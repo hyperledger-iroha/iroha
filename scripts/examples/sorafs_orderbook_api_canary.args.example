@@ -16,6 +16,7 @@
 --route channels_get
 --route receipts_get
 --route events_get
+--route-body-blake3-hex 9999999999999999999999999999999999999999999999999999999999999999
 --verified-claim canonical_request_auth_enforced
 --verified-claim owner_account_binding_verified
 --verified-claim provider_role_binding_verified

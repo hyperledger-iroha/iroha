@@ -7,6 +7,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = SCRIPT_ROOT / "build_sorafs_moderation_panel_canary.py"
@@ -37,6 +39,7 @@ TALLY_DIGEST = "c" * 64
 POP_DIGEST = "d" * 64
 SORTITION_SEED = "e" * 64
 POLICY_DIGEST = "f" * 64
+ROUTE_BODY_DIGEST = "9" * 64
 GENERATED_AT = 1_800_300_000
 
 
@@ -76,12 +79,14 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
         args.extend(["--roster-hash-hex", ROSTER_HASH])
     if kind in MODULE.TALLY_DIGEST_KINDS:
         args.extend(["--tally-digest-hex", TALLY_DIGEST])
+    if kind in MODULE.ROUTE_BODY_DIGEST_KINDS:
+        args.extend(["--route-body-blake3-hex", ROUTE_BODY_DIGEST])
     for claim in MODULE.TRUE_CLAIMS[kind]:
         args.extend(["--verified-claim", claim])
     if kind == "appeal_intake":
         args.extend(["--case-count", "2"])
-        args.extend(["--case", "appeal-case-00"])
-        args.extend(["--case", "appeal-case-01"])
+        args.extend(["--case", "moderation-appeal-case-00"])
+        args.extend(["--case", "moderation-appeal-case-01"])
         for route in MODULE.REQUIRED_INTAKE_ROUTES:
             args.extend(["--intake-route", route])
     elif kind == "sortition_roster":
@@ -98,18 +103,18 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
             ]
         )
         for index in range(CHECKER.DEFAULT_MIN_PANEL_SIZE):
-            args.extend(["--roster-juror", f"roster-juror-{index:02d}"])
+            args.extend(["--roster-juror", f"moderation-roster-juror-{index:02d}"])
     elif kind == "evidence_viewer":
         args.extend(
             [
                 "--session-count",
                 "3",
                 "--viewer-session",
-                "viewer-session-00",
+                "moderation-viewer-session-00",
                 "--viewer-session",
-                "viewer-session-01",
+                "moderation-viewer-session-01",
                 "--viewer-session",
-                "viewer-session-02",
+                "moderation-viewer-session-02",
                 "--max-url-ttl-secs",
                 "300",
                 "--session-manifest-digest-hex",
@@ -140,9 +145,9 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
     elif kind == "juror_notifications":
         args.extend(["--notification-count", "7", "--juror-count", "7"])
         for index in range(7):
-            args.extend(["--notification", f"notification-{index:02d}"])
+            args.extend(["--notification", f"moderation-notification-{index:02d}"])
         for index in range(7):
-            args.extend(["--juror", f"juror-{index:02d}"])
+            args.extend(["--juror", f"moderation-juror-{index:02d}"])
     elif kind == "commit_reveal":
         args.extend(
             [
@@ -157,9 +162,9 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
             ]
         )
         for index in range(7):
-            args.extend(["--commit", f"commit-{index:02d}"])
+            args.extend(["--commit", f"moderation-commit-{index:02d}"])
         for index in range(7):
-            args.extend(["--reveal", f"reveal-{index:02d}"])
+            args.extend(["--reveal", f"moderation-reveal-{index:02d}"])
         for route in MODULE.REQUIRED_BALLOT_ROUTES:
             args.extend(["--ballot-route", route])
         for scenario in MODULE.REQUIRED_COMMIT_REVEAL_SCENARIOS:
@@ -171,8 +176,8 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
             args.extend(["--outcome", outcome])
     elif kind == "settlement_integration":
         args.extend(["--settlement-count", "2"])
-        args.extend(["--settlement", "appeal-settlement-00"])
-        args.extend(["--settlement", "appeal-settlement-01"])
+        args.extend(["--settlement", "moderation-settlement-00"])
+        args.extend(["--settlement", "moderation-settlement-01"])
     elif kind == "transparency_reputation":
         for target in MODULE.REQUIRED_PUBLICATION_TARGETS:
             args.extend(["--publication-target", target])
@@ -189,18 +194,33 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
                 "2",
             ]
         )
-        args.extend(["--panel-case", "panel-case-00"])
-        args.extend(["--panel-case", "panel-case-01"])
+        args.extend(["--panel-case", "moderation-case-00"])
+        args.extend(["--panel-case", "moderation-case-01"])
         for index in range(CHECKER.DEFAULT_MIN_PEERS):
-            args.extend(["--peer", f"peer-{index:02d}"])
+            args.extend(["--peer", f"moderation-peer-{index:02d}"])
         for index in range(CHECKER.DEFAULT_MIN_PEERS):
-            args.extend(["--validator", f"validator-{index:02d}"])
+            args.extend(["--validator", f"moderation-validator-{index:02d}"])
     elif kind == "metrics_alerts":
         for metric in MODULE.REQUIRED_METRICS:
             args.extend(["--metric", metric])
     elif kind == "governance_approval":
         args.extend(["--policy-digest-hex", POLICY_DIGEST])
     return args
+
+
+def assert_rejected_without_artifact(
+    args: list[str],
+    *,
+    kind: str,
+    tmp_path: Path,
+    capsys,
+    expected_error: str,
+) -> None:
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert expected_error in captured.err
+    assert not canary_path(tmp_path, kind).exists()
 
 
 def test_builds_payload_free_appeal_intake_canary(tmp_path: Path) -> None:
@@ -213,8 +233,8 @@ def test_builds_payload_free_appeal_intake_canary(tmp_path: Path) -> None:
     assert payload["case_count"] == 2
     assert payload["accepted_case_count"] == 2
     assert payload["cases"] == [
-        {"name": "appeal-case-00", "accepted": True},
-        {"name": "appeal-case-01", "accepted": True},
+        {"name": "moderation-appeal-case-00", "accepted": True},
+        {"name": "moderation-appeal-case-01", "accepted": True},
     ]
     for claim in MODULE.TRUE_CLAIMS["appeal_intake"]:
         assert payload[claim] is True
@@ -235,7 +255,7 @@ def test_builds_payload_free_sortition_roster_canary(tmp_path: Path) -> None:
     assert payload["sortition_seed_hex"] == SORTITION_SEED
     assert payload["panel_size"] == CHECKER.DEFAULT_MIN_PANEL_SIZE
     assert payload["jurors"] == [
-        {"name": f"roster-juror-{index:02d}", "eligible": True}
+        {"name": f"moderation-roster-juror-{index:02d}", "eligible": True}
         for index in range(CHECKER.DEFAULT_MIN_PANEL_SIZE)
     ]
     assert payload["quorum"] == 5
@@ -259,12 +279,13 @@ def test_builds_payload_free_commit_reveal_canary(tmp_path: Path) -> None:
     assert payload["tally_digest_hex"] == TALLY_DIGEST
     assert payload["commit_count"] == 7
     assert payload["commits"] == [
-        {"name": f"commit-{index:02d}"} for index in range(7)
+        {"name": f"moderation-commit-{index:02d}"} for index in range(7)
     ]
     assert payload["reveal_count"] == 7
     assert payload["reveals"] == [
-        {"name": f"reveal-{index:02d}"} for index in range(7)
+        {"name": f"moderation-reveal-{index:02d}"} for index in range(7)
     ]
+    assert payload["scenario_count"] == len(MODULE.REQUIRED_COMMIT_REVEAL_SCENARIOS)
     assert payload["scenarios_exercised"] == list(
         MODULE.REQUIRED_COMMIT_REVEAL_SCENARIOS
     )
@@ -287,16 +308,102 @@ def test_builds_payload_free_evidence_viewer_canary(tmp_path: Path) -> None:
     assert payload["attested_session_count"] == 3
     assert payload["logged_session_count"] == 3
     assert payload["sessions"] == [
-        {"name": "viewer-session-00", "attested": True, "logged": True},
-        {"name": "viewer-session-01", "attested": True, "logged": True},
-        {"name": "viewer-session-02", "attested": True, "logged": True},
+        {
+            "name": "moderation-viewer-session-00",
+            "attested": True,
+            "logged": True,
+        },
+        {
+            "name": "moderation-viewer-session-01",
+            "attested": True,
+            "logged": True,
+        },
+        {
+            "name": "moderation-viewer-session-02",
+            "attested": True,
+            "logged": True,
+        },
     ]
+    assert payload["role_count"] == len(MODULE.REQUIRED_VIEWER_ROLES)
+    assert payload["roles_tested"] == list(MODULE.REQUIRED_VIEWER_ROLES)
+    assert payload["security_control_count"] == len(
+        MODULE.REQUIRED_VIEWER_SECURITY_CONTROLS
+    )
+    assert payload["viewer_security_controls"] == list(
+        MODULE.REQUIRED_VIEWER_SECURITY_CONTROLS
+    )
+    assert payload["access_event_kind_count"] == len(MODULE.REQUIRED_VIEWER_EVENT_KINDS)
+    assert payload["access_event_kinds"] == list(MODULE.REQUIRED_VIEWER_EVENT_KINDS)
+    assert payload["export_target_count"] == len(MODULE.REQUIRED_VIEWER_EXPORT_TARGETS)
+    assert payload["export_targets"] == list(MODULE.REQUIRED_VIEWER_EXPORT_TARGETS)
     for claim in MODULE.TRUE_CLAIMS["evidence_viewer"]:
         assert payload[claim] is True
+    assert payload["audit_log_tamper_rejected"] is True
+    assert payload["watermark_metadata_mismatch_rejected"] is True
     for field in MODULE.FORCED_FALSE_FIELDS["evidence_viewer"]:
         assert payload[field] is False
     kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
     assert kind == "evidence_viewer"
+    assert errors == []
+
+
+def test_builds_payload_free_decision_publication_canary(tmp_path: Path) -> None:
+    assert MODULE.main(args_for("decision_publication", tmp_path)) == 0
+
+    payload = json.loads(
+        canary_path(tmp_path, "decision_publication").read_text("utf-8")
+    )
+
+    assert payload["schema"] == (
+        "sorafs.moderation_panel.decision_publication_canary.v1"
+    )
+    assert payload["outcome_count"] == len(MODULE.REQUIRED_OUTCOMES)
+    assert payload["outcomes"] == list(MODULE.REQUIRED_OUTCOMES)
+    for claim in MODULE.TRUE_CLAIMS["decision_publication"]:
+        assert payload[claim] is True
+    for field in MODULE.FORCED_FALSE_FIELDS["decision_publication"]:
+        assert payload[field] is False
+    kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
+    assert kind == "decision_publication"
+    assert errors == []
+
+
+@pytest.mark.parametrize("kind", MODULE.ROUTE_BODY_DIGEST_KINDS)
+def test_route_canaries_record_route_body_digest(kind: str, tmp_path: Path) -> None:
+    assert MODULE.main(args_for(kind, tmp_path)) == 0
+
+    payload = json.loads(canary_path(tmp_path, kind).read_text("utf-8"))
+
+    assert all(
+        route["body_blake3_hex"] == ROUTE_BODY_DIGEST for route in payload["routes"]
+    )
+    validated_kind, errors = CHECKER.validate_evidence_payload(
+        payload, checker_options()
+    )
+    assert validated_kind == kind
+    assert errors == []
+
+
+def test_builds_payload_free_transparency_reputation_canary(tmp_path: Path) -> None:
+    assert MODULE.main(args_for("transparency_reputation", tmp_path)) == 0
+
+    payload = json.loads(
+        canary_path(tmp_path, "transparency_reputation").read_text("utf-8")
+    )
+
+    assert payload["schema"] == (
+        "sorafs.moderation_panel.transparency_reputation_canary.v1"
+    )
+    assert payload["publication_target_count"] == len(
+        MODULE.REQUIRED_PUBLICATION_TARGETS
+    )
+    assert payload["publication_targets"] == list(MODULE.REQUIRED_PUBLICATION_TARGETS)
+    for claim in MODULE.TRUE_CLAIMS["transparency_reputation"]:
+        assert payload[claim] is True
+    for field in MODULE.FORCED_FALSE_FIELDS["transparency_reputation"]:
+        assert payload[field] is False
+    kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
+    assert kind == "transparency_reputation"
     assert errors == []
 
 
@@ -313,12 +420,12 @@ def test_builds_payload_free_juror_notifications_canary(tmp_path: Path) -> None:
     assert payload["notification_count"] == 7
     assert payload["delivered_notification_count"] == 7
     assert payload["notifications"] == [
-        {"name": f"notification-{index:02d}", "delivered": True}
+        {"name": f"moderation-notification-{index:02d}", "delivered": True}
         for index in range(7)
     ]
     assert payload["juror_count"] == 7
     assert payload["jurors"] == [
-        {"name": f"juror-{index:02d}"}
+        {"name": f"moderation-juror-{index:02d}"}
         for index in range(7)
     ]
     for claim in MODULE.TRUE_CLAIMS["juror_notifications"]:
@@ -342,8 +449,8 @@ def test_builds_payload_free_settlement_integration_canary(tmp_path: Path) -> No
     )
     assert payload["settlement_count"] == 2
     assert payload["settlements"] == [
-        {"name": "appeal-settlement-00"},
-        {"name": "appeal-settlement-01"},
+        {"name": "moderation-settlement-00"},
+        {"name": "moderation-settlement-01"},
     ]
     for claim in MODULE.TRUE_CLAIMS["settlement_integration"]:
         assert payload[claim] is True
@@ -403,16 +510,17 @@ def test_response_file_can_build_e2e_panel_canary(tmp_path: Path) -> None:
     assert payload["policy_digest_hex"] == POLICY_DIGEST
     assert payload["peer_count"] == CHECKER.DEFAULT_MIN_PEERS
     assert [peer["name"] for peer in payload["peers"]] == [
-        f"peer-{index:02d}" for index in range(CHECKER.DEFAULT_MIN_PEERS)
+        f"moderation-peer-{index:02d}" for index in range(CHECKER.DEFAULT_MIN_PEERS)
     ]
     assert payload["validator_count"] == CHECKER.DEFAULT_MIN_PEERS
     assert [validator["name"] for validator in payload["validators"]] == [
-        f"validator-{index:02d}" for index in range(CHECKER.DEFAULT_MIN_PEERS)
+        f"moderation-validator-{index:02d}"
+        for index in range(CHECKER.DEFAULT_MIN_PEERS)
     ]
     assert payload["case_count"] == 2
     assert payload["cases"] == [
-        {"name": "panel-case-00", "passed": True},
-        {"name": "panel-case-01", "passed": True},
+        {"name": "moderation-case-00", "passed": True},
+        {"name": "moderation-case-01", "passed": True},
     ]
 
 
@@ -440,6 +548,23 @@ def test_e2e_panel_requires_policy_digest(tmp_path: Path, capsys) -> None:
     assert not canary_path(tmp_path, "e2e_panel").exists()
 
 
+@pytest.mark.parametrize("kind", MODULE.ROUTE_BODY_DIGEST_KINDS)
+def test_route_canaries_require_route_body_digest(
+    kind: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for(kind, tmp_path)
+    index = args.index("--route-body-blake3-hex")
+    del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--route-body-blake3-hex must be exact lowercase 32-byte hex" in captured.err
+    assert not canary_path(tmp_path, kind).exists()
+
+
 def test_missing_viewer_event_coverage_fails_closed(tmp_path: Path, capsys) -> None:
     args = args_for("evidence_viewer", tmp_path)
     index = args.index("--viewer-event-kind")
@@ -450,6 +575,120 @@ def test_missing_viewer_event_coverage_fails_closed(tmp_path: Path, capsys) -> N
     captured = capsys.readouterr()
     assert "--viewer-event-kind must include every required value" in captured.err
     assert not canary_path(tmp_path, "evidence_viewer").exists()
+
+
+@pytest.mark.parametrize(
+    ("kind", "option", "duplicate_value", "unknown_value"),
+    (
+        (
+            "appeal_intake",
+            "--verified-claim",
+            MODULE.TRUE_CLAIMS["appeal_intake"][0],
+            "unreviewed-moderation-panel-claim",
+        ),
+        (
+            "appeal_intake",
+            "--intake-route",
+            MODULE.REQUIRED_INTAKE_ROUTES[0],
+            "unreviewed-intake-route",
+        ),
+        (
+            "evidence_viewer",
+            "--viewer-role",
+            MODULE.REQUIRED_VIEWER_ROLES[0],
+            "unreviewed-viewer-role",
+        ),
+        (
+            "evidence_viewer",
+            "--viewer-security-control",
+            MODULE.REQUIRED_VIEWER_SECURITY_CONTROLS[0],
+            "unreviewed-viewer-security-control",
+        ),
+        (
+            "evidence_viewer",
+            "--viewer-event-kind",
+            MODULE.REQUIRED_VIEWER_EVENT_KINDS[0],
+            "unreviewed-viewer-event-kind",
+        ),
+        (
+            "evidence_viewer",
+            "--viewer-export-target",
+            MODULE.REQUIRED_VIEWER_EXPORT_TARGETS[0],
+            "unreviewed-viewer-export-target",
+        ),
+        (
+            "operator_workflow",
+            "--operator-route",
+            MODULE.REQUIRED_OPERATOR_ROUTES[0],
+            "unreviewed-operator-route",
+        ),
+        (
+            "commit_reveal",
+            "--ballot-route",
+            MODULE.REQUIRED_BALLOT_ROUTES[0],
+            "unreviewed-ballot-route",
+        ),
+        (
+            "commit_reveal",
+            "--scenario",
+            MODULE.REQUIRED_COMMIT_REVEAL_SCENARIOS[0],
+            "unreviewed-commit-reveal-scenario",
+        ),
+        (
+            "decision_publication",
+            "--decision-route",
+            MODULE.REQUIRED_DECISION_ROUTES[0],
+            "unreviewed-decision-route",
+        ),
+        (
+            "decision_publication",
+            "--outcome",
+            MODULE.REQUIRED_OUTCOMES[0],
+            "unreviewed-decision-outcome",
+        ),
+        (
+            "transparency_reputation",
+            "--publication-target",
+            MODULE.REQUIRED_PUBLICATION_TARGETS[0],
+            "unreviewed-publication-target",
+        ),
+        (
+            "metrics_alerts",
+            "--metric",
+            MODULE.REQUIRED_METRICS[0],
+            "unreviewed-moderation-panel-metric",
+        ),
+    ),
+)
+def test_closed_set_inputs_reject_duplicate_and_unknown_values_before_write(
+    kind: str,
+    option: str,
+    duplicate_value: str,
+    unknown_value: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    duplicate_args = args_for(kind, tmp_path)
+    duplicate_args.extend([option, duplicate_value])
+    assert_rejected_without_artifact(
+        duplicate_args,
+        kind=kind,
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error=f"{option} must not contain duplicates",
+    )
+
+    unknown_dir = tmp_path / "unknown"
+    unknown_dir.mkdir()
+    unknown_args = args_for(kind, unknown_dir)
+    unknown_args.extend([option, unknown_value])
+    assert_rejected_without_artifact(
+        unknown_args,
+        kind=kind,
+        tmp_path=unknown_dir,
+        capsys=capsys,
+        expected_error=f"{option} contains an unknown value",
+    )
 
 
 def test_appeal_intake_case_inventory_must_match_case_count(
@@ -478,6 +717,35 @@ def test_appeal_intake_case_inventory_must_not_duplicate(
 
     captured = capsys.readouterr()
     assert "--case must not contain duplicates" in captured.err
+    assert not canary_path(tmp_path, "appeal_intake").exists()
+
+
+@pytest.mark.parametrize(
+    ("invalid_value", "expected_error"),
+    (
+        (
+            "appeal-case-00",
+            "--case must match canonical lowercase `moderation-appeal-case-*`",
+        ),
+        (
+            "moderation-appeal-case-placeholder",
+            "--case[0] must not contain non-production markers ['placeholder']",
+        ),
+    ),
+)
+def test_appeal_intake_case_inventory_must_use_reviewed_labels_before_write(
+    invalid_value: str,
+    expected_error: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("appeal_intake", tmp_path)
+    args[args.index("--case") + 1] = invalid_value
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert expected_error in captured.err
     assert not canary_path(tmp_path, "appeal_intake").exists()
 
 
@@ -510,6 +778,37 @@ def test_sortition_roster_juror_inventory_must_not_duplicate(
     assert not canary_path(tmp_path, "sortition_roster").exists()
 
 
+@pytest.mark.parametrize(
+    ("invalid_value", "expected_error"),
+    (
+        (
+            "roster-juror-00",
+            "--roster-juror must match canonical lowercase "
+            "`moderation-roster-juror-*`",
+        ),
+        (
+            "moderation-roster-juror-placeholder",
+            "--roster-juror[0] must not contain non-production markers "
+            "['placeholder']",
+        ),
+    ),
+)
+def test_sortition_roster_juror_inventory_must_use_reviewed_labels_before_write(
+    invalid_value: str,
+    expected_error: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("sortition_roster", tmp_path)
+    args[args.index("--roster-juror") + 1] = invalid_value
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert expected_error in captured.err
+    assert not canary_path(tmp_path, "sortition_roster").exists()
+
+
 def test_evidence_viewer_session_inventory_must_match_session_count(
     tmp_path: Path,
     capsys,
@@ -536,6 +835,37 @@ def test_evidence_viewer_session_inventory_must_not_duplicate(
 
     captured = capsys.readouterr()
     assert "--viewer-session must not contain duplicates" in captured.err
+    assert not canary_path(tmp_path, "evidence_viewer").exists()
+
+
+@pytest.mark.parametrize(
+    ("invalid_value", "expected_error"),
+    (
+        (
+            "viewer-session-00",
+            "--viewer-session must match canonical lowercase "
+            "`moderation-viewer-session-*`",
+        ),
+        (
+            "moderation-viewer-session-placeholder",
+            "--viewer-session[0] must not contain non-production markers "
+            "['placeholder']",
+        ),
+    ),
+)
+def test_evidence_viewer_session_inventory_must_use_reviewed_labels_before_write(
+    invalid_value: str,
+    expected_error: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("evidence_viewer", tmp_path)
+    args[args.index("--viewer-session") + 1] = invalid_value
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert expected_error in captured.err
     assert not canary_path(tmp_path, "evidence_viewer").exists()
 
 
@@ -571,6 +901,36 @@ def test_juror_notification_inventory_must_not_duplicate(
     assert not canary_path(tmp_path, "juror_notifications").exists()
 
 
+@pytest.mark.parametrize(
+    ("invalid_value", "expected_error"),
+    (
+        (
+            "notification-00",
+            "--notification must match canonical lowercase "
+            "`moderation-notification-*`",
+        ),
+        (
+            "moderation-notification-placeholder",
+            "--notification[0] must not contain non-production markers ['placeholder']",
+        ),
+    ),
+)
+def test_juror_notification_inventory_must_use_reviewed_labels_before_write(
+    invalid_value: str,
+    expected_error: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("juror_notifications", tmp_path)
+    args[args.index("--notification") + 1] = invalid_value
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert expected_error in captured.err
+    assert not canary_path(tmp_path, "juror_notifications").exists()
+
+
 def test_juror_inventory_must_match_juror_count(
     tmp_path: Path,
     capsys,
@@ -600,6 +960,38 @@ def test_juror_inventory_must_not_duplicate(
     assert not canary_path(tmp_path, "juror_notifications").exists()
 
 
+@pytest.mark.parametrize(
+    ("option", "invalid_value", "expected_error"),
+    (
+        (
+            "--juror",
+            "juror-00",
+            "--juror must match canonical lowercase `moderation-juror-*`",
+        ),
+        (
+            "--juror",
+            "moderation-juror-placeholder",
+            "--juror[0] must not contain non-production markers ['placeholder']",
+        ),
+    ),
+)
+def test_juror_inventory_must_use_reviewed_labels_before_write(
+    option: str,
+    invalid_value: str,
+    expected_error: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("juror_notifications", tmp_path)
+    args[args.index(option) + 1] = invalid_value
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert expected_error in captured.err
+    assert not canary_path(tmp_path, "juror_notifications").exists()
+
+
 def test_commit_reveal_commit_inventory_must_match_commit_count(
     tmp_path: Path,
     capsys,
@@ -626,6 +1018,48 @@ def test_commit_reveal_commit_inventory_must_not_duplicate(
 
     captured = capsys.readouterr()
     assert "--commit must not contain duplicates" in captured.err
+    assert not canary_path(tmp_path, "commit_reveal").exists()
+
+
+@pytest.mark.parametrize(
+    ("option", "invalid_value", "expected_error"),
+    (
+        (
+            "--commit",
+            "commit-00",
+            "--commit must match canonical lowercase `moderation-commit-*`",
+        ),
+        (
+            "--commit",
+            "moderation-commit-placeholder",
+            "--commit[0] must not contain non-production markers ['placeholder']",
+        ),
+        (
+            "--reveal",
+            "reveal-00",
+            "--reveal must match canonical lowercase `moderation-reveal-*`",
+        ),
+        (
+            "--reveal",
+            "moderation-reveal-placeholder",
+            "--reveal[0] must not contain non-production markers ['placeholder']",
+        ),
+    ),
+)
+def test_commit_reveal_inventory_must_use_reviewed_labels_before_write(
+    option: str,
+    invalid_value: str,
+    expected_error: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("commit_reveal", tmp_path)
+    args[args.index(option) + 1] = invalid_value
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert expected_error in captured.err
     assert not canary_path(tmp_path, "commit_reveal").exists()
 
 
@@ -664,7 +1098,7 @@ def test_commit_reveal_reveal_count_must_not_exceed_commit_count(
 ) -> None:
     args = args_for("commit_reveal", tmp_path)
     args[args.index("--reveal-count") + 1] = "8"
-    args.extend(["--reveal", "reveal-07"])
+    args.extend(["--reveal", "moderation-reveal-07"])
 
     assert MODULE.main(args) == 2
 
@@ -699,6 +1133,35 @@ def test_settlement_integration_inventory_must_not_duplicate(
 
     captured = capsys.readouterr()
     assert "--settlement must not contain duplicates" in captured.err
+    assert not canary_path(tmp_path, "settlement_integration").exists()
+
+
+@pytest.mark.parametrize(
+    ("invalid_value", "expected_error"),
+    (
+        (
+            "appeal-settlement-00",
+            "--settlement must match canonical lowercase `moderation-settlement-*`",
+        ),
+        (
+            "moderation-settlement-placeholder",
+            "--settlement[0] must not contain non-production markers ['placeholder']",
+        ),
+    ),
+)
+def test_settlement_integration_inventory_must_use_reviewed_labels_before_write(
+    invalid_value: str,
+    expected_error: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("settlement_integration", tmp_path)
+    args[args.index("--settlement") + 1] = invalid_value
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert expected_error in captured.err
     assert not canary_path(tmp_path, "settlement_integration").exists()
 
 
@@ -739,6 +1202,58 @@ def test_e2e_panel_peer_inventory_must_not_duplicate(
 
     captured = capsys.readouterr()
     assert "--peer must not contain duplicates" in captured.err
+    assert not canary_path(tmp_path, "e2e_panel").exists()
+
+
+@pytest.mark.parametrize(
+    ("option", "invalid_value", "expected_error"),
+    (
+        (
+            "--peer",
+            "peer-00",
+            "--peer must match canonical lowercase `moderation-peer-*`",
+        ),
+        (
+            "--peer",
+            "moderation-peer-placeholder",
+            "--peer[0] must not contain non-production markers ['placeholder']",
+        ),
+        (
+            "--validator",
+            "validator-00",
+            "--validator must match canonical lowercase `moderation-validator-*`",
+        ),
+        (
+            "--validator",
+            "moderation-validator-placeholder",
+            "--validator[0] must not contain non-production markers ['placeholder']",
+        ),
+        (
+            "--panel-case",
+            "panel-case-00",
+            "--panel-case must match canonical lowercase `moderation-case-*`",
+        ),
+        (
+            "--panel-case",
+            "moderation-case-placeholder",
+            "--panel-case[0] must not contain non-production markers ['placeholder']",
+        ),
+    ),
+)
+def test_e2e_panel_inventory_must_use_reviewed_labels_before_write(
+    option: str,
+    invalid_value: str,
+    expected_error: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("e2e_panel", tmp_path)
+    args[args.index(option) + 1] = invalid_value
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert expected_error in captured.err
     assert not canary_path(tmp_path, "e2e_panel").exists()
 
 
@@ -824,3 +1339,15 @@ def test_output_symlink_is_rejected(tmp_path: Path, capsys) -> None:
     assert "--out" in captured.err
     assert "must not be a symlink" in captured.err
     assert not target.exists()
+
+
+def test_output_directory_is_rejected(tmp_path: Path, capsys) -> None:
+    output_dir = canary_path(tmp_path, "appeal_intake")
+    output_dir.mkdir()
+
+    assert MODULE.main(args_for("appeal_intake", tmp_path)) == 2
+
+    captured = capsys.readouterr()
+    assert "--out" in captured.err
+    assert "must not be a directory" in captured.err
+    assert output_dir.is_dir()

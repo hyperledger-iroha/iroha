@@ -3297,8 +3297,28 @@ fn moderation_ballot_event_json(
         "revealed_count".into(),
         JsonValue::from(event.revealed_count),
     );
+    metadata.insert(
+        "challenge_count".into(),
+        JsonValue::from(event.challenge_count),
+    );
     if let Some(juror_id) = &event.juror_id {
         metadata.insert("juror_id".into(), JsonValue::from(juror_id.clone()));
+    }
+    if let Some(challenge) = &event.challenge {
+        metadata.insert(
+            "challenge_id".into(),
+            JsonValue::from(challenge.challenge_id.clone()),
+        );
+        metadata.insert(
+            "challenge_kind".into(),
+            JsonValue::from(challenge.kind.as_str()),
+        );
+        if let Some(decision) = challenge.decision {
+            metadata.insert(
+                "challenge_decision".into(),
+                JsonValue::from(decision.as_str()),
+            );
+        }
     }
     if let Some(tally) = &event.tally {
         metadata.insert(
@@ -3986,6 +4006,7 @@ mod tests {
             juror_id: None,
             committed_count: 2,
             revealed_count: 2,
+            challenge_count: 0,
             tally: Some(SoraFsModerationBallotGovernanceTallyV1 {
                 case_id: "case-42".to_string(),
                 round_id: "round-1".to_string(),
@@ -4001,6 +4022,7 @@ mod tests {
                 contested: false,
                 tallied_at_unix_ms: 1_800_000_030_000,
             }),
+            challenge: None,
         };
         let encoded = norito::to_bytes(&event).expect("encode moderation ballot event");
         (event, encoded)

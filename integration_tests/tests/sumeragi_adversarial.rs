@@ -971,6 +971,24 @@ async fn run_chunk_equivocation_scenario() -> Result<()> {
     for peer in network.peers() {
         status_after_all.push(blocking_status(&peer.client())?);
     }
+    let progress_quorum = commit_quorum_from_len(status_after_all.len()).max(1);
+    if count_statuses_at_or_above_height(&status_after_all, expected_height) < progress_quorum
+        && status_after_all
+            .iter()
+            .any(|status| status.blocks >= expected_height)
+    {
+        let peer_clients: Vec<Client> = network.peers().iter().map(|peer| peer.client()).collect();
+        if let Some(quorum_statuses) = try_wait_for_cluster_height_quorum(
+            &peer_clients,
+            expected_height,
+            progress_quorum,
+            Duration::from_secs(60),
+        )
+        .await?
+        {
+            status_after_all = quorum_statuses;
+        }
+    }
     let min_blocks = status_after_all
         .iter()
         .map(|status| status.blocks)
@@ -981,7 +999,6 @@ async fn run_chunk_equivocation_scenario() -> Result<()> {
         .map(|status| status.blocks)
         .max()
         .unwrap_or(status_before.blocks);
-    let progress_quorum = commit_quorum_from_len(status_after_all.len()).max(1);
     let progress_quorum_blocks =
         count_statuses_at_or_above_height(&status_after_all, expected_height);
 

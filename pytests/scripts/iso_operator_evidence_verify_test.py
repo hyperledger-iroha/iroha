@@ -3619,6 +3619,101 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             self.assertEqual(stdout, "")
             self.assertIn("ok must be false for plan-only evidence", stderr)
 
+    def test_allowed_nonproduction_canaries_must_not_claim_ok(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            trust_path = write_trust_summary(root / "trust")
+
+            def partial_case(case_root):
+                _notary_receipts, rail_receipts = write_https_receipt_dirs(case_root)
+                body = valid_canary_summary(
+                    receipt_entries=receipt_entries_from_dirs(rail_receipts)
+                )
+                body["stages"] = [body["stages"][0], body["stages"][2]]
+                remove_verify_receipt_dir(
+                    body["stages"][1]["command"],
+                    "/ops/iso/notary-receipts",
+                )
+                return body, ["--allow-partial-canary", "--allow-canary-stage-receipts-only"]
+
+            def dry_run_case(case_root):
+                notary_receipts, _rail_receipts = write_https_receipt_dirs(case_root)
+                body = valid_canary_summary(
+                    receipt_entries=receipt_entries_from_dirs(notary_receipts)
+                )
+                body["stages"][0]["command"].append("--dry-run")
+                remove_verify_receipt_dir(
+                    body["stages"][2]["command"],
+                    "/ops/iso/rail-receipts",
+                )
+                return body, ["--allow-dry-run", "--allow-canary-stage-receipts-only"]
+
+            def insecure_http_case(_case_root):
+                body = valid_canary_summary()
+                rail_command = body["stages"][0]["command"]
+                rail_command[rail_command.index("--torii-base-url") + 1] = (
+                    "http://torii.local-bank.bank/iso"
+                )
+                rail_command.append("--allow-insecure-http")
+                body["stages"][2]["command"].append("--allow-insecure-http")
+                receipt_summary = json.loads(receipt_stdout(allow_insecure_http=True))
+                receipt_summary["receipts"][1]["endpoint_requires_insecure_http"] = True
+                body["stages"][2]["stdout_preview"] = (
+                    json.dumps(digest_receipt_summary(receipt_summary), sort_keys=True)
+                    + "\n"
+                )
+                return body, ["--allow-insecure-http", "--allow-canary-stage-receipts-only"]
+
+            def default_profile_case(_case_root):
+                body = valid_canary_summary()
+                body["stages"][0]["command"].append("--allow-default-profile")
+                body["stages"][2]["command"].append("--allow-default-profile")
+                receipt_summary = json.loads(receipt_stdout(allow_default_profile=True))
+                receipt_summary["receipts"][1]["profile"] = None
+                body["stages"][2]["stdout_preview"] = (
+                    json.dumps(digest_receipt_summary(receipt_summary), sort_keys=True)
+                    + "\n"
+                )
+                return (
+                    body,
+                    [
+                        "--allow-default-profile",
+                        "--allow-canary-stage-receipts-only",
+                        "--default-rail-profile",
+                        "swift-cbpr-plus",
+                    ],
+                )
+
+            cases = (
+                ("partial", partial_case),
+                ("dry-run", dry_run_case),
+                ("insecure-http", insecure_http_case),
+                ("default-profile", default_profile_case),
+            )
+            for name, build_case in cases:
+                with self.subTest(name=name):
+                    case_root = root / name
+                    case_root.mkdir()
+                    body, extra_args = build_case(case_root)
+                    canary_path = write_canary(case_root, digest_summary(body))
+
+                    rc, stdout, stderr = run_evidence(
+                        [
+                            "--canary-summary",
+                            str(canary_path),
+                            "--trust-summary",
+                            str(trust_path),
+                            *extra_args,
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(
+                        "ok does not match canary summary production policy",
+                        stderr,
+                    )
+
     def test_plan_only_insecure_http_override_requires_matching_command_url(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -3758,6 +3853,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 partial_body["stages"][1]["command"],
                 "/ops/iso/notary-receipts",
             )
+            partial_body["ok"] = False
             partial_body.pop("summary_sha256")
             partial_canary_path = write_canary(partial_root, digest_summary(partial_body))
             partial_summary_out = partial_root / "evidence.summary.json"
@@ -4006,6 +4102,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 body["stages"][2]["command"],
                 "/ops/iso/rail-receipts",
             )
+            body["ok"] = False
             body.pop("summary_sha256")
             canary_path = write_canary(root, digest_summary(body))
             trust_path = write_trust_summary(root / "trust")
@@ -4046,6 +4143,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 body["stages"][2]["command"],
                 "/ops/iso/rail-receipts",
             )
+            body["ok"] = False
             body.pop("summary_sha256")
             canary_path = write_canary(root, digest_summary(body))
             trust_path = write_trust_summary(root / "trust")
@@ -7015,6 +7113,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 json.dumps(digest_receipt_summary(receipt_summary), sort_keys=True)
                 + "\n"
             )
+            canary["ok"] = False
             canary.pop("summary_sha256")
             canary_path = write_canary(root, digest_summary(canary))
             trust_path = write_trust_summary(root / "trust")
@@ -7819,6 +7918,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 )
                 + "\n"
             )
+            body["ok"] = False
             body.pop("summary_sha256")
             canary_path = write_canary(root, digest_summary(body))
             trust_path = write_trust_summary(root / "trust")
@@ -8072,6 +8172,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 )
                 + "\n"
             )
+            body["ok"] = False
             body.pop("summary_sha256")
             canary_path = write_canary(root, digest_summary(body))
             trust_path = write_trust_summary(root / "trust")
@@ -8102,6 +8203,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 )
                 + "\n"
             )
+            body["ok"] = False
             body.pop("summary_sha256")
             canary_path = write_canary(root, digest_summary(body))
             trust_path = write_trust_summary(root / "trust")
@@ -8197,6 +8299,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             )
             body["stages"][0]["command"].append("--allow-default-profile")
             body["stages"][2]["command"].append("--allow-default-profile")
+            body["ok"] = False
             body.pop("summary_sha256")
             canary_path = write_canary(root, digest_summary(body))
             trust_path = write_trust_summary(root / "trust")
@@ -8705,6 +8808,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 )
                 + "\n"
             )
+            body["ok"] = False
             body.pop("summary_sha256")
             canary_path = write_canary(root, digest_summary(body))
 
@@ -8844,6 +8948,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     )
                     body["stages"][0]["command"].append(flag)
                     body["stages"][2]["command"].append(flag)
+                    body["ok"] = False
                     body.pop("summary_sha256")
                     canary_path = write_canary(case_root, digest_summary(body))
 
@@ -13299,6 +13404,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 json.dumps(digest_receipt_summary(receipt_summary), sort_keys=True)
                 + "\n"
             )
+            body["ok"] = False
             body.pop("summary_sha256")
             canary_path = write_canary(root, digest_summary(body))
 
@@ -13334,6 +13440,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 json.dumps(digest_receipt_summary(receipt_summary), sort_keys=True)
                 + "\n"
             )
+            body["ok"] = False
             body.pop("summary_sha256")
             canary_path = write_canary(root, digest_summary(body))
 
@@ -13370,6 +13477,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 json.dumps(digest_receipt_summary(receipt_summary), sort_keys=True)
                 + "\n"
             )
+            body["ok"] = False
             body.pop("summary_sha256")
             canary_path = write_canary(root, digest_summary(body))
 
@@ -13441,6 +13549,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 )
                 + "\n"
             )
+            body["ok"] = False
             body.pop("summary_sha256")
             canary_path = write_canary(root, digest_summary(body))
 
@@ -13477,6 +13586,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 )
                 + "\n"
             )
+            body["ok"] = False
             body.pop("summary_sha256")
             canary_path = write_canary(root, digest_summary(body))
 
@@ -13514,6 +13624,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 )
                 + "\n"
             )
+            body["ok"] = False
             body.pop("summary_sha256")
             canary_path = write_canary(root, digest_summary(body))
 

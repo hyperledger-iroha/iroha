@@ -7,6 +7,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = SCRIPT_ROOT / "build_sorafs_reference_sdk_release_canary.py"
@@ -95,8 +97,30 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
             ]
         )
     elif kind == "governance_approval":
-        args.extend(["--policy-digest-hex", POLICY_DIGEST])
+        args.extend(
+            [
+                "--policy-digest-hex",
+                POLICY_DIGEST,
+                "--public-key-fingerprint-hex",
+                PUBLIC_KEY_DIGEST,
+            ]
+        )
     return args
+
+
+def assert_rejected_without_artifact(
+    args: list[str],
+    *,
+    kind: str,
+    tmp_path: Path,
+    capsys,
+    expected_error: str,
+) -> None:
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert expected_error in captured.err
+    assert not canary_path(tmp_path, kind).exists()
 
 
 def test_builds_payload_free_release_archive_canary(tmp_path: Path) -> None:
@@ -136,6 +160,7 @@ def test_generated_canaries_pass_full_reference_sdk_release_gate(
     assert payload["status"] == "ready"
     assert payload["valid_release_manifest_digests"] == [MANIFEST_DIGEST]
     assert payload["valid_release_manifest_reference_digests"] == [MANIFEST_DIGEST]
+    assert payload["valid_release_key_fingerprints"] == [PUBLIC_KEY_DIGEST]
     assert payload["valid_policy_digests"] == [POLICY_DIGEST]
     for kind in MODULE.CANARY_KINDS:
         assert payload["required"][kind]["artifact_count"] == 1
@@ -158,6 +183,18 @@ def test_response_file_can_build_signed_manifest_canary(tmp_path: Path) -> None:
     assert payload["raw_manifest_included"] is False
 
 
+def test_policy_digest_kind_inventory_matches_generated_payloads(tmp_path: Path) -> None:
+    assert MODULE.POLICY_DIGEST_KINDS == ("signed_manifest", "governance_approval")
+
+    for kind in MODULE.CANARY_KINDS:
+        assert MODULE.main(args_for(kind, tmp_path)) == 0
+        payload = json.loads(canary_path(tmp_path, kind).read_text("utf-8"))
+        if kind in MODULE.POLICY_DIGEST_KINDS:
+            assert payload["policy_digest_hex"] == POLICY_DIGEST
+        else:
+            assert "policy_digest_hex" not in payload
+
+
 def test_signed_manifest_requires_policy_digest_before_write(
     tmp_path: Path, capsys
 ) -> None:
@@ -172,6 +209,82 @@ def test_signed_manifest_requires_policy_digest_before_write(
     assert not canary_path(tmp_path, "signed_manifest").exists()
 
 
+def test_signed_manifest_rejects_unsupported_signature_algorithm_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("signed_manifest", tmp_path)
+    args.extend(["--signature-algorithm", "none"])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--signature-algorithm must be `ed25519`" in captured.err
+    assert not canary_path(tmp_path, "signed_manifest").exists()
+
+
+def test_governance_approval_canary_binds_public_key_fingerprint(
+    tmp_path: Path,
+) -> None:
+    assert MODULE.main(args_for("governance_approval", tmp_path)) == 0
+
+    payload = json.loads(canary_path(tmp_path, "governance_approval").read_text("utf-8"))
+
+    assert payload["release_manifest_digest_hex"] == MANIFEST_DIGEST
+    assert payload["policy_digest_hex"] == POLICY_DIGEST
+    assert payload["public_key_fingerprint_hex"] == PUBLIC_KEY_DIGEST
+
+
+def test_governance_approval_requires_public_key_fingerprint_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("governance_approval", tmp_path)
+    index = args.index("--public-key-fingerprint-hex")
+    del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--public-key-fingerprint-hex is required for governance_approval"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "governance_approval").exists()
+
+
+def test_governance_approval_rejects_malformed_public_key_fingerprint_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("governance_approval", tmp_path)
+    index = args.index("--public-key-fingerprint-hex")
+    args[index + 1] = "not-hex"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--public-key-fingerprint-hex must be exact lowercase 32-byte hex"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "governance_approval").exists()
+
+
+def test_signed_manifest_canary_rejects_rsa_sha256_signature_algorithm(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("signed_manifest", tmp_path)
+    args.extend(["--signature-algorithm", "rsa-sha256"])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--signature-algorithm must be `ed25519`" in captured.err
+    assert not canary_path(tmp_path, "signed_manifest").exists()
+
+
 def test_missing_release_target_coverage_fails_closed(tmp_path: Path, capsys) -> None:
     args = args_for("release_archive", tmp_path)
     index = args.index("--target")
@@ -182,6 +295,125 @@ def test_missing_release_target_coverage_fails_closed(tmp_path: Path, capsys) ->
     captured = capsys.readouterr()
     assert "--target must include every required value" in captured.err
     assert not canary_path(tmp_path, "release_archive").exists()
+
+
+def test_duplicate_release_target_coverage_fails_closed(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("release_archive", tmp_path)
+    args.extend(["--target", MODULE.REQUIRED_RELEASE_TARGETS[0]])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--target must not contain duplicates" in captured.err
+    assert not canary_path(tmp_path, "release_archive").exists()
+
+
+def test_unknown_release_target_coverage_fails_closed(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("release_archive", tmp_path)
+    args.extend(["--target", "shadow-release-target"])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--target contains an unknown value" in captured.err
+    assert not canary_path(tmp_path, "release_archive").exists()
+
+
+def test_missing_downstream_package_coverage_fails_closed(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("downstream_bindings", tmp_path)
+    index = args.index("--package")
+    del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--package must include every required value" in captured.err
+    assert not canary_path(tmp_path, "downstream_bindings").exists()
+
+
+def test_duplicate_downstream_package_coverage_fails_closed(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("downstream_bindings", tmp_path)
+    args.extend(["--package", MODULE.REQUIRED_DOWNSTREAM_PACKAGES[0]])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--package must not contain duplicates" in captured.err
+    assert not canary_path(tmp_path, "downstream_bindings").exists()
+
+
+def test_unknown_downstream_package_coverage_fails_closed(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("downstream_bindings", tmp_path)
+    args.extend(["--package", "shadow-sdk-package"])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--package contains an unknown value" in captured.err
+    assert not canary_path(tmp_path, "downstream_bindings").exists()
+
+
+@pytest.mark.parametrize(
+    ("kind", "option", "duplicate_value", "unknown_value"),
+    (
+        (
+            "release_archive",
+            "--target",
+            MODULE.REQUIRED_RELEASE_TARGETS[0],
+            "shadow-release-target",
+        ),
+        (
+            "downstream_bindings",
+            "--package",
+            MODULE.REQUIRED_DOWNSTREAM_PACKAGES[0],
+            "shadow-sdk-package",
+        ),
+    ),
+)
+def test_closed_set_inputs_reject_duplicate_and_unknown_values_before_write(
+    kind: str,
+    option: str,
+    duplicate_value: str,
+    unknown_value: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    duplicate_args = args_for(kind, tmp_path)
+    duplicate_args.extend([option, duplicate_value])
+    assert_rejected_without_artifact(
+        duplicate_args,
+        kind=kind,
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error=f"{option} must not contain duplicates",
+    )
+
+    unknown_dir = tmp_path / "unknown"
+    unknown_dir.mkdir()
+    unknown_args = args_for(kind, unknown_dir)
+    unknown_args.extend([option, unknown_value])
+    assert_rejected_without_artifact(
+        unknown_args,
+        kind=kind,
+        tmp_path=unknown_dir,
+        capsys=capsys,
+        expected_error=f"{option} contains an unknown value",
+    )
 
 
 def test_smoke_duration_threshold_fails_before_write(tmp_path: Path, capsys) -> None:
@@ -208,3 +440,16 @@ def test_output_symlink_is_refused(tmp_path: Path, capsys) -> None:
     captured = capsys.readouterr()
     assert "must not be a symlink" in captured.err
     assert not target.exists()
+
+
+def test_output_directory_is_refused(tmp_path: Path, capsys) -> None:
+    directory = tmp_path / "out-dir"
+    directory.mkdir()
+    args = args_for("governance_approval", tmp_path)
+    index = args.index("--out")
+    args[index + 1] = str(directory)
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "must not be a directory" in captured.err

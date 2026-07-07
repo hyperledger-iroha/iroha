@@ -166,6 +166,8 @@ def _read_runtime_bytecode_file_text(path: Path, *, label: str) -> str:
 def parse_runtime_bytecode_file(value: str, *, label: str) -> bytes:
     """Parse runtime bytecode from a file containing hex text."""
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None
     path = Path(value).expanduser()
     text = _read_runtime_bytecode_file_text(path, label=label)
     return parse_runtime_bytecode_hex("".join(text.split()), label=label)
@@ -174,44 +176,27 @@ def parse_runtime_bytecode_file(value: str, *, label: str) -> bytes:
 def parse_destination_domain(value: str) -> int:
     """Parse the destination domain selector for ETH or BSC."""
 
-    if value != value.strip():
-        raise argparse.ArgumentTypeError("domain must be eth or bsc")
-    normalized = value.lower()
-    aliases = {
-        "eth": SCCP_DOMAIN_ETH,
-        "ethereum": SCCP_DOMAIN_ETH,
-        "1": SCCP_DOMAIN_ETH,
-        "bsc": SCCP_DOMAIN_BSC,
-        "bnb": SCCP_DOMAIN_BSC,
-        "2": SCCP_DOMAIN_BSC,
-    }
-    try:
-        return aliases[normalized]
-    except KeyError:
+    if type(value) is not str:
         raise argparse.ArgumentTypeError("domain must be eth or bsc") from None
+    if value == "eth":
+        return SCCP_DOMAIN_ETH
+    if value == "bsc":
+        return SCCP_DOMAIN_BSC
+    raise argparse.ArgumentTypeError("domain must be eth or bsc") from None
 
 
 def parse_bsc_network(value: str) -> str:
     """Parse the BSC network profile selector."""
 
-    if value != value.strip():
-        raise argparse.ArgumentTypeError("BSC network must be mainnet or testnet")
-    normalized = value.lower().replace("_", "-")
-    aliases = {
-        "mainnet": "mainnet",
-        "bsc-mainnet": "mainnet",
-        "56": "mainnet",
-        "testnet": "testnet",
-        "bsc-testnet": "testnet",
-        "chapel": "testnet",
-        "97": "testnet",
-    }
-    try:
-        return aliases[normalized]
-    except KeyError:
+    if type(value) is not str:
         raise argparse.ArgumentTypeError(
             "BSC network must be mainnet or testnet"
         ) from None
+    if value not in BSC_NETWORK_PROFILES:
+        raise argparse.ArgumentTypeError(
+            "BSC network must be mainnet or testnet"
+        ) from None
+    return value
 
 
 def _bsc_network_from_value(value: str | None) -> str:
@@ -328,7 +313,13 @@ def _push_vec(out: bytearray, value: bytes) -> None:
 
 def _require_exact_u32(value: object, label: str) -> int:
     if type(value) is not int or value < 0 or value > 0xFFFFFFFF:
-        raise ValueError(f"{label} must be an exact u32")
+        raise ValueError(f"{label} must be an exact u32") from None
+    return value
+
+
+def _require_exact_u64(value: object, label: str) -> int:
+    if type(value) is not int or value < 0 or value > 0xFFFFFFFFFFFFFFFF:
+        raise ValueError(f"{label} must be an exact u64") from None
     return value
 
 
@@ -340,17 +331,19 @@ def _prefixed_blake2b(prefix: bytes, payload: bytes) -> bytes:
 
 
 def _toml_string(value: str) -> str:
+    if type(value) is not str:
+        raise TypeError("unsupported TOML string value")
     return json.dumps(value)
 
 
 def _toml_line(key: str, value: object) -> str:
-    if isinstance(value, bool):
+    if type(value) is bool:
         rendered = "true" if value else "false"
-    elif isinstance(value, int):
+    elif type(value) is int:
         rendered = str(value)
-    elif isinstance(value, str):
+    elif type(value) is str:
         rendered = _toml_string(value)
-    elif isinstance(value, list) and all(isinstance(item, str) for item in value):
+    elif type(value) is list and all(type(item) is str for item in value):
         rendered = "[" + ", ".join(_toml_string(item) for item in value) + "]"
     else:
         raise TypeError(f"unsupported TOML value for {key}")
@@ -802,9 +795,9 @@ def evm_route_canary_transaction_evidence_hash(
     if type(receipt_block_finalized) is not bool:
         raise ValueError("receipt_block_finalized must be a boolean for EVM route canaries")
     log_index = _require_exact_u32(log_index, "log_index")
-    receipt_block_number = parse_u64_decimal(
-        str(receipt_block_number),
-        label="receipt_block_number",
+    receipt_block_number = _require_exact_u64(
+        receipt_block_number,
+        "receipt_block_number",
     )
     if receipt_block_number == 0:
         raise ValueError("receipt_block_number must be positive for EVM route canaries")
@@ -1191,15 +1184,15 @@ def _route_canary_transaction_values(args: argparse.Namespace) -> dict[str, obje
             "EVM route canary transaction metadata requires "
             "--route-canary-receipt-block-finalized=true from finalized live reads"
         )
-    receipt_block_number = parse_u64_decimal(
-        str(getattr(args, "route_canary_receipt_block_number")),
-        label="route_canary_receipt_block_number",
+    receipt_block_number = _require_exact_u64(
+        getattr(args, "route_canary_receipt_block_number"),
+        "route_canary_receipt_block_number",
     )
     if receipt_block_number == 0:
         raise ValueError("EVM route canary receipt block number must be positive")
-    transaction_block_number = parse_u64_decimal(
-        str(getattr(args, "route_canary_transaction_block_number")),
-        label="route_canary_transaction_block_number",
+    transaction_block_number = _require_exact_u64(
+        getattr(args, "route_canary_transaction_block_number"),
+        "route_canary_transaction_block_number",
     )
     if transaction_block_number == 0:
         raise ValueError("EVM route canary transaction block number must be positive")

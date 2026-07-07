@@ -67,7 +67,7 @@ final class OfflineProofVerifierTests: XCTestCase {
             attestationKeyId: "attestation-key",
             deviceId: "ios-device",
             offlinePublicKey: "offline-public-key",
-            attestationReportBase64: ""
+            attestationReportBase64: "not-empty"
         )
 
         XCTAssertThrowsError(
@@ -80,6 +80,58 @@ final class OfflineProofVerifierTests: XCTestCase {
             XCTAssertEqual(
                 (error as? OfflineProofVerifierError)?.errorDescription,
                 "Missing offline device binding challenge hash."
+            )
+        }
+    }
+
+    func testCounterpartyVerifierRoutesIosAppAttestThroughIosVerifier() throws {
+        let binding = try ToriiOfflineDeviceBinding(
+            platform: "ios",
+            attestationKeyId: "attestation-key",
+            deviceId: "ios-device",
+            offlinePublicKey: "offline-public-key",
+            attestationReportBase64: ""
+        )
+
+        XCTAssertThrowsError(
+            try CounterpartyOfflineProofVerifier().verifyDeviceBinding(
+                accountId: "account",
+                binding: binding,
+                expectedChallengeHashHex: Self.hexLowercased(Self.challengeBytes())
+            )
+        ) { error in
+            XCTAssertEqual(
+                (error as? OfflineProofVerifierError)?.errorDescription,
+                "Offline device binding iOS metadata is incomplete."
+            )
+        }
+    }
+
+    func testCounterpartyVerifierRoutesIosAppAttestProofThroughIosVerifier() throws {
+        let keyId = Data(repeating: 0x01, count: 32).base64EncodedString()
+        let binding = try ToriiOfflineDeviceBinding(
+            platform: "ios",
+            attestationKeyId: keyId,
+            deviceId: "ios-device",
+            offlinePublicKey: "offline-public-key",
+            attestationReportBase64: "not-empty",
+            iosTeamId: "TEAMID1234",
+            iosBundleId: "jp.co.soramitsu.iroha.offline",
+            iosEnvironment: "production"
+        )
+        let proof = try ToriiOfflineDeviceProof(
+            platform: "ios-appattest",
+            attestationKeyId: keyId,
+            challengeHashHex: Self.hexLowercased(Self.challengeBytes()),
+            assertionBase64: Data("assertion".utf8).base64EncodedString()
+        )
+
+        XCTAssertThrowsError(
+            try CounterpartyOfflineProofVerifier().verifyDeviceProof(binding: binding, proof: proof)
+        ) { error in
+            XCTAssertEqual(
+                (error as? OfflineProofVerifierError)?.errorDescription,
+                "iOS offline proofs must include a counter."
             )
         }
     }
@@ -255,6 +307,36 @@ final class OfflineProofVerifierTests: XCTestCase {
             XCTAssertThrowsError(try invalidBinding()) { error in
                 XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField(expectedField))
             }
+        }
+    }
+
+    func testIosVerifierAcceptsIosBindingWithAppAttestProofPlatformBeforeAssertionParsing() throws {
+        let keyId = Data(repeating: 0x02, count: 32).base64EncodedString()
+        let binding = try ToriiOfflineDeviceBinding(
+            platform: "ios",
+            attestationKeyId: keyId,
+            deviceId: "ios-device",
+            offlinePublicKey: "offline-public-key",
+            attestationReportBase64: "",
+            iosTeamId: "TEAMID1234",
+            iosBundleId: "jp.co.soramitsu.iroha.offline",
+            iosEnvironment: "production"
+        )
+        let proof = try ToriiOfflineDeviceProof(
+            platform: "ios-appattest",
+            attestationKeyId: keyId,
+            challengeHashHex: Self.hexLowercased(Self.challengeBytes()),
+            assertionBase64: Data("assertion".utf8).base64EncodedString(),
+            counter: 1
+        )
+
+        XCTAssertThrowsError(
+            try IosOfflineProofVerifier().verifyDeviceProof(binding: binding, proof: proof)
+        ) { error in
+            XCTAssertEqual(
+                (error as? OfflineProofVerifierError)?.errorDescription,
+                "Offline device proof assertion is invalid."
+            )
         }
     }
 

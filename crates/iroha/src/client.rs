@@ -4489,6 +4489,13 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
             norito::json::to_value(envelope).expect("serialize lane relay envelope to JSON")
         })
         .collect();
+    let lane_payload_ownerships: Vec<Value> = wire
+        .lane_payload_ownerships
+        .iter()
+        .map(|ownership| {
+            norito::json::to_value(ownership).expect("serialize lane payload ownership to JSON")
+        })
+        .collect();
     let lane_governance: Vec<Value> = wire
         .lane_governance
         .iter()
@@ -4778,6 +4785,10 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
     root.insert(
         "lane_relay_envelopes".into(),
         Value::Array(lane_relay_envelopes),
+    );
+    root.insert(
+        "lane_payload_ownerships".into(),
+        Value::Array(lane_payload_ownerships),
     );
     root.insert(
         "lane_governance_sealed_total".into(),
@@ -13267,6 +13278,28 @@ impl Client {
             .send()
     }
 
+    /// Convenience: GET `/v1/sorafs/moderation/ballots/{case_id}/{round_id}/no-show-plan`.
+    ///
+    /// # Errors
+    /// Returns an error if identifiers are blank, request construction, or the HTTP call fails.
+    pub fn get_sorafs_moderation_ballot_no_show_plan(
+        &self,
+        case_id: &str,
+        round_id: &str,
+    ) -> Result<Response<Vec<u8>>> {
+        let case_id = require_non_empty_path_segment(case_id, "case_id")?;
+        let round_id = require_non_empty_path_segment(round_id, "round_id")?;
+        let url = join_torii_url_with_path_segments(
+            &self.torii_url,
+            "v1/sorafs/moderation/ballots",
+            &[case_id, round_id, "no-show-plan"],
+        );
+        self.default_request(HttpMethod::GET, url)
+            .header("Accept", APPLICATION_JSON)
+            .build()?
+            .send()
+    }
+
     /// Convenience: GET `/v1/sorafs/moderation/ballots/events`.
     ///
     /// # Errors
@@ -19171,11 +19204,12 @@ mod tests {
                 SumeragiBlockSyncRosterStatus, SumeragiConsensusMessageHandlingEntry,
                 SumeragiConsensusMessageHandlingStatus, SumeragiDaGateReason,
                 SumeragiDaGateSatisfaction, SumeragiDaGateStatus, SumeragiKuraStoreStatus,
-                SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
-                SumeragiMissingBlockFetchStatus, SumeragiPeerKeyPolicyStatus,
-                SumeragiPendingRbcStatus, SumeragiQcEntry, SumeragiQcSnapshot,
-                SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus, SumeragiRbcStoreStatus,
-                SumeragiStatusWire, SumeragiV1StatusWire, SumeragiValidationRejectStatus,
+                SumeragiLanePayloadOwnership, SumeragiMembershipMismatchStatus,
+                SumeragiMembershipStatus, SumeragiMissingBlockFetchStatus,
+                SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcStatus, SumeragiProposalGateStatus,
+                SumeragiQcEntry, SumeragiQcSnapshot, SumeragiRbcMismatchEntry,
+                SumeragiRbcMismatchStatus, SumeragiRbcStoreStatus, SumeragiStatusWire,
+                SumeragiV1StatusWire, SumeragiValidationRejectStatus,
                 SumeragiViewChangeCauseStatus, SumeragiVoteValidationDropStatus,
             },
         },
@@ -19538,6 +19572,7 @@ mod tests {
                 drop_unsolicited_share_blocks_total: 4,
             },
             pacemaker_backpressure_deferrals_total: 6,
+            proposal_gate: SumeragiProposalGateStatus::default(),
             commit_pipeline_tick_total: 0,
             da_reschedule_total: 0,
             missing_block_fetch: SumeragiMissingBlockFetchStatus {
@@ -19641,6 +19676,7 @@ mod tests {
             ],
             lane_settlement_commitments: vec![settlement],
             lane_relay_envelopes: vec![relay_envelope.clone()],
+            lane_payload_ownerships: Vec::new(),
             lane_governance_sealed_total: 0,
             lane_governance_sealed_aliases: Vec::new(),
             lane_governance: vec![iroha_data_model::block::consensus::SumeragiLaneGovernance {
@@ -23113,6 +23149,7 @@ mod tests {
             peer_key_policy: SumeragiPeerKeyPolicyStatus::default(),
             block_sync_roster: SumeragiBlockSyncRosterStatus::default(),
             pacemaker_backpressure_deferrals_total: 0,
+            proposal_gate: SumeragiProposalGateStatus::default(),
             commit_pipeline_tick_total: 0,
             da_reschedule_total: 0,
             missing_block_fetch: SumeragiMissingBlockFetchStatus {
@@ -23214,6 +23251,7 @@ mod tests {
             ],
             lane_settlement_commitments: vec![settlement],
             lane_relay_envelopes: vec![relay],
+            lane_payload_ownerships: Vec::new(),
             lane_governance_sealed_total: 0,
             lane_governance_sealed_aliases: Vec::new(),
             lane_governance: vec![iroha_data_model::block::consensus::SumeragiLaneGovernance {
@@ -23447,6 +23485,18 @@ mod tests {
             chunk_root_mismatch_total: 1,
             last_timestamp_ms: 1_724_000_000_123,
         };
+        let lane_payload_ownership = SumeragiLanePayloadOwnership {
+            proposal_height: 12,
+            proposal_view: 5,
+            lane_id: LaneId::new(1),
+            dataspace_id: DataSpaceId::new(7),
+            lane_block_height: 3,
+            lane_block_view: 2,
+            subject_hash,
+            accepted_candidate_indices: vec![0, 2],
+            payload_ownership_hash: Hash::prehashed([0xBC; Hash::LENGTH]),
+            rbc_instance_hash: Hash::prehashed([0xBD; Hash::LENGTH]),
+        };
         let status = SumeragiStatusWire {
             canonical: SumeragiV1StatusWire::default(),
             mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_string(),
@@ -23552,6 +23602,7 @@ mod tests {
                 ..Default::default()
             },
             pacemaker_backpressure_deferrals_total: 6,
+            proposal_gate: SumeragiProposalGateStatus::default(),
             commit_pipeline_tick_total: 0,
             da_reschedule_total: 0,
             missing_block_fetch: SumeragiMissingBlockFetchStatus {
@@ -23655,6 +23706,7 @@ mod tests {
             ],
             lane_settlement_commitments: vec![settlement.clone()],
             lane_relay_envelopes: vec![relay_envelope.clone()],
+            lane_payload_ownerships: vec![lane_payload_ownership.clone()],
             lane_governance_sealed_total: 0,
             lane_governance_sealed_aliases: Vec::new(),
             lane_governance: vec![iroha_data_model::block::consensus::SumeragiLaneGovernance {
@@ -24035,6 +24087,21 @@ mod tests {
         assert_eq!(
             settlement_entries[0], expected_settlement,
             "lane settlement commitment mismatch"
+        );
+        let ownership_entries = root
+            .get("lane_payload_ownerships")
+            .and_then(Value::as_array)
+            .expect("lane payload ownership entries array");
+        assert_eq!(
+            ownership_entries.len(),
+            1,
+            "lane payload ownership length mismatch"
+        );
+        let expected_ownership =
+            norito::json::to_value(&lane_payload_ownership).expect("serialize lane ownership");
+        assert_eq!(
+            ownership_entries[0], expected_ownership,
+            "lane payload ownership mismatch"
         );
 
         let highest_qc = root
@@ -25007,6 +25074,37 @@ mod tests {
             "/v1/sorafs/moderation/ballots/case%2F401/round%207"
         );
         assert_eq!(snapshot.url.query(), Some("limit=5"));
+    }
+
+    #[test]
+    fn sorafs_moderation_ballot_no_show_plan_targets_endpoint() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .get_sorafs_moderation_ballot_no_show_plan("case/401", "round 7")
+                .expect("moderation ballot no-show plan request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(
+            snapshot.url.path(),
+            "/v1/sorafs/moderation/ballots/case%2F401/round%207/no-show-plan"
+        );
+        assert_eq!(snapshot.url.query(), None);
+    }
+
+    #[test]
+    fn sorafs_moderation_ballot_no_show_plan_rejects_blank_round_id() {
+        let client = client_with_base_url(base_url());
+        let err = client
+            .get_sorafs_moderation_ballot_no_show_plan("case-401", "   ")
+            .expect_err("blank round id must be rejected");
+        assert!(err.to_string().contains("round_id"));
     }
 
     #[test]

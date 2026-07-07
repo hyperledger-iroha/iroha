@@ -1150,6 +1150,17 @@ test("BSC Groth16 material converter maps SnarkJS verifier key to Solidity const
   );
 });
 
+test("BSC Groth16 material converter rejects retired network option alias", () => {
+  assert.throws(
+    () =>
+      snarkjsVerificationKeyToBscVerifierMaterial(
+        verificationKey(),
+        { network: "mainnet" },
+      ),
+    /BSC Groth16 material network alias was removed; use --bsc-network/u,
+  );
+});
+
 test("BSC Groth16 material converter rejects verifier keys with wrong public input count", () => {
   assert.throws(
     () =>
@@ -1405,6 +1416,28 @@ test("materialize rejects copied input collisions with fixed outputs before writ
         ]),
       /--zkey must not write the same path as --r1cs/u,
     );
+
+    const linkedOutDir = join(root, "linked-out");
+    await symlink(outDir, linkedOutDir);
+    await assert.rejects(
+      () =>
+        main([
+          "materialize",
+          "--bsc-network",
+          "testnet",
+          "--circuit-profile",
+          BSC_SIGNAL_BINDING_CIRCUIT_PROFILE,
+          "--r1cs",
+          join(linkedOutDir, "testnet-bsc-groth16-verifier-key.json"),
+          "--zkey",
+          zkeyPath,
+          "--snarkjs-verifier-key",
+          verifierKeyPath,
+          "--out-dir",
+          outDir,
+        ]),
+      /BSC Groth16 verifier key output must not be the same path as --r1cs/u,
+    );
     for (const [pathName, text] of files) {
       assert.equal(await readFile(pathName, "utf8"), text);
     }
@@ -1491,44 +1524,68 @@ test("materialize redacts encoded sensitive self-check blockers", async () => {
   }
 });
 
-test("generate refuses local setup unless explicitly constrained to testnet candidates", async () => {
-  await assert.rejects(
-    () =>
-      main([
-        "generate",
-        "--bsc-network",
-        "testnet",
-        "--create-local-ptau-power",
-        "8",
-      ]),
-    /requires --allow-local-testnet-setup true/u,
-  );
-  await assert.rejects(
-    () =>
-      main([
-        "generate",
-        "--bsc-network",
-        "mainnet",
-        "--create-local-ptau-power",
-        "8",
-        "--allow-local-testnet-setup",
-        "true",
-      ]),
-    /only allowed for testnet candidates/u,
-  );
+test("generate rejects removed local setup options before PTAU reads", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-removed-local-"));
+  try {
+    const missingPtau = join(root, "secret-token-missing.ptau");
+    for (const [flag, value] of [
+      ["--create-local-ptau-power", "8"],
+      ["--allow-local-testnet-setup", "true"],
+    ]) {
+      await assert.rejects(
+        () =>
+          main([
+            "generate",
+            "--bsc-network",
+            "testnet",
+            "--ptau",
+            missingPtau,
+            flag,
+            value,
+          ]),
+        (error) => {
+          assert.match(
+            error.message,
+            new RegExp(
+              `${flag} was removed; generate requires externally supplied Powers of Tau material`,
+              "u",
+            ),
+          );
+          assert.doesNotMatch(error.message, /secret-token/u);
+          return true;
+        },
+      );
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
-test("generate rejects malformed local setup boolean options before setup work", async () => {
-  for (const value of malformedBooleanOptionValues) {
-    await assert.rejects(
-      () =>
-        generateBscGroth16Material({
-          "bsc-network": "testnet",
-          "create-local-ptau-power": "8",
-          "allow-local-testnet-setup": value,
-        }),
-      /--allow-local-testnet-setup must be true or false/u,
-    );
+test("generate rejects removed local setup options without boolean parsing", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-removed-local-bool-"));
+  try {
+    const ptau = join(root, "secret-token-unused.ptau");
+    for (const key of [
+      "create-local-ptau-power",
+      "allow-local-testnet-setup",
+    ]) {
+      for (const value of malformedBooleanOptionValues) {
+        await assert.rejects(
+          () =>
+            generateBscGroth16Material({
+              "bsc-network": "testnet",
+              ptau,
+              [key]: value,
+            }),
+          new RegExp(
+            `--${key} was removed; generate requires externally supplied Powers of Tau material`,
+            "u",
+          ),
+        );
+      }
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });
 
@@ -4187,6 +4244,50 @@ test("evidence-template writes manifest-bound drafts that remain unsigned blocke
       /already exists; pass --overwrite true/u,
     );
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("evidence-template skips hostile temp symlink collisions", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-template-temp-"));
+  const originalNow = Date.now;
+  const originalRandom = Math.random;
+  try {
+    const { result } = await writeAttestationRequestCandidate(root, {
+      evidence: false,
+    });
+    const outDir = join(root, "review-evidence");
+    await mkdir(outDir, { recursive: true });
+    const semanticReportPath = join(outDir, "semantic-review-report.md");
+    const trapTarget = join(root, "template-temp-target.md");
+    const sentinel = "sentinel:bsc-groth16-template-temp-target\n";
+    await writeFile(trapTarget, sentinel);
+    const tempOne = `${semanticReportPath}.tmp-${process.pid}-424242-8`;
+    const tempTwo = `${semanticReportPath}.tmp-${process.pid}-424242-c`;
+    await symlink(trapTarget, tempOne);
+    await symlink(trapTarget, tempTwo);
+    const forcedRandoms = [0.5, 0.75, 0.875];
+    Date.now = () => 424242;
+    Math.random = () => forcedRandoms.shift() ?? 0.875;
+
+    const templateResult = await writeBscGroth16EvidenceTemplates({
+      manifest: result.manifest,
+      "out-dir": outDir,
+    });
+
+    assert.equal(templateResult.ok, true);
+    assert.equal(await readFile(trapTarget, "utf8"), sentinel);
+    assert.equal(await readFile(tempOne, "utf8"), sentinel);
+    assert.equal(await readFile(tempTwo, "utf8"), sentinel);
+    const index = JSON.parse(await readFile(templateResult.out, "utf8"));
+    assert.equal(index.schema, BSC_GROTH16_EVIDENCE_TEMPLATE_PACKAGE_SCHEMA);
+    assert.match(
+      await readFile(templateResult.semanticReviewReport, "utf8"),
+      /SCCP BSC Groth16 Semantic Review/u,
+    );
+  } finally {
+    Date.now = originalNow;
+    Math.random = originalRandom;
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -6979,256 +7080,10 @@ test("proof-self-test rejects manifests that are not production-ready", async ()
   }
 });
 
-test("proof-self-test can refresh explicit testnet candidate evidence without marking it ready", async () => {
-  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-proof-candidate-"));
+test("proof-self-test rejects removed unready candidate flags before manifest reads", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-proof-removed-flag-"));
   try {
-    const candidate = await writePreflightCandidate(root, {
-      manifest: {
-        productionReady: false,
-        productionBlockers: ["candidate awaits external ceremony attestations"],
-      },
-    });
-    const witnessWasm = join(
-      candidate.outDir,
-      `${BSC_FULL_SCCP_CIRCUIT_PROFILE}_js`,
-      `${BSC_FULL_SCCP_CIRCUIT_PROFILE}.wasm`,
-    );
-    const snarkjsStub = await writeSnarkjsStub(
-      root,
-      candidate.snarkjsVerificationKey,
-      { supportProofSelfTest: true },
-    );
-    const out = join(candidate.outDir, "testnet-bsc-groth16-proof-self-test.json");
-
-    const result = await main([
-      "proof-self-test",
-      "--manifest",
-      candidate.manifest,
-      "--witness-wasm",
-      witnessWasm,
-      "--snarkjs-bin",
-      snarkjsStub,
-      "--allow-unready-candidate",
-      "true",
-      "--out",
-      out,
-    ]);
-    const report = JSON.parse(await readFile(out, "utf8"));
-    const circomStub = await writeCircomStub(root);
-    const preflight = await preflightBscGroth16Material({
-      "bsc-network": "testnet",
-      "out-dir": candidate.outDir,
-      "circom-bin": circomStub,
-      "snarkjs-bin": snarkjsStub,
-    });
-
-    assert.equal(result.ok, true);
-    assert.equal(report.manifest.productionReady, false);
-    assert.deepEqual(report.manifest.productionBlockers, [
-      "candidate awaits external ceremony attestations",
-    ]);
-    assert.equal(report.adversarialChecks.publicSignalMismatch.rejected, 9);
-    assert.equal(report.adversarialChecks.nonBooleanValueBit.rejected, 1);
-    assert.equal(preflight.ready, false);
-    assert.match(
-      preflight.problems.join("\n"),
-      /proof self-test report blocker: proof self-test manifest\.productionReady must be true/u,
-    );
-    assert.doesNotMatch(
-      preflight.problems.join("\n"),
-      /adversarialChecks block is required/u,
-    );
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("proof-self-test can refresh explicit mainnet candidate evidence without marking it ready", async () => {
-  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-proof-mainnet-refresh-"));
-  try {
-    const candidate = await writePreflightCandidate(root, {
-      bscNetwork: "mainnet",
-      manifest: {
-        productionReady: false,
-        productionBlockers: ["mainnet candidate awaits external ceremony attestations"],
-      },
-    });
-    const witnessWasm = join(
-      candidate.outDir,
-      `${BSC_FULL_SCCP_CIRCUIT_PROFILE}_js`,
-      `${BSC_FULL_SCCP_CIRCUIT_PROFILE}.wasm`,
-    );
-    const snarkjsStub = await writeSnarkjsStub(
-      root,
-      candidate.snarkjsVerificationKey,
-      { supportProofSelfTest: true },
-    );
-    const out = join(candidate.outDir, "mainnet-bsc-groth16-proof-self-test.json");
-
-    const result = await main([
-      "proof-self-test",
-      "--manifest",
-      candidate.manifest,
-      "--witness-wasm",
-      witnessWasm,
-      "--snarkjs-bin",
-      snarkjsStub,
-      "--allow-unready-mainnet-candidate",
-      "true",
-      "--out",
-      out,
-    ]);
-    const report = JSON.parse(await readFile(out, "utf8"));
-    const circomStub = await writeCircomStub(root);
-    const preflight = await preflightBscGroth16Material({
-      "bsc-network": "mainnet",
-      "out-dir": candidate.outDir,
-      "circom-bin": circomStub,
-      "snarkjs-bin": snarkjsStub,
-    });
-
-    assert.equal(result.ok, true);
-    assert.equal(report.bscNetwork, "mainnet");
-    assert.equal(report.chainIdHex, BSC_MAINNET_CHAIN_ID_HEX);
-    assert.equal(report.networkIdHex, BSC_MAINNET_NETWORK_ID_HEX);
-    assert.equal(report.manifest.productionReady, false);
-    assert.deepEqual(report.manifest.productionBlockers, [
-      "mainnet candidate awaits external ceremony attestations",
-    ]);
-    assert.equal(report.adversarialChecks.publicSignalMismatch.rejected, 9);
-    assert.equal(report.adversarialChecks.nonBooleanValueBit.rejected, 1);
-    assert.equal(preflight.ready, false);
-    assert.match(
-      preflight.problems.join("\n"),
-      /proof self-test report blocker: proof self-test manifest\.productionReady must be true/u,
-    );
-    assert.doesNotMatch(
-      preflight.problems.join("\n"),
-      /adversarialChecks block is required/u,
-    );
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("proof-self-test refuses unready mainnet candidate reports even with opt-in", async () => {
-  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-proof-mainnet-candidate-"));
-  try {
-    const candidate = await writePreflightCandidate(root, {
-      bscNetwork: "mainnet",
-      manifest: {
-        productionReady: false,
-        productionBlockers: ["candidate awaits external ceremony attestations"],
-      },
-    });
-    const snarkjsStub = await writeSnarkjsStub(
-      root,
-      candidate.snarkjsVerificationKey,
-      { supportProofSelfTest: true },
-    );
-
-    await assert.rejects(
-      () =>
-        main([
-          "proof-self-test",
-          "--manifest",
-          candidate.manifest,
-          "--snarkjs-bin",
-          snarkjsStub,
-          "--allow-unready-candidate",
-          "true",
-          "--out",
-          join(root, "proof-self-test.json"),
-        ]),
-      /--allow-unready-candidate is only allowed for testnet candidate proof reports/u,
-    );
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("proof-self-test refuses mainnet candidate flag on testnet reports", async () => {
-  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-proof-testnet-mainnet-flag-"));
-  try {
-    const candidate = await writePreflightCandidate(root, {
-      manifest: {
-        productionReady: false,
-        productionBlockers: ["candidate awaits external ceremony attestations"],
-      },
-    });
-    const snarkjsStub = await writeSnarkjsStub(
-      root,
-      candidate.snarkjsVerificationKey,
-      { supportProofSelfTest: true },
-    );
-
-    await assert.rejects(
-      () =>
-        main([
-          "proof-self-test",
-          "--manifest",
-          candidate.manifest,
-          "--snarkjs-bin",
-          snarkjsStub,
-          "--allow-unready-mainnet-candidate",
-          "true",
-          "--out",
-          join(root, "proof-self-test.json"),
-        ]),
-      /--allow-unready-mainnet-candidate is only allowed for mainnet candidate proof reports/u,
-    );
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("proof-self-test rejects both unready candidate flags", async () => {
-  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-proof-both-candidate-flags-"));
-  try {
-    const candidate = await writePreflightCandidate(root, {
-      bscNetwork: "mainnet",
-      manifest: {
-        productionReady: false,
-        productionBlockers: ["mainnet candidate awaits external ceremony attestations"],
-      },
-    });
-    const snarkjsStub = await writeSnarkjsStub(
-      root,
-      candidate.snarkjsVerificationKey,
-      { supportProofSelfTest: true },
-    );
-
-    await assert.rejects(
-      () =>
-        main([
-          "proof-self-test",
-          "--manifest",
-          candidate.manifest,
-          "--snarkjs-bin",
-          snarkjsStub,
-          "--allow-unready-candidate",
-          "true",
-          "--allow-unready-mainnet-candidate",
-          "true",
-          "--out",
-          join(root, "proof-self-test.json"),
-        ]),
-      /--allow-unready-candidate and --allow-unready-mainnet-candidate are mutually exclusive/u,
-    );
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("proof-self-test rejects unready candidate flags on production-ready manifests", async () => {
-  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-proof-ready-unready-flag-"));
-  try {
-    const candidate = await writePreflightCandidate(root);
-    const snarkjsStub = await writeSnarkjsStub(
-      root,
-      candidate.snarkjsVerificationKey,
-      { supportProofSelfTest: true },
-    );
+    const missingManifest = join(root, "secret-token-missing-manifest.json");
 
     for (const flag of [
       "--allow-unready-candidate",
@@ -7239,15 +7094,25 @@ test("proof-self-test rejects unready candidate flags on production-ready manife
           main([
             "proof-self-test",
             "--manifest",
-            candidate.manifest,
-            "--snarkjs-bin",
-            snarkjsStub,
+            missingManifest,
             flag,
             "true",
+            "--snarkjs-bin",
+            join(root, "must-not-run-snarkjs"),
             "--out",
             join(root, "proof-self-test.json"),
           ]),
-        /unready candidate proof-self-test flags are only allowed for manifests that are not production-ready/u,
+        (error) => {
+          assert.match(
+            error.message,
+            new RegExp(
+              `${flag} was removed; proof-self-test requires productionReady Groth16 material manifests`,
+              "u",
+            ),
+          );
+          assert.doesNotMatch(error.message, /secret-token/u);
+          return true;
+        },
       );
     }
   } finally {
@@ -7255,8 +7120,42 @@ test("proof-self-test rejects unready candidate flags on production-ready manife
   }
 });
 
-test("proof-self-test rejects malformed unready-candidate boolean options", async () => {
-  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-proof-boolean-"));
+test("proof-self-test rejects both removed unready candidate flags before manifest reads", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-proof-both-removed-flags-"));
+  try {
+    const missingManifest = join(root, "secret-token-missing-manifest.json");
+
+    await assert.rejects(
+      () =>
+        main([
+          "proof-self-test",
+          "--manifest",
+          missingManifest,
+          "--allow-unready-candidate",
+          "true",
+          "--allow-unready-mainnet-candidate",
+          "true",
+          "--snarkjs-bin",
+          join(root, "must-not-run-snarkjs"),
+          "--out",
+          join(root, "proof-self-test.json"),
+        ]),
+      (error) => {
+        assert.match(
+          error.message,
+          /--allow-unready-candidate was removed; proof-self-test requires productionReady Groth16 material manifests/u,
+        );
+        assert.doesNotMatch(error.message, /secret-token/u);
+        return true;
+      },
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("proof-self-test rejects removed unready candidate options without boolean parsing", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-proof-removed-boolean-"));
   try {
     const candidate = await writePreflightCandidate(root, {
       manifest: {
@@ -7276,7 +7175,10 @@ test("proof-self-test rejects malformed unready-candidate boolean options", asyn
               manifest: candidate.manifest,
               [key]: value,
             }),
-          new RegExp(`--${key} must be true or false`, "u"),
+          new RegExp(
+            `--${key} was removed; proof-self-test requires productionReady Groth16 material manifests`,
+            "u",
+          ),
         );
       }
     }
@@ -9380,6 +9282,10 @@ test("generate command help is exposed through the material CLI", async () => {
     result.help,
     /materialize .*--semantic-attestation .*--trusted-attestation-signer/u,
   );
+  assert.doesNotMatch(result.help, /--create-local-ptau-power/u);
+  assert.doesNotMatch(result.help, /--allow-local-testnet-setup/u);
+  assert.doesNotMatch(result.help, /--allow-unready-candidate/u);
+  assert.doesNotMatch(result.help, /--allow-unready-mainnet-candidate/u);
   assert.match(result.help, /sccp_bsc_groth16_material\.mjs preflight/u);
   assert.match(result.help, new RegExp(BSC_SIGNAL_BINDING_CIRCUIT_PROFILE, "u"));
   assert.match(
@@ -9394,6 +9300,27 @@ test("material CLI subcommand help returns usage without operator probes", async
   assert.match(result.help, /sccp_bsc_groth16_material\.mjs preflight/u);
   assert.equal(Object.prototype.hasOwnProperty.call(result, "toolchain"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(result, "artifacts"), false);
+});
+
+test("BSC Groth16 material CLI rejects retired network option aliases before work", async () => {
+  const secretNetwork = "secret-token-bsc-groth16-network";
+
+  for (const args of [
+    ["preflight", "--network", secretNetwork, "--out-dir", "missing-output"],
+    ["generate", `--network=${secretNetwork}`, "--ptau", "missing.ptau"],
+    ["materialize", "--network", secretNetwork, "--r1cs", "missing.r1cs"],
+    ["proof-self-test", "--network", secretNetwork, "--manifest", "missing.json"],
+  ]) {
+    await assert.rejects(
+      () => main(args),
+      (error) => {
+        assert.match(error.message, /Unknown option\./u);
+        assert.doesNotMatch(error.message, new RegExp(secretNetwork, "u"));
+        assert.doesNotMatch(error.message, /missing/u);
+        return true;
+      },
+    );
+  }
 });
 
 test("materialize CLI refuses signed attestation inputs and requires finalization flow", async () => {

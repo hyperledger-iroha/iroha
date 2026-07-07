@@ -12,6 +12,75 @@ abs_path() {
   fi
 }
 
+abs_output_path() {
+  local input="$1"
+  if [[ "$input" = /* ]]; then
+    printf '%s\n' "$input"
+  else
+    printf '%s/%s\n' "$(pwd -P)" "$input"
+  fi
+}
+
+reject_symlinked_output_parent() {
+  local label="$1"
+  local target="$2"
+  local parent
+  parent="$(dirname "$target")"
+  local current="/"
+  local rest="${parent#/}"
+  local component
+  IFS='/' read -r -a components <<< "$rest"
+  for component in "${components[@]}"; do
+    [[ -z "$component" || "$component" == "." ]] && continue
+    if [[ "$component" == ".." ]]; then
+      echo "error: ${label} parent must not contain parent-directory segments" >&2
+      exit 1
+    fi
+    if [[ "$current" == "/" ]]; then
+      current="/${component}"
+    else
+      current="${current}/${component}"
+    fi
+    if [[ -L "$current" ]]; then
+      echo "error: ${label} parent must not be a symlink: ${current}" >&2
+      exit 1
+    fi
+    if [[ -e "$current" && ! -d "$current" ]]; then
+      echo "error: ${label} parent component must be a directory: ${current}" >&2
+      exit 1
+    fi
+    if [[ ! -e "$current" ]]; then
+      break
+    fi
+  done
+}
+
+validate_output_file_path() {
+  local label="$1"
+  local target="$2"
+  if [[ -z "$target" ]]; then
+    echo "error: ${label} path must not be empty" >&2
+    exit 1
+  fi
+  if [[ -L "$target" ]]; then
+    echo "error: ${label} must not be a symlink: ${target}" >&2
+    exit 1
+  fi
+  if [[ -e "$target" && ! -f "$target" ]]; then
+    echo "error: ${label} must be a regular file path: ${target}" >&2
+    exit 1
+  fi
+  reject_symlinked_output_parent "$label" "$target"
+}
+
+prepare_output_file_path() {
+  local label="$1"
+  local target="$2"
+  validate_output_file_path "$label" "$target"
+  mkdir -p "$(dirname "$target")"
+  validate_output_file_path "$label" "$target"
+}
+
 usage() {
   cat <<'USAGE'
 sorafs_direct_mode_smoke.sh [--plan PATH] [--manifest-id HEX] --provider name=ALIAS,provider-id=HEX,base-url=URL,stream-token=BASE64 [...]
@@ -230,7 +299,13 @@ if [[ ! -f "$policy_path" ]]; then
   exit 1
 fi
 
-providers=("${providers_config[@]}" "${providers_cli[@]}")
+providers=()
+if (( ${#providers_config[@]} )); then
+  providers+=("${providers_config[@]}")
+fi
+if (( ${#providers_cli[@]} )); then
+  providers+=("${providers_cli[@]}")
+fi
 if [[ "${#providers[@]}" -eq 0 ]]; then
   echo "error: at least one --provider specification is required" >&2
   exit 1
@@ -245,16 +320,21 @@ fi
 if [[ -z "$output_path" ]]; then
   output_path="${workspace}/artifacts/sorafs_direct_mode/payload.bin"
 fi
+output_path="$(abs_output_path "$output_path")"
 if [[ -z "$summary_path" ]]; then
-  summary_path="$(dirname "$(abs_path "$output_path")")/fetch_summary.json"
+  summary_path="$(dirname "$output_path")/fetch_summary.json"
 else
-  summary_path="$(abs_path "$summary_path")"
+  summary_path="$(abs_output_path "$summary_path")"
 fi
-output_path="$(abs_path "$output_path")"
-mkdir -p "$(dirname "$output_path")"
-mkdir -p "$(dirname "$summary_path")"
 if [[ -n "$adoption_report_path" ]] ; then
-  adoption_report_path="$(abs_path "$adoption_report_path")"
+  adoption_report_path="$(abs_output_path "$adoption_report_path")"
+elif [[ ${skip_adoption_check} -eq 0 ]]; then
+  adoption_report_path="$(dirname "$summary_path")/adoption_report.json"
+fi
+prepare_output_file_path "payload output" "$output_path"
+prepare_output_file_path "summary JSON report" "$summary_path"
+if [[ -n "$adoption_report_path" ]] ; then
+  prepare_output_file_path "adoption report" "$adoption_report_path"
 fi
 
 persist_path=""
@@ -300,7 +380,8 @@ if [[ -n "$persist_path" ]]; then
   if [[ "$persist_path" != /* ]]; then
     persist_path="${workspace}/${persist_path}"
   fi
-  mkdir -p "$(dirname "$persist_path")"
+  persist_path="$(abs_output_path "$persist_path")"
+  prepare_output_file_path "scoreboard output" "$persist_path"
 fi
 
 if [[ -n "$cli_path" ]]; then
@@ -377,11 +458,6 @@ if [[ ${skip_adoption_check} -eq 0 ]]; then
   if [[ -z "$min_providers_effective" || "$min_providers_effective" -lt 1 ]]; then
     min_providers_effective=1
   fi
-  if [[ -z "$adoption_report_path" ]]; then
-    adoption_report_path="$(dirname "$summary_path")/adoption_report.json"
-  fi
-  mkdir -p "$(dirname "$adoption_report_path")"
-
   echo "Running cargo xtask sorafs-adoption-check (min providers: ${min_providers_effective})"
   # shellcheck disable=SC2206
   ADOPTION_FLAGS=()

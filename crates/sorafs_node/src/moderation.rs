@@ -13,6 +13,8 @@ use iroha_data_model::sorafs::moderation::{
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use sorafs_manifest::{
     SORAFS_MODERATION_BALLOT_GOVERNANCE_EVENT_VERSION_V1,
+    SoraFsModerationBallotGovernanceChallengeDecisionV1,
+    SoraFsModerationBallotGovernanceChallengeKindV1, SoraFsModerationBallotGovernanceChallengeV1,
     SoraFsModerationBallotGovernanceEventKindV1, SoraFsModerationBallotGovernanceEventV1,
     SoraFsModerationBallotGovernanceTallyV1, SoraFsModerationVoteChoiceV1,
     SoraFsModerationVoteCountsV1,
@@ -20,6 +22,8 @@ use sorafs_manifest::{
 use thiserror::Error;
 
 const MODERATION_ROSTER_HASH_DOMAIN_V1: &[u8] = b"sorafs.moderation.local.panel-roster-hash.v1";
+const MODERATION_BALLOT_NO_SHOW_PENALTY_PLAN_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.local.ballot-no-show-penalty-plan.v1";
 const MODERATION_SCREENING_RECORD_DOMAIN_V1: &[u8] = b"sorafs.moderation.local.screening-record.v1";
 const MODERATION_QUARANTINE_RECORD_DOMAIN_V1: &[u8] =
     b"sorafs.moderation.local.quarantine-record.v1";
@@ -37,6 +41,17 @@ const MODERATION_QUARANTINE_OBJECT_KEYSTREAM_DOMAIN_V1: &[u8] =
     b"sorafs.moderation.local.quarantine-object.keystream.v1";
 const MODERATION_QUARANTINE_OBJECT_AUTH_DOMAIN_V1: &[u8] =
     b"sorafs.moderation.local.quarantine-object.auth.v1";
+const MODERATION_EVIDENCE_VIEWER_SESSION_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.local.evidence-viewer-session.v1";
+const MODERATION_EVIDENCE_VIEWER_ACCESS_EVENT_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.local.evidence-viewer-access-event.v1";
+const MODERATION_EVIDENCE_VIEWER_AUDIT_REPORT_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.local.evidence-viewer-audit-report.v1";
+const MODERATION_EVIDENCE_VIEWER_AUDIT_DIGEST_SET_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.local.evidence-viewer-audit-digest-set.v1";
+const MODERATION_EVIDENCE_VIEWER_MAX_SESSION_TTL_MS: u64 = 15 * 60 * 1_000;
+const MODERATION_EVIDENCE_VIEWER_AUDIT_REPORT_MAX_WINDOW_SECS: u64 = 24 * 60 * 60;
+pub(crate) const MODERATION_EVIDENCE_VIEWER_AUDIT_REPORT_VERSION_V1: u16 = 1;
 pub(crate) const MODERATION_QUARANTINE_OBJECT_ENVELOPE_VERSION_V1: u16 = 1;
 pub(crate) const MODERATION_QUARANTINE_OBJECT_ALGORITHM_V1: &str = "blake3-xof-local-seal-v1";
 pub(crate) const MODERATION_QUARANTINE_OBJECTS_DIR: &str = "objects";
@@ -60,7 +75,7 @@ pub fn local_moderation_panel_roster_hash(juror_ids: &[String], quorum: u16) -> 
 }
 
 /// Local moderation ballot announcement accepted by the lifecycle runtime.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationBallotAnnouncement {
     /// Immutable case context bound by every commit and reveal.
     pub context: SoraFsModerationBallotContextV1,
@@ -85,7 +100,7 @@ pub struct ModerationBallotAnnouncement {
 }
 
 /// Confirmed appeal deposit metadata captured at moderation intake.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationAppealDeposit {
     /// Confirmed native asset-lock escrow id.
     pub escrow_id_hex: String,
@@ -107,6 +122,154 @@ pub struct ModerationAppealDeposit {
     pub idempotency_key: String,
     /// Canonical lowercase evidence hashes used to derive the escrow id.
     pub evidence_hashes_hex: Vec<String>,
+}
+
+/// Local moderation ballot challenge type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub enum ModerationBallotChallengeKind {
+    /// The announced panel roster or roster hash is disputed.
+    RosterMismatch,
+    /// A duplicate commitment attempt or duplicate-commit evidence is disputed.
+    DuplicateCommit,
+    /// A commitment or reveal is alleged to be bound to the wrong payload.
+    PayloadMismatch,
+    /// A juror eligibility or authority assertion is disputed.
+    JurorEligibility,
+    /// The evidence bundle or policy binding is disputed.
+    EvidenceMismatch,
+    /// Operator-reviewed challenge category outside the fixed local labels.
+    Other,
+}
+
+impl ModerationBallotChallengeKind {
+    fn requires_target_juror(self) -> bool {
+        matches!(
+            self,
+            Self::DuplicateCommit | Self::PayloadMismatch | Self::JurorEligibility
+        )
+    }
+}
+
+/// Local moderation ballot challenge decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub enum ModerationBallotChallengeDecision {
+    /// The challenge was rejected and the ballot may continue.
+    Rejected,
+    /// The challenge was accepted and higher-level dispute handling must resolve the ballot.
+    Accepted,
+}
+
+/// Input used to raise a local moderation ballot challenge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModerationBallotChallengeInput {
+    /// Operator- or juror-supplied challenge id unique within the ballot.
+    pub challenge_id: String,
+    /// Moderation or appeal case identifier.
+    pub case_id: String,
+    /// Moderation ballot round identifier.
+    pub round_id: String,
+    /// Canonical account or service identifier raising the challenge.
+    pub challenger_id: String,
+    /// Challenge category.
+    pub kind: ModerationBallotChallengeKind,
+    /// Juror targeted by the challenge, when the category requires one.
+    pub target_juror_id: Option<String>,
+    /// Digest of the payload-free challenge evidence packet.
+    pub evidence_digest: [u8; 32],
+    /// Payload-free operator-readable reason label.
+    pub reason: String,
+}
+
+/// Input used to resolve a local moderation ballot challenge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModerationBallotChallengeResolution {
+    /// Moderation or appeal case identifier.
+    pub case_id: String,
+    /// Moderation ballot round identifier.
+    pub round_id: String,
+    /// Challenge id being resolved.
+    pub challenge_id: String,
+    /// Canonical account or service identifier resolving the challenge.
+    pub resolved_by: String,
+    /// Resolution decision.
+    pub decision: ModerationBallotChallengeDecision,
+    /// Optional payload-free resolution note.
+    pub note: Option<String>,
+}
+
+/// Durable local moderation ballot challenge record.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct ModerationBallotChallengeRecord {
+    /// Challenge id unique within the ballot.
+    pub challenge_id: String,
+    /// Moderation or appeal case identifier.
+    pub case_id: String,
+    /// Moderation ballot round identifier.
+    pub round_id: String,
+    /// Canonical account or service identifier raising the challenge.
+    pub challenger_id: String,
+    /// Challenge category.
+    pub kind: ModerationBallotChallengeKind,
+    /// Juror targeted by the challenge, when any.
+    pub target_juror_id: Option<String>,
+    /// Digest of the payload-free challenge evidence packet.
+    pub evidence_digest: [u8; 32],
+    /// Payload-free operator-readable reason label.
+    pub reason: String,
+    /// UTC timestamp (milliseconds) when the challenge was raised.
+    pub raised_at_unix_ms: u64,
+    /// Resolution decision, when reviewed.
+    pub decision: Option<ModerationBallotChallengeDecision>,
+    /// Canonical account or service identifier that resolved the challenge.
+    pub resolved_by: Option<String>,
+    /// UTC timestamp (milliseconds) when the challenge was resolved.
+    pub resolved_at_unix_ms: Option<u64>,
+    /// Optional payload-free resolution note.
+    pub resolution_note: Option<String>,
+}
+
+impl From<ModerationBallotChallengeKind> for SoraFsModerationBallotGovernanceChallengeKindV1 {
+    fn from(kind: ModerationBallotChallengeKind) -> Self {
+        match kind {
+            ModerationBallotChallengeKind::RosterMismatch => Self::RosterMismatch,
+            ModerationBallotChallengeKind::DuplicateCommit => Self::DuplicateCommit,
+            ModerationBallotChallengeKind::PayloadMismatch => Self::PayloadMismatch,
+            ModerationBallotChallengeKind::JurorEligibility => Self::JurorEligibility,
+            ModerationBallotChallengeKind::EvidenceMismatch => Self::EvidenceMismatch,
+            ModerationBallotChallengeKind::Other => Self::Other,
+        }
+    }
+}
+
+impl From<ModerationBallotChallengeDecision>
+    for SoraFsModerationBallotGovernanceChallengeDecisionV1
+{
+    fn from(decision: ModerationBallotChallengeDecision) -> Self {
+        match decision {
+            ModerationBallotChallengeDecision::Rejected => Self::Rejected,
+            ModerationBallotChallengeDecision::Accepted => Self::Accepted,
+        }
+    }
+}
+
+impl From<&ModerationBallotChallengeRecord> for SoraFsModerationBallotGovernanceChallengeV1 {
+    fn from(record: &ModerationBallotChallengeRecord) -> Self {
+        Self {
+            challenge_id: record.challenge_id.clone(),
+            case_id: record.case_id.clone(),
+            round_id: record.round_id.clone(),
+            challenger_id: record.challenger_id.clone(),
+            kind: record.kind.into(),
+            target_juror_id: record.target_juror_id.clone(),
+            evidence_digest: record.evidence_digest,
+            reason: record.reason.clone(),
+            raised_at_unix_ms: record.raised_at_unix_ms,
+            decision: record.decision.map(Into::into),
+            resolved_by: record.resolved_by.clone(),
+            resolved_at_unix_ms: record.resolved_at_unix_ms,
+            resolution_note: record.resolution_note.clone(),
+        }
+    }
 }
 
 /// Local registry record for an admitted moderation reproducibility manifest.
@@ -381,6 +544,290 @@ pub struct ModerationQuarantineObjectSnapshot {
     pub objects: Vec<ModerationQuarantineObjectRecord>,
 }
 
+/// Payload-free local evidence viewer session admission request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModerationEvidenceViewerSessionInput {
+    /// Stable quarantine id whose sealed object will be reviewed.
+    pub quarantine_id: [u8; 16],
+    /// Canonical operator or service account that requested the viewer session.
+    pub requested_by: String,
+    /// Canonical juror, auditor, or legal reviewer account represented by the session.
+    pub viewer_account: String,
+    /// Role label scoped to this evidence review session.
+    pub viewer_role: String,
+    /// Human-readable purpose bound to the audit manifest.
+    pub purpose: String,
+    /// Digest of the device/user attestation transcript.
+    pub attestation_digest: [u8; 32],
+    /// Digest of the per-session watermark metadata.
+    pub watermark_metadata_digest: [u8; 32],
+    /// Digest of the session nonce or runtime-only token preimage.
+    pub session_nonce_digest: [u8; 32],
+    /// Unix timestamp (milliseconds) when the session starts.
+    pub issued_at_unix_ms: u64,
+    /// Unix timestamp (milliseconds) when the session expires.
+    pub expires_at_unix_ms: u64,
+    /// Optional legal-hold or retention receipt identifier.
+    pub legal_hold_id: Option<String>,
+    /// Optional operator note.
+    pub notes: Option<String>,
+    /// Whether raw evidence bytes were included in the request.
+    pub raw_evidence_included: bool,
+    /// Whether a signed URL was included in the request.
+    pub signed_url_included: bool,
+    /// Whether a runtime session token was included in the request.
+    pub session_token_included: bool,
+    /// Whether watermark secret material was included in the request.
+    pub watermark_secret_included: bool,
+}
+
+/// Append-only local evidence viewer access event kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub enum ModerationEvidenceViewerAccessKind {
+    /// The viewer opened or resumed evidence playback.
+    Viewed,
+    /// The viewer sought to another playback position or page.
+    Seeked,
+    /// The viewer paused playback.
+    Paused,
+    /// The viewer attempted a screenshot or screen capture.
+    ScreenshotAttempted,
+    /// The viewer attempted to download evidence.
+    DownloadAttempted,
+    /// The viewer created or updated an annotation.
+    Annotated,
+    /// The viewer service observed access after session expiry.
+    SessionExpired,
+    /// The viewer service rejected access because attestation failed.
+    AttestationFailed,
+}
+
+impl ModerationEvidenceViewerAccessKind {
+    /// Stable lower-case JSON label.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Viewed => "viewed",
+            Self::Seeked => "seeked",
+            Self::Paused => "paused",
+            Self::ScreenshotAttempted => "screenshot_attempted",
+            Self::DownloadAttempted => "download_attempted",
+            Self::Annotated => "annotated",
+            Self::SessionExpired => "session_expired",
+            Self::AttestationFailed => "attestation_failed",
+        }
+    }
+
+    fn is_expiry_event(self) -> bool {
+        matches!(self, Self::SessionExpired)
+    }
+}
+
+/// Payload-free local evidence viewer access-log append request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModerationEvidenceViewerAccessInput {
+    /// Session id that owns the access event.
+    pub session_id: [u8; 16],
+    /// Access event kind.
+    pub kind: ModerationEvidenceViewerAccessKind,
+    /// Canonical viewer account represented by the event.
+    pub actor_account: String,
+    /// Unix timestamp (milliseconds) when the event occurred.
+    pub event_at_unix_ms: u64,
+    /// Digest of the request metadata or interaction envelope.
+    pub request_digest: [u8; 32],
+    /// Optional digest of event-specific metadata such as seek range or annotation text.
+    pub event_metadata_digest: Option<[u8; 32]>,
+    /// Optional event note.
+    pub notes: Option<String>,
+    /// Whether raw evidence bytes were included in the event.
+    pub raw_evidence_included: bool,
+    /// Whether a signed URL was included in the event.
+    pub signed_url_included: bool,
+    /// Whether a runtime session token was included in the event.
+    pub session_token_included: bool,
+    /// Whether a response body or raw access-log payload was included in the event.
+    pub response_body_included: bool,
+}
+
+/// Persisted payload-free local evidence viewer session record.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct ModerationEvidenceViewerSessionRecord {
+    /// Stable quarantine id whose sealed object is reviewed.
+    pub quarantine_id: [u8; 16],
+    /// Stable encrypted object id for the reviewed payload.
+    pub object_id: [u8; 16],
+    /// Stable session id derived from payload-free session metadata.
+    pub session_id: [u8; 16],
+    /// Digest of the quarantined evidence payload.
+    pub evidence_digest: [u8; 32],
+    /// Digest of the device/user attestation transcript.
+    pub attestation_digest: [u8; 32],
+    /// Digest of the per-session watermark metadata.
+    pub watermark_metadata_digest: [u8; 32],
+    /// Digest of the session nonce or runtime-only token preimage.
+    pub session_nonce_digest: [u8; 32],
+    /// Canonical operator or service account that requested the viewer session.
+    pub requested_by: String,
+    /// Canonical juror, auditor, or legal reviewer account represented by the session.
+    pub viewer_account: String,
+    /// Role label scoped to this evidence review session.
+    pub viewer_role: String,
+    /// Human-readable purpose bound to the audit manifest.
+    pub purpose: String,
+    /// Unix timestamp (milliseconds) when the session starts.
+    pub issued_at_unix_ms: u64,
+    /// Unix timestamp (milliseconds) when the session expires.
+    pub expires_at_unix_ms: u64,
+    /// Optional legal-hold or retention receipt identifier.
+    pub legal_hold_id: Option<String>,
+    /// Optional operator note.
+    pub notes: Option<String>,
+    /// Digest of the payload-free session manifest.
+    pub session_manifest_digest: [u8; 32],
+}
+
+/// Persisted payload-free local evidence viewer access-log event.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct ModerationEvidenceViewerAccessEventRecord {
+    /// Monotonic append-only event sequence.
+    pub sequence: u64,
+    /// Stable event id derived from payload-free event metadata.
+    pub event_id: [u8; 16],
+    /// Session id that owns the event.
+    pub session_id: [u8; 16],
+    /// Stable quarantine id for the reviewed evidence.
+    pub quarantine_id: [u8; 16],
+    /// Stable encrypted object id for the reviewed payload.
+    pub object_id: [u8; 16],
+    /// Digest of the quarantined evidence payload.
+    pub evidence_digest: [u8; 32],
+    /// Access event kind.
+    pub kind: ModerationEvidenceViewerAccessKind,
+    /// Canonical viewer account represented by the event.
+    pub actor_account: String,
+    /// Unix timestamp (milliseconds) when the event occurred.
+    pub event_at_unix_ms: u64,
+    /// Digest of the request metadata or interaction envelope.
+    pub request_digest: [u8; 32],
+    /// Optional digest of event-specific metadata such as seek range or annotation text.
+    pub event_metadata_digest: Option<[u8; 32]>,
+    /// Optional event note.
+    pub notes: Option<String>,
+    /// Digest of the payload-free access event.
+    pub event_digest: [u8; 32],
+}
+
+/// Snapshot of local payload-free evidence viewer session and access-log state.
+#[derive(Debug, Clone, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct ModerationEvidenceViewerSnapshot {
+    /// Session records sorted by session id.
+    pub sessions: Vec<ModerationEvidenceViewerSessionRecord>,
+    /// Append-only access events sorted by sequence.
+    pub access_events: Vec<ModerationEvidenceViewerAccessEventRecord>,
+}
+
+/// Request for a payload-free local evidence-viewer audit report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModerationEvidenceViewerAuditReportInput {
+    /// Public report scope label, for example `local-daily`.
+    pub report_scope: String,
+    /// Inclusive Unix timestamp (seconds) at the start of the report window.
+    pub window_start_unix: u64,
+    /// Exclusive Unix timestamp (seconds) at the end of the report window.
+    pub window_end_unix: u64,
+    /// Unix timestamp (seconds) when the report was generated.
+    pub generated_at_unix: u64,
+    /// Optional policy/configuration digest for this report.
+    pub policy_digest: Option<[u8; 32]>,
+    /// Whether raw evidence bytes were included in the report request.
+    pub raw_evidence_included: bool,
+    /// Whether raw access-log payloads were included in the report request.
+    pub raw_access_logs_included: bool,
+    /// Whether raw viewer account identifiers were included in the report request.
+    pub viewer_accounts_included: bool,
+    /// Whether signed URLs were included in the report request.
+    pub signed_urls_included: bool,
+    /// Whether runtime session tokens were included in the report request.
+    pub session_tokens_included: bool,
+    /// Whether response bodies were included in the report request.
+    pub response_bodies_included: bool,
+}
+
+/// One access-kind count in a payload-free evidence-viewer audit report.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct ModerationEvidenceViewerAuditKindCount {
+    /// Stable access-kind label.
+    pub kind: String,
+    /// Number of matching access events in the report window.
+    pub count: u64,
+}
+
+/// Payload-free local evidence-viewer access report for transparency export.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct ModerationEvidenceViewerAuditReport {
+    /// Schema version; currently [`MODERATION_EVIDENCE_VIEWER_AUDIT_REPORT_VERSION_V1`].
+    pub version: u16,
+    /// Stable report id derived from the payload-free report body.
+    pub report_id: [u8; 16],
+    /// Public report scope label, for example `local-daily`.
+    pub report_scope: String,
+    /// Inclusive Unix timestamp (seconds) at the start of the report window.
+    pub window_start_unix: u64,
+    /// Exclusive Unix timestamp (seconds) at the end of the report window.
+    pub window_end_unix: u64,
+    /// Unix timestamp (seconds) when the report was generated.
+    pub generated_at_unix: u64,
+    /// Number of sessions active during the report window.
+    pub session_count: u64,
+    /// Number of active sessions with at least one logged access event in the report window.
+    pub logged_session_count: u64,
+    /// Number of access events in the report window.
+    pub access_event_count: u64,
+    /// Number of distinct viewer role labels represented by active sessions.
+    pub unique_viewer_role_count: u64,
+    /// Number of active sessions with non-zero attestation digests.
+    pub attested_session_count: u64,
+    /// Number of active sessions with non-zero watermark metadata digests.
+    pub watermarked_session_count: u64,
+    /// Number of active sessions bound to legal-hold metadata.
+    pub legal_hold_bound_session_count: u64,
+    /// First access-event timestamp in the report window, if any.
+    pub first_event_at_unix_ms: Option<u64>,
+    /// Last access-event timestamp in the report window, if any.
+    pub last_event_at_unix_ms: Option<u64>,
+    /// Access-event counts sorted by stable access-kind label.
+    pub access_kind_counts: Vec<ModerationEvidenceViewerAuditKindCount>,
+    /// Digest of the sorted unique evidence digests represented by active sessions.
+    pub evidence_digest_set_digest: [u8; 32],
+    /// Digest of the sorted unique session manifest digests represented by active sessions.
+    pub session_manifest_digest_set_digest: [u8; 32],
+    /// Digest of the sorted unique access-event digests represented by logged events.
+    pub access_event_digest_set_digest: [u8; 32],
+    /// Digest of the sorted unique request digests represented by logged events.
+    pub request_digest_set_digest: [u8; 32],
+    /// Digest of the sorted unique attestation digests represented by active sessions.
+    pub attestation_digest_set_digest: [u8; 32],
+    /// Digest of the sorted unique watermark metadata digests represented by active sessions.
+    pub watermark_metadata_digest_set_digest: [u8; 32],
+    /// Optional policy/configuration digest for this report.
+    pub policy_digest: Option<[u8; 32]>,
+    /// Digest of the full payload-free report body.
+    pub report_digest: [u8; 32],
+}
+
+impl ModerationEvidenceViewerAuditReport {
+    /// Validate the report's payload-free invariants and derived digests.
+    ///
+    /// # Errors
+    ///
+    /// Returns a human-readable validation message when report metadata is
+    /// malformed, counts are inconsistent, or derived digests do not match.
+    pub fn validate(&self) -> Result<(), String> {
+        validate_evidence_viewer_audit_report(self)
+    }
+}
+
 /// Outcome of recording one local screening result.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModerationScreeningOutcome {
@@ -509,6 +956,82 @@ pub enum ModerationQuarantineObjectError {
     },
     /// The local object-store lock was poisoned.
     #[error("moderation quarantine object state lock poisoned")]
+    StateLockPoisoned,
+}
+
+/// Error raised by the payload-free local evidence viewer audit runtime.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum ModerationEvidenceViewerError {
+    /// Session or access event input is invalid.
+    #[error("invalid moderation evidence viewer input: {message}")]
+    InvalidInput {
+        /// Validation detail.
+        message: String,
+    },
+    /// Input attempted to include payloads, tokens, signed URLs, bodies, or secrets.
+    #[error("moderation evidence viewer payload-safety violation: {message}")]
+    PayloadSafetyViolation {
+        /// Validation detail.
+        message: String,
+    },
+    /// The referenced quarantine queue record does not exist.
+    #[error("moderation quarantine record `{quarantine_id_hex}` is unknown")]
+    UnknownQuarantine {
+        /// Unknown quarantine id as lowercase hex.
+        quarantine_id_hex: String,
+    },
+    /// A requested encrypted quarantine object does not exist locally.
+    #[error("moderation quarantine object for `{quarantine_id_hex}` is missing")]
+    MissingObject {
+        /// Quarantine id as lowercase hex.
+        quarantine_id_hex: String,
+    },
+    /// The session id does not exist in the local evidence viewer state.
+    #[error("moderation evidence viewer session `{session_id_hex}` is unknown")]
+    UnknownSession {
+        /// Unknown session id as lowercase hex.
+        session_id_hex: String,
+    },
+    /// A session id collided with different payload-free metadata.
+    #[error("moderation evidence viewer session `{session_id_hex}` conflicts with local state")]
+    ConflictingSession {
+        /// Conflicting session id as lowercase hex.
+        session_id_hex: String,
+    },
+    /// A non-expiry access event arrived outside the active session window.
+    #[error("moderation evidence viewer session `{session_id_hex}` is not active at event time")]
+    ExpiredSession {
+        /// Expired or inactive session id as lowercase hex.
+        session_id_hex: String,
+    },
+    /// A restored snapshot is internally inconsistent.
+    #[error("moderation evidence viewer snapshot is invalid: {message}")]
+    InvalidSnapshot {
+        /// Validation detail.
+        message: String,
+    },
+    /// The payload-free audit report could not be exported into transparency source state.
+    #[error("moderation evidence viewer transparency export failed: {message}")]
+    TransparencyExport {
+        /// Validation or transparency-ingest detail.
+        message: String,
+    },
+    /// Filesystem operation failed.
+    #[error("moderation evidence viewer I/O failed at `{path}`: {message}")]
+    Io {
+        /// Path involved in the failed operation.
+        path: String,
+        /// Underlying error message.
+        message: String,
+    },
+    /// Norito encoding or decoding failed.
+    #[error("moderation evidence viewer codec failed: {message}")]
+    Codec {
+        /// Underlying codec error message.
+        message: String,
+    },
+    /// The local evidence-viewer state lock was poisoned.
+    #[error("moderation evidence viewer state lock poisoned")]
     StateLockPoisoned,
 }
 
@@ -756,6 +1279,276 @@ impl ModerationQuarantineObjectRuntime {
         self.objects = objects;
         Ok(())
     }
+}
+
+/// Local in-memory payload-free evidence viewer session and access-log runtime.
+#[derive(Debug, Default)]
+pub(crate) struct ModerationEvidenceViewerRuntime {
+    sessions: BTreeMap<[u8; 16], ModerationEvidenceViewerSessionRecord>,
+    access_events: Vec<ModerationEvidenceViewerAccessEventRecord>,
+}
+
+impl ModerationEvidenceViewerRuntime {
+    pub(crate) fn create_session(
+        &mut self,
+        input: ModerationEvidenceViewerSessionInput,
+        object: &ModerationQuarantineObjectRecord,
+    ) -> Result<ModerationEvidenceViewerSessionRecord, ModerationEvidenceViewerError> {
+        let record = evidence_viewer_session_record_from_input(input, object)?;
+        match self.sessions.get(&record.session_id) {
+            Some(existing) if existing != &record => {
+                Err(ModerationEvidenceViewerError::ConflictingSession {
+                    session_id_hex: hex::encode(record.session_id),
+                })
+            }
+            Some(existing) => Ok(existing.clone()),
+            None => {
+                self.sessions.insert(record.session_id, record.clone());
+                Ok(record)
+            }
+        }
+    }
+
+    pub(crate) fn record_access(
+        &mut self,
+        input: ModerationEvidenceViewerAccessInput,
+    ) -> Result<ModerationEvidenceViewerAccessEventRecord, ModerationEvidenceViewerError> {
+        let session = self
+            .sessions
+            .get(&input.session_id)
+            .cloned()
+            .ok_or_else(|| ModerationEvidenceViewerError::UnknownSession {
+                session_id_hex: hex::encode(input.session_id),
+            })?;
+        let sequence = self
+            .access_events
+            .last()
+            .map_or(1, |event| event.sequence.saturating_add(1));
+        let record = evidence_viewer_access_event_record_from_input(sequence, input, &session)?;
+        self.access_events.push(record.clone());
+        Ok(record)
+    }
+
+    pub(crate) fn snapshot(&self) -> ModerationEvidenceViewerSnapshot {
+        ModerationEvidenceViewerSnapshot {
+            sessions: self.sessions.values().cloned().collect(),
+            access_events: self.access_events.clone(),
+        }
+    }
+
+    pub(crate) fn restore_snapshot(
+        &mut self,
+        snapshot: ModerationEvidenceViewerSnapshot,
+    ) -> Result<(), ModerationEvidenceViewerError> {
+        let mut sessions = BTreeMap::new();
+        for record in snapshot.sessions {
+            validate_evidence_viewer_session_record(&record)
+                .map_err(|message| ModerationEvidenceViewerError::InvalidSnapshot { message })?;
+            if sessions.insert(record.session_id, record).is_some() {
+                return Err(ModerationEvidenceViewerError::InvalidSnapshot {
+                    message: "duplicate evidence viewer session id".to_string(),
+                });
+            }
+        }
+
+        let mut expected_sequence = 1_u64;
+        let mut events = Vec::with_capacity(snapshot.access_events.len());
+        for record in snapshot.access_events {
+            if record.sequence != expected_sequence {
+                return Err(ModerationEvidenceViewerError::InvalidSnapshot {
+                    message: format!(
+                        "evidence viewer access event `{}` has non-contiguous sequence",
+                        hex::encode(record.event_id)
+                    ),
+                });
+            }
+            let session = sessions.get(&record.session_id).ok_or_else(|| {
+                ModerationEvidenceViewerError::InvalidSnapshot {
+                    message: format!(
+                        "evidence viewer access event `{}` references unknown session `{}`",
+                        hex::encode(record.event_id),
+                        hex::encode(record.session_id)
+                    ),
+                }
+            })?;
+            validate_evidence_viewer_access_event_record(&record, session)
+                .map_err(|message| ModerationEvidenceViewerError::InvalidSnapshot { message })?;
+            events.push(record);
+            expected_sequence = expected_sequence.saturating_add(1);
+        }
+
+        self.sessions = sessions;
+        self.access_events = events;
+        Ok(())
+    }
+}
+
+pub(crate) fn moderation_evidence_viewer_audit_report_from_snapshot(
+    input: ModerationEvidenceViewerAuditReportInput,
+    snapshot: &ModerationEvidenceViewerSnapshot,
+) -> Result<ModerationEvidenceViewerAuditReport, ModerationEvidenceViewerError> {
+    if input.raw_evidence_included
+        || input.raw_access_logs_included
+        || input.viewer_accounts_included
+        || input.signed_urls_included
+        || input.session_tokens_included
+        || input.response_bodies_included
+    {
+        return Err(ModerationEvidenceViewerError::PayloadSafetyViolation {
+            message: "evidence viewer audit reports must include only aggregate counts and digest-set hashes, never raw evidence, raw access logs, viewer accounts, signed URLs, session tokens, or response bodies".to_string(),
+        });
+    }
+    if input.window_start_unix == 0 {
+        return Err(ModerationEvidenceViewerError::InvalidInput {
+            message: "window_start_unix must be non-zero".to_string(),
+        });
+    }
+    if input.window_end_unix <= input.window_start_unix {
+        return Err(ModerationEvidenceViewerError::InvalidInput {
+            message: "window_end_unix must be later than window_start_unix".to_string(),
+        });
+    }
+    if input
+        .window_end_unix
+        .saturating_sub(input.window_start_unix)
+        > MODERATION_EVIDENCE_VIEWER_AUDIT_REPORT_MAX_WINDOW_SECS
+    {
+        return Err(ModerationEvidenceViewerError::InvalidInput {
+            message: "evidence viewer audit reports must cover no more than one day".to_string(),
+        });
+    }
+    if input.generated_at_unix < input.window_end_unix {
+        return Err(ModerationEvidenceViewerError::InvalidInput {
+            message: "generated_at_unix must be at or after window_end_unix".to_string(),
+        });
+    }
+    if input.policy_digest.is_some_and(digest_is_zero) {
+        return Err(ModerationEvidenceViewerError::InvalidInput {
+            message: "policy_digest must not be all zeroes when present".to_string(),
+        });
+    }
+
+    let report_scope = clean_evidence_viewer_text(input.report_scope, "report_scope")?;
+    let window_start_ms = u128::from(input.window_start_unix) * 1_000;
+    let window_end_ms = u128::from(input.window_end_unix) * 1_000;
+    let sessions = snapshot
+        .sessions
+        .iter()
+        .filter(|session| {
+            u128::from(session.issued_at_unix_ms) < window_end_ms
+                && u128::from(session.expires_at_unix_ms) > window_start_ms
+        })
+        .collect::<Vec<_>>();
+    let session_ids = sessions
+        .iter()
+        .map(|session| session.session_id)
+        .collect::<BTreeSet<_>>();
+    let access_events = snapshot
+        .access_events
+        .iter()
+        .filter(|event| {
+            session_ids.contains(&event.session_id)
+                && u128::from(event.event_at_unix_ms) >= window_start_ms
+                && u128::from(event.event_at_unix_ms) < window_end_ms
+        })
+        .collect::<Vec<_>>();
+
+    let mut logged_sessions = BTreeSet::new();
+    let mut viewer_roles = BTreeSet::new();
+    let mut evidence_digests = BTreeSet::new();
+    let mut session_manifest_digests = BTreeSet::new();
+    let mut attestation_digests = BTreeSet::new();
+    let mut watermark_metadata_digests = BTreeSet::new();
+    let mut legal_hold_bound_session_count = 0_u64;
+    for session in &sessions {
+        viewer_roles.insert(session.viewer_role.clone());
+        evidence_digests.insert(session.evidence_digest);
+        session_manifest_digests.insert(session.session_manifest_digest);
+        attestation_digests.insert(session.attestation_digest);
+        watermark_metadata_digests.insert(session.watermark_metadata_digest);
+        if session.legal_hold_id.is_some() {
+            legal_hold_bound_session_count = legal_hold_bound_session_count.saturating_add(1);
+        }
+    }
+
+    let mut access_kind_counts = BTreeMap::new();
+    let mut access_event_digests = BTreeSet::new();
+    let mut request_digests = BTreeSet::new();
+    let mut first_event_at_unix_ms: Option<u64> = None;
+    let mut last_event_at_unix_ms: Option<u64> = None;
+    for event in &access_events {
+        logged_sessions.insert(event.session_id);
+        *access_kind_counts
+            .entry(event.kind.as_str().to_string())
+            .or_insert(0_u64) += 1;
+        access_event_digests.insert(event.event_digest);
+        request_digests.insert(event.request_digest);
+        first_event_at_unix_ms = Some(
+            first_event_at_unix_ms.map_or(event.event_at_unix_ms, |current| {
+                current.min(event.event_at_unix_ms)
+            }),
+        );
+        last_event_at_unix_ms = Some(
+            last_event_at_unix_ms.map_or(event.event_at_unix_ms, |current| {
+                current.max(event.event_at_unix_ms)
+            }),
+        );
+    }
+    let access_kind_counts = access_kind_counts
+        .into_iter()
+        .map(|(kind, count)| ModerationEvidenceViewerAuditKindCount { kind, count })
+        .collect::<Vec<_>>();
+
+    let mut report = ModerationEvidenceViewerAuditReport {
+        version: MODERATION_EVIDENCE_VIEWER_AUDIT_REPORT_VERSION_V1,
+        report_id: [0; 16],
+        report_scope,
+        window_start_unix: input.window_start_unix,
+        window_end_unix: input.window_end_unix,
+        generated_at_unix: input.generated_at_unix,
+        session_count: len_to_u64(sessions.len()),
+        logged_session_count: len_to_u64(logged_sessions.len()),
+        access_event_count: len_to_u64(access_events.len()),
+        unique_viewer_role_count: len_to_u64(viewer_roles.len()),
+        attested_session_count: len_to_u64(sessions.len()),
+        watermarked_session_count: len_to_u64(sessions.len()),
+        legal_hold_bound_session_count,
+        first_event_at_unix_ms,
+        last_event_at_unix_ms,
+        access_kind_counts,
+        evidence_digest_set_digest: evidence_viewer_audit_digest_set_digest(
+            "evidence_digest",
+            evidence_digests,
+        ),
+        session_manifest_digest_set_digest: evidence_viewer_audit_digest_set_digest(
+            "session_manifest_digest",
+            session_manifest_digests,
+        ),
+        access_event_digest_set_digest: evidence_viewer_audit_digest_set_digest(
+            "access_event_digest",
+            access_event_digests,
+        ),
+        request_digest_set_digest: evidence_viewer_audit_digest_set_digest(
+            "request_digest",
+            request_digests,
+        ),
+        attestation_digest_set_digest: evidence_viewer_audit_digest_set_digest(
+            "attestation_digest",
+            attestation_digests,
+        ),
+        watermark_metadata_digest_set_digest: evidence_viewer_audit_digest_set_digest(
+            "watermark_metadata_digest",
+            watermark_metadata_digests,
+        ),
+        policy_digest: input.policy_digest,
+        report_digest: [0; 32],
+    };
+    let digest = evidence_viewer_audit_report_digest(&report);
+    report.report_id = digest_id16(digest);
+    report.report_digest = digest;
+    validate_evidence_viewer_audit_report(&report)
+        .map_err(|message| ModerationEvidenceViewerError::InvalidInput { message })?;
+    Ok(report)
 }
 
 /// Local in-memory runtime for SFM-4a screening and quarantine evidence.
@@ -1697,6 +2490,630 @@ fn xor_quarantine_object_keystream(
     output
 }
 
+fn evidence_viewer_session_record_from_input(
+    input: ModerationEvidenceViewerSessionInput,
+    object: &ModerationQuarantineObjectRecord,
+) -> Result<ModerationEvidenceViewerSessionRecord, ModerationEvidenceViewerError> {
+    if input.raw_evidence_included
+        || input.signed_url_included
+        || input.session_token_included
+        || input.watermark_secret_included
+    {
+        return Err(ModerationEvidenceViewerError::PayloadSafetyViolation {
+            message: "viewer sessions must include only digest metadata, never raw evidence, signed URLs, session tokens, or watermark secrets".to_string(),
+        });
+    }
+    let requested_by = clean_evidence_viewer_text(input.requested_by, "requested_by")?;
+    let viewer_account = clean_evidence_viewer_text(input.viewer_account, "viewer_account")?;
+    let viewer_role = clean_evidence_viewer_text(input.viewer_role, "viewer_role")?;
+    let purpose = clean_evidence_viewer_text(input.purpose, "purpose")?;
+    let legal_hold_id = clean_optional_evidence_viewer_text(input.legal_hold_id, "legal_hold_id")?;
+    let notes = clean_optional_evidence_viewer_text(input.notes, "notes")?;
+    if input.issued_at_unix_ms == 0 {
+        return Err(ModerationEvidenceViewerError::InvalidInput {
+            message: "issued_at_unix_ms must be non-zero".to_string(),
+        });
+    }
+    if input.expires_at_unix_ms <= input.issued_at_unix_ms {
+        return Err(ModerationEvidenceViewerError::InvalidInput {
+            message: "expires_at_unix_ms must be later than issued_at_unix_ms".to_string(),
+        });
+    }
+    if input
+        .expires_at_unix_ms
+        .saturating_sub(input.issued_at_unix_ms)
+        > MODERATION_EVIDENCE_VIEWER_MAX_SESSION_TTL_MS
+    {
+        return Err(ModerationEvidenceViewerError::InvalidInput {
+            message: "evidence viewer sessions must expire within 15 minutes".to_string(),
+        });
+    }
+    for (field, digest) in [
+        ("attestation_digest", input.attestation_digest),
+        ("watermark_metadata_digest", input.watermark_metadata_digest),
+        ("session_nonce_digest", input.session_nonce_digest),
+    ] {
+        if digest_is_zero(digest) {
+            return Err(ModerationEvidenceViewerError::InvalidInput {
+                message: format!("{field} must not be all zeroes"),
+            });
+        }
+    }
+
+    let mut record = ModerationEvidenceViewerSessionRecord {
+        quarantine_id: input.quarantine_id,
+        object_id: object.object_id,
+        session_id: [0; 16],
+        evidence_digest: object.payload_digest,
+        attestation_digest: input.attestation_digest,
+        watermark_metadata_digest: input.watermark_metadata_digest,
+        session_nonce_digest: input.session_nonce_digest,
+        requested_by,
+        viewer_account,
+        viewer_role,
+        purpose,
+        issued_at_unix_ms: input.issued_at_unix_ms,
+        expires_at_unix_ms: input.expires_at_unix_ms,
+        legal_hold_id,
+        notes,
+        session_manifest_digest: [0; 32],
+    };
+    let digest = evidence_viewer_session_digest(&record);
+    record.session_id.copy_from_slice(&digest[..16]);
+    record.session_manifest_digest = digest;
+    validate_evidence_viewer_session_record(&record)
+        .map_err(|message| ModerationEvidenceViewerError::InvalidInput { message })?;
+    Ok(record)
+}
+
+fn evidence_viewer_access_event_record_from_input(
+    sequence: u64,
+    input: ModerationEvidenceViewerAccessInput,
+    session: &ModerationEvidenceViewerSessionRecord,
+) -> Result<ModerationEvidenceViewerAccessEventRecord, ModerationEvidenceViewerError> {
+    if input.raw_evidence_included
+        || input.signed_url_included
+        || input.session_token_included
+        || input.response_body_included
+    {
+        return Err(ModerationEvidenceViewerError::PayloadSafetyViolation {
+            message: "viewer access events must include only digest metadata, never raw evidence, signed URLs, session tokens, response bodies, or raw access logs".to_string(),
+        });
+    }
+    let actor_account = clean_evidence_viewer_text(input.actor_account, "actor_account")?;
+    if actor_account != session.viewer_account {
+        return Err(ModerationEvidenceViewerError::InvalidInput {
+            message: "actor_account must match the session viewer_account".to_string(),
+        });
+    }
+    if sequence == 0 {
+        return Err(ModerationEvidenceViewerError::InvalidInput {
+            message: "access event sequence must be non-zero".to_string(),
+        });
+    }
+    if input.event_at_unix_ms == 0 {
+        return Err(ModerationEvidenceViewerError::InvalidInput {
+            message: "event_at_unix_ms must be non-zero".to_string(),
+        });
+    }
+    if input.event_at_unix_ms < session.issued_at_unix_ms {
+        return Err(ModerationEvidenceViewerError::ExpiredSession {
+            session_id_hex: hex::encode(input.session_id),
+        });
+    }
+    if input.kind.is_expiry_event() {
+        if input.event_at_unix_ms < session.expires_at_unix_ms {
+            return Err(ModerationEvidenceViewerError::InvalidInput {
+                message: "session_expired events must be at or after expires_at_unix_ms"
+                    .to_string(),
+            });
+        }
+    } else if input.event_at_unix_ms >= session.expires_at_unix_ms {
+        return Err(ModerationEvidenceViewerError::ExpiredSession {
+            session_id_hex: hex::encode(input.session_id),
+        });
+    }
+    if digest_is_zero(input.request_digest) {
+        return Err(ModerationEvidenceViewerError::InvalidInput {
+            message: "request_digest must not be all zeroes".to_string(),
+        });
+    }
+    if input.event_metadata_digest.is_some_and(digest_is_zero) {
+        return Err(ModerationEvidenceViewerError::InvalidInput {
+            message: "event_metadata_digest must not be all zeroes when present".to_string(),
+        });
+    }
+    let notes = clean_optional_evidence_viewer_text(input.notes, "notes")?;
+    let mut record = ModerationEvidenceViewerAccessEventRecord {
+        sequence,
+        event_id: [0; 16],
+        session_id: input.session_id,
+        quarantine_id: session.quarantine_id,
+        object_id: session.object_id,
+        evidence_digest: session.evidence_digest,
+        kind: input.kind,
+        actor_account,
+        event_at_unix_ms: input.event_at_unix_ms,
+        request_digest: input.request_digest,
+        event_metadata_digest: input.event_metadata_digest,
+        notes,
+        event_digest: [0; 32],
+    };
+    let digest = evidence_viewer_access_event_digest(&record);
+    record.event_id.copy_from_slice(&digest[..16]);
+    record.event_digest = digest;
+    validate_evidence_viewer_access_event_record(&record, session)
+        .map_err(|message| ModerationEvidenceViewerError::InvalidInput { message })?;
+    Ok(record)
+}
+
+fn validate_evidence_viewer_session_record(
+    record: &ModerationEvidenceViewerSessionRecord,
+) -> Result<(), String> {
+    for (field, value) in [
+        ("requested_by", record.requested_by.as_str()),
+        ("viewer_account", record.viewer_account.as_str()),
+        ("viewer_role", record.viewer_role.as_str()),
+        ("purpose", record.purpose.as_str()),
+    ] {
+        validate_evidence_viewer_record_text(field, value)?;
+    }
+    validate_optional_evidence_viewer_record_text("legal_hold_id", &record.legal_hold_id)?;
+    validate_optional_evidence_viewer_record_text("notes", &record.notes)?;
+    if record.issued_at_unix_ms == 0 {
+        return Err(format!(
+            "evidence viewer session `{}` has zero issued_at_unix_ms",
+            hex::encode(record.session_id)
+        ));
+    }
+    if record.expires_at_unix_ms <= record.issued_at_unix_ms {
+        return Err(format!(
+            "evidence viewer session `{}` expires before it starts",
+            hex::encode(record.session_id)
+        ));
+    }
+    if record
+        .expires_at_unix_ms
+        .saturating_sub(record.issued_at_unix_ms)
+        > MODERATION_EVIDENCE_VIEWER_MAX_SESSION_TTL_MS
+    {
+        return Err(format!(
+            "evidence viewer session `{}` exceeds the maximum TTL",
+            hex::encode(record.session_id)
+        ));
+    }
+    for (field, digest) in [
+        ("evidence_digest", record.evidence_digest),
+        ("attestation_digest", record.attestation_digest),
+        (
+            "watermark_metadata_digest",
+            record.watermark_metadata_digest,
+        ),
+        ("session_nonce_digest", record.session_nonce_digest),
+    ] {
+        if digest_is_zero(digest) {
+            return Err(format!(
+                "evidence viewer session `{}` has all-zero {field}",
+                hex::encode(record.session_id)
+            ));
+        }
+    }
+    let digest = evidence_viewer_session_digest(record);
+    if record.session_manifest_digest != digest {
+        return Err(format!(
+            "evidence viewer session `{}` manifest digest does not match metadata",
+            hex::encode(record.session_id)
+        ));
+    }
+    if record.session_id != digest_id16(digest) {
+        return Err(format!(
+            "evidence viewer session `{}` id does not match metadata",
+            hex::encode(record.session_id)
+        ));
+    }
+    Ok(())
+}
+
+fn validate_evidence_viewer_access_event_record(
+    record: &ModerationEvidenceViewerAccessEventRecord,
+    session: &ModerationEvidenceViewerSessionRecord,
+) -> Result<(), String> {
+    if record.sequence == 0 {
+        return Err(format!(
+            "evidence viewer access event `{}` has zero sequence",
+            hex::encode(record.event_id)
+        ));
+    }
+    if record.session_id != session.session_id
+        || record.quarantine_id != session.quarantine_id
+        || record.object_id != session.object_id
+        || record.evidence_digest != session.evidence_digest
+    {
+        return Err(format!(
+            "evidence viewer access event `{}` does not match its session",
+            hex::encode(record.event_id)
+        ));
+    }
+    validate_evidence_viewer_record_text("actor_account", &record.actor_account)?;
+    if record.actor_account != session.viewer_account {
+        return Err(format!(
+            "evidence viewer access event `{}` actor does not match session viewer",
+            hex::encode(record.event_id)
+        ));
+    }
+    if record.event_at_unix_ms == 0 {
+        return Err(format!(
+            "evidence viewer access event `{}` has zero event_at_unix_ms",
+            hex::encode(record.event_id)
+        ));
+    }
+    if record.event_at_unix_ms < session.issued_at_unix_ms {
+        return Err(format!(
+            "evidence viewer access event `{}` predates its session",
+            hex::encode(record.event_id)
+        ));
+    }
+    if record.kind.is_expiry_event() {
+        if record.event_at_unix_ms < session.expires_at_unix_ms {
+            return Err(format!(
+                "evidence viewer access event `{}` reports expiry before session expiration",
+                hex::encode(record.event_id)
+            ));
+        }
+    } else if record.event_at_unix_ms >= session.expires_at_unix_ms {
+        return Err(format!(
+            "evidence viewer access event `{}` occurs after session expiration",
+            hex::encode(record.event_id)
+        ));
+    }
+    if digest_is_zero(record.request_digest) {
+        return Err(format!(
+            "evidence viewer access event `{}` has all-zero request_digest",
+            hex::encode(record.event_id)
+        ));
+    }
+    if record.event_metadata_digest.is_some_and(digest_is_zero) {
+        return Err(format!(
+            "evidence viewer access event `{}` has all-zero event_metadata_digest",
+            hex::encode(record.event_id)
+        ));
+    }
+    validate_optional_evidence_viewer_record_text("notes", &record.notes)?;
+    let digest = evidence_viewer_access_event_digest(record);
+    if record.event_digest != digest {
+        return Err(format!(
+            "evidence viewer access event `{}` digest does not match metadata",
+            hex::encode(record.event_id)
+        ));
+    }
+    if record.event_id != digest_id16(digest) {
+        return Err(format!(
+            "evidence viewer access event `{}` id does not match metadata",
+            hex::encode(record.event_id)
+        ));
+    }
+    Ok(())
+}
+
+fn validate_evidence_viewer_audit_report(
+    report: &ModerationEvidenceViewerAuditReport,
+) -> Result<(), String> {
+    if report.version != MODERATION_EVIDENCE_VIEWER_AUDIT_REPORT_VERSION_V1 {
+        return Err(format!(
+            "evidence viewer audit report `{}` has unsupported version {}",
+            hex::encode(report.report_id),
+            report.version
+        ));
+    }
+    validate_evidence_viewer_record_text("report_scope", &report.report_scope)?;
+    if report.window_start_unix == 0 {
+        return Err(format!(
+            "evidence viewer audit report `{}` has zero window_start_unix",
+            hex::encode(report.report_id)
+        ));
+    }
+    if report.window_end_unix <= report.window_start_unix {
+        return Err(format!(
+            "evidence viewer audit report `{}` has an invalid window",
+            hex::encode(report.report_id)
+        ));
+    }
+    if report
+        .window_end_unix
+        .saturating_sub(report.window_start_unix)
+        > MODERATION_EVIDENCE_VIEWER_AUDIT_REPORT_MAX_WINDOW_SECS
+    {
+        return Err(format!(
+            "evidence viewer audit report `{}` exceeds the maximum window",
+            hex::encode(report.report_id)
+        ));
+    }
+    if report.generated_at_unix < report.window_end_unix {
+        return Err(format!(
+            "evidence viewer audit report `{}` was generated before its window closed",
+            hex::encode(report.report_id)
+        ));
+    }
+    if report.logged_session_count > report.session_count
+        || report.attested_session_count > report.session_count
+        || report.watermarked_session_count > report.session_count
+        || report.legal_hold_bound_session_count > report.session_count
+        || report.unique_viewer_role_count > report.session_count
+    {
+        return Err(format!(
+            "evidence viewer audit report `{}` has inconsistent session counts",
+            hex::encode(report.report_id)
+        ));
+    }
+    let mut previous_kind: Option<&str> = None;
+    let mut counted_events = 0_u64;
+    for kind_count in &report.access_kind_counts {
+        validate_evidence_viewer_record_text("access_kind_counts.kind", &kind_count.kind)?;
+        if let Some(previous) = previous_kind
+            && previous >= kind_count.kind.as_str()
+        {
+            return Err(format!(
+                "evidence viewer audit report `{}` has unsorted or duplicate access kind counts",
+                hex::encode(report.report_id)
+            ));
+        }
+        if kind_count.count == 0 {
+            return Err(format!(
+                "evidence viewer audit report `{}` has zero count for access kind `{}`",
+                hex::encode(report.report_id),
+                kind_count.kind
+            ));
+        }
+        counted_events = counted_events.saturating_add(kind_count.count);
+        previous_kind = Some(kind_count.kind.as_str());
+    }
+    if counted_events != report.access_event_count {
+        return Err(format!(
+            "evidence viewer audit report `{}` access-kind counts do not sum to access_event_count",
+            hex::encode(report.report_id)
+        ));
+    }
+    match (report.first_event_at_unix_ms, report.last_event_at_unix_ms) {
+        (Some(first), Some(last)) if first <= last => {
+            let window_start_ms = u128::from(report.window_start_unix) * 1_000;
+            let window_end_ms = u128::from(report.window_end_unix) * 1_000;
+            if u128::from(first) < window_start_ms || u128::from(last) >= window_end_ms {
+                return Err(format!(
+                    "evidence viewer audit report `{}` event timestamps are outside the window",
+                    hex::encode(report.report_id)
+                ));
+            }
+        }
+        (None, None) if report.access_event_count == 0 => {}
+        _ => {
+            return Err(format!(
+                "evidence viewer audit report `{}` has inconsistent event timestamp bounds",
+                hex::encode(report.report_id)
+            ));
+        }
+    }
+    for (field, digest) in [
+        (
+            "evidence_digest_set_digest",
+            report.evidence_digest_set_digest,
+        ),
+        (
+            "session_manifest_digest_set_digest",
+            report.session_manifest_digest_set_digest,
+        ),
+        (
+            "access_event_digest_set_digest",
+            report.access_event_digest_set_digest,
+        ),
+        (
+            "request_digest_set_digest",
+            report.request_digest_set_digest,
+        ),
+        (
+            "attestation_digest_set_digest",
+            report.attestation_digest_set_digest,
+        ),
+        (
+            "watermark_metadata_digest_set_digest",
+            report.watermark_metadata_digest_set_digest,
+        ),
+    ] {
+        if digest_is_zero(digest) {
+            return Err(format!(
+                "evidence viewer audit report `{}` has all-zero {field}",
+                hex::encode(report.report_id)
+            ));
+        }
+    }
+    if report.policy_digest.is_some_and(digest_is_zero) {
+        return Err(format!(
+            "evidence viewer audit report `{}` has all-zero policy_digest",
+            hex::encode(report.report_id)
+        ));
+    }
+    let digest = evidence_viewer_audit_report_digest(report);
+    if report.report_digest != digest {
+        return Err(format!(
+            "evidence viewer audit report `{}` digest does not match metadata",
+            hex::encode(report.report_id)
+        ));
+    }
+    if report.report_id != digest_id16(digest) {
+        return Err(format!(
+            "evidence viewer audit report `{}` id does not match metadata",
+            hex::encode(report.report_id)
+        ));
+    }
+    Ok(())
+}
+
+fn clean_evidence_viewer_text(
+    value: String,
+    field: &str,
+) -> Result<String, ModerationEvidenceViewerError> {
+    let trimmed = value.trim().to_string();
+    if trimmed.is_empty() {
+        return Err(ModerationEvidenceViewerError::InvalidInput {
+            message: format!("{field} must not be blank"),
+        });
+    }
+    if trimmed.len() > 256 {
+        return Err(ModerationEvidenceViewerError::InvalidInput {
+            message: format!("{field} must be 256 bytes or shorter"),
+        });
+    }
+    Ok(trimmed)
+}
+
+fn clean_optional_evidence_viewer_text(
+    value: Option<String>,
+    field: &str,
+) -> Result<Option<String>, ModerationEvidenceViewerError> {
+    value
+        .map(|value| {
+            let trimmed = value.trim().to_string();
+            if trimmed.is_empty() {
+                return Err(ModerationEvidenceViewerError::InvalidInput {
+                    message: format!("{field} must not be blank when present"),
+                });
+            }
+            if trimmed.len() > 512 {
+                return Err(ModerationEvidenceViewerError::InvalidInput {
+                    message: format!("{field} must be 512 bytes or shorter"),
+                });
+            }
+            Ok(trimmed)
+        })
+        .transpose()
+}
+
+fn validate_evidence_viewer_record_text(field: &str, value: &str) -> Result<(), String> {
+    if value.trim().is_empty() {
+        return Err(format!("{field} must not be blank"));
+    }
+    if value != value.trim() {
+        return Err(format!(
+            "{field} must be normalized without surrounding whitespace"
+        ));
+    }
+    if value.len() > 256 {
+        return Err(format!("{field} must be 256 bytes or shorter"));
+    }
+    Ok(())
+}
+
+fn validate_optional_evidence_viewer_record_text(
+    field: &str,
+    value: &Option<String>,
+) -> Result<(), String> {
+    if let Some(value) = value.as_deref() {
+        if value.trim().is_empty() {
+            return Err(format!("{field} must not be blank when present"));
+        }
+        if value != value.trim() {
+            return Err(format!(
+                "{field} must be normalized without surrounding whitespace"
+            ));
+        }
+        if value.len() > 512 {
+            return Err(format!("{field} must be 512 bytes or shorter"));
+        }
+    }
+    Ok(())
+}
+
+fn evidence_viewer_session_digest(record: &ModerationEvidenceViewerSessionRecord) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(MODERATION_EVIDENCE_VIEWER_SESSION_DOMAIN_V1);
+    hasher.update(&record.quarantine_id);
+    hasher.update(&record.object_id);
+    hasher.update(&record.evidence_digest);
+    hasher.update(&record.attestation_digest);
+    hasher.update(&record.watermark_metadata_digest);
+    hasher.update(&record.session_nonce_digest);
+    update_string(&mut hasher, &record.requested_by);
+    update_string(&mut hasher, &record.viewer_account);
+    update_string(&mut hasher, &record.viewer_role);
+    update_string(&mut hasher, &record.purpose);
+    hasher.update(&record.issued_at_unix_ms.to_le_bytes());
+    hasher.update(&record.expires_at_unix_ms.to_le_bytes());
+    update_optional_string(&mut hasher, record.legal_hold_id.as_deref());
+    update_optional_string(&mut hasher, record.notes.as_deref());
+    *hasher.finalize().as_bytes()
+}
+
+fn evidence_viewer_access_event_digest(
+    record: &ModerationEvidenceViewerAccessEventRecord,
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(MODERATION_EVIDENCE_VIEWER_ACCESS_EVENT_DOMAIN_V1);
+    hasher.update(&record.sequence.to_le_bytes());
+    hasher.update(&record.session_id);
+    hasher.update(&record.quarantine_id);
+    hasher.update(&record.object_id);
+    hasher.update(&record.evidence_digest);
+    update_string(&mut hasher, record.kind.as_str());
+    update_string(&mut hasher, &record.actor_account);
+    hasher.update(&record.event_at_unix_ms.to_le_bytes());
+    hasher.update(&record.request_digest);
+    update_optional_digest(&mut hasher, record.event_metadata_digest);
+    update_optional_string(&mut hasher, record.notes.as_deref());
+    *hasher.finalize().as_bytes()
+}
+
+fn evidence_viewer_audit_report_digest(report: &ModerationEvidenceViewerAuditReport) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(MODERATION_EVIDENCE_VIEWER_AUDIT_REPORT_DOMAIN_V1);
+    hasher.update(&report.version.to_le_bytes());
+    update_string(&mut hasher, &report.report_scope);
+    hasher.update(&report.window_start_unix.to_le_bytes());
+    hasher.update(&report.window_end_unix.to_le_bytes());
+    hasher.update(&report.generated_at_unix.to_le_bytes());
+    hasher.update(&report.session_count.to_le_bytes());
+    hasher.update(&report.logged_session_count.to_le_bytes());
+    hasher.update(&report.access_event_count.to_le_bytes());
+    hasher.update(&report.unique_viewer_role_count.to_le_bytes());
+    hasher.update(&report.attested_session_count.to_le_bytes());
+    hasher.update(&report.watermarked_session_count.to_le_bytes());
+    hasher.update(&report.legal_hold_bound_session_count.to_le_bytes());
+    update_optional_u64(&mut hasher, report.first_event_at_unix_ms);
+    update_optional_u64(&mut hasher, report.last_event_at_unix_ms);
+    hasher.update(&(report.access_kind_counts.len() as u64).to_le_bytes());
+    for kind_count in &report.access_kind_counts {
+        update_string(&mut hasher, &kind_count.kind);
+        hasher.update(&kind_count.count.to_le_bytes());
+    }
+    hasher.update(&report.evidence_digest_set_digest);
+    hasher.update(&report.session_manifest_digest_set_digest);
+    hasher.update(&report.access_event_digest_set_digest);
+    hasher.update(&report.request_digest_set_digest);
+    hasher.update(&report.attestation_digest_set_digest);
+    hasher.update(&report.watermark_metadata_digest_set_digest);
+    update_optional_digest(&mut hasher, report.policy_digest);
+    *hasher.finalize().as_bytes()
+}
+
+fn evidence_viewer_audit_digest_set_digest(label: &str, values: BTreeSet<[u8; 32]>) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(MODERATION_EVIDENCE_VIEWER_AUDIT_DIGEST_SET_DOMAIN_V1);
+    update_string(&mut hasher, label);
+    hasher.update(&(values.len() as u64).to_le_bytes());
+    for value in values {
+        hasher.update(&value);
+    }
+    *hasher.finalize().as_bytes()
+}
+
+fn digest_id16(digest: [u8; 32]) -> [u8; 16] {
+    let mut id = [0; 16];
+    id.copy_from_slice(&digest[..16]);
+    id
+}
+
+fn digest_is_zero(digest: [u8; 32]) -> bool {
+    digest.iter().all(|byte| *byte == 0)
+}
+
 fn len_to_u64(len: usize) -> u64 {
     u64::try_from(len).unwrap_or(u64::MAX)
 }
@@ -1791,6 +3208,18 @@ fn update_optional_digest(hasher: &mut blake3::Hasher, value: Option<[u8; 32]>) 
     };
 }
 
+fn update_optional_u64(hasher: &mut blake3::Hasher, value: Option<u64>) {
+    match value {
+        Some(value) => {
+            hasher.update(&[1]);
+            hasher.update(&value.to_le_bytes());
+        }
+        None => {
+            hasher.update(&[0]);
+        }
+    };
+}
+
 fn update_optional_string(hasher: &mut blake3::Hasher, value: Option<&str>) {
     match value {
         Some(value) => {
@@ -1804,12 +3233,16 @@ fn update_optional_string(hasher: &mut blake3::Hasher, value: Option<&str>) {
 }
 
 /// Sequenced local moderation ballot event kind.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum ModerationBallotEventKind {
     /// A ballot was announced.
     BallotAnnounced,
     /// A juror commitment was accepted.
     CommitAccepted,
+    /// A moderation ballot challenge was accepted.
+    ChallengeSubmitted,
+    /// A moderation ballot challenge was resolved.
+    ChallengeResolved,
     /// A juror reveal was accepted.
     RevealAccepted,
     /// The ballot was tallied.
@@ -1821,6 +3254,8 @@ impl From<ModerationBallotEventKind> for SoraFsModerationBallotGovernanceEventKi
         match kind {
             ModerationBallotEventKind::BallotAnnounced => Self::BallotAnnounced,
             ModerationBallotEventKind::CommitAccepted => Self::CommitAccepted,
+            ModerationBallotEventKind::ChallengeSubmitted => Self::ChallengeSubmitted,
+            ModerationBallotEventKind::ChallengeResolved => Self::ChallengeResolved,
             ModerationBallotEventKind::RevealAccepted => Self::RevealAccepted,
             ModerationBallotEventKind::BallotTallied => Self::BallotTallied,
         }
@@ -1828,7 +3263,7 @@ impl From<ModerationBallotEventKind> for SoraFsModerationBallotGovernanceEventKi
 }
 
 /// Local moderation ballot vote counts.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationVoteCounts {
     /// Number of `uphold` reveals.
     pub uphold: u32,
@@ -1889,7 +3324,7 @@ impl From<ModerationVoteCounts> for SoraFsModerationVoteCountsV1 {
 }
 
 /// Final local tally for one moderation ballot.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationBallotTally {
     /// Moderation or appeal case identifier.
     pub case_id: String,
@@ -1909,6 +3344,43 @@ pub struct ModerationBallotTally {
     pub tallied_at_unix_ms: u64,
 }
 
+/// Payload-free local penalty plan for jurors that did not reveal.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct ModerationBallotNoShowPlan {
+    /// Moderation or appeal case identifier.
+    pub case_id: String,
+    /// Moderation ballot round identifier.
+    pub round_id: String,
+    /// UTC timestamp (milliseconds) when the plan was generated locally.
+    pub generated_at_unix_ms: u64,
+    /// UTC timestamp (milliseconds) after which reveals are no longer accepted.
+    pub reveal_deadline_unix_ms: u64,
+    /// Required reveal quorum.
+    pub quorum: u16,
+    /// Number of jurors in the announced roster.
+    pub roster_size: u32,
+    /// Number of accepted commitments at plan generation time.
+    pub committed_count: u32,
+    /// Number of accepted reveals at plan generation time.
+    pub revealed_count: u32,
+    /// Number of announced jurors without an accepted reveal.
+    pub no_show_count: u32,
+    /// True when accepted reveals satisfy quorum even with no-shows.
+    pub quorum_met: bool,
+    /// True when a local tally has already finalized for this ballot.
+    pub tally_finalized: bool,
+    /// True when the finalized local tally reached quorum but had no unique winner.
+    pub contested: bool,
+    /// Roster jurors that never submitted an accepted commitment.
+    pub missing_commit_juror_ids: Vec<String>,
+    /// Roster jurors that committed but did not submit an accepted reveal.
+    pub unrevealed_committed_juror_ids: Vec<String>,
+    /// Roster jurors without an accepted reveal, in roster order.
+    pub no_show_juror_ids: Vec<String>,
+    /// Deterministic digest binding the payload-free penalty plan material.
+    pub penalty_plan_digest: [u8; 32],
+}
+
 impl From<&ModerationBallotTally> for SoraFsModerationBallotGovernanceTallyV1 {
     fn from(tally: &ModerationBallotTally) -> Self {
         Self {
@@ -1925,7 +3397,7 @@ impl From<&ModerationBallotTally> for SoraFsModerationBallotGovernanceTallyV1 {
 }
 
 /// Snapshot of one local moderation ballot lifecycle record.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationBallotRecord {
     /// Ballot announcement.
     pub announcement: ModerationBallotAnnouncement,
@@ -1933,8 +3405,19 @@ pub struct ModerationBallotRecord {
     pub commits: Vec<SoraFsModerationBallotCommitV1>,
     /// Accepted juror reveals sorted by juror id.
     pub reveals: Vec<SoraFsModerationBallotRevealV1>,
+    /// Local challenge/dispute records sorted by challenge id.
+    pub challenges: Vec<ModerationBallotChallengeRecord>,
     /// Final tally when the ballot has been finalized.
     pub tally: Option<ModerationBallotTally>,
+}
+
+/// Durable local moderation ballot lifecycle snapshot.
+#[derive(Debug, Clone, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct ModerationBallotSnapshot {
+    /// Ballot records sorted by case id and round id.
+    pub ballots: Vec<ModerationBallotRecord>,
+    /// Sequenced local event backlog sorted by event sequence.
+    pub events: Vec<ModerationBallotEvent>,
 }
 
 /// Result of accepting a moderation ballot commitment.
@@ -1960,7 +3443,7 @@ pub struct ModerationBallotRevealOutcome {
 }
 
 /// Sequenced local moderation ballot event.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationBallotEvent {
     /// Monotonic local event sequence.
     pub sequence: u64,
@@ -1978,8 +3461,12 @@ pub struct ModerationBallotEvent {
     pub committed_count: u64,
     /// Accepted reveal count after the event.
     pub revealed_count: u64,
+    /// Local challenge count after the event.
+    pub challenge_count: u64,
     /// Tally associated with the event, when finalized.
     pub tally: Option<ModerationBallotTally>,
+    /// Challenge record associated with the event, when submitted or resolved.
+    pub challenge: Option<ModerationBallotChallengeRecord>,
 }
 
 impl ModerationBallotEvent {
@@ -1994,7 +3481,9 @@ impl ModerationBallotEvent {
             juror_id: self.juror_id.clone(),
             committed_count: self.committed_count,
             revealed_count: self.revealed_count,
+            challenge_count: self.challenge_count,
             tally: self.tally.as_ref().map(Into::into),
+            challenge: self.challenge.as_ref().map(Into::into),
         }
     }
 }
@@ -2142,6 +3631,108 @@ pub enum ModerationBallotRuntimeError {
         /// Juror identifier.
         juror_id: String,
     },
+    /// Ballot challenge id is blank.
+    #[error("moderation ballot challenge id is required")]
+    MissingChallengeId,
+    /// Ballot challenger id is blank.
+    #[error("moderation ballot challenger id is required")]
+    MissingChallengerId,
+    /// Ballot challenge target juror id is required.
+    #[error("moderation ballot challenge target juror id is required for `{kind:?}`")]
+    MissingChallengeTarget {
+        /// Challenge category requiring a target juror.
+        kind: ModerationBallotChallengeKind,
+    },
+    /// Ballot challenge target juror id is blank.
+    #[error("moderation ballot challenge target juror id is blank")]
+    BlankChallengeTarget,
+    /// Ballot challenge evidence digest is all zeroes.
+    #[error("moderation ballot challenge evidence digest must be non-zero")]
+    MissingChallengeEvidence,
+    /// Ballot challenge reason is blank.
+    #[error("moderation ballot challenge reason is required")]
+    MissingChallengeReason,
+    /// A challenge already exists with this id.
+    #[error(
+        "moderation ballot challenge `{challenge_id}` already exists for `{case_id}` round `{round_id}`"
+    )]
+    DuplicateChallenge {
+        /// Case identifier.
+        case_id: String,
+        /// Round identifier.
+        round_id: String,
+        /// Challenge identifier.
+        challenge_id: String,
+    },
+    /// Challenge is unknown for this ballot.
+    #[error(
+        "moderation ballot challenge `{challenge_id}` is unknown for `{case_id}` round `{round_id}`"
+    )]
+    UnknownChallenge {
+        /// Case identifier.
+        case_id: String,
+        /// Round identifier.
+        round_id: String,
+        /// Challenge identifier.
+        challenge_id: String,
+    },
+    /// Challenge arrived before the post-commit challenge window.
+    #[error("moderation ballot challenge window is not open at `{now_unix_ms}`")]
+    ChallengeWindowNotOpen {
+        /// Acceptance timestamp.
+        now_unix_ms: u64,
+    },
+    /// Challenge arrived after the challenge window or after reveal/tally progress.
+    #[error("moderation ballot challenge window is closed at `{now_unix_ms}`")]
+    ChallengeWindowClosed {
+        /// Acceptance timestamp.
+        now_unix_ms: u64,
+    },
+    /// A pending challenge blocks reveal or tally progress.
+    #[error(
+        "moderation ballot challenge `{challenge_id}` is still pending for `{case_id}` round `{round_id}`"
+    )]
+    ChallengePending {
+        /// Case identifier.
+        case_id: String,
+        /// Round identifier.
+        round_id: String,
+        /// Challenge identifier.
+        challenge_id: String,
+    },
+    /// An accepted challenge blocks local reveal or tally progress.
+    #[error(
+        "moderation ballot challenge `{challenge_id}` was accepted for `{case_id}` round `{round_id}`"
+    )]
+    ChallengeAccepted {
+        /// Case identifier.
+        case_id: String,
+        /// Round identifier.
+        round_id: String,
+        /// Challenge identifier.
+        challenge_id: String,
+    },
+    /// Challenge has already been resolved.
+    #[error(
+        "moderation ballot challenge `{challenge_id}` was already resolved for `{case_id}` round `{round_id}`"
+    )]
+    ChallengeAlreadyResolved {
+        /// Case identifier.
+        case_id: String,
+        /// Round identifier.
+        round_id: String,
+        /// Challenge identifier.
+        challenge_id: String,
+    },
+    /// Challenge resolver id is blank.
+    #[error("moderation ballot challenge resolver id is required")]
+    MissingChallengeResolver,
+    /// Challenge resolution note is blank.
+    #[error("moderation ballot challenge resolution note must not be blank")]
+    BlankChallengeResolutionNote,
+    /// Challenge resolution timestamp predates the challenge.
+    #[error("moderation ballot challenge resolution timestamp is before the challenge timestamp")]
+    InvalidChallengeResolutionTimestamp,
     /// Tally was requested before the reveal window closed and before all jurors revealed.
     #[error("moderation ballot reveal window is still open until `{reveal_deadline_unix_ms}`")]
     TallyWindowOpen {
@@ -2163,6 +3754,12 @@ pub enum ModerationBallotRuntimeError {
         quorum: u16,
         /// Accepted reveal count.
         reveals: usize,
+    },
+    /// Durable snapshot is internally inconsistent.
+    #[error("moderation ballot snapshot is invalid: {message}")]
+    InvalidSnapshot {
+        /// Validation failure.
+        message: String,
     },
     /// The local moderation runtime lock was poisoned.
     #[error("moderation ballot state lock poisoned")]
@@ -2194,6 +3791,7 @@ impl ModerationBallotRuntime {
                 announcement,
                 commits: BTreeMap::new(),
                 reveals: BTreeMap::new(),
+                challenges: BTreeMap::new(),
                 tally: None,
             },
         );
@@ -2261,6 +3859,7 @@ impl ModerationBallotRuntime {
         if now_unix_ms > state.announcement.reveal_deadline_unix_ms {
             return Err(ModerationBallotRuntimeError::RevealWindowClosed { now_unix_ms });
         }
+        ensure_no_blocking_challenges(state)?;
         ensure_eligible_juror(state, &reveal.juror_id)?;
         let commit = state.commits.get(&reveal.juror_id).ok_or_else(|| {
             ModerationBallotRuntimeError::MissingCommit {
@@ -2287,6 +3886,97 @@ impl ModerationBallotRuntime {
         })
     }
 
+    pub(crate) fn submit_challenge(
+        &mut self,
+        input: ModerationBallotChallengeInput,
+        now_unix_ms: u64,
+    ) -> Result<ModerationBallotChallengeRecord, ModerationBallotRuntimeError> {
+        validate_challenge_input(&input)?;
+        let key = ModerationBallotKey::new(&input.case_id, &input.round_id);
+        let state = self.ballots.get_mut(&key).ok_or_else(|| {
+            ModerationBallotRuntimeError::UnknownBallot {
+                case_id: key.case_id.clone(),
+                round_id: key.round_id.clone(),
+            }
+        })?;
+        if state.tally.is_some() || !state.reveals.is_empty() {
+            return Err(ModerationBallotRuntimeError::ChallengeWindowClosed { now_unix_ms });
+        }
+        if now_unix_ms <= state.announcement.commit_deadline_unix_ms {
+            return Err(ModerationBallotRuntimeError::ChallengeWindowNotOpen { now_unix_ms });
+        }
+        if now_unix_ms > state.announcement.challenge_deadline_unix_ms {
+            return Err(ModerationBallotRuntimeError::ChallengeWindowClosed { now_unix_ms });
+        }
+        if state.challenges.contains_key(&input.challenge_id) {
+            return Err(ModerationBallotRuntimeError::DuplicateChallenge {
+                case_id: key.case_id,
+                round_id: key.round_id,
+                challenge_id: input.challenge_id,
+            });
+        }
+        let record = ModerationBallotChallengeRecord {
+            challenge_id: input.challenge_id,
+            case_id: input.case_id,
+            round_id: input.round_id,
+            challenger_id: input.challenger_id,
+            kind: input.kind,
+            target_juror_id: input.target_juror_id,
+            evidence_digest: input.evidence_digest,
+            reason: input.reason,
+            raised_at_unix_ms: now_unix_ms,
+            decision: None,
+            resolved_by: None,
+            resolved_at_unix_ms: None,
+            resolution_note: None,
+        };
+        state
+            .challenges
+            .insert(record.challenge_id.clone(), record.clone());
+        Ok(record)
+    }
+
+    pub(crate) fn resolve_challenge(
+        &mut self,
+        input: ModerationBallotChallengeResolution,
+        now_unix_ms: u64,
+    ) -> Result<ModerationBallotChallengeRecord, ModerationBallotRuntimeError> {
+        validate_challenge_resolution_input(&input)?;
+        let key = ModerationBallotKey::new(&input.case_id, &input.round_id);
+        let state = self.ballots.get_mut(&key).ok_or_else(|| {
+            ModerationBallotRuntimeError::UnknownBallot {
+                case_id: key.case_id.clone(),
+                round_id: key.round_id.clone(),
+            }
+        })?;
+        if state.tally.is_some() || !state.reveals.is_empty() {
+            return Err(ModerationBallotRuntimeError::ChallengeWindowClosed { now_unix_ms });
+        }
+        let challenge = state
+            .challenges
+            .get_mut(&input.challenge_id)
+            .ok_or_else(|| ModerationBallotRuntimeError::UnknownChallenge {
+                case_id: key.case_id.clone(),
+                round_id: key.round_id.clone(),
+                challenge_id: input.challenge_id.clone(),
+            })?;
+        if challenge.decision.is_some() {
+            return Err(ModerationBallotRuntimeError::ChallengeAlreadyResolved {
+                case_id: key.case_id,
+                round_id: key.round_id,
+                challenge_id: input.challenge_id,
+            });
+        }
+        if now_unix_ms < challenge.raised_at_unix_ms {
+            return Err(ModerationBallotRuntimeError::InvalidChallengeResolutionTimestamp);
+        }
+        challenge.decision = Some(input.decision);
+        challenge.resolved_by = Some(input.resolved_by);
+        challenge.resolved_at_unix_ms = Some(now_unix_ms);
+        challenge.resolution_note = input.note;
+        Ok(challenge.clone())
+    }
+
     pub(crate) fn tally_ballot(
         &mut self,
         case_id: &str,
@@ -2306,6 +3996,7 @@ impl ModerationBallotRuntime {
                 round_id: round_id.to_owned(),
             });
         }
+        ensure_no_blocking_challenges(state)?;
         let all_jurors_revealed = state.reveals.len() == state.announcement.juror_ids.len();
         if now_unix_ms < state.announcement.reveal_deadline_unix_ms && !all_jurors_revealed {
             return Err(ModerationBallotRuntimeError::TallyWindowOpen {
@@ -2338,6 +4029,66 @@ impl ModerationBallotRuntime {
         Ok(tally)
     }
 
+    pub(crate) fn no_show_plan(
+        &self,
+        case_id: &str,
+        round_id: &str,
+        now_unix_ms: u64,
+    ) -> Result<ModerationBallotNoShowPlan, ModerationBallotRuntimeError> {
+        let key = ModerationBallotKey::new(case_id, round_id);
+        let state =
+            self.ballots
+                .get(&key)
+                .ok_or_else(|| ModerationBallotRuntimeError::UnknownBallot {
+                    case_id: case_id.to_owned(),
+                    round_id: round_id.to_owned(),
+                })?;
+        ensure_no_blocking_challenges(state)?;
+        if now_unix_ms <= state.announcement.reveal_deadline_unix_ms {
+            return Err(ModerationBallotRuntimeError::TallyWindowOpen {
+                reveal_deadline_unix_ms: state.announcement.reveal_deadline_unix_ms,
+            });
+        }
+
+        let mut missing_commit_juror_ids = Vec::new();
+        let mut unrevealed_committed_juror_ids = Vec::new();
+        let mut no_show_juror_ids = Vec::new();
+        for juror_id in &state.announcement.juror_ids {
+            if state.reveals.contains_key(juror_id) {
+                continue;
+            }
+            no_show_juror_ids.push(juror_id.clone());
+            if state.commits.contains_key(juror_id) {
+                unrevealed_committed_juror_ids.push(juror_id.clone());
+            } else {
+                missing_commit_juror_ids.push(juror_id.clone());
+            }
+        }
+
+        let quorum_met = state.reveals.len() >= usize::from(state.announcement.quorum);
+        let contested = state.tally.as_ref().is_some_and(|tally| tally.contested);
+        let mut plan = ModerationBallotNoShowPlan {
+            case_id: case_id.to_owned(),
+            round_id: round_id.to_owned(),
+            generated_at_unix_ms: now_unix_ms,
+            reveal_deadline_unix_ms: state.announcement.reveal_deadline_unix_ms,
+            quorum: state.announcement.quorum,
+            roster_size: state.announcement.juror_ids.len() as u32,
+            committed_count: state.commits.len() as u32,
+            revealed_count: state.reveals.len() as u32,
+            no_show_count: no_show_juror_ids.len() as u32,
+            quorum_met,
+            tally_finalized: state.tally.is_some(),
+            contested,
+            missing_commit_juror_ids,
+            unrevealed_committed_juror_ids,
+            no_show_juror_ids,
+            penalty_plan_digest: [0; 32],
+        };
+        plan.penalty_plan_digest = moderation_ballot_no_show_penalty_plan_digest(state, &plan);
+        Ok(plan)
+    }
+
     pub(crate) fn ballot(&self, case_id: &str, round_id: &str) -> Option<ModerationBallotRecord> {
         self.ballots
             .get(&ModerationBallotKey::new(case_id, round_id))
@@ -2349,6 +4100,35 @@ impl ModerationBallotRuntime {
             .values()
             .map(ModerationBallotState::to_record)
             .collect()
+    }
+
+    pub(crate) fn snapshot(&self) -> ModerationBallotSnapshot {
+        ModerationBallotSnapshot {
+            ballots: self.ballots(),
+            events: Vec::new(),
+        }
+    }
+
+    pub(crate) fn restore_snapshot(
+        &mut self,
+        snapshot: ModerationBallotSnapshot,
+    ) -> Result<(), ModerationBallotRuntimeError> {
+        let mut ballots = BTreeMap::new();
+        for record in snapshot.ballots {
+            validate_ballot_record(&record)?;
+            let key = ModerationBallotKey::from_announcement(&record.announcement);
+            if ballots.contains_key(&key) {
+                return Err(invalid_ballot_snapshot(format!(
+                    "duplicate moderation ballot `{}` round `{}`",
+                    key.case_id, key.round_id
+                )));
+            }
+
+            let state = ballot_state_from_record(record)?;
+            ballots.insert(key, state);
+        }
+        self.ballots = ballots;
+        Ok(())
     }
 }
 
@@ -2380,6 +4160,7 @@ struct ModerationBallotState {
     announcement: ModerationBallotAnnouncement,
     commits: BTreeMap<String, SoraFsModerationBallotCommitV1>,
     reveals: BTreeMap<String, SoraFsModerationBallotRevealV1>,
+    challenges: BTreeMap<String, ModerationBallotChallengeRecord>,
     tally: Option<ModerationBallotTally>,
 }
 
@@ -2389,6 +4170,7 @@ impl ModerationBallotState {
             announcement: self.announcement.clone(),
             commits: self.commits.values().cloned().collect(),
             reveals: self.reveals.values().cloned().collect(),
+            challenges: self.challenges.values().cloned().collect(),
             tally: self.tally.clone(),
         }
     }
@@ -2481,6 +4263,379 @@ fn ensure_eligible_juror(
         round_id: state.announcement.round_id.clone(),
         juror_id: juror_id.to_owned(),
     })
+}
+
+fn validate_challenge_input(
+    input: &ModerationBallotChallengeInput,
+) -> Result<(), ModerationBallotRuntimeError> {
+    if input.challenge_id.trim().is_empty() {
+        return Err(ModerationBallotRuntimeError::MissingChallengeId);
+    }
+    if input.challenger_id.trim().is_empty() {
+        return Err(ModerationBallotRuntimeError::MissingChallengerId);
+    }
+    validate_challenge_target(input.kind, input.target_juror_id.as_deref())?;
+    if input.evidence_digest == [0; 32] {
+        return Err(ModerationBallotRuntimeError::MissingChallengeEvidence);
+    }
+    if input.reason.trim().is_empty() {
+        return Err(ModerationBallotRuntimeError::MissingChallengeReason);
+    }
+    Ok(())
+}
+
+fn validate_challenge_target(
+    kind: ModerationBallotChallengeKind,
+    target_juror_id: Option<&str>,
+) -> Result<(), ModerationBallotRuntimeError> {
+    match target_juror_id {
+        Some(target_juror_id) if target_juror_id.trim().is_empty() => {
+            Err(ModerationBallotRuntimeError::BlankChallengeTarget)
+        }
+        Some(_) => Ok(()),
+        None if kind.requires_target_juror() => {
+            Err(ModerationBallotRuntimeError::MissingChallengeTarget { kind })
+        }
+        None => Ok(()),
+    }
+}
+
+fn validate_challenge_resolution_input(
+    input: &ModerationBallotChallengeResolution,
+) -> Result<(), ModerationBallotRuntimeError> {
+    if input.case_id.trim().is_empty() || input.round_id.trim().is_empty() {
+        return Err(ModerationBallotRuntimeError::UnknownBallot {
+            case_id: input.case_id.clone(),
+            round_id: input.round_id.clone(),
+        });
+    }
+    if input.challenge_id.trim().is_empty() {
+        return Err(ModerationBallotRuntimeError::MissingChallengeId);
+    }
+    if input.resolved_by.trim().is_empty() {
+        return Err(ModerationBallotRuntimeError::MissingChallengeResolver);
+    }
+    if input
+        .note
+        .as_deref()
+        .is_some_and(|note| note.trim().is_empty())
+    {
+        return Err(ModerationBallotRuntimeError::BlankChallengeResolutionNote);
+    }
+    Ok(())
+}
+
+fn ensure_no_blocking_challenges(
+    state: &ModerationBallotState,
+) -> Result<(), ModerationBallotRuntimeError> {
+    for challenge in state.challenges.values() {
+        match challenge.decision {
+            None => {
+                return Err(ModerationBallotRuntimeError::ChallengePending {
+                    case_id: state.announcement.context.case_id.clone(),
+                    round_id: state.announcement.round_id.clone(),
+                    challenge_id: challenge.challenge_id.clone(),
+                });
+            }
+            Some(ModerationBallotChallengeDecision::Accepted) => {
+                return Err(ModerationBallotRuntimeError::ChallengeAccepted {
+                    case_id: state.announcement.context.case_id.clone(),
+                    round_id: state.announcement.round_id.clone(),
+                    challenge_id: challenge.challenge_id.clone(),
+                });
+            }
+            Some(ModerationBallotChallengeDecision::Rejected) => {}
+        }
+    }
+    Ok(())
+}
+
+fn moderation_ballot_no_show_penalty_plan_digest(
+    state: &ModerationBallotState,
+    plan: &ModerationBallotNoShowPlan,
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(MODERATION_BALLOT_NO_SHOW_PENALTY_PLAN_DOMAIN_V1);
+    update_string(&mut hasher, &plan.case_id);
+    update_string(&mut hasher, &plan.round_id);
+    hasher.update(&state.announcement.context.evidence_bundle_digest);
+    update_string(
+        &mut hasher,
+        &state.announcement.context.appeal_finance_config_version,
+    );
+    hasher.update(&state.announcement.context.panel_roster_hash);
+    update_string(&mut hasher, &state.announcement.context.policy_reference);
+    update_optional_string(
+        &mut hasher,
+        state.announcement.context.evidence_uri.as_deref(),
+    );
+    hasher.update(&state.announcement.announced_at_unix_ms.to_le_bytes());
+    hasher.update(&state.announcement.commit_deadline_unix_ms.to_le_bytes());
+    hasher.update(&state.announcement.challenge_deadline_unix_ms.to_le_bytes());
+    hasher.update(&plan.reveal_deadline_unix_ms.to_le_bytes());
+    hasher.update(&plan.quorum.to_le_bytes());
+    hasher.update(&plan.roster_size.to_le_bytes());
+    hasher.update(&plan.committed_count.to_le_bytes());
+    hasher.update(&plan.revealed_count.to_le_bytes());
+    hasher.update(&plan.no_show_count.to_le_bytes());
+    hasher.update(&[u8::from(plan.quorum_met)]);
+    hasher.update(&[u8::from(plan.tally_finalized)]);
+    hasher.update(&[u8::from(plan.contested)]);
+    update_string_list(&mut hasher, &state.announcement.juror_ids);
+    update_string_list(&mut hasher, &plan.missing_commit_juror_ids);
+    update_string_list(&mut hasher, &plan.unrevealed_committed_juror_ids);
+    update_string_list(&mut hasher, &plan.no_show_juror_ids);
+    *hasher.finalize().as_bytes()
+}
+
+fn update_string_list(hasher: &mut blake3::Hasher, values: &[String]) {
+    hasher.update(&(values.len() as u64).to_le_bytes());
+    for value in values {
+        update_string(hasher, value);
+    }
+}
+
+fn invalid_ballot_snapshot(message: impl Into<String>) -> ModerationBallotRuntimeError {
+    ModerationBallotRuntimeError::InvalidSnapshot {
+        message: message.into(),
+    }
+}
+
+fn validate_ballot_record(
+    record: &ModerationBallotRecord,
+) -> Result<(), ModerationBallotRuntimeError> {
+    validate_announcement(&record.announcement)?;
+    for commit in &record.commits {
+        commit.validate()?;
+    }
+    for reveal in &record.reveals {
+        reveal.validate()?;
+    }
+    for challenge in &record.challenges {
+        validate_challenge_record_shape(challenge)?;
+    }
+    Ok(())
+}
+
+fn validate_challenge_record_shape(
+    challenge: &ModerationBallotChallengeRecord,
+) -> Result<(), ModerationBallotRuntimeError> {
+    if challenge.challenge_id.trim().is_empty() {
+        return Err(ModerationBallotRuntimeError::MissingChallengeId);
+    }
+    if challenge.case_id.trim().is_empty() || challenge.round_id.trim().is_empty() {
+        return Err(invalid_ballot_snapshot(
+            "challenge case id and round id are required",
+        ));
+    }
+    if challenge.challenger_id.trim().is_empty() {
+        return Err(ModerationBallotRuntimeError::MissingChallengerId);
+    }
+    validate_challenge_target(challenge.kind, challenge.target_juror_id.as_deref())?;
+    if challenge.evidence_digest == [0; 32] {
+        return Err(ModerationBallotRuntimeError::MissingChallengeEvidence);
+    }
+    if challenge.reason.trim().is_empty() {
+        return Err(ModerationBallotRuntimeError::MissingChallengeReason);
+    }
+    match challenge.decision {
+        Some(_) => {
+            if challenge
+                .resolved_by
+                .as_deref()
+                .is_none_or(|resolved_by| resolved_by.trim().is_empty())
+            {
+                return Err(ModerationBallotRuntimeError::MissingChallengeResolver);
+            }
+            let Some(resolved_at_unix_ms) = challenge.resolved_at_unix_ms else {
+                return Err(invalid_ballot_snapshot(
+                    "resolved challenge is missing resolved_at_unix_ms",
+                ));
+            };
+            if resolved_at_unix_ms < challenge.raised_at_unix_ms {
+                return Err(ModerationBallotRuntimeError::InvalidChallengeResolutionTimestamp);
+            }
+            if challenge
+                .resolution_note
+                .as_deref()
+                .is_some_and(|note| note.trim().is_empty())
+            {
+                return Err(ModerationBallotRuntimeError::BlankChallengeResolutionNote);
+            }
+        }
+        None => {
+            if challenge.resolved_by.is_some()
+                || challenge.resolved_at_unix_ms.is_some()
+                || challenge.resolution_note.is_some()
+            {
+                return Err(invalid_ballot_snapshot(
+                    "pending challenge carries resolution fields",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn ballot_state_from_record(
+    record: ModerationBallotRecord,
+) -> Result<ModerationBallotState, ModerationBallotRuntimeError> {
+    let mut state = ModerationBallotState {
+        announcement: record.announcement,
+        commits: BTreeMap::new(),
+        reveals: BTreeMap::new(),
+        challenges: BTreeMap::new(),
+        tally: None,
+    };
+    let key = ModerationBallotKey::from_announcement(&state.announcement);
+
+    for commit in record.commits {
+        validate_payload_scope(&state, &commit.context, &commit.round_id)?;
+        if commit.committed_at_unix_ms < state.announcement.announced_at_unix_ms
+            || commit.committed_at_unix_ms > state.announcement.commit_deadline_unix_ms
+        {
+            return Err(invalid_ballot_snapshot(format!(
+                "commit for juror `{}` in ballot `{}` round `{}` is outside the commit window",
+                commit.juror_id, key.case_id, key.round_id
+            )));
+        }
+        ensure_eligible_juror(&state, &commit.juror_id)?;
+        if state.commits.contains_key(&commit.juror_id) {
+            return Err(invalid_ballot_snapshot(format!(
+                "duplicate commit for juror `{}` in ballot `{}` round `{}`",
+                commit.juror_id, key.case_id, key.round_id
+            )));
+        }
+        state.commits.insert(commit.juror_id.clone(), commit);
+    }
+
+    for challenge in record.challenges {
+        if challenge.case_id != key.case_id || challenge.round_id != key.round_id {
+            return Err(invalid_ballot_snapshot(format!(
+                "challenge `{}` in ballot `{}` round `{}` has mismatched scope",
+                challenge.challenge_id, key.case_id, key.round_id
+            )));
+        }
+        if challenge.raised_at_unix_ms <= state.announcement.commit_deadline_unix_ms
+            || challenge.raised_at_unix_ms > state.announcement.challenge_deadline_unix_ms
+        {
+            return Err(invalid_ballot_snapshot(format!(
+                "challenge `{}` in ballot `{}` round `{}` is outside the challenge window",
+                challenge.challenge_id, key.case_id, key.round_id
+            )));
+        }
+        if state
+            .challenges
+            .insert(challenge.challenge_id.clone(), challenge)
+            .is_some()
+        {
+            return Err(invalid_ballot_snapshot(format!(
+                "duplicate challenge in ballot `{}` round `{}`",
+                key.case_id, key.round_id
+            )));
+        }
+    }
+
+    for reveal in record.reveals {
+        ensure_no_blocking_challenges(&state).map_err(|err| {
+            invalid_ballot_snapshot(format!(
+                "reveal in ballot `{}` round `{}` would be blocked by restored challenge state: {err}",
+                key.case_id, key.round_id
+            ))
+        })?;
+        validate_payload_scope(&state, &reveal.context, &reveal.round_id)?;
+        if reveal.revealed_at_unix_ms <= state.announcement.challenge_deadline_unix_ms
+            || reveal.revealed_at_unix_ms > state.announcement.reveal_deadline_unix_ms
+        {
+            return Err(invalid_ballot_snapshot(format!(
+                "reveal for juror `{}` in ballot `{}` round `{}` is outside the reveal window",
+                reveal.juror_id, key.case_id, key.round_id
+            )));
+        }
+        ensure_eligible_juror(&state, &reveal.juror_id)?;
+        let commit = state.commits.get(&reveal.juror_id).ok_or_else(|| {
+            invalid_ballot_snapshot(format!(
+                "reveal for juror `{}` in ballot `{}` round `{}` has no accepted commit",
+                reveal.juror_id, key.case_id, key.round_id
+            ))
+        })?;
+        commit.verify_reveal(&reveal)?;
+        if state
+            .reveals
+            .insert(reveal.juror_id.clone(), reveal)
+            .is_some()
+        {
+            return Err(invalid_ballot_snapshot(format!(
+                "duplicate reveal in ballot `{}` round `{}`",
+                key.case_id, key.round_id
+            )));
+        }
+    }
+
+    if let Some(tally) = record.tally {
+        ensure_no_blocking_challenges(&state).map_err(|err| {
+            invalid_ballot_snapshot(format!(
+                "tally in ballot `{}` round `{}` would be blocked by restored challenge state: {err}",
+                key.case_id, key.round_id
+            ))
+        })?;
+        validate_restored_tally(&state, &tally)?;
+        state.tally = Some(tally);
+    }
+    Ok(state)
+}
+
+fn validate_restored_tally(
+    state: &ModerationBallotState,
+    tally: &ModerationBallotTally,
+) -> Result<(), ModerationBallotRuntimeError> {
+    let announcement = &state.announcement;
+    if tally.case_id != announcement.context.case_id || tally.round_id != announcement.round_id {
+        return Err(invalid_ballot_snapshot(
+            "tally case id or round id does not match announcement",
+        ));
+    }
+    if tally.quorum != announcement.quorum {
+        return Err(invalid_ballot_snapshot(
+            "tally quorum does not match announcement",
+        ));
+    }
+    if usize::try_from(tally.votes_total).ok() != Some(state.reveals.len()) {
+        return Err(invalid_ballot_snapshot(
+            "tally votes_total does not match accepted reveals",
+        ));
+    }
+    if state.reveals.len() < usize::from(announcement.quorum) {
+        return Err(invalid_ballot_snapshot("tally does not satisfy quorum"));
+    }
+    let all_jurors_revealed = state.reveals.len() == announcement.juror_ids.len();
+    if tally.tallied_at_unix_ms < announcement.reveal_deadline_unix_ms && !all_jurors_revealed {
+        return Err(invalid_ballot_snapshot(
+            "early tally requires every announced juror to reveal",
+        ));
+    }
+
+    let mut counts = ModerationVoteCounts::default();
+    for reveal in state.reveals.values() {
+        counts.increment(reveal.choice);
+    }
+    if tally.counts != counts {
+        return Err(invalid_ballot_snapshot(
+            "tally vote counts do not match accepted reveals",
+        ));
+    }
+    let winning_choice = counts.winning_choice();
+    if tally.winning_choice != winning_choice {
+        return Err(invalid_ballot_snapshot(
+            "tally winning choice does not match vote counts",
+        ));
+    }
+    if tally.contested != winning_choice.is_none() {
+        return Err(invalid_ballot_snapshot(
+            "tally contested flag does not match vote counts",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

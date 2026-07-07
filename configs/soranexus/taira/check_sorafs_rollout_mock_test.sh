@@ -33,18 +33,32 @@ import sys
 from pathlib import Path
 
 output_path = None
+gas_asset_id = None
+skip_faucet = False
 args = sys.argv[1:]
 for index, value in enumerate(args):
     if value == "--output-config" and index + 1 < len(args):
         output_path = args[index + 1]
-        break
+    elif value == "--gas-asset-id" and index + 1 < len(args):
+        gas_asset_id = args[index + 1]
+    elif value == "--skip-faucet":
+        skip_faucet = True
 
 if output_path is None:
     raise SystemExit("missing --output-config")
 
 state_dir = os.environ.get("MOCK_STATE_DIR")
 if state_dir:
-    Path(state_dir, "bootstrap_seen").write_text("1\n", encoding="utf-8")
+    state = Path(state_dir)
+    state.joinpath("bootstrap_seen").write_text("1\n", encoding="utf-8")
+    if gas_asset_id is not None:
+        state.joinpath("bootstrap_gas_asset_seen").write_text(
+            gas_asset_id + "\n", encoding="utf-8"
+        )
+    if skip_faucet:
+        state.joinpath("bootstrap_skip_faucet_seen").write_text(
+            "1\n", encoding="utf-8"
+        )
 
 with open(output_path, "w", encoding="utf-8") as handle:
     handle.write(
@@ -178,6 +192,8 @@ case "${method} ${url}" in
       body='{"commit_qc":{"height":707,"validator_set_len":3},"highest_qc":{"height":707},"locked_qc":{"height":707},"canonical":{"height":707}}'
     elif [[ "$scenario" == "sumeragi_canonical_behind" ]]; then
       body='{"commit_qc":{"height":707,"validator_set_len":4},"highest_qc":{"height":707},"locked_qc":{"height":707},"canonical":{"height":706}}'
+    elif [[ "$scenario" == "sumeragi_idle_high_view_missing_qc" ]]; then
+      body='{"commit_qc":{"height":707,"validator_set_len":4},"highest_qc":{"height":707},"locked_qc":{"height":707},"canonical":{"height":708,"phase":"prepare","view":42,"pending_finality":null,"rbc_status":"disabled"},"membership":{"height":708,"view":42},"worker_loop":{"stage":"idle"},"view_change_causes":{"last_cause":"missing_qc"},"tx_queue":{"depth":1,"capacity":20000,"saturated_by_age":true,"oldest_queued_age_ms":30000},"pending_rbc":{"sessions":0}}'
     else
       body='{"commit_qc":{"height":707,"validator_set_len":4},"highest_qc":{"height":707},"locked_qc":{"height":707},"canonical":{"height":707}}'
     fi
@@ -210,6 +226,40 @@ if [[ "$*" == *"ledger transaction stdin"* ]]; then
   mkdir -p "${MOCK_STATE_DIR:?}"
   cat >"${MOCK_STATE_DIR}/submitted_tx.json"
   : >"${MOCK_STATE_DIR}/submit_seen"
+  metadata_file=""
+  previous=""
+  for arg in "$@"; do
+    if [[ "$previous" == "-m" || "$previous" == "--metadata" ]]; then
+      metadata_file="$arg"
+      previous=""
+      continue
+    fi
+    case "$arg" in
+      -m|--metadata)
+        previous="$arg"
+        ;;
+      -m=*|--metadata=*)
+        metadata_file="${arg#*=}"
+        ;;
+    esac
+  done
+  if [[ -z "$metadata_file" ]]; then
+    echo "missing gas_asset_id in transaction metadata"
+    exit 1
+  fi
+  python3 - "$metadata_file" "${MOCK_STATE_DIR}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+state = Path(sys.argv[2])
+payload = json.loads(path.read_text(encoding="utf-8"))
+gas_asset_id = payload.get("gas_asset_id")
+if gas_asset_id != "6TEAJqbb8oEPmLncoNiMRbLEK6tw":
+    raise SystemExit(f"unexpected gas_asset_id: {gas_asset_id!r}")
+state.joinpath("gas_asset_seen").write_text(gas_asset_id + "\n", encoding="utf-8")
+PY
   case "${MOCK_SCENARIO:-}" in
     unknown_instruction)
       echo "Unknown instruction type: SoraFsCapacityDeclaration"
@@ -247,6 +297,9 @@ spec=""
 request_out=""
 authority=""
 private_key=""
+private_key_file=""
+argv_log="${MOCK_STATE_DIR:?}/sorafs_manifest_stub_argv"
+printf '%s\n' "$*" >"$argv_log"
 
 for arg in "$@"; do
   case "$arg" in
@@ -260,7 +313,11 @@ for arg in "$@"; do
       authority="${arg#--authority=}"
       ;;
     --private-key=*)
-      private_key="${arg#--private-key=}"
+      echo "private key must be passed through --private-key-file in rollout tests" >&2
+      exit 1
+      ;;
+    --private-key-file=*)
+      private_key_file="${arg#--private-key-file=}"
       ;;
   esac
 done
@@ -269,23 +326,25 @@ done
   echo "unexpected sorafs_manifest_stub invocation: $*" >&2
   exit 1
 }
-[[ -n "$spec" && -n "$request_out" && -n "$authority" && -n "$private_key" ]] || {
+[[ -n "$spec" && -n "$request_out" && -n "$authority" && -n "$private_key_file" ]] || {
   echo "missing capacity declaration arguments" >&2
   exit 1
 }
 
-python3 - "$spec" "$request_out" "$authority" "$private_key" "${MOCK_STATE_DIR:?}" <<'PY'
+python3 - "$spec" "$request_out" "$authority" "$private_key_file" "${MOCK_STATE_DIR:?}" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-spec_path, request_path, authority, private_key, state_dir = sys.argv[1:]
+spec_path, request_path, authority, private_key_file, state_dir = sys.argv[1:]
+private_key = Path(private_key_file).read_text(encoding="utf-8").strip()
 with open(spec_path, "r", encoding="utf-8") as handle:
     spec = json.load(handle)
 provider_id = spec["provider_id_hex"]
 Path(state_dir, "provider_id").write_text(provider_id, encoding="utf-8")
 Path(state_dir, "authority_seen").write_text(authority, encoding="utf-8")
 Path(state_dir, "private_key_seen").write_text(private_key, encoding="utf-8")
+Path(state_dir, "private_key_file_seen").write_text(private_key_file, encoding="utf-8")
 with open(request_path, "w", encoding="utf-8") as handle:
     json.dump(
         {
@@ -412,8 +471,13 @@ run_implicit_bootstrap_success_case() {
 
   grep -q 'SoraFS rollout verification passed.' "$output_file"
   test -f "${root}/state/bootstrap_seen"
+  grep -q '6TEAJqbb8oEPmLncoNiMRbLEK6tw' "${root}/state/bootstrap_gas_asset_seen"
+  test -f "${root}/state/bootstrap_skip_faucet_seen"
   test -f "${root}/state/submit_seen"
+  test -f "${root}/state/gas_asset_seen"
   test -f "$config_path"
+  ! grep -q 'BOOTSTRAPPRIVATEKEY' "${root}/state/sorafs_manifest_stub_argv"
+  grep -q 'BOOTSTRAPPRIVATEKEY' "${root}/state/private_key_seen"
 }
 
 run_custom_http_timeouts_are_passed_to_curl_case() {
@@ -459,7 +523,10 @@ run_explicit_config_is_preserved_case() {
   [[ "$before_hash" == "$after_hash" ]]
   grep -q 'SoraFS rollout verification passed.' "$output_file"
   test ! -f "${root}/state/bootstrap_seen"
+  test -f "${root}/state/gas_asset_seen"
   grep -q 'EXPLICITPRIVATEKEY' "${root}/state/private_key_seen"
+  ! grep -q 'EXPLICITPRIVATEKEY' "${root}/state/sorafs_manifest_stub_argv"
+  test -f "${root}/state/private_key_file_seen"
 }
 
 run_explicit_missing_config_fails_without_bootstrap_case() {
@@ -489,6 +556,11 @@ run_expected_failure_case() {
   local scenario="$1"
   local expected_pattern="$2"
   local extra_pattern="${3:-}"
+  if [[ $# -ge 3 ]]; then
+    shift 3
+  else
+    shift 2
+  fi
   local root output_file config_path
 
   root="$(make_case_root)"
@@ -506,6 +578,7 @@ run_expected_failure_case() {
     --iroha-bin "${root}/mockbin/iroha" \
     --sorafs-manifest-stub-bin "${root}/mockbin/sorafs_manifest_stub" \
     --sorafs-tx-stdin-builder-bin "${root}/mockbin/sorafs_tx_stdin_builder" \
+    "$@" \
     >"$output_file" 2>&1; then
     echo "case ${scenario} unexpectedly succeeded" >&2
     sed -n '1,200p' "$output_file" >&2 || true
@@ -635,6 +708,8 @@ run_asset_retry_success_case() {
   grep -q 'SoraFS rollout verification passed.' "$output_file"
   test -f "${root}/state/retry_seen"
   test -f "${root}/state/faucet_seen"
+  test -f "${root}/state/gas_asset_seen"
+  ! grep -q 'ASSETRETRYPRIVATEKEY' "${root}/state/sorafs_manifest_stub_argv"
 }
 
 run_read_only_success_case
@@ -653,6 +728,11 @@ run_expected_failure_case \
 run_expected_failure_case \
   state_missing_after_submit \
   'capacity canary transaction landed but the declaration never appeared in /v1/sorafs/capacity/state'
+run_expected_failure_case \
+  success \
+  'SoraFS capacity canary failed: Taira requires gas_asset_id transaction metadata' \
+  'missing gas_asset_id in transaction metadata' \
+  --gas-asset-id ""
 run_expected_preflight_failure_case \
   status_blocks_zero \
   'status payload did not include a positive `blocks` value'
@@ -662,6 +742,9 @@ run_expected_preflight_failure_case \
 run_expected_preflight_failure_case \
   sumeragi_canonical_behind \
   'sumeragi/status canonical height 706 is behind commit QC height 707'
+run_expected_preflight_failure_case \
+  sumeragi_idle_high_view_missing_qc \
+  'sumeragi/status reports a finality fault'
 run_expected_numeric_argument_failure_case \
   'DECLARED_CAPACITY_GIB must be a positive integer' \
   --declared-capacity-gib 0
@@ -677,6 +760,9 @@ run_expected_numeric_failure_case \
 run_expected_numeric_failure_case \
   'CAPACITY_STATE_RECHECK_DELAY_SECONDS must be a non-negative integer' \
   env CAPACITY_STATE_RECHECK_ATTEMPTS=2 CAPACITY_STATE_RECHECK_DELAY_SECONDS=-1
+run_expected_numeric_failure_case \
+  'ROLLOUT_CANARY_SKIP_FAUCET must be auto, 1, 0, true, false, yes, or no' \
+  env ROLLOUT_CANARY_SKIP_FAUCET=maybe CAPACITY_STATE_RECHECK_ATTEMPTS=2 CAPACITY_STATE_RECHECK_DELAY_SECONDS=0
 run_expected_numeric_argument_failure_case \
   'SORAFS_ROLLOUT_CURL_CONNECT_TIMEOUT_SECONDS must be a positive integer' \
   --curl-connect-timeout-seconds 0

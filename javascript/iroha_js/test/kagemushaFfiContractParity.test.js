@@ -1320,7 +1320,7 @@ test("Kagemusha Swift and C# recursive spend inputs require Norito archives", ()
       "testNativeArchiveLimitMatchesSharedKagemushaCap",
       "KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes",
       "KagemushaRecursiveSpendProver.nativeArchiveMaxBytes",
-      "64 * 1024 * 1024",
+      "256 * 1024 * 1024",
     ],
     "Swift recursive compact prover input guard tests",
   );
@@ -2426,6 +2426,16 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
     dts,
     /recursiveCompact(?:KeyArtifactsArchive|VerifierKeysArchive)\?:\s*BinaryLike/u,
     "JavaScript TypeScript recursive compact key packages must not be optional",
+  );
+  assert.match(
+    dts,
+    /export type KagemushaRecursiveSpendAppendRequestInput =\s*KagemushaRecursiveSpendAppendRequestBaseInput &\s*\(\s*\|\s*\{\s*readonly outputProofCircuitId: string;\s*readonly output_proof_circuit_id\?: never;\s*\}\s*\|\s*\{\s*readonly outputProofCircuitId\?: never;\s*readonly output_proof_circuit_id: string;\s*\}\s*\);/u,
+    "JavaScript TypeScript recursive append request declaration must require exactly one output selector alias",
+  );
+  assert.doesNotMatch(
+    dts,
+    /readonly output(?:ProofCircuitId|_proof_circuit_id)\?: string \| null/u,
+    "JavaScript TypeScript recursive append output selector must not be optional or nullable",
   );
   assertContainsAll(
     source("javascript/iroha_js/test/kagemushaRecursiveSpend.test.js"),
@@ -11024,7 +11034,7 @@ test("recursive Kagemusha policy negative controls pin non-C# native output guar
     branch,
     [
       "javascript/iroha_js/src/crypto.js",
-      "export const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;",
+      "export const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 256 * 1024 * 1024;",
       "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaCompactPaymentTokenProver.java",
       "static void requireNativeInput(final byte[] archive, final String archiveName)",
       "static boolean isValidNoritoArchive(final byte[] output)",
@@ -16922,7 +16932,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jvmAndroidCompactProjectionArchivePreflightBranch,
-    /KagemushaRecursiveSpendProverTest\.kt[\s\S]*?bundleArchive must not exceed[\s\S]*?bundleArchive may exceed[\s\S]*?verifierRecordArchive must not exceed[\s\S]*?verifierRecordArchive may exceed[\s\S]*?KagemushaRecursiveSpendProverTest\.java[\s\S]*?bundleArchive must not exceed 67108864 bytes[\s\S]*?bundleArchive may exceed 67108864 bytes[\s\S]*?verifierRecordArchive must not exceed 67108864 bytes[\s\S]*?verifierRecordArchive may exceed 67108864 bytes[\s\S]*?run_checks\(mutated_texts\)/u,
+    /KagemushaRecursiveSpendProverTest\.kt[\s\S]*?bundleArchive must not exceed[\s\S]*?bundleArchive may exceed[\s\S]*?verifierRecordArchive must not exceed[\s\S]*?verifierRecordArchive may exceed[\s\S]*?KagemushaRecursiveSpendProverTest\.java[\s\S]*?bundleArchive must not exceed 268435456 bytes[\s\S]*?bundleArchive may exceed 268435456 bytes[\s\S]*?verifierRecordArchive must not exceed 268435456 bytes[\s\S]*?verifierRecordArchive may exceed 268435456 bytes[\s\S]*?run_checks\(mutated_texts\)/u,
     "JVM/Android compact projection archive-preflight negative control must mutate Kotlin and Android Java oversized archive rows",
   );
   assertContainsAll(
@@ -16930,8 +16940,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     [
       "Kotlin compact projection archive preflight test vectors missing bundleArchive must not exceed",
       "Kotlin compact projection archive preflight test vectors missing verifierRecordArchive must not exceed",
-      "Android Java compact projection archive preflight test vectors missing bundleArchive must not exceed 67108864 bytes",
-      "Android Java compact projection archive preflight test vectors missing verifierRecordArchive must not exceed 67108864 bytes",
+      "Android Java compact projection archive preflight test vectors missing bundleArchive must not exceed 268435456 bytes",
+      "Android Java compact projection archive preflight test vectors missing verifierRecordArchive must not exceed 268435456 bytes",
       "if expected_label not in message:",
       "JVM/Android compact projection archive preflight drift was rejected",
       "run_checks(mutated_texts)",
@@ -16946,7 +16956,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       ".recursiveSpendCompactPaymentTokenFromBundle(oversizedRecursiveCompactInput)",
       ".recursiveSpendCompactPaymentTokenFromBundle(oversizedRecursiveCompactInput));",
       "verifierRecordArchive must not exceed",
-      "verifierRecordArchive must not exceed 67108864 bytes",
+      "verifierRecordArchive must not exceed 268435456 bytes",
       ".verifyRecursiveSpendCompactPaymentTokenProjection(validRecursiveCompactInput, ByteArray(0))",
       "validRecursiveCompactInput, new byte[0]));",
     ],
@@ -28656,7 +28666,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     swiftRecursiveCompactNativeArchiveCapBranch,
-    /nativeArchiveMaxBytes = 64 \* 1024 \* 1024[\s\S]*?nativeArchiveMaxBytes = 1024 \* 1024 \* 1024[\s\S]*?testNativeArchiveLimitMatchesSharedKagemushaCap[\s\S]*?testNativeArchiveLimitAllowsIndependentKagemushaCap[\s\S]*?64 \* 1024 \* 1024[\s\S]*?1024 \* 1024 \* 1024/u,
+    /nativeArchiveMaxBytes = 256 \* 1024 \* 1024[\s\S]*?nativeArchiveMaxBytes = 1024 \* 1024 \* 1024[\s\S]*?testNativeArchiveLimitMatchesSharedKagemushaCap[\s\S]*?testNativeArchiveLimitAllowsIndependentKagemushaCap[\s\S]*?256 \* 1024 \* 1024[\s\S]*?1024 \* 1024 \* 1024/u,
     "Swift recursive compact native archive cap negative control must mutate the wrapper cap and shared-cap test",
   );
   assert.match(
@@ -28666,7 +28676,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     swiftRecursiveCompactNativeArchiveCapBranch,
-    /expected_labels\s*=\s*\([\s\S]*?Swift recursive compact wrapper missing nativeArchiveMaxBytes = 64 \* 1024 \* 1024[\s\S]*?Swift recursive compact verifier tests missing testNativeArchiveLimitMatchesSharedKagemushaCap[\s\S]*?Swift recursive compact verifier tests missing 64 \* 1024 \* 1024[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    /expected_labels\s*=\s*\([\s\S]*?Swift recursive compact wrapper missing nativeArchiveMaxBytes = 256 \* 1024 \* 1024[\s\S]*?Swift recursive compact verifier tests missing testNativeArchiveLimitMatchesSharedKagemushaCap[\s\S]*?Swift recursive compact verifier tests missing 256 \* 1024 \* 1024[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
     "Swift recursive compact native archive cap negative control must require source and test diagnostics",
   );
   assert.match(

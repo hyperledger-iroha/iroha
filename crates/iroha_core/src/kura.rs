@@ -42,9 +42,13 @@ use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::block::decode_versioned_signed_block;
 use iroha_data_model::{
     AccountId,
-    block::{BlockHeader, SignedBlock, decode_framed_signed_block},
+    block::{
+        BlockHeader, SignedBlock, consensus::SumeragiLanePayloadOwnership,
+        decode_framed_signed_block,
+    },
     consensus::{Qc, ValidatorSetCheckpoint},
     merge::MergeLedgerEntry,
+    nexus::{DataSpaceId, LaneId},
     peer::PeerId,
     transaction::signed::TransactionEntrypoint,
 };
@@ -80,6 +84,9 @@ const PIPELINE_DIR_NAME: &str = "pipeline";
 const DA_BLOCKS_DIR_NAME: &str = "da_blocks";
 const WSV_CHECKPOINTS_DIR_NAME: &str = "wsv_checkpoints";
 const COMMIT_MANIFESTS_DIR_NAME: &str = "commit_manifests";
+const LANE_ARTIFACTS_DIR_NAME: &str = "lane_artifacts";
+const LANE_ARTIFACTS_DATA_FILE: &str = "ownerships.norito";
+const LANE_ARTIFACTS_INDEX_FILE: &str = "ownerships.index";
 const PIPELINE_SIDECARS_DATA_FILE: &str = "sidecars.norito";
 const PIPELINE_SIDECARS_INDEX_FILE: &str = "sidecars.index";
 const ROSTER_SIDECARS_DATA_FILE: &str = "roster_sidecars.norito";
@@ -210,6 +217,8 @@ pub struct Kura {
     active_blocks_dir: Mutex<PathBuf>,
     /// Active merge-ledger file path for the primary lane.
     active_merge_path: Mutex<PathBuf>,
+    /// Current lane storage entries, keyed by lane id, used for lane-local artifact placement.
+    lane_storage_entries: Mutex<BTreeMap<LaneId, LaneConfigEntry>>,
     /// Maximum on-disk footprint for Kura block storage (0 = unlimited).
     max_disk_usage_bytes: u64,
     /// Distinct remote peers required before Kura may evict a local canonical block body.
@@ -1266,6 +1275,7 @@ impl Kura {
             store_root,
             active_blocks_dir: Mutex::new(blocks_root.clone()),
             active_merge_path: Mutex::new(merge_log_path.clone()),
+            lane_storage_entries: Mutex::new(Self::lane_storage_entries_from_config(lane_config)),
             max_disk_usage_bytes: config.max_disk_usage_bytes.get(),
             eviction_required_replicas: config.eviction_required_replicas,
             replica_registry: Mutex::new(BTreeMap::new()),
@@ -1351,6 +1361,7 @@ impl Kura {
         let blocks_root = store_root.join("blocks");
         std::fs::create_dir_all(&blocks_root)
             .expect("create temporary Kura block directory for tests");
+        let lane_config = LaneConfig::default();
         let roster_log_path = Self::roster_log_path(&store_root);
         Arc::new(Self {
             block_store: Mutex::new(BlockStore::with_fsync(
@@ -1382,6 +1393,7 @@ impl Kura {
             store_root,
             active_blocks_dir: Mutex::new(blocks_root),
             active_merge_path: Mutex::new(PathBuf::new()),
+            lane_storage_entries: Mutex::new(Self::lane_storage_entries_from_config(&lane_config)),
             max_disk_usage_bytes: MAX_DISK_USAGE_BYTES.get(),
             eviction_required_replicas: EVICTION_REQUIRED_REPLICAS,
             replica_registry: Mutex::new(BTreeMap::new()),
@@ -1952,6 +1964,45 @@ impl Kura {
         lane.blocks_dir(store_dir)
     }
 
+    fn lane_storage_entries_from_config(
+        lane_config: &LaneConfig,
+    ) -> BTreeMap<LaneId, LaneConfigEntry> {
+        lane_config
+            .entries()
+            .iter()
+            .cloned()
+            .map(|entry| (entry.lane_id, entry))
+            .collect()
+    }
+
+    fn set_lane_storage_entry(&self, entry: &LaneConfigEntry) {
+        self.lane_storage_entries
+            .lock()
+            .insert(entry.lane_id, entry.clone());
+    }
+
+    fn remove_lane_storage_entry(&self, lane_id: LaneId) {
+        self.lane_storage_entries.lock().remove(&lane_id);
+    }
+
+    fn lane_storage_entry(&self, lane_id: LaneId) -> Result<LaneConfigEntry> {
+        self.lane_storage_entries
+            .lock()
+            .get(&lane_id)
+            .cloned()
+            .ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::NotFound,
+                        format!("no Kura storage segment configured for lane {lane_id:?}"),
+                    ),
+                    self.store_root
+                        .join("blocks")
+                        .join(format!("lane_{:03}", lane_id.as_u32())),
+                )
+            })
+    }
+
     fn roster_log_path(store_root: &Path) -> PathBuf {
         CommitRosterJournal::journal_path(store_root)
     }
@@ -2012,18 +2063,22 @@ impl Kura {
 
         for (previous, _) in replacements {
             self.retire_lane_storage(previous)?;
+            self.remove_lane_storage_entry(previous.lane_id);
             changed = true;
         }
         for entry in added {
             self.prepare_lane_storage(entry)?;
+            self.set_lane_storage_entry(entry);
             changed = true;
         }
         for (_, current) in replacements {
             self.prepare_lane_storage(current)?;
+            self.set_lane_storage_entry(current);
             changed = true;
         }
         for entry in retired {
             self.retire_lane_storage(entry)?;
+            self.remove_lane_storage_entry(entry.lane_id);
             changed = true;
         }
 
@@ -2136,15 +2191,18 @@ impl Kura {
         }
         for (previous, current) in migrations {
             if previous.kura_segment == current.kura_segment {
+                self.set_lane_storage_entry(current);
                 continue;
             }
             let old_dir = previous.blocks_dir(&self.store_root);
             let new_dir = current.blocks_dir(&self.store_root);
             if old_dir == new_dir {
+                self.set_lane_storage_entry(current);
                 continue;
             }
             if !old_dir.exists() {
                 self.prepare_lane_storage(current)?;
+                self.set_lane_storage_entry(current);
                 continue;
             }
             if let Some(parent) = new_dir.parent() {
@@ -2190,6 +2248,7 @@ impl Kura {
             }
 
             self.relabel_merge_log(previous, current)?;
+            self.set_lane_storage_entry(current);
 
             iroha_logger::info!(
                 lane = %current.lane_id.as_u32(),
@@ -4189,6 +4248,7 @@ impl Kura {
                 let chain_len = block_data.len();
                 drop(block_data);
                 self.ensure_durable_block_at_height(actual_height, block_hash)?;
+                self.persist_lane_payload_ownership_artifacts_for_block(block)?;
                 self.set_block_height_index_entry(actual_height_usize, block_hash);
                 self.set_transaction_entrypoint_index_entry(actual_height_usize, block, chain_len);
                 if let Some(entry) = merge_entry {
@@ -4204,6 +4264,7 @@ impl Kura {
         }
 
         self.check_storage_budget(block, merge_entry)?;
+        self.persist_lane_payload_ownership_artifacts_for_block(block)?;
 
         let mut block_data = self.block_data.lock();
         Self::validate_next_or_existing_block(
@@ -4216,6 +4277,7 @@ impl Kura {
             let chain_len = block_data.len();
             drop(block_data);
             self.ensure_durable_block_at_height(actual_height, block_hash)?;
+            self.persist_lane_payload_ownership_artifacts_for_block(block)?;
             self.set_block_height_index_entry(actual_height_usize, block_hash);
             self.set_transaction_entrypoint_index_entry(actual_height_usize, block, chain_len);
             if let Some(entry) = merge_entry {
@@ -4451,32 +4513,34 @@ impl Kura {
 
     fn block_required_bytes_for_budget(block: &SignedBlock, _limit: u64) -> Result<u64> {
         let required = Self::block_required_bytes(block)?;
-        Ok(required)
+        Ok(required.saturating_add(Self::lane_artifact_required_bytes_for_block(block)?))
     }
 
     fn sidecar_bytes(store_dir: &Path) -> Result<u64> {
         if store_dir.as_os_str().is_empty() {
             return Ok(0);
         }
-        let dir = store_dir.join(PIPELINE_DIR_NAME);
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(entries) => entries,
-            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(0),
-            Err(err) => return Err(Error::IO(err, dir)),
-        };
         let mut total = 0u64;
-        for entry in entries {
-            let entry = entry.map_err(|err| Error::IO(err, dir.clone()))?;
-            let path = entry.path();
-            let file_type = entry
-                .file_type()
-                .map_err(|err| Error::IO(err, path.clone()))?;
-            if file_type.is_file() {
-                let len = entry
-                    .metadata()
-                    .map_err(|err| Error::IO(err, path.clone()))?
-                    .len();
-                total = total.saturating_add(len);
+        for dir_name in [PIPELINE_DIR_NAME, LANE_ARTIFACTS_DIR_NAME] {
+            let dir = store_dir.join(dir_name);
+            let entries = match std::fs::read_dir(&dir) {
+                Ok(entries) => entries,
+                Err(err) if err.kind() == ErrorKind::NotFound => continue,
+                Err(err) => return Err(Error::IO(err, dir)),
+            };
+            for entry in entries {
+                let entry = entry.map_err(|err| Error::IO(err, dir.clone()))?;
+                let path = entry.path();
+                let file_type = entry
+                    .file_type()
+                    .map_err(|err| Error::IO(err, path.clone()))?;
+                if file_type.is_file() {
+                    let len = entry
+                        .metadata()
+                        .map_err(|err| Error::IO(err, path.clone()))?
+                        .len();
+                    total = total.saturating_add(len);
+                }
             }
         }
         Ok(total)
@@ -5038,6 +5102,7 @@ impl Kura {
                 let chain_len = data.len();
                 drop(data);
                 self.ensure_durable_block_at_height(height, block_hash)?;
+                self.persist_lane_payload_ownership_artifacts_for_block(&block)?;
                 self.set_block_height_index_entry(height_usize, block_hash);
                 self.set_transaction_entrypoint_index_entry(height_usize, &block, chain_len);
                 return Ok(());
@@ -5045,12 +5110,14 @@ impl Kura {
         }
 
         self.check_replace_storage_budget(block.as_ref())?;
+        self.persist_lane_payload_ownership_artifacts_for_block(&block)?;
 
         let mut data = self.block_data.lock();
         if Self::validate_top_replacement(data.as_slice(), height, height_usize, block_hash)? {
             let chain_len = data.len();
             drop(data);
             self.ensure_durable_block_at_height(height, block_hash)?;
+            self.persist_lane_payload_ownership_artifacts_for_block(&block)?;
             self.set_block_height_index_entry(height_usize, block_hash);
             self.set_transaction_entrypoint_index_entry(height_usize, &block, chain_len);
             return Ok(());
@@ -6114,6 +6181,59 @@ impl FastpqProofSnapshot {
     }
 }
 
+/// Known metadata format variants for lane-local block artifacts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+pub enum LaneBlockArtifactFormat {
+    #[codec(index = 1)]
+    /// Lane payload ownership artifact anchored to a committed global block hash.
+    Current,
+}
+
+/// Persisted lane-local payload ownership artifact anchored to a global block.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+pub struct LaneBlockArtifact {
+    /// Schema / evolution tag for the lane artifact format.
+    pub format: LaneBlockArtifactFormat,
+    /// Global block hash that committed the lane payload ownership.
+    pub proposal_block_hash: HashOf<BlockHeader>,
+    /// Lane-local payload ownership and RBC instance identity.
+    pub ownership: SumeragiLanePayloadOwnership,
+}
+
+impl LaneBlockArtifact {
+    const FORMAT_LABEL: &'static str = "lane.block_artifact";
+
+    /// Construct a lane block artifact using the current schema.
+    #[must_use]
+    pub fn new(
+        proposal_block_hash: HashOf<BlockHeader>,
+        ownership: SumeragiLanePayloadOwnership,
+    ) -> Self {
+        Self {
+            format: LaneBlockArtifactFormat::Current,
+            proposal_block_hash,
+            ownership,
+        }
+    }
+
+    /// Return the human-readable format tag describing the artifact payload.
+    #[must_use]
+    pub fn format_label(&self) -> &'static str {
+        match self.format {
+            LaneBlockArtifactFormat::Current => Self::FORMAT_LABEL,
+        }
+    }
+
+    /// Encode the artifact into a framed Norito buffer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if framing fails.
+    pub fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
+        norito::to_bytes(self)
+    }
+}
+
 /// Known metadata format variants for roster snapshots persisted alongside blocks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub enum RosterSidecarFormat {
@@ -6244,6 +6364,309 @@ impl Kura {
 
     fn sidecar_fsync_mode(&self) -> FsyncMode {
         self.block_store.lock().fsync.mode
+    }
+
+    fn lane_artifact_dir(blocks_dir: &Path) -> PathBuf {
+        blocks_dir.join(LANE_ARTIFACTS_DIR_NAME)
+    }
+
+    fn lane_artifact_paths_for_entry(
+        entry: &LaneConfigEntry,
+        store_root: &Path,
+    ) -> (PathBuf, PathBuf) {
+        let dir = Self::lane_artifact_dir(&entry.blocks_dir(store_root));
+        (
+            dir.join(LANE_ARTIFACTS_DATA_FILE),
+            dir.join(LANE_ARTIFACTS_INDEX_FILE),
+        )
+    }
+
+    fn invalid_lane_artifact_error(path: PathBuf, message: impl Into<String>) -> Error {
+        Error::IO(
+            std::io::Error::new(ErrorKind::InvalidData, message.into()),
+            path,
+        )
+    }
+
+    fn lane_artifact_required_bytes_for_block(block: &SignedBlock) -> Result<u64> {
+        let Some(bundle) = block.execution_context() else {
+            return Ok(0);
+        };
+        if bundle.lane_payload_ownerships.is_empty() {
+            return Ok(0);
+        }
+
+        let block_hash = block.hash();
+        let mut total = 0u64;
+        for ownership in &bundle.lane_payload_ownerships {
+            let artifact = LaneBlockArtifact::new(block_hash, ownership.clone());
+            let encoded_len = u64::try_from(artifact.encode_framed()?.len())?;
+            total = total
+                .saturating_add(encoded_len)
+                .saturating_add(PIPELINE_INDEX_ENTRY_SIZE_U64);
+        }
+        Ok(total)
+    }
+
+    fn persist_lane_payload_ownership_artifacts_for_block(
+        &self,
+        block: &SignedBlock,
+    ) -> Result<()> {
+        let Some(bundle) = block.execution_context() else {
+            return Ok(());
+        };
+        if bundle.lane_payload_ownerships.is_empty() {
+            return Ok(());
+        }
+
+        let _guard = self.sidecar_lock.lock();
+        let block_hash = block.hash();
+        for ownership in &bundle.lane_payload_ownerships {
+            let artifact = LaneBlockArtifact::new(block_hash, ownership.clone());
+            self.write_lane_block_artifact_locked(&artifact)?;
+        }
+        Ok(())
+    }
+
+    fn write_lane_block_artifact_locked(&self, artifact: &LaneBlockArtifact) -> Result<()> {
+        let lane_id = artifact.ownership.lane_id;
+        let lane_block_height = artifact.ownership.lane_block_height;
+        let entry = self.lane_storage_entry(lane_id)?;
+        let (data_path, index_path) = Self::lane_artifact_paths_for_entry(&entry, &self.store_root);
+        let Some(dir) = data_path.parent().map(Path::to_path_buf) else {
+            return Err(Self::invalid_lane_artifact_error(
+                data_path,
+                "lane artifact path has no parent directory",
+            ));
+        };
+        if lane_block_height == 0 {
+            return Err(Self::invalid_lane_artifact_error(
+                data_path,
+                "lane artifact block height must be non-zero",
+            ));
+        }
+        std::fs::create_dir_all(&dir).map_err(|err| Error::MkDir(err, dir.clone()))?;
+
+        if let Some(existing) = Self::read_indexed_sidecar_from_paths(
+            lane_block_height,
+            &data_path,
+            &index_path,
+            norito::decode_from_bytes::<LaneBlockArtifact>,
+            "lane block artifact",
+        ) {
+            if existing == *artifact {
+                return Ok(());
+            }
+            return Err(Self::invalid_lane_artifact_error(
+                data_path,
+                format!(
+                    "lane artifact already exists for lane {} height {} with a different payload",
+                    lane_id.as_u32(),
+                    lane_block_height
+                ),
+            ));
+        }
+
+        let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
+            Ok(bytes) => Some(bytes),
+            Err(err) => {
+                iroha_logger::warn!(
+                    ?err,
+                    lane = %lane_id.as_u32(),
+                    lane_block_height,
+                    "failed to measure lane artifact bytes before write"
+                );
+                None
+            }
+        };
+        let payload = artifact.encode_framed()?;
+        let wrote = Self::append_indexed_sidecar(
+            &data_path,
+            &index_path,
+            lane_block_height,
+            &payload,
+            "lane block artifact",
+            self.sidecar_fsync_mode(),
+            None,
+        );
+        if !wrote {
+            return Err(Error::IO(
+                std::io::Error::other("failed to persist lane block artifact"),
+                data_path,
+            ));
+        }
+        if let Some(before_bytes) = before_bytes {
+            match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
+                Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
+                Err(err) => iroha_logger::warn!(
+                    ?err,
+                    lane = %lane_id.as_u32(),
+                    lane_block_height,
+                    "failed to measure lane artifact bytes after write"
+                ),
+            }
+        }
+        Ok(())
+    }
+
+    /// Read a lane-local block artifact by lane and lane-local block height.
+    ///
+    /// Returns `None` when the artifact is absent, malformed, belongs to a different lane/height,
+    /// or is not anchored to the canonical global block hash stored by Kura.
+    #[must_use]
+    pub fn read_lane_block_artifact(
+        &self,
+        lane_id: LaneId,
+        lane_block_height: u64,
+    ) -> Option<LaneBlockArtifact> {
+        let entry = self.lane_storage_entry(lane_id).ok()?;
+        let (data_path, index_path) = Self::lane_artifact_paths_for_entry(&entry, &self.store_root);
+        let _guard = self.sidecar_lock.lock();
+        self.read_lane_block_artifact_from_paths_locked(
+            lane_id,
+            lane_block_height,
+            &data_path,
+            &index_path,
+            true,
+        )
+    }
+
+    /// Return the highest valid lane-local block artifact known for `lane_id`.
+    ///
+    /// Empty index entries created by sparse writes are skipped. Artifacts whose
+    /// global proposal hash no longer matches Kura's canonical block hash are
+    /// ignored.
+    #[must_use]
+    pub fn latest_lane_block_artifact(&self, lane_id: LaneId) -> Option<LaneBlockArtifact> {
+        self.latest_lane_block_artifact_matching(lane_id, |_| true)
+    }
+
+    /// Return the highest valid lane-local block artifact for `lane_id` and `dataspace_id`.
+    ///
+    /// This scans past valid artifacts from other dataspaces, which can be left
+    /// by older lane incarnations or corrupted local state, and returns the
+    /// newest artifact that matches the active lane dataspace.
+    #[must_use]
+    pub fn latest_lane_block_artifact_for_dataspace(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+    ) -> Option<LaneBlockArtifact> {
+        self.latest_lane_block_artifact_matching(lane_id, |artifact| {
+            artifact.ownership.dataspace_id == dataspace_id
+        })
+    }
+
+    fn latest_lane_block_artifact_matching<F>(
+        &self,
+        lane_id: LaneId,
+        mut accept: F,
+    ) -> Option<LaneBlockArtifact>
+    where
+        F: FnMut(&LaneBlockArtifact) -> bool,
+    {
+        let entry = self.lane_storage_entry(lane_id).ok()?;
+        let (data_path, index_path) = Self::lane_artifact_paths_for_entry(&entry, &self.store_root);
+        let _guard = self.sidecar_lock.lock();
+        Self::recover_indexed_sidecar_artifacts(&data_path, &index_path, "lane block artifact");
+
+        let index_len = match std::fs::metadata(&index_path) {
+            Ok(meta) => meta.len(),
+            Err(err) => {
+                iroha_logger::debug!(
+                    ?err,
+                    lane = %lane_id.as_u32(),
+                    ?index_path,
+                    "lane block artifact index is unavailable"
+                );
+                return None;
+            }
+        };
+        let remainder = index_len % PIPELINE_INDEX_ENTRY_SIZE_U64;
+        if remainder != 0 {
+            iroha_logger::warn!(
+                len = index_len,
+                aligned_len = index_len - remainder,
+                lane = %lane_id.as_u32(),
+                ?index_path,
+                "lane block artifact index length misaligned; ignoring trailing bytes"
+            );
+        }
+        let total_entries = index_len / PIPELINE_INDEX_ENTRY_SIZE_U64;
+        for lane_block_height in (1..=total_entries).rev() {
+            if let Some(artifact) = self.read_lane_block_artifact_from_paths_locked(
+                lane_id,
+                lane_block_height,
+                &data_path,
+                &index_path,
+                false,
+            ) {
+                if accept(&artifact) {
+                    return Some(artifact);
+                }
+            }
+        }
+        None
+    }
+
+    fn read_lane_block_artifact_from_paths_locked(
+        &self,
+        lane_id: LaneId,
+        lane_block_height: u64,
+        data_path: &Path,
+        index_path: &Path,
+        recover: bool,
+    ) -> Option<LaneBlockArtifact> {
+        Self::read_indexed_sidecar_from_paths_with_recovery(
+            lane_block_height,
+            &data_path,
+            &index_path,
+            norito::decode_from_bytes::<LaneBlockArtifact>,
+            "lane block artifact",
+            recover,
+        )
+        .and_then(|artifact| {
+            if artifact.ownership.lane_id != lane_id
+                || artifact.ownership.lane_block_height != lane_block_height
+            {
+                iroha_logger::warn!(
+                    lane = %lane_id.as_u32(),
+                    lane_block_height,
+                    actual_lane = %artifact.ownership.lane_id.as_u32(),
+                    actual_height = artifact.ownership.lane_block_height,
+                    "lane block artifact identity mismatch"
+                );
+                return None;
+            }
+            let proposal_height = artifact.ownership.proposal_height;
+            let Some(proposal_height_usize) = usize::try_from(proposal_height)
+                .ok()
+                .and_then(NonZeroUsize::new)
+            else {
+                iroha_logger::warn!(
+                    lane = %lane_id.as_u32(),
+                    lane_block_height,
+                    proposal_height,
+                    "lane block artifact proposal height is invalid"
+                );
+                return None;
+            };
+            let expected = self
+                .get_block_hash(proposal_height_usize)
+                .or_else(|| self.get_durable_block_hash(proposal_height_usize));
+            if expected != Some(artifact.proposal_block_hash) {
+                iroha_logger::warn!(
+                    lane = %lane_id.as_u32(),
+                    lane_block_height,
+                    proposal_height,
+                    expected = ?expected,
+                    actual = %artifact.proposal_block_hash,
+                    "lane block artifact global block hash mismatch"
+                );
+                return None;
+            }
+            Some(artifact)
+        })
     }
 
     /// Enqueue pipeline recovery metadata for asynchronous persistence.
@@ -7420,18 +7843,51 @@ impl Kura {
     where
         F: Fn(&[u8]) -> Result<T, norito::Error>,
     {
-        if height == 0 {
-            return None;
-        }
-
         let mut dir = self.store_dir()?;
         dir.push(PIPELINE_DIR_NAME);
         let data_path = dir.join(data_file);
         let index_path = dir.join(index_file);
 
-        Self::recover_indexed_sidecar_artifacts(&data_path, &index_path, kind);
+        Self::read_indexed_sidecar_from_paths(height, &data_path, &index_path, decoder, kind)
+    }
 
-        let mut index = std::fs::File::open(&index_path).ok()?;
+    #[allow(clippy::too_many_lines)]
+    fn read_indexed_sidecar_from_paths<T, F>(
+        height: u64,
+        data_path: &Path,
+        index_path: &Path,
+        decoder: F,
+        kind: &str,
+    ) -> Option<T>
+    where
+        F: Fn(&[u8]) -> Result<T, norito::Error>,
+    {
+        Self::read_indexed_sidecar_from_paths_with_recovery(
+            height, data_path, index_path, decoder, kind, true,
+        )
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn read_indexed_sidecar_from_paths_with_recovery<T, F>(
+        height: u64,
+        data_path: &Path,
+        index_path: &Path,
+        decoder: F,
+        kind: &str,
+        recover: bool,
+    ) -> Option<T>
+    where
+        F: Fn(&[u8]) -> Result<T, norito::Error>,
+    {
+        if height == 0 {
+            return None;
+        }
+
+        if recover {
+            Self::recover_indexed_sidecar_artifacts(data_path, index_path, kind);
+        }
+
+        let mut index = std::fs::File::open(index_path).ok()?;
         let index_meta = index.metadata().ok()?;
         let index_len = index_meta.len();
         let remainder = index_len % PIPELINE_INDEX_ENTRY_SIZE_U64;
@@ -7492,7 +7948,7 @@ impl Kura {
             return None;
         };
 
-        let mut data = std::fs::File::open(&data_path).ok()?;
+        let mut data = std::fs::File::open(data_path).ok()?;
         let data_len = data.metadata().ok()?.len();
         let entry_end = entry.offset.saturating_add(entry.len);
         if entry_end > data_len {
@@ -9462,7 +9918,10 @@ mod tests {
     use iroha_data_model::{
         ChainId, Level,
         account::Account,
-        block::BlockHeader,
+        block::{
+            BlockExecutionContextBundle, BlockHeader, ExternalExecutionContext,
+            consensus::SumeragiLanePayloadOwnership,
+        },
         consensus::Qc,
         domain::{Domain, DomainId},
         isi::{Log, Upgrade},
@@ -14070,6 +14529,382 @@ mod tests {
         store.read_block_data(start, &mut buff)?;
         let block = decode_versioned_signed_block(&buff).map_err(eyre::Report::new)?;
         Ok(block)
+    }
+
+    fn sample_lane_payload_ownership_for_kura(
+        block: &SignedBlock,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_block_height: u64,
+    ) -> SumeragiLanePayloadOwnership {
+        let proposal_height = block.header().height().get();
+        let proposal_view = block.header().view_change_index();
+        let lane_block_view = proposal_view;
+        let accepted_candidate_indices = vec![0_u64];
+        let subject_hash = Hash::new(
+            format!(
+                "kura-lane-subject:{}:{}:{}",
+                lane_id.as_u32(),
+                dataspace_id.as_u64(),
+                lane_block_height
+            )
+            .into_bytes(),
+        );
+        let payload_ownership_hash = Hash::new(
+            format!(
+                "kura-lane-payload:{}:{}:{}",
+                lane_id.as_u32(),
+                dataspace_id.as_u64(),
+                lane_block_height
+            )
+            .into_bytes(),
+        );
+        let rbc_instance_hash = Hash::new(
+            format!(
+                "kura-lane-rbc:{}:{}:{}",
+                lane_id.as_u32(),
+                dataspace_id.as_u64(),
+                lane_block_height
+            )
+            .into_bytes(),
+        );
+
+        SumeragiLanePayloadOwnership {
+            proposal_height,
+            proposal_view,
+            lane_id,
+            dataspace_id,
+            lane_block_height,
+            lane_block_view,
+            subject_hash,
+            qc_mode_tag: "kura-lane-artifact-test".to_string(),
+            accepted_candidate_indices,
+            payload_ownership_hash,
+            rbc_instance_hash,
+        }
+    }
+
+    fn dummy_block_with_lane_payload_ownership(
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_block_height: u64,
+    ) -> Arc<SignedBlock> {
+        let mut generator = DummyBlocks::new();
+        dummy_block_with_lane_payload_ownership_from_generator(
+            &mut generator,
+            lane_id,
+            dataspace_id,
+            lane_block_height,
+        )
+    }
+
+    fn dummy_block_with_lane_payload_ownership_from_generator(
+        generator: &mut DummyBlocks,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_block_height: u64,
+    ) -> Arc<SignedBlock> {
+        let mut block = generator.next().as_ref().clone();
+        let entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
+            b"kura-lane-artifact-entrypoint",
+        ));
+        let ownership = sample_lane_payload_ownership_for_kura(
+            &block,
+            lane_id,
+            dataspace_id,
+            lane_block_height,
+        );
+        let execution_context =
+            BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+                entrypoint_hash,
+                lane_id,
+                dataspace_id,
+            )])
+            .with_lane_payload_ownerships(vec![ownership]);
+        block.set_execution_context(Some(execution_context));
+        Arc::new(block)
+    }
+
+    fn two_lane_runtime_config() -> RuntimeLaneConfig {
+        let lane0 = ModelLaneConfig::default();
+        let lane1 = ModelLaneConfig {
+            id: LaneId::from(1),
+            alias: "beta".to_string(),
+            ..ModelLaneConfig::default()
+        };
+        let catalog = LaneCatalog::new(nonzero!(2_u32), vec![lane0, lane1]).expect("catalog");
+        RuntimeLaneConfig::from_catalog(&catalog)
+    }
+
+    #[test]
+    fn lane_block_artifact_persists_under_lane_segment_and_reloads() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let lane_block_height = 1;
+        let block = dummy_block_with_lane_payload_ownership(
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        );
+        let block_hash = block.hash();
+        let expected_ownership = block
+            .execution_context()
+            .expect("execution context")
+            .lane_payload_ownerships
+            .first()
+            .expect("lane ownership")
+            .clone();
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.store_block(Arc::clone(&block))
+            .expect("store block with lane artifact");
+
+        let artifact = kura
+            .read_lane_block_artifact(lane_id, lane_block_height)
+            .expect("lane block artifact");
+        assert_eq!(artifact.format_label(), "lane.block_artifact");
+        assert_eq!(artifact.proposal_block_hash, block_hash);
+        assert_eq!(artifact.ownership, expected_ownership);
+
+        let (data_path, index_path) =
+            Kura::lane_artifact_paths_for_entry(lane_entry, temp_dir.path());
+        assert!(data_path.is_file(), "lane artifact data file missing");
+        assert!(index_path.is_file(), "lane artifact index file missing");
+
+        drop(kura);
+        let (reloaded, _) = Kura::new(&config, &lane_config).expect("reopen kura");
+        assert_eq!(
+            reloaded.read_lane_block_artifact(lane_id, lane_block_height),
+            Some(artifact)
+        );
+    }
+
+    #[test]
+    fn latest_lane_block_artifact_returns_highest_valid_height() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let mut generator = DummyBlocks::new();
+        let first = dummy_block_with_lane_payload_ownership_from_generator(
+            &mut generator,
+            lane_id,
+            lane_entry.dataspace_id,
+            1,
+        );
+        let later = dummy_block_with_lane_payload_ownership_from_generator(
+            &mut generator,
+            lane_id,
+            lane_entry.dataspace_id,
+            3,
+        );
+        let expected = later
+            .execution_context()
+            .expect("execution context")
+            .lane_payload_ownerships
+            .first()
+            .expect("lane ownership")
+            .clone();
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.store_block(first).expect("store first lane artifact");
+        kura.store_block(later)
+            .expect("store sparse later artifact");
+
+        let latest = kura
+            .latest_lane_block_artifact(lane_id)
+            .expect("latest lane block artifact");
+        assert_eq!(latest.ownership, expected);
+        assert_eq!(latest.ownership.lane_block_height, 3);
+        assert!(
+            kura.read_lane_block_artifact(lane_id, 2).is_none(),
+            "sparse placeholder entries must not decode as artifacts"
+        );
+    }
+
+    #[test]
+    fn latest_lane_block_artifact_for_dataspace_skips_newer_foreign_dataspace() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let foreign_dataspace = DataSpaceId::new(77);
+        let mut generator = DummyBlocks::new();
+        let active = dummy_block_with_lane_payload_ownership_from_generator(
+            &mut generator,
+            lane_id,
+            lane_entry.dataspace_id,
+            2,
+        );
+        let foreign = dummy_block_with_lane_payload_ownership_from_generator(
+            &mut generator,
+            lane_id,
+            foreign_dataspace,
+            4,
+        );
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.store_block(active)
+            .expect("store active-dataspace lane artifact");
+        kura.store_block(foreign)
+            .expect("store foreign-dataspace lane artifact");
+
+        let latest_any = kura
+            .latest_lane_block_artifact(lane_id)
+            .expect("latest lane artifact");
+        assert_eq!(latest_any.ownership.dataspace_id, foreign_dataspace);
+        assert_eq!(latest_any.ownership.lane_block_height, 4);
+
+        let latest_active = kura
+            .latest_lane_block_artifact_for_dataspace(lane_id, lane_entry.dataspace_id)
+            .expect("latest active-dataspace lane artifact");
+        assert_eq!(
+            latest_active.ownership.dataspace_id,
+            lane_entry.dataspace_id
+        );
+        assert_eq!(latest_active.ownership.lane_block_height, 2);
+    }
+
+    #[test]
+    fn lane_block_artifact_read_rejects_global_block_hash_mismatch() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let lane_block_height = 1;
+        let block = dummy_block_with_lane_payload_ownership(
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        );
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.store_block(block)
+            .expect("store block with lane artifact");
+
+        let mut forged = kura
+            .read_lane_block_artifact(lane_id, lane_block_height)
+            .expect("lane block artifact");
+        forged.proposal_block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA5; 32]));
+        let payload = forged.encode_framed().expect("encode forged artifact");
+        let (data_path, index_path) =
+            Kura::lane_artifact_paths_for_entry(lane_entry, temp_dir.path());
+        assert!(
+            Kura::append_indexed_sidecar(
+                &data_path,
+                &index_path,
+                lane_block_height,
+                &payload,
+                "lane block artifact",
+                FsyncMode::Off,
+                None,
+            ),
+            "overwrite lane artifact with forged block hash"
+        );
+
+        assert!(
+            kura.read_lane_block_artifact(lane_id, lane_block_height)
+                .is_none(),
+            "forged global block hash must make the artifact unreadable"
+        );
+    }
+
+    #[test]
+    fn lane_block_artifact_conflicting_rewrite_is_rejected_and_preserves_original() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let lane_block_height = 1;
+        let mut generator = DummyBlocks::new();
+        let first = dummy_block_with_lane_payload_ownership_from_generator(
+            &mut generator,
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        );
+        let second = dummy_block_with_lane_payload_ownership_from_generator(
+            &mut generator,
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        );
+        assert_ne!(
+            first.hash(),
+            second.hash(),
+            "test setup should produce distinct global proposals"
+        );
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.store_block(Arc::clone(&first))
+            .expect("store first lane artifact");
+        let original = kura
+            .read_lane_block_artifact(lane_id, lane_block_height)
+            .expect("original lane block artifact");
+
+        let err = kura
+            .store_block(second)
+            .expect_err("conflicting lane artifact rewrite must be rejected");
+        match err {
+            Error::IO(io, path) => {
+                assert_eq!(io.kind(), ErrorKind::InvalidData);
+                assert!(
+                    io.to_string().contains("lane artifact already exists"),
+                    "unexpected lane artifact conflict error: {io}"
+                );
+                assert!(
+                    path.display().to_string().contains("lane_artifacts"),
+                    "unexpected error path: {}",
+                    path.display()
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert_eq!(
+            kura.read_lane_block_artifact(lane_id, lane_block_height),
+            Some(original),
+            "conflicting rewrite must not replace the original artifact"
+        );
+        assert_eq!(
+            kura.blocks_count(),
+            1,
+            "conflicting lane artifact must abort before the second global block is stored"
+        );
+    }
+
+    #[test]
+    fn store_block_rejects_lane_payload_ownership_for_unconfigured_lane() {
+        let kura = Kura::blank_kura_for_testing();
+        let block =
+            dummy_block_with_lane_payload_ownership(LaneId::from(99), DataSpaceId::UNIVERSAL, 1);
+
+        let err = kura
+            .store_block(block)
+            .expect_err("unconfigured lane artifact must be rejected");
+        match err {
+            Error::IO(io, path) => {
+                assert_eq!(io.kind(), ErrorKind::NotFound);
+                assert!(
+                    path.display().to_string().contains("lane_099"),
+                    "unexpected error path: {}",
+                    path.display()
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert_eq!(
+            kura.blocks_count(),
+            0,
+            "block must not be committed when lane artifact persistence fails"
+        );
     }
 
     #[test]

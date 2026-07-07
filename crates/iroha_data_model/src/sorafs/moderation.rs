@@ -19,6 +19,10 @@ pub(crate) use crate::json_helpers::fixed_bytes::option as json_option_digest32;
 
 /// Schema version for `ModerationReproManifestV1`.
 pub const MODERATION_REPRO_MANIFEST_VERSION_V1: u16 = 1;
+/// Required ONNX opset for first-release moderation model artefacts.
+pub const MODERATION_REPRO_MODEL_OPSET_V1: u16 = 17;
+/// Maximum model weight and threshold value in basis points.
+pub const MODERATION_REPRO_MAX_BPS: u16 = 10_000;
 /// Schema version for [`SoraFsModerationBallotContextV1`].
 pub const SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraFsModerationBallotCommitV1`].
@@ -173,6 +177,80 @@ pub enum ModerationReproValidationError {
     /// Manifest contains no model entries.
     #[error("reproducibility manifest lists no model digests")]
     MissingModels,
+    /// Manifest digest is all zeros.
+    #[error("reproducibility manifest field `{field}` must be non-zero")]
+    MissingDigest {
+        /// Name of the digest field.
+        field: &'static str,
+    },
+    /// Model identifier is all zeros.
+    #[error("reproducibility manifest includes a zero model id")]
+    MissingModelId,
+    /// Manifest contains duplicate model identifiers.
+    #[error("reproducibility manifest repeats model id {model_id:?}")]
+    DuplicateModelId {
+        /// Repeated model identifier.
+        model_id: [u8; 16],
+    },
+    /// Manifest contains duplicate model artefact digests.
+    #[error("reproducibility manifest repeats artifact digest for model {model_id:?}")]
+    DuplicateArtifactDigest {
+        /// Model identifier carrying the repeated artifact digest.
+        model_id: [u8; 16],
+    },
+    /// Manifest contains duplicate model weight digests.
+    #[error("reproducibility manifest repeats weights digest for model {model_id:?}")]
+    DuplicateWeightsDigest {
+        /// Model identifier carrying the repeated weights digest.
+        model_id: [u8; 16],
+    },
+    /// Model digest is all zeros.
+    #[error("reproducibility manifest model {model_id:?} field `{field}` must be non-zero")]
+    MissingModelDigest {
+        /// Model identifier carrying the zero digest.
+        model_id: [u8; 16],
+        /// Name of the digest field.
+        field: &'static str,
+    },
+    /// Model uses an unsupported opset.
+    #[error("reproducibility manifest model {model_id:?} uses opset {found}; expected {expected}")]
+    UnsupportedModelOpset {
+        /// Model identifier carrying the unsupported opset.
+        model_id: [u8; 16],
+        /// Expected opset.
+        expected: u16,
+        /// Opset declared in the manifest.
+        found: u16,
+    },
+    /// Model weight is outside the accepted basis-point range.
+    #[error("reproducibility manifest model {model_id:?} weight {weight} exceeds 10000 bps")]
+    InvalidModelWeight {
+        /// Model identifier carrying the invalid weight.
+        model_id: [u8; 16],
+        /// Weight declared in the manifest.
+        weight: u16,
+    },
+    /// Every model has zero weight.
+    #[error("reproducibility manifest must include at least one positive model weight")]
+    MissingPositiveModelWeight,
+    /// Threshold is outside the accepted basis-point range.
+    #[error("reproducibility manifest threshold `{field}` value {value} exceeds 10000 bps")]
+    InvalidThresholdBps {
+        /// Threshold field name.
+        field: &'static str,
+        /// Threshold value.
+        value: u16,
+    },
+    /// Quarantine threshold exceeds the escalate threshold.
+    #[error(
+        "reproducibility manifest quarantine threshold {quarantine} exceeds escalate threshold {escalate}"
+    )]
+    InvalidThresholdOrder {
+        /// Quarantine threshold in basis points.
+        quarantine: u16,
+        /// Escalate threshold in basis points.
+        escalate: u16,
+    },
     /// Manifest is missing signer entries.
     #[error("reproducibility manifest contains no signatures")]
     MissingSignatures,
@@ -203,46 +281,186 @@ impl ModerationReproManifestV1 {
     pub fn validate(
         &self,
     ) -> Result<ModerationReproManifestSummary, ModerationReproValidationError> {
-        if self.body.schema_version != MODERATION_REPRO_MANIFEST_VERSION_V1 {
-            return Err(ModerationReproValidationError::UnsupportedVersion {
-                expected: MODERATION_REPRO_MANIFEST_VERSION_V1,
-                found: self.body.schema_version,
-            });
-        }
-        if self.body.models.is_empty() {
-            return Err(ModerationReproValidationError::MissingModels);
-        }
-        if self.signatures.is_empty() {
-            return Err(ModerationReproValidationError::MissingSignatures);
-        }
-
-        let mut seen = BTreeSet::new();
-        for signer in &self.signatures {
-            if !seen.insert(signer.public_key.clone()) {
-                return Err(ModerationReproValidationError::DuplicateSigner);
-            }
-            if let Err(source) =
-                verify_repro_signature(&signer.signature, &signer.public_key, &self.body)
-            {
-                return Err(ModerationReproValidationError::BadSignature {
-                    role: signer.role.clone(),
-                    source,
-                });
-            }
-        }
-
-        let model_count = u32::try_from(self.body.models.len())
-            .map_err(|_| ModerationReproValidationError::MissingModels)?;
-        let signer_count = u32::try_from(self.signatures.len())
-            .map_err(|_| ModerationReproValidationError::MissingSignatures)?;
-
-        Ok(ModerationReproManifestSummary {
-            manifest_id: self.body.manifest_id,
-            issued_at_unix: self.body.issued_at_unix,
-            model_count,
-            signer_count,
-        })
+        validate_repro_body_header(&self.body)?;
+        validate_repro_thresholds(self.body.thresholds)?;
+        validate_repro_models(&self.body.models)?;
+        validate_repro_signatures(&self.signatures, &self.body)?;
+        moderation_repro_summary(&self.body, self.signatures.len())
     }
+}
+
+fn validate_repro_body_header(
+    body: &ModerationReproBodyV1,
+) -> Result<(), ModerationReproValidationError> {
+    if body.schema_version != MODERATION_REPRO_MANIFEST_VERSION_V1 {
+        return Err(ModerationReproValidationError::UnsupportedVersion {
+            expected: MODERATION_REPRO_MANIFEST_VERSION_V1,
+            found: body.schema_version,
+        });
+    }
+    if body.models.is_empty() {
+        return Err(ModerationReproValidationError::MissingModels);
+    }
+    if body.manifest_digest == [0; 32] {
+        return Err(ModerationReproValidationError::MissingDigest {
+            field: "manifest_digest",
+        });
+    }
+    if body.runner_hash == [0; 32] {
+        return Err(ModerationReproValidationError::MissingDigest {
+            field: "runner_hash",
+        });
+    }
+    if body.seed_material.run_nonce == [0; 32] {
+        return Err(ModerationReproValidationError::MissingDigest { field: "run_nonce" });
+    }
+    Ok(())
+}
+
+fn validate_repro_thresholds(
+    thresholds: ModerationThresholdsV1,
+) -> Result<(), ModerationReproValidationError> {
+    if thresholds.quarantine > MODERATION_REPRO_MAX_BPS {
+        return Err(ModerationReproValidationError::InvalidThresholdBps {
+            field: "quarantine",
+            value: thresholds.quarantine,
+        });
+    }
+    if thresholds.escalate > MODERATION_REPRO_MAX_BPS {
+        return Err(ModerationReproValidationError::InvalidThresholdBps {
+            field: "escalate",
+            value: thresholds.escalate,
+        });
+    }
+    if thresholds.quarantine > thresholds.escalate {
+        return Err(ModerationReproValidationError::InvalidThresholdOrder {
+            quarantine: thresholds.quarantine,
+            escalate: thresholds.escalate,
+        });
+    }
+    Ok(())
+}
+
+fn validate_repro_models(
+    models: &[ModerationModelFingerprintV1],
+) -> Result<(), ModerationReproValidationError> {
+    let mut model_ids = BTreeSet::new();
+    let mut artifact_digests = BTreeSet::new();
+    let mut weights_digests = BTreeSet::new();
+    let mut has_positive_model_weight = false;
+    for model in models {
+        validate_repro_model_uniqueness(model, &mut model_ids)?;
+        validate_repro_model_digests(model, &mut artifact_digests, &mut weights_digests)?;
+        validate_repro_model_shape(model)?;
+        has_positive_model_weight |= model.weight.unwrap_or(MODERATION_REPRO_MAX_BPS) > 0;
+    }
+    if !has_positive_model_weight {
+        return Err(ModerationReproValidationError::MissingPositiveModelWeight);
+    }
+    Ok(())
+}
+
+fn validate_repro_model_uniqueness(
+    model: &ModerationModelFingerprintV1,
+    model_ids: &mut BTreeSet<[u8; 16]>,
+) -> Result<(), ModerationReproValidationError> {
+    if model.model_id == [0; 16] {
+        return Err(ModerationReproValidationError::MissingModelId);
+    }
+    if !model_ids.insert(model.model_id) {
+        return Err(ModerationReproValidationError::DuplicateModelId {
+            model_id: model.model_id,
+        });
+    }
+    Ok(())
+}
+
+fn validate_repro_model_digests(
+    model: &ModerationModelFingerprintV1,
+    artifact_digests: &mut BTreeSet<[u8; 32]>,
+    weights_digests: &mut BTreeSet<[u8; 32]>,
+) -> Result<(), ModerationReproValidationError> {
+    if model.artifact_digest == [0; 32] {
+        return Err(ModerationReproValidationError::MissingModelDigest {
+            model_id: model.model_id,
+            field: "artifact_digest",
+        });
+    }
+    if !artifact_digests.insert(model.artifact_digest) {
+        return Err(ModerationReproValidationError::DuplicateArtifactDigest {
+            model_id: model.model_id,
+        });
+    }
+    if model.weights_digest == [0; 32] {
+        return Err(ModerationReproValidationError::MissingModelDigest {
+            model_id: model.model_id,
+            field: "weights_digest",
+        });
+    }
+    if !weights_digests.insert(model.weights_digest) {
+        return Err(ModerationReproValidationError::DuplicateWeightsDigest {
+            model_id: model.model_id,
+        });
+    }
+    Ok(())
+}
+
+fn validate_repro_model_shape(
+    model: &ModerationModelFingerprintV1,
+) -> Result<(), ModerationReproValidationError> {
+    if model.opset != MODERATION_REPRO_MODEL_OPSET_V1 {
+        return Err(ModerationReproValidationError::UnsupportedModelOpset {
+            model_id: model.model_id,
+            expected: MODERATION_REPRO_MODEL_OPSET_V1,
+            found: model.opset,
+        });
+    }
+    let weight = model.weight.unwrap_or(MODERATION_REPRO_MAX_BPS);
+    if weight > MODERATION_REPRO_MAX_BPS {
+        return Err(ModerationReproValidationError::InvalidModelWeight {
+            model_id: model.model_id,
+            weight,
+        });
+    }
+    Ok(())
+}
+
+fn validate_repro_signatures(
+    signatures: &[ModerationReproSignatureV1],
+    body: &ModerationReproBodyV1,
+) -> Result<(), ModerationReproValidationError> {
+    if signatures.is_empty() {
+        return Err(ModerationReproValidationError::MissingSignatures);
+    }
+    let mut seen = BTreeSet::new();
+    for signer in signatures {
+        if !seen.insert(signer.public_key.clone()) {
+            return Err(ModerationReproValidationError::DuplicateSigner);
+        }
+        verify_repro_signature(&signer.signature, &signer.public_key, body).map_err(|source| {
+            ModerationReproValidationError::BadSignature {
+                role: signer.role.clone(),
+                source,
+            }
+        })?;
+    }
+    Ok(())
+}
+
+fn moderation_repro_summary(
+    body: &ModerationReproBodyV1,
+    signature_count: usize,
+) -> Result<ModerationReproManifestSummary, ModerationReproValidationError> {
+    let model_count = u32::try_from(body.models.len())
+        .map_err(|_| ModerationReproValidationError::MissingModels)?;
+    let signer_count = u32::try_from(signature_count)
+        .map_err(|_| ModerationReproValidationError::MissingSignatures)?;
+    Ok(ModerationReproManifestSummary {
+        manifest_id: body.manifest_id,
+        issued_at_unix: body.issued_at_unix,
+        model_count,
+        signer_count,
+    })
 }
 
 fn verify_repro_signature(
@@ -696,6 +914,30 @@ pub enum AdversarialCorpusValidationError {
         /// Identifier of the empty family.
         family_id: [u8; 16],
     },
+    /// Manifest repeats a perceptual family identifier.
+    #[error("adversarial corpus manifest repeats family id {family_id:?}")]
+    DuplicateFamilyId {
+        /// Repeated family identifier.
+        family_id: [u8; 16],
+    },
+    /// Manifest repeats a perceptual variant identifier.
+    #[error("adversarial corpus manifest repeats variant id {variant_id:?}")]
+    DuplicateVariantId {
+        /// Repeated variant identifier.
+        variant_id: [u8; 16],
+    },
+    /// Manifest repeats a perceptual hash fingerprint.
+    #[error("adversarial corpus manifest repeats perceptual hash for variant {variant_id:?}")]
+    DuplicatePerceptualHash {
+        /// Identifier of the variant carrying the repeated perceptual hash.
+        variant_id: [u8; 16],
+    },
+    /// Manifest repeats an embedding digest fingerprint.
+    #[error("adversarial corpus manifest repeats embedding digest for variant {variant_id:?}")]
+    DuplicateEmbeddingDigest {
+        /// Identifier of the variant carrying the repeated embedding digest.
+        variant_id: [u8; 16],
+    },
     /// Variant lacks perceptual hash and embedding fingerprints.
     #[error("variant {variant_id:?} must include a perceptual hash or embedding digest")]
     MissingMatchBasis {
@@ -718,7 +960,8 @@ impl AdversarialCorpusManifestV1 {
     /// # Errors
     ///
     /// Returns [`AdversarialCorpusValidationError`] when the schema version mismatches,
-    /// families/variants are missing, or fingerprint metadata is incomplete.
+    /// family/variant identifiers are missing or duplicated, or fingerprint metadata is
+    /// incomplete.
     pub fn validate(&self) -> Result<(), AdversarialCorpusValidationError> {
         if self.schema_version != ADVERSARIAL_CORPUS_VERSION_V1 {
             return Err(AdversarialCorpusValidationError::UnsupportedVersion {
@@ -729,17 +972,45 @@ impl AdversarialCorpusManifestV1 {
         if self.families.is_empty() {
             return Err(AdversarialCorpusValidationError::MissingFamilies);
         }
+        let mut family_ids = BTreeSet::new();
+        let mut variant_ids = BTreeSet::new();
+        let mut perceptual_hashes = BTreeSet::new();
+        let mut embedding_digests = BTreeSet::new();
         for family in &self.families {
+            if !family_ids.insert(family.family_id) {
+                return Err(AdversarialCorpusValidationError::DuplicateFamilyId {
+                    family_id: family.family_id,
+                });
+            }
             if family.variants.is_empty() {
                 return Err(AdversarialCorpusValidationError::MissingVariants {
                     family_id: family.family_id,
                 });
             }
             for variant in &family.variants {
+                if !variant_ids.insert(variant.variant_id) {
+                    return Err(AdversarialCorpusValidationError::DuplicateVariantId {
+                        variant_id: variant.variant_id,
+                    });
+                }
                 let has_hash = variant.perceptual_hash.is_some();
                 let has_embedding = variant.embedding_digest.is_some();
                 if !has_hash && !has_embedding {
                     return Err(AdversarialCorpusValidationError::MissingMatchBasis {
+                        variant_id: variant.variant_id,
+                    });
+                }
+                if let Some(perceptual_hash) = variant.perceptual_hash
+                    && !perceptual_hashes.insert(perceptual_hash)
+                {
+                    return Err(AdversarialCorpusValidationError::DuplicatePerceptualHash {
+                        variant_id: variant.variant_id,
+                    });
+                }
+                if let Some(embedding_digest) = variant.embedding_digest
+                    && !embedding_digests.insert(embedding_digest)
+                {
+                    return Err(AdversarialCorpusValidationError::DuplicateEmbeddingDigest {
                         variant_id: variant.variant_id,
                     });
                 }
@@ -974,6 +1245,217 @@ mod tests {
         assert!(matches!(err, ModerationReproValidationError::MissingModels));
     }
 
+    #[test]
+    fn validate_rejects_zero_manifest_digests() {
+        let mut body = sample_body();
+        body.manifest_digest = [0; 32];
+        let manifest = sign_manifest(body, &["council"]);
+        let err = manifest
+            .validate()
+            .expect_err("zero manifest digest should fail");
+        assert!(matches!(
+            err,
+            ModerationReproValidationError::MissingDigest {
+                field: "manifest_digest"
+            }
+        ));
+
+        let mut body = sample_body();
+        body.runner_hash = [0; 32];
+        let manifest = sign_manifest(body, &["council"]);
+        let err = manifest
+            .validate()
+            .expect_err("zero runner hash should fail");
+        assert!(matches!(
+            err,
+            ModerationReproValidationError::MissingDigest {
+                field: "runner_hash"
+            }
+        ));
+
+        let mut body = sample_body();
+        body.seed_material.run_nonce = [0; 32];
+        let manifest = sign_manifest(body, &["council"]);
+        let err = manifest.validate().expect_err("zero run nonce should fail");
+        assert!(matches!(
+            err,
+            ModerationReproValidationError::MissingDigest { field: "run_nonce" }
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_bad_thresholds() {
+        let mut body = sample_body();
+        body.thresholds.quarantine = MODERATION_REPRO_MAX_BPS + 1;
+        let manifest = sign_manifest(body, &["council"]);
+        let err = manifest
+            .validate()
+            .expect_err("oversized quarantine threshold should fail");
+        assert!(matches!(
+            err,
+            ModerationReproValidationError::InvalidThresholdBps {
+                field: "quarantine",
+                value: 10_001
+            }
+        ));
+
+        let mut body = sample_body();
+        body.thresholds.escalate = MODERATION_REPRO_MAX_BPS + 1;
+        let manifest = sign_manifest(body, &["council"]);
+        let err = manifest
+            .validate()
+            .expect_err("oversized escalate threshold should fail");
+        assert!(matches!(
+            err,
+            ModerationReproValidationError::InvalidThresholdBps {
+                field: "escalate",
+                value: 10_001
+            }
+        ));
+
+        let mut body = sample_body();
+        body.thresholds = ModerationThresholdsV1 {
+            quarantine: 8_000,
+            escalate: 7_000,
+        };
+        let manifest = sign_manifest(body, &["council"]);
+        let err = manifest
+            .validate()
+            .expect_err("inverted thresholds should fail");
+        assert!(matches!(
+            err,
+            ModerationReproValidationError::InvalidThresholdOrder {
+                quarantine: 8_000,
+                escalate: 7_000
+            }
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_model_ids_and_digests() {
+        let mut body = sample_body();
+        let mut duplicate = body.models[0];
+        duplicate.artifact_digest = [0x77; 32];
+        duplicate.weights_digest = [0x88; 32];
+        body.models.push(duplicate);
+        let manifest = sign_manifest(body, &["council"]);
+        let err = manifest
+            .validate()
+            .expect_err("duplicate model id should fail");
+        assert!(matches!(
+            err,
+            ModerationReproValidationError::DuplicateModelId { .. }
+        ));
+
+        let mut body = sample_body();
+        let mut duplicate = body.models[0];
+        duplicate.model_id = [0x45; 16];
+        duplicate.weights_digest = [0x88; 32];
+        body.models.push(duplicate);
+        let manifest = sign_manifest(body, &["council"]);
+        let err = manifest
+            .validate()
+            .expect_err("duplicate artifact digest should fail");
+        assert!(matches!(
+            err,
+            ModerationReproValidationError::DuplicateArtifactDigest { .. }
+        ));
+
+        let mut body = sample_body();
+        let mut duplicate = body.models[0];
+        duplicate.model_id = [0x45; 16];
+        duplicate.artifact_digest = [0x77; 32];
+        body.models.push(duplicate);
+        let manifest = sign_manifest(body, &["council"]);
+        let err = manifest
+            .validate()
+            .expect_err("duplicate weights digest should fail");
+        assert!(matches!(
+            err,
+            ModerationReproValidationError::DuplicateWeightsDigest { .. }
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_missing_model_identity_and_digests() {
+        let mut body = sample_body();
+        body.models[0].model_id = [0; 16];
+        let manifest = sign_manifest(body, &["council"]);
+        let err = manifest.validate().expect_err("zero model id should fail");
+        assert!(matches!(
+            err,
+            ModerationReproValidationError::MissingModelId
+        ));
+
+        let mut body = sample_body();
+        body.models[0].artifact_digest = [0; 32];
+        let manifest = sign_manifest(body, &["council"]);
+        let err = manifest
+            .validate()
+            .expect_err("zero artifact digest should fail");
+        assert!(matches!(
+            err,
+            ModerationReproValidationError::MissingModelDigest {
+                field: "artifact_digest",
+                ..
+            }
+        ));
+
+        let mut body = sample_body();
+        body.models[0].weights_digest = [0; 32];
+        let manifest = sign_manifest(body, &["council"]);
+        let err = manifest
+            .validate()
+            .expect_err("zero weights digest should fail");
+        assert!(matches!(
+            err,
+            ModerationReproValidationError::MissingModelDigest {
+                field: "weights_digest",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_unsupported_opset_and_bad_weights() {
+        let mut body = sample_body();
+        body.models[0].opset = MODERATION_REPRO_MODEL_OPSET_V1 + 1;
+        let manifest = sign_manifest(body, &["council"]);
+        let err = manifest
+            .validate()
+            .expect_err("unsupported opset should fail");
+        assert!(matches!(
+            err,
+            ModerationReproValidationError::UnsupportedModelOpset {
+                expected: MODERATION_REPRO_MODEL_OPSET_V1,
+                found: 18,
+                ..
+            }
+        ));
+
+        let mut body = sample_body();
+        body.models[0].weight = Some(MODERATION_REPRO_MAX_BPS + 1);
+        let manifest = sign_manifest(body, &["council"]);
+        let err = manifest
+            .validate()
+            .expect_err("oversized model weight should fail");
+        assert!(matches!(
+            err,
+            ModerationReproValidationError::InvalidModelWeight { weight: 10_001, .. }
+        ));
+
+        let mut body = sample_body();
+        body.models[0].weight = Some(0);
+        let manifest = sign_manifest(body, &["council"]);
+        let err = manifest
+            .validate()
+            .expect_err("all-zero model weights should fail");
+        assert!(matches!(
+            err,
+            ModerationReproValidationError::MissingPositiveModelWeight
+        ));
+    }
+
     fn sample_ballot_context() -> SoraFsModerationBallotContextV1 {
         SoraFsModerationBallotContextV1 {
             version: SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1,
@@ -1157,6 +1639,83 @@ mod tests {
         assert!(matches!(
             err,
             AdversarialCorpusValidationError::MissingVariants { .. }
+        ));
+    }
+
+    #[test]
+    fn adversarial_manifest_rejects_duplicate_family_ids() {
+        let mut manifest = sample_family_manifest();
+        let mut duplicate = manifest.families[0].clone();
+        duplicate.description = "same family id with different rows".to_string();
+        duplicate.variants[0].variant_id = [0x03; 16];
+        manifest.families.push(duplicate);
+
+        let err = manifest.validate().expect_err("duplicate family id");
+        assert!(matches!(
+            err,
+            AdversarialCorpusValidationError::DuplicateFamilyId { .. }
+        ));
+    }
+
+    #[test]
+    fn adversarial_manifest_rejects_duplicate_variant_ids_across_families() {
+        let mut manifest = sample_family_manifest();
+        let mut second_family = manifest.families[0].clone();
+        second_family.family_id = [0x04; 16];
+        second_family.description = "same variant id in another family".to_string();
+        manifest.families.push(second_family);
+
+        let err = manifest.validate().expect_err("duplicate variant id");
+        assert!(matches!(
+            err,
+            AdversarialCorpusValidationError::DuplicateVariantId { .. }
+        ));
+    }
+
+    #[test]
+    fn adversarial_manifest_rejects_duplicate_variant_ids_within_family() {
+        let mut manifest = sample_family_manifest();
+        let mut duplicate = manifest.families[0].variants[0].clone();
+        duplicate.attack_vector = "mosaic".to_string();
+        duplicate.perceptual_hash = Some([0xBB; 32]);
+        manifest.families[0].variants.push(duplicate);
+
+        let err = manifest.validate().expect_err("duplicate variant id");
+        assert!(matches!(
+            err,
+            AdversarialCorpusValidationError::DuplicateVariantId { .. }
+        ));
+    }
+
+    #[test]
+    fn adversarial_manifest_rejects_duplicate_perceptual_hashes() {
+        let mut manifest = sample_family_manifest();
+        let mut duplicate = manifest.families[0].variants[0].clone();
+        duplicate.variant_id = [0x05; 16];
+        duplicate.attack_vector = "crop_jitter".to_string();
+        manifest.families[0].variants.push(duplicate);
+
+        let err = manifest.validate().expect_err("duplicate perceptual hash");
+        assert!(matches!(
+            err,
+            AdversarialCorpusValidationError::DuplicatePerceptualHash { .. }
+        ));
+    }
+
+    #[test]
+    fn adversarial_manifest_rejects_duplicate_embedding_digests() {
+        let mut manifest = sample_family_manifest();
+        manifest.families[0].variants[0].perceptual_hash = None;
+        manifest.families[0].variants[0].embedding_digest = Some([0xCC; 32]);
+        let mut duplicate = manifest.families[0].variants[0].clone();
+        duplicate.variant_id = [0x06; 16];
+        duplicate.attack_vector = "embedding_collision".to_string();
+        manifest.families[0].variants.push(duplicate);
+
+        let err = manifest.validate().expect_err("duplicate embedding digest");
+        assert!(matches!(
+            err,
+            AdversarialCorpusValidationError::DuplicateEmbeddingDigest { .. }
         ));
     }
 

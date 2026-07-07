@@ -63,6 +63,31 @@ class HostileImportedScalar:
         raise AssertionError("secret-token imported EVM live metadata was stringified")
 
 
+class HostileImportedInteger:
+    def __int__(self):
+        raise AssertionError("secret-token imported EVM live integer was coerced")
+
+    def __index__(self):
+        raise AssertionError("secret-token imported EVM live integer index was coerced")
+
+    def __str__(self):
+        raise AssertionError("secret-token imported EVM live integer was stringified")
+
+
+class HostileLiveDomain:
+    def __str__(self):
+        raise AssertionError("secret-token EVM live domain was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token EVM live domain was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token EVM live domain was compared")
+
+    def __int__(self):
+        raise AssertionError("secret-token EVM live domain was coerced")
+
+
 class OversizedResponse:
     def __enter__(self):
         return self
@@ -661,6 +686,250 @@ def full_evm_live_summary(module):
     )
 
 
+def test_evm_route_canary_call_summary_rejects_non_string_event_fields_without_stringifying():
+    module = load_live_module()
+    call_data = evm_route_canary_submit_call_data(module)
+    event_summary = {
+        "message_id": "0x" + "55" * 32,
+        "commitment_root": "0x" + "66" * 32,
+        "statement_hash": "0x" + "77" * 32,
+    }
+
+    cases = (
+        ("message_id", "route-canary event message id must be an exact hex string"),
+        (
+            "commitment_root",
+            "route-canary event commitment root must be an exact hex string",
+        ),
+        (
+            "statement_hash",
+            "route-canary event statement hash must be an exact hex string",
+        ),
+    )
+
+    for field, expected_message in cases:
+        forged = dict(event_summary)
+        forged[field] = HostileImportedScalar()
+        try:
+            module._route_canary_submit_call_data_summary(
+                call_data,
+                event_summary=forged,
+                expected_source_domain=module.evidence.SCCP_DOMAIN_SORA,
+                expected_target_domain=module.evidence.SCCP_DOMAIN_ETH,
+            )
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(
+                f"EVM route-canary calldata accepted non-string {field}"
+            )
+
+
+def test_evm_route_canary_evidence_hash_rejects_non_string_call_fields_without_stringifying(
+    monkeypatch,
+):
+    module = load_live_module()
+    fake = fake_opener_for(module)
+    route_allowlist_hash = bytes.fromhex(EVM_LIVE_ROUTE_ALLOWLIST_HASH_VECTOR)
+    destination = {
+        "source_domain": module.evidence.SCCP_DOMAIN_SORA,
+        "target_domain": module.evidence.SCCP_DOMAIN_ETH,
+        "bridge_address": fake.bridge,
+        "destination_binding_hash": "0x" + fake.destination_binding.hex(),
+        "verifier_backend_hash": "0x" + module.evidence.evm_verifier_backend_hash().hex(),
+        "proof_family_hash": "0x" + module.evidence.evm_proof_family_hash().hex(),
+        "network_id": "0x" + fake.network_id.hex(),
+    }
+    original_call_summary = module._route_canary_transaction_call_summary
+
+    cases = (
+        (
+            "call_data_sha256",
+            "route-canary call data SHA-256 must be an exact hex string",
+        ),
+        (
+            "public_inputs_payload_hash",
+            "route-canary payload hash must be an exact hex string",
+        ),
+        (
+            "public_inputs_finality_height",
+            "route-canary finality height must be an exact hex string",
+        ),
+        (
+            "public_inputs_finality_block_hash",
+            "route-canary finality block hash must be an exact hex string",
+        ),
+    )
+
+    for field, expected_message in cases:
+        with monkeypatch.context() as patch:
+
+            def forged_call_summary(*args, field=field, **kwargs):
+                summary = original_call_summary(*args, **kwargs)
+                summary[field] = HostileImportedScalar()
+                return summary
+
+            patch.setattr(
+                module,
+                "_route_canary_transaction_call_summary",
+                forged_call_summary,
+            )
+            try:
+                module._collect_route_canary_transaction_evidence(
+                    "https://ethereum.example",
+                    destination=destination,
+                    route_allowlist_hash=route_allowlist_hash,
+                    transaction_hash=fake.route_canary_transaction_hash,
+                    log_index=fake.route_canary_log_index,
+                    block_tag="finalized",
+                    opener=fake.opener,
+                    timeout=1.0,
+                )
+            except ValueError as exc:
+                rendered = str(exc)
+                assert rendered == expected_message
+                assert "secret-token" not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError(
+                    "EVM route-canary evidence hash accepted non-string "
+                    f"{field}"
+                )
+
+
+def test_evm_route_canary_evidence_hash_rejects_non_integer_summary_fields_without_coercion(
+    monkeypatch,
+):
+    module = load_live_module()
+    fake = fake_opener_for(module)
+    route_allowlist_hash = bytes.fromhex(EVM_LIVE_ROUTE_ALLOWLIST_HASH_VECTOR)
+    destination = {
+        "source_domain": module.evidence.SCCP_DOMAIN_SORA,
+        "target_domain": module.evidence.SCCP_DOMAIN_ETH,
+        "bridge_address": fake.bridge,
+        "destination_binding_hash": "0x" + fake.destination_binding.hex(),
+        "verifier_backend_hash": "0x" + module.evidence.evm_verifier_backend_hash().hex(),
+        "proof_family_hash": "0x" + module.evidence.evm_proof_family_hash().hex(),
+        "network_id": "0x" + fake.network_id.hex(),
+    }
+
+    def collect():
+        return module._collect_route_canary_transaction_evidence(
+            "https://ethereum.example",
+            destination=destination,
+            route_allowlist_hash=route_allowlist_hash,
+            transaction_hash=fake.route_canary_transaction_hash,
+            log_index=fake.route_canary_log_index,
+            block_tag="finalized",
+            opener=fake.opener,
+            timeout=1.0,
+        )
+
+    original_receipt_block_summary = module._route_canary_receipt_block_summary
+    original_event_summary = module._route_canary_message_proof_event_summary
+    original_call_summary = module._route_canary_transaction_call_summary
+
+    with monkeypatch.context() as patch:
+
+        def forged_receipt_block_summary(*args, **kwargs):
+            summary = original_receipt_block_summary(*args, **kwargs)
+            summary["block_number"] = HostileImportedInteger()
+            return summary
+
+        patch.setattr(
+            module,
+            "_route_canary_receipt_block_summary",
+            forged_receipt_block_summary,
+        )
+        try:
+            collect()
+        except ValueError as exc:
+            rendered = str(exc)
+            assert (
+                rendered
+                == "route-canary receipt block number must be an exact positive u64 integer"
+            )
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(
+                "EVM route-canary evidence hash accepted non-integer block number"
+            )
+
+    with monkeypatch.context() as patch:
+
+        def forged_event_summary(*args, **kwargs):
+            summary = original_event_summary(*args, **kwargs)
+            if summary is not None:
+                summary["log_index"] = HostileImportedInteger()
+            return summary
+
+        patch.setattr(
+            module,
+            "_route_canary_message_proof_event_summary",
+            forged_event_summary,
+        )
+        try:
+            collect()
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == "route-canary log index must be an exact u32 integer"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(
+                "EVM route-canary evidence hash accepted non-integer log index"
+            )
+
+    cases = (
+        (
+            "public_inputs_target_domain",
+            "route-canary target domain must be an exact u32 integer",
+        ),
+        (
+            "proof_version",
+            "route-canary proof version must be an exact u32 integer",
+        ),
+        (
+            "proof_source_domain",
+            "route-canary proof source domain must be an exact u32 integer",
+        ),
+    )
+    for field, expected_message in cases:
+        with monkeypatch.context() as patch:
+
+            def forged_call_summary(*args, field=field, **kwargs):
+                summary = original_call_summary(*args, **kwargs)
+                summary[field] = HostileImportedInteger()
+                return summary
+
+            patch.setattr(
+                module,
+                "_route_canary_transaction_call_summary",
+                forged_call_summary,
+            )
+            try:
+                collect()
+            except ValueError as exc:
+                rendered = str(exc)
+                assert rendered == expected_message
+                assert "secret-token" not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError(
+                    "EVM route-canary evidence hash accepted non-integer "
+                    f"{field}"
+                )
+
+
 def test_evm_json_rpc_response_size_is_bounded():
     module = load_live_module()
 
@@ -774,6 +1043,35 @@ def test_evm_json_rpc_rejects_duplicate_json_keys():
 def test_evm_json_rpc_url_rejects_hidden_request_state():
     module = load_live_module()
 
+    class HostileEvmRpcUrl(str):
+        def __new__(cls):
+            return str.__new__(cls, "https://ethereum.example")
+
+        def __str__(self):
+            raise AssertionError("secret-token EVM RPC URL was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token EVM RPC URL was repr'd")
+
+        def __eq__(self, _other):
+            raise AssertionError("secret-token EVM RPC URL was compared")
+
+        def __ne__(self, _other):
+            raise AssertionError("secret-token EVM RPC URL was compared")
+
+        def __iter__(self):
+            raise AssertionError("secret-token EVM RPC URL was iterated")
+
+        def strip(self, *_args):
+            raise AssertionError("secret-token EVM RPC URL was stripped")
+
+    class HostileEvmRpcUrlLabel:
+        def __str__(self):
+            raise AssertionError("secret-token EVM RPC URL label was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token EVM RPC URL label was repr'd")
+
     assert module._normalize_evm_rpc_url("https://ethereum.example") == (
         "https://ethereum.example"
     )
@@ -800,6 +1098,8 @@ def test_evm_json_rpc_url_rejects_hidden_request_state():
         ("https://bad_host.ethereum.example", "public DNS"),
         (" https://ethereum.example", "exact http(s) URL"),
         ("https://ethereum.example\nsecret", "exact http(s) URL"),
+        (HostileEvmRpcUrl(), "exact http(s) URL"),
+        (HostileEvmRpcUrlLabel(), "exact http(s) URL"),
     ):
         try:
             module._json_rpc(
@@ -1706,6 +2006,157 @@ def test_live_evm_route_canary_rejects_unverified_transaction_metadata():
         raise AssertionError("forged EVM route canary evidence hash was accepted")
 
 
+def test_live_evm_collect_rejects_non_string_route_canary_transaction_summary_without_stringifying(
+    monkeypatch,
+):
+    module = load_live_module()
+    fake = fake_opener_for(module)
+    route_allowlist_hash = bytes.fromhex(EVM_LIVE_ROUTE_ALLOWLIST_HASH_VECTOR)
+    route_canary_hash = route_canary_hash_for(module, fake, route_allowlist_hash)
+    def collect_args():
+        return SimpleNamespace(
+            rpc_url="https://ethereum.example",
+            domain=module.evidence.SCCP_DOMAIN_ETH,
+            bridge_address="0x" + "11" * 20,
+            expected_network_id=fake.network_id,
+            expected_bridge_code_hash=fake.bridge_code_hash,
+            expected_destination_binding_hash=fake.destination_binding,
+            route_allowlist_hash=route_allowlist_hash,
+            route_canary_evidence_hash=route_canary_hash,
+            route_canary_transaction_hash=fake.route_canary_transaction_hash,
+            route_canary_log_index=fake.route_canary_log_index,
+            source_verifier_material_hash=bytes.fromhex(
+                EVM_SOURCE_VERIFIER_MATERIAL_HASH
+            ),
+            source_adapter_engine_deployment_hash=bytes.fromhex(
+                EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
+            ),
+            block_tag="finalized",
+            timeout=1.0,
+        )
+    original_collect_transaction = module._collect_route_canary_transaction_evidence
+
+    for field in (
+        "route_canary_evidence_hash",
+        "transaction_hash",
+        "transaction_block_hash",
+        "block_hash",
+        "block_receipts_root",
+        "call_data_sha256",
+        "message_id",
+        "public_inputs_payload_hash",
+        "statement_hash",
+        "commitment_root",
+        "public_inputs_finality_height",
+        "public_inputs_finality_block_hash",
+    ):
+
+        def tampered_collect_transaction(*args, _field=field, **kwargs):
+            summary = original_collect_transaction(*args, **kwargs)
+            summary[_field] = HostileImportedScalar()
+            return summary
+
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                module,
+                "_collect_route_canary_transaction_evidence",
+                tampered_collect_transaction,
+            )
+            try:
+                module.collect_live_evidence(collect_args(), opener=fake.opener)
+            except ValueError as exc:
+                rendered = str(exc)
+                assert "exact hex string" in rendered or "metadata is invalid" in rendered
+                assert "secret-token" not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError(
+                    "EVM live collection accepted hostile route-canary "
+                    f"transaction {field}"
+                )
+
+
+def test_live_evm_collect_rejects_non_integer_route_canary_transaction_summary_without_coercion(
+    monkeypatch,
+):
+    module = load_live_module()
+    fake = fake_opener_for(module)
+    route_allowlist_hash = bytes.fromhex(EVM_LIVE_ROUTE_ALLOWLIST_HASH_VECTOR)
+    route_canary_hash = route_canary_hash_for(module, fake, route_allowlist_hash)
+    def collect_args():
+        return SimpleNamespace(
+            rpc_url="https://ethereum.example",
+            domain=module.evidence.SCCP_DOMAIN_ETH,
+            bridge_address="0x" + "11" * 20,
+            expected_network_id=fake.network_id,
+            expected_bridge_code_hash=fake.bridge_code_hash,
+            expected_destination_binding_hash=fake.destination_binding,
+            route_allowlist_hash=route_allowlist_hash,
+            route_canary_evidence_hash=route_canary_hash,
+            route_canary_transaction_hash=fake.route_canary_transaction_hash,
+            route_canary_log_index=fake.route_canary_log_index,
+            source_verifier_material_hash=bytes.fromhex(
+                EVM_SOURCE_VERIFIER_MATERIAL_HASH
+            ),
+            source_adapter_engine_deployment_hash=bytes.fromhex(
+                EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
+            ),
+            block_tag="finalized",
+            timeout=1.0,
+        )
+    original_collect_transaction = module._collect_route_canary_transaction_evidence
+
+    for field, expected_message in (
+        (
+            "transaction_block_number",
+            "route canary transaction block number must be an exact positive u64 integer",
+        ),
+        (
+            "block_number",
+            "route canary receipt block number must be an exact positive u64 integer",
+        ),
+        ("log_index", "route canary log index must be an exact u32 integer"),
+        (
+            "public_inputs_target_domain",
+            "route canary target domain must be an exact u32 integer",
+        ),
+        (
+            "proof_version",
+            "route canary proof version must be an exact u32 integer",
+        ),
+        (
+            "proof_source_domain",
+            "route canary proof source domain must be an exact u32 integer",
+        ),
+    ):
+
+        def tampered_collect_transaction(*args, _field=field, **kwargs):
+            summary = original_collect_transaction(*args, **kwargs)
+            summary[_field] = HostileImportedInteger()
+            return summary
+
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                module,
+                "_collect_route_canary_transaction_evidence",
+                tampered_collect_transaction,
+            )
+            try:
+                module.collect_live_evidence(collect_args(), opener=fake.opener)
+            except ValueError as exc:
+                rendered = str(exc)
+                assert rendered == expected_message
+                assert "secret-token" not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError(
+                    "EVM live collection accepted hostile route-canary "
+                    f"transaction {field}"
+                )
+
+
 def test_live_evm_full_toml_revalidates_imported_summary_metadata(monkeypatch):
     module = load_live_module()
     fake = fake_opener_for(module)
@@ -1964,6 +2415,144 @@ def test_live_evm_rejects_non_string_copied_route_metadata_without_stringifying(
         else:
             raise AssertionError(
                 f"EVM full TOML accepted non-string copied {'.'.join(path)}"
+            )
+
+
+def test_live_evm_rejects_non_string_copied_destination_comment_metadata_without_stringifying():
+    module = load_live_module()
+    summary = full_evm_live_summary(module)
+
+    cases = (
+        (("block_tag",), "EVM block tag metadata is invalid"),
+        (
+            ("destination_bridge", "rpc_chain_id"),
+            "EVM RPC chain id must be an exact u32 integer",
+        ),
+        (
+            ("destination_bridge", "bridge_code_hash"),
+            "bridge code hash must be an exact hex string",
+        ),
+        (
+            ("destination_bridge", "bridge_runtime_bytecode_hex"),
+            "bridge runtime bytecode must be exact 0x-prefixed hex",
+        ),
+        (
+            ("destination_bridge", "eth_getcode_verifier_code_hash"),
+            "eth_getCode verifier code hash must be an exact hex string",
+        ),
+        (
+            ("destination_bridge", "verifier_runtime_bytecode_hex"),
+            "verifier runtime bytecode must be exact 0x-prefixed hex",
+        ),
+        (
+            ("destination_bridge", "verifier_verifying_key_hash"),
+            "verifier verifyingKeyHash must be an exact hex string",
+        ),
+        (
+            ("destination_bridge", "verifier_backend_hash"),
+            "verifier backend hash must be an exact hex string",
+        ),
+        (
+            ("destination_bridge", "proof_family_hash"),
+            "proof family hash must be an exact hex string",
+        ),
+    )
+
+    for path, expected_message in cases:
+        forged = copy.deepcopy(summary)
+        container = forged
+        for key in path[:-1]:
+            container = container[key]
+        container[path[-1]] = HostileImportedScalar()
+
+        try:
+            module.render_offline_toml(forged)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(
+                "EVM full TOML accepted non-string copied destination "
+                f"{'.'.join(path)}"
+            )
+
+
+def test_live_evm_full_toml_rejects_non_string_route_canary_transaction_metadata_without_stringifying():
+    module = load_live_module()
+    summary = full_evm_live_summary(module)
+
+    for field, expected_message in (
+        ("transaction_hash", "route canary transaction hash must be an exact hex string"),
+        ("call_data_sha256", "route canary call data SHA-256 must be an exact hex string"),
+        ("message_id", "route canary message id must be an exact hex string"),
+        (
+            "public_inputs_payload_hash",
+            "route canary payload hash must be an exact hex string",
+        ),
+        ("statement_hash", "route canary statement hash must be an exact hex string"),
+        ("commitment_root", "route canary commitment root must be an exact hex string"),
+        (
+            "public_inputs_finality_height",
+            "route canary finality height must be an exact hex string",
+        ),
+        (
+            "public_inputs_finality_block_hash",
+            "route canary finality block hash must be an exact hex string",
+        ),
+    ):
+        forged = copy.deepcopy(summary)
+        forged["route_canary_transaction"][field] = HostileImportedScalar()
+        try:
+            module.render_offline_toml(forged)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered, field
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(
+                "EVM full TOML accepted hostile route-canary "
+                f"transaction {field}"
+            )
+
+
+def test_live_evm_full_toml_rejects_non_integer_route_canary_transaction_metadata_without_coercion():
+    module = load_live_module()
+    summary = full_evm_live_summary(module)
+
+    for field, expected_message in (
+        ("log_index", "route canary log index must be an exact u32 integer"),
+        (
+            "public_inputs_target_domain",
+            "route canary target domain must be an exact u32 integer",
+        ),
+        (
+            "proof_version",
+            "route canary proof version must be an exact u32 integer",
+        ),
+        (
+            "proof_source_domain",
+            "route canary proof source domain must be an exact u32 integer",
+        ),
+    ):
+        forged = copy.deepcopy(summary)
+        forged["route_canary_transaction"][field] = HostileImportedInteger()
+        try:
+            module.render_offline_toml(forged)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(
+                "EVM full TOML accepted hostile route-canary "
+                f"transaction {field}"
             )
 
 
@@ -2684,13 +3273,17 @@ def test_live_evm_default_block_tag_rejects_boolean_domain():
         == "finalized"
     )
     assert module.default_block_tag_for_domain(module.evidence.SCCP_DOMAIN_BSC) == "latest"
-    for alias_domain in (True, False):
+    for alias_domain in (True, False, 3, 99, HostileLiveDomain()):
         try:
             module.default_block_tag_for_domain(alias_domain)
         except module.argparse.ArgumentTypeError as exc:
-            assert str(exc) == "domain must be an EVM-family SCCP lane"
+            rendered = str(exc)
+            assert rendered == "domain must be an EVM-family SCCP lane"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
         else:
-            raise AssertionError("boolean EVM live block-tag domain was accepted")
+            raise AssertionError("invalid EVM live block-tag domain was accepted")
 
 
 def test_live_evm_block_tag_parser_rejects_unstable_or_noncanonical_tags():

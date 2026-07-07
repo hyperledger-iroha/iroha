@@ -72,6 +72,9 @@ const MULTISIG_CONTRACT_CALL_APPROVE_DTO_SCHEMA_HASH = schemaHashForTypeName(
 const OPEN_VERIFY_ENVELOPE_SCHEMA_HASH = schemaHashForTypeName(
   "iroha_data_model::zk::OpenVerifyEnvelope",
 );
+const TRANSACTION_PAYLOAD_BATCH_SCHEMA_HASH = schemaHashForTypeName(
+  "alloc::vec::Vec<alloc::vec::Vec<u8>>",
+);
 const INNER_SCHEMA_HASH_BY_WIRE_ID = Object.freeze({
   "iroha.mint": Buffer.from("ec0b538ed0e5b46ed163e0aedb335e73", "hex"),
   "iroha.burn": Buffer.from("361f279124a0aad61978c80ff1c9ce0a", "hex"),
@@ -558,8 +561,15 @@ export function noritoEncodeTransactionPayloadBatch(payloads) {
   if (payloads.length === 0) {
     throw new TypeError("transaction payload batch must contain at least one payload");
   }
-  return encodeNoritoVec(payloads, (payload, index) =>
-    encodeByteVecValue(payload, `transaction payload batch[${index}]`),
+  const payload = withNoritoCompactLengths(() =>
+    encodeNoritoVec(payloads, (item, index) =>
+      encodeByteVecValue(item, `transaction payload batch[${index}]`),
+    ),
+  );
+  return frameNoritoPayload(
+    payload,
+    TRANSACTION_PAYLOAD_BATCH_SCHEMA_HASH,
+    COMPACT_LEN_FLAG,
   );
 }
 

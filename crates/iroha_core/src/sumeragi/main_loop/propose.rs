@@ -8,7 +8,9 @@ use crate::state::WorldReadOnly;
 #[cfg(test)]
 use crate::state::{StateBlock, StateReadOnly};
 use core::num::{NonZeroU64, NonZeroUsize};
-use iroha_data_model::block::BlockExecutionContextBundle;
+use iroha_data_model::block::{
+    BlockExecutionContextBundle, consensus::SumeragiLanePayloadOwnership,
+};
 use iroha_data_model::consensus::{
     CommitStakeSnapshot as ModelCommitStakeSnapshot,
     CommitStakeSnapshotEntry as ModelCommitStakeSnapshotEntry, PreviousRosterEvidence,
@@ -19,7 +21,9 @@ use iroha_data_model::prelude::Repeats;
 use mv::storage::StorageReadOnly;
 
 const PROPOSAL_STALE_WINDOW_TX_QUANTUM: usize = 128;
-const PROPOSAL_STALE_WINDOW_MAX_MULTIPLIER: u32 = 4;
+const PROPOSAL_STALE_WINDOW_PREP_TX_QUANTUM: usize = 32;
+const PROPOSAL_STALE_WINDOW_FULL_BATCH_PREP_GRACE: usize = 2;
+const PROPOSAL_STALE_WINDOW_MAX_MULTIPLIER: u32 = 8;
 
 pub(super) const fn should_seed_frontier_backup_transport(
     da_enabled: bool,
@@ -181,6 +185,28 @@ fn previous_roster_evidence_for_hash_only_parent(
         validator_checkpoint: checkpoint,
         stake_snapshot,
     })
+}
+
+fn known_lane_block_tips_for_proposal(state: &State) -> Vec<super::lane_scheduler::LaneBlockTip> {
+    let mut tips = state
+        .lane_block_artifact_tips_snapshot_cached()
+        .into_iter()
+        .map(|(lane_id, dataspace_id, latest_lane_block_height)| {
+            super::lane_scheduler::LaneBlockTip {
+                lane_id,
+                dataspace_id,
+                latest_lane_block_height,
+            }
+        })
+        .collect::<Vec<_>>();
+    tips.extend(state.lane_relay_snapshot().into_iter().map(|relay| {
+        super::lane_scheduler::LaneBlockTip {
+            lane_id: relay.lane_id,
+            dataspace_id: relay.dataspace_id,
+            latest_lane_block_height: relay.block_height,
+        }
+    }));
+    tips
 }
 
 fn next_cached_slot_timeout_streak(
@@ -1043,6 +1069,10 @@ impl Actor {
         let Some(lock) = self.same_height_vote_lock_blocking_candidate(height, view, None) else {
             return false;
         };
+        if self.same_height_vote_lock_superseded_by_committed_frontier_new_view(height, view, &lock)
+        {
+            return false;
+        }
         if self.same_height_block_has_observed_qc(lock.block_hash, height, lock.view) {
             return false;
         }
@@ -1376,8 +1406,16 @@ impl Actor {
         let batches = tx_count.saturating_add(PROPOSAL_STALE_WINDOW_TX_QUANTUM - 1)
             / PROPOSAL_STALE_WINDOW_TX_QUANTUM;
         let full_batch_grace = usize::from(tx_count >= PROPOSAL_STALE_WINDOW_TX_QUANTUM);
-        let multiplier = batches
-            .saturating_add(full_batch_grace)
+        let consensus_multiplier = batches.saturating_add(full_batch_grace);
+        let prep_multiplier = if tx_count >= PROPOSAL_STALE_WINDOW_TX_QUANTUM {
+            tx_count.saturating_add(PROPOSAL_STALE_WINDOW_PREP_TX_QUANTUM - 1)
+                / PROPOSAL_STALE_WINDOW_PREP_TX_QUANTUM
+                + PROPOSAL_STALE_WINDOW_FULL_BATCH_PREP_GRACE
+        } else {
+            1
+        };
+        let multiplier = consensus_multiplier
+            .max(prep_multiplier)
             .max(1)
             .min(PROPOSAL_STALE_WINDOW_MAX_MULTIPLIER as usize);
         let multiplier = u32::try_from(multiplier).expect("proposal stale multiplier fits u32");
@@ -1419,14 +1457,6 @@ impl Actor {
         }
     }
 
-    pub(super) fn proposal_multilane_lookahead_enabled(
-        nexus: &iroha_config::parameters::actual::Nexus,
-        block_height: u64,
-    ) -> bool {
-        nexus.enabled
-            && crate::queue::routable_lane_ids_for_nexus_at_height(nexus, block_height).len() > 1
-    }
-
     pub(super) fn pull_transactions_for_proposal(
         &self,
         state: &State,
@@ -1452,8 +1482,16 @@ impl Actor {
         let mut ivm_transactions_deferred = 0usize;
         let scan_budget = scan_budget.max(1);
         let committed_nexus = state.nexus_snapshot();
-        let multilane_lookahead =
-            Self::proposal_multilane_lookahead_enabled(&committed_nexus, height);
+        let (lane_domain_consensus_mode, lane_domain_mode_tag, _) =
+            self.consensus_context_for_height(height);
+        let mut planned_lane_payload_ownerships = Vec::new();
+        let mut lane_domain_validators =
+            self.roster_for_live_vote_with_mode(height, lane_domain_consensus_mode);
+        if lane_domain_validators.is_empty() {
+            lane_domain_validators = self.effective_commit_topology();
+        }
+        let use_shared_lane_domain_committee = !committed_nexus.enabled
+            || !super::lane_scheduler::proposal_lookahead_enabled(&committed_nexus, height);
         if self.queue.reconfigure_nexus_with_state_if_needed(
             &committed_nexus,
             state,
@@ -1464,6 +1502,8 @@ impl Actor {
                 view, "proposal queue routing refreshed from committed Nexus state"
             );
         }
+        let known_lane_block_tips = known_lane_block_tips_for_proposal(state);
+        let lane_reset_heights = state.da_shard_reset_heights_snapshot_cached();
 
         loop {
             let remaining_budget = scan_budget.saturating_sub(fetched_total);
@@ -1491,11 +1531,12 @@ impl Actor {
                     break;
                 }
             }
-            let fetch_cap = if multilane_lookahead {
-                remaining_budget
-            } else {
-                remaining_budget.min(remaining_slots)
-            };
+            let fetch_cap = super::lane_scheduler::proposal_fetch_cap(
+                &committed_nexus,
+                height,
+                remaining_budget,
+                remaining_slots,
+            );
             let fetch_cap = NonZeroUsize::new(fetch_cap).expect("non-zero by construction");
             let mut fetched = Vec::new();
             self.queue
@@ -1518,7 +1559,168 @@ impl Actor {
                 .iter()
                 .map(crate::queue::TransactionGuard::routing)
                 .collect();
-            let order = interleave_lane_indices_for_slot(&fetched_routing, height, view);
+            let candidates: Vec<_> = fetched
+                .iter()
+                .map(|guard| super::lane_scheduler::ProposalAdmissionCandidate {
+                    gas_cost: guard.gas_cost(),
+                    is_ivm_heavy: Self::is_ivm_heavy_transaction(
+                        guard.as_accepted(),
+                        replay_ivm_proved,
+                    ),
+                })
+                .collect();
+            let mut schedule = super::lane_scheduler::schedule_proposal_batch(
+                &fetched_routing,
+                &candidates,
+                super::lane_scheduler::ProposalAdmissionContext {
+                    accepted_before_batch: tx_guards.len(),
+                    accepted_in_batch: 0,
+                    max_in_block: max_in_block.get(),
+                    gas_limit_per_block,
+                    gas_used_in_block,
+                    max_ivm_transactions,
+                    ivm_transactions_included,
+                },
+                height,
+                view,
+            )
+            .expect("fetched proposal candidates and routing decisions must align");
+            let lane_consensus_deferral = !use_shared_lane_domain_committee;
+            let mut defer_accepted_due_to_lane_consensus = false;
+            let lane_domain_committees =
+                super::lane_scheduler::plan_lane_consensus_committees_with_authority(
+                    &fetched_routing,
+                    &schedule,
+                    use_shared_lane_domain_committee.then_some(lane_domain_validators.as_slice()),
+                    |lane_id, _dataspace_id| {
+                        if use_shared_lane_domain_committee {
+                            Vec::new()
+                        } else {
+                            state.authoritative_lane_peer_ids(lane_id)
+                        }
+                    },
+                );
+            let lane_domains = lane_domain_committees.and_then(|committees| {
+                super::lane_scheduler::plan_lane_consensus_domains(
+                    &fetched_routing,
+                    &schedule,
+                    &committees,
+                    lane_domain_mode_tag,
+                )
+            });
+            match lane_domains {
+                Ok(domains) => {
+                    if !domains.is_empty() {
+                        match super::lane_scheduler::plan_lane_payload(
+                            &domains,
+                            &known_lane_block_tips,
+                            height.saturating_sub(1),
+                            &lane_reset_heights,
+                            view,
+                        ) {
+                            Ok(lane_payload_plan) => {
+                                planned_lane_payload_ownerships.extend(
+                                    lane_payload_plan.ownerships.iter().map(|ownership| {
+                                        Self::lane_payload_ownership_to_wire(
+                                            ownership, height, view,
+                                        )
+                                    }),
+                                );
+                                trace!(
+                                    height,
+                                    view,
+                                    lane_domains = domains.len(),
+                                    lane_ids = ?domains
+                                        .iter()
+                                        .map(|domain| domain.lane_id.as_u32())
+                                        .collect::<Vec<_>>(),
+                                    dataspace_ids = ?domains
+                                        .iter()
+                                        .map(|domain| domain.dataspace_id.as_u64())
+                                        .collect::<Vec<_>>(),
+                                    accepted_lane_candidates = domains
+                                        .iter()
+                                        .map(|domain| domain.accepted_candidates)
+                                        .sum::<usize>(),
+                                    accepted_lane_candidate_indices = ?domains
+                                        .iter()
+                                        .map(|domain| domain.accepted_candidate_indices.clone())
+                                        .collect::<Vec<_>>(),
+                                    lane_tip_heights = ?lane_payload_plan
+                                        .lane_tips
+                                        .iter()
+                                        .map(|tip| tip.latest_lane_block_height)
+                                        .collect::<Vec<_>>(),
+                                    lane_slot_heights = ?lane_payload_plan
+                                        .slots
+                                        .iter()
+                                        .map(|slot| slot.lane_block_height)
+                                        .collect::<Vec<_>>(),
+                                    lane_block_subjects = lane_payload_plan.subjects.len(),
+                                    lane_block_subject_hashes = ?lane_payload_plan
+                                        .subjects
+                                        .iter()
+                                        .map(|subject| hex::encode(subject.subject_hash.as_ref()))
+                                        .collect::<Vec<_>>(),
+                                    lane_payload_ownerships = lane_payload_plan.ownerships.len(),
+                                    lane_payload_ownership_hashes = ?lane_payload_plan
+                                        .ownerships
+                                        .iter()
+                                        .map(|ownership| hex::encode(ownership.payload_ownership_hash.as_ref()))
+                                        .collect::<Vec<_>>(),
+                                    lane_rbc_instance_hashes = ?lane_payload_plan
+                                        .ownerships
+                                        .iter()
+                                        .map(|ownership| hex::encode(ownership.rbc_instance_hash.as_ref()))
+                                        .collect::<Vec<_>>(),
+                                    validator_count = domains
+                                        .iter()
+                                        .map(|domain| domain.validator_set.len())
+                                        .max()
+                                        .unwrap_or_default(),
+                                    first_quorum = domains
+                                        .first()
+                                        .map_or(0, |domain| domain.quorum.min_quorum),
+                                    first_qc_mode_tag = domains
+                                        .first()
+                                        .map_or("", |domain| domain.qc_mode_tag.as_str()),
+                                    "planned lane-local consensus domains for proposal batch"
+                                );
+                            }
+                            Err(error) => {
+                                warn!(
+                                    height,
+                                    view,
+                                    ?error,
+                                    lane_consensus_deferral,
+                                    "failed to plan lane-local payload for proposal batch"
+                                );
+                                if lane_consensus_deferral {
+                                    defer_accepted_due_to_lane_consensus = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(error) => {
+                    warn!(
+                        height,
+                        view,
+                        ?error,
+                        lane_consensus_deferral,
+                        "failed to plan lane-local consensus domains for proposal batch"
+                    );
+                    if lane_consensus_deferral {
+                        defer_accepted_due_to_lane_consensus = true;
+                    }
+                }
+            }
+            if defer_accepted_due_to_lane_consensus {
+                schedule = super::lane_scheduler::defer_accepted_proposal_actions(
+                    &schedule,
+                    super::lane_scheduler::ProposalDeferralReason::LaneConsensus,
+                );
+            }
             let mut fetched_slots: Vec<Option<crate::queue::TransactionGuard>> =
                 fetched.into_iter().map(Some).collect();
             let mut accepted = Vec::with_capacity(remaining_slots.min(fetched_slots.len()));
@@ -1532,76 +1734,42 @@ impl Actor {
                     }
                 };
 
-            for (order_pos, idx) in order.iter().copied().enumerate() {
-                let Some(guard) = fetched_slots.get_mut(idx).and_then(Option::take) else {
-                    continue;
-                };
-
-                if tx_guards.len().saturating_add(accepted.len()) >= max_in_block.get() {
-                    release_lane_consumption(&guard, &mut lane_consumption);
-                    deferred_accumulator.push((guard.clone_accepted(), guard.routing_plan()));
-                    continue;
-                }
-
-                let is_ivm_heavy =
-                    Self::is_ivm_heavy_transaction(guard.as_accepted(), replay_ivm_proved);
-                if let Some(limit) = max_ivm_transactions
-                    && is_ivm_heavy
-                    && ivm_transactions_included >= limit
-                {
-                    release_lane_consumption(&guard, &mut lane_consumption);
-                    ivm_transactions_deferred = ivm_transactions_deferred.saturating_add(1);
-                    deferred_accumulator.push((guard.clone_accepted(), guard.routing_plan()));
-                    continue;
-                }
-
-                if let Some(limit) = gas_limit_per_block {
-                    let gas_cost = guard.gas_cost();
-                    let remaining_gas = limit.saturating_sub(gas_used_in_block);
-                    let would_exceed = gas_cost > remaining_gas && gas_cost > 0;
-                    let allow_oversized =
-                        gas_used_in_block == 0 && tx_guards.is_empty() && accepted.is_empty();
-
-                    let fitting_later_candidate = would_exceed
-                        && allow_oversized
-                        && order.iter().skip(order_pos + 1).any(|candidate_idx| {
-                            fetched_slots
-                                .get(*candidate_idx)
-                                .and_then(Option::as_ref)
-                                .is_some_and(|candidate| {
-                                    let candidate_is_ivm_heavy = Self::is_ivm_heavy_transaction(
-                                        candidate.as_accepted(),
-                                        replay_ivm_proved,
-                                    );
-                                    max_ivm_transactions.is_none_or(|max| {
-                                        !candidate_is_ivm_heavy || ivm_transactions_included < max
-                                    }) && candidate.gas_cost() <= remaining_gas
-                                })
-                        });
-
-                    if would_exceed && (!allow_oversized || fitting_later_candidate) {
+            for action in schedule.actions {
+                match action {
+                    super::lane_scheduler::ProposalBatchAction::Accept {
+                        index,
+                        exceeds_gas_limit,
+                    } => {
+                        let Some(guard) = fetched_slots.get_mut(index).and_then(Option::take)
+                        else {
+                            continue;
+                        };
+                        if exceeds_gas_limit {
+                            debug!(
+                                height,
+                                view,
+                                gas_cost = guard.gas_cost(),
+                                gas_limit = gas_limit_per_block,
+                                "proposal gas cap exceeded by single tx; admitting to avoid stall"
+                            );
+                        }
+                        accepted.push(guard);
+                    }
+                    super::lane_scheduler::ProposalBatchAction::Defer { index, reason: _ } => {
+                        let Some(guard) = fetched_slots.get_mut(index).and_then(Option::take)
+                        else {
+                            continue;
+                        };
                         release_lane_consumption(&guard, &mut lane_consumption);
                         deferred_accumulator.push((guard.clone_accepted(), guard.routing_plan()));
-                        continue;
                     }
-
-                    if would_exceed {
-                        debug!(
-                            height,
-                            view,
-                            gas_cost,
-                            gas_limit = limit,
-                            "proposal gas cap exceeded by single tx; admitting to avoid stall"
-                        );
-                    }
-                    gas_used_in_block = gas_used_in_block.saturating_add(gas_cost);
                 }
-
-                if is_ivm_heavy {
-                    ivm_transactions_included = ivm_transactions_included.saturating_add(1);
-                }
-                accepted.push(guard);
             }
+            gas_used_in_block = gas_used_in_block.saturating_add(schedule.gas_used_delta);
+            ivm_transactions_included =
+                ivm_transactions_included.saturating_add(schedule.ivm_transactions_included_delta);
+            ivm_transactions_deferred =
+                ivm_transactions_deferred.saturating_add(schedule.ivm_transactions_deferred);
             tx_guards.extend(accepted);
 
             if let Some(limit) = gas_limit_per_block {
@@ -1610,6 +1778,7 @@ impl Actor {
                 }
             }
         }
+        crate::sumeragi::status::set_lane_payload_ownerships(planned_lane_payload_ownerships);
 
         if ivm_transactions_deferred > 0 {
             debug!(
@@ -1623,6 +1792,113 @@ impl Actor {
         }
 
         deferred_accumulator
+    }
+
+    fn lane_payload_ownership_to_wire(
+        ownership: &super::lane_scheduler::LanePayloadOwnership,
+        proposal_height: u64,
+        proposal_view: u64,
+    ) -> SumeragiLanePayloadOwnership {
+        SumeragiLanePayloadOwnership {
+            proposal_height,
+            proposal_view,
+            lane_id: ownership.lane_id,
+            dataspace_id: ownership.dataspace_id,
+            lane_block_height: ownership.lane_block_height,
+            lane_block_view: ownership.lane_block_view,
+            subject_hash: ownership.subject_hash,
+            qc_mode_tag: ownership.qc_mode_tag.clone(),
+            accepted_candidate_indices: ownership
+                .accepted_candidate_indices
+                .iter()
+                .map(|index| {
+                    u64::try_from(*index).expect("validated lane payload candidate index fits u64")
+                })
+                .collect(),
+            payload_ownership_hash: ownership.payload_ownership_hash,
+            rbc_instance_hash: ownership.rbc_instance_hash,
+        }
+    }
+
+    fn plan_final_lane_payload_ownerships(
+        &self,
+        state: &State,
+        routing_batch: &[RoutingDecision],
+        height: u64,
+        view: u64,
+    ) -> Result<Vec<SumeragiLanePayloadOwnership>> {
+        if routing_batch.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let committed_nexus = state.nexus_snapshot();
+        let (lane_domain_consensus_mode, lane_domain_mode_tag, _) =
+            self.consensus_context_for_height(height);
+        let mut lane_domain_validators =
+            self.roster_for_live_vote_with_mode(height, lane_domain_consensus_mode);
+        if lane_domain_validators.is_empty() {
+            lane_domain_validators = self.effective_commit_topology();
+        }
+        let use_shared_lane_domain_committee = !committed_nexus.enabled
+            || !super::lane_scheduler::proposal_lookahead_enabled(&committed_nexus, height);
+        let schedule = super::lane_scheduler::ProposalBatchSchedule {
+            actions: (0..routing_batch.len())
+                .map(|index| super::lane_scheduler::ProposalBatchAction::Accept {
+                    index,
+                    exceeds_gas_limit: false,
+                })
+                .collect(),
+            ..super::lane_scheduler::ProposalBatchSchedule::default()
+        };
+        let lane_domain_committees =
+            super::lane_scheduler::plan_lane_consensus_committees_with_authority(
+                routing_batch,
+                &schedule,
+                use_shared_lane_domain_committee.then_some(lane_domain_validators.as_slice()),
+                |lane_id, _dataspace_id| {
+                    if use_shared_lane_domain_committee {
+                        Vec::new()
+                    } else {
+                        state.authoritative_lane_peer_ids(lane_id)
+                    }
+                },
+            )
+            .map_err(|error| {
+                eyre!(
+                    "failed to plan lane-local consensus committees for final proposal batch: {error:?}"
+                )
+            })?;
+        let lane_domains = super::lane_scheduler::plan_lane_consensus_domains(
+            routing_batch,
+            &schedule,
+            &lane_domain_committees,
+            lane_domain_mode_tag,
+        )
+        .map_err(|error| {
+            eyre!("failed to plan lane-local consensus domains for final proposal batch: {error:?}")
+        })?;
+        if lane_domains.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let known_lane_block_tips = known_lane_block_tips_for_proposal(state);
+        let lane_reset_heights = state.da_shard_reset_heights_snapshot_cached();
+        let lane_payload_plan = super::lane_scheduler::plan_lane_payload(
+            &lane_domains,
+            &known_lane_block_tips,
+            height.saturating_sub(1),
+            &lane_reset_heights,
+            view,
+        )
+        .map_err(|error| {
+            eyre!("failed to plan lane-local payload for final proposal batch: {error:?}")
+        })?;
+
+        Ok(lane_payload_plan
+            .ownerships
+            .iter()
+            .map(|ownership| Self::lane_payload_ownership_to_wire(ownership, height, view))
+            .collect())
     }
 
     fn requeue_accepted_transaction(
@@ -2160,7 +2436,15 @@ impl Actor {
                 };
                 let stale_unprotected_owner = owner_age >= yield_age && !protected_owner;
                 let recovery_exhausted = owner_age >= hard_yield_age;
-                if (stale_unprotected_owner || recovery_exhausted)
+                let new_view_superseded_unrepairable_owner = new_view_qc_supersedes_owner
+                    && !owner_qc_observed
+                    && !frontier_commit_qc_observed
+                    && !owner_pending_commit_qc_observed
+                    && !local_vote_consensus_locked
+                    && !commit_inflight_live;
+                if (stale_unprotected_owner
+                    || recovery_exhausted
+                    || new_view_superseded_unrepairable_owner)
                     && !owner_qc_observed
                     && !owner_pending_commit_qc_observed
                     && !local_vote_consensus_locked
@@ -2186,6 +2470,7 @@ impl Actor {
                         owner_pending_commit_qc_observed,
                         competing_quorum_locked,
                         new_view_qc_supersedes_owner,
+                        new_view_superseded_unrepairable_owner,
                         "cleared no-pending stale frontier owner for fresh resilience proposal"
                     );
                     return true;
@@ -2260,12 +2545,17 @@ impl Actor {
                 && !matches!(vote.phase, crate::sumeragi::consensus::Phase::Commit)
                 && self.local_same_height_vote_blocks_fresh_proposal(height, view, vote, now, false)
         });
+        let local_commit_vote_matches_owner = local_vote.as_ref().is_some_and(|vote| {
+            matches!(vote.phase, crate::sumeragi::consensus::Phase::Commit)
+                && vote.block_hash == owner_hash
+                && vote.view == owner_view
+                && !self.local_same_height_vote_is_committed_parent_marker(height, view, vote)
+        });
         let local_commit_vote_present = local_vote.as_ref().is_some_and(|vote| {
             !local_vote_new_view_qc_supersedes
                 && matches!(vote.phase, crate::sumeragi::consensus::Phase::Commit)
                 && !self.local_same_height_vote_is_committed_parent_marker(height, view, vote)
         });
-        let local_commit_vote_blocks_yield = local_commit_vote_present && recovery_exhausted;
         let (frontier_commit_qc_observed, competing_quorum_locked) = self
             .frontier_slot
             .as_ref()
@@ -2290,6 +2580,17 @@ impl Actor {
         let frontier_commit_qc_blocks_yield = frontier_commit_qc_observed && !recovery_exhausted;
         let competing_quorum_blocks_yield =
             competing_quorum_locked && !new_view_qc_supersedes_owner && owner_age < yield_age;
+        let local_commit_vote_superseded_by_owner_new_view = local_commit_vote_matches_owner
+            && new_view_qc_supersedes_owner
+            && recovery_exhausted
+            && !owner_qc_observed
+            && !frontier_commit_qc_observed
+            && !owner_pending_commit_qc_observed
+            && !local_vote_consensus_locked
+            && !commit_inflight_live;
+        let local_commit_vote_blocks_yield = local_commit_vote_present
+            && recovery_exhausted
+            && !local_commit_vote_superseded_by_owner_new_view;
         if owner_qc_observed
             || frontier_commit_qc_blocks_yield
             || local_vote_consensus_locked
@@ -2328,6 +2629,7 @@ impl Actor {
                     competing_quorum_blocks_yield,
                     new_view_qc_supersedes_owner,
                     local_vote_new_view_qc_supersedes,
+                    local_commit_vote_superseded_by_owner_new_view,
                     suppressed_since_last,
                     "stale frontier owner yield blocked by consensus evidence"
                 );
@@ -2733,6 +3035,20 @@ impl Actor {
                     || pending.is_retry_aborted()
                     || pending.validation_status == ValidationStatus::Invalid
             });
+        let stale_pending_repair_window_elapsed = self
+            .pending
+            .pending_blocks
+            .get(&existing_vote.block_hash)
+            .filter(|pending| {
+                pending.height == proposal_height && pending.view == existing_vote.view
+            })
+            .is_some_and(|pending| {
+                !pending.commit_qc_observed()
+                    && pending
+                        .progress_age(now)
+                        .max(now.saturating_duration_since(pending.inserted_at))
+                        >= repair_window
+            });
         let pending_allows_stale_branch_rotation = self
             .pending
             .pending_blocks
@@ -2750,7 +3066,7 @@ impl Actor {
                             .max(now.saturating_duration_since(pending.inserted_at))
                             >= repair_window)
             });
-        (stale_branch_terminal || missing_qc_liveness_active)
+        (stale_branch_terminal || missing_qc_liveness_active || stale_pending_repair_window_elapsed)
             && pending_allows_stale_branch_rotation
     }
 
@@ -3274,7 +3590,7 @@ impl Actor {
             tx_sizes,
             height,
             view,
-        );
+        )?;
         tx_guards = filtered_guards;
         transactions = filtered_transactions;
         routing_decisions = filtered_routing;
@@ -3559,6 +3875,7 @@ impl Actor {
                 proposal_hint,
                 block_hash,
                 block_created_frame_len,
+                lane_payload_ownerships,
             ) = loop {
                 let sidecar_started_at = Instant::now();
                 let nexus = self.state.nexus_snapshot();
@@ -3927,6 +4244,12 @@ impl Actor {
                     );
                 }
 
+                let lane_payload_ownerships = self.plan_final_lane_payload_ownerships(
+                    self.state.as_ref(),
+                    &routing_batch,
+                    proposal_height,
+                    view,
+                )?;
                 let native_amx_receipts = self
                     .native_amx_receipts_for_batch(&tx_batch, &routing_plan_batch, proposal_height)
                     .map_err(|reason| {
@@ -3948,10 +4271,10 @@ impl Actor {
                         }
                     })
                     .collect::<Vec<_>>();
+                let execution_context = BlockExecutionContextBundle::new(execution_context)
+                    .with_lane_payload_ownerships(lane_payload_ownerships.clone());
                 if !execution_context.is_empty() {
-                    builder = builder.with_execution_context(Some(
-                        BlockExecutionContextBundle::new(execution_context),
-                    ));
+                    builder = builder.with_execution_context(Some(execution_context));
                 }
                 builder = builder.with_confidential_features(conf_features);
                 let proposal_may_record_sccp_messages = {
@@ -4144,6 +4467,7 @@ impl Actor {
                     proposal_hint,
                     block_hash,
                     frame_len,
+                    lane_payload_ownerships,
                 );
             };
             let block_loop_ms = block_loop_started_at.elapsed().as_millis();
@@ -4189,6 +4513,7 @@ impl Actor {
                     stale_window.as_millis()
                 ));
             }
+            crate::sumeragi::status::set_lane_payload_ownerships(lane_payload_ownerships);
 
             // Loop back consensus messages locally so the leader participates immediately.
             let frontier_block_created_ready = matches!(
@@ -4655,6 +4980,7 @@ impl Actor {
         let tip_height = self.state.committed_height();
         let tip_hash = self.state.latest_block_hash_fast();
         let ingress_grace = self.frontier_ingress_drain_grace(self.runtime_da_enabled());
+        let quorum_timeout = self.quorum_timeout(self.runtime_da_enabled());
         let (pending_votes_or_qc, live_pending_under_congestion, recent_pending_consensus_progress) =
             self.pending.pending_blocks.values().fold(
                 (false, false, false),
@@ -4678,8 +5004,10 @@ impl Actor {
                         || self.pending_block_has_qc(block_hash, pending.height, pending.view);
                     let recent_consensus_progress =
                         has_consensus_progress && pending.progress_age(now) < ingress_grace;
+                    let consensus_evidence_blocks_proposals = self
+                        .pending_consensus_evidence_blocks_proposals(pending, now, quorum_timeout);
                     (
-                        has_votes_or_qc || has_consensus_progress,
+                        has_votes_or_qc || consensus_evidence_blocks_proposals,
                         // In normal operation, payload-only pending blocks stay on the fast path.
                         // Under saturation, live pending blocks at or beyond the frontier become
                         // a proposal pacing signal so targeted load cannot churn around recovery.
@@ -4767,14 +5095,29 @@ impl Actor {
         tx_sizes: Vec<usize>,
         height: u64,
         view: u64,
-    ) -> (
+    ) -> Result<(
         Vec<crate::queue::TransactionGuard>,
         Vec<AcceptedTransaction<'static>>,
         Vec<RoutingDecision>,
         Vec<crate::queue::RoutingPlan>,
         Vec<usize>,
         usize,
-    ) {
+    )> {
+        if tx_guards.len() != transactions.len()
+            || transactions.len() != routing_decisions.len()
+            || transactions.len() != routing_plans.len()
+            || transactions.len() != tx_sizes.len()
+        {
+            return Err(eyre!(
+                "proposal committed-filter vector length mismatch: guards={} txs={} routes={} plans={} sizes={}",
+                tx_guards.len(),
+                transactions.len(),
+                routing_decisions.len(),
+                routing_plans.len(),
+                tx_sizes.len()
+            ));
+        }
+
         let mut retained_guards = Vec::with_capacity(tx_guards.len());
         let mut retained_transactions = Vec::with_capacity(transactions.len());
         let mut retained_routing = Vec::with_capacity(routing_decisions.len());
@@ -4810,14 +5153,14 @@ impl Actor {
             );
         }
 
-        (
+        Ok((
             retained_guards,
             retained_transactions,
             retained_routing,
             retained_routing_plans,
             retained_sizes,
             dropped,
-        )
+        ))
     }
 
     pub(super) fn maybe_rebroadcast_cached_proposal(
@@ -5172,6 +5515,66 @@ impl Actor {
         }
     }
 
+    pub(super) fn recent_pending_validation_for_slot(
+        &self,
+        height: u64,
+        view: u64,
+        expected_hash: Option<HashOf<BlockHeader>>,
+        now: Instant,
+        freshness_window: Duration,
+    ) -> Option<(HashOf<BlockHeader>, Duration)> {
+        if freshness_window == Duration::ZERO {
+            return None;
+        }
+
+        let mut youngest = None;
+        for (block_hash, pending) in &self.pending.pending_blocks {
+            if pending.aborted
+                || pending.is_retired_same_height()
+                || pending.validation_status != ValidationStatus::Pending
+                || pending.height != height
+                || pending.view != view
+                || expected_hash.is_some_and(|expected| expected != *block_hash)
+            {
+                continue;
+            }
+
+            let age = pending
+                .progress_age(now)
+                .max(now.saturating_duration_since(pending.inserted_at));
+            if age < freshness_window && youngest.is_none_or(|(_, current_age)| age < current_age) {
+                youngest = Some((*block_hash, age));
+            }
+        }
+        youngest
+    }
+
+    pub(super) fn validation_inflight_for_slot(
+        &self,
+        height: u64,
+        view: u64,
+        expected_hash: Option<HashOf<BlockHeader>>,
+    ) -> bool {
+        self.subsystems
+            .validation
+            .inflight
+            .keys()
+            .any(|block_hash| {
+                expected_hash.is_none_or(|expected| expected == *block_hash)
+                    && self
+                        .pending
+                        .pending_blocks
+                        .get(block_hash)
+                        .is_some_and(|pending| {
+                            !pending.aborted
+                                && !pending.is_retired_same_height()
+                                && pending.validation_status != ValidationStatus::Invalid
+                                && pending.height == height
+                                && pending.view == view
+                        })
+            })
+    }
+
     pub(super) fn maybe_progress_existing_slot_proposal(
         &mut self,
         height: u64,
@@ -5253,7 +5656,7 @@ impl Actor {
         progressed
     }
 
-    fn same_height_frontier_owner_blocks_proposal(
+    pub(super) fn same_height_frontier_owner_blocks_proposal(
         &mut self,
         height: u64,
         view_idx: u64,
@@ -5410,7 +5813,7 @@ impl Actor {
         (view_age >= stale_window).then_some((view_age, stale_window))
     }
 
-    fn stale_slot_proposal_evidence_allows_recovery_rotation(
+    pub(super) fn stale_slot_proposal_evidence_allows_recovery_rotation(
         &self,
         height: u64,
         view: u64,
@@ -5419,12 +5822,21 @@ impl Actor {
         precommit_votes_at_view: usize,
         highest_qc: crate::sumeragi::consensus::QcHeaderRef,
     ) -> Option<(Duration, Duration)> {
+        let stale_window = self
+            .quorum_timeout(self.runtime_da_enabled())
+            .max(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
+            .max(self.frontier_slot_lag_window())
+            .max(Duration::from_millis(1));
         if !self.config.resilience.enabled
             || height != self.committed_height_snapshot().saturating_add(1)
             || view == 0
             || precommit_votes_at_view > 0
             || !self.frontier_missing_qc_liveness_active(height, view)
             || self.same_height_has_recoverable_qc(height)
+            || self.validation_inflight_for_slot(height, view, None)
+            || self
+                .recent_pending_validation_for_slot(height, view, None, now, stale_window)
+                .is_some()
             || self
                 .subsystems
                 .commit
@@ -5466,13 +5878,25 @@ impl Actor {
             return None;
         }
 
-        let stale_window = self
-            .quorum_timeout(self.runtime_da_enabled())
-            .max(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
-            .max(self.frontier_slot_lag_window())
-            .max(Duration::from_millis(1));
         let view_age = self.phase_tracker.view_age(height, now)?;
         (view_age >= stale_window).then_some((view_age, stale_window))
+    }
+
+    pub(super) fn clear_exhausted_frontier_proposal_marker(
+        &mut self,
+        height: u64,
+        view: u64,
+    ) -> bool {
+        let removed = self.slot_tracker.proposals_seen.remove(&(height, view));
+        if self
+            .subsystems
+            .propose
+            .proposal_liveness
+            .is_some_and(|slot| slot.height == height && slot.view == view)
+        {
+            self.subsystems.propose.proposal_liveness = None;
+        }
+        removed
     }
 
     pub(super) fn on_pacemaker_backpressure_deferral(
@@ -6512,8 +6936,43 @@ impl Actor {
                     .max(quorum_timeout)
                     .max(self.rebroadcast_cooldown())
                     .max(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL);
-                let repair_window =
-                    self.cap_active_block_production_gap(base_repair_window, pending_queue_len > 0);
+                let cached_body_recovery_active = cached_hint.as_ref().is_some_and(|hint| {
+                    let session_key = Self::session_key(&hint.block_hash, height, view_idx);
+                    let exact_repair_active = self.frontier_slot.as_ref().is_some_and(|slot| {
+                        slot.height == height
+                            && slot.view == view_idx
+                            && slot.block_hash == hint.block_hash
+                            && slot.exact_fetch_armed
+                            && !slot.body_present()
+                    });
+                    let rbc_pending_active = self
+                        .subsystems
+                        .da_rbc
+                        .rbc
+                        .pending
+                        .contains_key(&session_key);
+                    let rbc_session_active = self
+                        .subsystems
+                        .da_rbc
+                        .rbc
+                        .sessions
+                        .get(&session_key)
+                        .is_some_and(|session| {
+                            !session.is_invalid()
+                                && (session.received_chunks() > 0
+                                    || !session.ready_signatures.is_empty()
+                                    || session.sent_ready
+                                    || session.delivered
+                                    || session.progress_stage()
+                                        > RbcProgressStage::CollectingChunks)
+                        });
+                    exact_repair_active || rbc_pending_active || rbc_session_active
+                });
+                let repair_window = if cached_body_recovery_active {
+                    base_repair_window
+                } else {
+                    self.cap_active_block_production_gap(base_repair_window, pending_queue_len > 0)
+                };
                 if repair_window < base_repair_window {
                     debug!(
                         height,
@@ -6523,6 +6982,14 @@ impl Actor {
                         repair_window_ms = base_repair_window.as_millis(),
                         capped_repair_window_ms = repair_window.as_millis(),
                         "capping cached proposal body repair window under active transaction backlog"
+                    );
+                } else if cached_body_recovery_active && pending_queue_len > 0 {
+                    debug!(
+                        height,
+                        view = view_idx,
+                        queue_len = pending_queue_len,
+                        repair_window_ms = repair_window.as_millis(),
+                        "using full cached proposal body repair window while recovery is active"
                     );
                 }
                 let cache_age = self
@@ -6560,6 +7027,13 @@ impl Actor {
                                 && *deferred_hash == hint.block_hash
                         },
                     );
+                    let pending_validation = self.recent_pending_validation_for_slot(
+                        height,
+                        view_idx,
+                        Some(hint.block_hash),
+                        now,
+                        repair_window,
+                    );
                     let pending_processing_only = pending_processing
                         && !validation_inflight
                         && !commit_inflight
@@ -6571,7 +7045,8 @@ impl Actor {
                     if (validation_inflight
                         || commit_inflight
                         || pending_processing
-                        || deferred_body)
+                        || deferred_body
+                        || pending_validation.is_some())
                         && !stale_pending_processing_only
                     {
                         self.subsystems.propose.pacemaker.next_deadline = now
@@ -6585,6 +7060,8 @@ impl Actor {
                             commit_inflight,
                             pending_processing,
                             deferred_body,
+                            pending_validation_age_ms =
+                                pending_validation.map(|(_, age)| age.as_millis()),
                             queue_len = pending_queue_len,
                             "cached proposal has no live pending body but local processing still owns it; deferring rotation"
                         );
@@ -6715,12 +7192,15 @@ impl Actor {
                     .proposal_cache
                     .pop_hint(height, view_idx)
                     .is_some();
+                let dropped_proposal_seen =
+                    self.clear_exhausted_frontier_proposal_marker(height, view_idx);
                 warn!(
                     height,
                     view = view_idx,
                     queue_len = pending_queue_len,
                     dropped_proposal,
                     dropped_hint,
+                    dropped_proposal_seen,
                     repair_window_ms = repair_window.as_millis(),
                     repair_age_ms = repair_age.map(|age| age.as_millis()),
                     cache_age_ms = cache_age.map(|age| age.as_millis()),
@@ -7107,15 +7587,7 @@ impl Actor {
                     precommit_votes_at_view,
                 )
             {
-                self.slot_tracker.proposals_seen.remove(&(height, view_idx));
-                if self
-                    .subsystems
-                    .propose
-                    .proposal_liveness
-                    .is_some_and(|slot| slot.height == height && slot.view == view_idx)
-                {
-                    self.subsystems.propose.proposal_liveness = None;
-                }
+                self.clear_exhausted_frontier_proposal_marker(height, view_idx);
                 warn!(
                     height,
                     view = view_idx,
@@ -7158,15 +7630,7 @@ impl Actor {
                         highest_qc,
                     )
                 {
-                    self.slot_tracker.proposals_seen.remove(&(height, view_idx));
-                    if self
-                        .subsystems
-                        .propose
-                        .proposal_liveness
-                        .is_some_and(|slot| slot.height == height && slot.view == view_idx)
-                    {
-                        self.subsystems.propose.proposal_liveness = None;
-                    }
+                    self.clear_exhausted_frontier_proposal_marker(height, view_idx);
                     warn!(
                         height,
                         view = view_idx,
@@ -7619,14 +8083,12 @@ impl Actor {
         };
         if local_pos != leader_index {
             let leader_peer = topology.iter().next().cloned();
-            if self.frontier_missing_qc_liveness_active(height, view_idx)
-                && self.maybe_rotate_missing_qc_nonleader_after_proposal_timeout(
-                    height,
-                    view_idx,
-                    pending_queue_len,
-                    now,
-                )
-            {
+            if self.maybe_rotate_missing_qc_nonleader_after_proposal_timeout(
+                height,
+                view_idx,
+                pending_queue_len,
+                now,
+            ) {
                 self.warn_resilience_frontier_proposal_deferred(
                     height,
                     view_idx,
@@ -7849,7 +8311,7 @@ mod tests {
             nonce,
             asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
             asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            asset_id: b"xor#universal".to_vec(),
+            asset_id: b"xor".to_vec(),
             amount: 77,
             sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             sender: b"sora:bridge".to_vec(),
@@ -7920,7 +8382,8 @@ mod tests {
 
     #[test]
     fn proposal_sccp_collection_ignores_records_when_nexus_disabled() {
-        let state = blank_state();
+        let mut state = blank_state();
+        state.nexus.get_mut().enabled = false;
         let tx = accepted_sccp_record_transaction(1);
         let routing = vec![RoutingDecision::default()];
         let nexus = state.nexus_snapshot();
@@ -8657,6 +9120,35 @@ mod tests {
     }
 
     #[test]
+    fn filter_committed_transactions_for_proposal_rejects_vector_length_drift() {
+        let state = blank_state();
+        let tx = accepted_log_transaction("committed-filter-route-drift");
+        let route = RoutingDecision::default();
+        let plan = RoutingPlan::single(route);
+        let size = tx.encoded_len();
+
+        let err = match super::Actor::filter_committed_transactions_for_proposal(
+            &state,
+            Vec::new(),
+            vec![tx],
+            Vec::new(),
+            vec![plan],
+            vec![size],
+            1,
+            0,
+        ) {
+            Ok(_) => panic!("proposal metadata vector drift must fail closed"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("proposal committed-filter vector length mismatch"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn drain_aligned_batch_moves_pairs_without_backup_clone() {
         let mut tx_batch = vec![1, 2, 3];
         let mut routing_plan_batch = vec![11, 12, 13];
@@ -9150,7 +9642,11 @@ mod tests {
                 base,
                 super::PROPOSAL_STALE_WINDOW_TX_QUANTUM
             ),
-            base.saturating_mul(2)
+            base.saturating_mul(6)
+        );
+        assert_eq!(
+            super::Actor::proposal_assembly_stale_window(base, 140),
+            base.saturating_mul(7)
         );
         assert_eq!(
             super::Actor::proposal_assembly_stale_window(

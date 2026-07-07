@@ -81,6 +81,102 @@ def test_help_marks_final_deployment_context_required(capsys) -> None:
     assert "Optional expected environment" not in help_text
 
 
+def test_malformed_integer_arguments_fail_before_validation(capsys) -> None:
+    cases = [
+        ("--now-unix", "private-key-01", "must be an integer"),
+        ("--now-unix", "0", "must be positive"),
+        (
+            "--max-summary-artifact-age-secs",
+            "private-key-02",
+            "must be an integer",
+        ),
+        ("--max-summary-artifact-age-secs", "-1", "must be non-negative"),
+    ]
+
+    for flag, value, diagnostic in cases:
+        assert MODULE.main([flag, value]) == 2
+
+        captured = capsys.readouterr()
+        assert diagnostic in captured.err
+        assert value not in captured.err
+        assert captured.out == ""
+
+
+def test_duplicate_required_gate_fails_before_validation(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    assert (
+        MODULE.main(
+            [
+                "--out-dir",
+                str(tmp_path / "out"),
+                "--require-gate",
+                "gateway_load",
+                "--require-gate",
+                "gateway_load",
+            ]
+        )
+        == 2
+    )
+
+    captured = capsys.readouterr()
+    assert "duplicate required evidence kind" in captured.err
+    assert "gateway_load" not in captured.err
+    assert captured.out == ""
+
+
+def test_unknown_required_gate_fails_before_validation(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    unknown_gate = "private-key-placeholder"
+
+    assert (
+        MODULE.main(
+            [
+                "--out-dir",
+                str(tmp_path / "out"),
+                "--require-gate",
+                unknown_gate,
+            ]
+        )
+        == 2
+    )
+
+    captured = capsys.readouterr()
+    assert "unknown required evidence kind" in captured.err
+    assert unknown_gate not in captured.err
+    assert captured.out == ""
+
+
+def test_malformed_required_gate_fails_before_validation(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    malformed_gate = "gateway_load,"
+
+    assert (
+        MODULE.main(
+            [
+                "--out-dir",
+                str(tmp_path / "out"),
+                "--require-gate",
+                malformed_gate,
+            ]
+        )
+        == 2
+    )
+
+    captured = capsys.readouterr()
+    assert (
+        "--require-kind entries must be non-empty canonical strings"
+        in captured.err
+    )
+    assert malformed_gate not in captured.err
+    assert captured.out == ""
+
+
 def test_plan_json_shape_is_validated(tmp_path: Path) -> None:
     args = MODULE.parse_args(complete_args(tmp_path))
     plan = MODULE.build_command_plan(args)
@@ -800,6 +896,43 @@ def test_response_file_arguments_pass(tmp_path: Path, capsys) -> None:
     )
 
 
+def test_response_file_symlink_fails_before_validation(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    target = tmp_path / "private-key-args"
+    target.write_text("--require-gate gateway_load\n", encoding="utf-8")
+    symlink = tmp_path / "production-readiness.args"
+    symlink.symlink_to(target)
+
+    assert MODULE.main([f"@{symlink}"]) == 2
+
+    captured = capsys.readouterr()
+    assert "@ARGFILE must not be a symlink" in captured.err
+    assert "private-key-args" not in captured.err
+    assert "production-readiness.args" not in captured.err
+    assert captured.out == ""
+
+
+def test_response_file_malformed_line_fails_before_validation(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args_file = tmp_path / "production-readiness.args"
+    args_file.write_text(
+        "--require-gate 'private-key-placeholder\n",
+        encoding="utf-8",
+    )
+
+    assert MODULE.main([f"@{args_file}"]) == 2
+
+    captured = capsys.readouterr()
+    assert "@ARGFILE line 1:" in captured.err
+    assert "private-key-placeholder" not in captured.err
+    assert "production-readiness.args" not in captured.err
+    assert captured.out == ""
+
+
 def test_narrowed_required_gate_plan(tmp_path: Path, capsys) -> None:
     gateway_summary = write_json(tmp_path / "gateway-load.json")
     exit_code = MODULE.main(
@@ -1112,6 +1245,42 @@ def test_summary_input_path_components_must_be_plan_safe(
     )
     assert captured.out == ""
     assert "gateway_private_key_summary" not in captured.err
+    assert "private_key" not in captured.err
+
+
+def test_encoded_summary_input_path_components_must_be_plan_safe(
+    tmp_path: Path, capsys
+) -> None:
+    unsafe_summary = write_json(tmp_path / "gateway_private&#95;key_summary.json")
+
+    exit_code = MODULE.main(
+        [
+            "--out-dir",
+            str(tmp_path / "out"),
+            "--verifier",
+            str(CHECKER_PATH),
+            "--gateway-load-summary",
+            str(unsafe_summary),
+            "--require-gate",
+            "gateway_load",
+            "--deployment-id",
+            "sorafs-mainnet-2026-06",
+            "--environment",
+            "production",
+            "--dry-run",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert (
+        "production readiness runner summary input paths must not contain "
+        "secret-looking, control-character, parent, current, or platform-specific components"
+        in captured.err
+    )
+    assert captured.out == ""
+    assert "gateway_private&#95;key_summary" not in captured.err
+    assert "&#95;" not in captured.err
     assert "private_key" not in captured.err
 
 

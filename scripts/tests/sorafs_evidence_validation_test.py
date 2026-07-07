@@ -11,6 +11,8 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from sorafs_evidence_validation import (  # noqa: E402
+    ALLOWED_ROLLOUT_ENVIRONMENTS,
+    ROLLOUT_DEPLOYMENT_REVIEW_LABELS,
     archive_artifact_path_label,
     build_evidence_artifact,
     build_kinded_evidence_artifact,
@@ -149,6 +151,33 @@ def test_archive_artifact_path_rejects_nonportable_labels() -> None:
     assert is_archive_portable_artifact_path("C:/rollout.json") is False
     assert is_archive_portable_artifact_path("nested\\rollout.json") is False
     assert is_archive_portable_artifact_path("bad\nname.json") is False
+    assert is_archive_portable_artifact_path("nested/%2e%2e/rollout.json") is False
+    assert is_archive_portable_artifact_path("nested/bad%2Fname.json") is False
+    assert is_archive_portable_artifact_path("nested/bad&#47;name.json") is False
+    assert is_archive_portable_artifact_path("nested/C%3A/rollout.json") is False
+    assert is_archive_portable_artifact_path("nested/C&#58;/rollout.json") is False
+    assert is_archive_portable_artifact_path("nested/http%3A/rollout.json") is False
+    assert is_archive_portable_artifact_path("nested/http&#58;/rollout.json") is False
+    assert is_archive_portable_artifact_path("nested/%252e%252e/rollout.json") is False
+    assert is_archive_portable_artifact_path("nested/private_key.json") is False
+    assert is_archive_portable_artifact_path("nested/private%5Fkey.json") is False
+    assert is_archive_portable_artifact_path("nested/private&#95;key.json") is False
+    assert is_archive_portable_artifact_path("nested/private%26%2395%3Bkey.json") is False
+    assert is_archive_portable_artifact_path("nested/secret.json") is False
+    assert is_archive_portable_artifact_path("nested/api-token.json") is False
+    assert is_archive_portable_artifact_path("nested/auth%2Dtoken.json") is False
+    assert is_archive_portable_artifact_path("nested/auth&#45;token.json") is False
+    assert is_archive_portable_artifact_path("nested/id-token.json") is False
+    assert is_archive_portable_artifact_path("nested/jwt.json") is False
+    assert is_archive_portable_artifact_path("nested/oauth-token.json") is False
+    assert is_archive_portable_artifact_path("nested/refresh%2Dtoken.json") is False
+    assert is_archive_portable_artifact_path("nested/session%255Ftoken.json") is False
+    assert is_archive_portable_artifact_path("nested/set-cookie.txt") is False
+    assert is_archive_portable_artifact_path("nested/password.txt") is False
+    assert is_archive_portable_artifact_path("nested/bearer-token.txt") is False
+    assert is_archive_portable_artifact_path("nested/bearer%252Dtoken.txt") is False
+    assert is_archive_portable_artifact_path("nested/proof-token-report.json") is True
+    assert is_archive_portable_artifact_path("nested/proof&#45;token-report.json") is True
 
 
 def test_build_evidence_artifact_records_payload_free_fingerprint() -> None:
@@ -6538,6 +6567,35 @@ def test_require_rollout_environment_accepts_reviewed_labels() -> None:
     assert require_rollout_environment({"environment": "release"}, errors) == "release"
 
     assert errors == []
+
+
+def test_rollout_environment_inventory_matches_validation_policy() -> None:
+    assert ALLOWED_ROLLOUT_ENVIRONMENTS == {
+        "prod",
+        "production",
+        "release",
+        "staging",
+    }
+    assert ROLLOUT_DEPLOYMENT_REVIEW_LABELS == frozenset(
+        {"prod", "production", "release"}
+    )
+    assert ROLLOUT_DEPLOYMENT_REVIEW_LABELS < ALLOWED_ROLLOUT_ENVIRONMENTS
+
+    for environment in sorted(ALLOWED_ROLLOUT_ENVIRONMENTS):
+        errors: list[str] = []
+        assert require_rollout_environment({"environment": environment}, errors) == (
+            environment
+        )
+        assert errors == []
+
+    for label in sorted(ROLLOUT_DEPLOYMENT_REVIEW_LABELS):
+        deployment_id = f"gateway-{label}-202606"
+        errors = []
+        assert require_rollout_deployment_id(
+            {"deployment_id": deployment_id},
+            errors,
+        ) == deployment_id
+        assert errors == []
 
 
 def test_require_rollout_environment_rejects_unreviewed_labels() -> None:

@@ -6,7 +6,7 @@
 --generated-at-unix 1800100000
 --now-unix 1800100000
 --bundle-digest-hex aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
---controller-instance-id compliance-controller-prod-a
+--controller-instance-id gateway-compliance-controller-prod-a
 --feed-count 7
 --feed ofac
 --feed eu-sanctions

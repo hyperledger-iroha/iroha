@@ -204,6 +204,24 @@ def validate_no_staged_runner_temp_outputs(
     return []
 
 
+def running_heavy_job_diagnostics() -> list[str]:
+    """Describe a live heavy job without echoing its command or paths."""
+
+    jobs = resource_guard.find_running_heavy_jobs()
+    if not jobs:
+        return []
+    return [
+        (
+            "running Kagemusha heavy job remains active while staged runner "
+            "temporary outputs exist; wait for it to exit and rerun through the "
+            "staged runner before finalization "
+            f"(pid={job.pid}, ppid={job.parent_pid}, "
+            f"pgid={job.process_group_id}, rss_bytes={job.rss_bytes})"
+        )
+        for job in jobs
+    ]
+
+
 def _validate_output_file_path(path: Path, label: str, *, replace: bool) -> list[str]:
     secret_error = _secret_path_error(path, label)
     if secret_error is not None:
@@ -1460,7 +1478,7 @@ def finalize_staged_run(args: argparse.Namespace) -> tuple[int, Path | None, lis
             "staged lineage proof artifact directory",
         )
         if temp_errors:
-            return 1, None, temp_errors
+            return 1, None, [*temp_errors, *running_heavy_job_diagnostics()]
     exit_code_text, exit_errors = validate_exit_marker(args.exit_file)
     errors.extend(exit_errors)
     if exit_errors:

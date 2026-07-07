@@ -47,12 +47,12 @@ SF-3 Iroha/Torii ሂደትን ወደ SoraFS ማከማቻ አቅራቢ የሚቀ�
 
 ### ሐ. ጌትዌይ የመጨረሻ ነጥቦች
 
-| የመጨረሻ ነጥብ | ባህሪ | ተግባራት |
-|-------------|------|
-| `POST /sorafs/pin` | `PinProposalV1`ን ተቀበል፣ አንጸባራቂዎችን አረጋግጥ፣ ወረፋ መግባቱን፣ በአንጸባራቂ CID ምላሽ ይስጡ። | የ chunk መገለጫን ያረጋግጡ፣ ኮታዎችን ያስፈጽሙ፣ ውሂብን በchunk ማከማቻ ያሰራጩ። |
-| `GET /sorafs/chunks/{cid}` + ክልል መጠይቅ | ከ`Content-Chunker` ራስጌዎች ጋር ቸንክ ባይት ያገልግሉ፤ አክብሮት ክልል ችሎታ spek. | የጊዜ መርሐግብር + የዥረት በጀቶችን ይጠቀሙ (ከ SF-2d ክልል አቅም ጋር ይገናኙ)። |
-| `POST /sorafs/por/sample` | ለማንፀባረቂያ እና የመመለሻ ማረጋገጫ ጥቅል የPoR ናሙናን ያሂዱ። | የ chunk ማከማቻ ናሙና እንደገና ተጠቀም፣ በNorito JSON ጭነቶች ምላሽ ይስጡ። |
-| `GET /sorafs/telemetry` | ማጠቃለያዎች፡ አቅም፣ የPoR ስኬት፣ የስህተት ቆጠራዎች። | ለዳሽቦርዶች/ኦፕሬተሮች ውሂብ ያቅርቡ። |
+| Endpoint | Behaviour | Tasks |
+|----------|-----------|-------|
+| `GET /v1/sorafs/pin`, `POST /v1/sorafs/pin/register`, `GET /v1/sorafs/pin/{digest_hex}` | Read the pin registry, register paid manifest pins, and fetch bounded manifest pin details. | Validate chunker profiles, manifest payloads, pin policy, fee receipt context, aliases, and successor links before queueing the signed transaction. |
+| `POST /v1/sorafs/storage/pin`, `POST /v1/sorafs/storage/fetch`, `POST /v1/sorafs/storage/token` | Store payload bytes for an approved manifest, fetch content ranges, and issue storage access tokens. | Enforce quotas, token policy, provider capability checks, and scheduler/back-pressure limits. |
+| `GET /v1/sorafs/storage/manifest/{manifest_id}`, `GET /v1/sorafs/storage/plan/{manifest_id}`, `GET /v1/sorafs/storage/car/{manifest_id}`, `GET /v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}` | Serve bounded manifest metadata, deterministic chunk plans, CAR bytes, and individual chunk bytes. | Keep readback arrays bounded while preserving total counts and verify digest/path bindings before streaming bytes. |
+| `GET /v1/sorafs/storage/peers`, `GET /v1/sorafs/storage/state`, `POST /v1/sorafs/storage/por-sample`, `POST /v1/sorafs/storage/por-challenge`, `POST /v1/sorafs/storage/por-proof`, `POST /v1/sorafs/storage/por-verdict` | Report peer/storage state and exercise local PoR sampling, challenge, proof, and verdict plumbing. | Reuse chunk-store sampling, update telemetry, and preserve governance-verdict replay state. |
 
 የአሂድ ቧንቧዎች በ `sorafs_node::por` በኩል የPoR ግንኙነቶችን ይከተላሉ፡ መከታተያው እያንዳንዱን `PorChallengeV1`፣ `PorProofV1` እና `AuditVerdictV1` ይመዘግባል ስለዚህ I18NI000000059X ሜትሪክስ `CapacityMeter` ሜትሪክስ ያለአስተዳደር ፍርዶች00 ያንፀባርቃል አመክንዮ።【crates/sorafs_node/src/scheduler.rs#L147】
 
@@ -108,7 +108,7 @@ SF-3 Iroha/Torii ሂደትን ወደ SoraFS ማከማቻ አቅራቢ የሚቀ�
 ## ወሳኝ ደረጃ መውጫ መስፈርት
 
 - `cargo run -p sorafs_node --example pin_fetch` ከአካባቢያዊ መገልገያዎች ጋር ይሰራል።  
-- Torii በ `--features sorafs-storage` ይገነባል እና የውህደት ፈተናዎችን አልፏል።  
+- Torii exposes the current `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` route surface and passes integration tests.
 - ሰነድ ([መስቀለኛ ማከማቻ መመሪያ](node-storage.md)) በማዋቀር ነባሪዎች + CLI ምሳሌዎች የዘመነ; ከዋኝ runbook ይገኛል.  
 - ቴሌሜትሪ በፕላስተር ዳሽቦርዶች ውስጥ ይታያል; ለአቅም ሙሌት እና ለPoR ውድቀቶች የተዋቀሩ ማንቂያዎች።
 
@@ -116,4 +116,4 @@ SF-3 Iroha/Torii ሂደትን ወደ SoraFS ማከማቻ አቅራቢ የሚቀ�
 
 - [የመስቀለኛ ማከማቻ ማጣቀሻ](node-storage.md) በማዋቀር ነባሪዎች፣ የCLI አጠቃቀም እና የመላ መፈለጊያ ደረጃዎችን ያዘምኑ።  
 - SF-3 እየተሻሻለ ሲመጣ [መስቀለኛ ኦፕሬሽኖች runbook](node-operations.md) ከትግበራው ጋር እንዲጣጣም ያድርጉ።  
-- የኤፒአይ ማጣቀሻዎችን ለ`/sorafs/*` የመጨረሻ ነጥቦችን በገንቢ ፖርታል ውስጥ ያትሙ እና ወደ OpenAPI ማኒፌስት አንድ ጊዜ Torii ተቆጣጣሪዎች ያርቁዋቸው።
+- Keep API reference for `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` endpoints aligned with the OpenAPI manifest.

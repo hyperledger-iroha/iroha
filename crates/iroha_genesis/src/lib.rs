@@ -5825,6 +5825,106 @@ mod tests {
     }
 
     #[test]
+    fn shipped_public_genesis_manifests_do_not_fake_public_xor() -> Result<()> {
+        use std::collections::BTreeSet;
+
+        const PUBLIC_TAIRA_XOR_ID: &str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
+        const PUBLIC_XOR_ALIAS: &str = "xor#universal";
+
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let manifests = [
+            (
+                repo_root.join("defaults/kagami/iroha3-taira/genesis.json"),
+                true,
+            ),
+            (repo_root.join("configs/soranexus/taira/genesis.json"), true),
+            (repo_root.join("defaults/nexus/genesis.json"), false),
+            (
+                repo_root.join("configs/soranexus/nexus/genesis.json"),
+                false,
+            ),
+        ];
+
+        for (manifest_path, requires_taira_xor_id) in manifests {
+            let raw = std::fs::read_to_string(&manifest_path)?;
+            let value = norito::json::parse_value(&raw)?;
+            let transactions = value
+                .get("transactions")
+                .and_then(norito::json::Value::as_array)
+                .ok_or_else(|| eyre!("{} missing transactions array", manifest_path.display()))?;
+            let mut registered_asset_ids = BTreeSet::new();
+            let mut public_xor_binding = None;
+            for instruction in transactions
+                .iter()
+                .filter_map(|tx| tx.get("instructions"))
+                .filter_map(norito::json::Value::as_array)
+                .flatten()
+            {
+                if let Some(id) = instruction
+                    .get("Register")
+                    .and_then(|register| register.get("AssetDefinition"))
+                    .and_then(|asset| asset.get("id"))
+                    .and_then(norito::json::Value::as_str)
+                {
+                    if id.starts_with("xor#") {
+                        return Err(eyre!(
+                            "{} registers alias-shaped public XOR asset definition id `{id}`; register a canonical Base58 id and bind `{PUBLIC_XOR_ALIAS}` instead",
+                            manifest_path.display()
+                        ));
+                    }
+                    registered_asset_ids.insert(id.to_owned());
+                }
+
+                let Some(binding) = instruction.get("SetAssetDefinitionAlias") else {
+                    continue;
+                };
+                if binding.get("alias").and_then(norito::json::Value::as_str)
+                    == Some(PUBLIC_XOR_ALIAS)
+                {
+                    let target = binding
+                        .get("asset_definition_id")
+                        .and_then(norito::json::Value::as_str)
+                        .ok_or_else(|| {
+                            eyre!(
+                                "{} binds `{PUBLIC_XOR_ALIAS}` without asset_definition_id",
+                                manifest_path.display()
+                            )
+                        })?;
+                    public_xor_binding = Some(target.to_owned());
+                }
+            }
+
+            if let Some(target) = public_xor_binding {
+                if target.starts_with("xor#") {
+                    return Err(eyre!(
+                        "{} binds `{PUBLIC_XOR_ALIAS}` to alias-shaped asset definition id `{target}`",
+                        manifest_path.display()
+                    ));
+                }
+                if !registered_asset_ids.contains(&target) {
+                    return Err(eyre!(
+                        "{} binds `{PUBLIC_XOR_ALIAS}` to `{target}` without registering that canonical asset",
+                        manifest_path.display()
+                    ));
+                }
+                if requires_taira_xor_id && target != PUBLIC_TAIRA_XOR_ID {
+                    return Err(eyre!(
+                        "{} must bind `{PUBLIC_XOR_ALIAS}` to live Taira XOR `{PUBLIC_TAIRA_XOR_ID}`, found `{target}`",
+                        manifest_path.display()
+                    ));
+                }
+            } else if requires_taira_xor_id {
+                return Err(eyre!(
+                    "{} must bind `{PUBLIC_XOR_ALIAS}` to live Taira XOR `{PUBLIC_TAIRA_XOR_ID}`",
+                    manifest_path.display()
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn shipped_genesis_manifests_advertise_current_npos_crypto_caps() -> Result<()> {
         let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let manifests = [

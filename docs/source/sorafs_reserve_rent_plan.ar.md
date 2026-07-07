@@ -4,11 +4,11 @@ direction: rtl
 source: docs/source/sorafs_reserve_rent_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 45710c44c48f393c2d55b97c5f297abc2dc86109437aa37a975e86d2189a5692
-source_last_modified: "2026-07-02T06:45:27.120013+00:00"
-translation_last_reviewed: 2026-07-02
+source_hash: 7b6532037723d1359975b367786db45c08cf054a2b4b25b8d64d6f26f0d69117
+source_last_modified: 2026-07-05T01:29:59.210412+00:00
+translation_last_reviewed: 2026-07-05
+source_mtime: 2026-07-05T01:29:59.210412+00:00
 ---
-
 # Reserve+Rent & Lifecycle Policy
 
 ## Status
@@ -481,25 +481,98 @@ When an operator has reviewed the underlying production facts, use
 for the individual evidence artifacts consumed by the gate. The builder covers
 every current evidence kind, requires explicit
 `--verified-claim` input for positive safety claims, complete lifecycle route,
-signed route, quote-matrix, and metrics coverage where applicable, shared
-policy/matrix/ledger digest bindings, and threshold-bounded lag/latency facts.
-It forces raw reserve payload, ledger, transfer instruction, response body,
-appeal payload, and provider-bake payload inclusion flags to `false`,
+signed route, reserve-movement action, quote-matrix, and metrics coverage where
+applicable, explicit `--route-body-blake3-hex` evidence for lifecycle-service
+and signed-route canaries, binds quote-matrix `--scenario-count` to the reviewed
+storage-class/tier/duration product, complete credit-line mutation/accrual
+coverage, complete appeal-policy probe coverage, complete provider-bake
+provider/cycle coverage, shared policy/matrix/ledger digest bindings, and
+integer-unit threshold-bounded lag/latency facts. Builder-reviewed fixed
+inventories are closed sets, so duplicate or unsupported storage classes, tiers, durations,
+routes, movement actions, appeal probes, credit-line names, accrual-cycle names,
+or metrics fail before evidence is written. provider-bake artifacts require
+`bake_id` to match a reviewed lowercase `reserve-bake-*` label and
+`providers[].name` entries to use reviewed lowercase `provider-*` labels
+without non-production markers, require `rent_cycles[].name`,
+`top_up_cycles[].name`, `appeal_cycles[].name`, and
+`scheduled_lifecycle_canary_ticks[].name` to use reviewed lowercase
+`reserve-rent-cycle-*`, `reserve-top-up-cycle-*`,
+`reserve-appeal-cycle-*`, and `reserve-lifecycle-tick-*` labels without
+non-production markers, bind `provider_count`, `rent_cycle_count`,
+`top_up_cycle_count`, `appeal_cycle_count`, and
+`scheduled_lifecycle_canary_tick_count` to unique canonical provider/cycle/tick
+inventories, and
+reject duplicate provider-bake entries before promotion can report ready.
+Provider-bake `--bake-id` labels must match the same production shape enforced
+by the gate, provider inputs must use reviewed `provider-*` labels without
+non-production markers, and `--rent-cycle`, `--top-up-cycle`, and
+`--appeal-cycle` inputs must use the matching reserve cycle label families and
+stay duplicate-free before evidence is written. Provider-bake `--scheduled-lifecycle-canary-tick` inputs must use reviewed
+`reserve-lifecycle-tick-*` labels, match
+`--scheduled-lifecycle-canary-tick-count`, avoid non-production markers, and stay
+duplicate-free before evidence is written. Ledger-digest `--ledger-ref` and
+`--instruction-ref` inputs must use reviewed `reserve-ledger-*` and
+`reserve-instruction-*` labels, match `--ledger-count`/`--instruction-count`,
+avoid non-production markers, and stay duplicate-free before evidence is
+written. Lifecycle-service `--persisted-stage` inputs must use reviewed
+`reserve-lifecycle-stage-*` labels, match `--persisted-stage-count`, avoid
+non-production markers, and stay duplicate-free before evidence is written.
+Reserve-rent payload-safety artifacts must explicitly set
+`policy_payload_included`, `quote_payloads_included`, `raw_ledger_included`,
+`raw_transfer_instructions_included`, `response_bodies_included`,
+`raw_transfer_included`, `raw_instruction_included`,
+`appeal_payloads_included`, `critical_alerts_firing`, and
+`payloads_included` to `false` before promotion can report ready. The builder
 prevalidates the generated artifact with
 `check_sorafs_reserve_rent_rollout_evidence.py`, and writes the JSON atomically
 without following output symlinks. Valid provider-bake artifacts surface the
-reviewed `policy_digest_hex`, `matrix_digest_hex`, and `ledger_digest_hex`
-inside `valid_provider_bakes`, so the final production-readiness gate can
-validate the staged bake against the same policy/matrix/ledger tuple that the
-rollout checker accepted. Example argfiles are checked in for the policy-config
-anchor and provider-bake evidence:
+reviewed `policy_digest_hex`, `matrix_digest_hex`, `ledger_digest_hex`,
+`scheduled_lifecycle_canary_last_tick_at_unix`,
+`scheduled_lifecycle_canary_tick_count`, and
+`scheduled_lifecycle_canary_defaulted_provider_count` inside
+`valid_provider_bakes`, so the final production-readiness gate can validate the
+staged bake against the same policy/matrix/ledger tuple and scheduler canary
+metadata that the rollout checker accepted. The aggregate production-readiness
+gate also preserves the full policy/matrix/ledger chain: policies in
+`valid_policy_matrix_bindings` must appear in `valid_policy_digests`, ledger
+binding policy/matrix pairs must appear in `valid_policy_matrix_bindings`, and
+provider-bake policy/matrix/ledger tuples must appear in
+`valid_policy_matrix_ledger_bindings` before final promotion can report ready.
+It also rechecks policy-bound, matrix-bound, and ledger-bound artifact
+fingerprints against `valid_policy_digests`, `valid_policy_matrix_bindings`, and
+`valid_policy_matrix_ledger_bindings`.
+Governance approval artifacts must carry the accepted provider-bake `bake_id`,
+and the rollout gate plus aggregate production-readiness gate reject governance
+approval evidence whose `bake_id` does not match a valid provider-bake artifact
+before final promotion can report ready.
+Example argfiles are checked in for
+the policy-config anchor, route-bearing canaries, reserve movement, appeal
+policy, credit-line, provider-bake, and governance-approval evidence:
 
 ```bash
 python3 scripts/build_sorafs_reserve_rent_canary.py \
   @scripts/examples/sorafs_reserve_rent_policy_config_canary.args.example
 
 python3 scripts/build_sorafs_reserve_rent_canary.py \
+  @scripts/examples/sorafs_reserve_rent_lifecycle_service_canary.args.example
+
+python3 scripts/build_sorafs_reserve_rent_canary.py \
+  @scripts/examples/sorafs_reserve_rent_signed_routes_canary.args.example
+
+python3 scripts/build_sorafs_reserve_rent_canary.py \
+  @scripts/examples/sorafs_reserve_rent_reserve_movement_canary.args.example
+
+python3 scripts/build_sorafs_reserve_rent_canary.py \
+  @scripts/examples/sorafs_reserve_rent_appeal_policy_canary.args.example
+
+python3 scripts/build_sorafs_reserve_rent_canary.py \
+  @scripts/examples/sorafs_reserve_rent_credit_line_canary.args.example
+
+python3 scripts/build_sorafs_reserve_rent_canary.py \
   @scripts/examples/sorafs_reserve_rent_provider_bake_canary.args.example
+
+python3 scripts/build_sorafs_reserve_rent_canary.py \
+  @scripts/examples/sorafs_reserve_rent_governance_approval_canary.args.example
 ```
 
 The checker recognizes `sorafs.reserve.*` SFM-6 rollout schemas for policy
@@ -508,31 +581,83 @@ reserve movements, credit-line accrual, appeal policy, metrics/alerts, provider
 bake, and governance approval. It reports `ready` only when every required kind
 is present, every recognized artifact is valid, raw ledgers/quotes/transfers,
 signed transactions, response bodies, and secrets are absent, ledger/provider
-bake timestamps are fresh, lifecycle lag and signed-route latency remain under
-the configured thresholds, provider-bake artifacts prove the config-backed
-reserve lifecycle scheduler canary ran recently enough before bake completion,
+bake timestamps are fresh, every lifecycle and signed-route response carries a
+lowercase `body_blake3_hex` digest, and lifecycle lag and signed-route latency
+are integer-unit evidence under the configured thresholds, provider-bake artifacts
+prove the config-backed reserve lifecycle scheduler canary ran recently enough before bake completion,
 advanced defaulting providers, synced gateway compliance, and preserved
-orderbook rejection, quote-matrix artifacts bind `scenario_count` and
+orderbook rejection, provider-bake artifacts bind `provider_count`,
+`rent_cycle_count`, `top_up_cycle_count`, `appeal_cycle_count`, and
+`scheduled_lifecycle_canary_tick_count` to unique canonical provider/cycle/tick
+inventories, require `providers[].name` entries to use
+reviewed lowercase `provider-*` labels without non-production markers, require
+`rent_cycles[].name`, `top_up_cycles[].name`, `appeal_cycles[].name`, and
+`scheduled_lifecycle_canary_ticks[].name` to use reviewed lowercase
+`reserve-rent-cycle-*`, `reserve-top-up-cycle-*`, `reserve-appeal-cycle-*`, and
+`reserve-lifecycle-tick-*` labels without non-production markers, and reject
+duplicate provider-bake entries before promotion can report ready,
+quote-matrix artifacts bind `scenario_count` and
 `passed_scenario_count` to the product of unique `storage_classes`, `tiers`, and
-`durations` inventories and reject duplicate dimension entries before promotion
-can report ready, lifecycle-service and signed-route artifacts bind
+`durations` inventories and reject duplicate or unknown dimension entries
+before promotion can report ready, ledger-digest artifacts bind `ledger_count`
+and `instruction_count` to the unique canonical `ledgers[].name` and
+`instructions[].name` inventories using reviewed `reserve-ledger-*` and
+`reserve-instruction-*` labels without non-production markers, and reject
+duplicate ledger/instruction entries before promotion can report ready, lifecycle-service artifacts bind `persisted_stage_count` to the unique canonical `persisted_stages[].name` inventory using reviewed `reserve-lifecycle-stage-*` labels without non-production markers, and reject duplicate persisted-stage entries before promotion can report ready, lifecycle-service and signed-route artifacts bind
 `route_count` to the unique canonical `routes[].name` inventories and reject
-duplicate route entries before promotion can report ready, reserve-movement
-artifacts prove live chain submission
-coverage, submitted transaction-hash readback, automatic finality polling,
+duplicate or unknown route entries before promotion can report ready, and require
+every route response to carry a lowercase `body_blake3_hex` digest;
+reserve-movement
+artifacts bind `movement_count` to the unique canonical `movements[].action`
+inventory and reject duplicate or unknown movement-action entries before
+promotion can report ready. Reserve-movement artifacts must explicitly set
+`raw_transfer_included` and `raw_instruction_included` to `false` before
+promotion can report ready. Appeal-policy artifacts bind `appeal_probe_count` to the unique
+canonical `appeal_probes[].name` inventory and reject duplicate appeal-probe
+entries or unknown probe names before promotion can report ready, credit-line artifacts bind
+`credit_line_mutation_count` to unique canonical
+`credit_line_mutations[].name` and `accrual_cycle_count` to unique canonical
+`accrual_cycles[].name` inventories and reject duplicate or unknown credit-line
+entries before promotion can report ready, metrics artifacts bind
+`metric_count` to the unique canonical `metrics` inventory and reject duplicate
+or unknown metrics before promotion can report ready. Metrics artifacts must
+explicitly set `critical_alerts_firing` and `response_bodies_included` to
+`false` before promotion can report ready. The summary exports the
+sorted reviewed `metrics` inventory plus `metric_count_values`, and the
+aggregate production-readiness gate requires those fields to match the
+metrics/alert artifact fingerprint before final promotion can report ready.
+Reserve-movement artifacts prove live
+chain submission coverage, submitted transaction-hash readback, automatic
+finality polling,
 confirmed-status polling, timeout rejection, submitted, confirmed, and
 rejected custody evidence plus confirmed-balance readback and
 confirmed-withdrawal underflow rejection, credit-line artifacts prove live
 account-state mutation/readback, accrual posting, manual-approval tier
 non-mutation, and account-state reconciliation, governance approval artifacts
 prove source-entry publication, downstream compliance application, consumer
-coverage, handoff verification, and non-reserve compliance-entry preservation,
+coverage, handoff verification, and non-reserve compliance-entry preservation;
+governance approval artifacts must carry the accepted provider-bake `bake_id`
+and match it to a valid provider-bake artifact before final promotion can report
+ready;
+governance approval artifacts also bind `downstream_compliance_consumer_count`
+to the unique canonical `downstream_compliance_consumers[].name` inventory
+using reviewed `reserve-compliance-consumer-*` labels without non-production
+markers, and reject duplicate downstream-compliance consumer entries before
+promotion can report ready,
 the quote matrix binds to a valid policy
 `policy_digest_hex`, the ledger binds to that policy/matrix tuple, and
 lifecycle, route, movement, credit-line, appeal, metrics, provider-bake, and
 governance artifacts all carry the same payload-free
 `policy_digest_hex`/`matrix_digest_hex`/`ledger_digest_hex` tuple. The
-governance packet must also be bound to `iroha_config`. Tuple binding failures
+aggregate production-readiness gate also preserves that chain by requiring
+policies in `valid_policy_matrix_bindings` to appear in `valid_policy_digests`,
+ledger binding policy/matrix pairs to appear in `valid_policy_matrix_bindings`,
+and provider-bake policy/matrix/ledger tuples to appear in
+`valid_policy_matrix_ledger_bindings` before final promotion can report ready.
+It also rechecks policy-bound, matrix-bound, and ledger-bound artifact
+fingerprints against `valid_policy_digests`, `valid_policy_matrix_bindings`, and
+`valid_policy_matrix_ledger_bindings`.
+The governance packet must also be bound to `iroha_config`. Tuple binding failures
 are recorded on the offending artifact before required-kind validity is
 computed, so the JSON summary matches the fail-closed rollout decision. The
 collection planner's dry-run JSON also includes the checker-backed `evidence_contract` map so

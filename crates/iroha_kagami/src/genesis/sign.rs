@@ -22,7 +22,11 @@ use super::{
     ConsensusPolicy, build_line_from_env, ensure_npos_parameters, generate::ConsensusModeArg,
     validate_consensus_mode_for_line,
 };
-use crate::{Outcome, RunArgs, tui};
+use crate::{
+    Outcome, RunArgs,
+    genesis::{PUBLIC_XOR_ALIAS, public_xor_profile_for_chain_id},
+    tui,
+};
 
 /// Sign the genesis block
 #[derive(Clone, Debug, Parser)]
@@ -187,31 +191,98 @@ fn resolve_npos_bootstrap_stake_asset_id(
         )
     })?;
 
+    let Some(asset_definition_id) = resolve_asset_definition_alias(manifest, &alias)? else {
+        return Err(eyre!(
+            "nexus.staking.stake_asset_id alias `{configured}` is not bound in genesis manifest"
+        ));
+    };
+    Ok(asset_definition_id)
+}
+
+fn resolve_asset_definition_alias(
+    manifest: &RawGenesisTransaction,
+    alias: &AssetDefinitionAlias,
+) -> Result<Option<AssetDefinitionId>, color_eyre::eyre::Error> {
+    let mut target = None;
     for instruction in manifest.instructions() {
         if let Some(bind) = instruction
             .as_any()
             .downcast_ref::<iroha_data_model::isi::asset_alias::SetAssetDefinitionAlias>(
         ) && bind.alias.as_ref() == Some(&alias)
         {
-            return Ok(bind.asset_definition_id.clone());
+            if let Some(existing) = &target
+                && existing != &bind.asset_definition_id
+            {
+                return Err(eyre!(
+                    "asset definition alias `{alias}` is bound to multiple asset definitions"
+                ));
+            }
+            target = Some(bind.asset_definition_id.clone());
         }
     }
+    Ok(target)
+}
 
-    Err(eyre!(
-        "nexus.staking.stake_asset_id alias `{configured}` is not bound in genesis manifest"
-    ))
+fn public_xor_profile_for_manifest(
+    manifest: &RawGenesisTransaction,
+) -> Option<crate::genesis::GenesisProfile> {
+    public_xor_profile_for_chain_id(manifest.chain_id().as_str())
 }
 
 fn configured_npos_bootstrap_stake_asset_id(
     manifest: &RawGenesisTransaction,
     config_path: Option<&Path>,
 ) -> Result<AssetDefinitionId, color_eyre::eyre::Error> {
-    let Some(config_path) = config_path else {
-        return Ok(default_npos_bootstrap_stake_asset_id());
+    let public_profile = public_xor_profile_for_manifest(manifest);
+    let stake_asset_id = if let Some(config_path) = config_path {
+        let config = load_peer_config(config_path)?;
+        resolve_npos_bootstrap_stake_asset_id(manifest, &config.nexus.staking.stake_asset_id)
+            .map_err(|err| {
+                eyre!(
+                    "failed to resolve nexus.staking.stake_asset_id from {}: {err}",
+                    config_path.display(),
+                )
+            })?
+    } else if public_profile.is_some() {
+        let public_xor_alias: AssetDefinitionAlias = PUBLIC_XOR_ALIAS.parse()?;
+        resolve_asset_definition_alias(manifest, &public_xor_alias)?.ok_or_else(|| {
+            eyre!(
+                "public NPoS bootstrap requires `{PUBLIC_XOR_ALIAS}` to be bound to a canonical XOR asset in genesis; regenerate with `kagami genesis generate --xor-asset-definition-id <BASE58>` or pass a config with an explicit canonical stake asset"
+            )
+        })?
+    } else {
+        default_npos_bootstrap_stake_asset_id()
     };
 
-    let config = load_peer_config(config_path)?;
-    resolve_npos_bootstrap_stake_asset_id(manifest, &config.nexus.staking.stake_asset_id)
+    if let Some(profile) = public_profile {
+        let public_xor_alias: AssetDefinitionAlias = PUBLIC_XOR_ALIAS.parse()?;
+        let public_xor_asset_id =
+            resolve_asset_definition_alias(manifest, &public_xor_alias)?.ok_or_else(|| {
+                eyre!(
+                    "public NPoS bootstrap for {profile:?} requires `{PUBLIC_XOR_ALIAS}` to be bound to a canonical XOR asset in genesis"
+                )
+            })?;
+        if profile == crate::genesis::GenesisProfile::Iroha3Taira
+            && public_xor_asset_id.to_string() != crate::genesis::TAIRA_XOR_ASSET_DEFINITION_ID
+        {
+            return Err(eyre!(
+                "public Taira NPoS bootstrap requires `{PUBLIC_XOR_ALIAS}` to bind to `{}`; found `{public_xor_asset_id}`",
+                crate::genesis::TAIRA_XOR_ASSET_DEFINITION_ID
+            ));
+        }
+        if public_xor_asset_id == default_npos_bootstrap_stake_asset_id() {
+            return Err(eyre!(
+                "public NPoS bootstrap for {profile:?} cannot use synthetic `{DEFAULT_NPOS_BOOTSTRAP_DOMAIN}/{DEFAULT_NPOS_BOOTSTRAP_STAKE_ASSET_NAME}`; bind `{PUBLIC_XOR_ALIAS}` to the real XOR asset or configure a canonical stake asset id"
+            ));
+        }
+        if stake_asset_id != public_xor_asset_id {
+            return Err(eyre!(
+                "public NPoS bootstrap for {profile:?} resolved stake asset `{stake_asset_id}`, but `{PUBLIC_XOR_ALIAS}` is bound to `{public_xor_asset_id}`; public stake asset must match the canonical XOR binding"
+            ));
+        }
+    }
+
+    Ok(stake_asset_id)
 }
 
 fn append_npos_bootstrap(
@@ -1117,6 +1188,7 @@ mod tests {
         let block = decode_framed_signed_block(&bytes).expect("decode signed block");
 
         let mut validators = std::collections::BTreeSet::new();
+        let mut minted_asset_ids = std::collections::BTreeSet::new();
         for tx in block.external_transactions() {
             if let Executable::Instructions(instructions) = tx.instructions() {
                 for instr in instructions {
@@ -1124,6 +1196,11 @@ mod tests {
                         instr.as_any().downcast_ref::<RegisterPublicLaneValidator>()
                     {
                         validators.insert(register.validator.clone());
+                    }
+                    if let Some(mint) = instr.as_any().downcast_ref::<MintBox>()
+                        && let MintBox::Asset(mint_asset) = mint
+                    {
+                        minted_asset_ids.insert(mint_asset.destination.definition().clone());
                     }
                 }
             }
@@ -1135,20 +1212,39 @@ mod tests {
             validators, expected,
             "expected NPoS bootstrap to register topology validators"
         );
+        assert!(
+            minted_asset_ids.contains(&default_npos_bootstrap_stake_asset_id()),
+            "private NPoS bootstrap should keep using the synthetic local stake asset"
+        );
     }
 
     fn nexus_profile_with_staking_overrides(overrides: &str) -> PathBuf {
         use std::fmt::Write as _;
 
-        let mut config =
+        let config =
             fs::read_to_string(nexus_profile_config_path()).expect("read nexus profile config");
-        writeln!(config, "\n[nexus.staking]\n{overrides}").expect("append staking overrides");
+        let mut config_without_staking = String::new();
+        let mut skipping_staking = false;
+        for line in config.lines() {
+            if line == "[nexus.staking]" {
+                skipping_staking = true;
+                continue;
+            }
+            if skipping_staking && line.starts_with('[') {
+                skipping_staking = false;
+            }
+            if !skipping_staking {
+                writeln!(config_without_staking, "{line}").expect("copy config line");
+            }
+        }
+        writeln!(config_without_staking, "\n[nexus.staking]\n{overrides}")
+            .expect("append staking overrides");
         let mut temp = tempfile::Builder::new()
             .prefix("kagami-nexus-profile-")
             .suffix(".toml")
             .tempfile()
             .expect("create temp config");
-        write!(temp, "{config}").expect("write temp config");
+        write!(temp, "{config_without_staking}").expect("write temp config");
         let (_file, path) = temp.keep().expect("persist temp config");
         path
     }
@@ -1222,6 +1318,165 @@ mod tests {
         assert!(
             !registered_asset_ids.contains(&default_npos_bootstrap_stake_asset_id()),
             "alias-backed stake asset should not force the legacy localnet bootstrap asset"
+        );
+    }
+
+    #[test]
+    fn public_taira_auto_bootstrap_uses_alias_bound_xor_without_config() {
+        let peer = PeerId::new(
+            checked_genesis_sign_keypair_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let topology_json = norito::json::to_json(&vec![peer.clone()]).unwrap();
+        let configured_asset_id: AssetDefinitionId = crate::genesis::TAIRA_XOR_ASSET_DEFINITION_ID
+            .parse()
+            .expect("valid canonical asset id");
+        let args = Args {
+            genesis_file: public_taira_alias_backed_npos_genesis_file(),
+            out_file: None,
+            topology: Some(topology_json),
+            peer_pops: vec![format!("{}=00", peer.public_key())],
+            private_key: Some(test_private_key_hex()),
+            seed: None,
+            algorithm: Algorithm::Ed25519,
+            config: None,
+            consensus_mode: None,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        let mut writer = BufWriter::new(Vec::new());
+        args.run(&mut writer).expect("sign should succeed");
+        writer.flush().expect("flush output");
+        let bytes = writer.into_inner().expect("extract buffer");
+        let block = decode_framed_signed_block(&bytes).expect("decode signed block");
+
+        let mut minted_asset_ids = std::collections::BTreeSet::new();
+        let mut registered_asset_ids = std::collections::BTreeSet::new();
+        for tx in block.external_transactions() {
+            if let Executable::Instructions(instructions) = tx.instructions() {
+                for instr in instructions {
+                    if let Some(mint) = instr.as_any().downcast_ref::<MintBox>()
+                        && let MintBox::Asset(mint_asset) = mint
+                    {
+                        minted_asset_ids.insert(mint_asset.destination.definition().clone());
+                    }
+                    if let Some(register) =
+                        instr.as_any().downcast_ref::<Register<AssetDefinition>>()
+                    {
+                        registered_asset_ids.insert(register.object.id.clone());
+                    }
+                }
+            }
+        }
+
+        assert!(
+            minted_asset_ids.contains(&configured_asset_id),
+            "public Taira bootstrap should mint to canonical XOR"
+        );
+        assert!(
+            !registered_asset_ids.contains(&default_npos_bootstrap_stake_asset_id()),
+            "public Taira bootstrap must not register the synthetic NPoS stake asset"
+        );
+    }
+
+    #[test]
+    fn public_nexus_auto_bootstrap_requires_xor_alias_binding() {
+        let peer = PeerId::new(
+            checked_genesis_sign_keypair_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let topology_json = norito::json::to_json(&vec![peer.clone()]).unwrap();
+        let args = Args {
+            genesis_file: public_nexus_npos_genesis_file_without_xor_alias(),
+            out_file: None,
+            topology: Some(topology_json),
+            peer_pops: vec![format!("{}=00", peer.public_key())],
+            private_key: Some(test_private_key_hex()),
+            seed: None,
+            algorithm: Algorithm::Ed25519,
+            config: None,
+            consensus_mode: None,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        let mut writer = BufWriter::new(Vec::new());
+        let err = args
+            .run(&mut writer)
+            .expect_err("public Nexus without XOR binding should fail");
+        assert!(
+            err.to_string().contains(crate::genesis::PUBLIC_XOR_ALIAS),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn public_taira_auto_bootstrap_rejects_configured_stake_asset_that_bypasses_xor_binding() {
+        let peer = PeerId::new(
+            checked_genesis_sign_keypair_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let topology_json = norito::json::to_json(&vec![peer.clone()]).unwrap();
+        let args = Args {
+            genesis_file: public_taira_alias_backed_npos_genesis_file(),
+            out_file: None,
+            topology: Some(topology_json),
+            peer_pops: vec![format!("{}=00", peer.public_key())],
+            private_key: Some(test_private_key_hex()),
+            seed: None,
+            algorithm: Algorithm::Ed25519,
+            config: Some(nexus_profile_with_stake_asset_id(
+                "61CtjvNd9T3THAR65GsMVHr82Bjc",
+            )),
+            consensus_mode: None,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        let mut writer = BufWriter::new(Vec::new());
+        let err = args
+            .run(&mut writer)
+            .expect_err("public stake config must match XOR alias binding");
+        assert!(
+            err.to_string()
+                .contains("must match the canonical XOR binding"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn public_taira_auto_bootstrap_rejects_conflicting_xor_alias_bindings() {
+        let peer = PeerId::new(
+            checked_genesis_sign_keypair_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let topology_json = norito::json::to_json(&vec![peer.clone()]).unwrap();
+        let args = Args {
+            genesis_file: public_taira_conflicting_xor_alias_npos_genesis_file(),
+            out_file: None,
+            topology: Some(topology_json),
+            peer_pops: vec![format!("{}=00", peer.public_key())],
+            private_key: Some(test_private_key_hex()),
+            seed: None,
+            algorithm: Algorithm::Ed25519,
+            config: None,
+            consensus_mode: None,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        let mut writer = BufWriter::new(Vec::new());
+        let err = args
+            .run(&mut writer)
+            .expect_err("conflicting public XOR bindings should fail");
+        assert!(
+            err.to_string().contains("multiple asset definitions"),
+            "unexpected error: {err}"
         );
     }
 
@@ -1594,6 +1849,104 @@ mod tests {
         ))
         .build_raw()
         .with_consensus_mode(SumeragiConsensusMode::Npos);
+        let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
+        fs::write(genesis_file.path(), json).expect("write genesis json");
+        let (_file, path) = genesis_file.keep().expect("persist temp genesis");
+        path
+    }
+
+    fn public_taira_alias_backed_npos_genesis_file() -> PathBuf {
+        let genesis_file = tempfile::Builder::new()
+            .prefix("kagami-public-taira-npos-alias-genesis-")
+            .tempfile()
+            .expect("create temp genesis file");
+        let asset_definition_id: AssetDefinitionId = crate::genesis::TAIRA_XOR_ASSET_DEFINITION_ID
+            .parse()
+            .expect("valid canonical asset id");
+        let alias: AssetDefinitionAlias = crate::genesis::PUBLIC_XOR_ALIAS
+            .parse()
+            .expect("valid alias");
+        let manifest =
+            GenesisBuilder::new_without_executor(ChainId::from("iroha3-taira"), PathBuf::from("."))
+                .append_instruction(Register::asset_definition(
+                    AssetDefinition::new(asset_definition_id.clone(), NumericSpec::default())
+                        .with_name("xor".to_owned())
+                        .with_metadata(Metadata::default()),
+                ))
+                .append_instruction(SetAssetDefinitionAlias::bind(
+                    asset_definition_id,
+                    alias,
+                    None,
+                ))
+                .append_parameter(Parameter::Custom(
+                    SumeragiNposParameters::default().into_custom_parameter(),
+                ))
+                .build_raw()
+                .with_consensus_mode(SumeragiConsensusMode::Npos)
+                .with_chain_discriminant(crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT);
+        let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
+        fs::write(genesis_file.path(), json).expect("write genesis json");
+        let (_file, path) = genesis_file.keep().expect("persist temp genesis");
+        path
+    }
+
+    fn public_nexus_npos_genesis_file_without_xor_alias() -> PathBuf {
+        let genesis_file = tempfile::Builder::new()
+            .prefix("kagami-public-nexus-npos-genesis-")
+            .tempfile()
+            .expect("create temp genesis file");
+        let manifest =
+            GenesisBuilder::new_without_executor(ChainId::from("iroha3-nexus"), PathBuf::from("."))
+                .append_parameter(Parameter::Custom(
+                    SumeragiNposParameters::default().into_custom_parameter(),
+                ))
+                .build_raw()
+                .with_consensus_mode(SumeragiConsensusMode::Npos)
+                .with_chain_discriminant(crate::genesis::profile::NEXUS_CHAIN_DISCRIMINANT);
+        let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
+        fs::write(genesis_file.path(), json).expect("write genesis json");
+        let (_file, path) = genesis_file.keep().expect("persist temp genesis");
+        path
+    }
+
+    fn public_taira_conflicting_xor_alias_npos_genesis_file() -> PathBuf {
+        let genesis_file = tempfile::Builder::new()
+            .prefix("kagami-public-taira-conflicting-xor-genesis-")
+            .tempfile()
+            .expect("create temp genesis file");
+        let canonical_xor: AssetDefinitionId = crate::genesis::TAIRA_XOR_ASSET_DEFINITION_ID
+            .parse()
+            .expect("valid canonical asset id");
+        let wrong_xor: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+            .parse()
+            .expect("valid canonical asset id");
+        let alias: AssetDefinitionAlias = crate::genesis::PUBLIC_XOR_ALIAS
+            .parse()
+            .expect("valid alias");
+        let manifest =
+            GenesisBuilder::new_without_executor(ChainId::from("iroha3-taira"), PathBuf::from("."))
+                .append_instruction(Register::asset_definition(
+                    AssetDefinition::new(canonical_xor.clone(), NumericSpec::default())
+                        .with_name("xor".to_owned())
+                        .with_metadata(Metadata::default()),
+                ))
+                .append_instruction(Register::asset_definition(
+                    AssetDefinition::new(wrong_xor.clone(), NumericSpec::default())
+                        .with_name("xor-shadow".to_owned())
+                        .with_metadata(Metadata::default()),
+                ))
+                .append_instruction(SetAssetDefinitionAlias::bind(
+                    canonical_xor,
+                    alias.clone(),
+                    None,
+                ))
+                .append_instruction(SetAssetDefinitionAlias::bind(wrong_xor, alias, None))
+                .append_parameter(Parameter::Custom(
+                    SumeragiNposParameters::default().into_custom_parameter(),
+                ))
+                .build_raw()
+                .with_consensus_mode(SumeragiConsensusMode::Npos)
+                .with_chain_discriminant(crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT);
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
         fs::write(genesis_file.path(), json).expect("write genesis json");
         let (_file, path) = genesis_file.keep().expect("persist temp genesis");

@@ -72,6 +72,16 @@ def source_entry_evidence() -> dict:
 
 
 def publication_evidence(*, publisher_identity: bool = True) -> dict:
+    cycle_detail_probes = [
+        {
+            "name": MODULE.REQUIRED_PUBLICATION_CYCLE_DETAIL_PROBES[0],
+            "status_code": 200,
+            "body_blake3_hex": "3" * 64,
+            "anchor_metadata_present": True,
+            "publisher_identity_present": True,
+            "verification_valid": True,
+        }
+    ]
     return {
         "schema": "sorafs.transparency.publication_canary.v1",
         "status": "passed" if publisher_identity else "failed",
@@ -83,7 +93,8 @@ def publication_evidence(*, publisher_identity: bool = True) -> dict:
         "cycle_digest_hex": DIGEST,
         "route_count": 2,
         "passed_route_count": 2 if publisher_identity else 1,
-        "cycle_detail_probe_count": 1,
+        "cycle_detail_probe_count": len(cycle_detail_probes),
+        "cycle_detail_probes": cycle_detail_probes,
         "publisher_identity_required": True,
         "payload_bytes_included": False,
         "publication_bodies_included": False,
@@ -166,6 +177,7 @@ def proof_token_issuance_evidence() -> dict:
         "response_bodies_included": False,
         "probes": [
             {
+                "action": "proof_token_issuance",
                 "response_success": True,
                 "response_status": 202,
                 "request_body_blake3": "e" * 64,
@@ -215,6 +227,21 @@ def write_complete_evidence(root: Path) -> None:
     write_json(root / "explorer.json", explorer_evidence())
 
 
+SOURCE_BOUND_FIXTURES = (
+    ("publication", "publication.json", publication_evidence),
+)
+
+CYCLE_BOUND_FIXTURES = (
+    ("privacy_aggregate", "privacy-aggregate.json", privacy_aggregate_evidence),
+    ("proof_token_issuance", "proof-token-issuance.json", proof_token_issuance_evidence),
+    ("explorer", "explorer.json", explorer_evidence),
+)
+
+
+def run_gate(root: Path, *extra: str) -> int:
+    return MODULE.main(["--evidence-dir", str(root), *extra])
+
+
 def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     summary = tmp_path / "summary.json"
@@ -229,9 +256,46 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert payload["required"]["publication"]["valid"] is True
     assert payload["valid_source_batch_digests"] == [DIGEST]
     assert payload["valid_cycle_digests"] == [DIGEST]
+    assert payload["valid_publication_bindings"] == [
+        {
+            "source_batch_digest_hex": DIGEST,
+            "cycle_digest_hex": DIGEST,
+        }
+    ]
     assert payload["required"]["publication"]["artifacts"][0]["fingerprint"][
         "deployment_id"
     ] == DEPLOYMENT_ID
+
+
+def test_bound_fixture_tables_cover_checker_bound_kind_sets() -> None:
+    assert (
+        tuple(kind_name for kind_name, _file_name, _factory in SOURCE_BOUND_FIXTURES)
+        == MODULE.SOURCE_BOUND_KINDS
+    )
+    assert (
+        tuple(kind_name for kind_name, _file_name, _factory in CYCLE_BOUND_FIXTURES)
+        == MODULE.CYCLE_BOUND_KINDS
+    )
+
+
+def test_fixture_inventories_cover_checker_required_sets() -> None:
+    assert tuple(route["name"] for route in publication_evidence()["routes"]) == (
+        MODULE.REQUIRED_PUBLICATION_ROUTES
+    )
+    assert tuple(
+        probe["name"] for probe in publication_evidence()["cycle_detail_probes"]
+    ) == MODULE.REQUIRED_PUBLICATION_CYCLE_DETAIL_PROBES
+    assert tuple(route["name"] for route in explorer_evidence()["routes"]) == (
+        MODULE.REQUIRED_EXPLORER_ROUTES
+    )
+    assert tuple(probe["action"] for probe in privacy_aggregate_evidence()["probes"]) == (
+        MODULE.REQUIRED_PRIVACY_AGGREGATE_ACTIONS
+    )
+    assert tuple(
+        probe["action"] for probe in proof_token_issuance_evidence()["probes"]
+    ) == (
+        MODULE.REQUIRED_PROOF_TOKEN_ISSUANCE_ACTIONS
+    )
 
 
 def test_response_file_arguments_pass(tmp_path: Path) -> None:
@@ -305,6 +369,82 @@ def test_routes_must_not_duplicate_for_route_artifacts(tmp_path: Path) -> None:
         assert "route_count must match unique routes count" in artifact["errors"]
 
 
+def test_routes_must_not_include_unknown_values_for_route_artifacts(
+    tmp_path: Path,
+) -> None:
+    route_artifacts = (
+        ("publication", "publication.json", publication_evidence),
+        ("explorer", "explorer.json", explorer_evidence),
+    )
+    for kind, filename, factory in route_artifacts:
+        root = tmp_path / kind
+        root.mkdir()
+        write_complete_evidence(root)
+        payload = factory()
+        unknown = dict(payload["routes"][0])
+        unknown["name"] = "unexpected_transparency_route"
+        unknown["body_blake3_hex"] = "4" * 64
+        payload["routes"].append(unknown)
+        payload["route_count"] = len(payload["routes"])
+        if "passed_route_count" in payload:
+            payload["passed_route_count"] = len(payload["routes"])
+        write_json(root / filename, payload)
+        summary = root / "summary.json"
+
+        assert (
+            MODULE.main(["--evidence-dir", str(root), "--summary-out", str(summary)])
+            == 1
+        )
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"][kind]["artifacts"][0]
+        assert "routes must not include unknown values" in artifact["errors"]
+
+
+def test_source_entry_probes_must_not_duplicate_source_kind(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = source_entry_evidence()
+    payload["probes"].append(dict(payload["probes"][0]))
+    payload["probe_count"] = len(payload["probes"])
+    payload["passed_probe_count"] = len(payload["probes"])
+    payload["source_entry_probe_count"] = len(payload["probes"])
+    write_json(tmp_path / "source-entry.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)]) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["source_entry"]["artifacts"][0]
+    assert "probes must not contain duplicate values" in artifact["errors"]
+    assert (
+        "source_entry_probe_count must match unique probes count"
+        in artifact["errors"]
+    )
+
+
+def test_source_entry_probe_kinds_must_not_include_unknown_values(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = source_entry_evidence()
+    unknown = dict(payload["probes"][0])
+    unknown["source_kind"] = "unreviewed-source-kind"
+    unknown["request_body_blake3"] = "c" * 64
+    unknown["response_body_blake3"] = "d" * 64
+    payload["probes"].append(unknown)
+    payload["probe_count"] = len(payload["probes"])
+    payload["passed_probe_count"] = len(payload["probes"])
+    payload["source_entry_probe_count"] = len(payload["probes"])
+    write_json(tmp_path / "source-entry.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)]) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["source_entry"]["artifacts"][0]
+    assert "probes must not include unknown values" in artifact["errors"]
+
+
 def test_probe_count_must_match_probe_inventory_for_probe_artifacts(
     tmp_path: Path,
 ) -> None:
@@ -335,6 +475,8 @@ def test_probe_count_must_match_probe_inventory_for_probe_artifacts(
         result = json.loads(summary.read_text(encoding="utf-8"))
         artifact = result["required"][kind]["artifacts"][0]
         assert "probe_count must equal probes length" in artifact["errors"]
+        if kind in {"privacy_aggregate", "proof_token_issuance"}:
+            assert "probe_count must match unique probes count" in artifact["errors"]
 
 
 def test_specific_probe_counts_must_match_probe_roles(tmp_path: Path) -> None:
@@ -398,6 +540,111 @@ def test_privacy_aggregate_probe_role_counts_must_sum_to_probe_count(
         "source_event_probe_count plus publish_due_probe_count must equal probe_count"
         in artifact["errors"]
     )
+
+
+def test_privacy_aggregate_actions_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = privacy_aggregate_evidence()
+    duplicate = dict(payload["probes"][0])
+    duplicate["request_body_blake3"] = "e" * 64
+    duplicate["response_body_blake3"] = "f" * 64
+    payload["probes"].append(duplicate)
+    payload["probe_count"] = len(payload["probes"])
+    payload["passed_probe_count"] = len(payload["probes"])
+    payload["source_event_probe_count"] = 2
+    payload["publish_due_probe_count"] = 1
+    write_json(tmp_path / "privacy-aggregate.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)]) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["privacy_aggregate"]["artifacts"][0]
+    assert "probes must not contain duplicate values" in artifact["errors"]
+    assert "probe_count must match unique probes count" in artifact["errors"]
+
+
+def test_privacy_aggregate_actions_must_not_include_unknown_values(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = privacy_aggregate_evidence()
+    unknown = dict(payload["probes"][0])
+    unknown["action"] = "privacy_refresh"
+    unknown["request_body_blake3"] = "e" * 64
+    unknown["response_body_blake3"] = "f" * 64
+    payload["probes"].append(unknown)
+    payload["probe_count"] = len(payload["probes"])
+    payload["passed_probe_count"] = len(payload["probes"])
+    write_json(tmp_path / "privacy-aggregate.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)]) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["privacy_aggregate"]["artifacts"][0]
+    assert "probes must not include unknown values" in artifact["errors"]
+
+
+def test_proof_token_issuance_actions_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = proof_token_issuance_evidence()
+    duplicate = dict(payload["probes"][0])
+    duplicate["request_body_blake3"] = "1" * 64
+    duplicate["response_body_blake3"] = "2" * 64
+    payload["probes"].append(duplicate)
+    payload["probe_count"] = len(payload["probes"])
+    payload["passed_probe_count"] = len(payload["probes"])
+    payload["issuance_probe_count"] = len(payload["probes"])
+    write_json(tmp_path / "proof-token-issuance.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)]) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["proof_token_issuance"]["artifacts"][0]
+    assert "probes must not contain duplicate values" in artifact["errors"]
+    assert "probe_count must match unique probes count" in artifact["errors"]
+    assert "issuance_probe_count must match unique probes count" in artifact["errors"]
+
+
+def test_proof_token_issuance_actions_must_not_include_unknown_values(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = proof_token_issuance_evidence()
+    unknown = dict(payload["probes"][0])
+    unknown["action"] = "proof_token_replay"
+    unknown["request_body_blake3"] = "1" * 64
+    unknown["response_body_blake3"] = "2" * 64
+    payload["probes"].append(unknown)
+    payload["probe_count"] = len(payload["probes"])
+    payload["passed_probe_count"] = len(payload["probes"])
+    write_json(tmp_path / "proof-token-issuance.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)]) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["proof_token_issuance"]["artifacts"][0]
+    assert "probes must not include unknown values" in artifact["errors"]
+
+
+def test_proof_token_issuance_requires_action_coverage(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = proof_token_issuance_evidence()
+    del payload["probes"][0]["action"]
+    write_json(tmp_path / "proof-token-issuance.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)])
+        == 1
+    )
+
+    summary_payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = summary_payload["required"]["proof_token_issuance"]["artifacts"][0]
+    assert "probes must include action `proof_token_issuance`" in artifact["errors"]
 
 
 def test_deployment_context_is_required(tmp_path: Path) -> None:
@@ -564,6 +811,147 @@ def test_publication_requires_cycle_detail_probe(tmp_path: Path) -> None:
     assert MODULE.main(["--evidence-dir", str(tmp_path)]) == 1
 
 
+def test_publication_cycle_detail_probes_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = publication_evidence()
+    payload["cycle_detail_probes"].append(dict(payload["cycle_detail_probes"][0]))
+    payload["cycle_detail_probe_count"] = len(payload["cycle_detail_probes"])
+    write_json(tmp_path / "publication.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)])
+        == 1
+    )
+
+    summary_payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = summary_payload["required"]["publication"]["artifacts"][0]
+    assert "cycle_detail_probes must not contain duplicate values" in artifact[
+        "errors"
+    ]
+    assert (
+        "cycle_detail_probe_count must match unique cycle_detail_probes count"
+        in artifact["errors"]
+    )
+
+
+def test_publication_cycle_detail_probes_must_not_include_unknown_values(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = publication_evidence()
+    unknown = dict(payload["cycle_detail_probes"][0])
+    unknown["name"] = "unexpected_cycle_detail_probe"
+    unknown["body_blake3_hex"] = "4" * 64
+    payload["cycle_detail_probes"].append(unknown)
+    payload["cycle_detail_probe_count"] = len(payload["cycle_detail_probes"])
+    write_json(tmp_path / "publication.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)])
+        == 1
+    )
+
+    summary_payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = summary_payload["required"]["publication"]["artifacts"][0]
+    assert "cycle_detail_probes must not include unknown values" in artifact[
+        "errors"
+    ]
+
+
+def test_publication_cycle_detail_probe_names_must_use_production_family(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = publication_evidence()
+    payload["cycle_detail_probes"][0]["name"] = "cycle_detail_readback"
+    write_json(tmp_path / "publication.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)])
+        == 1
+    )
+
+    summary_payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = summary_payload["required"]["publication"]["artifacts"][0]
+    assert MODULE.CYCLE_DETAIL_PROBE_LABEL_ERROR in artifact["errors"]
+
+
+def test_publication_cycle_detail_probe_names_reject_non_production_markers(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = publication_evidence()
+    payload["cycle_detail_probes"][0]["name"] = "transparency-cycle-detail-placeholder"
+    write_json(tmp_path / "publication.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)])
+        == 1
+    )
+
+    summary_payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = summary_payload["required"]["publication"]["artifacts"][0]
+    assert (
+        "cycle_detail_probes[0].name must not contain non-production markers "
+        "['placeholder']"
+    ) in artifact["errors"]
+
+
+def test_publication_requires_cycle_detail_probe_coverage(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = publication_evidence()
+    payload["cycle_detail_probes"] = []
+    write_json(tmp_path / "publication.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)])
+        == 1
+    )
+
+    summary_payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = summary_payload["required"]["publication"]["artifacts"][0]
+    assert (
+        "cycle_detail_probes must include name `transparency-cycle-detail-readback`"
+        in artifact["errors"]
+    )
+    assert (
+        "cycle_detail_probe_count must match unique cycle_detail_probes count"
+        in artifact["errors"]
+    )
+
+
+def test_publication_cycle_detail_probe_requires_publication_proofs(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = publication_evidence()
+    payload["cycle_detail_probes"][0]["publisher_identity_present"] = False
+    payload["cycle_detail_probes"][0]["verification_valid"] = False
+    write_json(tmp_path / "publication.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)])
+        == 1
+    )
+
+    summary_payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = summary_payload["required"]["publication"]["artifacts"][0]
+    assert (
+        "cycle_detail_probes[0].publisher_identity_present must be true"
+        in artifact["errors"]
+    )
+    assert (
+        "cycle_detail_probes[0].verification_valid must be true"
+        in artifact["errors"]
+    )
+
+
 def test_publication_requires_source_batch_binding(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = publication_evidence()
@@ -573,6 +961,31 @@ def test_publication_requires_source_batch_binding(tmp_path: Path) -> None:
     assert MODULE.main(["--evidence-dir", str(tmp_path)]) == 1
 
 
+def test_all_source_bound_artifacts_reject_source_entry_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in SOURCE_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["source_batch_digest_hex"] = DIGEST_2
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} source_batch_digest_hex must match "
+            "a valid source_entry artifact"
+        ) in artifact["errors"]
+
+
 def test_explorer_cycle_binding_must_match_publication(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = explorer_evidence()
@@ -580,6 +993,31 @@ def test_explorer_cycle_binding_must_match_publication(tmp_path: Path) -> None:
     write_json(tmp_path / "explorer.json", payload)
 
     assert MODULE.main(["--evidence-dir", str(tmp_path)]) == 1
+
+
+def test_all_cycle_bound_artifacts_reject_publication_cycle_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in CYCLE_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["cycle_digest_hex"] = DIGEST_2
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} cycle_digest_hex must match "
+            "a valid source-bound publication artifact"
+        ) in artifact["errors"]
 
 
 def test_invalid_publication_does_not_anchor_cycle_bound_evidence(tmp_path: Path) -> None:
@@ -597,6 +1035,7 @@ def test_invalid_publication_does_not_anchor_cycle_bound_evidence(tmp_path: Path
     payload = json.loads(summary.read_text(encoding="utf-8"))
     assert payload["valid_source_batch_digests"] == [DIGEST]
     assert payload["valid_cycle_digests"] == []
+    assert payload["valid_publication_bindings"] == []
     assert payload["required"]["publication"]["valid"] is False
     assert payload["required"]["explorer"]["valid"] is False
     errors = "\n".join(payload["errors"])

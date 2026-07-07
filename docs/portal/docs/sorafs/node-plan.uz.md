@@ -47,12 +47,13 @@ SF-3 Iroha/Torii jarayonini SoraFS saqlash provayderiga aylantiradigan birinchi 
 
 ### C. Gateway oxirgi nuqtalari
 
-| Oxirgi nuqta | Xulq-atvor | Vazifalar |
+| Endpoint | Behaviour | Tasks |
 |----------|-----------|-------|
-| `POST /sorafs/pin` | `PinProposalV1` qabul qiling, manifestlarni tasdiqlang, qabul qilish uchun navbatga qo'ying, manifest CID bilan javob bering. | Bo'lak profilini tasdiqlang, kvotalar qo'ying, ma'lumotlarni parchalar do'koni orqali uzating. |
-| `GET /sorafs/chunks/{cid}` + diapazon so'rovi | `Content-Chunker` sarlavhalari bilan bo'lak baytlarga xizmat qiling; diapazon qobiliyati spetsifikatsiyasini hurmat qiling. | Rejalashtiruvchi + oqim budjetlaridan foydalaning (SF-2d diapazoniga ulanish). |
-| `POST /sorafs/por/sample` | Manifest va qaytish isboti to'plami uchun PoR namunalarini ishga tushiring. | Do'kon namunalarini qayta ishlating, Norito JSON foydali yuklari bilan javob bering. |
-| `GET /sorafs/telemetry` | Xulosa: sig'im, PoR muvaffaqiyati, olish xatosi. | Boshqaruv paneli/operatorlar uchun ma'lumotlarni taqdim eting. |
+| `GET /v1/sorafs/pin`, `POST /v1/sorafs/pin/register`, `GET /v1/sorafs/pin/{digest_hex}` | Read the pin registry, register paid manifest pins, and fetch bounded manifest pin details. | Validate chunker profiles, manifest payloads, pin policy, fee receipt context, aliases, and successor links before queueing the signed transaction. |
+| `POST /v1/sorafs/storage/pin`, `POST /v1/sorafs/storage/fetch`, `POST /v1/sorafs/storage/token` | Store payload bytes for an approved manifest, fetch content ranges, and issue storage access tokens. | Enforce quotas, token policy, provider capability checks, and scheduler/back-pressure limits. |
+| `GET /v1/sorafs/storage/manifest/{manifest_id}`, `GET /v1/sorafs/storage/plan/{manifest_id}`, `GET /v1/sorafs/storage/car/{manifest_id}`, `GET /v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}` | Serve bounded manifest metadata, deterministic chunk plans, CAR bytes, and individual chunk bytes. | Keep readback arrays bounded while preserving total counts and verify digest/path bindings before streaming bytes. |
+| `GET /v1/sorafs/storage/peers`, `GET /v1/sorafs/storage/state`, `POST /v1/sorafs/storage/por-sample`, `POST /v1/sorafs/storage/por-challenge`, `POST /v1/sorafs/storage/por-proof`, `POST /v1/sorafs/storage/por-verdict` | Report peer/storage state and exercise local PoR sampling, challenge, proof, and verdict plumbing. | Reuse chunk-store sampling, update telemetry, and preserve governance-verdict replay state. |
+
 
 Santexnika ish vaqti `sorafs_node::por` orqali PoR o'zaro ta'sirini o'tkazadi: treker har bir `PorChallengeV1`, `PorProofV1` va `AuditVerdictV1`ni qayd qiladi, shuning uchun `CapacityMeter` ko'rsatkichlari o'zgarmasligini aks ettiradi. Torii mantiq.【crates/sorafs_node/src/scheduler.rs#L147】
 
@@ -108,7 +109,7 @@ Jurnallar / voqealar:
 ## Muhim bosqichdan chiqish mezonlari
 
 - `cargo run -p sorafs_node --example pin_fetch` mahalliy moslamalarga qarshi ishlaydi.  
-- Torii `--features sorafs-storage` bilan quriladi va integratsiya testlaridan o'tadi.  
+- Torii exposes the current `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` route surface and passes integration tests.
 - Hujjatlar ([tugunni saqlash bo'yicha qo'llanma](node-storage.md)) standart konfiguratsiya + CLI misollari bilan yangilangan; operator runbook mavjud.  
 - Staging asboblar panelida ko'rinadigan telemetriya; sig'imning to'yinganligi va PoR nosozliklari uchun sozlangan ogohlantirishlar.
 
@@ -116,4 +117,4 @@ Jurnallar / voqealar:
 
 - Konfiguratsiya standartlari, CLI-dan foydalanish va nosozliklarni bartaraf etish bosqichlari bilan [tugunni saqlash ma'lumotnomasini](node-storage.md) yangilang.  
 - SF-3 rivojlanishi davomida [tugun operatsiyalari ish kitobini](node-operations.md) amalga oshirish bilan bir xilda saqlang.  
-- Ishlab chiquvchi portalida `/sorafs/*` so'nggi nuqtalari uchun API havolalarini nashr eting va ularni OpenAPI manifestiga Torii ishlov beruvchilari tushganidan keyin ulang.
+- Keep API reference for `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` endpoints aligned with the OpenAPI manifest.

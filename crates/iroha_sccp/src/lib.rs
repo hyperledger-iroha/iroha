@@ -9445,7 +9445,19 @@ fn canonical_nexus_sccp_message_bundle_bytes_len_checked(
 pub fn canonical_nexus_sccp_message_bundle_bytes_checked(
     bundle: &NexusSccpMessageProofV1,
 ) -> Option<Vec<u8>> {
-    if !verify_message_bundle_structure(bundle) {
+    canonical_nexus_sccp_message_bundle_bytes_checked_internal(bundle, None, None)
+}
+
+fn canonical_nexus_sccp_message_bundle_bytes_checked_internal(
+    bundle: &NexusSccpMessageProofV1,
+    source_material: Option<&SccpSourceVerifierMaterialV1>,
+    source_deployment: Option<&SccpSourceAdapterEngineDeploymentV1>,
+) -> Option<Vec<u8>> {
+    if !verify_message_bundle_structure_internal_with_deployment(
+        bundle,
+        source_material,
+        source_deployment,
+    ) {
         return None;
     }
     canonical_nexus_sccp_message_bundle_bytes_len_checked(bundle)
@@ -19218,7 +19230,11 @@ fn build_sccp_local_admission_submission_payload(
         return None;
     }
     let public_inputs_bytes = canonical_sccp_message_transparent_public_inputs_bytes(public_inputs);
-    let bundle_bytes = canonical_nexus_sccp_message_bundle_bytes_checked(bundle)?;
+    let bundle_bytes = canonical_nexus_sccp_message_bundle_bytes_checked_internal(
+        bundle,
+        Some(source_material),
+        source_deployment,
+    )?;
     if !sccp_native_recursive_payload_bytes_are_packagable(&bundle_bytes) {
         return None;
     }
@@ -19302,7 +19318,11 @@ fn build_sccp_platform_submission_payload(
     }
     let canonical_public_inputs =
         canonical_sccp_message_transparent_public_inputs_bytes(public_inputs);
-    let canonical_bundle = canonical_nexus_sccp_message_bundle_bytes_checked(bundle)?;
+    let canonical_bundle = canonical_nexus_sccp_message_bundle_bytes_checked_internal(
+        bundle,
+        source_material,
+        source_deployment,
+    )?;
     if !sccp_transparent_public_inputs_match_manifest(manifest, public_inputs) {
         return None;
     }
@@ -21047,6 +21067,54 @@ fn build_nexus_sccp_message_transparent_proof_internal(
     })
 }
 
+#[cfg(feature = "test-fixtures")]
+fn build_nexus_sccp_message_local_admission_transparent_proof_fixture(
+    bundle: &NexusSccpMessageProofV1,
+    source_material: &SccpSourceVerifierMaterialV1,
+    source_deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> Option<NexusSccpMessageTransparentProofV1> {
+    let counterparty_domain = sccp_counterparty_domain_for_message_payload(&bundle.payload)?;
+    let manifest = sccp_proof_manifest_for_domain(counterparty_domain)?;
+    let public_inputs = sccp_message_transparent_public_inputs_internal_with_deployment(
+        bundle,
+        Some(source_material),
+        Some(source_deployment),
+    )?;
+    let proof_bytes = build_sccp_message_transparent_fastpq_proof_bytes_internal(
+        bundle,
+        &manifest,
+        Some(source_material),
+        Some(source_deployment),
+    )?;
+    let submission_package = build_sccp_local_admission_submission_package(
+        &manifest,
+        &proof_bytes,
+        &public_inputs,
+        bundle,
+        source_material,
+        Some(source_deployment),
+    )?;
+    Some(NexusSccpMessageTransparentProofV1 {
+        version: 1,
+        local_domain: manifest.local_domain,
+        counterparty_domain,
+        security_model: manifest.security_model,
+        anchor_governance: manifest.anchor_governance,
+        destination_binding: manifest.destination_binding.clone(),
+        proof_family: manifest.proof_family,
+        verifier_backend: manifest.verifier_backend,
+        message_backend: manifest.message_backend,
+        registry_backend: manifest.registry_backend,
+        manifest_seed: manifest.manifest_seed,
+        finality_model: manifest.finality_model,
+        verifier_target: manifest.verifier_target,
+        public_inputs,
+        proof_bytes,
+        submission_package,
+        bundle: bundle.clone(),
+    })
+}
+
 fn verify_sccp_message_transparent_inner_proof_bytes_internal(
     proof_bytes: &[u8],
     bundle: &NexusSccpMessageProofV1,
@@ -21410,7 +21478,9 @@ fn verify_sccp_evm_submission_package(
 pub fn verify_nexus_sccp_message_transparent_proof_structure(
     proof: &NexusSccpMessageTransparentProofV1,
 ) -> bool {
-    verify_nexus_sccp_message_transparent_proof_structure_internal(proof, false, false, None, None)
+    verify_nexus_sccp_message_transparent_proof_structure_internal(
+        proof, false, false, false, None, None,
+    )
 }
 
 pub fn verify_nexus_sccp_message_transparent_proof_structure_allow_unready(
@@ -21421,6 +21491,7 @@ pub fn verify_nexus_sccp_message_transparent_proof_structure_allow_unready(
         proof,
         allow_unready,
         allow_unready,
+        false,
         None,
         None,
     )
@@ -21432,6 +21503,7 @@ pub fn verify_nexus_sccp_message_transparent_proof_structure_with_source_verifie
 ) -> bool {
     verify_nexus_sccp_message_transparent_proof_structure_internal(
         proof,
+        false,
         false,
         false,
         Some(material),
@@ -21452,13 +21524,16 @@ pub fn verify_nexus_sccp_message_transparent_proof_structure_with_source_verifie
         proof,
         allow_unready,
         allow_unready,
+        false,
         Some(material),
         None,
     )
 }
 
-/// Verify structure with configured source material, allowing only the destination manifest gate
-/// to remain disabled while still requiring a production-ready source proof.
+/// Verify structure with configured source material and a test-gated destination manifest bypass.
+///
+/// Production local admission should use the deployment-bound helper below so disabled
+/// destination manifests are opened only by governed source-adapter deployment evidence.
 pub fn verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material_allow_unready_manifest(
     proof: &NexusSccpMessageTransparentProofV1,
     material: &SccpSourceVerifierMaterialV1,
@@ -21466,6 +21541,7 @@ pub fn verify_nexus_sccp_message_transparent_proof_structure_with_source_verifie
     verify_nexus_sccp_message_transparent_proof_structure_internal(
         proof,
         true,
+        false,
         false,
         Some(material),
         None,
@@ -21481,12 +21557,13 @@ pub fn verify_nexus_sccp_message_transparent_proof_structure_with_source_verifie
         proof,
         false,
         false,
+        false,
         Some(material),
         Some(deployment),
     )
 }
 
-/// Verify deployment-bound transparent proof structure while optionally allowing disabled manifests.
+/// Verify deployment-bound transparent proof structure with test-gated diagnostic relaxations.
 pub fn verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material_and_deployment_allow_unready(
     proof: &NexusSccpMessageTransparentProofV1,
     material: &SccpSourceVerifierMaterialV1,
@@ -21497,6 +21574,7 @@ pub fn verify_nexus_sccp_message_transparent_proof_structure_with_source_verifie
         proof,
         allow_unready,
         allow_unready,
+        false,
         Some(material),
         Some(deployment),
     )
@@ -21515,6 +21593,7 @@ pub fn verify_nexus_sccp_message_transparent_proof_structure_with_source_verifie
         proof,
         true,
         false,
+        true,
         Some(material),
         Some(deployment),
     )
@@ -21524,6 +21603,7 @@ fn verify_nexus_sccp_message_transparent_proof_structure_internal(
     proof: &NexusSccpMessageTransparentProofV1,
     allow_unready_manifest: bool,
     allow_unready_source_proof: bool,
+    allow_configured_destination_manifest: bool,
     source_material: Option<&SccpSourceVerifierMaterialV1>,
     source_deployment: Option<&SccpSourceAdapterEngineDeploymentV1>,
 ) -> bool {
@@ -21577,8 +21657,7 @@ fn verify_nexus_sccp_message_transparent_proof_structure_internal(
     {
         return false;
     }
-    if !sccp_manifest_allows_transparent_proofs(&manifest, allow_unready_manifest)
-        || proof.security_model != manifest.security_model
+    if proof.security_model != manifest.security_model
         || proof.anchor_governance != manifest.anchor_governance
         || proof.destination_binding != manifest.destination_binding
         || proof.message_backend != manifest.message_backend
@@ -21606,6 +21685,12 @@ fn verify_nexus_sccp_message_transparent_proof_structure_internal(
         source_material,
         source_deployment,
     );
+    let destination_manifest_is_allowed =
+        sccp_manifest_allows_transparent_proofs(&manifest, allow_unready_manifest)
+            || (allow_configured_destination_manifest && local_admission_is_allowed);
+    if !destination_manifest_is_allowed {
+        return false;
+    }
     let proof_body_is_valid = if local_admission_is_allowed {
         verify_sccp_message_transparent_inner_proof_bytes_internal(
             &proof.proof_bytes,
@@ -33866,6 +33951,12 @@ fn verify_nexus_commit_qc_bls_aggregate(_proof: &NexusBridgeFinalityProofV1) -> 
     false
 }
 
+fn sccp_test_only_placeholder_source_adapter_opening_allowed() -> bool {
+    // Source-adapter placeholder opening is test-only; production builds must
+    // use FastPQ verification.
+    cfg!(test)
+}
+
 fn source_adapter_placeholder_opening_is_well_bound(
     proof: &SccpSourceChainProofEnvelopeV1,
     consensus_proof: &SccpSourceConsensusProofV1,
@@ -33967,15 +34058,17 @@ fn verify_sccp_source_chain_proof_material_with_material_and_optional_deployment
             material,
         )
     };
-    let placeholder_source_adapter_opening = deployment.is_none()
-        && material.placeholder_material
-        && proof.source_domain == SCCP_DOMAIN_BSC
-        && source_adapter_placeholder_opening_is_well_bound(
-            proof,
-            &consensus_proof,
-            expected_adapter_transcript_hash,
-        )
-        && source_verifier_evidence_has_common_valid_shape(&consensus_proof.verifier_evidence);
+    let placeholder_source_adapter_opening =
+        sccp_test_only_placeholder_source_adapter_opening_allowed()
+            && deployment.is_none()
+            && material.placeholder_material
+            && proof.source_domain == SCCP_DOMAIN_BSC
+            && source_adapter_placeholder_opening_is_well_bound(
+                proof,
+                &consensus_proof,
+                expected_adapter_transcript_hash,
+            )
+            && source_verifier_evidence_has_common_valid_shape(&consensus_proof.verifier_evidence);
     let source_adapter_opening_is_valid = placeholder_source_adapter_opening
         || verify_sccp_source_adapter_verification_proof(
             proof,
@@ -44001,18 +44094,24 @@ pub mod tests {
             source_material,
             source_deployment,
         );
-        let artifact =
-            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready(
-                &bundle,
-                source_material,
-                source_deployment,
-                true,
-            )
-            .expect("build ETH local-admission transparent proof");
+        let artifact = build_nexus_sccp_message_local_admission_transparent_proof_fixture(
+            &bundle,
+            source_material,
+            source_deployment,
+        )
+        .expect("build ETH local-admission transparent proof");
         assert_eq!(artifact.public_inputs.target_domain, SCCP_DOMAIN_SORA);
         assert!(matches!(
             artifact.submission_package.platform_payload,
             SccpPlatformSubmissionPayloadV1::LocalAdmission(_)
+        ));
+        let manifest =
+            sccp_proof_manifest_for_domain(SCCP_DOMAIN_ETH).expect("ETH SCCP proof manifest");
+        assert!(verify_sccp_local_admission_submission_package_internal(
+            &manifest,
+            &artifact,
+            Some(source_material),
+            Some(source_deployment),
         ));
         assert!(
             verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material_and_deployment_allow_unready_manifest(
@@ -58841,6 +58940,27 @@ pub mod tests {
                 .expect("sample branch depth is below u64 width");
             replace_source_inclusion_proof(proof, &inclusion);
         });
+    }
+
+    #[test]
+    fn bsc_placeholder_source_adapter_opening_is_test_only() {
+        assert!(
+            sccp_test_only_placeholder_source_adapter_opening_allowed(),
+            "BSC placeholder source-adapter opening remains a test-only structural fixture",
+        );
+        let bundle = sample_transfer_bundle(SCCP_DOMAIN_BSC, SCCP_DOMAIN_SORA, 359);
+        let proof = source_chain_proof_from_bundle(&bundle);
+        let material =
+            sccp_source_verifier_material_for_domain(SCCP_DOMAIN_BSC).expect("BSC material");
+        assert!(material.placeholder_material);
+        assert!(
+            verify_sccp_source_chain_proof_envelope_structure_with_material(&proof, &material),
+            "test-only BSC placeholder source material may satisfy structural fixtures",
+        );
+        assert!(
+            !verify_sccp_source_chain_proof_envelope_production_with_material(&proof, &material),
+            "BSC placeholder source material must not satisfy production verification",
+        );
     }
 
     #[test]

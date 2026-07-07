@@ -907,9 +907,15 @@ SUMERAGI_BYZANTINE_TOP_CONJUNCT_CONTRACTS = {
         "ByzantineVoteFirstTopExactness",
     ),
 }
-SUMERAGI_BYZANTINE_TOP_IMPLICATION_CONTRACTS = {
-    "ByzantineDirectTopCoversOrderedTopCorridors": "ByzantineDirectTopExactness",
-}
+SUMERAGI_BYZANTINE_TOP_IMPLICATION_CONTRACT_ROWS = (
+    (
+        "ByzantineDirectTopCoversOrderedTopCorridors",
+        "ByzantineDirectTopExactness",
+    ),
+)
+SUMERAGI_BYZANTINE_TOP_IMPLICATION_CONTRACTS = dict(
+    SUMERAGI_BYZANTINE_TOP_IMPLICATION_CONTRACT_ROWS
+)
 SUMERAGI_DIRECT_INTERLEAVING_GATE_CONJUNCT_CONTRACTS = {
     "DirectCommitInterleavingExactness": (
         "RbcEvidenceShape",
@@ -1277,32 +1283,58 @@ SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS = (
         "top-level Byzantine vote-first commit spec",
     ),
 )
-SUMERAGI_PROJECTION_GATE_IMPLICATION_CONTRACTS = {
-    "ProjectionBridgeCoversOrderedTopCorridors": "ProjectedByzantineDirectTopExactness",
-    "ProjectionBridgeMatchesInterleavingCore": "ProjectedByzantineDirectTopExactness",
-}
-SUMERAGI_BYZANTINE_TOP_TO_PROJECTION_OPERATOR_CONTRACTS = {
-    "ByzantineDeliveredFirstTopExactness": (
-        "ProjectedByzantineDeliveredFirstTopExactness"
+SUMERAGI_PROJECTION_GATE_IMPLICATION_CONTRACT_ROWS = (
+    (
+        "ProjectionBridgeCoversOrderedTopCorridors",
+        "ProjectedByzantineDirectTopExactness",
     ),
-    "ByzantineDeliveredFirstTopCorrectnessEnvelope": (
-        "ProjectedByzantineDeliveredFirstTopCorrectnessEnvelope"
+    (
+        "ProjectionBridgeMatchesInterleavingCore",
+        "ProjectedByzantineDirectTopExactness",
     ),
-    "ByzantineVoteFirstTopExactness": "ProjectedByzantineVoteFirstTopExactness",
-    "ByzantineVoteFirstTopCorrectnessEnvelope": (
-        "ProjectedByzantineVoteFirstTopCorrectnessEnvelope"
+)
+SUMERAGI_PROJECTION_GATE_IMPLICATION_CONTRACTS = dict(
+    SUMERAGI_PROJECTION_GATE_IMPLICATION_CONTRACT_ROWS
+)
+SUMERAGI_BYZANTINE_TOP_TO_PROJECTION_OPERATOR_CONTRACT_ROWS = (
+    (
+        "ByzantineDeliveredFirstTopExactness",
+        "ProjectedByzantineDeliveredFirstTopExactness",
     ),
-    "ByzantineDirectTopExactness": "ProjectedByzantineDirectTopExactness",
-    "ByzantineDirectTopCorrectnessEnvelope": (
-        "ProjectedByzantineDirectTopCorrectnessEnvelope"
+    (
+        "ByzantineDeliveredFirstTopCorrectnessEnvelope",
+        "ProjectedByzantineDeliveredFirstTopCorrectnessEnvelope",
     ),
-    "ByzantineDirectTopCoversOrderedTopCorridors": (
-        "ProjectionBridgeCoversOrderedTopCorridors"
+    (
+        "ByzantineVoteFirstTopExactness",
+        "ProjectedByzantineVoteFirstTopExactness",
     ),
-}
-SUMERAGI_TOP_TO_PROJECTION_LITERAL_CONJUNCTS = {
-    "TypeInvariant": "TypeInvariant",
-}
+    (
+        "ByzantineVoteFirstTopCorrectnessEnvelope",
+        "ProjectedByzantineVoteFirstTopCorrectnessEnvelope",
+    ),
+    (
+        "ByzantineDirectTopExactness",
+        "ProjectedByzantineDirectTopExactness",
+    ),
+    (
+        "ByzantineDirectTopCorrectnessEnvelope",
+        "ProjectedByzantineDirectTopCorrectnessEnvelope",
+    ),
+    (
+        "ByzantineDirectTopCoversOrderedTopCorridors",
+        "ProjectionBridgeCoversOrderedTopCorridors",
+    ),
+)
+SUMERAGI_BYZANTINE_TOP_TO_PROJECTION_OPERATOR_CONTRACTS = dict(
+    SUMERAGI_BYZANTINE_TOP_TO_PROJECTION_OPERATOR_CONTRACT_ROWS
+)
+SUMERAGI_TOP_TO_PROJECTION_LITERAL_CONJUNCT_ROWS = (
+    ("TypeInvariant", "TypeInvariant"),
+)
+SUMERAGI_TOP_TO_PROJECTION_LITERAL_CONJUNCTS = dict(
+    SUMERAGI_TOP_TO_PROJECTION_LITERAL_CONJUNCT_ROWS
+)
 FAST_CI = ROOT_DIR / "ci" / "check_sumeragi_formal.sh"
 EXPECTED_FAILURE_CI = ROOT_DIR / "ci" / "check_sumeragi_formal_expected_failures.sh"
 PR_WORKFLOW = ROOT_DIR / ".github" / "workflows" / "pr.yml"
@@ -1375,7 +1407,54 @@ FORMAL_WORKFLOW_JOB_NAMES = (
     (PR_WORKFLOW, ("sumeragi_formal",)),
     (NIGHTLY_WORKFLOW, ("frontier-nightly",)),
 )
-FORMAL_WORKFLOW_ALLOWED_JOB_NAMES = dict(FORMAL_WORKFLOW_JOB_NAMES)
+
+
+def formal_workflow_job_contract_map(
+    workflow_jobs: tuple[tuple[Path, tuple[str, ...]], ...],
+    inventory_label: str,
+) -> tuple[dict[Path, tuple[str, ...]], list[str]]:
+    """Return workflow job contracts while rejecting duplicate rows."""
+
+    jobs_by_path: dict[Path, tuple[str, ...]] = {}
+    errors: list[str] = []
+    for path, job_names in workflow_jobs:
+        previous_jobs = jobs_by_path.get(path)
+        if previous_jobs is not None:
+            errors.append(
+                f"{inventory_label} inventory repeats {path}; "
+                f"first expected {', '.join(previous_jobs) or 'none'}, then "
+                f"{', '.join(job_names) or 'none'}; each formal workflow path "
+                "must be counted once"
+            )
+            continue
+        seen_jobs: set[str] = set()
+        duplicate_jobs: list[str] = []
+        for job_name in job_names:
+            if job_name in seen_jobs:
+                duplicate_jobs.append(job_name)
+                continue
+            seen_jobs.add(job_name)
+        if duplicate_jobs:
+            errors.append(
+                f"{inventory_label} inventory for {path} repeats "
+                f"job(s) {', '.join(sorted(set(duplicate_jobs)))}; each "
+                "checked formal workflow job must be counted once"
+            )
+        jobs_by_path[path] = job_names
+    return jobs_by_path, errors
+
+
+FORMAL_WORKFLOW_ALLOWED_JOB_NAMES = formal_workflow_job_contract_map(
+    FORMAL_WORKFLOW_JOB_NAMES,
+    "formal workflow allowed job",
+)[0]
+FORMAL_WORKFLOW_CHECKED_JOB_OCCURRENCE_CONTRACTS = (
+    (PR_WORKFLOW, "PR formal workflow", ("sumeragi_formal",)),
+    (NIGHTLY_WORKFLOW, "nightly formal workflow", ("frontier-nightly",)),
+)
+FORMAL_WORKFLOW_JOB_INVENTORY_CONTRACTS = (
+    (NIGHTLY_WORKFLOW, "nightly formal workflow", ("frontier-nightly",)),
+)
 FORMAL_WORKFLOW_NAME_CONTRACTS = (
     (PR_WORKFLOW, "PR formal workflow", "Pull Request CI"),
     (NIGHTLY_WORKFLOW, "nightly formal workflow", "Nightly Sumeragi Formal"),
@@ -1383,6 +1462,10 @@ FORMAL_WORKFLOW_NAME_CONTRACTS = (
 FORMAL_WORKFLOW_HEADER_KEY_CONTRACTS = (
     (PR_WORKFLOW, "PR formal workflow", ("name", "on", "concurrency", "env")),
     (NIGHTLY_WORKFLOW, "nightly formal workflow", ("name", "on", "concurrency")),
+)
+FORMAL_WORKFLOW_TOP_LEVEL_KEY_CONTRACTS = (
+    (PR_WORKFLOW, "PR formal workflow", ("name", "on", "concurrency", "env", "jobs")),
+    (NIGHTLY_WORKFLOW, "nightly formal workflow", ("name", "on", "concurrency", "jobs")),
 )
 FORMAL_WORKFLOW_PROOF_COMMAND_FRAGMENTS = (
     FORMAL_APALACHE_VERSION_COMMAND,
@@ -1568,15 +1651,19 @@ TLC_INVOCATION_SNIPPETS = (
     '-config "$cfg_file"',
     '"$module"',
 )
-APALACHE_ONLY_PR_MODES = {
+APALACHE_ONLY_PR_MODE_CONTRACTS = (
     "deep",
     "byzantine-direct-top-fast",
     "byzantine-delivered-first-top-fast",
     "byzantine-vote-first-top-fast",
-}
-APALACHE_ONLY_BOUNDED_PR_MODE_EXCEPTIONS = {
+)
+APALACHE_ONLY_PR_MODES = set(APALACHE_ONLY_PR_MODE_CONTRACTS)
+APALACHE_ONLY_BOUNDED_PR_MODE_EXCEPTION_CONTRACTS = (
     "deep",
-}
+)
+APALACHE_ONLY_BOUNDED_PR_MODE_EXCEPTIONS = set(
+    APALACHE_ONLY_BOUNDED_PR_MODE_EXCEPTION_CONTRACTS
+)
 APALACHE_ONLY_PR_MODE_README_SNIPPETS = (
     "`deep` is intentionally Apalache-only in PR CI",
     "`byzantine-direct-top-fast` is Apalache-only in PR CI",
@@ -1584,12 +1671,13 @@ APALACHE_ONLY_PR_MODE_README_SNIPPETS = (
     "`byzantine-vote-first-top-fast` is Apalache-only in PR CI",
     "Every non-allowlisted PR baseline mode must have both a TLC runner case and README command.",
 )
-APALACHE_TYPECHECK_ONLY_MODES = {
+APALACHE_TYPECHECK_ONLY_MODE_CONTRACTS = (
     "fast",
     "byzantine-direct-top-fast",
     "byzantine-delivered-first-top-fast",
     "byzantine-vote-first-top-fast",
-}
+)
+APALACHE_TYPECHECK_ONLY_MODES = set(APALACHE_TYPECHECK_ONLY_MODE_CONTRACTS)
 APALACHE_TYPECHECK_ONLY_README_SNIPPETS = (
     "The Apalache `fast` mode is intentionally a monolithic-module typecheck smoke.",
     "`byzantine-direct-top-fast` is a focused top-level `Sumeragi.tla`",
@@ -1672,6 +1760,7 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Transitive named exactness predicate chains must not hide generic correctness",
     "pins the three top-level Byzantine CFG check surfaces",
     "top-level Byzantine CFG constants pin quorum and fault envelopes",
+    "Byzantine top auxiliary CFG contract inventories must stay duplicate-free",
     "top-level sentinel CFG proof-check sets must remain exact",
     "projection progress spec composes the named fairness aggregate",
     "source progress specs compose their named fairness aggregates",
@@ -1684,6 +1773,10 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "CI, workflow, and README formal commands must use strict Apalache/TLC runner shapes",
     "README formal runner commands must be standalone command lines",
     "README formal runner commands must live in shell fenced code blocks",
+    "Apalache/TLC runner case inventories must stay duplicate-free",
+    "Apalache runner-mode CI reachability diagnostics must stay line-aware",
+    "README Apalache command support diagnostics must stay line-aware",
+    "README TLC command support diagnostics must stay line-aware",
     "README shell fences containing formal runner commands must be closed",
     "YAML `run:` formal commands are only accepted in workflow files",
     "Workflow and baseline formal entrypoint commands must be active run/script lines",
@@ -1691,17 +1784,71 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Formal preflight, sweep, and success ordering checks must use exact command lines",
     "CI and workflow mode inventories must count only active direct runner commands",
     "Active CI/workflow TLC modes must be supported by the TLC runner and documented by README TLC commands",
+    "Active CI/workflow TLC inventory diagnostics must stay line-aware",
+    "Active CI/workflow Apalache support diagnostics must stay line-aware",
+    "Active CI/workflow Apalache README coverage diagnostics must stay line-aware",
+    "PR baseline TLC cross-check diagnostics must stay line-aware",
+    "Active CI/workflow Apalache modes must be duplicate-free",
     "Active CI/workflow TLC modes must be duplicate-free",
+    "Active CI/workflow Apalache modes must not overlap across proof surfaces",
+    "Active CI/workflow TLC modes must not overlap across proof surfaces",
+    "README Apalache/TLC command inventories must stay duplicate-free",
+    "README Apalache length table modes must stay duplicate-free",
+    "README Apalache length table coverage diagnostics must stay line-aware",
+    "README Apalache length mismatch diagnostics must stay line-aware",
+    "README fast-mode table modes must stay duplicate-free",
+    "README fast-mode table TLC support diagnostics must stay line-aware",
+    "TLC exact fast-mode README coverage diagnostics must stay line-aware",
+    "README mutation-mode TLC runner support diagnostics must stay line-aware",
+    "README mutation-mode TLC expected-failure diagnostics must stay line-aware",
+    "README mutation-mode expected-failure CI coverage diagnostics must stay line-aware",
+    "Apalache expected-failure CI marker diagnostics must stay line-aware",
+    "Apalache baseline expected-failure diagnostics must stay line-aware",
+    "Apalache CI mutation-surface diagnostics must stay line-aware",
+    "README mutation CFG equivalence diagnostics must stay line-aware",
+    "README mutation CFG-name diagnostics must stay line-aware",
+    "TLC module identity diagnostics must stay line-aware",
+    "Apalache/TLC unused runner-case diagnostics must stay line-aware",
+    "Apalache/TLC missing formal-file diagnostics must stay line-aware",
+    "Apalache/TLC CFG shape diagnostics must stay line-aware",
+    "Apalache/TLC TLA validation diagnostics must stay line-aware",
+    "Apalache/TLC CFG inventory diagnostics must stay line-aware",
+    "Apalache/TLC CFG proof-target diagnostics must stay line-aware",
+    "Apalache/TLC CFG module-binding diagnostics must stay line-aware",
+    "Apalache/TLC CFG constant-binding diagnostics must stay line-aware",
+    "Apalache/TLC CFG trivial-target diagnostics must stay line-aware",
+    "TLC non-mutation expected-failure diagnostics must stay line-aware",
     "Formal coverage audit must run before Apalache, TLC, and expected-failure evidence commands",
     "Formal workflow triggers must keep the checked PR and scheduled/manual surfaces",
     "Formal workflow names must stay exact",
+    "Formal workflow name inventories must stay duplicate-free",
     "Formal workflow header key inventories must stay exact",
+    "Formal workflow header-key contract rows must stay duplicate-free",
+    "Formal workflow full top-level key inventories must stay exact",
+    "Formal workflow full top-level key contract rows must stay duplicate-free",
     "Formal workflow trigger event inventories must stay exact",
+    "Formal workflow trigger block inventories must stay duplicate-free",
+    "Formal workflow trigger event inventories must stay duplicate-free",
     "Formal workflow path filters must keep the reviewed ignored-path set",
+    "Formal workflow path-filter inventories must stay duplicate-free",
     "Formal workflow concurrency must keep reviewed cancellation behavior",
+    "Formal workflow concurrency inventories must stay duplicate-free",
     "Formal workflow headers must not set defaults or token permissions",
+    "Formal workflow header-control job inventories must stay duplicate-free",
     "Formal workflow top-level env keys must stay reviewed",
+    "Formal workflow top-level env key inventories must stay duplicate-free",
     "Formal workflow top-level env bindings must stay exact",
+    "Formal workflow top-level env binding inventories must stay duplicate-free",
+    "Formal workflow step-name inventories must stay exact",
+    "Formal workflow step-name contract rows must stay duplicate-free",
+    "Formal workflow job key inventories must stay exact",
+    "Formal workflow job-key contract rows must stay duplicate-free",
+    "Formal workflow step key inventories must stay exact",
+    "Formal workflow step-key contract rows must stay duplicate-free",
+    "Formal workflow checked job declarations must stay singular",
+    "Formal workflow checked-job declaration inventories must stay duplicate-free",
+    "Formal nightly workflow job inventory must stay exact",
+    "Formal nightly workflow job inventory rows must stay duplicate-free",
     "Workflow Apalache install and toolchain version pins must come from active commands",
     "Formal workflows must verify the pinned Apalache binary before running proof jobs",
     "Formal baseline script must verify the pinned Apalache binary after coverage and before proof jobs",
@@ -1716,35 +1863,58 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Formal CI proof scripts may contain only allowlisted direct evidence commands",
     "Formal workflow proof jobs may contain only single-line allowlisted run commands",
     "Formal workflow run steps must set `run` at most once and cannot combine `run` with `uses`",
+    "Formal workflow run-command job inventories must stay duplicate-free",
     "Formal workflow run inventories must match the checked proof jobs",
+    "Formal workflow run inventories must stay duplicate-free",
     "Formal workflow proof jobs may use only allowlisted action steps",
+    "Formal workflow action-step job inventories must stay duplicate-free",
     "Formal workflow action steps must set `uses` at most once",
     "Formal workflow action inventories must match the checked proof jobs",
+    "Formal workflow action inventories must stay duplicate-free",
     "Formal workflow action inputs must match the pinned proof environment",
+    "Formal workflow action input inventories must stay duplicate-free",
+    "Formal workflow action-input job inventories must stay duplicate-free",
     "Formal workflow setup action steps must not use conditionals, execution modifiers, or continue-on-error",
+    "Formal workflow setup-action job inventories must stay duplicate-free",
     "Formal workflow proof jobs must use the pinned runner label",
+    "Formal workflow runner-label inventories must stay duplicate-free",
     "Formal workflow proof jobs must keep pinned timeout budgets",
+    "Formal workflow timeout contract rows must stay duplicate-free",
     "Formal workflow proof jobs must not use dependency or environment gates",
     "Formal workflow proof jobs must not set job-level token permissions",
+    "Formal workflow proof-step control job inventories must stay duplicate-free",
     "Formal workflow proof entrypoints must stay inside the checked formal jobs",
+    "Formal workflow entrypoint inventories must stay duplicate-free",
     "Formal workflow proof commands must not appear outside checked formal jobs in any workflow",
+    "Formal workflow allowed-job inventories must stay duplicate-free",
     "Formal workflow job scoping must only recognize jobs under the top-level jobs block",
     "Formal workflow job scoping must normalize top-level and job-name YAML key spacing",
     "Formal workflow proof steps must not use job or step conditionals, execution modifiers, or continue-on-error",
     "Formal workflow mode and toolchain inventories must stay scoped to checked formal jobs",
     "Formal singleton evidence commands must appear at most once",
+    "Formal CI singleton command inventories must stay duplicate-free",
     "Formal shell entrypoints must use `set -euo pipefail`",
     "Apalache runner proof invocations must route through `run_with_expected_status`",
     "TLC runner proof invocations must preserve the `PIPESTATUS[0]` status-capture contract",
     "top-level Sumeragi proof CFGs must remain unconstrained",
     "CFGs must define exactly one behavior surface",
+    "CFG required behavior inventories must stay duplicate-free",
     "CFGs must check TypeInvariant and a semantic proof target",
+    "CFG semantic proof-target checks must propagate malformed operator inventories",
+    "CFG normalized proof-target inventories must stay duplicate-free",
+    "CFG required proof-check inventories must stay duplicate-free",
     "CFG operator references must resolve to zero-arity non-trivial targets",
     "CFG operator references must be duplicate-free and role-disjoint",
+    "CFG duplicate and non-trivial operator guards must propagate malformed operator inventories",
     "CFG filenames must belong to inferred owning modules",
     "fast CFGs must use model-specific correctness envelopes",
+    "Fast generic-check guards must propagate malformed operator inventories",
+    "Correctness-envelope shape guards must propagate malformed operator inventories",
+    "Direct-exactness shape and pairing guards must propagate malformed operator inventories",
     "CFG proof-target shapes must preserve correctness-envelope/direct-exactness structure",
     "CFG constant bindings must match owning module declarations",
+    "CFG duplicate constant-binding guards must propagate malformed binding inventories",
+    "CFG required constant-value inventories must stay duplicate-free",
     "top-level Sumeragi CFG constants pin quorum and fault envelopes",
     "top-level Sumeragi CFG constant sets must remain exact",
     'clean temporal progress CFGs bind Bug = "none"',
@@ -1756,6 +1926,7 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Mutation CFG semantic proof targets must resolve to zero-arity non-trivial",
     "mutation CFGs bind the expected behavior surface",
     "custom mutation INIT exceptions must stay live, necessary, and exact",
+    "Custom mutation INIT exception inventories must stay duplicate-free",
     "quoted-string mutation CFG Bug constants match their file suffix",
     "quoted mutation CFG Bug selectors must be used by reachable TLA Bug expressions",
     "mutation CFGs use exactly one Bug selector style",
@@ -1772,10 +1943,17 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "boolean mutation CFG selectors bind every declared boolean selector",
     "boolean mutation CFG selectors must be used by reachable TLA expressions",
     "exact mutation CFG Bug selectors must be declared by their TLA modules",
+    "Boolean mutation selector alias inventories must stay duplicate-free",
+    "Boolean mutation compound selector inventories must stay duplicate-free",
     "boolean selector exception tables must stay live, necessary, and exact",
     "safety mutation CFGs bind INIT Init and NEXT Next",
     'clean safety CFGs bind Bug = "none"',
     "clean safety CFGs bind INIT Init and NEXT Next",
+    "Progress safety-only mutation allowlists must stay duplicate-free",
+    "Source progress safety alignment inventories must stay duplicate-free",
+    "Byzantine top/projection operator alignment inventories must stay duplicate-free",
+    "Byzantine top/projection implication inventories must stay duplicate-free",
+    "Byzantine top/projection literal conjunct inventories must stay duplicate-free",
     "Transitive exactness predicate chains must not hide repeated helper conjuncts",
     "Unary-temporal exactness helper wrappers must not hide repeated helper conjuncts",
     "Unary-temporal exactness helper wrappers must not hide single-helper conjunct aliases",
@@ -2040,6 +2218,8 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Exactness and correctness-envelope conjunct references must resolve to zero-arity",
     "Transitive exactness predicate chains must also resolve through zero-arity",
     "Apalache-only top-level corridor modes must stay typecheck-only unless listed as the bounded deep exception",
+    "Apalache-only proof-mode inventories must stay duplicate-free",
+    "Apalache typecheck-only runner inventories must stay duplicate-free",
     "Every top-level Sumeragi property checked by the deep/TLC-fast configs must be reachable",
     "from `SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope` through zero-arity",
     "operator references",
@@ -2049,6 +2229,10 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Aggregate proof root conjuncts must stay named zero-arity operators",
     "The correctness root composes `TypeInvariant`, `SumeragiConsensusCoreAlwaysMatchesExactness`,",
     "`SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope`, and `EventuallyCommit` directly",
+    "Static aggregate conjunct contract inventories must stay duplicate-free",
+    "Source/projection static alignment contract inventories must stay duplicate-free",
+    "Static fairness action contract inventories must stay duplicate-free",
+    "`WF_vars` fairness operands must stay named zero-arity operators",
     "The state+temporal, exactness, and fast roots keep their documented direct conjuncts",
     "Sumeragi_fast.cfg pins the fast correctness envelope",
     "Every direct conjunct of `SumeragiConsensusCoreStateMatchesEnvelope` must be checked",
@@ -2063,7 +2247,10 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Reachable aggregate temporal property roots recursively use the same top-level `PROPERTY` coverage rule",
     "Finalized certificate retention names the Byzantine commit-vote closure property directly",
     "Root coverage checks require each selected deep/TLC-fast CFG to carry every protected conjunct independently",
+    "Root CFG coverage checks must consume duplicate-free proof-target inventories",
+    "Correctness-root CFG role checks must propagate malformed proof-target inventories",
     "Top-level Apalache/TLC CFG proof checks must stay in parity",
+    "Top-level Apalache/TLC CFG parity checks must propagate malformed proof-target inventories",
     "Correctness-root reachability requires the root property in every selected deep/TLC-fast CFG",
     "Correctness-root direct TypeInvariant stays a top-level `INVARIANT` in every selected deep/TLC-fast CFG",
     "Correctness-root direct temporal obligations stay top-level `PROPERTY` checks in every selected deep/TLC-fast CFG",
@@ -2153,18 +2340,24 @@ FORMAL_WORKFLOW_ALLOWED_ACTIONS = (
     "actions/setup-java@v4",
     "actions/upload-artifact@v4",
 )
-FORMAL_WORKFLOW_ACTION_INPUTS = {
-    "actions/checkout@v4": (),
-    "actions/setup-java@v4": (
-        "distribution: temurin",
-        "java-version: '17'",
+FORMAL_WORKFLOW_ACTION_INPUT_CONTRACTS = (
+    ("actions/checkout@v4", ()),
+    (
+        "actions/setup-java@v4",
+        (
+            "distribution: temurin",
+            "java-version: '17'",
+        ),
     ),
-    "actions/upload-artifact@v4": (
-        "name: formal-docs-i18n-metadata-nightly",
-        "path: target/docs-i18n/formal-metadata.json",
-        "if-no-files-found: ignore",
+    (
+        "actions/upload-artifact@v4",
+        (
+            "name: formal-docs-i18n-metadata-nightly",
+            "path: target/docs-i18n/formal-metadata.json",
+            "if-no-files-found: ignore",
+        ),
     ),
-}
+)
 FORMAL_WORKFLOW_ACTION_CONTRACTS = (
     (
         PR_WORKFLOW,
@@ -2186,9 +2379,82 @@ FORMAL_WORKFLOW_ACTION_CONTRACTS = (
         ),
     ),
 )
+FORMAL_WORKFLOW_UNNAMED_STEP = "<unnamed step>"
+FORMAL_WORKFLOW_STEP_NAME_CONTRACTS = (
+    (
+        PR_WORKFLOW,
+        ("sumeragi_formal",),
+        "PR formal workflow job",
+        (
+            FORMAL_WORKFLOW_UNNAMED_STEP,
+            FORMAL_WORKFLOW_UNNAMED_STEP,
+            "Install pinned Apalache",
+            "Apalache version",
+            "Sumeragi formal model checks (fast + deep)",
+        ),
+    ),
+    (
+        NIGHTLY_WORKFLOW,
+        ("frontier-nightly",),
+        "nightly formal workflow job",
+        (
+            FORMAL_WORKFLOW_UNNAMED_STEP,
+            FORMAL_WORKFLOW_UNNAMED_STEP,
+            "Install pinned Apalache",
+            "Apalache version",
+            "Sumeragi formal CI baseline",
+            "Sumeragi frontier nightly formal check",
+            "Formal docs metadata report",
+            "Upload formal docs metadata report",
+        ),
+    ),
+)
+FORMAL_WORKFLOW_STEP_KEY_CONTRACTS = (
+    (
+        PR_WORKFLOW,
+        ("sumeragi_formal",),
+        "PR formal workflow job",
+        (
+            ("uses",),
+            ("uses", "with"),
+            ("name", "run"),
+            ("name", "run"),
+            ("name", "run"),
+        ),
+    ),
+    (
+        NIGHTLY_WORKFLOW,
+        ("frontier-nightly",),
+        "nightly formal workflow job",
+        (
+            ("uses",),
+            ("uses", "with"),
+            ("name", "run"),
+            ("name", "run"),
+            ("name", "run"),
+            ("name", "run"),
+            ("name", "run"),
+            ("name", "if", "uses", "with"),
+        ),
+    ),
+)
 FORMAL_WORKFLOW_SETUP_ACTIONS = (
     "actions/checkout@v4",
     "actions/setup-java@v4",
+)
+FORMAL_WORKFLOW_JOB_KEY_CONTRACTS = (
+    (
+        PR_WORKFLOW,
+        ("sumeragi_formal",),
+        "PR formal workflow job",
+        ("runs-on", "timeout-minutes", "steps"),
+    ),
+    (
+        NIGHTLY_WORKFLOW,
+        ("frontier-nightly",),
+        "nightly formal workflow job",
+        ("runs-on", "timeout-minutes", "steps"),
+    ),
 )
 FORMAL_WORKFLOW_REQUIRED_RUNNER = "ubuntu-latest"
 FORMAL_WORKFLOW_TIMEOUT_CONTRACTS = (
@@ -2557,7 +2823,7 @@ CFG_CONSTANT_BINDING_LINE_RE = re.compile(
 CFG_NESTED_CONSTANT_BINDING_RE = re.compile(
     r"(^|\s)([A-Za-z_][A-Za-z0-9_]*)\s*(?:=|<-)"
 )
-TLA_WF_VARS_RE = re.compile(r"\bWF_vars\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)")
+TLA_WF_VARS_START_RE = re.compile(r"\bWF_vars\s*\(")
 CFG_CONSTANT_DIRECTIVES = {"CONSTANT", "CONSTANTS"}
 CFG_CHECK_DIRECTIVES = {"INVARIANT", "INVARIANTS", "PROPERTY", "PROPERTIES"}
 CFG_MISC_DIRECTIVES = {"CHECK_DEADLOCK"}
@@ -2922,22 +3188,27 @@ BYZANTINE_INTERLEAVING_PROGRESS_MUTATION_REQUIRED_CHECKS = (
 BYZANTINE_INTERLEAVING_PROGRESS_CFG_REQUIRED_BEHAVIOR = (
     ("SPECIFICATION", "ByzantineCommitInterleavingProgressSpec"),
 )
-DIRECT_DELIVERED_FIRST_PROGRESS_SAFETY_ONLY_MUTATIONS = frozenset()
+DIRECT_DELIVERED_FIRST_PROGRESS_SAFETY_ONLY_MUTATION_CONTRACTS: tuple[str, ...] = ()
+DIRECT_DELIVERED_FIRST_PROGRESS_SAFETY_ONLY_MUTATIONS = frozenset(
+    DIRECT_DELIVERED_FIRST_PROGRESS_SAFETY_ONLY_MUTATION_CONTRACTS
+)
+DIRECT_VOTE_FIRST_PROGRESS_SAFETY_ONLY_MUTATION_CONTRACTS = (
+    "commit_before_delivery",
+    "commit_evidence_before_delivery",
+    "phase_committed_before_delivery",
+)
 DIRECT_VOTE_FIRST_PROGRESS_SAFETY_ONLY_MUTATIONS = frozenset(
-    {
-        "commit_before_delivery",
-        "commit_evidence_before_delivery",
-        "phase_committed_before_delivery",
-    }
+    DIRECT_VOTE_FIRST_PROGRESS_SAFETY_ONLY_MUTATION_CONTRACTS
+)
+DIRECT_INTERLEAVING_PROGRESS_SAFETY_ONLY_MUTATION_CONTRACTS = (
+    "commit_before_delivery",
+    "commit_evidence_before_delivery",
+    "commit_quorum_under_counted",
+    "prepare_quorum_under_counted",
+    "stake_not_recorded",
 )
 DIRECT_INTERLEAVING_PROGRESS_SAFETY_ONLY_MUTATIONS = frozenset(
-    {
-        "commit_before_delivery",
-        "commit_evidence_before_delivery",
-        "commit_quorum_under_counted",
-        "prepare_quorum_under_counted",
-        "stake_not_recorded",
-    }
+    DIRECT_INTERLEAVING_PROGRESS_SAFETY_ONLY_MUTATION_CONTRACTS
 )
 SOURCE_SAFETY_MUTATION_CFG_REQUIRED_CHECKS = (
     (
@@ -3018,39 +3289,50 @@ PROJECTION_PROGRESS_CFG_REQUIRED_BEHAVIOR = (
     ("SPECIFICATION", "ProjectedCommitProgressSpec"),
 )
 CLEAN_PROGRESS_BUG_CONSTANT_VALUE = '"none"'
-BYZANTINE_PROGRESS_SAFETY_ONLY_MUTATIONS = frozenset(
-    {
-        "byzantine_stake_over_counted",
-        "byzantine_vote_over_budget",
-        "commit_before_delivery",
-        "commit_evidence_before_delivery",
-        "honest_stake_not_recorded",
-        "prepare_quorum_under_counted",
-    }
+BYZANTINE_PROGRESS_SAFETY_ONLY_MUTATION_CONTRACTS = (
+    "byzantine_stake_over_counted",
+    "byzantine_vote_over_budget",
+    "commit_before_delivery",
+    "commit_evidence_before_delivery",
+    "honest_stake_not_recorded",
+    "prepare_quorum_under_counted",
 )
-MUTATION_CFG_CUSTOM_INIT_OPERATORS = {
-    "SumeragiFrontierRecovery_bug_future_reanchor_active_marker.cfg": (
+BYZANTINE_PROGRESS_SAFETY_ONLY_MUTATIONS = frozenset(
+    BYZANTINE_PROGRESS_SAFETY_ONLY_MUTATION_CONTRACTS
+)
+MUTATION_CFG_CUSTOM_INIT_OPERATOR_CONTRACTS = (
+    (
+        "SumeragiFrontierRecovery_bug_future_reanchor_active_marker.cfg",
         "FutureReanchorActiveMarkerBugInit"
     ),
-    "SumeragiFrontierRecovery_bug_future_reanchor_rotated.cfg": (
+    (
+        "SumeragiFrontierRecovery_bug_future_reanchor_rotated.cfg",
         "FutureReanchorRotationBugInit"
     ),
-    "SumeragiFrontierRecovery_bug_payload_recovery_owner.cfg": (
+    (
+        "SumeragiFrontierRecovery_bug_payload_recovery_owner.cfg",
         "PayloadRecoveryOwnerBugInit"
     ),
-    "SumeragiFrontierRecovery_bug_quorum_window_cleanup.cfg": (
+    (
+        "SumeragiFrontierRecovery_bug_quorum_window_cleanup.cfg",
         "QuorumRetransmitWindowCleanupBugInit"
     ),
-    "SumeragiFrontierRecovery_bug_stale_recovery_owner_cleanup.cfg": (
+    (
+        "SumeragiFrontierRecovery_bug_stale_recovery_owner_cleanup.cfg",
         "StaleRecoveryUnlockOwnerBugInit"
     ),
-    "SumeragiFrontierRecovery_bug_view_bound_retransmit_evidence.cfg": (
+    (
+        "SumeragiFrontierRecovery_bug_view_bound_retransmit_evidence.cfg",
         "ViewBoundRetransmitEvidenceBugInit"
     ),
-    "SumeragiFrontierRecovery_bug_zero_evidence_future_drop.cfg": (
+    (
+        "SumeragiFrontierRecovery_bug_zero_evidence_future_drop.cfg",
         "ZeroEvidenceFutureDropBugInit"
     ),
-}
+)
+MUTATION_CFG_CUSTOM_INIT_OPERATORS = dict(
+    MUTATION_CFG_CUSTOM_INIT_OPERATOR_CONTRACTS
+)
 FORMAL_FILE_SUFFIXES = {".cfg", ".tla"}
 TLA_MODULE_VALIDATION_MODE_MARKER = "__SUMERAGI_FORMAL_MODE__"
 TLA_STRING_LITERAL_RE = re.compile(r'"(?:\\.|[^"\\])*"')
@@ -3433,18 +3715,151 @@ def workflow_field_value(stripped_line: str, field: str) -> str | None:
     return field_match.group(1)
 
 
-def command_modes(
+def command_mode_occurrences(
     path: Path, command_re: re.Pattern[str] = APALACHE_COMMAND_RE
-) -> list[str]:
-    modes: list[str] = []
-    for line in read_text(path).splitlines():
+) -> list[tuple[str, int]]:
+    occurrences: list[tuple[str, int]] = []
+    for line_number, line in enumerate(read_text(path).splitlines(), 1):
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
         match = command_re.fullmatch(direct_formal_command_text(stripped, path))
         if match is not None:
-            modes.append(match.group(1))
-    return modes
+            occurrences.append((match.group(1), line_number))
+    return occurrences
+
+
+def command_modes(
+    path: Path, command_re: re.Pattern[str] = APALACHE_COMMAND_RE
+) -> list[str]:
+    return [mode for mode, _line in command_mode_occurrences(path, command_re)]
+
+
+def duplicate_command_mode_errors(
+    occurrences: list[tuple[str, int]],
+    path: Path,
+    owner: str,
+) -> list[str]:
+    """Return duplicate command-mode errors with source line context."""
+
+    first_lines: dict[str, int] = {}
+    errors: list[str] = []
+    for mode, line_number in occurrences:
+        first_line = first_lines.get(mode)
+        if first_line is not None:
+            errors.append(
+                f"{display_path(path)} {owner} repeats mode {mode} at line "
+                f"{line_number}; first declared at line {first_line}; each "
+                f"{owner} mode must be counted once"
+            )
+            continue
+        first_lines[mode] = line_number
+    return errors
+
+
+def unsupported_command_mode_errors(
+    occurrences: list[tuple[str, int]],
+    path: Path,
+    owner: str,
+    cases: dict[str, RunnerCase],
+    runner_name: str,
+) -> list[str]:
+    """Return command modes unsupported by runner cases with source context."""
+
+    first_lines: dict[str, int] = {}
+    for mode, line_number in occurrences:
+        first_lines.setdefault(mode, line_number)
+
+    errors: list[str] = []
+    for mode in sorted_unique(
+        mode for mode in first_lines if matching_case(mode, cases) is None
+    ):
+        errors.append(
+            f"{display_path(path)} {owner} mode {mode} at line "
+            f"{first_lines[mode]} is unsupported by the {runner_name} runner"
+        )
+    return errors
+
+
+def missing_documented_command_mode_errors(
+    occurrences: list[tuple[str, int]],
+    path: Path,
+    owner: str,
+    supported_modes: set[str],
+    support_owner: str,
+) -> list[str]:
+    """Return documented modes missing from another inventory with source context."""
+
+    first_lines: dict[str, int] = {}
+    for mode, line_number in occurrences:
+        first_lines.setdefault(mode, line_number)
+
+    errors: list[str] = []
+    for mode in sorted_unique(set(first_lines) - supported_modes):
+        errors.append(
+            f"{display_path(path)} {owner} mode {mode} at line "
+            f"{first_lines[mode]} is missing from {support_owner}"
+        )
+    return errors
+
+
+def documented_bug_mode_expected_failure_ci_errors(
+    readme_occurrences: list[tuple[str, int]],
+    expected_failure_modes: set[str],
+    path: Path = README,
+) -> list[str]:
+    """Return README mutation modes missing from expected-failure CI."""
+
+    return missing_documented_command_mode_errors(
+        [
+            (mode, line_number)
+            for mode, line_number in readme_occurrences
+            if "-bug-" in mode
+        ],
+        path,
+        "README mutation command",
+        expected_failure_modes,
+        "expected-failure CI",
+    )
+
+
+def unexpected_bug_command_mode_errors(
+    occurrences: list[tuple[str, int]],
+    path: Path,
+    owner: str,
+    target_owner: str,
+) -> list[str]:
+    """Return mutation modes assigned to a non-mutation command surface."""
+
+    first_lines: dict[str, int] = {}
+    for mode, line_number in occurrences:
+        if "-bug-" in mode:
+            first_lines.setdefault(mode, line_number)
+
+    return [
+        f"{display_path(path)} {owner} mode {mode} at line "
+        f"{first_lines[mode]} belongs in {target_owner}"
+        for mode in sorted_unique(set(first_lines))
+    ]
+
+
+def unexpected_non_bug_command_mode_errors(
+    occurrences: list[tuple[str, int]],
+    path: Path,
+    owner: str,
+) -> list[str]:
+    """Return non-mutation modes assigned to a mutation command surface."""
+
+    first_lines: dict[str, int] = {}
+    for mode, line_number in occurrences:
+        if "-bug-" not in mode:
+            first_lines.setdefault(mode, line_number)
+
+    return [
+        f"{display_path(path)} {owner} mode {mode} at line "
+        f"{first_lines[mode]} is not a mutation mode"
+        for mode in sorted_unique(set(first_lines))
+    ]
 
 
 def readme_formal_command_block_errors(path: Path = README) -> list[str]:
@@ -3509,15 +3924,49 @@ def active_command_modes(
 ) -> list[str]:
     """Return formal modes invoked by active direct runner commands."""
 
+    return [
+        mode
+        for mode, _line in active_command_mode_occurrences(path, command_prefix)
+    ]
+
+
+def active_command_mode_occurrences(
+    path: Path,
+    command_prefix: str = APALACHE_COMMAND_PREFIX,
+) -> list[tuple[str, int]]:
+    """Return formal modes and lines invoked by active direct runner commands."""
+
     command_re = re.compile(
         rf"{re.escape(command_prefix)}\s+({COMMAND_MODE_PATTERN})"
     )
-    modes: list[str] = []
-    for _, command_text in active_command_lines(path):
+    occurrences: list[tuple[str, int]] = []
+    for line_number, command_text in active_command_lines(path):
         match = command_re.fullmatch(command_text)
         if match is not None:
-            modes.append(match.group(1))
-    return modes
+            occurrences.append((match.group(1), line_number))
+    return occurrences
+
+
+def duplicate_active_command_mode_errors(
+    occurrences: list[tuple[str, int]],
+    path: Path,
+    owner: str,
+) -> list[str]:
+    """Return duplicate active proof-mode errors with source line context."""
+
+    first_lines: dict[str, int] = {}
+    errors: list[str] = []
+    for mode, line_number in occurrences:
+        first_line = first_lines.get(mode)
+        if first_line is not None:
+            errors.append(
+                f"{display_path(path)} {owner} repeats mode {mode} at line "
+                f"{line_number}; first declared at line {first_line}; each "
+                f"{owner} mode must be counted once"
+            )
+            continue
+        first_lines[mode] = line_number
+    return errors
 
 
 def command_shape_errors(path: Path, command_prefix: str, owner: str) -> list[str]:
@@ -3724,7 +4173,18 @@ def formal_artifact_paths(spec_dir: Path | None = None) -> tuple[Path, ...]:
 def documented_fast_table_modes(path: Path = README) -> list[str]:
     return [
         mode
-        for mode, _length in documented_apalache_length_rows(path)
+        for mode, _line in documented_fast_table_mode_occurrences(path)
+    ]
+
+
+def documented_fast_table_mode_occurrences(
+    path: Path = README,
+) -> list[tuple[str, int]]:
+    return [
+        (mode, line_number)
+        for mode, _length, line_number in documented_apalache_length_row_occurrences(
+            path
+        )
         if mode.endswith("-fast")
     ]
 
@@ -3771,17 +4231,75 @@ def apalache_length_table_body_lines(path: Path = README) -> tuple[
 
 
 def documented_apalache_length_rows(path: Path = README) -> list[tuple[str, int]]:
-    rows: list[tuple[str, int]] = []
+    return [
+        (mode, length)
+        for mode, length, _line in documented_apalache_length_row_occurrences(path)
+    ]
+
+
+def documented_apalache_length_row_occurrences(
+    path: Path = README,
+) -> list[tuple[str, int, int]]:
+    """Return README Apalache length rows with source lines."""
+
+    rows: list[tuple[str, int, int]] = []
     body_lines, _ = apalache_length_table_body_lines(path)
-    for _, line in body_lines:
+    for line_number, line in body_lines:
         match = README_APALACHE_LENGTH_TABLE_ROW_RE.match(line)
         if match is None:
             continue
         mode, length, _intended_use = match.groups()
         length = length.strip()
         if length.isdigit():
-            rows.append((mode, int(length)))
+            rows.append((mode, int(length), line_number))
     return rows
+
+
+def apalache_length_table_occurrence_map(
+    rows: list[tuple[str, int, int]],
+    path: Path = README,
+) -> tuple[dict[str, int], list[str]]:
+    """Return Apalache length rows keyed by mode with duplicate line context."""
+
+    lengths: dict[str, int] = {}
+    first_lines: dict[str, int] = {}
+    errors: list[str] = []
+    for mode, length, line_number in rows:
+        previous_length = lengths.get(mode)
+        if previous_length is not None:
+            first_line = first_lines[mode]
+            errors.append(
+                f"{display_path(path)} Apalache length table repeats mode "
+                f"{mode} at line {line_number}; first declared at line "
+                f"{first_line} with length {previous_length}, then length "
+                f"{length}; each Apalache length table mode must be counted "
+                "once"
+            )
+            continue
+        lengths[mode] = length
+        first_lines[mode] = line_number
+    return lengths, errors
+
+
+def apalache_length_table_row_map(
+    rows: list[tuple[str, int]],
+    path: Path = README,
+) -> tuple[dict[str, int], list[str]]:
+    """Return Apalache length rows keyed by mode, rejecting duplicate rows."""
+
+    lengths: dict[str, int] = {}
+    errors: list[str] = []
+    for mode, length in rows:
+        previous_length = lengths.get(mode)
+        if previous_length is not None:
+            errors.append(
+                f"{display_path(path)} Apalache length table repeats mode "
+                f"{mode}; first length {previous_length}, then {length}; each "
+                "Apalache length table mode must be counted once"
+            )
+            continue
+        lengths[mode] = length
+    return lengths, errors
 
 
 def apalache_length_table_shape_errors(path: Path = README) -> list[str]:
@@ -3812,7 +4330,43 @@ def apalache_length_table_shape_errors(path: Path = README) -> list[str]:
 
 
 def runner_case_labels(path: Path) -> list[str]:
-    return CASE_LABEL_RE.findall(read_text(path))
+    return [label for label, _line in runner_case_label_occurrences(path)]
+
+
+def runner_case_label_occurrences(path: Path) -> list[tuple[str, int]]:
+    """Return runner case labels with source lines."""
+
+    occurrences: list[tuple[str, int]] = []
+    for line_number, line in enumerate(read_text(path).splitlines(), 1):
+        if CASE_LABEL_LINE_RE.fullmatch(line) is None:
+            continue
+        label_match = CASE_LABEL_RE.fullmatch(line)
+        if label_match is not None:
+            occurrences.append((label_match.group(1), line_number))
+    return occurrences
+
+
+def duplicate_runner_case_label_errors(
+    occurrences: list[tuple[str, int]],
+    path: Path,
+    runner_name: str,
+) -> list[str]:
+    """Return duplicate runner case labels with source line context."""
+
+    first_lines: dict[str, int] = {}
+    errors: list[str] = []
+    for label, line_number in occurrences:
+        first_line = first_lines.get(label)
+        if first_line is not None:
+            errors.append(
+                f"{runner_name} runner {display_path(path)} repeats case "
+                f"label {label} at line {line_number}; first declared at "
+                f"line {first_line}; each runner case label must be counted "
+                "once"
+            )
+            continue
+        first_lines[label] = line_number
+    return errors
 
 
 def runner_case_shape_errors(path: Path, runner_name: str) -> list[str]:
@@ -3882,33 +4436,170 @@ def exact_fast_runner_modes(cases: dict[str, RunnerCase]) -> set[str]:
     return {label for label in cases if "*" not in label and label.endswith("-fast")}
 
 
+def exact_fast_runner_mode_occurrences(
+    cases: dict[str, RunnerCase],
+) -> list[tuple[str, int]]:
+    """Return exact fast runner modes with their case-label lines."""
+
+    return [
+        (label, case.line)
+        for label, case in cases.items()
+        if "*" not in label and label.endswith("-fast")
+    ]
+
+
+def undocumented_exact_fast_runner_mode_errors(
+    cases: dict[str, RunnerCase],
+    documented_modes: set[str],
+    runner_path: Path,
+    target_owner: str,
+    runner_name: str = "TLC",
+) -> list[str]:
+    """Return exact fast runner modes missing from documentation."""
+
+    errors: list[str] = []
+    for mode, line_number in sorted(exact_fast_runner_mode_occurrences(cases)):
+        if mode in documented_modes:
+            continue
+        errors.append(
+            f"{runner_name} runner {display_path(runner_path)} case {mode} "
+            f"at line {line_number} is missing from {target_owner}"
+        )
+    return errors
+
+
+def unsupported_documented_bug_mode_errors(
+    occurrences: list[tuple[str, int]],
+    cases: dict[str, RunnerCase],
+    path: Path,
+    owner: str,
+    runner_name: str = "TLC",
+) -> list[str]:
+    """Return documented mutation modes unsupported by a runner."""
+
+    first_lines: dict[str, int] = {}
+    for mode, line_number in occurrences:
+        if "-bug-" not in mode:
+            continue
+        first_lines.setdefault(mode, line_number)
+
+    errors: list[str] = []
+    for mode, line_number in sorted(first_lines.items()):
+        if matching_case(mode, cases) is not None:
+            continue
+        errors.append(
+            f"{display_path(path)} {owner} mode {mode} at line "
+            f"{line_number} is unsupported by the {runner_name} runner"
+        )
+    return errors
+
+
+def missing_runner_case_mode_errors(
+    cases: dict[str, RunnerCase],
+    required_modes: set[str],
+    present_modes: set[str],
+    runner_path: Path,
+    runner_name: str,
+    target_owner: str,
+) -> list[str]:
+    """Return missing runner-created mode obligations with case line context."""
+
+    errors: list[str] = []
+    for mode in sorted_unique(required_modes - present_modes):
+        case = cases.get(mode)
+        if case is None:
+            errors.append(
+                f"{runner_name} runner case {mode} is missing from "
+                f"{target_owner}"
+            )
+            continue
+        errors.append(
+            f"{runner_name} runner {display_path(runner_path)} case {mode} "
+            f"at line {case.line} is missing from {target_owner}"
+        )
+    return errors
+
+
+def proof_mode_contract_items(
+    modes: set[str] | tuple[str, ...],
+) -> tuple[str, ...]:
+    """Return ordered proof-mode contract rows."""
+
+    if isinstance(modes, set):
+        return tuple(modes)
+    return modes
+
+
+def proof_mode_contract_set(
+    modes: set[str] | tuple[str, ...],
+    inventory_label: str,
+) -> tuple[set[str], list[str]]:
+    """Return proof-mode contracts as a set while rejecting duplicates."""
+
+    mode_set: set[str] = set()
+    errors: list[str] = []
+    for mode in proof_mode_contract_items(modes):
+        if mode in mode_set:
+            errors.append(
+                f"{inventory_label} inventory repeats {mode}; each proof "
+                "mode must be counted once"
+            )
+            continue
+        mode_set.add(mode)
+    return mode_set, errors
+
+
 def pr_tlc_cross_check_errors(
     pr_baseline_modes: set[str],
-    modes_with_tlc_runner: set[str],
-    readme_tlc_modes: set[str],
-    apalache_only_modes: set[str] = APALACHE_ONLY_PR_MODES,
+    apalache_cases: dict[str, RunnerCase],
+    tlc_cases: dict[str, RunnerCase],
+    readme_tlc_occurrences: list[tuple[str, int]],
+    readme_path: Path = README,
+    apalache_runner: Path = APALACHE_RUNNER,
+    tlc_runner: Path = TLC_RUNNER,
+    apalache_only_modes: (
+        set[str] | tuple[str, ...]
+    ) = APALACHE_ONLY_PR_MODE_CONTRACTS,
 ) -> list[str]:
     """Return coverage errors for PR baseline modes that need TLC parity."""
-    checked_modes = pr_baseline_modes - apalache_only_modes
-    errors: list[str] = []
+    apalache_only_mode_set, errors = proof_mode_contract_set(
+        apalache_only_modes,
+        "Apalache-only PR mode allowlist",
+    )
+    checked_modes = pr_baseline_modes - apalache_only_mode_set
+    readme_tlc_lines: dict[str, int] = {}
+    for mode, line_number in readme_tlc_occurrences:
+        readme_tlc_lines.setdefault(mode, line_number)
+    readme_tlc_modes = set(readme_tlc_lines)
 
-    missing_runner_modes = sorted_unique(checked_modes - modes_with_tlc_runner)
-    if missing_runner_modes:
+    def baseline_origin(mode: str) -> str:
+        case = matching_case(mode, apalache_cases)
+        if case is None:
+            return f"Apalache runner mode {mode}"
+        return (
+            f"Apalache runner case {case.label!r} at "
+            f"{display_path(apalache_runner)}:{case.line}"
+        )
+
+    missing_runner_modes = sorted_unique(
+        mode for mode in checked_modes if matching_case(mode, tlc_cases) is None
+    )
+    for mode in missing_runner_modes:
         errors.append(
-            "Sumeragi PR baseline modes without TLC runner cases "
-            "(not explicitly Apalache-only):\n"
-            + format_items(missing_runner_modes)
+            f"Sumeragi PR baseline mode {mode} from {baseline_origin(mode)} "
+            "has no TLC runner case (not explicitly Apalache-only)"
         )
 
     missing_readme_modes = sorted_unique(checked_modes - readme_tlc_modes)
-    if missing_readme_modes:
+    for mode in missing_readme_modes:
         errors.append(
-            "Sumeragi PR baseline modes without README TLC commands "
-            "(not explicitly Apalache-only):\n"
-            + format_items(missing_readme_modes)
+            f"Sumeragi PR baseline mode {mode} from {baseline_origin(mode)} "
+            "has no README TLC command (not explicitly Apalache-only)"
         )
 
-    stale_allowlist_modes = sorted_unique(apalache_only_modes - pr_baseline_modes)
+    stale_allowlist_modes = sorted_unique(
+        apalache_only_mode_set - pr_baseline_modes
+    )
     if stale_allowlist_modes:
         errors.append(
             "Sumeragi Apalache-only PR mode allowlist entries are stale:\n"
@@ -3916,21 +4607,26 @@ def pr_tlc_cross_check_errors(
         )
 
     allowlisted_runner_modes = sorted_unique(
-        apalache_only_modes & modes_with_tlc_runner
+        mode
+        for mode in apalache_only_mode_set
+        if matching_case(mode, tlc_cases) is not None
     )
-    if allowlisted_runner_modes:
+    for mode in allowlisted_runner_modes:
+        case = matching_case(mode, tlc_cases)
+        assert case is not None
         errors.append(
-            "Sumeragi Apalache-only PR modes unexpectedly have TLC runner cases:\n"
-            + format_items(allowlisted_runner_modes)
+            f"Sumeragi Apalache-only PR mode {mode} unexpectedly has TLC "
+            f"runner case {case.label!r} at {display_path(tlc_runner)}:"
+            f"{case.line}"
         )
 
     allowlisted_readme_modes = sorted_unique(
-        apalache_only_modes & readme_tlc_modes
+        apalache_only_mode_set & readme_tlc_modes
     )
-    if allowlisted_readme_modes:
+    for mode in allowlisted_readme_modes:
         errors.append(
-            "Sumeragi Apalache-only PR modes unexpectedly have README TLC commands:\n"
-            + format_items(allowlisted_readme_modes)
+            f"Sumeragi Apalache-only PR mode {mode} unexpectedly has README "
+            f"TLC command at {display_path(readme_path)}:{readme_tlc_lines[mode]}"
         )
 
     return errors
@@ -3966,15 +4662,217 @@ def ci_tlc_inventory_errors(
     return errors
 
 
+def ci_tlc_inventory_occurrence_errors(
+    surfaces: tuple[tuple[str, list[tuple[str, int]], Path], ...],
+    readme_tlc_modes: set[str],
+    tlc_cases: dict[str, RunnerCase],
+) -> list[str]:
+    """Return active TLC wiring errors with first source occurrence context."""
+
+    first_occurrences: dict[str, tuple[str, Path, int]] = {}
+    for label, occurrences, path in surfaces:
+        for mode, line_number in occurrences:
+            first_occurrences.setdefault(mode, (label, path, line_number))
+
+    errors: list[str] = []
+    unsupported_modes = sorted_unique(
+        mode
+        for mode in first_occurrences
+        if matching_case(mode, tlc_cases) is None
+    )
+    for mode in unsupported_modes:
+        label, path, line_number = first_occurrences[mode]
+        errors.append(
+            f"{mode} is invoked by {label} CI at "
+            f"{display_path(path)}:{line_number} but unsupported by the TLC runner"
+        )
+
+    undocumented_modes = sorted_unique(
+        set(first_occurrences) - readme_tlc_modes
+    )
+    for mode in undocumented_modes:
+        label, path, line_number = first_occurrences[mode]
+        errors.append(
+            f"{mode} is invoked by {label} CI at "
+            f"{display_path(path)}:{line_number} but missing from README TLC commands"
+        )
+    return errors
+
+
+def active_command_support_occurrence_errors(
+    surfaces: tuple[tuple[str, list[tuple[str, int]], Path], ...],
+    cases: dict[str, RunnerCase],
+    runner_name: str,
+) -> list[str]:
+    """Return active command modes unsupported by a runner with source context."""
+
+    first_occurrences: dict[str, tuple[str, Path, int]] = {}
+    for label, occurrences, path in surfaces:
+        for mode, line_number in occurrences:
+            first_occurrences.setdefault(mode, (label, path, line_number))
+
+    errors: list[str] = []
+    for mode in sorted_unique(
+        mode
+        for mode in first_occurrences
+        if matching_case(mode, cases) is None
+    ):
+        label, path, line_number = first_occurrences[mode]
+        errors.append(
+            f"{mode} is invoked by {label} CI at "
+            f"{display_path(path)}:{line_number} but unsupported by the "
+            f"{runner_name} runner"
+        )
+    return errors
+
+
+def active_command_documentation_occurrence_errors(
+    surfaces: tuple[tuple[str, list[tuple[str, int]], Path], ...],
+    documented_modes: set[str],
+    documentation_owner: str,
+) -> list[str]:
+    """Return active command modes missing documentation with source context."""
+
+    first_occurrences: dict[str, tuple[str, Path, int]] = {}
+    for label, occurrences, path in surfaces:
+        for mode, line_number in occurrences:
+            first_occurrences.setdefault(mode, (label, path, line_number))
+
+    errors: list[str] = []
+    for mode in sorted_unique(set(first_occurrences) - documented_modes):
+        label, path, line_number = first_occurrences[mode]
+        errors.append(
+            f"{mode} is invoked by {label} CI at "
+            f"{display_path(path)}:{line_number} but missing from "
+            f"{documentation_owner}"
+        )
+    return errors
+
+
+def ci_apalache_mode_surface_errors(
+    fast_ci_modes: list[str] | set[str],
+    expected_failure_modes: list[str] | set[str],
+    nightly_ci_modes: list[str] | set[str],
+) -> list[str]:
+    """Return errors when Apalache modes are assigned to multiple CI surfaces."""
+
+    errors: list[str] = []
+    surfaces = (
+        ("PR", set(fast_ci_modes)),
+        ("expected-failure", set(expected_failure_modes)),
+        ("scheduled/manual", set(nightly_ci_modes)),
+    )
+    for first_index, (first_label, first_modes) in enumerate(surfaces):
+        for second_label, second_modes in surfaces[first_index + 1 :]:
+            overlapping_modes = sorted_unique(first_modes & second_modes)
+            if not overlapping_modes:
+                continue
+            errors.append(
+                "Sumeragi formal modes appear in both "
+                f"{first_label} and {second_label} CI:\n"
+                + format_items(overlapping_modes)
+            )
+    return errors
+
+
+def ci_mode_surface_occurrence_errors(
+    surfaces: tuple[tuple[str, list[tuple[str, int]], Path], ...],
+    owner: str,
+) -> list[str]:
+    """Return cross-surface mode overlaps with source line context."""
+
+    errors: list[str] = []
+    indexed_surfaces: list[tuple[str, Path, dict[str, int]]] = []
+    for label, occurrences, path in surfaces:
+        first_lines: dict[str, int] = {}
+        for mode, line_number in occurrences:
+            first_lines.setdefault(mode, line_number)
+        indexed_surfaces.append((label, path, first_lines))
+
+    for first_index, (
+        first_label,
+        first_path,
+        first_lines,
+    ) in enumerate(indexed_surfaces):
+        for second_label, second_path, second_lines in indexed_surfaces[
+            first_index + 1 :
+        ]:
+            overlapping_modes = sorted_unique(
+                set(first_lines) & set(second_lines)
+            )
+            if not overlapping_modes:
+                continue
+            overlap_items = [
+                f"{mode} ({first_label} {display_path(first_path)}:"
+                f"{first_lines[mode]}; {second_label} "
+                f"{display_path(second_path)}:{second_lines[mode]})"
+                for mode in overlapping_modes
+            ]
+            errors.append(
+                f"Sumeragi {owner} modes appear in both "
+                f"{first_label} and {second_label} CI:\n"
+                + format_items(overlap_items)
+            )
+    return errors
+
+
+def ci_tlc_mode_surface_errors(
+    fast_ci_tlc_modes: list[str] | set[str],
+    expected_failure_tlc_modes: list[str] | set[str],
+    nightly_tlc_modes: list[str] | set[str],
+) -> list[str]:
+    """Return errors when TLC modes are assigned to multiple CI surfaces."""
+
+    errors: list[str] = []
+    surfaces = (
+        ("PR", set(fast_ci_tlc_modes)),
+        ("expected-failure", set(expected_failure_tlc_modes)),
+        ("scheduled/manual", set(nightly_tlc_modes)),
+    )
+    for first_index, (first_label, first_modes) in enumerate(surfaces):
+        for second_label, second_modes in surfaces[first_index + 1 :]:
+            overlapping_modes = sorted_unique(first_modes & second_modes)
+            if not overlapping_modes:
+                continue
+            errors.append(
+                "Sumeragi TLC modes appear in both "
+                f"{first_label} and {second_label} CI:\n"
+                + format_items(overlapping_modes)
+            )
+    return errors
+
+
 def apalache_only_typecheck_contract_errors(
-    apalache_only_modes: set[str] = APALACHE_ONLY_PR_MODES,
-    typecheck_only_modes: set[str] = APALACHE_TYPECHECK_ONLY_MODES,
-    bounded_exceptions: set[str] = APALACHE_ONLY_BOUNDED_PR_MODE_EXCEPTIONS,
+    apalache_only_modes: (
+        set[str] | tuple[str, ...]
+    ) = APALACHE_ONLY_PR_MODE_CONTRACTS,
+    typecheck_only_modes: (
+        set[str] | tuple[str, ...]
+    ) = APALACHE_TYPECHECK_ONLY_MODE_CONTRACTS,
+    bounded_exceptions: (
+        set[str] | tuple[str, ...]
+    ) = APALACHE_ONLY_BOUNDED_PR_MODE_EXCEPTION_CONTRACTS,
 ) -> list[str]:
     """Return errors when Apalache-only proof modes are not typecheck-only."""
 
-    errors: list[str] = []
-    stale_exceptions = sorted_unique(bounded_exceptions - apalache_only_modes)
+    apalache_only_mode_set, errors = proof_mode_contract_set(
+        apalache_only_modes,
+        "Apalache-only PR mode allowlist",
+    )
+    typecheck_only_mode_set, typecheck_only_errors = proof_mode_contract_set(
+        typecheck_only_modes,
+        "Apalache typecheck-only mode allowlist",
+    )
+    bounded_exception_set, bounded_exception_errors = proof_mode_contract_set(
+        bounded_exceptions,
+        "Apalache-only bounded PR exception",
+    )
+    errors.extend(typecheck_only_errors)
+    errors.extend(bounded_exception_errors)
+
+    stale_exceptions = sorted_unique(
+        bounded_exception_set - apalache_only_mode_set
+    )
     if stale_exceptions:
         errors.append(
             "Apalache-only bounded PR exception entries are stale:\n"
@@ -3982,7 +4880,7 @@ def apalache_only_typecheck_contract_errors(
         )
 
     unbounded_only_modes = sorted_unique(
-        apalache_only_modes - bounded_exceptions - typecheck_only_modes
+        apalache_only_mode_set - bounded_exception_set - typecheck_only_mode_set
     )
     if unbounded_only_modes:
         errors.append(
@@ -4011,6 +4909,25 @@ def unused_runner_case_labels(
     cases: dict[str, RunnerCase],
 ) -> list[str]:
     return sorted(set(cases) - used_runner_case_labels(modes, cases))
+
+
+def unused_runner_case_label_errors(
+    modes: list[str] | set[str],
+    cases: dict[str, RunnerCase],
+    runner_path: Path,
+    runner_name: str,
+    target_owner: str,
+) -> list[str]:
+    """Return unused runner case labels with source line context."""
+
+    errors: list[str] = []
+    for label in unused_runner_case_labels(modes, cases):
+        case = cases[label]
+        errors.append(
+            f"{runner_name} runner {display_path(runner_path)} case {label} "
+            f"at line {case.line} is unused by {target_owner}"
+        )
+    return errors
 
 
 def runner_case_shadow_errors(
@@ -4166,6 +5083,27 @@ def referenced_files(
             files.append(path)
 
     return files, errors
+
+
+def missing_referenced_file_errors(
+    mode: str,
+    case: RunnerCase,
+    files: list[Path],
+    runner_path: Path,
+    runner_name: str,
+) -> list[str]:
+    """Return missing formal file references with runner case context."""
+
+    errors: list[str] = []
+    for path in files:
+        if path.exists():
+            continue
+        errors.append(
+            f"{runner_name} runner {display_path(runner_path)} case "
+            f"{case.label!r} at line {case.line} mode {mode} references "
+            f"missing file {display_path(path)}"
+        )
+    return errors
 
 
 def malformed_scalar_assignment_errors(
@@ -4537,6 +5475,22 @@ def cfg_shape_errors(mode: str, paths: list[Path]) -> list[str]:
     return errors
 
 
+def runner_cfg_shape_errors(
+    mode: str,
+    case: RunnerCase,
+    paths: list[Path],
+    runner_path: Path,
+    runner_name: str,
+) -> list[str]:
+    """Return CFG shape errors with runner case source context."""
+
+    return [
+        f"{runner_name} runner {display_path(runner_path)} case "
+        f"{case.label!r} at line {case.line}: {error}"
+        for error in cfg_shape_errors(mode, paths)
+    ]
+
+
 def cfg_shape_surface_errors(
     spec_dir: Path = SPEC_DIR,
     cfg_glob: str = "*.cfg",
@@ -4873,8 +5827,10 @@ def cfg_check_operator_names(path: Path) -> tuple[set[str], list[str]]:
 def cfg_check_operator_kinds(path: Path) -> tuple[dict[str, str], list[str]]:
     """Return proof-check operators and their normalized CFG check kind."""
     references, errors = cfg_operator_references(path)
+    errors = list(errors)
     operator_kinds: dict[str, str] = {}
-    for _, directive, operator in references:
+    operator_lines: dict[str, tuple[str, int]] = {}
+    for line_number, directive, operator in references:
         if directive not in CFG_CHECK_DIRECTIVES:
             continue
         kind = (
@@ -4882,6 +5838,24 @@ def cfg_check_operator_kinds(path: Path) -> tuple[dict[str, str], list[str]]:
             if directive in {"INVARIANT", "INVARIANTS"}
             else "PROPERTY"
         )
+        previous = operator_lines.get(operator)
+        if previous is not None:
+            previous_kind, previous_line = previous
+            if previous_kind == kind:
+                errors.append(
+                    f"{display_path(path)}:{line_number} repeats {kind} "
+                    f"check {operator} first declared at line {previous_line}; "
+                    "CFG proof targets must be duplicate-free"
+                )
+            else:
+                errors.append(
+                    f"{display_path(path)}:{line_number} references {kind} "
+                    f"check {operator}, but line {previous_line} already "
+                    f"references it as {previous_kind}; CFG proof targets "
+                    "must not be both INVARIANT and PROPERTY"
+                )
+            continue
+        operator_lines[operator] = (kind, line_number)
         operator_kinds[operator] = kind
     return operator_kinds, errors
 
@@ -5003,6 +5977,24 @@ def cfg_behavior_contract_label(required_behavior: tuple[tuple[str, str], ...]) 
     )
 
 
+def cfg_required_behavior_inventory_duplicate_errors(
+    required_behavior: tuple[tuple[str, str], ...],
+    coverage_label: str,
+) -> list[str]:
+    """Return errors when a required CFG behavior inventory repeats directives."""
+
+    repeated_directives = duplicate_values(
+        [directive for directive, _operator in required_behavior]
+    )
+    if not repeated_directives:
+        return []
+    return [
+        f"{coverage_label} required behavior contract repeats expected "
+        f"directive(s) {', '.join(repeated_directives)}; each required CFG "
+        "behavior directive must be counted once"
+    ]
+
+
 def cfg_required_behavior_contract_errors(
     cfg_path: Path,
     required_behavior: tuple[tuple[str, str], ...],
@@ -5010,19 +6002,22 @@ def cfg_required_behavior_contract_errors(
 ) -> list[str]:
     """Return errors when a CFG file is not bound to the expected behavior."""
 
+    errors = cfg_required_behavior_inventory_duplicate_errors(
+        required_behavior,
+        coverage_label,
+    )
     if not cfg_path.exists():
-        return [
+        return errors + [
             f"{display_path(cfg_path)} is missing required {coverage_label} behavior"
         ]
 
     behavior_entries, cfg_errors = cfg_behavior_operator_references(cfg_path)
     if cfg_errors:
-        return [f"{display_path(cfg_path)}: {error}" for error in cfg_errors]
+        return errors + [f"{display_path(cfg_path)}: {error}" for error in cfg_errors]
 
     required = dict(required_behavior)
     required_directives = set(required)
     expected_label = cfg_behavior_contract_label(required_behavior)
-    errors: list[str] = []
 
     for directive in ("SPECIFICATION", "INIT", "NEXT"):
         entries = behavior_entries[directive]
@@ -5308,6 +6303,24 @@ def cfg_required_constant_value_contract_errors(
     return errors
 
 
+def cfg_required_constant_value_inventory_duplicate_errors(
+    required_values: tuple[tuple[str, str], ...],
+    coverage_label: str,
+) -> list[str]:
+    """Return errors when a required CFG constant-value inventory repeats keys."""
+
+    repeated_constants = duplicate_values(
+        [constant for constant, _expected_value in required_values]
+    )
+    if not repeated_constants:
+        return []
+    return [
+        f"{coverage_label} required constant value contract repeats expected "
+        f"constant(s) {', '.join(repeated_constants)}; each required CFG "
+        "constant must be counted once"
+    ]
+
+
 def cfg_required_constant_values_contract_errors(
     cfg_path: Path,
     required_values: tuple[tuple[str, str], ...],
@@ -5315,7 +6328,10 @@ def cfg_required_constant_values_contract_errors(
 ) -> list[str]:
     """Return errors when CFG constants do not match required values."""
 
-    errors: list[str] = []
+    errors = cfg_required_constant_value_inventory_duplicate_errors(
+        required_values,
+        coverage_label,
+    )
     for constant, expected_value in required_values:
         errors.extend(
             cfg_required_constant_value_contract_errors(
@@ -5335,19 +6351,22 @@ def cfg_required_exact_constant_set_contract_errors(
 ) -> list[str]:
     """Return errors when a CFG binds constants outside a proof envelope."""
 
+    errors = cfg_required_constant_value_inventory_duplicate_errors(
+        required_values,
+        coverage_label,
+    )
     if not cfg_path.exists():
-        return [
+        return errors + [
             f"{display_path(cfg_path)} is missing required {coverage_label} "
             "constant set"
         ]
 
     bindings, parse_errors = cfg_constant_binding_values(cfg_path)
     if parse_errors:
-        return parse_errors
+        return errors + parse_errors
 
     expected_constants = {constant for constant, _ in required_values}
     expected_label = ", ".join(sorted(expected_constants))
-    errors: list[str] = []
     for line_number, constant, _value in bindings:
         if constant in expected_constants:
             continue
@@ -5403,72 +6422,206 @@ def cfg_required_inferred_bug_suffix_constant_errors(
     )
 
 
-BOOLEAN_BUG_SELECTOR_COMPOUND_MUTATIONS = {
-    "SumeragiForkSafety_bug_double_sign.cfg": frozenset(
-        {
+BOOLEAN_BUG_SELECTOR_COMPOUND_MUTATION_CONTRACTS = (
+    (
+        "SumeragiForkSafety_bug_double_sign.cfg",
+        (
             "BugDisableSingleVote",
             "BugDisableLockedQcGate",
-        }
+        ),
     ),
-}
-BOOLEAN_BUG_SELECTOR_NAME_ALIASES = {
-    "SumeragiEngineCommitQcGate_bug_missing_highest_record.cfg": (
-        "BugSkipHighestRecord"
+)
+
+
+def boolean_bug_selector_compound_contract_items(
+    compound_contracts: (
+        dict[str, frozenset[str]] | tuple[tuple[str, tuple[str, ...]], ...]
     ),
-    "SumeragiEnginePrepareLockHighestGate_bug_clear_highest_on_rejected.cfg": (
-        "BugClearOnRejected"
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Return ordered boolean compound selector contract rows."""
+
+    if isinstance(compound_contracts, dict):
+        return tuple(
+            (cfg_name, tuple(compound_selectors))
+            for cfg_name, compound_selectors in compound_contracts.items()
+        )
+    return compound_contracts
+
+
+def _format_boolean_bug_selector_contract(selectors: tuple[str, ...]) -> str:
+    """Return a human-readable boolean selector contract list."""
+
+    return ", ".join(selectors) or "none"
+
+
+def boolean_bug_selector_compound_contract_map(
+    compound_contracts: (
+        dict[str, frozenset[str]] | tuple[tuple[str, tuple[str, ...]], ...]
     ),
-    "SumeragiEnginePrepareLockHighestGate_bug_clear_highest_on_replay_conflict_pending.cfg": (
-        "BugClearOnReplayConflictPending"
+) -> tuple[dict[str, frozenset[str]], list[str]]:
+    """Return compound selector contracts while rejecting duplicates."""
+
+    compound_selectors_by_cfg: dict[str, frozenset[str]] = {}
+    seen_selectors_by_cfg: dict[str, tuple[str, ...]] = {}
+    errors: list[str] = []
+    for cfg_name, compound_selectors in boolean_bug_selector_compound_contract_items(
+        compound_contracts
+    ):
+        previous_selectors = seen_selectors_by_cfg.get(cfg_name)
+        if previous_selectors is not None:
+            errors.append(
+                "boolean mutation compound selector inventory repeats "
+                f"{cfg_name}; first expected "
+                f"{_format_boolean_bug_selector_contract(previous_selectors)}, "
+                "then "
+                f"{_format_boolean_bug_selector_contract(compound_selectors)}; "
+                "each compound boolean selector exception must be counted once"
+            )
+            continue
+        seen_selectors_by_cfg[cfg_name] = compound_selectors
+
+        selector_set: set[str] = set()
+        repeated_selectors: set[str] = set()
+        for selector in compound_selectors:
+            if selector in selector_set:
+                repeated_selectors.add(selector)
+                continue
+            selector_set.add(selector)
+        for selector in sorted(repeated_selectors):
+            errors.append(
+                "boolean mutation compound selector inventory repeats "
+                f"selector {selector} for {cfg_name}; each compound "
+                "boolean selector must be counted once"
+            )
+        compound_selectors_by_cfg[cfg_name] = frozenset(selector_set)
+    return compound_selectors_by_cfg, errors
+
+
+BOOLEAN_BUG_SELECTOR_COMPOUND_MUTATIONS = (
+    boolean_bug_selector_compound_contract_map(
+        BOOLEAN_BUG_SELECTOR_COMPOUND_MUTATION_CONTRACTS
+    )[0]
+)
+BOOLEAN_BUG_SELECTOR_NAME_ALIAS_CONTRACTS = (
+    (
+        "SumeragiEngineCommitQcGate_bug_missing_highest_record.cfg",
+        "BugSkipHighestRecord",
     ),
-    "SumeragiEnginePrepareLockHighestGate_bug_record_highest_on_rejected.cfg": (
-        "BugRecordOnRejected"
+    (
+        "SumeragiEnginePrepareLockHighestGate_bug_clear_highest_on_rejected.cfg",
+        "BugClearOnRejected",
     ),
-    "SumeragiEnginePrepareLockHighestGate_bug_record_highest_on_replay_conflict_pending.cfg": (
-        "BugRecordOnReplayConflictPending"
+    (
+        "SumeragiEnginePrepareLockHighestGate_bug_clear_highest_on_replay_conflict_pending.cfg",
+        "BugClearOnReplayConflictPending",
     ),
-    "SumeragiEnginePrepareLockHighestGate_bug_skip_improving_highest.cfg": (
-        "BugSkipImprovingRecord"
+    (
+        "SumeragiEnginePrepareLockHighestGate_bug_record_highest_on_rejected.cfg",
+        "BugRecordOnRejected",
     ),
-    "SumeragiEnginePrepareLockHighestGate_bug_skip_no_current_highest.cfg": (
-        "BugSkipNoCurrentRecord"
+    (
+        "SumeragiEnginePrepareLockHighestGate_bug_record_highest_on_replay_conflict_pending.cfg",
+        "BugRecordOnReplayConflictPending",
     ),
-    "SumeragiEnginePrepareQcGate_bug_missing_lock_record.cfg": (
-        "BugSkipLockRecord"
+    (
+        "SumeragiEnginePrepareLockHighestGate_bug_skip_improving_highest.cfg",
+        "BugSkipImprovingRecord",
     ),
-    "SumeragiFrontierRecovery_bug_promotion_reset.cfg": (
-        "BugPromoteWithoutReset"
+    (
+        "SumeragiEnginePrepareLockHighestGate_bug_skip_no_current_highest.cfg",
+        "BugSkipNoCurrentRecord",
     ),
-    "SumeragiFrontierRecovery_bug_quorum_window_cleanup.cfg": (
-        "BugKeepQuorumWindowAfterRetransmit"
+    (
+        "SumeragiEnginePrepareQcGate_bug_missing_lock_record.cfg",
+        "BugSkipLockRecord",
     ),
-    "SumeragiFrontierRecovery_bug_stale_owner.cfg": "BugDisableStaleRecovery",
-    "SumeragiFrontierRecovery_bug_stale_recovery_owner_cleanup.cfg": (
-        "BugKeepStaleRecoveryOwnerAfterUnlock"
+    (
+        "SumeragiFrontierRecovery_bug_promotion_reset.cfg",
+        "BugPromoteWithoutReset",
     ),
-    "SumeragiFrontierRecovery_bug_vote_queue.cfg": "BugDisableQueueDrain",
-    "SumeragiQuorumPolicy_bug_count_over_validators.cfg": (
-        "BugCountAllowsOverValidatorCount"
+    (
+        "SumeragiFrontierRecovery_bug_quorum_window_cleanup.cfg",
+        "BugKeepQuorumWindowAfterRetransmit",
     ),
-    "SumeragiRbcDeliverQuorum_bug_inbound_force_one_acceptance.cfg": (
-        "BugInboundForceOneAccepted"
+    (
+        "SumeragiFrontierRecovery_bug_stale_owner.cfg",
+        "BugDisableStaleRecovery",
     ),
-    "SumeragiValidationGate_bug_invalid_replay.cfg": (
-        "BugKeepInflightAfterInvalid"
+    (
+        "SumeragiFrontierRecovery_bug_stale_recovery_owner_cleanup.cfg",
+        "BugKeepStaleRecoveryOwnerAfterUnlock",
     ),
-    "SumeragiValidationGate_bug_unknown_result.cfg": (
-        "BugAdvanceUnknownValidation"
+    (
+        "SumeragiFrontierRecovery_bug_vote_queue.cfg",
+        "BugDisableQueueDrain",
     ),
-    "SumeragiValidatorSetTransition_bug_mixed_cert.cfg": (
-        "BugAllowMixedSetCertificate"
+    (
+        "SumeragiQuorumPolicy_bug_count_over_validators.cfg",
+        "BugCountAllowsOverValidatorCount",
     ),
-    "SumeragiValidatorSetTransition_bug_premature_activation.cfg": (
-        "BugDisableActivationFinalityGate"
+    (
+        "SumeragiRbcDeliverQuorum_bug_inbound_force_one_acceptance.cfg",
+        "BugInboundForceOneAccepted",
     ),
-    "SumeragiValidatorSetTransition_bug_premature_new_cert.cfg": (
-        "BugAllowPrematureNewSetCertificate"
+    (
+        "SumeragiValidationGate_bug_invalid_replay.cfg",
+        "BugKeepInflightAfterInvalid",
     ),
-}
+    (
+        "SumeragiValidationGate_bug_unknown_result.cfg",
+        "BugAdvanceUnknownValidation",
+    ),
+    (
+        "SumeragiValidatorSetTransition_bug_mixed_cert.cfg",
+        "BugAllowMixedSetCertificate",
+    ),
+    (
+        "SumeragiValidatorSetTransition_bug_premature_activation.cfg",
+        "BugDisableActivationFinalityGate",
+    ),
+    (
+        "SumeragiValidatorSetTransition_bug_premature_new_cert.cfg",
+        "BugAllowPrematureNewSetCertificate",
+    ),
+)
+BOOLEAN_BUG_SELECTOR_NAME_ALIASES = dict(
+    BOOLEAN_BUG_SELECTOR_NAME_ALIAS_CONTRACTS
+)
+
+
+def boolean_bug_selector_alias_contract_items(
+    alias_contracts: dict[str, str] | tuple[tuple[str, str], ...],
+) -> tuple[tuple[str, str], ...]:
+    """Return ordered boolean selector alias contract rows."""
+
+    if isinstance(alias_contracts, dict):
+        return tuple(alias_contracts.items())
+    return alias_contracts
+
+
+def boolean_bug_selector_alias_contract_map(
+    alias_contracts: dict[str, str] | tuple[tuple[str, str], ...],
+) -> tuple[dict[str, str], list[str]]:
+    """Return boolean selector alias contracts while rejecting duplicates."""
+
+    aliases: dict[str, str] = {}
+    seen_aliases: dict[str, str] = {}
+    errors: list[str] = []
+    for cfg_name, expected_alias in boolean_bug_selector_alias_contract_items(
+        alias_contracts
+    ):
+        previous_alias = seen_aliases.get(cfg_name)
+        if previous_alias is not None:
+            errors.append(
+                "boolean mutation selector alias inventory repeats "
+                f"{cfg_name}; first expected {previous_alias}, then "
+                f"{expected_alias}; each boolean selector alias must be "
+                "counted once"
+            )
+            continue
+        seen_aliases[cfg_name] = expected_alias
+        aliases[cfg_name] = expected_alias
+    return aliases, errors
 
 
 def _boolean_bug_selector_name(selector: str) -> str:
@@ -5897,10 +7050,15 @@ def numeric_bug_selector_reference_errors(
 def boolean_bug_selector_one_hot_errors(
     spec_dir: Path = SPEC_DIR,
     cfg_glob: str = "*_bug_*.cfg",
+    compound_exceptions: (
+        dict[str, frozenset[str]] | tuple[tuple[str, tuple[str, ...]], ...]
+    ) = BOOLEAN_BUG_SELECTOR_COMPOUND_MUTATION_CONTRACTS,
 ) -> list[str]:
     """Return errors when boolean Bug... mutation selectors are ambiguous."""
 
-    errors: list[str] = []
+    compound_exception_map, errors = boolean_bug_selector_compound_contract_map(
+        compound_exceptions
+    )
     for cfg_path in sorted(spec_dir.glob(cfg_glob)):
         stem = cfg_path.stem
         if "_bug_" not in stem:
@@ -5935,9 +7093,7 @@ def boolean_bug_selector_one_hot_errors(
             for line_number, constant, value in bug_selectors
             if value == "TRUE"
         ]
-        compound_selectors = BOOLEAN_BUG_SELECTOR_COMPOUND_MUTATIONS.get(
-            cfg_path.name
-        )
+        compound_selectors = compound_exception_map.get(cfg_path.name)
         if compound_selectors is not None:
             actual_selectors = {constant for _, constant in true_selectors}
             if actual_selectors == compound_selectors:
@@ -5963,10 +7119,24 @@ def boolean_bug_selector_one_hot_errors(
 def boolean_bug_selector_name_errors(
     spec_dir: Path = SPEC_DIR,
     cfg_glob: str = "*_bug_*.cfg",
+    alias_contracts: (
+        dict[str, str] | tuple[tuple[str, str], ...]
+    ) = BOOLEAN_BUG_SELECTOR_NAME_ALIAS_CONTRACTS,
+    compound_exceptions: (
+        dict[str, frozenset[str]] | tuple[tuple[str, tuple[str, ...]], ...]
+    ) = (
+        BOOLEAN_BUG_SELECTOR_COMPOUND_MUTATION_CONTRACTS
+    ),
 ) -> list[str]:
     """Return errors when boolean Bug... selectors drift from CFG suffixes."""
 
-    errors: list[str] = []
+    expected_aliases, errors = boolean_bug_selector_alias_contract_map(
+        alias_contracts
+    )
+    compound_exception_map, compound_errors = (
+        boolean_bug_selector_compound_contract_map(compound_exceptions)
+    )
+    errors.extend(compound_errors)
     for cfg_path in sorted(spec_dir.glob(cfg_glob)):
         stem = cfg_path.stem
         if "_bug_" not in stem:
@@ -5977,7 +7147,7 @@ def boolean_bug_selector_name_errors(
             continue
         if any(constant == "Bug" for _, constant, _ in bindings):
             continue
-        if cfg_path.name in BOOLEAN_BUG_SELECTOR_COMPOUND_MUTATIONS:
+        if cfg_path.name in compound_exception_map:
             continue
         true_selectors = [
             (line_number, constant)
@@ -5987,7 +7157,7 @@ def boolean_bug_selector_name_errors(
         if len(true_selectors) != 1:
             continue
         line_number, selector = true_selectors[0]
-        expected_alias = BOOLEAN_BUG_SELECTOR_NAME_ALIASES.get(cfg_path.name)
+        expected_alias = expected_aliases.get(cfg_path.name)
         suffix = stem.split("_bug_", 1)[1]
         if expected_alias is not None:
             if selector == expected_alias:
@@ -6011,16 +7181,26 @@ def boolean_bug_selector_name_errors(
 
 def boolean_bug_selector_exception_errors(
     spec_dir: Path = SPEC_DIR,
-    alias_exceptions: dict[str, str] = BOOLEAN_BUG_SELECTOR_NAME_ALIASES,
-    compound_exceptions: dict[str, frozenset[str]] = (
-        BOOLEAN_BUG_SELECTOR_COMPOUND_MUTATIONS
+    alias_exceptions: (
+        dict[str, str] | tuple[tuple[str, str], ...]
+    ) = BOOLEAN_BUG_SELECTOR_NAME_ALIAS_CONTRACTS,
+    compound_exceptions: (
+        dict[str, frozenset[str]] | tuple[tuple[str, tuple[str, ...]], ...]
+    ) = (
+        BOOLEAN_BUG_SELECTOR_COMPOUND_MUTATION_CONTRACTS
     ),
 ) -> list[str]:
     """Return errors when boolean selector exception tables go stale or weak."""
 
-    errors: list[str] = []
+    alias_exception_map, errors = boolean_bug_selector_alias_contract_map(
+        alias_exceptions
+    )
+    compound_exception_map, compound_errors = (
+        boolean_bug_selector_compound_contract_map(compound_exceptions)
+    )
+    errors.extend(compound_errors)
     overlapping_exceptions = sorted(
-        set(alias_exceptions) & set(compound_exceptions)
+        set(alias_exception_map) & set(compound_exception_map)
     )
     for cfg_name in overlapping_exceptions:
         errors.append(
@@ -6029,7 +7209,7 @@ def boolean_bug_selector_exception_errors(
         )
     overlapping_exception_set = set(overlapping_exceptions)
 
-    for cfg_name, alias_selector in sorted(alias_exceptions.items()):
+    for cfg_name, alias_selector in sorted(alias_exception_map.items()):
         if cfg_name in overlapping_exception_set:
             continue
         if not cfg_name.endswith(".cfg") or "_bug_" not in cfg_name:
@@ -6069,7 +7249,7 @@ def boolean_bug_selector_exception_errors(
             f"{_format_boolean_bug_selectors(true_selectors)}"
         )
 
-    for cfg_name, compound_selectors in sorted(compound_exceptions.items()):
+    for cfg_name, compound_selectors in sorted(compound_exception_map.items()):
         if cfg_name in overlapping_exception_set:
             continue
         if not cfg_name.endswith(".cfg") or "_bug_" not in cfg_name:
@@ -6572,7 +7752,7 @@ def top_level_cfg_check_parity_errors(
     deep_check_kinds, deep_errors = cfg_check_operator_kinds(deep_cfg)
     tlc_check_kinds, tlc_errors = cfg_check_operator_kinds(tlc_fast_cfg)
     if deep_errors or tlc_errors:
-        return []
+        return [*deep_errors, *tlc_errors]
 
     errors: list[str] = []
     deep_checks = set(deep_check_kinds)
@@ -6599,6 +7779,26 @@ def top_level_cfg_check_parity_errors(
     return errors
 
 
+def cfg_duplicate_free_check_references(
+    cfg_paths: tuple[Path, ...],
+) -> tuple[dict[Path, list[tuple[int, str, str]]], list[str]]:
+    """Return CFG references only after normalized proof targets validate."""
+
+    references_by_path: dict[Path, list[tuple[int, str, str]]] = {}
+    errors: list[str] = []
+    for cfg_path in cfg_paths:
+        _, check_errors = cfg_check_operator_kinds(cfg_path)
+        if check_errors:
+            errors.extend(check_errors)
+            continue
+        references, parse_errors = cfg_operator_references(cfg_path)
+        if parse_errors:
+            errors.extend(parse_errors)
+            continue
+        references_by_path[cfg_path] = references
+    return references_by_path, errors
+
+
 def cfg_property_root_reachability_errors(
     module_path: Path = SPEC_DIR / "Sumeragi.tla",
     cfg_paths: tuple[Path, ...] = (SUMERAGI_DEEP_CFG, SUMERAGI_TLC_FAST_CFG),
@@ -6611,13 +7811,14 @@ def cfg_property_root_reachability_errors(
 
     definitions = tla_single_expression_operator_definitions(module_path)
     signatures = tla_operator_signatures(module_path)
+    references_by_path, check_errors = cfg_duplicate_free_check_references(cfg_paths)
+    if check_errors:
+        return check_errors
     cfg_properties: dict[str, list[tuple[Path, int]]] = {}
     cfg_properties_by_path: dict[Path, set[str]] = {}
     for cfg_path in cfg_paths:
         cfg_properties_by_path[cfg_path] = set()
-        references, parse_errors = cfg_operator_references(cfg_path)
-        if parse_errors:
-            return []
+        references = references_by_path[cfg_path]
         for line_number, directive, operator in references:
             if normalized_cfg_check_directive(directive) != "PROPERTY":
                 continue
@@ -6698,11 +7899,12 @@ def cfg_state_invariant_root_reachability_errors(
 
     definitions = tla_single_expression_operator_definitions(module_path)
     signatures = tla_operator_signatures(module_path)
+    references_by_path, check_errors = cfg_duplicate_free_check_references(cfg_paths)
+    if check_errors:
+        return check_errors
     cfg_invariants: dict[str, list[tuple[Path, int]]] = {}
     for cfg_path in cfg_paths:
-        references, parse_errors = cfg_operator_references(cfg_path)
-        if parse_errors:
-            return []
+        references = references_by_path[cfg_path]
         for line_number, directive, operator in references:
             if normalized_cfg_check_directive(directive) != "INVARIANT":
                 continue
@@ -6771,12 +7973,13 @@ def state_invariant_root_cfg_coverage_errors(
 
     definitions = tla_single_expression_operator_definitions(module_path)
     signatures = tla_operator_signatures(module_path)
+    references_by_path, check_errors = cfg_duplicate_free_check_references(cfg_paths)
+    if check_errors:
+        return check_errors
     cfg_invariants_by_path: dict[Path, set[str]] = {}
     for cfg_path in cfg_paths:
         cfg_invariants_by_path[cfg_path] = set()
-        references, parse_errors = cfg_operator_references(cfg_path)
-        if parse_errors:
-            return []
+        references = references_by_path[cfg_path]
         for _, directive, operator in references:
             if normalized_cfg_check_directive(directive) != "INVARIANT":
                 continue
@@ -6916,12 +8119,13 @@ def temporal_property_root_cfg_coverage_errors(
 
     definitions = tla_single_expression_operator_definitions(module_path)
     signatures = tla_operator_signatures(module_path)
+    references_by_path, check_errors = cfg_duplicate_free_check_references(cfg_paths)
+    if check_errors:
+        return check_errors
     cfg_properties_by_path: dict[Path, set[str]] = {}
     for cfg_path in cfg_paths:
         cfg_properties_by_path[cfg_path] = set()
-        references, parse_errors = cfg_operator_references(cfg_path)
-        if parse_errors:
-            return []
+        references = references_by_path[cfg_path]
         for _, directive, operator in references:
             if normalized_cfg_check_directive(directive) != "PROPERTY":
                 continue
@@ -7027,6 +8231,23 @@ def temporal_property_root_cfg_coverage_errors(
     return errors
 
 
+def conjunct_contract_inventory_duplicate_errors(
+    operator: str,
+    expected_conjuncts: tuple[str, ...],
+    root_kind: str,
+    duplicate_requirement: str,
+) -> list[str]:
+    """Return errors when a static conjunct contract repeats entries."""
+
+    repeated_conjuncts = duplicate_values(list(expected_conjuncts))
+    if not repeated_conjuncts:
+        return []
+    return [
+        f"{root_kind} {operator} conjunct contract repeats conjunct(s) "
+        f"{', '.join(repeated_conjuncts)}; {duplicate_requirement}"
+    ]
+
+
 def consensus_core_root_conjunct_contract_errors(
     module_path: Path = SPEC_DIR / "Sumeragi.tla",
     contracts: dict[str, tuple[str, ...]] = SUMERAGI_CONSENSUS_CORE_ROOT_CONJUNCT_CONTRACTS,
@@ -7053,6 +8274,14 @@ def consensus_core_root_conjunct_contract_errors(
     signatures = tla_operator_signatures(module_path)
     errors: list[str] = []
     for operator, expected_conjuncts in contracts.items():
+        errors.extend(
+            conjunct_contract_inventory_duplicate_errors(
+                operator,
+                expected_conjuncts,
+                root_kind,
+                duplicate_requirement,
+            )
+        )
         definition = definitions.get(operator)
         if definition is None:
             errors.append(
@@ -7640,18 +8869,52 @@ def rbc_live_evidence_causality_envelope_conjunct_contract_errors(
     )
 
 
+def implication_contract_items(
+    contracts: dict[str, str] | tuple[tuple[str, str], ...],
+) -> tuple[tuple[str, str], ...]:
+    """Return ordered implication antecedent contract rows."""
+
+    if isinstance(contracts, dict):
+        return tuple(contracts.items())
+    return contracts
+
+
+def implication_contract_map(
+    contracts: dict[str, str] | tuple[tuple[str, str], ...],
+    inventory_label: str,
+) -> tuple[dict[str, str], list[str]]:
+    """Return implication antecedent contracts while rejecting duplicates."""
+
+    contract_map: dict[str, str] = {}
+    seen_contracts: dict[str, str] = {}
+    errors: list[str] = []
+    for operator, expected_antecedent in implication_contract_items(contracts):
+        previous_antecedent = seen_contracts.get(operator)
+        if previous_antecedent is not None:
+            errors.append(
+                f"{inventory_label} inventory repeats {operator}; first "
+                f"expected {previous_antecedent}, then {expected_antecedent}; "
+                "each implication antecedent contract must be counted once"
+            )
+            continue
+        seen_contracts[operator] = expected_antecedent
+        contract_map[operator] = expected_antecedent
+    return contract_map, errors
+
+
 def implication_antecedent_contract_errors(
     module_path: Path,
-    contracts: dict[str, str],
+    contracts: dict[str, str] | tuple[tuple[str, str], ...],
+    inventory_label: str = "implication antecedent contract",
 ) -> list[str]:
     """Return errors for proof operators that must keep a top-level implication."""
 
+    contract_map, errors = implication_contract_map(contracts, inventory_label)
     if not module_path.exists():
-        return []
+        return errors
 
     definitions = tla_single_expression_operator_definitions(module_path)
-    errors: list[str] = []
-    for operator, expected_antecedent in contracts.items():
+    for operator, expected_antecedent in contract_map.items():
         definition = definitions.get(operator)
         if definition is None:
             continue
@@ -7702,19 +8965,113 @@ def byzantine_top_conjunct_contract_errors(
     errors.extend(
         implication_antecedent_contract_errors(
             module_path,
-            SUMERAGI_BYZANTINE_TOP_IMPLICATION_CONTRACTS,
+            SUMERAGI_BYZANTINE_TOP_IMPLICATION_CONTRACT_ROWS,
+            "Byzantine top implication antecedent contract",
         )
     )
     return errors
 
 
-def projected_byzantine_top_conjunct(conjunct: str) -> str:
+def byzantine_top_projection_literal_contract_items(
+    literal_conjuncts: dict[str, str] | tuple[tuple[str, str], ...],
+) -> tuple[tuple[str, str], ...]:
+    """Return ordered Byzantine top/projection literal conjunct rows."""
+
+    if isinstance(literal_conjuncts, dict):
+        return tuple(literal_conjuncts.items())
+    return literal_conjuncts
+
+
+def byzantine_top_projection_literal_contract_map(
+    literal_conjuncts: dict[str, str] | tuple[tuple[str, str], ...],
+) -> tuple[dict[str, str], list[str]]:
+    """Return top/projection literal conjunct mappings without duplicates."""
+
+    literal_map: dict[str, str] = {}
+    seen_top_literals: dict[str, str] = {}
+    seen_projected_literals: dict[str, str] = {}
+    errors: list[str] = []
+    for top_literal, projected_literal in byzantine_top_projection_literal_contract_items(
+        literal_conjuncts
+    ):
+        previous_projection = seen_top_literals.get(top_literal)
+        if previous_projection is not None:
+            errors.append(
+                "Byzantine top/projection literal conjunct inventory repeats "
+                f"{top_literal}; first expected {previous_projection}, then "
+                f"{projected_literal}; each literal top/projection conjunct "
+                "alignment must be counted once"
+            )
+            continue
+        previous_top = seen_projected_literals.get(projected_literal)
+        if previous_top is not None:
+            errors.append(
+                "Byzantine top/projection literal conjunct inventory maps "
+                f"{previous_top} and {top_literal} to {projected_literal}; "
+                "each projected literal conjunct must be aligned once"
+            )
+            continue
+        seen_top_literals[top_literal] = projected_literal
+        seen_projected_literals[projected_literal] = top_literal
+        literal_map[top_literal] = projected_literal
+    return literal_map, errors
+
+
+def projected_byzantine_top_conjunct(
+    conjunct: str,
+    literal_conjuncts: dict[str, str],
+) -> str:
     """Return the projected counterpart of a top-level Byzantine obligation."""
 
-    return SUMERAGI_TOP_TO_PROJECTION_LITERAL_CONJUNCTS.get(
+    return literal_conjuncts.get(
         conjunct,
         f"Projected{conjunct}",
     )
+
+
+def byzantine_top_projection_operator_contract_items(
+    operator_map: dict[str, str] | tuple[tuple[str, str], ...],
+) -> tuple[tuple[str, str], ...]:
+    """Return ordered Byzantine top/projection operator alignment rows."""
+
+    if isinstance(operator_map, dict):
+        return tuple(operator_map.items())
+    return operator_map
+
+
+def byzantine_top_projection_operator_contract_map(
+    operator_map: dict[str, str] | tuple[tuple[str, str], ...],
+) -> tuple[dict[str, str], list[str]]:
+    """Return Byzantine top/projection operator map while rejecting duplicates."""
+
+    mapped_operators: dict[str, str] = {}
+    seen_top_operators: dict[str, str] = {}
+    seen_projected_operators: dict[str, str] = {}
+    errors: list[str] = []
+    for top_operator, projected_operator in byzantine_top_projection_operator_contract_items(
+        operator_map
+    ):
+        previous_projection = seen_top_operators.get(top_operator)
+        if previous_projection is not None:
+            errors.append(
+                "Byzantine top/projection operator alignment inventory repeats "
+                f"{top_operator}; first expected {previous_projection}, then "
+                f"{projected_operator}; each Byzantine top/projection operator "
+                "alignment must be counted once"
+            )
+            continue
+        previous_top = seen_projected_operators.get(projected_operator)
+        if previous_top is not None:
+            errors.append(
+                "Byzantine top/projection operator alignment inventory maps "
+                f"{previous_top} and {top_operator} to {projected_operator}; "
+                "each projected top operator must be aligned once"
+            )
+            continue
+        seen_top_operators[top_operator] = projected_operator
+        seen_projected_operators[projected_operator] = top_operator
+        mapped_operators[top_operator] = projected_operator
+    return mapped_operators, errors
 
 
 def byzantine_top_projection_contract_alignment_errors(
@@ -7726,23 +9083,41 @@ def byzantine_top_projection_contract_alignment_errors(
         str,
         tuple[str, ...],
     ] = SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS,
-    operator_map: dict[
-        str,
-        str,
-    ] = SUMERAGI_BYZANTINE_TOP_TO_PROJECTION_OPERATOR_CONTRACTS,
-    top_implication_contracts: dict[
-        str,
-        str,
-    ] = SUMERAGI_BYZANTINE_TOP_IMPLICATION_CONTRACTS,
-    projection_implication_contracts: dict[
-        str,
-        str,
-    ] = SUMERAGI_PROJECTION_GATE_IMPLICATION_CONTRACTS,
+    operator_map: (
+        dict[str, str] | tuple[tuple[str, str], ...]
+    ) = SUMERAGI_BYZANTINE_TOP_TO_PROJECTION_OPERATOR_CONTRACT_ROWS,
+    top_implication_contracts: (
+        dict[str, str] | tuple[tuple[str, str], ...]
+    ) = SUMERAGI_BYZANTINE_TOP_IMPLICATION_CONTRACT_ROWS,
+    projection_implication_contracts: (
+        dict[str, str] | tuple[tuple[str, str], ...]
+    ) = SUMERAGI_PROJECTION_GATE_IMPLICATION_CONTRACT_ROWS,
+    literal_conjuncts: (
+        dict[str, str] | tuple[tuple[str, str], ...]
+    ) = SUMERAGI_TOP_TO_PROJECTION_LITERAL_CONJUNCT_ROWS,
 ) -> list[str]:
     """Return errors if projection top contracts drift from central top contracts."""
 
-    errors: list[str] = []
-    for top_operator, projected_operator in operator_map.items():
+    operator_map_by_top, errors = byzantine_top_projection_operator_contract_map(
+        operator_map
+    )
+    top_implication_map, top_implication_errors = implication_contract_map(
+        top_implication_contracts,
+        "Byzantine top/projection source implication",
+    )
+    projection_implication_map, projection_implication_errors = (
+        implication_contract_map(
+            projection_implication_contracts,
+            "Byzantine top/projection projection implication",
+        )
+    )
+    literal_conjunct_map, literal_conjunct_errors = (
+        byzantine_top_projection_literal_contract_map(literal_conjuncts)
+    )
+    errors.extend(top_implication_errors)
+    errors.extend(projection_implication_errors)
+    errors.extend(literal_conjunct_errors)
+    for top_operator, projected_operator in operator_map_by_top.items():
         top_conjuncts = top_contracts.get(top_operator)
         if top_conjuncts is None:
             errors.append(
@@ -7759,8 +9134,35 @@ def byzantine_top_projection_contract_alignment_errors(
             continue
 
         expected_projected_conjuncts = tuple(
-            projected_byzantine_top_conjunct(conjunct)
+            projected_byzantine_top_conjunct(conjunct, literal_conjunct_map)
             for conjunct in top_conjuncts
+        )
+        duplicate_requirement = (
+            "each Byzantine top/projection obligation must be counted once"
+        )
+        errors.extend(
+            conjunct_contract_inventory_duplicate_errors(
+                top_operator,
+                top_conjuncts,
+                "Byzantine top source",
+                duplicate_requirement,
+            )
+        )
+        errors.extend(
+            conjunct_contract_inventory_duplicate_errors(
+                projected_operator,
+                expected_projected_conjuncts,
+                "Byzantine top/projection expected",
+                duplicate_requirement,
+            )
+        )
+        errors.extend(
+            conjunct_contract_inventory_duplicate_errors(
+                projected_operator,
+                projected_conjuncts,
+                "Byzantine top/projection actual",
+                duplicate_requirement,
+            )
         )
         expected_projected_set = set(expected_projected_conjuncts)
         projected_set = set(projected_conjuncts)
@@ -7788,16 +9190,19 @@ def byzantine_top_projection_contract_alignment_errors(
                 f"{', '.join(unexpected_conjuncts)}"
             )
 
-    for top_operator, top_antecedent in top_implication_contracts.items():
-        projected_operator = operator_map.get(top_operator)
+    for top_operator, top_antecedent in top_implication_map.items():
+        projected_operator = operator_map_by_top.get(top_operator)
         if projected_operator is None:
             errors.append(
                 "Byzantine top/projection alignment cannot map implication "
                 f"operator {top_operator}"
             )
             continue
-        expected_antecedent = projected_byzantine_top_conjunct(top_antecedent)
-        actual_antecedent = projection_implication_contracts.get(projected_operator)
+        expected_antecedent = projected_byzantine_top_conjunct(
+            top_antecedent,
+            literal_conjunct_map,
+        )
+        actual_antecedent = projection_implication_map.get(projected_operator)
         if actual_antecedent != expected_antecedent:
             actual = actual_antecedent or "<missing>"
             errors.append(
@@ -7838,6 +9243,25 @@ def byzantine_top_corridor_contract_alignment_errors(
 
         expected_set = set(expected_conjuncts)
         actual_set = set(actual_conjuncts)
+        duplicate_requirement = (
+            "each Byzantine top corridor obligation must be counted once"
+        )
+        errors.extend(
+            conjunct_contract_inventory_duplicate_errors(
+                operator,
+                expected_conjuncts,
+                "Byzantine top corridor expected",
+                duplicate_requirement,
+            )
+        )
+        errors.extend(
+            conjunct_contract_inventory_duplicate_errors(
+                operator,
+                actual_conjuncts,
+                "Byzantine top corridor actual",
+                duplicate_requirement,
+            )
+        )
         missing_conjuncts = [
             conjunct for conjunct in expected_conjuncts if conjunct not in actual_set
         ]
@@ -7890,6 +9314,25 @@ def projection_bridge_interleaving_contract_alignment_errors(
     expected_set = set(expected_conjuncts)
     bridge_conjuncts = projection_contracts[bridge_operator]
     bridge_set = set(bridge_conjuncts)
+    duplicate_requirement = (
+        "each projection bridge interleaving obligation must be counted once"
+    )
+    errors.extend(
+        conjunct_contract_inventory_duplicate_errors(
+            bridge_operator,
+            expected_conjuncts,
+            "projection bridge interleaving expected",
+            duplicate_requirement,
+        )
+    )
+    errors.extend(
+        conjunct_contract_inventory_duplicate_errors(
+            bridge_operator,
+            bridge_conjuncts,
+            "projection bridge interleaving actual",
+            duplicate_requirement,
+        )
+    )
 
     missing_conjuncts = [
         conjunct for conjunct in expected_conjuncts if conjunct not in bridge_set
@@ -7922,12 +9365,23 @@ def source_progress_safety_contract_alignment_errors(
     """Return errors if source progress safety envelopes drift from exactness."""
 
     errors: list[str] = []
+    seen_alignment_rows: set[tuple[str, str]] = set()
     for (
         family,
         conjunct_contracts,
         envelope_operator,
         expected_components,
     ) in alignment_contracts:
+        alignment_row = (family, envelope_operator)
+        if alignment_row in seen_alignment_rows:
+            errors.append(
+                "source progress safety alignment inventory repeats "
+                f"{family} -> {envelope_operator}; each source progress "
+                "safety alignment must be counted once"
+            )
+            continue
+        seen_alignment_rows.add(alignment_row)
+
         envelope_conjuncts = conjunct_contracts.get(envelope_operator)
         if envelope_conjuncts is None:
             errors.append(
@@ -7939,6 +9393,25 @@ def source_progress_safety_contract_alignment_errors(
         expected_set = set(expected_components)
         envelope_set = set(envelope_conjuncts)
         component_summary = " and ".join(expected_components)
+        duplicate_requirement = (
+            f"each {family} progress safety obligation must be counted once"
+        )
+        errors.extend(
+            conjunct_contract_inventory_duplicate_errors(
+                envelope_operator,
+                expected_components,
+                f"{family} progress safety expected",
+                duplicate_requirement,
+            )
+        )
+        errors.extend(
+            conjunct_contract_inventory_duplicate_errors(
+                envelope_operator,
+                envelope_conjuncts,
+                f"{family} progress safety actual",
+                duplicate_requirement,
+            )
+        )
 
         missing_conjuncts = [
             conjunct for conjunct in expected_components if conjunct not in envelope_set
@@ -7998,6 +9471,25 @@ def byzantine_interleaving_exactness_alignment_errors(
     expected_conjuncts = (*direct_conjuncts, *byzantine_extra_conjuncts)
     expected_set = set(expected_conjuncts)
     byzantine_set = set(byzantine_conjuncts)
+    duplicate_requirement = (
+        "each Byzantine interleaving exactness obligation must be counted once"
+    )
+    errors.extend(
+        conjunct_contract_inventory_duplicate_errors(
+            byzantine_operator,
+            expected_conjuncts,
+            "Byzantine interleaving expected",
+            duplicate_requirement,
+        )
+    )
+    errors.extend(
+        conjunct_contract_inventory_duplicate_errors(
+            byzantine_operator,
+            byzantine_conjuncts,
+            "Byzantine interleaving actual",
+            duplicate_requirement,
+        )
+    )
 
     missing_conjuncts = [
         conjunct for conjunct in expected_conjuncts if conjunct not in byzantine_set
@@ -8053,6 +9545,25 @@ def projection_bridge_core_source_alignment_errors(
 
     source_set = set(source_conjuncts)
     bridge_core_set = set(bridge_core_conjuncts)
+    duplicate_requirement = (
+        "each projection bridge core/source obligation must be counted once"
+    )
+    errors.extend(
+        conjunct_contract_inventory_duplicate_errors(
+            source_operator,
+            source_conjuncts,
+            "projection bridge core/source expected",
+            duplicate_requirement,
+        )
+    )
+    errors.extend(
+        conjunct_contract_inventory_duplicate_errors(
+            bridge_core_operator,
+            bridge_core_conjuncts,
+            "projection bridge core/source actual",
+            duplicate_requirement,
+        )
+    )
 
     missing_conjuncts = [
         conjunct for conjunct in source_conjuncts if conjunct not in bridge_core_set
@@ -8105,6 +9616,25 @@ def projected_commit_progress_contract_alignment_errors(
     envelope_conjuncts = projection_contracts[envelope_operator]
     envelope_set = set(envelope_conjuncts)
     component_summary = " and ".join(expected_components)
+    duplicate_requirement = (
+        "each projected commit progress obligation must be counted once"
+    )
+    errors.extend(
+        conjunct_contract_inventory_duplicate_errors(
+            envelope_operator,
+            expected_components,
+            "projected commit progress expected",
+            duplicate_requirement,
+        )
+    )
+    errors.extend(
+        conjunct_contract_inventory_duplicate_errors(
+            envelope_operator,
+            envelope_conjuncts,
+            "projected commit progress actual",
+            duplicate_requirement,
+        )
+    )
 
     missing_conjuncts = [
         conjunct for conjunct in expected_components if conjunct not in envelope_set
@@ -8127,13 +9657,51 @@ def projected_commit_progress_contract_alignment_errors(
     return errors
 
 
+def tla_wf_vars_operands(body: str) -> tuple[str, ...]:
+    """Return operands referenced by WF_vars clauses."""
+
+    comment_free_body = "\n".join(
+        tla_line_without_comment_or_strings(line) for line in body.splitlines()
+    )
+    operands: list[str] = []
+    index = 0
+    while True:
+        match = TLA_WF_VARS_START_RE.search(comment_free_body, index)
+        if match is None:
+            break
+        open_index = match.end() - 1
+        close_index = tla_delimited_expression_end(
+            comment_free_body,
+            open_index,
+            "(",
+            ")",
+        )
+        if close_index is None:
+            operands.append(comment_free_body[open_index + 1 :].strip())
+            break
+        operands.append(comment_free_body[open_index + 1 : close_index].strip())
+        index = close_index + 1
+    return tuple(operands)
+
+
+def normalized_wf_vars_action_operand(operand: str) -> str | None:
+    """Return a simple static WF_vars action operand, if the operand is valid."""
+
+    normalized = strip_static_outer_parentheses(" ".join(operand.split()))
+    if TLA_IDENTIFIER_RE.fullmatch(normalized) and is_tla_user_identifier(normalized):
+        return normalized
+    return None
+
+
 def tla_wf_vars_operator_references(body: str) -> tuple[str, ...]:
     """Return simple operator operands referenced by WF_vars clauses."""
 
-    comment_free_body = "\n".join(
-        tla_line_without_comment(line) for line in body.splitlines()
-    )
-    return tuple(TLA_WF_VARS_RE.findall(comment_free_body))
+    operators: list[str] = []
+    for operand in tla_wf_vars_operands(body):
+        operator = normalized_wf_vars_action_operand(operand)
+        if operator is not None:
+            operators.append(operator)
+    return tuple(operators)
 
 
 def commit_progress_spec_contract_errors(
@@ -8181,13 +9749,13 @@ def commit_progress_spec_contract_errors(
                 "transition closure"
             )
 
-        raw_fairness_actions = tla_wf_vars_operator_references(body)
-        if raw_fairness_actions:
+        raw_fairness_operands = tla_wf_vars_operands(body)
+        if raw_fairness_operands:
             errors.append(
                 f"{display_path(module_path)}:{definition_line} defines "
                 f"{spec_operator}, but must compose {fairness_operator} "
                 "instead of raw WF_vars fairness clauses: "
-                f"{', '.join(raw_fairness_actions)}"
+                f"{', '.join(' '.join(operand.split()) for operand in raw_fairness_operands)}"
             )
 
     fairness_definition = definitions.get(fairness_operator)
@@ -8209,9 +9777,39 @@ def commit_progress_spec_contract_errors(
         return errors
 
     fairness_line, fairness_body = fairness_definition
-    fairness_actions = tla_wf_vars_operator_references(fairness_body)
+    fairness_operands = tla_wf_vars_operands(fairness_body)
+    invalid_fairness_operands = [
+        " ".join(operand.split()) or "<empty>"
+        for operand in fairness_operands
+        if normalized_wf_vars_action_operand(operand) is None
+    ]
+    if invalid_fairness_operands:
+        errors.append(
+            f"{display_path(module_path)}:{fairness_line} defines "
+            f"{fairness_operator}, but contains non-static WF_vars "
+            f"operand(s) {', '.join(invalid_fairness_operands)}; "
+            f"{root_kind} fairness actions must be named zero-arity "
+            "operators"
+        )
+    fairness_actions = tuple(
+        action
+        for action in (
+            normalized_wf_vars_action_operand(operand)
+            for operand in fairness_operands
+        )
+        if action is not None
+    )
     fairness_action_set = set(fairness_actions)
     expected_action_set = set(expected_fairness_actions)
+
+    repeated_expected_actions = duplicate_values(list(expected_fairness_actions))
+    if repeated_expected_actions:
+        errors.append(
+            f"{root_kind} fairness {fairness_operator} action contract "
+            "repeats expected action(s) "
+            f"{', '.join(repeated_expected_actions)}; each {root_kind} "
+            "fairness action must be counted once"
+        )
 
     repeated_actions = duplicate_values(fairness_actions)
     if repeated_actions:
@@ -8450,7 +10048,8 @@ def projection_gate_conjunct_contract_errors(
     errors.extend(
         implication_antecedent_contract_errors(
             module_path,
-            SUMERAGI_PROJECTION_GATE_IMPLICATION_CONTRACTS,
+            SUMERAGI_PROJECTION_GATE_IMPLICATION_CONTRACT_ROWS,
+            "projection gate implication antecedent contract",
         )
     )
     return errors
@@ -8470,13 +10069,16 @@ def consensus_core_root_cfg_check_contract_errors(
 
     definitions = tla_single_expression_operator_definitions(module_path)
     cfg_check_kinds_by_path: dict[Path, dict[str, str]] = {}
+    errors: list[str] = []
     for cfg_path in cfg_paths:
         check_kinds, parse_errors = cfg_check_operator_kinds(cfg_path)
         if parse_errors:
-            return []
+            errors.extend(parse_errors)
+            continue
         cfg_check_kinds_by_path[cfg_path] = check_kinds
+    if errors:
+        return errors
 
-    errors: list[str] = []
     for root_operator, conjunct_contracts in contracts.items():
         definition = definitions.get(root_operator)
         if definition is None:
@@ -10010,6 +11612,22 @@ def tla_module_validation_errors(mode: str, path: Path) -> list[str]:
     ]
 
 
+def runner_tla_module_validation_errors(
+    mode: str,
+    case: RunnerCase,
+    path: Path,
+    runner_path: Path,
+    runner_name: str,
+) -> list[str]:
+    """Return TLA module validation errors with runner case source context."""
+
+    return [
+        f"{runner_name} runner {display_path(runner_path)} case "
+        f"{case.label!r} at line {case.line}: {error}"
+        for error in tla_module_validation_errors(mode, path)
+    ]
+
+
 def tla_module_surface_errors(
     spec_dir: Path = SPEC_DIR,
     tla_glob: str = "*.tla",
@@ -10247,6 +11865,23 @@ def cfg_constant_binding_errors(mode: str, module_path: Path, cfg_path: Path) ->
     return errors
 
 
+def runner_cfg_constant_binding_errors(
+    mode: str,
+    case: RunnerCase,
+    module_path: Path,
+    cfg_path: Path,
+    runner_path: Path,
+    runner_name: str,
+) -> list[str]:
+    """Return CFG constant-binding errors with runner case source context."""
+
+    return [
+        f"{runner_name} runner {display_path(runner_path)} case "
+        f"{case.label!r} at line {case.line}: {error}"
+        for error in cfg_constant_binding_errors(mode, module_path, cfg_path)
+    ]
+
+
 def cfg_module_ownership_errors(
     mode: str,
     module_path: Path,
@@ -10295,7 +11930,7 @@ def cfg_duplicate_constant_binding_errors(mode: str, cfg_path: Path) -> list[str
 
     bindings, parse_errors = cfg_constant_bindings(cfg_path)
     if parse_errors:
-        return []
+        return [f"{mode}: {error}" for error in parse_errors]
 
     errors: list[str] = []
     seen: dict[str, int] = {}
@@ -10341,6 +11976,26 @@ def cfg_operator_reference_errors(mode: str, module_path: Path, cfg_path: Path) 
     return errors
 
 
+def runner_cfg_module_binding_errors(
+    mode: str,
+    case: RunnerCase,
+    module_path: Path,
+    cfg_path: Path,
+    runner_path: Path,
+    runner_name: str,
+) -> list[str]:
+    """Return CFG/module binding errors with runner case source context."""
+
+    errors: list[str] = []
+    errors.extend(cfg_module_ownership_errors(mode, module_path, cfg_path))
+    errors.extend(cfg_operator_reference_errors(mode, module_path, cfg_path))
+    return [
+        f"{runner_name} runner {display_path(runner_path)} case "
+        f"{case.label!r} at line {case.line}: {error}"
+        for error in errors
+    ]
+
+
 def normalized_cfg_check_directive(directive: str) -> str:
     if directive in {"INVARIANT", "INVARIANTS"}:
         return "INVARIANT"
@@ -10355,7 +12010,7 @@ def cfg_duplicate_operator_reference_errors(mode: str, cfg_path: Path) -> list[s
 
     references, parse_errors = cfg_operator_references(cfg_path)
     if parse_errors:
-        return []
+        return [f"{mode}: {error}" for error in parse_errors]
 
     errors: list[str] = []
     seen_singleton: dict[str, int] = {}
@@ -10430,6 +12085,25 @@ def cfg_duplicate_operator_reference_errors(mode: str, cfg_path: Path) -> list[s
     return errors
 
 
+def runner_cfg_inventory_errors(
+    mode: str,
+    case: RunnerCase,
+    cfg_path: Path,
+    runner_path: Path,
+    runner_name: str,
+) -> list[str]:
+    """Return CFG inventory errors with runner case source context."""
+
+    errors: list[str] = []
+    errors.extend(cfg_duplicate_constant_binding_errors(mode, cfg_path))
+    errors.extend(cfg_duplicate_operator_reference_errors(mode, cfg_path))
+    return [
+        f"{runner_name} runner {display_path(runner_path)} case "
+        f"{case.label!r} at line {case.line}: {error}"
+        for error in errors
+    ]
+
+
 def cfg_semantic_check_errors(
     mode: str,
     cfg_file: Path,
@@ -10440,7 +12114,7 @@ def cfg_semantic_check_errors(
 
     references, parse_errors = cfg_operator_references(cfg_file)
     if parse_errors:
-        return []
+        return [f"{mode}: {error}" for error in parse_errors]
     checks = [
         operator
         for _, directive, operator in references
@@ -10465,7 +12139,7 @@ def cfg_fast_generic_check_errors(
 
     references, parse_errors = cfg_operator_references(cfg_file)
     if parse_errors:
-        return []
+        return [f"{mode}: {error}" for error in parse_errors]
 
     errors: list[str] = []
     has_correctness_envelope = False
@@ -10487,6 +12161,25 @@ def cfg_fast_generic_check_errors(
             "model-specific *CorrectnessEnvelope invariant/property check"
         )
     return errors
+
+
+def runner_cfg_proof_target_errors(
+    mode: str,
+    case: RunnerCase,
+    cfg_path: Path,
+    runner_path: Path,
+    runner_name: str,
+) -> list[str]:
+    """Return CFG proof-target errors with runner case source context."""
+
+    errors: list[str] = []
+    errors.extend(cfg_semantic_check_errors(mode, cfg_path, runner_name))
+    errors.extend(cfg_fast_generic_check_errors(mode, cfg_path, runner_name))
+    return [
+        f"{runner_name} runner {display_path(runner_path)} case "
+        f"{case.label!r} at line {case.line}: {error}"
+        for error in errors
+    ]
 
 
 def cfg_fast_generic_surface_errors(
@@ -21400,7 +23093,7 @@ def cfg_correctness_envelope_shape_errors(
 
     references, parse_errors = cfg_operator_references(cfg_file)
     if parse_errors:
-        return []
+        return [f"{mode}: {error}" for error in parse_errors]
 
     definitions = tla_single_expression_operator_definitions(module_path)
     signatures = tla_operator_signatures(module_path)
@@ -21623,7 +23316,7 @@ def cfg_direct_exactness_shape_errors(
 
     references, parse_errors = cfg_operator_references(cfg_file)
     if parse_errors:
-        return []
+        return [f"{mode}: {error}" for error in parse_errors]
 
     definitions = tla_single_expression_operator_definitions(module_path)
     errors: list[str] = []
@@ -21658,7 +23351,7 @@ def cfg_direct_exactness_envelope_pairing_errors(
 
     references, parse_errors = cfg_operator_references(cfg_file)
     if parse_errors:
-        return []
+        return [f"{mode}: {error}" for error in parse_errors]
 
     definitions = tla_single_expression_operator_definitions(module_path)
     enveloped_exactness: set[str] = set()
@@ -21749,7 +23442,7 @@ def cfg_trivial_check_operator_errors(
 
     references, parse_errors = cfg_operator_references(cfg_path)
     if parse_errors:
-        return []
+        return [f"{mode}: {error}" for error in parse_errors]
 
     trivial_chains = tla_trivial_operator_chains(module_path)
     errors: list[str] = []
@@ -21799,6 +23492,25 @@ def cfg_trivial_check_operator_errors(
             f"resolves to {terminal}"
         )
     return errors
+
+
+def runner_cfg_trivial_check_operator_errors(
+    mode: str,
+    case: RunnerCase,
+    module_path: Path,
+    cfg_path: Path,
+    runner_path: Path,
+    runner_name: str,
+) -> list[str]:
+    """Return trivial CFG target errors with runner case source context."""
+
+    return [
+        f"{runner_name} runner {display_path(runner_path)} case "
+        f"{case.label!r} at line {case.line}: {error}"
+        for error in cfg_trivial_check_operator_errors(
+            mode, module_path, cfg_path, runner_name
+        )
+    ]
 
 
 def unreferenced_formal_file_errors(referenced_paths: set[Path]) -> list[str]:
@@ -21916,6 +23628,35 @@ def workflow_job_lines(
     return lines
 
 
+def workflow_top_level_job_lines(path: Path) -> list[tuple[int, str]]:
+    """Return top-level workflow job keys from the jobs block."""
+
+    jobs: list[tuple[int, str]] = []
+    in_jobs = False
+    for line_number, line in enumerate(read_text(path).splitlines(), 1):
+        top_level_key = workflow_mapping_key(line, 0)
+        if top_level_key is not None:
+            in_jobs = top_level_key == "jobs"
+            continue
+        if not in_jobs:
+            continue
+        job_key = workflow_mapping_key(line, 2)
+        if job_key is not None:
+            jobs.append((line_number, job_key))
+    return jobs
+
+
+def workflow_job_key_lines(path: Path, job_name: str) -> list[tuple[int, str]]:
+    """Return top-level keys from a named workflow job."""
+
+    keys: list[tuple[int, str]] = []
+    for line_number, line in workflow_job_lines(path, (job_name,)):
+        key = workflow_mapping_key(line, 4)
+        if key is not None:
+            keys.append((line_number, key))
+    return keys
+
+
 def workflow_header_lines(path: Path) -> list[tuple[int, str]]:
     """Return raw workflow lines before the top-level jobs block."""
 
@@ -21955,6 +23696,17 @@ def workflow_header_top_level_key_lines(path: Path) -> list[tuple[int, str]]:
 
     keys: list[tuple[int, str]] = []
     for line_number, line in workflow_header_lines(path):
+        key = workflow_mapping_key(line, 0)
+        if key is not None:
+            keys.append((line_number, key))
+    return keys
+
+
+def workflow_top_level_key_lines(path: Path) -> list[tuple[int, str]]:
+    """Return all top-level workflow mapping keys in file order."""
+
+    keys: list[tuple[int, str]] = []
+    for line_number, line in enumerate(read_text(path).splitlines(), 1):
         key = workflow_mapping_key(line, 0)
         if key is not None:
             keys.append((line_number, key))
@@ -22172,17 +23924,25 @@ def formal_workflow_unscoped_command_errors(
 ) -> list[str]:
     """Return errors for formal proof commands outside checked workflow jobs."""
 
+    errors: list[str] = []
     if workflow_jobs is not None and allowed_jobs_by_path is None:
-        allowed_jobs_by_path = dict(workflow_jobs)
+        allowed_jobs_by_path, inventory_errors = formal_workflow_job_contract_map(
+            workflow_jobs,
+            "formal workflow allowed job",
+        )
+        errors.extend(inventory_errors)
     if allowed_jobs_by_path is None:
-        allowed_jobs_by_path = FORMAL_WORKFLOW_ALLOWED_JOB_NAMES
+        allowed_jobs_by_path, inventory_errors = formal_workflow_job_contract_map(
+            FORMAL_WORKFLOW_JOB_NAMES,
+            "formal workflow allowed job",
+        )
+        errors.extend(inventory_errors)
     if workflow_paths is None:
         if workflow_jobs is None:
             workflow_paths = formal_workflow_paths()
         else:
             workflow_paths = tuple(path for path, _ in workflow_jobs)
 
-    errors: list[str] = []
     for path in workflow_paths:
         job_names = allowed_jobs_by_path.get(path, ())
         job_label = (
@@ -22244,15 +24004,35 @@ def workflow_job_active_command_modes(
 ) -> list[str]:
     """Return formal modes invoked by active run commands in named jobs."""
 
+    return [
+        mode
+        for mode, _line in workflow_job_active_command_mode_occurrences(
+            path,
+            job_names,
+            command_prefix,
+        )
+    ]
+
+
+def workflow_job_active_command_mode_occurrences(
+    path: Path,
+    job_names: tuple[str, ...],
+    command_prefix: str = APALACHE_COMMAND_PREFIX,
+) -> list[tuple[str, int]]:
+    """Return formal modes and lines from active run commands in named jobs."""
+
     command_re = re.compile(
         rf"{re.escape(command_prefix)}\s+({COMMAND_MODE_PATTERN})"
     )
-    modes: list[str] = []
-    for _, command_text in workflow_job_active_command_lines(path, job_names):
+    occurrences: list[tuple[str, int]] = []
+    for line_number, command_text in workflow_job_active_command_lines(
+        path,
+        job_names,
+    ):
         match = command_re.fullmatch(command_text)
         if match is not None:
-            modes.append(match.group(1))
-    return modes
+            occurrences.append((match.group(1), line_number))
+    return occurrences
 
 
 def workflow_job_step_lines(
@@ -22320,6 +24100,43 @@ def workflow_step_run_commands(
         if command_text is not None:
             commands.append((line_number, command_text))
     return commands
+
+
+def workflow_step_names(step_lines: list[tuple[int, str]]) -> list[tuple[int, str]]:
+    """Return every explicit workflow step name, or an unnamed sentinel."""
+
+    names: list[tuple[int, str]] = []
+    for line_number, line in step_lines:
+        if not (line.startswith("      -") or re.match(r"^        \S", line)):
+            continue
+        name_value = workflow_field_value(
+            workflow_step_field_text(line.strip()),
+            "name",
+        )
+        if name_value is not None:
+            names.append((line_number, yaml_scalar_text(name_value)))
+    if names:
+        return names
+    return [(step_lines[0][0], FORMAL_WORKFLOW_UNNAMED_STEP)]
+
+
+def workflow_step_top_level_key_lines(
+    step_lines: list[tuple[int, str]],
+) -> list[tuple[int, str]]:
+    """Return top-level keys from a workflow step."""
+
+    keys: list[tuple[int, str]] = []
+    for line_number, line in step_lines:
+        if line.startswith("      -"):
+            field_text = workflow_step_field_text(line.strip())
+        elif re.match(r"^        \S", line):
+            field_text = line.strip()
+        else:
+            continue
+        key_match = re.match(r"^([A-Za-z][A-Za-z0-9_-]*)\s*:", field_text)
+        if key_match is not None:
+            keys.append((line_number, key_match.group(1)))
+    return keys
 
 
 def workflow_step_with_inputs(
@@ -22492,10 +24309,14 @@ def formal_workflow_run_command_errors(
 ) -> list[str]:
     """Return errors when formal workflow jobs can wrap evidence commands."""
 
-    errors: list[str] = []
+    jobs_by_path, errors = formal_workflow_job_contract_map(
+        workflow_jobs,
+        "formal workflow run-command job",
+    )
     block_scalars = {"", "|", ">", "|-", "|+", ">-", ">+"}
-    for path, job_names in workflow_jobs:
-        for step_lines in workflow_job_step_lines(path, job_names):
+    for path, job_names in jobs_by_path.items():
+        checked_jobs = tuple(dict.fromkeys(job_names))
+        for step_lines in workflow_job_step_lines(path, checked_jobs):
             run_commands = workflow_step_run_commands(step_lines)
             actions = workflow_step_actions(step_lines)
             if len(run_commands) > 1:
@@ -22526,7 +24347,7 @@ def formal_workflow_run_command_errors(
                     "steps must not combine run and uses:\n"
                     f"{run_summary}\n{action_summary}"
                 )
-        for line_number, line in workflow_job_lines(path, job_names):
+        for line_number, line in workflow_job_lines(path, checked_jobs):
             command_text = workflow_run_command_text(line.strip())
             if command_text is None:
                 continue
@@ -22555,8 +24376,38 @@ def formal_workflow_run_inventory_errors(
     """Return errors when formal workflow jobs change run command inventory/order."""
 
     errors: list[str] = []
+    owners_by_target: dict[tuple[Path, tuple[str, ...]], str] = {}
     for path, job_names, owner, expected_commands in contracts:
-        command_lines = workflow_job_active_command_lines(path, job_names)
+        repeated_jobs = duplicate_values(list(job_names))
+        if repeated_jobs:
+            errors.append(
+                f"{owner} run command inventory for {display_path(path)} "
+                f"repeats checked job(s) {', '.join(repeated_jobs)}; each "
+                "checked workflow run inventory job must be counted once"
+            )
+        checked_jobs = tuple(dict.fromkeys(job_names))
+        target = (path, checked_jobs)
+        job_label = ", ".join(checked_jobs) or "none"
+        previous_owner = owners_by_target.get(target)
+        if previous_owner is not None:
+            errors.append(
+                f"formal workflow run inventory repeats {display_path(path)} "
+                f"checked job(s) {job_label}; first owner {previous_owner}, "
+                f"then {owner}; each checked workflow run inventory must be "
+                "counted once"
+            )
+            continue
+        owners_by_target[target] = owner
+        repeated_commands = duplicate_values(list(expected_commands))
+        if repeated_commands:
+            errors.append(
+                f"{owner} run command inventory for {display_path(path)} "
+                f"checked job(s) {job_label} repeats command(s) "
+                f"{', '.join(repeated_commands)}; each expected workflow run "
+                "command must be counted once"
+            )
+        expected_commands = tuple(dict.fromkeys(expected_commands))
+        command_lines = workflow_job_active_command_lines(path, checked_jobs)
         actual_commands = tuple(command_text for _, command_text in command_lines)
         if actual_commands == expected_commands:
             continue
@@ -22579,6 +24430,107 @@ def formal_workflow_run_inventory_errors(
     return errors
 
 
+def formal_workflow_job_inventory_errors(
+    contracts: tuple[
+        tuple[Path, str, tuple[str, ...]],
+        ...,
+    ] = FORMAL_WORKFLOW_JOB_INVENTORY_CONTRACTS,
+) -> list[str]:
+    """Return errors when dedicated formal workflow job inventories drift."""
+
+    errors: list[str] = []
+    owners_by_path: dict[Path, str] = {}
+    for path, owner, expected_jobs in contracts:
+        previous_owner = owners_by_path.get(path)
+        if previous_owner is not None:
+            errors.append(
+                f"formal workflow job inventory repeats {display_path(path)}; "
+                f"first owner {previous_owner}, then {owner}; each dedicated "
+                "formal workflow job inventory must be counted once"
+            )
+            continue
+        owners_by_path[path] = owner
+        repeated_jobs = duplicate_values(list(expected_jobs))
+        if repeated_jobs:
+            errors.append(
+                f"{owner} workflow job inventory for {display_path(path)} "
+                f"repeats job(s) {', '.join(repeated_jobs)}; each expected "
+                "workflow job must be counted once"
+            )
+        expected_jobs = tuple(dict.fromkeys(expected_jobs))
+        job_lines = workflow_top_level_job_lines(path)
+        actual_jobs = tuple(job for _, job in job_lines)
+        if actual_jobs == expected_jobs:
+            continue
+        actual_summary = (
+            "\n"
+            + format_items(
+                [f"{line_number}: {job}" for line_number, job in job_lines]
+            )
+            if job_lines
+            else " no workflow jobs"
+        )
+        expected_summary = "\n" + format_items(list(expected_jobs))
+        errors.append(
+            f"{owner} {display_path(path)} must keep exact workflow job "
+            f"inventory:{expected_summary}; found:{actual_summary}"
+        )
+    return errors
+
+
+def formal_workflow_checked_job_occurrence_errors(
+    contracts: tuple[
+        tuple[Path, str, tuple[str, ...]],
+        ...,
+    ] = FORMAL_WORKFLOW_CHECKED_JOB_OCCURRENCE_CONTRACTS,
+) -> list[str]:
+    """Return errors when checked formal workflow jobs are missing or duplicated."""
+
+    errors: list[str] = []
+    owners_by_path: dict[Path, str] = {}
+    for path, owner, expected_jobs in contracts:
+        previous_owner = owners_by_path.get(path)
+        if previous_owner is not None:
+            errors.append(
+                f"formal workflow checked-job declaration inventory repeats "
+                f"{display_path(path)}; first owner {previous_owner}, then "
+                f"{owner}; each checked-job declaration inventory must be "
+                "counted once"
+            )
+            continue
+        owners_by_path[path] = owner
+        repeated_jobs = duplicate_values(list(expected_jobs))
+        if repeated_jobs:
+            errors.append(
+                f"{owner} checked-job declaration inventory for "
+                f"{display_path(path)} repeats job(s) {', '.join(repeated_jobs)}; "
+                "each checked formal workflow job must be counted once"
+            )
+        expected_jobs = tuple(dict.fromkeys(expected_jobs))
+        job_lines = workflow_top_level_job_lines(path)
+        for expected_job in expected_jobs:
+            matching_lines = [
+                (line_number, job)
+                for line_number, job in job_lines
+                if job == expected_job
+            ]
+            if len(matching_lines) == 1:
+                continue
+            actual_summary = (
+                "\n"
+                + format_items(
+                    [f"{line_number}: {job}" for line_number, job in matching_lines]
+                )
+                if matching_lines
+                else " no declarations"
+            )
+            errors.append(
+                f"{owner} {display_path(path)} must declare checked job "
+                f"{expected_job} exactly once; found:{actual_summary}"
+            )
+    return errors
+
+
 def formal_workflow_name_errors(
     contracts: tuple[
         tuple[Path, str, str],
@@ -22588,7 +24540,17 @@ def formal_workflow_name_errors(
     """Return errors when formal workflow top-level names drift."""
 
     errors: list[str] = []
+    owners_by_path: dict[Path, str] = {}
     for path, owner, expected_name in contracts:
+        previous_owner = owners_by_path.get(path)
+        if previous_owner is not None:
+            errors.append(
+                f"formal workflow name inventory repeats {display_path(path)}; "
+                f"first owner {previous_owner}, then {owner}; each formal "
+                "workflow name inventory must be counted once"
+            )
+            continue
+        owners_by_path[path] = owner
         name_lines = workflow_header_name_lines(path)
         actual_names = tuple(name for _, name in name_lines)
         if actual_names == (expected_name,):
@@ -22617,7 +24579,26 @@ def formal_workflow_header_key_errors(
     """Return errors when formal workflow top-level header keys drift."""
 
     errors: list[str] = []
+    owners_by_path: dict[Path, str] = {}
     for path, owner, expected_keys in contracts:
+        previous_owner = owners_by_path.get(path)
+        if previous_owner is not None:
+            errors.append(
+                f"formal workflow header-key inventory repeats "
+                f"{display_path(path)}; first owner {previous_owner}, then "
+                f"{owner}; each formal workflow header-key inventory must be "
+                "counted once"
+            )
+            continue
+        owners_by_path[path] = owner
+        repeated_keys = duplicate_values(list(expected_keys))
+        if repeated_keys:
+            errors.append(
+                f"{owner} header-key inventory for {display_path(path)} "
+                f"repeats key(s) {', '.join(repeated_keys)}; each expected "
+                "workflow header key must be counted once"
+            )
+        expected_keys = tuple(dict.fromkeys(expected_keys))
         key_lines = workflow_header_top_level_key_lines(path)
         actual_keys = tuple(key for _, key in key_lines)
         if actual_keys == expected_keys:
@@ -22638,6 +24619,56 @@ def formal_workflow_header_key_errors(
     return errors
 
 
+def formal_workflow_top_level_key_errors(
+    contracts: tuple[
+        tuple[Path, str, tuple[str, ...]],
+        ...,
+    ] = FORMAL_WORKFLOW_TOP_LEVEL_KEY_CONTRACTS,
+) -> list[str]:
+    """Return errors when formal workflow full-file top-level keys drift."""
+
+    errors: list[str] = []
+    owners_by_path: dict[Path, str] = {}
+    for path, owner, expected_keys in contracts:
+        previous_owner = owners_by_path.get(path)
+        if previous_owner is not None:
+            errors.append(
+                f"formal workflow full top-level key inventory repeats "
+                f"{display_path(path)}; first owner {previous_owner}, then "
+                f"{owner}; each formal workflow full top-level key inventory "
+                "must be counted once"
+            )
+            continue
+        owners_by_path[path] = owner
+        repeated_keys = duplicate_values(list(expected_keys))
+        if repeated_keys:
+            errors.append(
+                f"{owner} full top-level key inventory for "
+                f"{display_path(path)} repeats key(s) "
+                f"{', '.join(repeated_keys)}; each expected workflow "
+                "top-level key must be counted once"
+            )
+        expected_keys = tuple(dict.fromkeys(expected_keys))
+        key_lines = workflow_top_level_key_lines(path)
+        actual_keys = tuple(key for _, key in key_lines)
+        if actual_keys == expected_keys:
+            continue
+        actual_summary = (
+            "\n"
+            + format_items(
+                [f"{line_number}: {key}" for line_number, key in key_lines]
+            )
+            if key_lines
+            else " no top-level keys"
+        )
+        expected_summary = "\n" + format_items(list(expected_keys))
+        errors.append(
+            f"{owner} {display_path(path)} must keep exact full top-level keys:"
+            f"{expected_summary}; found:{actual_summary}"
+        )
+    return errors
+
+
 def formal_workflow_trigger_errors(
     contracts: tuple[
         tuple[Path, str, tuple[str, ...]],
@@ -22647,7 +24678,26 @@ def formal_workflow_trigger_errors(
     """Return errors when formal workflow trigger surfaces drift."""
 
     errors: list[str] = []
+    owners_by_path: dict[Path, str] = {}
     for path, owner, expected_lines in contracts:
+        previous_owner = owners_by_path.get(path)
+        if previous_owner is not None:
+            errors.append(
+                f"formal workflow trigger block inventory repeats "
+                f"{display_path(path)}; first owner {previous_owner}, then "
+                f"{owner}; each formal workflow trigger block inventory must "
+                "be counted once"
+            )
+            continue
+        owners_by_path[path] = owner
+        repeated_lines = duplicate_values(list(expected_lines))
+        if repeated_lines:
+            errors.append(
+                f"{owner} trigger block inventory for {display_path(path)} "
+                f"repeats line(s) {', '.join(repeated_lines)}; each expected "
+                "trigger block line must be counted once"
+            )
+        expected_lines = tuple(dict.fromkeys(expected_lines))
         trigger_lines = workflow_header_on_lines(path)
         actual_lines = tuple(line for _, line in trigger_lines)
         if actual_lines == expected_lines:
@@ -22677,7 +24727,26 @@ def formal_workflow_on_event_errors(
     """Return errors when formal workflow trigger event inventories drift."""
 
     errors: list[str] = []
+    owners_by_path: dict[Path, str] = {}
     for path, owner, expected_events in contracts:
+        previous_owner = owners_by_path.get(path)
+        if previous_owner is not None:
+            errors.append(
+                f"formal workflow trigger event inventory repeats "
+                f"{display_path(path)}; first owner {previous_owner}, then "
+                f"{owner}; each formal workflow trigger event inventory must "
+                "be counted once"
+            )
+            continue
+        owners_by_path[path] = owner
+        repeated_events = duplicate_values(list(expected_events))
+        if repeated_events:
+            errors.append(
+                f"{owner} trigger event inventory for {display_path(path)} "
+                f"repeats event(s) {', '.join(repeated_events)}; each expected "
+                "trigger event must be counted once"
+            )
+        expected_events = tuple(dict.fromkeys(expected_events))
         event_lines = workflow_header_on_event_lines(path)
         actual_events = tuple(event for _, event in event_lines)
         if actual_events == expected_events:
@@ -22711,7 +24780,26 @@ def formal_workflow_paths_ignore_errors(
     """Return errors when formal workflow PR path filters drift."""
 
     errors: list[str] = []
+    owners_by_path: dict[Path, str] = {}
     for path, owner, expected_paths in contracts:
+        previous_owner = owners_by_path.get(path)
+        if previous_owner is not None:
+            errors.append(
+                f"formal workflow path-filter inventory repeats "
+                f"{display_path(path)}; first owner {previous_owner}, then "
+                f"{owner}; each formal workflow path-filter inventory must be "
+                "counted once"
+            )
+            continue
+        owners_by_path[path] = owner
+        repeated_paths = duplicate_values(list(expected_paths))
+        if repeated_paths:
+            errors.append(
+                f"{owner} path-filter inventory for {display_path(path)} "
+                f"repeats path(s) {', '.join(repeated_paths)}; each expected "
+                "paths_ignore entry must be counted once"
+            )
+        expected_paths = tuple(dict.fromkeys(expected_paths))
         ignored_path_lines = workflow_header_paths_ignore_lines(path)
         actual_paths = tuple(ignored_path for _, ignored_path in ignored_path_lines)
         if actual_paths == expected_paths:
@@ -22744,7 +24832,26 @@ def formal_workflow_concurrency_errors(
     """Return errors when formal workflow concurrency behavior drifts."""
 
     errors: list[str] = []
+    owners_by_path: dict[Path, str] = {}
     for path, owner, expected_lines in contracts:
+        previous_owner = owners_by_path.get(path)
+        if previous_owner is not None:
+            errors.append(
+                f"formal workflow concurrency inventory repeats "
+                f"{display_path(path)}; first owner {previous_owner}, then "
+                f"{owner}; each formal workflow concurrency inventory must be "
+                "counted once"
+            )
+            continue
+        owners_by_path[path] = owner
+        repeated_lines = duplicate_values(list(expected_lines))
+        if repeated_lines:
+            errors.append(
+                f"{owner} concurrency inventory for {display_path(path)} "
+                f"repeats line(s) {', '.join(repeated_lines)}; each expected "
+                "concurrency line must be counted once"
+            )
+        expected_lines = tuple(dict.fromkeys(expected_lines))
         concurrency_lines = workflow_header_concurrency_lines(path)
         actual_lines = tuple(line for _, line in concurrency_lines)
         if actual_lines == expected_lines:
@@ -22771,8 +24878,11 @@ def formal_workflow_header_control_errors(
 ) -> list[str]:
     """Return errors when formal workflows set inherited header controls."""
 
-    errors: list[str] = []
-    for path, _ in workflow_jobs:
+    jobs_by_path, errors = formal_workflow_job_contract_map(
+        workflow_jobs,
+        "formal workflow header-control job",
+    )
+    for path in jobs_by_path:
         for line_number, line in workflow_header_lines(path):
             key = workflow_mapping_key(line, 0)
             if key not in forbidden_fields:
@@ -22793,7 +24903,26 @@ def formal_workflow_header_env_errors(
     """Return errors when formal workflow top-level env keys drift."""
 
     errors: list[str] = []
+    owners_by_path: dict[Path, str] = {}
     for path, owner, expected_keys in contracts:
+        previous_owner = owners_by_path.get(path)
+        if previous_owner is not None:
+            errors.append(
+                f"formal workflow top-level env key inventory repeats "
+                f"{display_path(path)}; first owner {previous_owner}, then "
+                f"{owner}; each formal workflow top-level env key inventory "
+                "must be counted once"
+            )
+            continue
+        owners_by_path[path] = owner
+        repeated_keys = duplicate_values(list(expected_keys))
+        if repeated_keys:
+            errors.append(
+                f"{owner} top-level env key inventory for {display_path(path)} "
+                f"repeats key(s) {', '.join(repeated_keys)}; each expected "
+                "top-level env key must be counted once"
+            )
+        expected_keys = tuple(dict.fromkeys(expected_keys))
         key_lines = workflow_header_env_key_lines(path)
         actual_keys = tuple(key for _, key in key_lines)
         if actual_keys == expected_keys:
@@ -22824,7 +24953,27 @@ def formal_workflow_header_env_binding_errors(
     """Return errors when formal workflow top-level env bindings drift."""
 
     errors: list[str] = []
+    owners_by_path: dict[Path, str] = {}
     for path, owner, expected_bindings in contracts:
+        previous_owner = owners_by_path.get(path)
+        if previous_owner is not None:
+            errors.append(
+                f"formal workflow top-level env binding inventory repeats "
+                f"{display_path(path)}; first owner {previous_owner}, then "
+                f"{owner}; each formal workflow top-level env binding "
+                "inventory must be counted once"
+            )
+            continue
+        owners_by_path[path] = owner
+        repeated_bindings = duplicate_values(list(expected_bindings))
+        if repeated_bindings:
+            errors.append(
+                f"{owner} top-level env binding inventory for "
+                f"{display_path(path)} repeats binding(s) "
+                f"{', '.join(repeated_bindings)}; each expected top-level env "
+                "binding must be counted once"
+            )
+        expected_bindings = tuple(dict.fromkeys(expected_bindings))
         binding_lines = workflow_header_env_binding_lines(path)
         actual_bindings = tuple(binding for _, binding in binding_lines)
         if actual_bindings == expected_bindings:
@@ -22857,9 +25006,13 @@ def formal_workflow_action_step_errors(
 ) -> list[str]:
     """Return errors when formal workflow jobs use unpinned or unvetted actions."""
 
-    errors: list[str] = []
-    for path, job_names in workflow_jobs:
-        for step_lines in workflow_job_step_lines(path, job_names):
+    jobs_by_path, errors = formal_workflow_job_contract_map(
+        workflow_jobs,
+        "formal workflow action-step job",
+    )
+    for path, job_names in jobs_by_path.items():
+        checked_jobs = tuple(dict.fromkeys(job_names))
+        for step_lines in workflow_job_step_lines(path, checked_jobs):
             actions = workflow_step_actions(step_lines)
             if not actions:
                 continue
@@ -22893,10 +25046,40 @@ def formal_workflow_action_inventory_errors(
     """Return errors when formal workflow jobs change action inventory/order."""
 
     errors: list[str] = []
+    owners_by_target: dict[tuple[Path, tuple[str, ...]], str] = {}
     for path, job_names, owner, expected_actions in contracts:
+        repeated_jobs = duplicate_values(list(job_names))
+        if repeated_jobs:
+            errors.append(
+                f"{owner} action step inventory for {display_path(path)} "
+                f"repeats checked job(s) {', '.join(repeated_jobs)}; each "
+                "checked workflow action inventory job must be counted once"
+            )
+        checked_jobs = tuple(dict.fromkeys(job_names))
+        target = (path, checked_jobs)
+        job_label = ", ".join(checked_jobs) or "none"
+        previous_owner = owners_by_target.get(target)
+        if previous_owner is not None:
+            errors.append(
+                f"formal workflow action inventory repeats {display_path(path)} "
+                f"checked job(s) {job_label}; first owner {previous_owner}, "
+                f"then {owner}; each checked workflow action inventory must "
+                "be counted once"
+            )
+            continue
+        owners_by_target[target] = owner
+        repeated_actions = duplicate_values(list(expected_actions))
+        if repeated_actions:
+            errors.append(
+                f"{owner} action step inventory for {display_path(path)} "
+                f"checked job(s) {job_label} repeats action(s) "
+                f"{', '.join(repeated_actions)}; each expected workflow "
+                "action step must be counted once"
+            )
+        expected_actions = tuple(dict.fromkeys(expected_actions))
         action_lines = [
             (line_number, action_text)
-            for step_lines in workflow_job_step_lines(path, job_names)
+            for step_lines in workflow_job_step_lines(path, checked_jobs)
             for line_number, action_text in workflow_step_actions(step_lines)
         ]
         actual_actions = tuple(action_text for _, action_text in action_lines)
@@ -22921,21 +25104,190 @@ def formal_workflow_action_inventory_errors(
     return errors
 
 
+def formal_workflow_step_name_inventory_errors(
+    contracts: tuple[
+        tuple[Path, tuple[str, ...], str, tuple[str, ...]],
+        ...,
+    ] = FORMAL_WORKFLOW_STEP_NAME_CONTRACTS,
+) -> list[str]:
+    """Return errors when formal workflow step names drift."""
+
+    errors: list[str] = []
+    owners_by_target: dict[tuple[Path, tuple[str, ...]], str] = {}
+    for path, job_names, owner, expected_names in contracts:
+        repeated_jobs = duplicate_values(list(job_names))
+        if repeated_jobs:
+            errors.append(
+                f"{owner} step-name inventory for {display_path(path)} "
+                f"repeats checked job(s) {', '.join(repeated_jobs)}; each "
+                "checked workflow step-name inventory job must be counted once"
+            )
+        checked_jobs = tuple(dict.fromkeys(job_names))
+        target = (path, checked_jobs)
+        job_label = ", ".join(checked_jobs) or "none"
+        previous_owner = owners_by_target.get(target)
+        if previous_owner is not None:
+            errors.append(
+                f"formal workflow step-name inventory repeats "
+                f"{display_path(path)} checked job(s) {job_label}; first "
+                f"owner {previous_owner}, then {owner}; each checked workflow "
+                "step-name inventory must be counted once"
+            )
+            continue
+        owners_by_target[target] = owner
+        name_lines = [
+            (line_number, name)
+            for step_lines in workflow_job_step_lines(path, checked_jobs)
+            for line_number, name in workflow_step_names(step_lines)
+        ]
+        actual_names = tuple(name for _, name in name_lines)
+        if actual_names == expected_names:
+            continue
+        actual_summary = (
+            "\n"
+            + format_items(
+                [f"{line_number}: {name}" for line_number, name in name_lines]
+            )
+            if name_lines
+            else " no workflow steps"
+        )
+        expected_summary = "\n" + format_items(list(expected_names))
+        errors.append(
+            f"{owner} {display_path(path)} must use exact step-name inventory:"
+            f"{expected_summary}; found:{actual_summary}"
+        )
+    return errors
+
+
+def workflow_step_key_summary(keys: tuple[str, ...]) -> str:
+    """Return a readable key sequence for one workflow step."""
+
+    return " -> ".join(keys) if keys else "<no step keys>"
+
+
+def formal_workflow_step_key_inventory_errors(
+    contracts: tuple[
+        tuple[Path, tuple[str, ...], str, tuple[tuple[str, ...], ...]],
+        ...,
+    ] = FORMAL_WORKFLOW_STEP_KEY_CONTRACTS,
+) -> list[str]:
+    """Return errors when formal workflow step key inventories drift."""
+
+    errors: list[str] = []
+    owners_by_target: dict[tuple[Path, tuple[str, ...]], str] = {}
+    for path, job_names, owner, expected_steps in contracts:
+        repeated_jobs = duplicate_values(list(job_names))
+        if repeated_jobs:
+            errors.append(
+                f"{owner} step-key inventory for {display_path(path)} "
+                f"repeats checked job(s) {', '.join(repeated_jobs)}; each "
+                "checked workflow step-key inventory job must be counted once"
+            )
+        checked_jobs = tuple(dict.fromkeys(job_names))
+        target = (path, checked_jobs)
+        job_label = ", ".join(checked_jobs) or "none"
+        previous_owner = owners_by_target.get(target)
+        if previous_owner is not None:
+            errors.append(
+                f"formal workflow step-key inventory repeats "
+                f"{display_path(path)} checked job(s) {job_label}; first "
+                f"owner {previous_owner}, then {owner}; each checked workflow "
+                "step-key inventory must be counted once"
+            )
+            continue
+        owners_by_target[target] = owner
+        step_key_lines = [
+            (
+                step_lines[0][0],
+                tuple(key for _, key in workflow_step_top_level_key_lines(step_lines)),
+            )
+            for step_lines in workflow_job_step_lines(path, checked_jobs)
+        ]
+        actual_steps = tuple(keys for _, keys in step_key_lines)
+        if actual_steps == expected_steps:
+            continue
+        actual_summary = (
+            "\n"
+            + format_items(
+                [
+                    f"{line_number}: {workflow_step_key_summary(keys)}"
+                    for line_number, keys in step_key_lines
+                ]
+            )
+            if step_key_lines
+            else " no workflow steps"
+        )
+        expected_summary = "\n" + format_items(
+            [workflow_step_key_summary(keys) for keys in expected_steps]
+        )
+        errors.append(
+            f"{owner} {display_path(path)} must use exact step-key inventory:"
+            f"{expected_summary}; found:{actual_summary}"
+        )
+    return errors
+
+
+def formal_workflow_action_input_summary(inputs: tuple[str, ...]) -> str:
+    """Return a readable action input contract summary."""
+
+    return ", ".join(inputs) if inputs else "no inputs"
+
+
+def formal_workflow_action_input_contract_map(
+    action_input_contracts: tuple[tuple[str, tuple[str, ...]], ...],
+) -> tuple[dict[str, tuple[str, ...]], list[str]]:
+    """Return action input contracts while rejecting duplicate rows."""
+
+    action_inputs: dict[str, tuple[str, ...]] = {}
+    errors: list[str] = []
+    for action_text, expected_inputs in action_input_contracts:
+        previous_inputs = action_inputs.get(action_text)
+        if previous_inputs is not None:
+            errors.append(
+                "formal workflow action input inventory repeats action "
+                f"{action_text}; first expected "
+                f"{formal_workflow_action_input_summary(previous_inputs)}, then "
+                f"{formal_workflow_action_input_summary(expected_inputs)}; "
+                "each pinned action input contract must be counted once"
+            )
+            continue
+        repeated_inputs = duplicate_values(list(expected_inputs))
+        if repeated_inputs:
+            errors.append(
+                "formal workflow action input inventory for "
+                f"{action_text} repeats input(s) {', '.join(repeated_inputs)}; "
+                "each pinned action input must be counted once"
+            )
+        action_inputs[action_text] = tuple(dict.fromkeys(expected_inputs))
+    return action_inputs, errors
+
+
 def formal_workflow_action_input_errors(
     workflow_jobs: tuple[tuple[Path, tuple[str, ...]], ...] = FORMAL_WORKFLOW_JOB_NAMES,
+    action_input_contracts: tuple[
+        tuple[str, tuple[str, ...]], ...
+    ] = FORMAL_WORKFLOW_ACTION_INPUT_CONTRACTS,
 ) -> list[str]:
     """Return errors when formal workflow action inputs drift."""
 
-    errors: list[str] = []
-    for path, job_names in workflow_jobs:
-        for step_lines in workflow_job_step_lines(path, job_names):
+    action_inputs, errors = formal_workflow_action_input_contract_map(
+        action_input_contracts
+    )
+    jobs_by_path, job_inventory_errors = formal_workflow_job_contract_map(
+        workflow_jobs,
+        "formal workflow action-input job",
+    )
+    errors.extend(job_inventory_errors)
+    for path, job_names in jobs_by_path.items():
+        checked_jobs = tuple(dict.fromkeys(job_names))
+        for step_lines in workflow_job_step_lines(path, checked_jobs):
             action = workflow_step_action(step_lines)
             if action is None:
                 continue
             line_number, action_text = action
-            if action_text not in FORMAL_WORKFLOW_ACTION_INPUTS:
+            if action_text not in action_inputs:
                 continue
-            expected_inputs = FORMAL_WORKFLOW_ACTION_INPUTS[action_text]
+            expected_inputs = action_inputs[action_text]
             actual_input_lines = workflow_step_with_inputs(step_lines)
             actual_inputs = tuple(input_text for _, input_text in actual_input_lines)
             if actual_inputs == expected_inputs:
@@ -22969,9 +25321,13 @@ def formal_workflow_setup_action_control_errors(
 ) -> list[str]:
     """Return errors when setup actions in formal jobs can be skipped or masked."""
 
-    errors: list[str] = []
-    for path, job_names in workflow_jobs:
-        for step_lines in workflow_job_step_lines(path, job_names):
+    jobs_by_path, errors = formal_workflow_job_contract_map(
+        workflow_jobs,
+        "formal workflow setup-action job",
+    )
+    for path, job_names in jobs_by_path.items():
+        checked_jobs = tuple(dict.fromkeys(job_names))
+        for step_lines in workflow_job_step_lines(path, checked_jobs):
             action = workflow_step_action(step_lines)
             if action is None:
                 continue
@@ -22991,14 +25347,78 @@ def formal_workflow_setup_action_control_errors(
     return errors
 
 
+def formal_workflow_job_key_inventory_errors(
+    contracts: tuple[
+        tuple[Path, tuple[str, ...], str, tuple[str, ...]],
+        ...,
+    ] = FORMAL_WORKFLOW_JOB_KEY_CONTRACTS,
+) -> list[str]:
+    """Return errors when checked formal workflow job keys drift."""
+
+    errors: list[str] = []
+    owners_by_target: dict[tuple[Path, str], str] = {}
+    for path, job_names, owner, expected_keys in contracts:
+        repeated_jobs = duplicate_values(list(job_names))
+        if repeated_jobs:
+            errors.append(
+                f"{owner} job-key inventory for {display_path(path)} "
+                f"repeats checked job(s) {', '.join(repeated_jobs)}; each "
+                "checked workflow job-key inventory job must be counted once"
+            )
+        checked_jobs = tuple(dict.fromkeys(job_names))
+        repeated_keys = duplicate_values(list(expected_keys))
+        job_label = ", ".join(checked_jobs) or "none"
+        if repeated_keys:
+            errors.append(
+                f"{owner} job-key inventory for {display_path(path)} "
+                f"checked job(s) {job_label} repeats key(s) "
+                f"{', '.join(repeated_keys)}; each expected workflow job key "
+                "must be counted once"
+            )
+        expected_keys = tuple(dict.fromkeys(expected_keys))
+        for job_name in checked_jobs:
+            target = (path, job_name)
+            previous_owner = owners_by_target.get(target)
+            if previous_owner is not None:
+                errors.append(
+                    f"formal workflow job-key inventory repeats "
+                    f"{display_path(path)} checked job {job_name}; first "
+                    f"owner {previous_owner}, then {owner}; each checked "
+                    "workflow job-key inventory must be counted once"
+                )
+                continue
+            owners_by_target[target] = owner
+            key_lines = workflow_job_key_lines(path, job_name)
+            actual_keys = tuple(key for _, key in key_lines)
+            if actual_keys == expected_keys:
+                continue
+            actual_summary = (
+                "\n"
+                + format_items(
+                    [f"{line_number}: {key}" for line_number, key in key_lines]
+                )
+                if key_lines
+                else " no checked job keys"
+            )
+            expected_summary = "\n" + format_items(list(expected_keys))
+            errors.append(
+                f"{owner} {display_path(path)} checked job {job_name} must "
+                f"keep exact job key inventory:{expected_summary}; "
+                f"found:{actual_summary}"
+            )
+    return errors
+
+
 def formal_workflow_runner_label_errors(
     workflow_jobs: tuple[tuple[Path, tuple[str, ...]], ...] = FORMAL_WORKFLOW_JOB_NAMES,
 ) -> list[str]:
     """Return errors when checked formal workflow jobs change runner labels."""
 
-    errors: list[str] = []
-    for path, job_names in workflow_jobs:
-        for job_name in job_names:
+    jobs_by_path, errors = formal_workflow_job_contract_map(
+        workflow_jobs, "formal workflow runner label"
+    )
+    for path, job_names in jobs_by_path.items():
+        for job_name in dict.fromkeys(job_names):
             runner_lines = [
                 (line_number, line.strip())
                 for line_number, line in workflow_job_lines(path, (job_name,))
@@ -23041,8 +25461,28 @@ def formal_workflow_timeout_errors(
     """Return errors when checked formal workflow jobs change timeout budgets."""
 
     errors: list[str] = []
+    owners_by_target: dict[tuple[Path, str], str] = {}
     for path, job_names, owner, expected_timeout in contracts:
-        for job_name in job_names:
+        repeated_jobs = duplicate_values(list(job_names))
+        if repeated_jobs:
+            errors.append(
+                f"{owner} timeout inventory for {display_path(path)} repeats "
+                f"checked job(s) {', '.join(repeated_jobs)}; each checked "
+                "workflow timeout inventory job must be counted once"
+            )
+        checked_jobs = tuple(dict.fromkeys(job_names))
+        for job_name in checked_jobs:
+            target = (path, job_name)
+            previous_owner = owners_by_target.get(target)
+            if previous_owner is not None:
+                errors.append(
+                    f"formal workflow timeout inventory repeats "
+                    f"{display_path(path)} checked job {job_name}; first "
+                    f"owner {previous_owner}, then {owner}; each checked "
+                    "workflow timeout inventory must be counted once"
+                )
+                continue
+            owners_by_target[target] = owner
             timeout_lines = [
                 (line_number, line.strip())
                 for line_number, line in workflow_job_lines(path, (job_name,))
@@ -23083,7 +25523,10 @@ def formal_workflow_proof_step_control_errors(
 ) -> list[str]:
     """Return errors when formal proof workflow steps can be skipped or masked."""
 
-    errors: list[str] = []
+    jobs_by_path, errors = formal_workflow_job_contract_map(
+        workflow_jobs,
+        "formal workflow proof-step control job",
+    )
 
     def flush_step(path: Path, step_lines: list[tuple[int, str]]) -> None:
         proof_commands = [
@@ -23110,10 +25553,11 @@ def formal_workflow_proof_step_control_errors(
                 f"{proof_command!r} must not set {control_field}: {line.strip()}"
             )
 
-    for path, job_names in workflow_jobs:
-        job_label = ", ".join(job_names)
+    for path, job_names in jobs_by_path.items():
+        checked_jobs = tuple(dict.fromkeys(job_names))
+        job_label = ", ".join(checked_jobs)
         step_lines: list[tuple[int, str]] = []
-        for line_number, line in workflow_job_lines(path, job_names):
+        for line_number, line in workflow_job_lines(path, checked_jobs):
             stripped = line.strip()
             if re.match(
                 r"^    (?:if|continue-on-error|needs|environment|env|defaults|permissions|container|services|strategy)\s*:",
@@ -23155,8 +25599,48 @@ def formal_workflow_job_entrypoint_errors(
     """Return errors when formal workflow proof commands leave formal jobs."""
 
     errors: list[str] = []
+    owners_by_target: dict[tuple[Path, tuple[str, ...]], str] = {}
     for path, job_names, owner, required_commands, ordered_pairs in contracts:
-        active_commands = workflow_job_active_command_lines(path, job_names)
+        repeated_jobs = duplicate_values(list(job_names))
+        if repeated_jobs:
+            errors.append(
+                f"{owner} entrypoint inventory for {display_path(path)} "
+                f"repeats checked job(s) {', '.join(repeated_jobs)}; each "
+                "checked workflow entrypoint job must be counted once"
+            )
+        checked_jobs = tuple(dict.fromkeys(job_names))
+        target = (path, checked_jobs)
+        job_label = ", ".join(checked_jobs) or "none"
+        previous_owner = owners_by_target.get(target)
+        if previous_owner is not None:
+            errors.append(
+                f"formal workflow entrypoint inventory repeats "
+                f"{display_path(path)} checked job(s) {job_label}; first "
+                f"owner {previous_owner}, then {owner}; each checked workflow "
+                "entrypoint inventory must be counted once"
+            )
+            continue
+        owners_by_target[target] = owner
+        repeated_commands = duplicate_values(list(required_commands))
+        if repeated_commands:
+            errors.append(
+                f"{owner} entrypoint inventory for {display_path(path)} "
+                f"checked job(s) {job_label} repeats command(s) "
+                f"{', '.join(repeated_commands)}; each required workflow "
+                "entrypoint command must be counted once"
+            )
+        pair_labels = [f"{first} -> {second}" for first, second in ordered_pairs]
+        repeated_pairs = duplicate_values(pair_labels)
+        if repeated_pairs:
+            errors.append(
+                f"{owner} entrypoint order inventory for {display_path(path)} "
+                f"checked job(s) {job_label} repeats order pair(s) "
+                f"{', '.join(repeated_pairs)}; each workflow entrypoint order "
+                "pair must be counted once"
+            )
+        required_commands = tuple(dict.fromkeys(required_commands))
+        ordered_pairs = tuple(dict.fromkeys(ordered_pairs))
+        active_commands = workflow_job_active_command_lines(path, checked_jobs)
         errors.extend(
             required_active_command_errors(
                 active_commands, path, required_commands, owner
@@ -23184,10 +25668,30 @@ def formal_ci_singleton_command_errors(
     """Return errors when CI proof scripts duplicate singleton evidence commands."""
 
     errors: list[str] = []
+    owners_by_path: dict[Path, str] = {}
     for path, owner, commands in contracts:
+        previous_owner = owners_by_path.get(path)
+        if previous_owner is not None:
+            errors.append(
+                "formal CI singleton command inventory repeats "
+                f"{display_path(path)}; first owner {previous_owner}, then "
+                f"{owner}; each formal CI script must be counted once"
+            )
+            continue
+        owners_by_path[path] = owner
+        repeated_commands = duplicate_values(list(commands))
+        if repeated_commands:
+            errors.append(
+                f"{owner} singleton command inventory for {display_path(path)} "
+                f"repeats command(s) {', '.join(repeated_commands)}; each "
+                "singleton evidence command must be counted once"
+            )
         errors.extend(
             active_singleton_command_errors(
-                active_command_lines(path), path, commands, owner
+                active_command_lines(path),
+                path,
+                tuple(dict.fromkeys(commands)),
+                owner,
             )
         )
     return errors
@@ -23432,17 +25936,30 @@ def version_values_mismatch_errors(
     pattern: re.Pattern[str],
     expected: str,
     label: str,
+    *,
+    allow_repeated_values: bool = False,
 ) -> list[str]:
     values = regex_values(path, pattern)
     if not values:
         return [
             f"{label} {display_path(path)} does not declare Apalache {expected}"
         ]
-    return [
-        f"{label} {display_path(path)} uses Apalache {value}, expected {expected}"
-        for value in sorted_unique(values)
-        if value != expected
-    ]
+    errors: list[str] = []
+    repeated_values = duplicate_values(values)
+    if repeated_values and not allow_repeated_values:
+        errors.append(
+            f"{label} {display_path(path)} repeats Apalache version pin(s) "
+            f"{', '.join(repeated_values)}; each version pin must be counted once"
+        )
+    errors.extend(
+        [
+            f"{label} {display_path(path)} uses Apalache {value}, "
+            f"expected {expected}"
+            for value in sorted_unique(values)
+            if value != expected
+        ]
+    )
+    return errors
 
 
 def active_version_values_mismatch_errors(
@@ -23473,11 +25990,23 @@ def active_command_version_values_mismatch_errors(
         return [
             f"{label} {display_path(path)} does not declare Apalache {expected}"
         ]
-    return [
-        f"{label} {display_path(path)} uses Apalache {value}, expected {expected}"
-        for value in sorted_unique(values)
-        if value != expected
-    ]
+    errors: list[str] = []
+    repeated_values = duplicate_values(values)
+    if repeated_values:
+        errors.append(
+            f"{label} {display_path(path)} repeats active Apalache version "
+            f"pin(s) {', '.join(repeated_values)}; each active version pin "
+            "must be counted once"
+        )
+    errors.extend(
+        [
+            f"{label} {display_path(path)} uses Apalache {value}, "
+            f"expected {expected}"
+            for value in sorted_unique(values)
+            if value != expected
+        ]
+    )
+    return errors
 
 
 def workflow_job_version_values_mismatch_errors(
@@ -23487,13 +26016,25 @@ def workflow_job_version_values_mismatch_errors(
     expected: str,
     label: str,
 ) -> list[str]:
-    return active_command_version_values_mismatch_errors(
-        workflow_job_active_command_lines(path, job_names),
-        path,
-        pattern,
-        expected,
-        label,
+    errors: list[str] = []
+    repeated_jobs = duplicate_values(list(job_names))
+    if repeated_jobs:
+        errors.append(
+            f"{label} {display_path(path)} repeats checked job(s) "
+            f"{', '.join(repeated_jobs)}; each workflow version-pin job "
+            "must be counted once"
+        )
+    checked_jobs = tuple(dict.fromkeys(job_names))
+    errors.extend(
+        active_command_version_values_mismatch_errors(
+            workflow_job_active_command_lines(path, checked_jobs),
+            path,
+            pattern,
+            expected,
+            label,
+        )
     )
+    return errors
 
 
 def apalache_version_pin_errors() -> list[str]:
@@ -23539,17 +26080,48 @@ def apalache_version_pin_errors() -> list[str]:
             )
         )
 
-    pinned_sources: tuple[tuple[Path, re.Pattern[str], str], ...] = (
-        (TLC_RUNNER, RUNNER_APALACHE_VERSION_RE, "TLC runner"),
-        (ROOT_DIR / "scripts" / "formal" / "install_apalache.sh", INSTALLER_APALACHE_VERSION_RE, "Apalache installer"),
-        (README, INSTALL_APALACHE_COMMAND_VERSION_RE, "formal README install command"),
-        (README, APALACHE_TOOLCHAIN_PATH_VERSION_RE, "formal README toolchain path"),
-        (README, APALACHE_DOCKER_IMAGE_VERSION_RE, "formal README Docker image"),
-        (ROOT_DIR / "ci" / "README.md", INSTALL_APALACHE_COMMAND_VERSION_RE, "CI README install command"),
+    pinned_sources: tuple[tuple[Path, re.Pattern[str], str, bool], ...] = (
+        (TLC_RUNNER, RUNNER_APALACHE_VERSION_RE, "TLC runner", False),
+        (
+            ROOT_DIR / "scripts" / "formal" / "install_apalache.sh",
+            INSTALLER_APALACHE_VERSION_RE,
+            "Apalache installer",
+            False,
+        ),
+        (
+            README,
+            INSTALL_APALACHE_COMMAND_VERSION_RE,
+            "formal README install command",
+            False,
+        ),
+        (
+            README,
+            APALACHE_TOOLCHAIN_PATH_VERSION_RE,
+            "formal README toolchain path",
+            False,
+        ),
+        (
+            README,
+            APALACHE_DOCKER_IMAGE_VERSION_RE,
+            "formal README Docker image",
+            True,
+        ),
+        (
+            ROOT_DIR / "ci" / "README.md",
+            INSTALL_APALACHE_COMMAND_VERSION_RE,
+            "CI README install command",
+            False,
+        ),
     )
-    for path, pattern, label in pinned_sources:
+    for path, pattern, label, allow_repeated_values in pinned_sources:
         errors.extend(
-            version_values_mismatch_errors(path, pattern, runner_version, label)
+            version_values_mismatch_errors(
+                path,
+                pattern,
+                runner_version,
+                label,
+                allow_repeated_values=allow_repeated_values,
+            )
         )
     return errors
 
@@ -23812,6 +26384,60 @@ def modes_without_expected_failure_marker(
     return missing
 
 
+def sourced_modes_without_expected_failure_marker_errors(
+    surfaces: tuple[tuple[str, Path, list[tuple[str, int]]], ...],
+    cases: dict[str, RunnerCase],
+    runner_name: str,
+) -> list[str]:
+    """Return sourced modes missing expected-failure markers."""
+
+    first_occurrences: dict[str, tuple[str, Path, int]] = {}
+    for owner, path, occurrences in surfaces:
+        for mode, line_number in occurrences:
+            first_occurrences.setdefault(mode, (owner, path, line_number))
+
+    missing: list[str] = []
+    for mode in sorted_unique(first_occurrences):
+        case = matching_case(mode, cases)
+        if case is None or "1" in EXPECT_FAILURE_ASSIGN_RE.findall(case.body):
+            continue
+        owner, path, line_number = first_occurrences[mode]
+        missing.append(
+            f"{owner} mode {mode} at {display_path(path)}:{line_number} "
+            f"maps to {runner_name} runner case {case.label!r} at line "
+            f"{case.line} without expect_failure=1"
+        )
+    return missing
+
+
+def documented_modes_without_expected_failure_marker_errors(
+    occurrences: list[tuple[str, int]],
+    cases: dict[str, RunnerCase],
+    path: Path,
+    owner: str,
+    runner_name: str,
+) -> list[str]:
+    """Return documented mutation modes missing runner expected-failure markers."""
+
+    first_lines: dict[str, int] = {}
+    for mode, line_number in occurrences:
+        if "-bug-" not in mode:
+            continue
+        first_lines.setdefault(mode, line_number)
+
+    missing: list[str] = []
+    for mode, line_number in sorted(first_lines.items()):
+        case = matching_case(mode, cases)
+        if case is None or "1" in EXPECT_FAILURE_ASSIGN_RE.findall(case.body):
+            continue
+        missing.append(
+            f"{display_path(path)} {owner} mode {mode} at line "
+            f"{line_number} maps to {runner_name} runner case {case.label!r} "
+            f"at line {case.line} without expect_failure=1"
+        )
+    return missing
+
+
 def modes_with_unexpected_failure_marker(
     modes: list[str] | set[str],
     cases: dict[str, RunnerCase],
@@ -23825,6 +26451,35 @@ def modes_with_unexpected_failure_marker(
                 f"{mode}: {runner_name} runner case {case.label!r} "
                 f"at line {case.line}"
             )
+    return unexpected
+
+
+def sourced_modes_with_unexpected_failure_marker_errors(
+    surfaces: tuple[tuple[str, Path, list[tuple[str, int]]], ...],
+    ignored_modes: set[str],
+    cases: dict[str, RunnerCase],
+    runner_name: str,
+) -> list[str]:
+    """Return sourced modes with unexpected failure markers."""
+
+    first_occurrences: dict[str, tuple[str, Path, int]] = {}
+    for owner, path, occurrences in surfaces:
+        for mode, line_number in occurrences:
+            if mode in ignored_modes:
+                continue
+            first_occurrences.setdefault(mode, (owner, path, line_number))
+
+    unexpected: list[str] = []
+    for mode in sorted_unique(first_occurrences):
+        case = matching_case(mode, cases)
+        if case is None or "1" not in EXPECT_FAILURE_ASSIGN_RE.findall(case.body):
+            continue
+        owner, path, line_number = first_occurrences[mode]
+        unexpected.append(
+            f"{owner} mode {mode} at {display_path(path)}:{line_number} "
+            f"maps to {runner_name} runner case {case.label!r} at line "
+            f"{case.line} with unexpected expect_failure=1"
+        )
     return unexpected
 
 
@@ -24004,10 +26659,15 @@ def apalache_typecheck_default_errors(path: Path = APALACHE_RUNNER) -> list[str]
 def apalache_typecheck_only_mode_errors(
     modes: list[str] | set[str],
     cases: dict[str, RunnerCase],
-    allowed_modes: set[str] = APALACHE_TYPECHECK_ONLY_MODES,
+    allowed_modes: set[str] | tuple[str, ...] = (
+        APALACHE_TYPECHECK_ONLY_MODE_CONTRACTS
+    ),
 ) -> list[str]:
     """Return errors for Apalache modes that weaken checks to typecheck-only."""
-    errors: list[str] = []
+    allowed_mode_set, errors = proof_mode_contract_set(
+        allowed_modes,
+        "Apalache typecheck-only runner mode allowlist",
+    )
     marked_modes: set[str] = set()
     for mode in sorted_unique(modes):
         case = matching_case(mode, cases)
@@ -24040,14 +26700,14 @@ def apalache_typecheck_only_mode_errors(
             )
             continue
         marked_modes.add(mode)
-        if mode not in allowed_modes:
+        if mode not in allowed_mode_set:
             errors.append(
                 f"{mode}: Apalache runner case {case.label!r} at line "
                 f"{case.line} sets typecheck_only=1 outside "
                 "APALACHE_TYPECHECK_ONLY_MODES"
             )
 
-    for mode in sorted_unique(allowed_modes - marked_modes):
+    for mode in sorted_unique(allowed_mode_set - marked_modes):
         case = matching_case(mode, cases)
         if case is None:
             errors.append(
@@ -24064,11 +26724,12 @@ def apalache_typecheck_only_mode_errors(
 
 
 def apalache_length_table_errors(
-    documented_lengths: dict[str, int],
+    documented_rows: list[tuple[str, int, int]],
     cases: dict[str, RunnerCase],
+    path: Path = README,
 ) -> list[str]:
     errors: list[str] = []
-    for mode, documented_length in sorted(documented_lengths.items()):
+    for mode, documented_length, line_number in sorted(documented_rows):
         case = matching_case(mode, cases)
         if case is None:
             continue
@@ -24077,8 +26738,9 @@ def apalache_length_table_errors(
             continue
         if actual_length != documented_length:
             errors.append(
-                f"{mode}: README length {documented_length} differs from "
-                f"Apalache runner length {actual_length}"
+                f"{display_path(path)}:{line_number}: {mode}: README length "
+                f"{documented_length} differs from Apalache runner case "
+                f"{case.label!r} at line {case.line} length {actual_length}"
             )
     return errors
 
@@ -24134,6 +26796,43 @@ def module_identity_errors(
     return errors
 
 
+def sourced_module_identity_errors(
+    surfaces: tuple[tuple[str, Path, list[tuple[str, int]]], ...],
+    apalache_cases: dict[str, RunnerCase],
+    tlc_cases: dict[str, RunnerCase],
+) -> list[str]:
+    """Return Apalache/TLC module drift with source occurrence context."""
+
+    first_occurrences: dict[str, tuple[str, Path, int]] = {}
+    for owner, path, occurrences in surfaces:
+        for mode, line_number in occurrences:
+            first_occurrences.setdefault(mode, (owner, path, line_number))
+
+    errors: list[str] = []
+    for mode in sorted_unique(first_occurrences):
+        apalache_case = matching_case(mode, apalache_cases)
+        tlc_case = matching_case(mode, tlc_cases)
+        if apalache_case is None or tlc_case is None:
+            continue
+
+        apalache_spec, apalache_errors = spec_file_for_mode(mode, apalache_case)
+        tlc_modules, tlc_errors = tlc_module_files(mode, tlc_case)
+        if apalache_errors or tlc_errors:
+            continue
+        if apalache_spec is None or len(tlc_modules) != 1:
+            continue
+        tlc_module = tlc_modules[0]
+        if apalache_spec == tlc_module:
+            continue
+        owner, path, line_number = first_occurrences[mode]
+        errors.append(
+            f"{owner} mode {mode} at {display_path(path)}:{line_number} "
+            f"resolves Apalache spec {display_path(apalache_spec)} but TLC "
+            f"module {display_path(tlc_module)}"
+        )
+    return errors
+
+
 def allowed_mutation_cfg_pair(mode: str, apalache_cfg: Path, tlc_cfg: Path) -> bool:
     if apalache_cfg == tlc_cfg:
         return True
@@ -24184,6 +26883,47 @@ def mutation_cfg_name_errors(
     return errors
 
 
+def documented_mutation_cfg_name_errors(
+    occurrences: list[tuple[str, int]],
+    path: Path,
+    cases: dict[str, RunnerCase],
+    runner_name: str,
+) -> list[str]:
+    """Return mutation CFG-name mismatches with README source context."""
+
+    first_lines: dict[str, int] = {}
+    for mode, line_number in occurrences:
+        if "-bug-" in mode:
+            first_lines.setdefault(mode, line_number)
+
+    errors: list[str] = []
+    for mode, line_number in sorted(first_lines.items()):
+        case = matching_case(mode, cases)
+        if case is None:
+            continue
+
+        cfg_file, cfg_errors = cfg_file_for_mode(mode, case)
+        if cfg_errors or cfg_file is None:
+            continue
+
+        slug = mutation_mode_slug(mode)
+        expected_fragments = [f"_bug_{slug}"]
+        if runner_name == "TLC" and any(
+            mode.startswith(prefix) for prefix in TLC_SPECIFIC_MUTATION_CFG_PREFIXES
+        ):
+            expected_fragments.append(f"_tlc_bug_{slug}")
+        if any(fragment in cfg_file.stem for fragment in expected_fragments):
+            continue
+        expected = " or ".join(expected_fragments)
+        errors.append(
+            f"{display_path(path)} README mutation command mode {mode} at "
+            f"line {line_number} resolves {runner_name} cfg "
+            f"{display_path(cfg_file)} without expected mutation fragment "
+            f"{expected}"
+        )
+    return errors
+
+
 def mutation_cfg_equivalence_errors(
     modes: list[str] | set[str],
     apalache_cases: dict[str, RunnerCase],
@@ -24207,6 +26947,42 @@ def mutation_cfg_equivalence_errors(
                 f"{mode}: Apalache cfg {display_path(apalache_cfg)} differs "
                 f"from TLC cfg {display_path(tlc_cfg)}"
             )
+    return errors
+
+
+def documented_mutation_cfg_equivalence_errors(
+    occurrences: list[tuple[str, int]],
+    path: Path,
+    apalache_cases: dict[str, RunnerCase],
+    tlc_cases: dict[str, RunnerCase],
+) -> list[str]:
+    """Return documented mutation CFG mismatches with README source context."""
+
+    first_lines: dict[str, int] = {}
+    for mode, line_number in occurrences:
+        if "-bug-" in mode:
+            first_lines.setdefault(mode, line_number)
+
+    errors: list[str] = []
+    for mode, line_number in sorted(first_lines.items()):
+        apalache_case = matching_case(mode, apalache_cases)
+        tlc_case = matching_case(mode, tlc_cases)
+        if apalache_case is None or tlc_case is None:
+            continue
+
+        apalache_cfg, apalache_errors = cfg_file_for_mode(mode, apalache_case)
+        tlc_cfg, tlc_errors = cfg_file_for_mode(mode, tlc_case)
+        if apalache_errors or tlc_errors:
+            continue
+        if apalache_cfg is None or tlc_cfg is None:
+            continue
+        if allowed_mutation_cfg_pair(mode, apalache_cfg, tlc_cfg):
+            continue
+        errors.append(
+            f"{display_path(path)} README mutation command mode {mode} at "
+            f"line {line_number} resolves Apalache cfg "
+            f"{display_path(apalache_cfg)} but TLC cfg {display_path(tlc_cfg)}"
+        )
     return errors
 
 
@@ -24340,14 +27116,53 @@ def mutation_cfg_semantic_check_errors(
     return errors
 
 
+def custom_init_operator_contract_items(
+    custom_init_operators: dict[str, str] | tuple[tuple[str, str], ...],
+) -> tuple[tuple[str, str], ...]:
+    """Return custom INIT exception contracts as ordered pairs."""
+
+    if isinstance(custom_init_operators, dict):
+        return tuple(custom_init_operators.items())
+    return custom_init_operators
+
+
+def custom_init_operator_contract_map(
+    custom_init_operators: dict[str, str] | tuple[tuple[str, str], ...],
+) -> tuple[dict[str, str], list[str]]:
+    """Return custom INIT exception contracts keyed by CFG name."""
+
+    contracts: dict[str, str] = {}
+    seen_inits: dict[str, str] = {}
+    errors: list[str] = []
+    for cfg_name, expected_init in custom_init_operator_contract_items(
+        custom_init_operators
+    ):
+        previous_init = seen_inits.get(cfg_name)
+        if previous_init is not None:
+            errors.append(
+                "custom mutation INIT exception inventory repeats "
+                f"{cfg_name}; first expected {previous_init}, then "
+                f"{expected_init}; each custom INIT exception must be "
+                "counted once"
+            )
+            continue
+        seen_inits[cfg_name] = expected_init
+        contracts[cfg_name] = expected_init
+    return contracts, errors
+
+
 def mutation_cfg_behavior_errors(
     spec_dir: Path = SPEC_DIR,
     cfg_glob: str = "*_bug_*.cfg",
-    custom_init_operators: dict[str, str] = MUTATION_CFG_CUSTOM_INIT_OPERATORS,
+    custom_init_operators: (
+        dict[str, str] | tuple[tuple[str, str], ...]
+    ) = MUTATION_CFG_CUSTOM_INIT_OPERATOR_CONTRACTS,
 ) -> list[str]:
     """Return errors when mutation CFGs drift from expected behavior bindings."""
 
-    errors: list[str] = []
+    custom_init_operator_map, errors = custom_init_operator_contract_map(
+        custom_init_operators
+    )
     for cfg_path in sorted(spec_dir.glob(cfg_glob)):
         if "_bug_" not in cfg_path.stem:
             continue
@@ -24411,7 +27226,7 @@ def mutation_cfg_behavior_errors(
             )
             continue
 
-        expected_init = custom_init_operators.get(cfg_path.name, "Init")
+        expected_init = custom_init_operator_map.get(cfg_path.name, "Init")
         if len(init_entries) != 1:
             errors.append(
                 f"{display_path(cfg_path)} must bind exactly one INIT "
@@ -24443,12 +27258,16 @@ def mutation_cfg_behavior_errors(
 
 def mutation_cfg_custom_init_exception_errors(
     spec_dir: Path = SPEC_DIR,
-    custom_init_operators: dict[str, str] = MUTATION_CFG_CUSTOM_INIT_OPERATORS,
+    custom_init_operators: (
+        dict[str, str] | tuple[tuple[str, str], ...]
+    ) = MUTATION_CFG_CUSTOM_INIT_OPERATOR_CONTRACTS,
 ) -> list[str]:
     """Return errors when custom mutation INIT exceptions go stale."""
 
-    errors: list[str] = []
-    for cfg_name, expected_init in sorted(custom_init_operators.items()):
+    custom_init_operator_map, errors = custom_init_operator_contract_map(
+        custom_init_operators
+    )
+    for cfg_name, expected_init in sorted(custom_init_operator_map.items()):
         if not cfg_name.endswith(".cfg") or "_bug_" not in cfg_name:
             errors.append(
                 f"{cfg_name} is not a mutation CFG filename for custom "
@@ -24549,19 +27368,28 @@ def cfg_required_check_contract_errors(
     cfg_path: Path,
     required_checks: tuple[tuple[str, str], ...],
     coverage_label: str,
+    *,
+    check_inventory: bool = True,
 ) -> list[str]:
     """Return errors when a CFG file omits or downgrades required proof checks."""
 
+    errors = (
+        cfg_required_check_inventory_duplicate_errors(
+            required_checks,
+            coverage_label,
+        )
+        if check_inventory
+        else []
+    )
     if not cfg_path.exists():
-        return [
+        return errors + [
             f"{display_path(cfg_path)} is missing required {coverage_label} checks"
         ]
 
     check_kinds, cfg_errors = cfg_check_operator_kinds(cfg_path)
     if cfg_errors:
-        return [f"{display_path(cfg_path)}: {error}" for error in cfg_errors]
+        return errors + [f"{display_path(cfg_path)}: {error}" for error in cfg_errors]
 
-    errors: list[str] = []
     for operator, expected_kind in required_checks:
         kind = check_kinds.get(operator)
         if kind is None:
@@ -24577,6 +27405,24 @@ def cfg_required_check_contract_errors(
     return errors
 
 
+def cfg_required_check_inventory_duplicate_errors(
+    required_checks: tuple[tuple[str, str], ...],
+    coverage_label: str,
+) -> list[str]:
+    """Return errors when a required CFG proof-check inventory repeats targets."""
+
+    repeated_operators = duplicate_values(
+        [operator for operator, _expected_kind in required_checks]
+    )
+    if not repeated_operators:
+        return []
+    return [
+        f"{coverage_label} required proof-check contract repeats expected "
+        f"check target(s) {', '.join(repeated_operators)}; each required CFG "
+        "proof check must be counted once"
+    ]
+
+
 def cfg_required_exact_check_set_contract_errors(
     cfg_path: Path,
     required_checks: tuple[tuple[str, str], ...],
@@ -24584,20 +27430,27 @@ def cfg_required_exact_check_set_contract_errors(
 ) -> list[str]:
     """Return errors when a sentinel CFG proof-check set drifts."""
 
+    errors = cfg_required_check_inventory_duplicate_errors(
+        required_checks,
+        coverage_label,
+    )
     if not cfg_path.exists():
-        return [
+        return errors + [
             f"{display_path(cfg_path)} is missing required {coverage_label} "
             "check set"
         ]
 
     check_kinds, cfg_errors = cfg_check_operator_kinds(cfg_path)
     if cfg_errors:
-        return [f"{display_path(cfg_path)}: {error}" for error in cfg_errors]
+        return errors + [f"{display_path(cfg_path)}: {error}" for error in cfg_errors]
 
-    errors = cfg_required_check_contract_errors(
-        cfg_path,
-        required_checks,
-        coverage_label,
+    errors.extend(
+        cfg_required_check_contract_errors(
+            cfg_path,
+            required_checks,
+            coverage_label,
+            check_inventory=False,
+        )
     )
     expected = {operator: kind for operator, kind in required_checks}
     expected_label = ", ".join(
@@ -24686,19 +27539,60 @@ def projection_clean_cfg_errors(
     )
 
 
+def cfg_contracts_by_name(
+    cfg_contracts: tuple[
+        tuple[Path, tuple[tuple[str, str], ...], str],
+        ...,
+    ],
+    contract_label: str,
+) -> tuple[dict[str, tuple[tuple[tuple[str, str], ...], str]], list[str]]:
+    """Return CFG contracts keyed by filename, rejecting duplicate keys."""
+
+    contracts_by_name: dict[str, tuple[tuple[tuple[str, str], ...], str]] = {}
+    seen_labels: dict[str, str] = {}
+    errors: list[str] = []
+    for cfg_path, contract, coverage_label in cfg_contracts:
+        previous_label = seen_labels.get(cfg_path.name)
+        if previous_label is not None:
+            errors.append(
+                f"{contract_label} CFG contract inventory repeats "
+                f"{cfg_path.name}; first declared for {previous_label}, "
+                f"then for {coverage_label}; each {contract_label} CFG "
+                "contract must be counted once"
+            )
+            continue
+        seen_labels[cfg_path.name] = coverage_label
+        contracts_by_name[cfg_path.name] = (contract, coverage_label)
+    return contracts_by_name, errors
+
+
 def byzantine_top_cfg_errors(
     cfg_contracts: tuple[
         tuple[Path, tuple[tuple[str, str], ...], str],
         ...,
     ] = BYZANTINE_TOP_CFG_REQUIRED_CHECKS,
+    behavior_contracts: tuple[
+        tuple[Path, tuple[tuple[str, str], ...], str],
+        ...,
+    ] = BYZANTINE_TOP_CFG_REQUIRED_BEHAVIORS,
+    constant_contracts: tuple[
+        tuple[Path, tuple[tuple[str, str], ...], str],
+        ...,
+    ] = BYZANTINE_TOP_CFG_REQUIRED_CONSTANT_VALUES,
 ) -> list[str]:
     """Return errors if top-level Byzantine CFGs stop naming bridge checks."""
 
-    errors: list[str] = []
+    behavior_contracts_by_name, errors = cfg_contracts_by_name(
+        behavior_contracts,
+        "Byzantine top behavior",
+    )
+    constant_contracts_by_name, constant_errors = cfg_contracts_by_name(
+        constant_contracts,
+        "Byzantine top constant",
+    )
+    errors.extend(constant_errors)
     for cfg_path, required_checks, coverage_label in cfg_contracts:
-        behavior_contract = BYZANTINE_TOP_CFG_REQUIRED_BEHAVIOR_BY_NAME.get(
-            cfg_path.name
-        )
+        behavior_contract = behavior_contracts_by_name.get(cfg_path.name)
         if behavior_contract is not None:
             required_behavior, behavior_label = behavior_contract
             errors.extend(
@@ -24708,9 +27602,7 @@ def byzantine_top_cfg_errors(
                     behavior_label,
                 )
             )
-        constant_contract = BYZANTINE_TOP_CFG_REQUIRED_CONSTANT_VALUES_BY_NAME.get(
-            cfg_path.name
-        )
+        constant_contract = constant_contracts_by_name.get(cfg_path.name)
         if constant_contract is not None:
             required_values, constant_label = constant_contract
             errors.extend(
@@ -25267,6 +28159,35 @@ def mutation_suffix_set_difference_errors(
     return errors
 
 
+def safety_only_mutation_suffix_items(
+    suffixes: frozenset[str] | set[str] | tuple[str, ...],
+) -> tuple[str, ...]:
+    """Return ordered safety-only mutation suffix rows."""
+
+    if isinstance(suffixes, (frozenset, set)):
+        return tuple(suffixes)
+    return suffixes
+
+
+def safety_only_mutation_suffix_set(
+    suffixes: frozenset[str] | set[str] | tuple[str, ...],
+    allowlist_label: str,
+) -> tuple[set[str], list[str]]:
+    """Return safety-only mutation suffixes while rejecting duplicates."""
+
+    suffix_set: set[str] = set()
+    errors: list[str] = []
+    for suffix in safety_only_mutation_suffix_items(suffixes):
+        if suffix in suffix_set:
+            errors.append(
+                f"{allowlist_label} inventory repeats {suffix}; each "
+                "safety-only mutation suffix must be counted once"
+            )
+            continue
+        suffix_set.add(suffix)
+    return suffix_set, errors
+
+
 def direct_mutation_family_alignment_errors(
     delivered_cfg_paths: list[Path] | None = None,
     delivered_progress_cfg_paths: list[Path] | None = None,
@@ -25274,14 +28195,20 @@ def direct_mutation_family_alignment_errors(
     vote_progress_cfg_paths: list[Path] | None = None,
     interleaving_cfg_paths: list[Path] | None = None,
     interleaving_progress_cfg_paths: list[Path] | None = None,
-    delivered_progress_safety_only_mutations: frozenset[str] = (
-        DIRECT_DELIVERED_FIRST_PROGRESS_SAFETY_ONLY_MUTATIONS
+    delivered_progress_safety_only_mutations: (
+        frozenset[str] | set[str] | tuple[str, ...]
+    ) = (
+        DIRECT_DELIVERED_FIRST_PROGRESS_SAFETY_ONLY_MUTATION_CONTRACTS
     ),
-    vote_progress_safety_only_mutations: frozenset[str] = (
-        DIRECT_VOTE_FIRST_PROGRESS_SAFETY_ONLY_MUTATIONS
+    vote_progress_safety_only_mutations: (
+        frozenset[str] | set[str] | tuple[str, ...]
+    ) = (
+        DIRECT_VOTE_FIRST_PROGRESS_SAFETY_ONLY_MUTATION_CONTRACTS
     ),
-    interleaving_progress_safety_only_mutations: frozenset[str] = (
-        DIRECT_INTERLEAVING_PROGRESS_SAFETY_ONLY_MUTATIONS
+    interleaving_progress_safety_only_mutations: (
+        frozenset[str] | set[str] | tuple[str, ...]
+    ) = (
+        DIRECT_INTERLEAVING_PROGRESS_SAFETY_ONLY_MUTATION_CONTRACTS
     ),
 ) -> list[str]:
     """Return errors if direct safety/progress mutation families drift."""
@@ -25357,11 +28284,18 @@ def direct_mutation_family_alignment_errors(
         )
         errors.extend(safety_errors)
         errors.extend(progress_errors)
+        progress_safety_only_set, allowlist_errors = (
+            safety_only_mutation_suffix_set(
+                progress_safety_only_mutations,
+                f"{family_label} progress safety-only mutation allowlist",
+            )
+        )
+        errors.extend(allowlist_errors)
         if safety_errors or progress_errors:
             continue
 
         stale_allowlist = sorted_unique(
-            progress_safety_only_mutations - safety_suffixes
+            progress_safety_only_set - safety_suffixes
         )
         if stale_allowlist:
             errors.append(
@@ -25370,7 +28304,7 @@ def direct_mutation_family_alignment_errors(
                 + format_items(stale_allowlist)
             )
 
-        expected_progress = safety_suffixes - progress_safety_only_mutations
+        expected_progress = safety_suffixes - progress_safety_only_set
         errors.extend(
             mutation_suffix_set_difference_errors(
                 f"{family_label} progress",
@@ -25387,8 +28321,10 @@ def byzantine_mutation_family_alignment_errors(
     interleaving_progress_cfg_paths: list[Path] | None = None,
     projection_cfg_paths: list[Path] | None = None,
     projection_progress_cfg_paths: list[Path] | None = None,
-    progress_safety_only_mutations: frozenset[str] = (
-        BYZANTINE_PROGRESS_SAFETY_ONLY_MUTATIONS
+    progress_safety_only_mutations: (
+        frozenset[str] | set[str] | tuple[str, ...]
+    ) = (
+        BYZANTINE_PROGRESS_SAFETY_ONLY_MUTATION_CONTRACTS
     ),
 ) -> list[str]:
     """Return errors if Byzantine source/projection mutation families drift."""
@@ -25442,6 +28378,11 @@ def byzantine_mutation_family_alignment_errors(
         suffix_sets[family_label] = suffixes
         errors.extend(suffix_errors)
 
+    progress_safety_only_set, allowlist_errors = safety_only_mutation_suffix_set(
+        progress_safety_only_mutations,
+        "Byzantine progress safety-only mutation allowlist",
+    )
+    errors.extend(allowlist_errors)
     if errors:
         return errors
 
@@ -25467,7 +28408,7 @@ def byzantine_mutation_family_alignment_errors(
         )
     )
 
-    stale_allowlist = sorted_unique(progress_safety_only_mutations - source_safety)
+    stale_allowlist = sorted_unique(progress_safety_only_set - source_safety)
     if stale_allowlist:
         errors.append(
             "Byzantine progress safety-only mutation allowlist has stale "
@@ -25487,7 +28428,7 @@ def byzantine_mutation_family_alignment_errors(
             projection_progress,
         ),
     ):
-        expected_progress = safety_suffixes - progress_safety_only_mutations
+        expected_progress = safety_suffixes - progress_safety_only_set
         errors.extend(
             mutation_suffix_set_difference_errors(
                 f"{family_label} progress",
@@ -25551,10 +28492,16 @@ def main() -> int:
 
     apalache_cases = parse_runner_cases(APALACHE_RUNNER)
     tlc_cases = parse_runner_cases(TLC_RUNNER)
-    duplicate_apalache_case_labels = duplicate_values(
-        runner_case_labels(APALACHE_RUNNER)
+    duplicate_apalache_case_labels = duplicate_runner_case_label_errors(
+        runner_case_label_occurrences(APALACHE_RUNNER),
+        APALACHE_RUNNER,
+        "Apalache",
     )
-    duplicate_tlc_case_labels = duplicate_values(runner_case_labels(TLC_RUNNER))
+    duplicate_tlc_case_labels = duplicate_runner_case_label_errors(
+        runner_case_label_occurrences(TLC_RUNNER),
+        TLC_RUNNER,
+        "TLC",
+    )
     shadowed_apalache_case_labels = runner_case_shadow_errors(
         apalache_cases, "Apalache"
     )
@@ -25749,8 +28696,15 @@ def main() -> int:
     formal_workflow_run_inventory_mismatches = (
         formal_workflow_run_inventory_errors()
     )
+    formal_workflow_job_inventory_mismatches = formal_workflow_job_inventory_errors()
+    formal_workflow_checked_job_occurrence_mismatches = (
+        formal_workflow_checked_job_occurrence_errors()
+    )
     formal_workflow_name_mismatches = formal_workflow_name_errors()
     formal_workflow_header_key_mismatches = formal_workflow_header_key_errors()
+    formal_workflow_top_level_key_mismatches = (
+        formal_workflow_top_level_key_errors()
+    )
     formal_workflow_trigger_mismatches = formal_workflow_trigger_errors()
     formal_workflow_on_event_mismatches = formal_workflow_on_event_errors()
     formal_workflow_paths_ignore_mismatches = formal_workflow_paths_ignore_errors()
@@ -25766,9 +28720,18 @@ def main() -> int:
     formal_workflow_action_inventory_mismatches = (
         formal_workflow_action_inventory_errors()
     )
+    formal_workflow_step_name_inventory_mismatches = (
+        formal_workflow_step_name_inventory_errors()
+    )
+    formal_workflow_step_key_inventory_mismatches = (
+        formal_workflow_step_key_inventory_errors()
+    )
     formal_workflow_action_input_mismatches = formal_workflow_action_input_errors()
     formal_workflow_setup_action_control_mismatches = (
         formal_workflow_setup_action_control_errors()
+    )
+    formal_workflow_job_key_inventory_mismatches = (
+        formal_workflow_job_key_inventory_errors()
     )
     formal_workflow_runner_label_mismatches = formal_workflow_runner_label_errors()
     formal_workflow_timeout_mismatches = formal_workflow_timeout_errors()
@@ -25789,60 +28752,163 @@ def main() -> int:
     formal_toolchain_override_mismatches = formal_toolchain_override_errors(
         (FAST_CI, EXPECTED_FAILURE_CI, PR_WORKFLOW, NIGHTLY_WORKFLOW, README)
     )
-    fast_ci_modes = active_command_modes(FAST_CI, APALACHE_COMMAND_PREFIX)
-    expected_failure_modes = active_command_modes(
-        EXPECTED_FAILURE_CI, APALACHE_COMMAND_PREFIX
+    fast_ci_mode_occurrences = active_command_mode_occurrences(
+        FAST_CI,
+        APALACHE_COMMAND_PREFIX,
     )
-    nightly_ci_modes = workflow_job_active_command_modes(
-        NIGHTLY_WORKFLOW, ("frontier-nightly",), APALACHE_COMMAND_PREFIX
+    expected_failure_mode_occurrences = active_command_mode_occurrences(
+        EXPECTED_FAILURE_CI,
+        APALACHE_COMMAND_PREFIX,
     )
+    nightly_ci_mode_occurrences = workflow_job_active_command_mode_occurrences(
+        NIGHTLY_WORKFLOW,
+        ("frontier-nightly",),
+        APALACHE_COMMAND_PREFIX,
+    )
+    fast_ci_modes = [mode for mode, _line in fast_ci_mode_occurrences]
+    expected_failure_modes = [
+        mode for mode, _line in expected_failure_mode_occurrences
+    ]
+    nightly_ci_modes = [mode for mode, _line in nightly_ci_mode_occurrences]
     ci_modes = fast_ci_modes + expected_failure_modes + nightly_ci_modes
-    readme_modes = command_modes(README, APALACHE_COMMAND_RE)
-    readme_tlc_modes = command_modes(README, TLC_COMMAND_RE)
-    fast_ci_tlc_modes = active_command_modes(FAST_CI, TLC_COMMAND_PREFIX)
-    expected_failure_tlc_modes = active_command_modes(
-        EXPECTED_FAILURE_CI, TLC_COMMAND_PREFIX
+    readme_mode_occurrences = command_mode_occurrences(README, APALACHE_COMMAND_RE)
+    readme_tlc_mode_occurrences = command_mode_occurrences(README, TLC_COMMAND_RE)
+    readme_modes = [mode for mode, _line in readme_mode_occurrences]
+    readme_tlc_modes = [mode for mode, _line in readme_tlc_mode_occurrences]
+    fast_ci_tlc_mode_occurrences = active_command_mode_occurrences(
+        FAST_CI,
+        TLC_COMMAND_PREFIX,
     )
-    nightly_tlc_modes = workflow_job_active_command_modes(
-        NIGHTLY_WORKFLOW, ("frontier-nightly",), TLC_COMMAND_PREFIX
+    expected_failure_tlc_mode_occurrences = active_command_mode_occurrences(
+        EXPECTED_FAILURE_CI,
+        TLC_COMMAND_PREFIX,
     )
+    nightly_tlc_mode_occurrences = workflow_job_active_command_mode_occurrences(
+        NIGHTLY_WORKFLOW,
+        ("frontier-nightly",),
+        TLC_COMMAND_PREFIX,
+    )
+    fast_ci_tlc_modes = [mode for mode, _line in fast_ci_tlc_mode_occurrences]
+    expected_failure_tlc_modes = [
+        mode for mode, _line in expected_failure_tlc_mode_occurrences
+    ]
+    nightly_tlc_modes = [mode for mode, _line in nightly_tlc_mode_occurrences]
     ci_tlc_modes = fast_ci_tlc_modes + expected_failure_tlc_modes + nightly_tlc_modes
     readme_tlc_bug_modes = bug_modes(readme_tlc_modes)
-    readme_fast_table_modes = documented_fast_table_modes(README)
-    readme_apalache_length_rows = documented_apalache_length_rows(README)
+    readme_fast_table_mode_occurrences = documented_fast_table_mode_occurrences(
+        README
+    )
+    readme_fast_table_modes = [
+        mode for mode, _line in readme_fast_table_mode_occurrences
+    ]
+    readme_apalache_length_row_occurrences = (
+        documented_apalache_length_row_occurrences(README)
+    )
+    readme_apalache_length_rows = [
+        (mode, length)
+        for mode, length, _line in readme_apalache_length_row_occurrences
+    ]
     readme_apalache_length_shape_mismatches = apalache_length_table_shape_errors(
         README
     )
     readme_apalache_length_modes = [
         mode for mode, _ in readme_apalache_length_rows
     ]
-    readme_apalache_lengths = dict(readme_apalache_length_rows)
-    duplicate_fast_ci_modes = duplicate_values(fast_ci_modes)
-    duplicate_expected_failure_ci_modes = duplicate_values(expected_failure_modes)
-    duplicate_nightly_ci_modes = duplicate_values(nightly_ci_modes)
-    duplicate_readme_apalache_commands = duplicate_values(readme_modes)
-    duplicate_readme_apalache_length_modes = duplicate_values(
-        readme_apalache_length_modes
+    (
+        readme_apalache_lengths,
+        readme_apalache_length_duplicate_mismatches,
+    ) = apalache_length_table_occurrence_map(
+        readme_apalache_length_row_occurrences,
+        README,
     )
-    overlapping_ci_modes = sorted_unique(
-        set(fast_ci_modes) & set(expected_failure_modes)
+    duplicate_fast_ci_modes = duplicate_active_command_mode_errors(
+        fast_ci_mode_occurrences,
+        FAST_CI,
+        "PR CI Apalache command",
+    )
+    duplicate_expected_failure_ci_modes = duplicate_active_command_mode_errors(
+        expected_failure_mode_occurrences,
+        EXPECTED_FAILURE_CI,
+        "expected-failure CI Apalache command",
+    )
+    duplicate_nightly_ci_modes = duplicate_active_command_mode_errors(
+        nightly_ci_mode_occurrences,
+        NIGHTLY_WORKFLOW,
+        "scheduled/manual CI Apalache command",
+    )
+    duplicate_fast_ci_tlc_modes = duplicate_active_command_mode_errors(
+        fast_ci_tlc_mode_occurrences,
+        FAST_CI,
+        "PR CI TLC command",
+    )
+    duplicate_expected_failure_ci_tlc_modes = duplicate_active_command_mode_errors(
+        expected_failure_tlc_mode_occurrences,
+        EXPECTED_FAILURE_CI,
+        "expected-failure CI TLC command",
+    )
+    duplicate_nightly_ci_tlc_modes = duplicate_active_command_mode_errors(
+        nightly_tlc_mode_occurrences,
+        NIGHTLY_WORKFLOW,
+        "scheduled/manual CI TLC command",
+    )
+    duplicate_readme_apalache_commands = duplicate_command_mode_errors(
+        readme_mode_occurrences,
+        README,
+        "README Apalache command",
+    )
+    ci_apalache_mode_surface_mismatches = ci_mode_surface_occurrence_errors(
+        (
+            ("PR", fast_ci_mode_occurrences, FAST_CI),
+            (
+                "expected-failure",
+                expected_failure_mode_occurrences,
+                EXPECTED_FAILURE_CI,
+            ),
+            ("scheduled/manual", nightly_ci_mode_occurrences, NIGHTLY_WORKFLOW),
+        ),
+        "formal",
+    )
+    ci_tlc_mode_surface_mismatches = ci_mode_surface_occurrence_errors(
+        (
+            ("PR", fast_ci_tlc_mode_occurrences, FAST_CI),
+            (
+                "expected-failure",
+                expected_failure_tlc_mode_occurrences,
+                EXPECTED_FAILURE_CI,
+            ),
+            (
+                "scheduled/manual",
+                nightly_tlc_mode_occurrences,
+                NIGHTLY_WORKFLOW,
+            ),
+        ),
+        "TLC",
     )
     readme_bug_modes = bug_modes(readme_modes)
     expected_failure_ci_set = set(expected_failure_modes)
-    documented_bug_modes_missing_expected_failure_ci = sorted_unique(
-        readme_bug_modes - expected_failure_ci_set
+    documented_bug_modes_missing_expected_failure_ci = (
+        documented_bug_mode_expected_failure_ci_errors(
+            readme_mode_occurrences,
+            expected_failure_ci_set,
+            README,
+        )
     )
-    fast_ci_bug_modes = sorted_unique(bug_modes(fast_ci_modes))
-    expected_failure_ci_non_bug_modes = sorted_unique(
-        expected_failure_ci_set - bug_modes(expected_failure_modes)
+    fast_ci_bug_modes = unexpected_bug_command_mode_errors(
+        fast_ci_mode_occurrences,
+        FAST_CI,
+        "PR CI Apalache command",
+        "expected-failure CI",
+    )
+    expected_failure_ci_non_bug_modes = unexpected_non_bug_command_mode_errors(
+        expected_failure_mode_occurrences,
+        EXPECTED_FAILURE_CI,
+        "expected-failure CI Apalache command",
     )
 
     all_documented_modes = set(readme_modes)
     all_checked_modes = set(ci_modes)
     all_modes_to_resolve = sorted_unique(all_checked_modes | all_documented_modes)
 
-    unsupported_ci_modes: list[str] = []
-    unsupported_readme_modes: list[str] = []
     missing_files: list[str] = []
     reference_errors: list[str] = []
     tlc_reference_errors: list[str] = []
@@ -25851,10 +28917,6 @@ def main() -> int:
     for mode in all_modes_to_resolve:
         case = matching_case(mode, apalache_cases)
         if case is None:
-            if mode in all_checked_modes:
-                unsupported_ci_modes.append(mode)
-            if mode in all_documented_modes:
-                unsupported_readme_modes.append(mode)
             continue
 
         files, mode_reference_errors = referenced_files(mode, case)
@@ -25866,34 +28928,49 @@ def main() -> int:
         for spec_file in [path for path in files if path.suffix == ".tla"]:
             reachable_modules = tla_reachable_module_files(spec_file)
             referenced_formal_files.update(reachable_modules)
-            reference_errors.extend(tla_module_validation_errors(mode, spec_file))
-        reference_errors.extend(cfg_shape_errors(mode, files))
+            reference_errors.extend(
+                runner_tla_module_validation_errors(
+                    mode, case, spec_file, APALACHE_RUNNER, "Apalache"
+                )
+            )
+        reference_errors.extend(
+            runner_cfg_shape_errors(
+                mode, case, files, APALACHE_RUNNER, "Apalache"
+            )
+        )
         spec_files = [path for path in files if path.suffix == ".tla"]
         cfg_files = [path for path in files if path.suffix == ".cfg"]
         for cfg_file in cfg_files:
             reference_errors.extend(
-                cfg_duplicate_constant_binding_errors(mode, cfg_file)
+                runner_cfg_inventory_errors(
+                    mode, case, cfg_file, APALACHE_RUNNER, "Apalache"
+                )
             )
             reference_errors.extend(
-                cfg_duplicate_operator_reference_errors(mode, cfg_file)
-            )
-            reference_errors.extend(
-                cfg_semantic_check_errors(mode, cfg_file, "Apalache")
-            )
-            reference_errors.extend(
-                cfg_fast_generic_check_errors(mode, cfg_file, "Apalache")
+                runner_cfg_proof_target_errors(
+                    mode, case, cfg_file, APALACHE_RUNNER, "Apalache"
+                )
             )
         if len(spec_files) == 1:
             for cfg_file in cfg_files:
                 reference_errors.extend(
-                    cfg_module_ownership_errors(mode, spec_files[0], cfg_file)
+                    runner_cfg_module_binding_errors(
+                        mode,
+                        case,
+                        spec_files[0],
+                        cfg_file,
+                        APALACHE_RUNNER,
+                        "Apalache",
+                    )
                 )
                 reference_errors.extend(
-                    cfg_operator_reference_errors(mode, spec_files[0], cfg_file)
-                )
-                reference_errors.extend(
-                    cfg_trivial_check_operator_errors(
-                        mode, spec_files[0], cfg_file, "Apalache"
+                    runner_cfg_trivial_check_operator_errors(
+                        mode,
+                        case,
+                        spec_files[0],
+                        cfg_file,
+                        APALACHE_RUNNER,
+                        "Apalache",
                     )
                 )
                 reference_errors.extend(
@@ -25912,25 +28989,86 @@ def main() -> int:
                     )
                 )
                 reference_errors.extend(
-                    cfg_constant_binding_errors(mode, spec_files[0], cfg_file)
+                    runner_cfg_constant_binding_errors(
+                        mode,
+                        case,
+                        spec_files[0],
+                        cfg_file,
+                        APALACHE_RUNNER,
+                        "Apalache",
+                    )
                 )
-        for path in files:
-            if not path.exists():
-                missing_files.append(f"{mode}: {path.relative_to(ROOT_DIR)}")
+        missing_files.extend(
+            missing_referenced_file_errors(
+                mode, case, files, APALACHE_RUNNER, "Apalache"
+            )
+        )
 
-    expected_failure_without_marker = modes_without_expected_failure_marker(
-        expected_failure_modes, apalache_cases, "Apalache"
+    expected_failure_without_marker = sourced_modes_without_expected_failure_marker_errors(
+        (
+            (
+                "expected-failure CI Apalache command",
+                EXPECTED_FAILURE_CI,
+                expected_failure_mode_occurrences,
+            ),
+        ),
+        apalache_cases,
+        "Apalache",
     )
-    baseline_with_expected_failure_marker = modes_with_unexpected_failure_marker(
-        set(fast_ci_modes) | set(nightly_ci_modes), apalache_cases, "Apalache"
+    baseline_with_expected_failure_marker = (
+        sourced_modes_with_unexpected_failure_marker_errors(
+            (
+                ("PR CI Apalache command", FAST_CI, fast_ci_mode_occurrences),
+                (
+                    "scheduled/manual CI Apalache command",
+                    NIGHTLY_WORKFLOW,
+                    nightly_ci_mode_occurrences,
+                ),
+            ),
+            set(),
+            apalache_cases,
+            "Apalache",
+        )
     )
     expected_failure_assignment_mismatches = expected_failure_assignment_errors(
         all_modes_to_resolve,
         apalache_cases,
         "Apalache",
     )
+    unsupported_readme_mode_errors = unsupported_command_mode_errors(
+        readme_mode_occurrences,
+        README,
+        "README Apalache command",
+        apalache_cases,
+        "Apalache",
+    )
+    unsupported_ci_mode_errors = active_command_support_occurrence_errors(
+        (
+            ("PR", fast_ci_mode_occurrences, FAST_CI),
+            (
+                "expected-failure",
+                expected_failure_mode_occurrences,
+                EXPECTED_FAILURE_CI,
+            ),
+            ("scheduled/manual", nightly_ci_mode_occurrences, NIGHTLY_WORKFLOW),
+        ),
+        apalache_cases,
+        "Apalache",
+    )
+    missing_readme_command_errors = active_command_documentation_occurrence_errors(
+        (
+            ("PR", fast_ci_mode_occurrences, FAST_CI),
+            (
+                "expected-failure",
+                expected_failure_mode_occurrences,
+                EXPECTED_FAILURE_CI,
+            ),
+            ("scheduled/manual", nightly_ci_mode_occurrences, NIGHTLY_WORKFLOW),
+        ),
+        all_documented_modes,
+        "README Apalache commands",
+    )
 
-    missing_readme_commands = sorted_unique(all_checked_modes - all_documented_modes)
     exact_runner_modes = {label for label in apalache_cases if "*" not in label}
     pr_baseline_modes = {
         mode
@@ -25938,43 +29076,84 @@ def main() -> int:
         if mode in {"fast", "deep", "fork-npos"} or mode.endswith("-fast")
     }
     fast_ci_set = set(fast_ci_modes)
-    missing_fast_ci_modes = sorted_unique(pr_baseline_modes - fast_ci_set)
-    readme_apalache_length_set = set(readme_apalache_length_modes)
-    missing_readme_apalache_length_modes = sorted_unique(
-        pr_baseline_modes - readme_apalache_length_set
+    missing_fast_ci_modes = missing_runner_case_mode_errors(
+        apalache_cases,
+        pr_baseline_modes,
+        fast_ci_set,
+        APALACHE_RUNNER,
+        "Apalache",
+        "PR CI",
     )
-    unsupported_readme_apalache_length_modes = sorted_unique(
-        mode
-        for mode in readme_apalache_length_set
-        if matching_case(mode, apalache_cases) is None
+    readme_apalache_length_set = set(readme_apalache_length_modes)
+    missing_readme_apalache_length_modes = missing_runner_case_mode_errors(
+        apalache_cases,
+        pr_baseline_modes,
+        readme_apalache_length_set,
+        APALACHE_RUNNER,
+        "Apalache",
+        "README Apalache length table",
+    )
+    unsupported_readme_apalache_length_modes = unsupported_command_mode_errors(
+        [
+            (mode, line_number)
+            for mode, _length, line_number in readme_apalache_length_row_occurrences
+        ],
+        README,
+        "README Apalache length table",
+        apalache_cases,
+        "Apalache",
     )
     apalache_length_mismatches = apalache_length_table_errors(
-        readme_apalache_lengths, apalache_cases
+        readme_apalache_length_row_occurrences, apalache_cases, README
     )
-    missing_exact_runner_ci_modes = sorted_unique(
-        exact_runner_modes - set(ci_modes)
+    missing_exact_runner_ci_modes = missing_runner_case_mode_errors(
+        apalache_cases,
+        exact_runner_modes,
+        set(ci_modes),
+        APALACHE_RUNNER,
+        "Apalache",
+        "formal CI",
     )
-    unused_apalache_runner_cases = unused_runner_case_labels(
-        all_modes_to_resolve, apalache_cases
+    unused_apalache_runner_cases = unused_runner_case_label_errors(
+        all_modes_to_resolve,
+        apalache_cases,
+        APALACHE_RUNNER,
+        "Apalache",
+        "CI or README modes",
     )
     readme_fast_table_set = set(readme_fast_table_modes)
     readme_tlc_set = set(readme_tlc_modes)
     ci_tlc_set = set(ci_tlc_modes)
-    ci_tlc_inventory_mismatches = ci_tlc_inventory_errors(
-        ci_tlc_modes, readme_tlc_set, tlc_cases
+    readme_fast_table_tlc_required_occurrences = [
+        (mode, line_number)
+        for mode, line_number in readme_fast_table_mode_occurrences
+        if mode not in APALACHE_ONLY_PR_MODES
+    ]
+    ci_tlc_inventory_mismatches = ci_tlc_inventory_occurrence_errors(
+        (
+            ("PR", fast_ci_tlc_mode_occurrences, FAST_CI),
+            (
+                "expected-failure",
+                expected_failure_tlc_mode_occurrences,
+                EXPECTED_FAILURE_CI,
+            ),
+            (
+                "scheduled/manual",
+                nightly_tlc_mode_occurrences,
+                NIGHTLY_WORKFLOW,
+            ),
+        ),
+        readme_tlc_set,
+        tlc_cases,
     )
     expected_failure_tlc_inventory_mismatches = (
         expected_failure_tlc_inventory_errors(expected_failure_tlc_modes)
     )
-    pr_modes_with_tlc_runner = {
-        mode
-        for mode in pr_baseline_modes | APALACHE_ONLY_PR_MODES
-        if matching_case(mode, tlc_cases) is not None
-    }
     pr_tlc_cross_check_mismatches = pr_tlc_cross_check_errors(
         pr_baseline_modes,
-        pr_modes_with_tlc_runner,
-        readme_tlc_set,
+        apalache_cases,
+        tlc_cases,
+        readme_tlc_mode_occurrences,
     )
     apalache_only_readme_mismatches = required_text_errors(
         README,
@@ -26001,43 +29180,93 @@ def main() -> int:
     tlc_modes_to_resolve = (
         readme_fast_table_set | readme_tlc_set | readme_bug_modes | ci_tlc_set
     )
-    missing_tlc_runner_modes = sorted_unique(
-        mode
-        for mode in readme_fast_table_set
-        if mode not in APALACHE_ONLY_PR_MODES
-        and matching_case(mode, tlc_cases) is None
+    missing_tlc_runner_modes = unsupported_command_mode_errors(
+        readme_fast_table_tlc_required_occurrences,
+        README,
+        "README fast-mode table",
+        tlc_cases,
+        "TLC",
     )
-    missing_readme_tlc_commands = sorted_unique(
-        readme_fast_table_set - readme_tlc_set - APALACHE_ONLY_PR_MODES
+    missing_readme_tlc_commands = missing_documented_command_mode_errors(
+        readme_fast_table_tlc_required_occurrences,
+        README,
+        "README fast-mode table",
+        readme_tlc_set,
+        "README TLC commands",
     )
     exact_tlc_fast_modes = exact_fast_runner_modes(tlc_cases)
-    undocumented_tlc_runner_modes = sorted_unique(
-        exact_tlc_fast_modes - readme_fast_table_set
+    undocumented_tlc_runner_modes = undocumented_exact_fast_runner_mode_errors(
+        tlc_cases,
+        readme_fast_table_set,
+        TLC_RUNNER,
+        "README fast-mode table",
     )
     documented_tlc_bug_modes = readme_bug_modes | readme_tlc_bug_modes
-    documented_bug_modes_missing_tlc_runner = sorted_unique(
-        mode
-        for mode in documented_tlc_bug_modes
-        if matching_case(mode, tlc_cases) is None
+    documented_tlc_bug_mode_occurrences = [
+        (mode, line_number)
+        for mode, line_number in readme_mode_occurrences + readme_tlc_mode_occurrences
+        if "-bug-" in mode
+    ]
+    documented_bug_modes_missing_tlc_runner = unsupported_documented_bug_mode_errors(
+        documented_tlc_bug_mode_occurrences,
+        tlc_cases,
+        README,
+        "README mutation command",
     )
-    tlc_expected_failure_without_marker = modes_without_expected_failure_marker(
-        documented_tlc_bug_modes, tlc_cases, "TLC"
+    tlc_expected_failure_without_marker = (
+        documented_modes_without_expected_failure_marker_errors(
+            documented_tlc_bug_mode_occurrences,
+            tlc_cases,
+            README,
+            "README mutation command",
+            "TLC",
+        )
     )
-    tlc_non_bug_modes = tlc_modes_to_resolve - documented_tlc_bug_modes
-    tlc_baseline_with_expected_failure_marker = modes_with_unexpected_failure_marker(
-        tlc_non_bug_modes, tlc_cases, "TLC"
+    tlc_non_bug_occurrence_surfaces = (
+        ("README fast-mode table", README, readme_fast_table_mode_occurrences),
+        ("README TLC command", README, readme_tlc_mode_occurrences),
+        ("PR CI TLC command", FAST_CI, fast_ci_tlc_mode_occurrences),
+        (
+            "expected-failure CI TLC command",
+            EXPECTED_FAILURE_CI,
+            expected_failure_tlc_mode_occurrences,
+        ),
+        (
+            "scheduled/manual CI TLC command",
+            NIGHTLY_WORKFLOW,
+            nightly_tlc_mode_occurrences,
+        ),
+    )
+    tlc_baseline_with_expected_failure_marker = (
+        sourced_modes_with_unexpected_failure_marker_errors(
+            tlc_non_bug_occurrence_surfaces,
+            documented_tlc_bug_modes,
+            tlc_cases,
+            "TLC",
+        )
     )
     tlc_expected_failure_assignment_mismatches = expected_failure_assignment_errors(
         tlc_modes_to_resolve,
         tlc_cases,
         "TLC",
     )
-    mutation_cfg_mismatches = mutation_cfg_equivalence_errors(
-        readme_bug_modes, apalache_cases, tlc_cases
+    mutation_cfg_mismatches = documented_mutation_cfg_equivalence_errors(
+        readme_mode_occurrences,
+        README,
+        apalache_cases,
+        tlc_cases,
     )
-    mutation_cfg_name_mismatches = mutation_cfg_name_errors(
-        readme_bug_modes, apalache_cases, "Apalache"
-    ) + mutation_cfg_name_errors(readme_bug_modes, tlc_cases, "TLC")
+    mutation_cfg_name_mismatches = documented_mutation_cfg_name_errors(
+        readme_mode_occurrences,
+        README,
+        apalache_cases,
+        "Apalache",
+    ) + documented_mutation_cfg_name_errors(
+        readme_mode_occurrences,
+        README,
+        tlc_cases,
+        "TLC",
+    )
     mutation_cfg_type_invariant_mismatches = (
         mutation_cfg_type_invariant_errors()
     )
@@ -26117,16 +29346,61 @@ def main() -> int:
     byzantine_mutation_family_alignment_mismatches = (
         byzantine_mutation_family_alignment_errors()
     )
-    module_identity_mismatches = module_identity_errors(
-        tlc_modes_to_resolve, apalache_cases, tlc_cases
+    module_identity_mismatches = sourced_module_identity_errors(
+        (
+            (
+                "README fast-mode table",
+                README,
+                readme_fast_table_mode_occurrences,
+            ),
+            ("README TLC command", README, readme_tlc_mode_occurrences),
+            (
+                "README mutation command",
+                README,
+                [
+                    (mode, line_number)
+                    for mode, line_number in readme_mode_occurrences
+                    if "-bug-" in mode
+                ],
+            ),
+            ("PR CI TLC command", FAST_CI, fast_ci_tlc_mode_occurrences),
+            (
+                "expected-failure CI TLC command",
+                EXPECTED_FAILURE_CI,
+                expected_failure_tlc_mode_occurrences,
+            ),
+            (
+                "scheduled/manual CI TLC command",
+                NIGHTLY_WORKFLOW,
+                nightly_tlc_mode_occurrences,
+            ),
+        ),
+        apalache_cases,
+        tlc_cases,
     )
-    unused_tlc_runner_cases = unused_runner_case_labels(
-        tlc_modes_to_resolve, tlc_cases
+    unused_tlc_runner_cases = unused_runner_case_label_errors(
+        tlc_modes_to_resolve,
+        tlc_cases,
+        TLC_RUNNER,
+        "TLC",
+        "README modes",
     )
-    duplicate_readme_fast_table_modes = duplicate_values(readme_fast_table_modes)
-    duplicate_readme_tlc_commands = duplicate_values(readme_tlc_modes)
-    unsupported_readme_tlc_commands = sorted_unique(
-        mode for mode in readme_tlc_set if matching_case(mode, tlc_cases) is None
+    duplicate_readme_fast_table_modes = duplicate_command_mode_errors(
+        readme_fast_table_mode_occurrences,
+        README,
+        "README fast-mode table",
+    )
+    duplicate_readme_tlc_commands = duplicate_command_mode_errors(
+        readme_tlc_mode_occurrences,
+        README,
+        "README TLC command",
+    )
+    unsupported_readme_tlc_commands = unsupported_command_mode_errors(
+        readme_tlc_mode_occurrences,
+        README,
+        "README TLC command",
+        tlc_cases,
+        "TLC",
     )
     missing_tlc_files: list[str] = []
     for mode in sorted_unique(tlc_modes_to_resolve):
@@ -26147,22 +29421,24 @@ def main() -> int:
             reachable_modules = tla_reachable_module_files(module_file)
             referenced_formal_files.update(reachable_modules)
             tlc_reference_errors.extend(
-                tla_module_validation_errors(mode, module_file)
+                runner_tla_module_validation_errors(
+                    mode, case, module_file, TLC_RUNNER, "TLC"
+                )
             )
-        tlc_reference_errors.extend(cfg_shape_errors(mode, files))
+        tlc_reference_errors.extend(
+            runner_cfg_shape_errors(mode, case, files, TLC_RUNNER, "TLC")
+        )
         for cfg_file in files:
             if cfg_file.suffix == ".cfg":
                 tlc_reference_errors.extend(
-                    cfg_duplicate_constant_binding_errors(mode, cfg_file)
+                    runner_cfg_inventory_errors(
+                        mode, case, cfg_file, TLC_RUNNER, "TLC"
+                    )
                 )
                 tlc_reference_errors.extend(
-                    cfg_duplicate_operator_reference_errors(mode, cfg_file)
-                )
-                tlc_reference_errors.extend(
-                    cfg_semantic_check_errors(mode, cfg_file, "TLC")
-                )
-                tlc_reference_errors.extend(
-                    cfg_fast_generic_check_errors(mode, cfg_file, "TLC")
+                    runner_cfg_proof_target_errors(
+                        mode, case, cfg_file, TLC_RUNNER, "TLC"
+                    )
                 )
         if len(module_files) == 1:
             tlc_reference_errors.extend(
@@ -26171,14 +29447,23 @@ def main() -> int:
             for cfg_file in files:
                 if cfg_file.suffix == ".cfg":
                     tlc_reference_errors.extend(
-                        cfg_module_ownership_errors(mode, module_files[0], cfg_file)
+                        runner_cfg_module_binding_errors(
+                            mode,
+                            case,
+                            module_files[0],
+                            cfg_file,
+                            TLC_RUNNER,
+                            "TLC",
+                        )
                     )
                     tlc_reference_errors.extend(
-                        cfg_operator_reference_errors(mode, module_files[0], cfg_file)
-                    )
-                    tlc_reference_errors.extend(
-                        cfg_trivial_check_operator_errors(
-                            mode, module_files[0], cfg_file, "TLC"
+                        runner_cfg_trivial_check_operator_errors(
+                            mode,
+                            case,
+                            module_files[0],
+                            cfg_file,
+                            TLC_RUNNER,
+                            "TLC",
                         )
                     )
                     tlc_reference_errors.extend(
@@ -26197,30 +29482,37 @@ def main() -> int:
                         )
                     )
                     tlc_reference_errors.extend(
-                        cfg_constant_binding_errors(mode, module_files[0], cfg_file)
+                        runner_cfg_constant_binding_errors(
+                            mode,
+                            case,
+                            module_files[0],
+                            cfg_file,
+                            TLC_RUNNER,
+                            "TLC",
+                        )
                     )
-        for path in files:
-            if not path.exists():
-                missing_tlc_files.append(f"{mode}: {path.relative_to(ROOT_DIR)}")
+        missing_tlc_files.extend(
+            missing_referenced_file_errors(mode, case, files, TLC_RUNNER, "TLC")
+        )
 
     unreferenced_formal_files = unreferenced_formal_file_errors(
         referenced_formal_files
     )
 
-    if unsupported_ci_modes:
+    if unsupported_ci_mode_errors:
         errors.append(
             "CI invokes Sumeragi formal modes unsupported by the runner:\n"
-            + format_items(sorted_unique(unsupported_ci_modes))
+            + format_items(unsupported_ci_mode_errors)
         )
-    if unsupported_readme_modes:
+    if unsupported_readme_mode_errors:
         errors.append(
             "README documents Sumeragi formal modes unsupported by the runner:\n"
-            + format_items(sorted_unique(unsupported_readme_modes))
+            + format_items(unsupported_readme_mode_errors)
         )
-    if missing_readme_commands:
+    if missing_readme_command_errors:
         errors.append(
             "README is missing commands for CI-invoked Sumeragi formal modes:\n"
-            + format_items(missing_readme_commands)
+            + format_items(missing_readme_command_errors)
         )
     if missing_fast_ci_modes:
         errors.append(
@@ -26259,24 +29551,20 @@ def main() -> int:
         )
     if duplicate_fast_ci_modes:
         errors.append(
-            "PR CI has duplicate Sumeragi formal modes:\n"
+            "PR CI has duplicate Sumeragi formal Apalache commands:\n"
             + format_items(duplicate_fast_ci_modes)
         )
     if duplicate_expected_failure_ci_modes:
         errors.append(
-            "Expected-failure CI has duplicate Sumeragi formal modes:\n"
+            "Expected-failure CI has duplicate Sumeragi formal Apalache commands:\n"
             + format_items(duplicate_expected_failure_ci_modes)
         )
     if duplicate_nightly_ci_modes:
         errors.append(
-            "Scheduled/manual CI has duplicate Sumeragi formal modes:\n"
+            "Scheduled/manual CI has duplicate Sumeragi formal Apalache commands:\n"
             + format_items(duplicate_nightly_ci_modes)
         )
-    if overlapping_ci_modes:
-        errors.append(
-            "Sumeragi formal modes appear in both PR and expected-failure CI:\n"
-            + format_items(overlapping_ci_modes)
-        )
+    errors.extend(ci_apalache_mode_surface_mismatches)
     if documented_bug_modes_missing_expected_failure_ci:
         errors.append(
             "README documents Sumeragi mutation modes missing from expected-failure CI:\n"
@@ -26292,16 +29580,32 @@ def main() -> int:
             "Expected-failure CI includes non-mutation Sumeragi formal modes:\n"
             + format_items(expected_failure_ci_non_bug_modes)
         )
+    errors.extend(ci_tlc_mode_surface_mismatches)
+    if duplicate_fast_ci_tlc_modes:
+        errors.append(
+            "PR CI has duplicate Sumeragi formal TLC commands:\n"
+            + format_items(duplicate_fast_ci_tlc_modes)
+        )
+    if duplicate_expected_failure_ci_tlc_modes:
+        errors.append(
+            "Expected-failure CI has duplicate Sumeragi formal TLC commands:\n"
+            + format_items(duplicate_expected_failure_ci_tlc_modes)
+        )
+    if duplicate_nightly_ci_tlc_modes:
+        errors.append(
+            "Scheduled/manual CI has duplicate Sumeragi formal TLC commands:\n"
+            + format_items(duplicate_nightly_ci_tlc_modes)
+        )
     errors.extend(expected_failure_tlc_inventory_mismatches)
     if duplicate_readme_apalache_commands:
         errors.append(
-            "README has duplicate Apalache commands for modes:\n"
+            "README has duplicate Apalache commands:\n"
             + format_items(duplicate_readme_apalache_commands)
         )
-    if duplicate_readme_apalache_length_modes:
+    if readme_apalache_length_duplicate_mismatches:
         errors.append(
             "README Apalache length table has duplicate modes:\n"
-            + format_items(duplicate_readme_apalache_length_modes)
+            + format_items(readme_apalache_length_duplicate_mismatches)
         )
     if expected_failure_without_marker:
         errors.append(
@@ -26364,6 +29668,16 @@ def main() -> int:
             "Sumeragi formal workflow run command inventory drifted:\n"
             + format_items(formal_workflow_run_inventory_mismatches)
         )
+    if formal_workflow_job_inventory_mismatches:
+        errors.append(
+            "Sumeragi formal workflow job inventory drifted:\n"
+            + format_items(formal_workflow_job_inventory_mismatches)
+        )
+    if formal_workflow_checked_job_occurrence_mismatches:
+        errors.append(
+            "Sumeragi formal workflow checked job declarations drifted:\n"
+            + format_items(formal_workflow_checked_job_occurrence_mismatches)
+        )
     if formal_workflow_name_mismatches:
         errors.append(
             "Sumeragi formal workflow names drifted:\n"
@@ -26373,6 +29687,11 @@ def main() -> int:
         errors.append(
             "Sumeragi formal workflow header key inventory drifted:\n"
             + format_items(formal_workflow_header_key_mismatches)
+        )
+    if formal_workflow_top_level_key_mismatches:
+        errors.append(
+            "Sumeragi formal workflow full top-level key inventory drifted:\n"
+            + format_items(formal_workflow_top_level_key_mismatches)
         )
     if formal_workflow_trigger_mismatches:
         errors.append(
@@ -26419,6 +29738,16 @@ def main() -> int:
             "Sumeragi formal workflow action inventory drifted:\n"
             + format_items(formal_workflow_action_inventory_mismatches)
         )
+    if formal_workflow_step_name_inventory_mismatches:
+        errors.append(
+            "Sumeragi formal workflow step-name inventory drifted:\n"
+            + format_items(formal_workflow_step_name_inventory_mismatches)
+        )
+    if formal_workflow_step_key_inventory_mismatches:
+        errors.append(
+            "Sumeragi formal workflow step-key inventory drifted:\n"
+            + format_items(formal_workflow_step_key_inventory_mismatches)
+        )
     if formal_workflow_action_input_mismatches:
         errors.append(
             "Sumeragi formal workflow action inputs changed proof environment:\n"
@@ -26428,6 +29757,11 @@ def main() -> int:
         errors.append(
             "Sumeragi formal workflow setup actions can be skipped or masked:\n"
             + format_items(formal_workflow_setup_action_control_mismatches)
+        )
+    if formal_workflow_job_key_inventory_mismatches:
+        errors.append(
+            "Sumeragi formal workflow job key inventory drifted:\n"
+            + format_items(formal_workflow_job_key_inventory_mismatches)
         )
     if formal_workflow_runner_label_mismatches:
         errors.append(
@@ -27155,7 +30489,7 @@ def main() -> int:
         )
     if duplicate_readme_tlc_commands:
         errors.append(
-            "README has duplicate TLC commands for modes:\n"
+            "README has duplicate TLC commands:\n"
             + format_items(duplicate_readme_tlc_commands)
         )
     if unsupported_readme_tlc_commands:

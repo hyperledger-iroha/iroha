@@ -19,6 +19,9 @@ EVIDENCE_FILE_SYMLINK_DIAGNOSTIC = "evidence file must not be a symlink"
 EVIDENCE_FILE_PARENT_INSPECTION_DIAGNOSTIC = (
     "evidence file parent cannot be inspected"
 )
+EVIDENCE_FILE_PARENT_SYMLINK_DIAGNOSTIC = (
+    "evidence file parent must not be a symlink"
+)
 EVIDENCE_FILE_PARENT_DIRECTORY_DIAGNOSTIC = (
     "evidence file parent must be a directory when it exists"
 )
@@ -36,6 +39,9 @@ EVIDENCE_DIRECTORY_INSPECTION_DIAGNOSTIC = "evidence directory cannot be inspect
 EVIDENCE_DIRECTORY_SYMLINK_DIAGNOSTIC = "evidence directory must not be a symlink"
 EVIDENCE_DIRECTORY_PARENT_INSPECTION_DIAGNOSTIC = (
     "evidence directory parent cannot be inspected"
+)
+EVIDENCE_DIRECTORY_PARENT_SYMLINK_DIAGNOSTIC = (
+    "evidence directory parent must not be a symlink"
 )
 EVIDENCE_DIRECTORY_PARENT_DIRECTORY_DIAGNOSTIC = (
     "evidence directory parent must be a directory when it exists"
@@ -307,6 +313,17 @@ def validate_evidence_parent_chain(
     for parent in (path.parent, *path.parent.parents):
         parent_label = f"{evidence_label} parent"
         try:
+            if parent.is_symlink():
+                if evidence_label == "evidence file":
+                    error_list.append(EVIDENCE_FILE_PARENT_SYMLINK_DIAGNOSTIC)
+                elif evidence_label == "evidence directory":
+                    error_list.append(EVIDENCE_DIRECTORY_PARENT_SYMLINK_DIAGNOSTIC)
+                else:
+                    error_list.append(
+                        f"{parent_label} `{_path_label(parent)}` "
+                        "must not be a symlink"
+                    )
+                return False
             if parent.exists() and not parent.is_dir():
                 if evidence_label == "evidence file":
                     error_list.append(EVIDENCE_FILE_PARENT_DIRECTORY_DIAGNOSTIC)

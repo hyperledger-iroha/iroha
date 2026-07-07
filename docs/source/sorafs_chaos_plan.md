@@ -39,8 +39,21 @@ After every exercise, append the outcome to `ops/drill-log.md` using
 postmortem template. Run `scripts/telemetry/validate_drill_log.sh` during review
 to ensure the log stays well-formed. Use `--status scheduled` for planned drills,
 `pass`/`fail` once the rehearsal completes, and `follow-up` when additional action
-items remain. The helper also accepts `--log <path>` so dry-runs or automated
-tests can target throwaway locations without touching `ops/drill-log.md`.
+items remain; status values are exact lowercase evidence labels, so hand-edited
+rows such as `PASS` are rejected. The helper also accepts `--log <path>` so
+dry-runs or automated tests can target throwaway locations without touching
+`ops/drill-log.md`. The logger escapes Markdown table separators and embedded
+newlines in every emitted cell, and the validator rejects malformed headers,
+separator rows, data rows, or unknown statuses before drill evidence is
+accepted. The logger and validator
+also require canonical, real calendar `YYYY-MM-DD` dates, range-checked
+`HH:MMZ` start/end times (or `-` for an open end), and a non-empty scenario so
+operator evidence cannot hide malformed drill records in a well-shaped table.
+Both helpers also reject symlinked drill-log leaves, symlinked parent
+components, non-regular existing log targets, and parent-directory segments
+before appending or reading drill evidence; the writer uses descriptor-based
+`O_NOFOLLOW` append/create semantics so dry-run logs cannot be redirected
+through filesystem aliases.
 
 TLS/ECH drills should also execute `cargo xtask sorafs-gateway-probe` with the
 new `--drill-*`, `--summary-json`, and `--pagerduty-*` flags so the gateway probe
@@ -49,13 +62,30 @@ automatically records the run, emits JSON evidence under
 training incident the moment headers or GAR policy drift. The telemetry helper
 (`scripts/telemetry/run_sorafs_gateway_probe.sh`) now forwards these flags, so
 existing runbooks can opt into the native logging/paging hooks without extra
-shell glue.
+shell glue. The wrapper validates PagerDuty severity and `key=value` detail
+arguments, plus `--date`, `--start`, and `--end` drill timestamp overrides,
+before creating artifacts or launching the probe, so malformed paging metadata
+or drill times cannot be hidden behind a later probe failure. Rollback hooks are
+also required to be existing, regular, non-symlink executable files before the
+probe starts. PagerDuty custom-detail keys must be canonical, unique, and cannot
+override wrapper-owned evidence fields such as `status`, `probe_log`, `host`, or
+`manifest_cid`; custom PagerDuty endpoint overrides must be credential-free
+HTTPS URLs without fragments or whitespace. Wrapper options also reject missing
+or option-shaped values before artifacts are prepared, while
+`--rollback-hook-arg` still accepts flag-like values intended for the hook. It
+also rejects symlinked or non-directory artifact roots, symlinked output-parent
+components, and symlinked/non-regular probe log, JSON report, or PagerDuty
+payload targets before launch, keeping drill evidence from being written through
+ambiguous filesystem aliases.
 
 ## Tooling
 
 - Harness controller (from mock provider plan) to inject failures.
 - Observability dashboards from metrics plan used during drills.
 - Automated scoring to assess response time and completeness.
+- `scripts/telemetry/schedule_soradns_ir_drill.sh` records quarterly
+  transparency IR drill placeholders using UTC-derived default dates and rejects
+  malformed custom date/start overrides before the drill log is touched.
 
 ## Communication Workflow
 

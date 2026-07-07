@@ -4,11 +4,12 @@ direction: ltr
 source: docs/source/sorafs_pop_credentials_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 27bf8efb7d955aec71c8b9c853c797bd0c33458acb9ff3d940144cc618da3553
-source_last_modified: "2026-07-02T09:22:07.337207+00:00"
-translation_last_reviewed: 2026-07-02
-source_mtime: 2026-07-02T09:22:07.337207+00:00
+source_hash: 3eb77b0182688b04843693ea978a27b67df61f56ec471375f6f48068de91be8f
+source_last_modified: "2026-07-04T23:07:05.429426+00:00"
+translation_last_reviewed: 2026-07-05
+source_mtime: "2026-07-04T23:07:05.429426+00:00"
 ---
+
 # Proof-of-Personhood Credential Pipeline
 
 ## Current Status
@@ -33,7 +34,8 @@ governance-approval artifacts before reporting `ready`, and it rejects raw
 credentials, proofs, holder identities, secrets, response bodies, stale
 root/revocation publications, unaudited transcript-digest-only proof backends,
 and missing `iroha_config` governance bindings. The gate also requires the
-issuer bundle to match the published commitment root and revocation registry,
+issuer bundle to use a canonical lowercase `pop-issuer-*` identifier without
+non-production markers, to match the published commitment root and revocation registry,
 and requires juror-client, verifier-service, moderation-integration,
 metrics/alert, and governance artifacts to carry the same root and
 revocation-list digests, so rollout packets cannot mix evidence from different
@@ -49,18 +51,53 @@ root/revocation sync tuple as `valid_juror_sync_bindings`, and valid
 moderation-integration artifacts publish `pop_snapshot_digest_hex` values as
 `valid_pop_snapshot_digests`; the aggregate production-readiness gate accepts
 both only as payload-free metadata tethered to recognized artifact
-fingerprints. Issuer-bundle artifacts also bind `credential_count` to the unique
-canonical `credentials[].name` inventory and reject duplicate credential entries
-before promotion can report ready. Enrollment-portal artifacts also bind
+fingerprints. The aggregate production-readiness gate also rechecks the
+juror-client sync tuple before final promotion: synced roots in
+`valid_juror_sync_bindings` must appear in `valid_root_digests`, and synced
+revocation lists must appear in `valid_revocation_list_digests`.
+Aggregate promotion also rechecks the lane-proven PoP digest relationships:
+root-bound artifact fingerprints must match `valid_root_digests`,
+revocation-bound artifact fingerprints must match
+`valid_revocation_list_digests`, and policy-bound artifact fingerprints must
+match `valid_policy_digests` before final promotion can report ready.
+Issuer-bundle artifacts also bind `credential_count` to the unique
+canonical `credentials[].name` inventory, require reviewed lowercase
+`pop-credential-*` labels without non-production markers, and reject duplicate
+credential entries before promotion can report ready. Revocation-registry artifacts also bind `revoked_nonce_count` to the unique canonical `revoked_nonce_refs[].name` inventory, require reviewed `pop-revoked-nonce-*` labels without non-production markers, keep raw revoked nonce payloads excluded, and reject duplicate revoked-nonce refs before promotion can report ready. Enrollment-portal artifacts also bind
 `route_count` to the unique canonical `routes[].name` inventory and reject
-duplicate route entries before promotion can report ready. Verifier-service
-artifacts also bind `proof_probe_count` to the unique canonical `probes[].name`
+duplicate or unknown route entries before promotion can report ready. Verifier-service
+artifacts also bind `route_count` to the unique canonical `routes[].name`
+inventory and `proof_probe_count` to the unique canonical `probes[].name`
 inventory, require accepted and rejected proof counts to match the
-`probes[].accepted` partitions, and reject duplicate proof-probe entries before
-promotion can report ready. Moderation-integration artifacts also bind
+`probes[].accepted` partitions, require accepted probe labels to use reviewed
+`pop-valid-proof-*` names and rejected probe labels to use reviewed
+`pop-invalid-proof-*` names without non-production markers, and reject duplicate or
+unknown route entries and duplicate proof-probe entries before promotion can
+report ready. Verifier-service artifacts must explicitly set
+`raw_proofs_included` and `holder_identity_disclosed` to `false`, and
+metrics/alert artifacts must explicitly set `critical_alerts_firing` and
+`response_bodies_included` to `false`, before promotion can report ready.
+PoP credential payload-safety artifacts must explicitly set
+`credential_payloads_included`, `holder_identities_included`,
+`credential_leaves_included`, `rollback_detected`,
+`revoked_nonces_included`, `pii_fields_included`, `attestations_included`,
+`holder_identity_included`, `proof_payloads_included`,
+`raw_proofs_included`, `holder_identity_disclosed`,
+`identity_payloads_included`, `critical_alerts_firing`, and
+`response_bodies_included` to `false` before promotion can report ready.
+Moderation-integration artifacts also bind
 `sortition_probe_count` and `commit_reveal_probe_count` to the unique canonical
-`sortition_probes[].name` and `commit_reveal_probes[].name` inventories and
-reject duplicate moderation-probe entries before promotion can report ready.
+`sortition_probes[].name` and `commit_reveal_probes[].name` inventories,
+require reviewed lowercase `pop-sortition-probe-*` and `pop-commit-reveal-probe-*`
+labels without non-production markers, and reject duplicate moderation-probe
+entries before promotion can report ready.
+Metrics/alert artifacts also bind `metric_count` to the unique canonical
+`metrics` inventory, require the reviewed POP metrics set, and reject duplicate
+or unknown metric entries before promotion can report ready.
+The summary exports the sorted reviewed `metrics` inventory plus
+`metric_count_values`, and the aggregate production-readiness gate requires
+those fields to match the metrics/alert artifact fingerprint before final
+promotion can report ready.
 `scripts/run_sorafs_pop_credentials_rollout_evidence.py` provides the matching
 collection planner/runner for reviewed staged evidence. It accepts explicit
 payload-free canary artifacts, supports shell-style `@ARGFILE` inputs, forwards
@@ -76,14 +113,22 @@ governance approval evidence. It takes reviewed deployment facts, requires every
 positive proof claim and required credential/proof-probe/moderation-probe/route/metric coverage explicitly, forces raw
 credential, holder-identity, proof, attestation, response-body, and revocation
 nonce payload flags to `false`, validates each generated artifact through the
-PoP rollout gate, requires reviewed policy-digest input for verifier-service
+PoP rollout gate, requires explicit `body_blake3_hex` response digest evidence
+for enrollment and verifier routes, requires reviewed policy-digest input for verifier-service
 and governance-approval evidence, requires reviewed `--credential` labels whose
-unique inventory matches `--credential-count` for issuer bundles, requires
+unique inventory matches `--credential-count` for issuer bundles and uses
+`pop-credential-*` production labels without non-production markers, requires
 reviewed `--accepted-proof-probe` and `--rejected-proof-probe` labels whose
-unique inventories match the verifier proof counts, requires reviewed
+unique inventories match the verifier proof counts and use partitioned
+`pop-valid-proof-*`/`pop-invalid-proof-*` production labels without non-production
+markers, requires reviewed
 `--sortition-probe` and `--commit-reveal-probe` labels whose unique inventories
-match the moderation-integration probe counts, and writes atomically
-without following output symlinks. The
+match the moderation-integration probe counts and use
+`pop-sortition-probe-*`/`pop-commit-reveal-probe-*` production labels without
+non-production markers, rejects duplicate or unknown `--verified-claim`, route,
+and metric closed-set inputs plus malformed, generic-family, or
+non-production `--issuer-id` values before writing, and
+writes atomically without following output symlinks. The
 builder is an evidence packaging aid; it does not replace the missing issuer,
 registry, juror client, verifier service, or production privacy-preserving proof
 backend.
@@ -138,10 +183,13 @@ backend.
   verifier-service policy digest anchors, emits them as `valid_policy_digests`,
   and requires governance approval `policy_digest_hex` to match one of those
   valid verifier policies. Enrollment-portal artifacts also bind `route_count`
-  to the unique canonical `routes[].name` inventory and reject duplicate route
-  entries before promotion can report ready. Moderation-integration artifacts
+  to the unique canonical `routes[].name` inventory and reject duplicate or
+  unknown route entries before promotion can report ready. Enrollment-portal and
+  verifier-service route responses must also carry a `body_blake3_hex` digest
+  before readiness can report ready. Moderation-integration artifacts
   also bind `sortition_probe_count` and `commit_reveal_probe_count` to reviewed
-  probe inventories before promotion can report ready. It supports
+  `pop-sortition-probe-*` and `pop-commit-reveal-probe-*` probe inventories without
+  non-production markers before promotion can report ready. It supports
   shell-style `@ARGFILE` inputs so reviewed operator evidence paths can be
   replayed without
   storing runtime secrets in the repo.
@@ -210,16 +258,21 @@ reference validator is shipped only for local/CI payload validation.
   `scripts/build_sorafs_pop_credentials_canary.py
   @scripts/examples/sorafs_pop_credentials_verifier_canary.args.example` before
   passing the generated evidence files to the rollout gate. Issuer canaries bind
-  `credential_count` to reviewed `credentials[].name` inventory before local
-  evidence can be generated. Verifier canaries bind `proof_probe_count` to
-  reviewed `probes[].name` inventory and bind accepted/rejected proof counts to
-  the reviewed `probes[].accepted` partitions before local evidence can be
-  generated. Moderation-integration canaries bind `sortition_probe_count` and
-  `commit_reveal_probe_count` to reviewed probe inventories before local
-  evidence can be generated.
+  `credential_count` to reviewed `pop-credential-*` `credentials[].name` inventory
+  without non-production markers before local
+  evidence can be generated. Verifier canaries bind `route_count` to reviewed `routes[].name`
+  inventory without unknown routes, bind `proof_probe_count` to reviewed
+  partitioned `pop-valid-proof-*`/`pop-invalid-proof-*` `probes[].name` inventory, and
+  bind accepted/rejected proof counts to the reviewed `probes[].accepted`
+  partitions before local evidence can be generated. Moderation-integration canaries bind `sortition_probe_count` and
+  `commit_reveal_probe_count` to reviewed `pop-sortition-probe-*` and
+  `pop-commit-reveal-probe-*` probe inventories without non-production markers
+  before local evidence can be generated.
   Production promotion remains blocked unless the summary status is `ready`
   and includes a production privacy-preserving proof backend rather than the
-  local transcript-digest policy foundation.
+  local transcript-digest policy foundation. The aggregate production-readiness
+  gate also rechecks `valid_juror_sync_bindings` against `valid_root_digests`
+  and `valid_revocation_list_digests` before final promotion can report ready.
 - Publish operator and juror docs only after the service CLI/API and verifier
   paths exist.
 

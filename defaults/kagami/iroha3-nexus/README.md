@@ -11,10 +11,10 @@
 - peer 4: public_key=ea0130A9DBBA9104C16C34C4293E68B9A999EE402705F9E7DFD889ED8326730EE7505A96641B1F88D4F93B0B3D0322D02A16FB address=127.0.0.1:1340 pop_hex=a0dc9d607b933fb3e7dcca835e21b5c445da4d063ce6ea73fb48b576b6073a1c0771f965bb4eacc8e455a4c97b69b40b1045a2b783f6fb188abb92ce5249d687dc8e51eb43243ec188d3e4ce341d2f05773926fabeba2f1463a7b5037a0e1a2a
 
 Files:
-- genesis.json — generated with `kagami genesis generate --profile iroha3-nexus` and patched with deterministic topology+PoPs
-- verify.txt — stdout from `kagami verify --profile iroha3-nexus --genesis genesis.json`
+- genesis.json — sample topology fixture; deployable public Nexus genesis must be regenerated with `kagami genesis generate --profile iroha3-nexus --xor-asset-definition-id <BASE58>` so `xor#universal` binds to the operator-supplied canonical XOR asset definition
+- verify.txt — policy note; profile verification requires a regenerated genesis with the operator-supplied canonical XOR id
 - config.toml — minimal Nexus config matching the topology (ports 8080/1337)
 - docker-compose.yml — single-node snippet mounting the config/genesis
 
 Regenerate:
-- cargo xtask kagami-profiles --profile iroha3-nexus
+- cargo xtask kagami-profiles --profile iroha3-nexus --nexus-xor-asset-definition-id <BASE58>

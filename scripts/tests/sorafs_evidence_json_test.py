@@ -25,6 +25,7 @@ from sorafs_evidence_json import (  # noqa: E402
     read_evidence_bytes,
     validate_evidence_file_for_read,
 )
+from sorafs_evidence_paths import EVIDENCE_FILE_PARENT_SYMLINK_DIAGNOSTIC  # noqa: E402
 
 
 def test_load_evidence_json_returns_object(tmp_path: Path) -> None:
@@ -241,7 +242,7 @@ def test_read_evidence_bytes_rejects_directory_before_open(tmp_path: Path) -> No
         raise AssertionError("expected directory evidence read to fail")
 
 
-def test_load_evidence_json_with_sha256_or_record_error_accepts_parent_symlink(
+def test_load_evidence_json_with_sha256_or_record_error_rejects_parent_symlink(
     tmp_path: Path,
 ) -> None:
     target_root = tmp_path / "target-root"
@@ -256,8 +257,11 @@ def test_load_evidence_json_with_sha256_or_record_error_accepts_parent_symlink(
     errors: list[str] = []
     loaded = load_evidence_json_with_sha256_or_record_error(evidence, 1024, errors)
 
-    assert loaded == ({"schema": "test"}, hashlib.sha256(raw).hexdigest())
-    assert errors == []
+    assert loaded is None
+    assert errors == [
+        f"{EVIDENCE_JSON_LOAD_DIAGNOSTIC}: {EVIDENCE_FILE_PARENT_SYMLINK_DIAGNOSTIC}"
+    ]
+    assert str(symlink_root) not in errors[0]
 
 
 def test_validate_evidence_file_for_read_records_inspection_failure(

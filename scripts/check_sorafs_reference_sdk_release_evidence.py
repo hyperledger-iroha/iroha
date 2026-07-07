@@ -50,7 +50,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_hex,
     require_governance_approval,
     validate_standard_evidence_payload,
-    require_maximum_number,
+    require_maximum_int,
     require_minimum_int,
     require_object,
     required_evidence_kind_names,
@@ -61,6 +61,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_string,
     require_string_coverage,
     require_string_equal,
+    require_string_in,
     require_string_inventory_count_match,
 )
 from sorafs_required_kinds import (  # noqa: E402
@@ -103,6 +104,8 @@ RELEASE_MANIFEST_BOUND_KINDS = (
     "governance_approval",
 )
 POLICY_BOUND_KINDS = ("governance_approval",)
+RELEASE_KEY_BOUND_KINDS = ("governance_approval",)
+ALLOWED_MANIFEST_SIGNATURE_ALGORITHMS = ("ed25519",)
 
 SENSITIVE_KEYS = {
     "authorization",
@@ -137,6 +140,31 @@ SENSITIVE_KEYS = {
     "signed_transaction",
     "token",
 }
+
+
+def require_only_required_values(
+    payload: dict[str, Any],
+    array_field: str,
+    field: str,
+    required_values: tuple[str, ...],
+    errors: list[str],
+) -> None:
+    """Reject reviewed inventory rows outside a required closed string set."""
+
+    values = payload.get(array_field)
+    if not isinstance(values, list):
+        return
+    allowed = frozenset(required_values)
+    for item in values:
+        if field:
+            if not isinstance(item, dict):
+                continue
+            value = item.get(field)
+        else:
+            value = item
+        if not isinstance(value, str) or value.strip() not in allowed:
+            errors.append(f"{array_field} must not include unknown values")
+            return
 
 
 @dataclass(frozen=True)
@@ -243,6 +271,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "governance_source",
         "release_manifest_digest_hex",
         "policy_digest_hex",
+        "public_key_fingerprint_hex",
     ),
 }
 
@@ -277,6 +306,23 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
 )
 
 
+def validated_signature_algorithm_fingerprint_values(
+    kind_name: str,
+    payload: dict[str, Any],
+) -> dict[str, str]:
+    """Return signature algorithm fingerprint fields after closed-set validation."""
+
+    if kind_name != "signed_manifest":
+        return {}
+    signature_algorithm = payload.get("signature_algorithm")
+    if (
+        isinstance(signature_algorithm, str)
+        and signature_algorithm in ALLOWED_MANIFEST_SIGNATURE_ALGORITHMS
+    ):
+        return {"signature_algorithm": signature_algorithm}
+    return {}
+
+
 def validate_release_archive(
     payload: dict[str, Any],
     errors: list[str],
@@ -289,6 +335,7 @@ def validate_release_archive(
     require_bool_true(payload, "dist_gitkeep_only_tracked", errors)
     require_minimum_int(payload, "target_count", options.min_release_targets, errors)
     require_string_coverage(payload, "targets", "", REQUIRED_RELEASE_TARGETS, errors)
+    require_only_required_values(payload, "targets", "", REQUIRED_RELEASE_TARGETS, errors)
     require_string_inventory_count_match(payload, "targets", "target_count", errors)
     require_hex(payload, "archive_index_digest_hex", HEX64_LEN, errors)
     require_hex(payload, "release_manifest_digest_hex", HEX64_LEN, errors)
@@ -302,7 +349,12 @@ def validate_signed_manifest(payload: dict[str, Any], errors: list[str]) -> None
     require_bool_true(payload, "governed_release_key_used", errors)
     require_bool_true(payload, "public_key_fingerprint_recorded", errors)
     require_bool_true(payload, "private_key_absent", errors)
-    require_string(payload, "signature_algorithm", errors)
+    require_string_in(
+        payload,
+        "signature_algorithm",
+        ALLOWED_MANIFEST_SIGNATURE_ALGORITHMS,
+        errors,
+    )
     require_hex(payload, "manifest_digest_hex", HEX64_LEN, errors)
     require_policy_digest(payload, errors)
     require_hex(payload, "public_key_fingerprint_hex", HEX64_LEN, errors)
@@ -315,6 +367,7 @@ def validate_downstream_bindings(
     options: ValidationOptions,
 ) -> None:
     require_string_coverage(payload, "packages", "", REQUIRED_DOWNSTREAM_PACKAGES, errors)
+    require_only_required_values(payload, "packages", "", REQUIRED_DOWNSTREAM_PACKAGES, errors)
     require_string_inventory_count_match(payload, "packages", "package_count", errors)
     require_minimum_int(
         payload,
@@ -342,11 +395,12 @@ def validate_cookbook_smoke(
     require_bool_true(payload, "fixture_bundle_validation_passed", errors)
     require_bool_true(payload, "manifest_car_replay_passed", errors)
     require_bool_true(payload, "validation_outcomes_emitted", errors)
-    require_maximum_number(
+    require_maximum_int(
         payload,
         "smoke_duration_seconds",
         options.max_smoke_duration_secs,
         errors,
+        minimum=1,
     )
     require_hex(payload, "release_manifest_digest_hex", HEX64_LEN, errors)
     require_hex(payload, "smoke_output_digest_hex", HEX64_LEN, errors)
@@ -374,6 +428,7 @@ def validate_governance_approval(payload: dict[str, Any], errors: list[str]) -> 
     require_string_equal(payload, "governance_source", "governed_release", errors)
     require_hex(payload, "release_manifest_digest_hex", HEX64_LEN, errors)
     require_policy_digest(payload, errors)
+    require_hex(payload, "public_key_fingerprint_hex", HEX64_LEN, errors)
 
 
 def validate_kind_specific(
@@ -443,8 +498,10 @@ def build_summary(
     valid_package_index_digests: set[str] = set()
     valid_release_key_fingerprints: set[str] = set()
     valid_smoke_output_digests: set[str] = set()
+    signature_algorithms: set[str] = set()
     valid_release_manifest_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     valid_policy_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
+    valid_release_key_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     files = discover_evidence_files(
         evidence_dirs,
         evidence_files,
@@ -473,6 +530,12 @@ def build_summary(
             validation_errors,
             FINGERPRINT_FIELDS,
         )
+        fingerprint_values = validated_signature_algorithm_fingerprint_values(
+            kind_name,
+            payload,
+        )
+        if fingerprint_values:
+            evidence_artifact_fingerprint(artifact).update(fingerprint_values)
         if evidence_artifact_is_valid(artifact):
             fingerprint = evidence_artifact_fingerprint(artifact)
             if kind_name == "release_archive":
@@ -491,6 +554,9 @@ def build_summary(
                     valid_release_key_fingerprints.add(
                         release_key_fingerprint.lower()
                     )
+                signature_algorithm = fingerprint.get("signature_algorithm")
+                if isinstance(signature_algorithm, str):
+                    signature_algorithms.add(signature_algorithm)
             elif kind_name == "downstream_bindings":
                 package_index_digest = fingerprint.get("package_index_digest_hex")
                 if isinstance(package_index_digest, str):
@@ -510,6 +576,8 @@ def build_summary(
                 valid_release_manifest_bound_artifacts.append((kind_name, artifact))
             if kind_name in POLICY_BOUND_KINDS:
                 valid_policy_bound_artifacts.append((kind_name, artifact))
+            if kind_name in RELEASE_KEY_BOUND_KINDS:
+                valid_release_key_bound_artifacts.append((kind_name, artifact))
         record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         record_evidence_validation_errors(path, validation_errors, errors)
 
@@ -543,6 +611,22 @@ def build_summary(
         missing_anchor_error_template=(
             "{kind_name} policy_digest_hex requires a valid "
             "signed_manifest policy_digest_hex"
+        ),
+    )
+    validate_bound_evidence_digest_references(
+        required_kinds=required_kinds,
+        missing_anchor_required_kinds=("signed_manifest",),
+        bound_artifacts=valid_release_key_bound_artifacts,
+        valid_anchor_digests=valid_release_key_fingerprints,
+        digest_field="public_key_fingerprint_hex",
+        errors=errors,
+        binding_error_template=(
+            "{kind_name} public_key_fingerprint_hex must reference a valid "
+            "signed_manifest public_key_fingerprint_hex"
+        ),
+        missing_anchor_error_template=(
+            "{kind_name} public_key_fingerprint_hex requires a valid "
+            "signed_manifest public_key_fingerprint_hex"
         ),
     )
 
@@ -587,6 +671,7 @@ def build_summary(
         "valid_release_key_fingerprints": sorted(valid_release_key_fingerprints),
         "valid_smoke_output_digests": sorted(valid_smoke_output_digests),
         "valid_policy_digests": sorted(valid_policy_digests),
+        "signature_algorithms": sorted(signature_algorithms),
         "required": required,
         "errors": errors,
     }

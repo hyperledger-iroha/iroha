@@ -433,7 +433,7 @@ def _is_nonzero_tron_address_payload(payload: bytes) -> bool:
 
 def _normalize_tron_node_url(base_url: str) -> str:
     if (
-        not isinstance(base_url, str)
+        type(base_url) is not str
         or base_url != base_url.strip()
         or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in base_url)
     ):
@@ -1317,7 +1317,9 @@ def _route_canary_transaction_signature_summary(
     }
 
 
-def _is_canonical_decimal_text(value: str) -> bool:
+def _is_canonical_decimal_text(value: Any) -> bool:
+    if type(value) is not str:
+        return False
     return value.isascii() and value.isdecimal() and (len(value) == 1 or value[0] != "0")
 
 
@@ -1326,7 +1328,7 @@ def _parse_canonical_u32(value: Any, *, label: str) -> int:
         raise ValueError(f"{label} must be a u32")
     if isinstance(value, int):
         parsed = value
-    elif isinstance(value, str) and _is_canonical_decimal_text(value):
+    elif _is_canonical_decimal_text(value):
         parsed = int(value)
     else:
         raise ValueError(f"{label} must be a u32")
@@ -1397,7 +1399,7 @@ def _parse_protobuf_nonnegative_int(value: Any, *, label: str) -> int:
         raise RuntimeError(f"{label} must fit non-negative int64")
     if isinstance(value, int):
         parsed = value
-    elif isinstance(value, str) and _is_canonical_decimal_text(value):
+    elif _is_canonical_decimal_text(value):
         parsed = int(value)
     else:
         raise RuntimeError(f"{label} must fit non-negative int64")
@@ -1418,9 +1420,9 @@ def _parse_transaction_enum(
         if value < 0 or value > PROTOBUF_INT64_MAX:
             raise RuntimeError(f"{label} enum is out of range")
         return value
-    if isinstance(value, str) and value in mapping:
+    if type(value) is str and value in mapping:
         return mapping[value]
-    if isinstance(value, str) and _is_canonical_decimal_text(value):
+    if _is_canonical_decimal_text(value):
         parsed = int(value)
         if parsed > PROTOBUF_INT64_MAX:
             raise RuntimeError(f"{label} enum is out of range")
@@ -6296,8 +6298,9 @@ def _route_canary_transaction_verified(summary: dict[str, Any]) -> bool:
                 block_timestamp=block_timestamp,
                 log_index=transaction["log_index"],
                 verifier_address20=verifier_payload[1:],
-                call_data_sha256=_parse_hex32(
-                    str(call_summary["call_data_sha256"]),
+                call_data_sha256=_parse_summary_hex32(
+                    call_summary,
+                    "call_data_sha256",
                     label="route canary call data SHA-256",
                 ),
                 message_id=_parse_summary_hex32(
@@ -6307,8 +6310,9 @@ def _route_canary_transaction_verified(summary: dict[str, Any]) -> bool:
                 ),
                 source_domain=transaction_source_domain,
                 target_domain=call_summary["public_inputs_target_domain"],
-                payload_hash=_parse_hex32(
-                    str(call_summary["public_inputs_payload_hash"]),
+                payload_hash=_parse_summary_hex32(
+                    call_summary,
+                    "public_inputs_payload_hash",
                     label="route canary payload hash",
                 ),
                 commitment_root=_parse_summary_hex32(
@@ -6316,12 +6320,14 @@ def _route_canary_transaction_verified(summary: dict[str, Any]) -> bool:
                     "commitment_root",
                     label="route canary commitment root",
                 ),
-                finality_height=_parse_hex32(
-                    str(call_summary["public_inputs_finality_height"]),
+                finality_height=_parse_summary_hex32(
+                    call_summary,
+                    "public_inputs_finality_height",
                     label="route canary finality height",
                 ),
-                finality_block_hash=_parse_hex32(
-                    str(call_summary["public_inputs_finality_block_hash"]),
+                finality_block_hash=_parse_summary_hex32(
+                    call_summary,
+                    "public_inputs_finality_block_hash",
                     label="route canary finality block hash",
                 ),
                 statement_hash=_parse_summary_hex32(
@@ -7109,6 +7115,15 @@ def _read_runtime_text_file(path: Path, *, error_message: str) -> str:
         raise ValueError(error_message) from None
 
 
+def _read_runtime_text_file_arg(value: Any, *, error_message: str) -> str:
+    if type(value) is not str:
+        raise ValueError(error_message) from None
+    return _read_runtime_text_file(
+        Path(value).expanduser(),
+        error_message=error_message,
+    )
+
+
 def _runtime_tron_pro_api_key(args: argparse.Namespace) -> str | None:
     inline_key = getattr(args, "tron_pro_api_key", None)
     key_file = getattr(args, "tron_pro_api_key_file", None)
@@ -7116,8 +7131,8 @@ def _runtime_tron_pro_api_key(args: argparse.Namespace) -> str | None:
         raise ValueError("--tron-pro-api-key and --tron-pro-api-key-file cannot both be supplied")
     from_file = key_file is not None
     if key_file is not None:
-        inline_key = _read_runtime_text_file(
-            Path(key_file).expanduser(),
+        inline_key = _read_runtime_text_file_arg(
+            key_file,
             error_message="--tron-pro-api-key-file cannot be read",
         )
     if inline_key is None:
@@ -7138,8 +7153,8 @@ def _runtime_witness_schedule_payload(args: argparse.Namespace) -> bytes | None:
         )
     from_file = payload_file is not None
     if from_file:
-        inline_payload = _read_runtime_text_file(
-            Path(payload_file).expanduser(),
+        inline_payload = _read_runtime_text_file_arg(
+            payload_file,
             error_message="--witness-schedule-payload-file cannot be read",
         )
     if inline_payload is None:
@@ -7184,14 +7199,14 @@ def _runtime_witness_schedule_transitions(
             "--witness-schedule-transition-json must be a list of JSON values"
         )
     for index, value in enumerate(values):
-        if not isinstance(value, str):
+        if type(value) is not str:
             raise ValueError(
                 f"--witness-schedule-transition-json {index} must be JSON text"
-            )
+            ) from None
         text = value
         if text.startswith("@"):
-            text = _read_runtime_text_file(
-                Path(text[1:]).expanduser(),
+            text = _read_runtime_text_file_arg(
+                text[1:],
                 error_message=(
                     f"--witness-schedule-transition-json {index} file cannot be read"
                 ),
@@ -7362,13 +7377,33 @@ def collect_live_evidence(
         "transaction_endpoint": _transaction_endpoint(args),
         "block_endpoint": _block_endpoint(args),
     }
+    constant_endpoint = _exact_summary_string(
+        summary,
+        "constant_endpoint",
+        label="TRON constant endpoint",
+    )
+    transaction_info_endpoint = _exact_summary_string(
+        summary,
+        "transaction_info_endpoint",
+        label="TRON transaction-info endpoint",
+    )
+    transaction_endpoint = _exact_summary_string(
+        summary,
+        "transaction_endpoint",
+        label="TRON transaction endpoint",
+    )
+    block_endpoint = _exact_summary_string(
+        summary,
+        "block_endpoint",
+        label="TRON block endpoint",
+    )
     if args.source_bridge_address is not None:
         summary["source_bridge"] = collect_source_bridge_evidence(
             tron_node_url,
             source_bridge_address=args.source_bridge_address,
             caller_address=caller_address,
             tron_pro_api_key=tron_pro_api_key,
-            constant_endpoint=str(summary["constant_endpoint"]),
+            constant_endpoint=constant_endpoint,
             include_contract_metadata=not no_getcontract,
             opener=opener,
             timeout=args.timeout,
@@ -7381,11 +7416,19 @@ def collect_live_evidence(
                 key: _hex(_optional_hex32_arg(args, key))
                 for key in _SOURCE_RECORD_HASH_FIELDS
             }
-            summary["source_record_inputs"]["source_bridge_emitter_code_hash"] = str(
-                summary["source_bridge"]["source_bridge_emitter_code_hash"]
+            summary["source_record_inputs"]["source_bridge_emitter_code_hash"] = _hex(
+                _parse_summary_hex32(
+                    summary["source_bridge"],
+                    "source_bridge_emitter_code_hash",
+                    label="source bridge emitter code hash",
+                )
             )
-            summary["source_record_inputs"]["adapter_verifier_vk_hash"] = str(
-                source_records["adapter_verifier_vk_hash"]
+            summary["source_record_inputs"]["adapter_verifier_vk_hash"] = _hex(
+                _parse_summary_hex32(
+                    source_records,
+                    "adapter_verifier_vk_hash",
+                    label="source adapter verifier VK hash",
+                )
             )
             expected_material_hash = _optional_hex32_arg(
                 args,
@@ -7426,9 +7469,29 @@ def collect_live_evidence(
                 summary["source_bridge"]["target_domain"],
                 label="source bridge target domain",
             )
-            source_event_owner_for_call = caller_address or str(
-                summary["source_bridge"]["source_bridge_owner_base58"]
+            source_bridge_payload = _parse_summary_tron_address(
+                summary["source_bridge"],
+                "address",
+                label="source bridge address",
             )
+            source_bridge_base58 = tron_base58check_from_payload(source_bridge_payload)
+            source_owner_payload = _parse_summary_tron_address(
+                summary["source_bridge"],
+                "source_bridge_owner_base58",
+                label="source bridge owner address",
+            )
+            source_owner_address_payload = _parse_summary_tron_address(
+                summary["source_bridge"],
+                "source_bridge_owner_address",
+                label="source bridge owner address",
+            )
+            if source_owner_address_payload != source_owner_payload:
+                raise RuntimeError(
+                    "source bridge owner address metadata does not match base58 owner"
+                )
+            source_owner_base58 = tron_base58check_from_payload(source_owner_payload)
+            source_owner_hex = _hex(source_owner_payload[1:])
+            source_event_owner_for_call = caller_address or source_owner_base58
             source_event_call_data = evidence.tron_source_message_call_data(
                 source_domain=source_domain,
                 target_domain=target_domain,
@@ -7437,8 +7500,8 @@ def collect_live_evidence(
             already_submitted = _word_bool(
                 _constant_word(
                     tron_node_url,
-                    endpoint=str(summary["constant_endpoint"]),
-                    contract_address=str(summary["source_bridge"]["address"]),
+                    endpoint=constant_endpoint,
+                    contract_address=source_bridge_base58,
                     function_selector="submittedSourceEvents(bytes32)",
                     parameter=source_event_digest.hex(),
                     owner_address=source_event_owner_for_call,
@@ -7460,13 +7523,9 @@ def collect_live_evidence(
                     "submittedSourceEvents(bytes32) is false for the digest"
                 )
             source_event_call: dict[str, Any] = {
-                "source_bridge_address": str(summary["source_bridge"]["address"]),
-                "source_bridge_owner_address": str(
-                    summary["source_bridge"]["source_bridge_owner_address"]
-                ),
-                "source_bridge_owner_base58": str(
-                    summary["source_bridge"]["source_bridge_owner_base58"]
-                ),
+                "source_bridge_address": source_bridge_base58,
+                "source_bridge_owner_address": source_owner_hex,
+                "source_bridge_owner_base58": source_owner_base58,
                 "source_domain": source_domain,
                 "target_domain": target_domain,
                 "source_event_digest": _hex(source_event_digest),
@@ -7478,10 +7537,8 @@ def collect_live_evidence(
             if source_event_transaction_id is None:
                 source_event_call["trigger_request"] = {
                     "endpoint": "wallet/triggersmartcontract",
-                    "owner_address": str(
-                        summary["source_bridge"]["source_bridge_owner_base58"]
-                    ),
-                    "contract_address": str(summary["source_bridge"]["address"]),
+                    "owner_address": source_owner_base58,
+                    "contract_address": source_bridge_base58,
                     "function_selector": evidence.TRON_SOURCE_MESSAGE_CALL_ABI.decode(
                         "ascii"
                     ),
@@ -7492,7 +7549,7 @@ def collect_live_evidence(
             else:
                 transaction = _transaction_by_id(
                     tron_node_url,
-                    endpoint=str(summary["transaction_endpoint"]),
+                    endpoint=transaction_endpoint,
                     transaction_id=source_event_transaction_id,
                     tron_pro_api_key=tron_pro_api_key,
                     opener=opener,
@@ -7500,24 +7557,16 @@ def collect_live_evidence(
                 )
                 transaction_info = _transaction_info(
                     tron_node_url,
-                    endpoint=str(summary["transaction_info_endpoint"]),
+                    endpoint=transaction_info_endpoint,
                     transaction_id=source_event_transaction_id,
                     tron_pro_api_key=tron_pro_api_key,
                     opener=opener,
                     timeout=args.timeout,
                 )
-                bridge_payload = parse_tron_address_payload(
-                    str(summary["source_bridge"]["address"]),
-                    label="source bridge address",
-                )
-                owner_payload = parse_tron_address_payload(
-                    str(summary["source_bridge"]["source_bridge_owner_base58"]),
-                    label="source bridge owner address",
-                )
                 transaction_summary = _source_event_transaction_summary(
                     transaction_info,
                     transaction_id=source_event_transaction_id,
-                    source_bridge_address20=bridge_payload[1:],
+                    source_bridge_address20=source_bridge_payload[1:],
                     source_event_digest=source_event_digest,
                 )
                 block_number = transaction_summary.get("block_number")
@@ -7528,13 +7577,13 @@ def collect_live_evidence(
                 trigger_contract = _source_event_trigger_contract_summary(
                     transaction,
                     transaction_id=source_event_transaction_id,
-                    source_bridge_payload=bridge_payload,
-                    owner_payload=owner_payload,
+                    source_bridge_payload=source_bridge_payload,
+                    owner_payload=source_owner_payload,
                     source_event_call_data=source_event_call_data,
                 )
                 block = _block_by_number(
                     tron_node_url,
-                    endpoint=str(summary["block_endpoint"]),
+                    endpoint=block_endpoint,
                     block_number=block_number,
                     tron_pro_api_key=tron_pro_api_key,
                     opener=opener,
@@ -7542,7 +7591,7 @@ def collect_live_evidence(
                 )
                 parent_block = _block_by_number(
                     tron_node_url,
-                    endpoint=str(summary["block_endpoint"]),
+                    endpoint=block_endpoint,
                     block_number=block_number - 1,
                     tron_pro_api_key=tron_pro_api_key,
                     opener=opener,
@@ -7558,7 +7607,7 @@ def collect_live_evidence(
                 ancestor_blocks = [
                     _block_by_number(
                         tron_node_url,
-                        endpoint=str(summary["block_endpoint"]),
+                        endpoint=block_endpoint,
                         block_number=block_number - 2 - index,
                         tron_pro_api_key=tron_pro_api_key,
                         opener=opener,
@@ -7569,7 +7618,7 @@ def collect_live_evidence(
                 confirmation_blocks = [
                     _block_by_number(
                         tron_node_url,
-                        endpoint=str(summary["block_endpoint"]),
+                        endpoint=block_endpoint,
                         block_number=block_number + 1 + index,
                         tron_pro_api_key=tron_pro_api_key,
                         opener=opener,
@@ -7597,8 +7646,8 @@ def collect_live_evidence(
                     ),
                     source_event_digest=source_event_digest,
                     source_inclusion_branch=source_inclusion_branch,
-                    source_bridge_address20=bridge_payload[1:],
-                    owner_address20=owner_payload[1:],
+                    source_bridge_address20=source_bridge_payload[1:],
+                    owner_address20=source_owner_payload[1:],
                     transaction_id=source_event_transaction_id,
                     block_number=block_number,
                     source_transaction_bytes=_parse_hex_blob(
@@ -7629,7 +7678,7 @@ def collect_live_evidence(
             destination_verifier_address=args.destination_verifier_address,
             caller_address=caller_address,
             tron_pro_api_key=tron_pro_api_key,
-            constant_endpoint=str(summary["constant_endpoint"]),
+            constant_endpoint=constant_endpoint,
             include_contract_metadata=not no_getcontract,
             opener=opener,
             timeout=args.timeout,
@@ -7660,7 +7709,7 @@ def collect_live_evidence(
     if route_canary_transaction_id is not None:
         response = _transaction_info(
             tron_node_url,
-            endpoint=str(summary["transaction_info_endpoint"]),
+            endpoint=transaction_info_endpoint,
             transaction_id=route_canary_transaction_id,
             tron_pro_api_key=tron_pro_api_key,
             opener=opener,
@@ -7672,14 +7721,15 @@ def collect_live_evidence(
             route_allowlist_hash=route_allowlist_hash,
             destination_verifier=summary["destination_verifier"],
         )
-        route_canary_message_id = _parse_hex32(
-            str(route_canary_transaction["message_id"]),
+        route_canary_message_id = _parse_summary_hex32(
+            route_canary_transaction,
+            "message_id",
             label="route-canary accepted message id",
         )
         route_canary_transaction.update(
             _route_canary_used_message_proof_summary(
                 tron_node_url,
-                constant_endpoint=str(summary["constant_endpoint"]),
+                constant_endpoint=constant_endpoint,
                 destination_verifier=summary["destination_verifier"],
                 message_id=route_canary_message_id,
                 caller_address=caller_address,
@@ -7690,7 +7740,7 @@ def collect_live_evidence(
         )
         transaction = _transaction_by_id(
             tron_node_url,
-            endpoint=str(summary["transaction_endpoint"]),
+            endpoint=transaction_endpoint,
             transaction_id=route_canary_transaction_id,
             tron_pro_api_key=tron_pro_api_key,
             opener=opener,
@@ -7708,63 +7758,76 @@ def collect_live_evidence(
         derived_canary_hash_bytes = _tron_route_canary_transaction_evidence_hash(
             route_allowlist_hash=route_allowlist_hash,
             transaction_id=route_canary_transaction_id,
-            transaction_owner_address=_parse_tron_payload_hex(
-                trigger_contract["owner_address"],
+            transaction_owner_address=_parse_summary_tron_payload_hex(
+                trigger_contract,
+                "owner_address",
                 label="route-canary transaction owner address",
             ),
             block_number=route_canary_transaction["block_number"],
             block_timestamp=route_canary_transaction["block_timestamp"],
             log_index=route_canary_transaction["log_index"],
-            verifier_address20=parse_tron_address_payload(
-                str(summary["destination_verifier"]["address"]),
+            verifier_address20=_parse_summary_tron_address(
+                summary["destination_verifier"],
+                "address",
                 label="destination verifier address",
             )[1:],
-            call_data_sha256=_parse_hex32(
-                str(trigger_contract["call_data_sha256"]),
+            call_data_sha256=_parse_summary_hex32(
+                trigger_contract,
+                "call_data_sha256",
                 label="route-canary call data SHA-256",
             ),
-            message_id=_parse_hex32(
-                str(route_canary_transaction["message_id"]),
+            message_id=_parse_summary_hex32(
+                route_canary_transaction,
+                "message_id",
                 label="route-canary accepted message id",
             ),
             source_domain=route_canary_transaction["source_domain"],
             target_domain=trigger_contract["public_inputs_target_domain"],
-            payload_hash=_parse_hex32(
-                str(trigger_contract["public_inputs_payload_hash"]),
+            payload_hash=_parse_summary_hex32(
+                trigger_contract,
+                "public_inputs_payload_hash",
                 label="route-canary payload hash",
             ),
-            commitment_root=_parse_hex32(
-                str(route_canary_transaction["commitment_root"]),
+            commitment_root=_parse_summary_hex32(
+                route_canary_transaction,
+                "commitment_root",
                 label="route-canary commitment root",
             ),
-            finality_height=_parse_hex32(
-                str(trigger_contract["public_inputs_finality_height"]),
+            finality_height=_parse_summary_hex32(
+                trigger_contract,
+                "public_inputs_finality_height",
                 label="route-canary finality height",
             ),
-            finality_block_hash=_parse_hex32(
-                str(trigger_contract["public_inputs_finality_block_hash"]),
+            finality_block_hash=_parse_summary_hex32(
+                trigger_contract,
+                "public_inputs_finality_block_hash",
                 label="route-canary finality block hash",
             ),
-            statement_hash=_parse_hex32(
-                str(route_canary_transaction["statement_hash"]),
+            statement_hash=_parse_summary_hex32(
+                route_canary_transaction,
+                "statement_hash",
                 label="route-canary statement hash",
             ),
             proof_version=trigger_contract["proof_version"],
             proof_source_domain=trigger_contract["proof_source_domain"],
-            destination_binding_hash=_parse_hex32(
-                str(route_canary_transaction["destination_binding_hash"]),
+            destination_binding_hash=_parse_summary_hex32(
+                route_canary_transaction,
+                "destination_binding_hash",
                 label="route-canary destination binding hash",
             ),
-            verifier_backend_hash=_parse_hex32(
-                str(route_canary_transaction["verifier_backend_hash"]),
+            verifier_backend_hash=_parse_summary_hex32(
+                route_canary_transaction,
+                "verifier_backend_hash",
                 label="route-canary verifier backend hash",
             ),
-            proof_family_hash=_parse_hex32(
-                str(route_canary_transaction["proof_family_hash"]),
+            proof_family_hash=_parse_summary_hex32(
+                route_canary_transaction,
+                "proof_family_hash",
                 label="route-canary proof family hash",
             ),
-            network_id=_parse_hex32(
-                str(route_canary_transaction["network_id"]),
+            network_id=_parse_summary_hex32(
+                route_canary_transaction,
+                "network_id",
                 label="route-canary network id",
             ),
             used_message_proof=route_canary_transaction["message_proof_used"] is True,
@@ -7772,12 +7835,14 @@ def collect_live_evidence(
                 "raw_data_owner_matches_transaction"
             ]
             is True,
-            signature_sha256=_parse_hex32(
-                str(trigger_contract["signature_sha256"]),
+            signature_sha256=_parse_summary_hex32(
+                trigger_contract,
+                "signature_sha256",
                 label="route-canary signature hash",
             ),
-            signature_recovered_address=_parse_tron_payload_hex(
-                trigger_contract["signature_recovered_address"],
+            signature_recovered_address=_parse_summary_tron_payload_hex(
+                trigger_contract,
+                "signature_recovered_address",
                 label="route-canary signature recovered address",
             ),
             signature_recovers_to_owner=trigger_contract["signature_recovers_to_owner"]
@@ -7786,10 +7851,7 @@ def collect_live_evidence(
         route_canary_transaction["route_canary_evidence_hash"] = _hex(
             derived_canary_hash_bytes
         )
-        derived_canary_hash = _parse_hex32(
-            str(route_canary_transaction["route_canary_evidence_hash"]),
-            label="derived route canary evidence hash",
-        )
+        derived_canary_hash = derived_canary_hash_bytes
         if (
             route_canary_evidence_hash is not None
             and route_canary_evidence_hash != derived_canary_hash

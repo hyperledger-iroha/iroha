@@ -27,6 +27,242 @@ class HostilePublicKey:
         return "secret-token-hostile-key"
 
 
+class HostileSolanaLiveComment(str):
+    def __new__(cls):
+        return str.__new__(cls, "blocked")
+
+    def __str__(self):
+        raise AssertionError("secret-token Solana live comment was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token Solana live comment was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token Solana live comment was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token Solana live comment was compared")
+
+    def strip(self):
+        raise AssertionError("secret-token Solana live comment was stripped")
+
+
+class HostileTonLiveComment(str):
+    def __new__(cls):
+        return str.__new__(cls, "active")
+
+    def __str__(self):
+        raise AssertionError("secret-token TON live comment was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token TON live comment was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token TON live comment was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token TON live comment was compared")
+
+    def strip(self):
+        raise AssertionError("secret-token TON live comment was stripped")
+
+
+class HostileRouteCanaryScalar(str):
+    def __new__(cls):
+        return str.__new__(cls, "true")
+
+    def __str__(self):
+        raise AssertionError("secret-token route canary scalar was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token route canary scalar was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token route canary scalar was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token route canary scalar was compared")
+
+    def strip(self):
+        raise AssertionError("secret-token route canary scalar was stripped")
+
+
+class HostileAllLanesPresenceScalar(str):
+    def __new__(cls):
+        return str.__new__(cls, "")
+
+    def __str__(self):
+        raise AssertionError("secret-token all-lanes scalar was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token all-lanes scalar was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token all-lanes scalar was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token all-lanes scalar was compared")
+
+    def strip(self):
+        raise AssertionError("secret-token all-lanes scalar was stripped")
+
+
+class HostileAllLanesMatchingText(str):
+    def __new__(cls, value: str):
+        return str.__new__(cls, value)
+
+    def __str__(self):
+        raise AssertionError("secret-token all-lanes matching text was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token all-lanes matching text was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token all-lanes matching text was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token all-lanes matching text was compared")
+
+
+class HostileAllLanesBlockerText(str):
+    def __new__(cls):
+        return str.__new__(cls, "safe public blocker")
+
+    def __str__(self):
+        raise AssertionError("secret-token all-lanes blocker was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token all-lanes blocker was repr'd")
+
+    def __iter__(self):
+        raise AssertionError("secret-token all-lanes blocker was iterated")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token all-lanes blocker was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token all-lanes blocker was compared")
+
+    def __hash__(self):
+        raise AssertionError("secret-token all-lanes blocker was hashed")
+
+    def strip(self):
+        raise AssertionError("secret-token all-lanes blocker was stripped")
+
+    def isascii(self):
+        raise AssertionError("secret-token all-lanes blocker checked ASCII")
+
+    def casefold(self):
+        raise AssertionError("secret-token all-lanes blocker was casefolded")
+
+
+class HostileAllLanesChecklistText(str):
+    def __new__(cls, value: str):
+        return str.__new__(cls, value)
+
+    def __str__(self):
+        raise AssertionError("secret-token all-lanes checklist text was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token all-lanes checklist text was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token all-lanes checklist text was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token all-lanes checklist text was compared")
+
+    def __hash__(self):
+        raise AssertionError("secret-token all-lanes checklist text was hashed")
+
+    def strip(self):
+        raise AssertionError("secret-token all-lanes checklist text was stripped")
+
+
+class HostileAllLanesFieldName(str):
+    def __new__(cls, value: str):
+        return str.__new__(cls, value)
+
+    def __str__(self):
+        raise AssertionError("secret-token all-lanes field name was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token all-lanes field name was repr'd")
+
+    def __iter__(self):
+        raise AssertionError("secret-token all-lanes field name was iterated")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token all-lanes field name was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token all-lanes field name was compared")
+
+    def __lt__(self, _other):
+        raise AssertionError("secret-token all-lanes field name was ordered")
+
+    def __hash__(self):
+        return str.__hash__(self)
+
+    def lower(self):
+        raise AssertionError("secret-token all-lanes field name was lowered")
+
+    def isascii(self):
+        raise AssertionError("secret-token all-lanes field name checked ASCII")
+
+    def strip(self):
+        raise AssertionError("secret-token all-lanes field name was stripped")
+
+
+class HostileAllLanesParserText(str):
+    def __new__(cls, value: str):
+        return str.__new__(cls, value)
+
+    def __str__(self):
+        raise AssertionError("secret-token all-lanes parser text was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token all-lanes parser text was repr'd")
+
+    def __iter__(self):
+        raise AssertionError("secret-token all-lanes parser text was iterated")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token all-lanes parser text was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token all-lanes parser text was compared")
+
+    def strip(self):
+        raise AssertionError("secret-token all-lanes parser text was stripped")
+
+    def startswith(self, _prefix):
+        raise AssertionError("secret-token all-lanes parser text checked prefix")
+
+    def lower(self):
+        raise AssertionError("secret-token all-lanes parser text was lowered")
+
+
+class HostileEvmLiveMetadata(str):
+    def __new__(cls):
+        return str.__new__(cls, "1")
+
+    def __str__(self):
+        raise AssertionError("secret-token EVM live metadata was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token EVM live metadata was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token EVM live metadata was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token EVM live metadata was compared")
+
+    def strip(self):
+        raise AssertionError("secret-token EVM live metadata was stripped")
+
+
 def load_evidence_module():
     script_path = (
         Path(__file__).resolve().parents[2] / "scripts" / "sccp_all_lanes_evidence.py"
@@ -4286,6 +4522,33 @@ def test_all_lanes_rejects_evm_live_block_tag_drift():
     assert "BSC source live block-tag metadata must be latest" in blockers
 
 
+def test_all_lanes_rejects_hostile_evm_live_metadata_comments_without_stringifying():
+    module = load_evidence_module()
+    eth_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(module.SCCP_DOMAIN_ETH)
+
+    hostile_fields = (
+        ("sccp_source_verifier_materials", "_comment_evm_source_rpc_chain_id"),
+        ("sccp_source_verifier_materials", "_comment_evm_source_block_tag"),
+        ("sccp_destination_rollouts", "_comment_evm_rpc_chain_id"),
+        ("sccp_destination_rollouts", "_comment_evm_block_tag"),
+    )
+    for section, field in hostile_fields:
+        records = copy.deepcopy(complete_bundle(module))
+        records[section][eth_index][field] = HostileEvmLiveMetadata()
+
+        summary = module.validate_evidence_bundle(records)
+
+        assert summary["production_ready"] is False
+        rendered = "\n".join(summary["blockers"])
+        assert "secret-token" not in rendered
+        eth_lane = next(
+            lane
+            for lane in summary["lanes"]
+            if lane["domain"] == module.SCCP_DOMAIN_ETH
+        )
+        assert eth_lane["evm_live_metadata"]["ready"] is False
+
+
 def test_all_lanes_rejects_ethereum_nonfinalized_evm_live_metadata():
     module = load_evidence_module()
     records = complete_bundle(module)
@@ -5489,6 +5752,97 @@ def test_all_lanes_rejects_evm_route_canary_transcript_on_non_evm_route():
     ) in blockers
 
 
+def test_all_lanes_rejects_hostile_absent_source_role_fields_without_stringifying():
+    module = load_evidence_module()
+    records = complete_bundle(module)
+    domain = next(
+        domain
+        for domain in module.SCCP_CORE_REMOTE_DOMAINS
+        if not module.LANE_PROFILES[domain].source_state_verifier_id
+    )
+    lane_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(domain)
+    records["sccp_source_verifier_materials"][lane_index][
+        "source_state_verifier_id"
+    ] = HostileAllLanesPresenceScalar()
+
+    summary = module.validate_evidence_bundle(records)
+
+    assert summary["production_ready"] is False
+    rendered = "\n".join(summary["blockers"])
+    assert "secret-token" not in rendered
+    assert "source_state_verifier_id must be empty for this lane" in rendered
+
+
+def test_all_lanes_rejects_hostile_foreign_route_canary_fields_without_stringifying():
+    module = load_evidence_module()
+    records = complete_bundle(module)
+    eth_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(module.SCCP_DOMAIN_ETH)
+    records["sccp_route_allowlists"][eth_index][
+        "_comment_ton_route_canary_last_transaction_lt"
+    ] = HostileAllLanesPresenceScalar()
+
+    summary = module.validate_evidence_bundle(records)
+
+    assert summary["production_ready"] is False
+    rendered = "\n".join(summary["blockers"])
+    assert "secret-token" not in rendered
+    assert (
+        "_comment_ton_route_canary_last_transaction_lt is only valid for "
+        "TON route canary evidence"
+    ) in rendered
+
+
+def test_all_lanes_rejects_hostile_not_required_source_gate_hash_without_stringifying():
+    module = load_evidence_module()
+    summary = module.validate_evidence_bundle(complete_bundle(module))
+    lane = copy.deepcopy(
+        next(
+            lane
+            for lane in summary["lanes"]
+            if lane["domain"] == module.SCCP_DOMAIN_ETH
+        )
+    )
+    lane["source_adapter_gate"]["required"] = False
+    lane["source_adapter_gate"]["gate_hash"] = HostileAllLanesPresenceScalar()
+    lane["source_adapter_gate"]["audit_hashes"] = {}
+
+    checklist = module._release_checklist([lane], [])
+    items = {item["id"]: item for item in checklist["items"]}
+    rendered = "\n".join(items["governed_deployment_evidence"]["blockers"])
+
+    assert checklist["ready"] is False
+    assert items["governed_deployment_evidence"]["ready"] is False
+    assert "secret-token" not in rendered
+    assert (
+        "domain 1 (eth): source adapter gate hash must be empty when not required"
+        in rendered
+    )
+
+
+def test_all_lanes_rejects_hostile_non_evm_live_metadata_without_stringifying():
+    module = load_evidence_module()
+    metadata = {
+        "required": False,
+        "ready": True,
+        "source_rpc_chain_id": HostileAllLanesPresenceScalar(),
+        "source_block_tag": "",
+        "destination_rpc_chain_id": "",
+        "destination_block_tag": "",
+    }
+
+    errors = module._public_lane_non_evm_live_metadata_errors(
+        metadata,
+        "all-lanes summary lanes[0].evm_live_metadata",
+    )
+    rendered = "\n".join(errors)
+
+    assert "secret-token" not in rendered
+    assert errors == [
+        "all-lanes summary lanes[0].evm_live_metadata.source_rpc_chain_id "
+        "must be empty for non-EVM lanes"
+    ]
+
+
 def test_all_lanes_rejects_evm_route_canary_missing_used_message_state():
     module = load_evidence_module()
     records = complete_bundle(module)
@@ -5518,6 +5872,57 @@ def test_all_lanes_rejects_evm_route_canary_missing_finalized_receipt_state():
         "EVM route canary receipt block finalized metadata must be true"
         in "\n".join(summary["blockers"])
     )
+
+
+def test_all_lanes_rejects_hostile_evm_route_canary_scalars_without_stringifying():
+    module = load_evidence_module()
+    eth_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(module.SCCP_DOMAIN_ETH)
+
+    hostile_fields = (
+        "_comment_evm_route_canary_log_index",
+        "_comment_evm_route_canary_receipt_block_number",
+        "_comment_evm_route_canary_transaction_block_number",
+        "_comment_evm_route_canary_used_message_proof",
+        "_comment_evm_route_canary_receipt_block_finalized",
+    )
+    for field in hostile_fields:
+        records = copy.deepcopy(complete_bundle(module))
+        records["sccp_route_allowlists"][eth_index][field] = (
+            HostileRouteCanaryScalar()
+        )
+
+        summary = module.validate_evidence_bundle(records)
+
+        assert summary["production_ready"] is False
+        rendered = "\n".join(summary["blockers"])
+        assert "secret-token" not in rendered
+        assert "EVM route canary" in rendered
+
+
+def test_all_lanes_rejects_hostile_tron_route_canary_scalars_without_stringifying():
+    module = load_evidence_module()
+    tron_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(module.SCCP_DOMAIN_TRON)
+
+    hostile_fields = (
+        "_comment_tron_route_canary_block_number",
+        "_comment_tron_route_canary_block_timestamp",
+        "_comment_tron_route_canary_log_index",
+        "_comment_tron_route_canary_used_message_proof",
+        "_comment_tron_route_canary_raw_data_owner_matches_transaction",
+        "_comment_tron_route_canary_signature_recovers_to_owner",
+    )
+    for field in hostile_fields:
+        records = copy.deepcopy(complete_bundle(module))
+        records["sccp_route_allowlists"][tron_index][field] = (
+            HostileRouteCanaryScalar()
+        )
+
+        summary = module.validate_evidence_bundle(records)
+
+        assert summary["production_ready"] is False
+        rendered = "\n".join(summary["blockers"])
+        assert "secret-token" not in rendered
+        assert "TRON route canary" in rendered
 
 
 def test_all_lanes_accepts_direct_tron_full_toml_with_audited_metadata(tmp_path):
@@ -6235,6 +6640,36 @@ def test_all_lanes_accepts_direct_solana_destination_toml_with_audited_metadata(
         lane for lane in summary["lanes"] if lane["domain"] == module.SCCP_DOMAIN_SOL
     )
     assert solana_lane["blockers"] == []
+
+
+def test_all_lanes_rejects_hostile_solana_live_program_comments_without_stringifying():
+    module = load_evidence_module()
+    sol_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(module.SCCP_DOMAIN_SOL)
+
+    hostile_fields = (
+        "verifier_identity",
+        "_comment_solana_rpc_commitment",
+        "_comment_solana_program_owner",
+        "_comment_solana_programdata_owner",
+        "_comment_solana_program_immutable",
+        "_comment_solana_programdata_address",
+    )
+    for field in hostile_fields:
+        records = copy.deepcopy(complete_bundle(module))
+        records["sccp_destination_rollouts"][sol_index][field] = (
+            HostileSolanaLiveComment()
+        )
+
+        summary = module.validate_evidence_bundle(records)
+
+        assert summary["production_ready"] is False
+        rendered = "\n".join(summary["blockers"])
+        assert "secret-token" not in rendered
+        assert (
+            "Solana route canary"
+            in rendered
+            or "Solana live ProgramData account metadata is required" in rendered
+        )
 
 
 def test_all_lanes_rejects_solana_destination_without_live_programdata_metadata():
@@ -7131,6 +7566,54 @@ def test_all_lanes_rejects_ton_destination_without_live_account_comments():
     assert "TON account state hash comment must be present" in blockers
     assert "TON last transaction LT comment must be present" in blockers
     assert "TON last transaction hash comment must be present" in blockers
+
+
+def test_all_lanes_rejects_hostile_ton_live_account_comments_without_stringifying():
+    module = load_evidence_module()
+    ton_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(module.SCCP_DOMAIN_TON)
+
+    hostile_fields = (
+        "verifier_identity",
+        "ton_account_status",
+        "_comment_ton_account_status",
+        "ton_last_transaction_lt",
+        "_comment_ton_last_transaction_lt",
+        "_comment_ton_code_boc_hash_matches",
+    )
+    for field in hostile_fields:
+        records = copy.deepcopy(complete_bundle(module))
+        records["sccp_destination_rollouts"][ton_index][field] = HostileTonLiveComment()
+
+        summary = module.validate_evidence_bundle(records)
+
+        assert summary["production_ready"] is False
+        rendered = "\n".join(summary["blockers"])
+        assert "secret-token" not in rendered
+        assert "TON" in rendered
+
+
+def test_all_lanes_rejects_hostile_ton_route_canary_comments_without_stringifying():
+    module = load_evidence_module()
+    ton_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(module.SCCP_DOMAIN_TON)
+
+    hostile_fields = (
+        "ton_route_canary_account_state_hash",
+        "_comment_ton_route_canary_account_state_hash",
+        "ton_route_canary_last_transaction_lt",
+        "_comment_ton_route_canary_last_transaction_lt",
+        "ton_route_canary_last_transaction_hash",
+        "_comment_ton_route_canary_last_transaction_hash",
+    )
+    for field in hostile_fields:
+        records = copy.deepcopy(complete_bundle(module))
+        records["sccp_route_allowlists"][ton_index][field] = HostileTonLiveComment()
+
+        summary = module.validate_evidence_bundle(records)
+
+        assert summary["production_ready"] is False
+        rendered = "\n".join(summary["blockers"])
+        assert "secret-token" not in rendered
+        assert "TON route canary" in rendered or "ton_route_canary" in rendered
 
 
 def test_all_lanes_rejects_ton_route_canary_without_active_account_status():
@@ -9302,6 +9785,53 @@ def test_all_lanes_release_checklist_compares_item_ready_exactly():
     assert checklist["ready"] is False
 
 
+def test_all_lanes_release_checklist_rejects_hostile_item_text_without_comparing():
+    module = load_evidence_module()
+    summary = module.validate_evidence_bundle(complete_bundle(module))
+    checklist = copy.deepcopy(summary["release_checklist"])
+    checklist["ready"] = False
+    checklist["items"][0]["id"] = HostileAllLanesChecklistText(
+        "all_required_lane_records"
+    )
+    checklist["items"][1]["title"] = HostileAllLanesChecklistText(
+        module.RELEASE_CHECKLIST_TITLES[checklist["items"][1]["id"]]
+    )
+
+    errors = module._public_release_checklist_errors(
+        checklist,
+        require_ready=False,
+    )
+
+    assert (
+        "all-lanes summary release_checklist items[0] id must be a non-empty "
+        "canonical string"
+    ) in errors
+    assert (
+        "all-lanes summary release_checklist items[1] title must be a non-empty "
+        "canonical string"
+    ) in errors
+    assert (
+        "all-lanes summary release_checklist missing item all_required_lane_records"
+        in errors
+    )
+
+    summary["production_ready"] = False
+    summary["release_checklist"] = checklist
+    public_summary = module._public_summary_payload(summary)
+    blockers = "\n".join(public_summary["blockers"])
+
+    assert public_summary["production_ready"] is False
+    assert "secret-token" not in blockers
+    assert (
+        "all-lanes summary release_checklist items[0] id must be a non-empty "
+        "canonical string"
+    ) in blockers
+    assert (
+        "all-lanes summary release_checklist items[1] title must be a non-empty "
+        "canonical string"
+    ) in blockers
+
+
 def test_all_lanes_cli_exit_compares_production_ready_exactly(capsys):
     module = load_evidence_module()
     original_load = module.load_evidence_bundle
@@ -9639,6 +10169,54 @@ def test_all_lanes_numbers_repeated_duplicate_blocker_diagnostics():
     assert canonical_blockers == []
 
 
+def test_all_lanes_public_blocker_helpers_reject_string_subclasses_without_normalizing():
+    """Public blocker lists must not normalize or compare hostile str subclasses."""
+
+    module = load_evidence_module()
+    blocker = HostileAllLanesBlockerText()
+
+    assert module._blocker_text_issue(blocker) == "must be a non-empty canonical string"
+    assert module._blocker_list_errors(
+        {"blockers": [blocker]},
+        "all-lanes summary",
+    ) == [
+        "all-lanes summary blockers[0] must be a non-empty canonical string",
+        "all-lanes summary blockers must be empty",
+    ]
+    canonical_blockers, canonical_errors = module._canonical_blocker_list(
+        [blocker],
+        "all-lanes summary",
+    )
+    assert canonical_blockers == []
+    assert canonical_errors == [
+        "all-lanes summary blockers[0] must be a non-empty canonical string"
+    ]
+
+    summary = module.validate_evidence_bundle(complete_bundle(module))
+    summary["production_ready"] = False
+    summary["blockers"] = [blocker]
+    public_summary = module._public_summary_payload(summary)
+    public_blockers = "\n".join(public_summary["blockers"])
+    checklist = module._release_checklist([], [blocker])
+    unresolved_blockers = "\n".join(
+        {
+            item["id"]: item
+            for item in checklist["items"]
+        }["no_unresolved_blockers"]["blockers"]
+    )
+
+    assert public_summary["production_ready"] is False
+    assert (
+        "all-lanes summary blockers[0] must be a non-empty canonical string"
+        in public_blockers
+    )
+    assert checklist["ready"] is False
+    assert (
+        "all-lanes root blockers[0] must be a non-empty canonical string"
+        in unresolved_blockers
+    )
+
+
 def test_all_lanes_cli_rejects_unknown_summary_fields_without_leaking(capsys):
     module = load_evidence_module()
     original_load = module.load_evidence_bundle
@@ -9677,6 +10255,70 @@ def test_all_lanes_cli_rejects_unknown_summary_fields_without_leaking(capsys):
     assert "all-lanes summary unexpected field operator_note" in blockers
     assert "all-lanes summary unexpected field with sensitive name" in blockers
     assert "all-lanes summary unexpected non-string field name" in blockers
+
+
+def test_all_lanes_public_field_names_reject_string_subclasses_without_normalizing():
+    """Copied public field names must reject hostile str subclasses as non-strings."""
+
+    module = load_evidence_module()
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    lane = summary["lanes"][0]
+
+    summary[HostileAllLanesFieldName("secret-token-root-field")] = (
+        "secret-token-root-value"
+    )
+    lane[HostileAllLanesFieldName("secret-token-lane-field")] = (
+        "secret-token-lane-value"
+    )
+    lane["records"][HostileAllLanesFieldName("secret-token-record-field")] = True
+    lane["source_record_hashes"][
+        HostileAllLanesFieldName("secret-token-source-record-field")
+    ] = "secret-token-source-record-value"
+    audit_hashes = lane["source_adapter_gate"]["audit_hashes"]
+    audit_hashes[HostileAllLanesFieldName("evm_source_gate_hash")] = (
+        audit_hashes.pop("evm_source_gate_hash")
+    )
+    lane["route_allowlist"]["route_canary"][
+        HostileAllLanesFieldName("_comment_evm_route_canary_transaction_hash")
+    ] = "secret-token-route-canary-value"
+    summary["release_checklist"][
+        HostileAllLanesFieldName("secret-token-checklist-field")
+    ] = "secret-token-checklist-value"
+    summary["release_checklist"]["items"][0][
+        HostileAllLanesFieldName("secret-token-checklist-item-field")
+    ] = "secret-token-checklist-item-value"
+
+    public_summary = module._public_summary_payload(summary)
+    blockers = "\n".join(public_summary["blockers"])
+
+    assert public_summary["production_ready"] is False
+    assert "secret-token" not in blockers
+    assert "all-lanes summary unexpected non-string field name" in blockers
+    assert "all-lanes summary lanes[0] unexpected non-string field name" in blockers
+    assert (
+        "all-lanes summary lanes[0] records unexpected non-string field name"
+        in blockers
+    )
+    assert (
+        "all-lanes summary lanes[0].source_record_hashes unexpected non-string "
+        "field name"
+    ) in blockers
+    assert (
+        "all-lanes summary lanes[0]: source adapter gate audit hashes contains "
+        "non-string field name"
+    ) in blockers
+    assert (
+        "all-lanes summary lanes[0].route_allowlist.route_canary unexpected non-string field name"
+        in blockers
+    )
+    assert (
+        "all-lanes summary release_checklist unexpected non-string field name"
+        in blockers
+    )
+    assert (
+        "all-lanes summary release_checklist items[0] unexpected non-string "
+        "field name"
+    ) in blockers
 
 
 def test_all_lanes_cli_rejects_malformed_allowed_summary_roots_without_leaking(
@@ -12460,6 +13102,61 @@ def test_all_lanes_cli_rejects_copied_not_ready_claimed_ready_hash_binding_drift
     assert "Traceback" not in captured.err
 
 
+def test_all_lanes_matching_text_helpers_reject_string_subclasses_without_comparing(
+):
+    module = load_evidence_module()
+    canonical_hash = hex32(0x51)
+
+    field_errors = module._public_lane_matching_field_errors(
+        {
+            "expected_destination_binding_hash": HostileAllLanesMatchingText(
+                canonical_hash
+            ),
+            "destination_binding_hash": canonical_hash,
+        },
+        "all-lanes summary lanes[0].destination_binding",
+        "expected_destination_binding_hash",
+        "destination_binding_hash",
+    )
+    copied_value_errors = module._public_lane_matching_value_errors(
+        {
+            "route_allowlist_hash": HostileAllLanesMatchingText(canonical_hash),
+        },
+        "all-lanes summary lanes[0].route_allowlist.route_canary",
+        "route_allowlist_hash",
+        canonical_hash,
+        "lane route_allowlist_hash",
+    )
+    expected_value_errors = module._public_lane_matching_value_errors(
+        {
+            "destination_binding_hash": canonical_hash,
+        },
+        "all-lanes summary lanes[0].route_allowlist.route_canary",
+        "destination_binding_hash",
+        HostileAllLanesMatchingText(canonical_hash),
+        "lane destination_binding_hash",
+    )
+
+    assert field_errors == [
+        (
+            "all-lanes summary lanes[0].destination_binding."
+            "expected_destination_binding_hash must match destination_binding_hash"
+        )
+    ]
+    assert copied_value_errors == [
+        (
+            "all-lanes summary lanes[0].route_allowlist.route_canary."
+            "route_allowlist_hash must match lane route_allowlist_hash"
+        )
+    ]
+    assert expected_value_errors == [
+        (
+            "all-lanes summary lanes[0].route_allowlist.route_canary."
+            "destination_binding_hash must match lane destination_binding_hash"
+        )
+    ]
+
+
 def test_all_lanes_cli_rejects_copied_not_ready_hash_binding_drift(capsys):
     module = load_evidence_module()
     original_load = module.load_evidence_bundle
@@ -14149,6 +14846,33 @@ def test_all_lanes_public_helper_strictness_flags_reject_non_booleans():
             )
 
 
+def test_all_lanes_scalar_parsers_reject_string_subclasses_without_normalizing():
+    module = load_evidence_module()
+    parser_text = HostileAllLanesParserText("0x" + "11" * 32)
+
+    def parse_runtime_bytecode_hex(_value, *, label):
+        raise AssertionError(f"{label} parser should not receive hostile text")
+
+    with pytest.raises(module.argparse.ArgumentTypeError) as runtime_error:
+        module._parse_exact_runtime_bytecode(
+            SimpleNamespace(parse_runtime_bytecode_hex=parse_runtime_bytecode_hex),
+            parser_text,
+            label="runtime bytecode",
+        )
+    assert str(runtime_error.value) == "runtime bytecode must be hex"
+
+    assert module._is_canonical_solana_pubkey_text(parser_text) is False
+
+    with pytest.raises(ValueError) as destination_error:
+        module._parse_public_destination_binding_key_hex(
+            parser_text,
+            byte_length=32,
+            prefixed=True,
+            label="destination binding",
+        )
+    assert str(destination_error.value) == "destination binding must be canonical hex"
+
+
 def test_all_lanes_release_checklist_pinpoints_canary_gaps():
     module = load_evidence_module()
     records = complete_bundle(module)
@@ -15426,6 +16150,12 @@ def test_all_lanes_release_checklist_rejects_unexpected_route_canary_fields():
             "operator route canary blocker",
             "domain 1 (eth): route canary unexpected non-string field name",
             "secret-token-hostile-key",
+        ),
+        (
+            HostileAllLanesFieldName("_comment_evm_route_canary_transaction_hash"),
+            "operator route canary blocker",
+            "domain 1 (eth): route canary unexpected non-string field name",
+            "secret-token all-lanes field name",
         ),
     )
     for field, value, expected, leaked_text in cases:

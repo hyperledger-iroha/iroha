@@ -3379,7 +3379,7 @@ pub mod isi {
             }
 
             let payload = SccpRouteManifestProposal {
-                manifest: self.manifest.clone(),
+                manifest: Box::new(self.manifest.clone()),
             };
             let kind = ProposalKind::SccpRouteManifest(payload.clone());
             if let Some(existing) = state_transaction.world.governance_proposals.get(&id) {
@@ -5241,7 +5241,8 @@ pub mod isi {
                     enact_runtime_upgrade_proposal(state_transaction, payload, &proposal.proposer)?;
                 }
                 ProposalKind::SccpRouteManifest(payload) => {
-                    let manifest = sccp_route_manifest_to_actual(payload.manifest.clone())?;
+                    let manifest =
+                        sccp_route_manifest_to_actual(payload.manifest.as_ref().clone())?;
                     upsert_sccp_route_manifest_actual(state_transaction, manifest);
                 }
             }
@@ -18079,7 +18080,8 @@ pub mod isi {
             let deployment =
                 test_sccp_source_adapter_deployment_for_domain(domain, &material, 0xa0);
             let canonical_vk_hash = hex::encode(deployment.adapter_verifier_vk_hash);
-            let canonical_emitter = hex::encode(&deployment.source_bridge_emitter_address);
+            let noncanonical_uppercase_emitter =
+                format!("0x{}", "ab".repeat(20).to_ascii_uppercase());
             let cases = [
                 (
                     "uppercase verifier hash",
@@ -18094,7 +18096,7 @@ pub mod isi {
                 (
                     "uppercase emitter address",
                     "source_bridge_emitter_address",
-                    format!("0x{}", canonical_emitter.to_ascii_uppercase()),
+                    noncanonical_uppercase_emitter,
                 ),
             ];
 
@@ -25830,6 +25832,7 @@ pub mod isi {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
             bootstrap_alice_account(&mut stx);
+            stx.nexus.enabled = false;
 
             let (sponsor_id, _) = gen_account_in("wonderland");
             register_wonderland_account(&mut stx, &sponsor_id);

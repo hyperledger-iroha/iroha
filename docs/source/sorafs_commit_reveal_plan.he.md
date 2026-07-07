@@ -4,9 +4,9 @@ direction: rtl
 source: docs/source/sorafs_commit_reveal_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f6f2f915fd1ed0ba7c9aed7b8137a29396147bf5e936be99b13c96baed7d2daf
-source_last_modified: "2026-06-25T16:58:37+00:00"
-translation_last_reviewed: 2026-06-25
+source_hash: 1cb8d684ffc7c896c64f6b094090dd0291d5e419b1e173193ca5c4d64f9669fe
+source_last_modified: "2026-07-04T15:39:59.807879+00:00"
+translation_last_reviewed: 2026-07-04
 ---
 
 # Commit-Reveal Voting Service
@@ -17,13 +17,24 @@ SFM-4b4 has reusable commit/reveal and sortition data foundations in the
 ministry policy-jury module plus SoraFS-specific moderation ballot
 commit/reveal payloads in the SoraFS data model and a local `sorafs_node`
 ballot lifecycle runtime exposed through local Torii JSON endpoints. Accepted
-local ballot lifecycle events can also be materialized into the SoraFS
-Governance DAG filesystem publisher and optional signed runtime DAG. The
-repository now ships local ballot CLI/client readback, signed commit/reveal/tally
-submission, and payload-free executor automation for the local Torii API. It
-does not yet ship the SoraFS moderation voting contract, contract-backed durable
-ballot orchestrator, challenge monitor, public juror portal, or deployed
-production service needed to run appeal-panel ballots end to end. The shared
+local ballot state, durable local challenge records, and event backlog are
+persisted as a validated Norito checkpoint when storage is enabled, and local
+ballot lifecycle and challenge submit/resolve events can also be materialized
+into the SoraFS Governance DAG filesystem publisher and optional signed runtime
+DAG. `NodeHandle` now also derives deterministic payload-free no-show penalty
+plans for closed ballots, separates missing commits from committed no-shows,
+and binds the plan to a stable digest without mutating ballot state. Torii
+exposes that plan through the payload-free local
+`GET /v1/sorafs/moderation/ballots/{case_id}/{round_id}/no-show-plan`
+readback route, using server-side network time and returning only counts,
+juror identifiers, and the digest. The repository now ships local ballot
+CLI/client readback, signed
+commit/reveal/challenge-resolution/tally submission, and payload-free executor
+automation for the local Torii API. It
+does not yet ship the SoraFS moderation voting contract, contract-backed
+ballot orchestrator, production challenge monitor/dispute service, public juror
+portal, or deployed production service needed to run appeal-panel ballots end
+to end. The shared
 SFM-4b moderation-panel rollout evidence gate now validates a dedicated
 `sorafs.moderation_panel.commit_reveal_canary.v1` artifact for this boundary,
 including authenticated commit/reveal routes, digest recomputation, duplicate
@@ -53,22 +64,42 @@ durable service or contract-backed workflow.
   reject blank case/policy/finance fields, reject zero evidence/roster hashes,
   and verify the reveal nonce and commitment digest.
 - `sorafs_node::ModerationBallotRuntime`, exposed through `NodeHandle`, accepts
-  ballot announcements, juror commitments, challenge-buffered reveals, and
-  deterministic quorum tallies with contested tie detection plus replayable
-  local events.
+  ballot announcements, juror commitments, durable local challenge records,
+  challenge-buffered reveals, and deterministic quorum tallies with contested
+  tie detection. Pending or accepted challenges block local reveal and tally
+  progress, while rejected challenges unblock the ballot for normal reveal and
+  tally processing. `NodeHandle` persists successful local ballot transitions,
+  challenge submissions/resolutions, and the sequenced local event backlog to
+  `moderation-ballots/ballots-snapshot.to` as a validated Norito checkpoint and
+  rejects duplicate, mismatched, out-of-window, missing-commit, unresolved or
+  accepted-challenge-with-reveal/tally, bad-tally, insufficient-quorum,
+  non-contiguous-event, missing/duplicated/mutated challenge-event, or
+  event/state-mismatch snapshots on explicit restore or startup reload.
+  Restored nodes replay the local event backlog through Torii readback
+  endpoints before subsequent live events continue. `NodeHandle` also exposes
+  `moderation_ballot_no_show_plan`, which refuses open reveal windows and
+  unresolved or accepted challenges, separates missing-commit and
+  unrevealed-commit jurors, and emits a stable payload-free penalty-plan digest
+  without mutating state or publishing events.
 - Torii exposes local moderation ballot endpoints for announcement, list/get,
-  commit, reveal, tally, and event backlog under
-  `/v1/sorafs/moderation/ballots*`. Mutating requests require canonical app
+  no-show plan readback, commit, challenge submission, challenge resolution,
+  reveal, tally, and event backlog under `/v1/sorafs/moderation/ballots*`.
+  Mutating requests require canonical app
   authentication, announcement requests require a `deposit_confirmation` object
   that Torii confirms against the runtime native asset-lock ledger before local
   ballot admission, and commit/reveal requests require the authenticated account
-  to match the canonical juror id in the payload. Ballot list/detail readbacks
-  bound embedded commit and reveal arrays with `limit` (default 50, max 500)
-  while preserving full counts and truncation metadata.
+  to match the canonical juror id in the payload. Challenge requests require the
+  authenticated account to match `challenger_id` or `resolved_by` and store only
+  payload-free evidence digests and reason labels. Ballot event readback now
+  includes `challenge_submitted` and `challenge_resolved` entries with
+  `challenge_count` and the payload-free challenge record, while ballot
+  list/detail readbacks bound embedded commit, reveal, and challenge arrays with
+  `limit` (default 50, max 500) while preserving full counts and truncation
+  metadata.
 - `iroha::client` and `iroha sorafs moderation ballots
-  list|get|events|commit|reveal|tally` wrap the local readback and signed
-  committee lifecycle endpoints, validating JSON or Norito commit/reveal payloads
-  and submitting canonical Norito bytes to Torii.
+  list|get|no-show-plan|events|commit|reveal|tally` wrap the local readback and
+  signed committee lifecycle endpoints, validating JSON or Norito commit/reveal
+  payloads and submitting canonical Norito bytes to Torii.
 - `iroha sorafs moderation ballots execute|executor-bundle|executor-canary`
   provide local payload-free commit/reveal executor automation and scheduled-job
   bundle/canary evidence without copying private commit or reveal payload files.
@@ -107,17 +138,18 @@ The production service still targets this flow:
 
 ## Remaining Production Gates
 
-- Persist or contract-back the local ballot lifecycle store and add the
-  production orchestrator for retries, no-show handling, challenge disputes, and
-  durable contested-outcome workflows.
+- Build the production orchestrator around the persisted local ballot lifecycle
+  store, local challenge records, event backlog, and local no-show penalty
+  plans, including retries, scheduled no-show dispatch/settlement handoff,
+  production challenge monitor/dispute workflows, and durable contested-outcome
+  workflows.
 - Implement the on-chain contract or ledger workflow that records commitments,
   reveals, challenges, outcomes, and juror penalties.
 - Promote the shipped local CLI/client bridge and executor automation into
   audited juror-facing deployment workflows, including challenge evidence export,
   portal UX, and public operations runbooks.
-- Extend Governance DAG publication beyond local lifecycle events to durable
-  challenge/dispute records, contract-backed decisions, and public IPFS/IPNS
-  rollout evidence.
+- Promote local Governance DAG publication for lifecycle and challenge/dispute
+  events into contract-backed decisions and public IPFS/IPNS rollout evidence.
 - Add end-to-end simulations with no-shows, duplicate commits, mismatched
   reveals, missed quorum, contested challenges, and successful decisions.
 - Collect a passing payload-free `commit_reveal` canary through the SFM-4b
@@ -134,8 +166,10 @@ python3 scripts/check_sorafs_moderation_panel_rollout_evidence.py \
 cargo test -p iroha_data_model policy_jury
 cargo test -p iroha_data_model sorafs_moderation_ballot
 cargo test -p sorafs_node moderation_ballot
+cargo test -p sorafs_node moderation_ballot_no_show -- --nocapture
 cargo test -p sorafs_manifest moderation_ballot_event
 cargo test -p iroha_torii moderation_ballot --features app_api
+cargo test -p iroha_torii moderation_ballot_no_show --features app_api -- --nocapture
 cargo test -p iroha_torii generated_spec_includes_documented_paths --features app_api
 ```
 

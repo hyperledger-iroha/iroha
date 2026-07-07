@@ -62,6 +62,7 @@ import {
   parseBoolean,
   parseJsonWithoutDuplicateKeys,
   normalizeVerifierMaterial,
+  normalizeBscNetworkProfile,
   unsafeSecretReason,
   validateBscReadbackEvidence,
 } from "./sccp_bsc_taira_xor_deploy.mjs";
@@ -81,6 +82,7 @@ const HASH_55 = `0x${"55".repeat(32)}`;
 const HASH_66 = `0x${"66".repeat(32)}`;
 const HASH_77 = `0x${"77".repeat(32)}`;
 const HASH_88 = `0x${"88".repeat(32)}`;
+const RETIRED_BSC_NETWORK_ALIAS_VALUE = "secret-token-bsc-payload-network";
 const malformedBooleanOptionValues = Object.freeze([
   " TRUE",
   "true ",
@@ -1083,6 +1085,25 @@ const offlineFullTomlEvidence = (overrides = {}) => ({
   },
   ...overrides,
 });
+
+const withRetiredBscNetworkAlias = (record, value = RETIRED_BSC_NETWORK_ALIAS_VALUE) => {
+  const clone = { ...record };
+  delete clone.bscNetwork;
+  delete clone.bsc_network;
+  clone.network = value;
+  return clone;
+};
+
+function assertRetiredBscNetworkAliasError(error) {
+  const message = String(error?.message ?? error);
+  assert.match(message, /network alias was removed; use bscNetwork/u);
+  assert.equal(
+    message.includes(RETIRED_BSC_NETWORK_ALIAS_VALUE),
+    false,
+    "retired BSC network alias diagnostics must not echo payload values",
+  );
+  return true;
+}
 
 const fixtureWords = (byte) => Array.from({ length: 9 }, () => hex32(byte));
 
@@ -3677,8 +3698,8 @@ test("BSC route-manifest command rejects ambiguous offline full TOML evidence", 
     ],
     [
       "generic network alias",
-      { ...offlineFullTomlEvidence(), network: "testnet" },
-      /BSC offline full TOML evidence network must not use multiple aliases/u,
+      withRetiredBscNetworkAlias(offlineFullTomlEvidence()),
+      assertRetiredBscNetworkAliasError,
     ],
     [
       "noncanonical chain label",
@@ -4422,6 +4443,75 @@ test("BSC route-manifest command rejects duplicate deployment evidence aliases",
   );
 });
 
+test("BSC route-manifest rejects retired generic network aliases in input payloads", async () => {
+  const baseEvidence = buildDeploymentEvidence({
+    tokenAddress: BSC_TOKEN_ADDRESS,
+    bridgeAddress: BSC_BRIDGE_ADDRESS,
+    sourceBridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS,
+    verifierAddress: BSC_VERIFIER_ADDRESS,
+    verifierCodeHash: HASH_11,
+    verifierKeyHash: HASH_22,
+    readback: readyReadback(),
+    compiledContractCodeHashes: compiledContractCodeHashes(),
+  });
+  const baseInput = {
+    evidence: baseEvidence,
+    tairaContract: tairaBurnRecordContract(),
+    options: {
+      "settlement-asset-definition-id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+      "proof-artifact-hash": HASH_44,
+      "proving-key-hash": HASH_55,
+    },
+    createdAt: "2026-06-13T00:00:00.000Z",
+  };
+
+  await assert.rejects(
+    () =>
+      buildBscTairaXorRouteManifestDraft({
+        ...baseInput,
+        evidence: withRetiredBscNetworkAlias(baseEvidence),
+      }),
+    assertRetiredBscNetworkAliasError,
+  );
+
+  await assert.rejects(
+    () =>
+      buildBscTairaXorRouteManifestDraft({
+        ...baseInput,
+        offlineFullTomlEvidence: withRetiredBscNetworkAlias(
+          offlineFullTomlEvidence(),
+        ),
+      }),
+    assertRetiredBscNetworkAliasError,
+  );
+
+  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-browser-network-"));
+  try {
+    const browserManifestPath = join(dir, "destination-browser.json");
+    await writeFile(
+      browserManifestPath,
+      `${JSON.stringify(
+        withRetiredBscNetworkAlias(browserProverSidecarManifest()),
+        null,
+        2,
+      )}\n`,
+    );
+    await assert.rejects(
+      () =>
+        buildBscTairaXorRouteManifestDraft({
+          ...baseInput,
+          options: {
+            ...baseInput.options,
+            "destination-browser-prover-manifest": browserManifestPath,
+          },
+        }),
+      assertRetiredBscNetworkAliasError,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("BSC route-manifest helper ignores accessor-backed request fields", async () => {
   const requestInput = accessorBackedRecord([
     "options",
@@ -5155,7 +5245,7 @@ test("BSC route-config rejects route material supplied only by prototypes", () =
   );
 });
 
-test("BSC route-config ignores accessor-backed scalar aliases before data aliases", () => {
+test("BSC route-config rejects accessor-backed scalar alias fallbacks without reading accessors", () => {
   const manifest = productionReadyRouteManifest({
     production_ready: true,
     counterparty_domain: SCCP_DOMAIN_BSC,
@@ -5190,11 +5280,10 @@ test("BSC route-config ignores accessor-backed scalar aliases before data aliase
     defineThrowingAccessors(manifest.postDeployLiveEvidence, ["fullTomlReady"]),
   ];
 
-  const toml = buildBscTairaXorRouteConfigToml(manifest);
-  assert.match(toml, /production_ready = true/u);
-  assert.match(toml, /counterparty_domain = 2/u);
-  assert.match(toml, /taira_burn_record_gas_limit = 2000000/u);
-  assert.match(toml, /post_deploy_full_toml_ready = true/u);
+  assert.throws(
+    () => buildBscTairaXorRouteConfigToml(manifest),
+    /route manifest counterpartyDomain must not use retired alias counterparty_domain in route manifest; use counterpartyDomain/u,
+  );
   assert.equal(
     readCounts.reduce((sum, readCount) => sum + readCount(), 0),
     0,
@@ -5502,6 +5591,86 @@ test("BSC route-config rejects duplicate route manifest container and scalar ali
       name,
     );
   }
+});
+
+test("BSC route-config rejects retired route manifest aliases without echoing values", () => {
+  const base = routeManifest();
+  const cloneManifest = () => JSON.parse(JSON.stringify(base));
+  const secret = "secret-token-bsc-retired-alias";
+  const cases = [
+    [
+      (manifest) => {
+        delete manifest.routeId;
+        manifest.route_id = secret;
+      },
+      /route manifest routeId must not use retired alias route_id in route manifest routeId; use routeId/u,
+    ],
+    [
+      (manifest) => {
+        delete manifest.productionReady;
+        manifest.production_ready = secret;
+      },
+      /route manifest productionReady must not use retired alias production_ready in route manifest; use productionReady/u,
+    ],
+    [
+      (manifest) => {
+        delete manifest.destinationRollout;
+        manifest.destination_rollout = { ...base.destinationRollout };
+      },
+      /route manifest destinationRollout must not use retired alias destination_rollout in route manifest; use destinationRollout/u,
+    ],
+    [
+      (manifest) => {
+        delete manifest.destinationRollout.sourceDomain;
+        manifest.destinationRollout.source_domain = secret;
+      },
+      /route manifest sourceDomain must not use retired alias source_domain in route manifest destinationRollout; use sourceDomain/u,
+    ],
+    [
+      (manifest) => {
+        delete manifest.tairaXorBurnRecord.vkRef;
+        manifest.tairaXorBurnRecord.vk_ref = { ...base.tairaXorBurnRecord.vkRef };
+      },
+      /route manifest tairaXorBurnRecord\.vkRef must not use retired alias vk_ref in route manifest tairaXorBurnRecord; use vkRef/u,
+    ],
+    [
+      (manifest) => {
+        delete manifest.settlement.routeId;
+        manifest.settlement.route_id = secret;
+      },
+      /route manifest settlement\.routeId must not use retired alias route_id in route manifest settlement; use routeId/u,
+    ],
+    [
+      (manifest) => {
+        delete manifest.postDeployLiveEvidence.fullTomlReady;
+        manifest.postDeployLiveEvidence.full_toml_ready = secret;
+      },
+      /route manifest postDeployLiveEvidence\.fullTomlReady must not use retired alias full_toml_ready in route manifest postDeployLiveEvidence; use fullTomlReady/u,
+    ],
+  ];
+
+  for (const [mutate, pattern] of cases) {
+    const manifest = cloneManifest();
+    mutate(manifest);
+    assert.throws(
+      () => buildBscTairaXorRouteConfigToml(manifest),
+      (error) => {
+        assert.match(error.message, pattern);
+        assert.doesNotMatch(error.message, /secret-token-bsc-retired-alias/u);
+        return true;
+      },
+    );
+  }
+});
+
+test("BSC route-config rejects retired generic network payload aliases", () => {
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        withRetiredBscNetworkAlias(routeManifest()),
+      ),
+    assertRetiredBscNetworkAliasError,
+  );
 });
 
 test("BSC route-config requires explicit post-deploy evidence for production-ready manifests", () => {
@@ -5995,6 +6164,15 @@ test("BSC route-config command rejects route output path collisions with inputs 
   await assert.rejects(
     () => main(routeOutputCollisionArgs(baseConfigPath)),
     /--out must not be the same path as --base-config/u,
+  );
+  assert.equal(await readFile(manifestPath, "utf8"), manifestText);
+  assert.equal(await readFile(baseConfigPath, "utf8"), baseConfigText);
+
+  const linkedInputDir = join(dir, "linked-inputs");
+  await symlink(dir, linkedInputDir);
+  await assert.rejects(
+    () => main(routeOutputCollisionArgs(join(linkedInputDir, "route.manifest.json"))),
+    /--out must not be the same path as --manifest/u,
   );
   assert.equal(await readFile(manifestPath, "utf8"), manifestText);
   assert.equal(await readFile(baseConfigPath, "utf8"), baseConfigText);
@@ -7943,6 +8121,90 @@ test("BSC native-prover-bundle validates bound Groth16 material manifests", asyn
     );
   } finally {
     await rm(fixture.workDir, { recursive: true, force: true });
+  }
+});
+
+test("BSC native-prover-bundle rejects retired generic network aliases in Groth16 payloads", async () => {
+  const materialFixture = await writeNativeProverFixtureFiles();
+  try {
+    const manifestPath = join(
+      materialFixture.artifactRoot,
+      "groth16-material.json",
+    );
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+    await writeFile(
+      manifestPath,
+      `${JSON.stringify(withRetiredBscNetworkAlias(manifest), null, 2)}\n`,
+    );
+    await assert.rejects(
+      () =>
+        buildBscNativeEvmProverBundleFromArtifacts(materialFixture.options),
+      assertRetiredBscNetworkAliasError,
+    );
+  } finally {
+    await rm(materialFixture.workDir, { recursive: true, force: true });
+  }
+
+  const attestationFixture = await writeNativeProverFixtureFiles();
+  try {
+    const semanticAttestationPath = join(
+      attestationFixture.artifactRoot,
+      "semantic-sccp-circuit-attestation.json",
+    );
+    const semanticAttestation = JSON.parse(
+      await readFile(semanticAttestationPath, "utf8"),
+    );
+    const semanticBytes = Buffer.from(
+      `${JSON.stringify(
+        withRetiredBscNetworkAlias(semanticAttestation),
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    await writeFile(semanticAttestationPath, semanticBytes);
+    attestationFixture.groth16Attestations.semanticSccpCircuit.sha256 =
+      sha256Hex(semanticBytes);
+    await writeFile(
+      join(attestationFixture.artifactRoot, "groth16-material.json"),
+      `${JSON.stringify(
+        nativeGroth16MaterialManifest(attestationFixture),
+        null,
+        2,
+      )}\n`,
+    );
+    await assert.rejects(
+      () =>
+        buildBscNativeEvmProverBundleFromArtifacts(attestationFixture.options),
+      assertRetiredBscNetworkAliasError,
+    );
+  } finally {
+    await rm(attestationFixture.workDir, { recursive: true, force: true });
+  }
+
+  const proofFixture = await writeNativeProverFixtureFiles();
+  try {
+    const proofSelfTestPath = join(
+      proofFixture.artifactRoot,
+      "groth16-proof-self-test.json",
+    );
+    const proofSelfTest = JSON.parse(
+      await readFile(proofSelfTestPath, "utf8"),
+    );
+    await writeFile(
+      proofSelfTestPath,
+      `${JSON.stringify(
+        withRetiredBscNetworkAlias(proofSelfTest),
+        null,
+        2,
+      )}\n`,
+    );
+    await assert.rejects(
+      () => buildBscNativeEvmProverBundleFromArtifacts(proofFixture.options),
+      assertRetiredBscNetworkAliasError,
+    );
+  } finally {
+    await rm(proofFixture.workDir, { recursive: true, force: true });
   }
 });
 
@@ -9906,7 +10168,7 @@ test("BSC route-config can merge into TAIRA config while preserving zk settings"
     () =>
       buildMergedBscTairaXorRouteConfigToml(
         "[[zk.sccp_route_manifests]]\n",
-        routeManifest(),
+        productionReadyRouteManifest(),
       ),
     /already contains/u,
   );
@@ -10349,7 +10611,7 @@ test("BSC route-config command accepts redacted secret placeholders in public ba
   const out = join(dir, "full-config.toml");
   await writeFile(
     manifestPath,
-    `${JSON.stringify(routeManifest(), null, 2)}\n`,
+    `${JSON.stringify(productionReadyRouteManifest(), null, 2)}\n`,
   );
   await writeFile(
     baseConfigPath,
@@ -10796,34 +11058,6 @@ test("BSC deploy command rejects malformed boolean switches before network use",
   );
 
   const dir = await mkdtemp(join(tmpdir(), "bsc-deploy-boolean-"));
-  const diagnosticVerifierFile = join(dir, "diagnostic-verifier.json");
-  await writeFile(
-    diagnosticVerifierFile,
-    JSON.stringify(
-      verifierMaterial({
-        schema: "iroha-sccp-bsc-testnet-diagnostic-verifier-key/v1",
-        warning: "Generated diagnostic BSC testnet verifier material.",
-        verifierKeyHash: DIAGNOSTIC_BSC_VERIFIER_KEY_HASH,
-      }),
-    ),
-    "utf8",
-  );
-  await assert.rejects(
-    () =>
-      main([
-        "deploy",
-        "--verifier",
-        diagnosticVerifierFile,
-        "--broadcast",
-        "true",
-        "--confirm-testnet",
-        "taira_bsc_xor",
-        "--allow-diagnostic-verifier",
-        " TRUE",
-      ]),
-    /--allow-diagnostic-verifier must be true or false/u,
-  );
-
   const envName = "SCCP_BSC_TEST_DEPLOYER_PRIVATE_KEY";
   const previous = process.env[envName];
   const verifierFile = join(dir, "verifier.json");
@@ -10855,6 +11089,138 @@ test("BSC deploy command rejects malformed boolean switches before network use",
     } else {
       process.env[envName] = previous;
     }
+  }
+});
+
+test("BSC network profile rejects pre-release aliases and ignores environment defaults", async () => {
+  assert.equal(normalizeBscNetworkProfile().key, "testnet");
+  assert.equal(normalizeBscNetworkProfile("testnet").key, "testnet");
+  assert.equal(normalizeBscNetworkProfile("mainnet").key, "mainnet");
+
+  for (const value of [
+    "",
+    " testnet",
+    "testnet ",
+    "TESTNET",
+    "bsc-testnet",
+    "chapel",
+    "bsc-chapel",
+    "bsc-mainnet",
+    "bnb-mainnet",
+    "bsc",
+    "56",
+    "0x38",
+  ]) {
+    assert.throws(
+      () => normalizeBscNetworkProfile(value),
+      /--bsc-network must be exactly testnet or mainnet/u,
+    );
+  }
+
+  const previous = process.env.SCCP_BSC_NETWORK;
+  try {
+    process.env.SCCP_BSC_NETWORK = "mainnet";
+    const requirements = await main(["requirements"]);
+    assert.equal(requirements.bsc.network, "testnet");
+  } finally {
+    if (previous === undefined) {
+      delete process.env.SCCP_BSC_NETWORK;
+    } else {
+      process.env.SCCP_BSC_NETWORK = previous;
+    }
+  }
+});
+
+test("BSC helper rejects retired --network aliases before work", async () => {
+  const secretValue = "secret-token-bsc-retired-network";
+
+  for (const args of [
+    ["requirements", "--network", secretValue],
+    ["source-parity-attestation", "--network", secretValue],
+    ["deploy", "--network", secretValue, "--verifier", "missing-verifier.json"],
+    ["evidence", "--network", secretValue, "--token", BSC_TOKEN_ADDRESS],
+    ["route-manifest", "--network", secretValue],
+  ]) {
+    await assert.rejects(
+      () => main(args),
+      (error) => {
+        assert.match(error.message, /Unknown option\./u);
+        assert.doesNotMatch(error.message, new RegExp(secretValue, "u"));
+        assert.doesNotMatch(error.message, /missing-verifier\.json/u);
+        return true;
+      },
+    );
+  }
+});
+
+test("BSC deploy command rejects removed diagnostic verifier override before verifier reads", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "bsc-deploy-removed-diagnostic-"));
+  try {
+    const missingVerifier = join(dir, "secret-token-missing-verifier.json");
+    await assert.rejects(
+      () =>
+        main([
+          "deploy",
+          "--verifier",
+          missingVerifier,
+          "--broadcast",
+          "true",
+          "--confirm-testnet",
+          "taira_bsc_xor",
+          "--allow-diagnostic-verifier",
+          "true",
+        ]),
+      (error) => {
+        assert.match(
+          error.message,
+          /--allow-diagnostic-verifier was removed/u,
+        );
+        assert.doesNotMatch(error.message, /secret-token-missing-verifier/u);
+        return true;
+      },
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("BSC deploy command always rejects diagnostic verifier material before signer lookup", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "bsc-deploy-diagnostic-verifier-"));
+  try {
+    const diagnosticVerifierFile = join(dir, "diagnostic-verifier.json");
+    await writeFile(
+      diagnosticVerifierFile,
+      JSON.stringify(
+        verifierMaterial({
+          diagnosticReason: "diagnostic verifier material must not deploy",
+        }),
+      ),
+      "utf8",
+    );
+
+    await assert.rejects(
+      () =>
+        main([
+          "deploy",
+          "--verifier",
+          diagnosticVerifierFile,
+          "--broadcast",
+          "true",
+          "--confirm-testnet",
+          "taira_bsc_xor",
+      ]),
+      (error) => {
+        assert.match(
+          error.message,
+          /deploy refuses diagnostic BSC verifier material/u,
+        );
+        assert.doesNotMatch(error.message, /SCCP_BSC_DEPLOYER_PRIVATE_KEY/u);
+        assert.doesNotMatch(error.message, /rpc-url|RPC/u);
+        return true;
+      },
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
 });
 
@@ -10960,8 +11326,6 @@ test("BSC deploy command refuses smoke-test verifier material before signer or R
         "true",
         "--confirm-testnet",
         "taira_bsc_xor",
-        "--allow-diagnostic-verifier",
-        "true",
       ]),
     /refuses deterministic smoke-test Groth16 fixture/u,
   );
@@ -10982,8 +11346,9 @@ test("BSC deployment helper help documents production network confirmations", as
   assert.match(result.help, /requirements \[--bsc-network testnet\|mainnet\]/u);
   assert.match(
     result.help,
-    /Diagnostic verifier material is refused\s+by deploy/u,
+    /Diagnostic verifier material is refused\s+by deploy; production deployments must use non-diagnostic verifier material/u,
   );
+  assert.doesNotMatch(result.help, /--allow-diagnostic-verifier/u);
   assert.doesNotMatch(result.help, /deploy .*--confirm-testnet/u);
 });
 
@@ -11013,6 +11378,8 @@ test("BSC deployment helper subcommand help does not touch operator inputs", asy
   const deploy = await main(["deploy", "--help"]);
   assert.match(deploy.help, /deploy --bsc-network testnet\|mainnet/u);
   assert.match(deploy.help, /environment variable at runtime/u);
+  assert.match(deploy.help, /Diagnostic\s+verifier material is always refused/u);
+  assert.doesNotMatch(deploy.help, /--allow-diagnostic-verifier/u);
 
   const groth16Material = await main(["groth16-material", "help"]);
   assert.match(
@@ -11040,6 +11407,10 @@ test("BSC deployment helper subcommand help does not touch operator inputs", asy
   assert.match(groth16Material.help, /groth16-material attestation-inventory/u);
   assert.match(groth16Material.help, /groth16-material proof-self-test/u);
   assert.match(groth16Material.help, /groth16-material finalize-attestations/u);
+  assert.doesNotMatch(groth16Material.help, /--create-local-ptau-power/u);
+  assert.doesNotMatch(groth16Material.help, /--allow-local-testnet-setup/u);
+  assert.doesNotMatch(groth16Material.help, /--allow-unready-candidate/u);
+  assert.doesNotMatch(groth16Material.help, /--allow-unready-mainnet-candidate/u);
   assert.doesNotMatch(
     groth16Material.help,
     /groth16-material materialize .*--semantic-attestation .*--trusted-attestation-signer/u,
@@ -11058,7 +11429,67 @@ test("BSC deployment helper rejects duplicate CLI options before operator inputs
         "--proof-artifact",
         "missing.r1cs",
       ]),
-    /Duplicate option: --route-manifest/u,
+    /Option must be specified at most once/u,
+  );
+});
+
+test("BSC deployment helper redacts unexpected positional arguments", async () => {
+  const secretArgument = "secret-token-bsc-positional";
+  await assert.rejects(
+    () => main(["route-manifest", secretArgument]),
+    (error) => {
+      assert.match(error.message, /Unexpected positional argument/u);
+      assert.doesNotMatch(error.message, new RegExp(secretArgument, "u"));
+      return true;
+    },
+  );
+});
+
+test("BSC deployment helper rejects unknown commands without echoing names", async () => {
+  const secretCommand = "secret-token-bsc-command";
+  await assert.rejects(
+    () => main([secretCommand, "--out", "ignored.json"]),
+    (error) => {
+      assert.match(error.message, /Unknown command\./u);
+      assert.doesNotMatch(error.message, new RegExp(secretCommand, "u"));
+      assert.doesNotMatch(error.message, /Usage:/u);
+      return true;
+    },
+  );
+});
+
+test("BSC deployment helper rejects unknown options without echoing names", async () => {
+  const secretOption = "secret-token-bsc-option";
+  const secretValue = "secret-token-bsc-value";
+  await assert.rejects(
+    () => main(["route-manifest", `--${secretOption}`, secretValue]),
+    (error) => {
+      assert.match(error.message, /Unknown option\./u);
+      assert.doesNotMatch(error.message, new RegExp(secretOption, "u"));
+      assert.doesNotMatch(error.message, new RegExp(secretValue, "u"));
+      return true;
+    },
+  );
+});
+
+test("BSC deploy and evidence reject bare valued options before work", async () => {
+  await assert.rejects(
+    () => main(["deploy", "--verifier"]),
+    /--verifier must be specified with an explicit value/u,
+  );
+  await assert.rejects(
+    () =>
+      main([
+        "evidence",
+        "--token",
+        BSC_TOKEN_ADDRESS,
+        "--bridge",
+        BSC_BRIDGE_ADDRESS,
+        "--source-bridge",
+        BSC_SOURCE_BRIDGE_ADDRESS,
+        "--verifier",
+      ]),
+    /--verifier must be specified with an explicit value/u,
   );
 });
 
@@ -11456,6 +11887,46 @@ test("BSC production requirements command writes public artifact without deploye
     } else {
       process.env.SCCP_BSC_DEPLOYER_PRIVATE_KEY = previousPrivateKey;
     }
+  }
+});
+
+test("BSC production requirements output skips hostile temp symlink collisions", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-requirements-temp-"));
+  const originalNow = Date.now;
+  const originalRandom = Math.random;
+  try {
+    const out = join(dir, "requirements.json");
+    const trapTarget = join(dir, "temp-target.json");
+    const sentinel = "sentinel:bsc-temp-target\n";
+    await writeFile(trapTarget, sentinel);
+    const tempOne = `${out}.tmp-${process.pid}-424242-8`;
+    const tempTwo = `${out}.tmp-${process.pid}-424242-c`;
+    await symlink(trapTarget, tempOne);
+    await symlink(trapTarget, tempTwo);
+    const forcedRandoms = [0.5, 0.75, 0.875];
+    Date.now = () => 424242;
+    Math.random = () => forcedRandoms.shift() ?? 0.875;
+
+    const result = await main([
+      "requirements",
+      "--bsc-network",
+      "testnet",
+      "--out",
+      out,
+    ]);
+
+    assert.equal(result.ok, true);
+    assert.equal(result.wrote, out);
+    assert.equal(await readFile(trapTarget, "utf8"), sentinel);
+    assert.equal(await readFile(tempOne, "utf8"), sentinel);
+    assert.equal(await readFile(tempTwo, "utf8"), sentinel);
+    const written = JSON.parse(await readFile(out, "utf8"));
+    assert.equal(written.schema, PRODUCTION_REQUIREMENTS_SCHEMA);
+    assert.equal(written.bsc.network, "testnet");
+  } finally {
+    Date.now = originalNow;
+    Math.random = originalRandom;
+    await rm(dir, { recursive: true, force: true });
   }
 });
 

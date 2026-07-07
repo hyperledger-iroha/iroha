@@ -19,10 +19,15 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from check_sorafs_transparency_rollout_evidence import (  # noqa: E402
     CYCLE_BOUND_KINDS,
+    CYCLE_DETAIL_PROBE_LABEL_ERROR,
+    CYCLE_DETAIL_PROBE_LABEL_PATTERN,
     DEFAULT_REQUIRED_SOURCE_KINDS,
+    FORBIDDEN_INVENTORY_LABEL_MARKERS,
     KIND_BY_NAME,
     REQUIRED_EXPLORER_ROUTES,
     REQUIRED_PRIVACY_AGGREGATE_ACTIONS,
+    REQUIRED_PROOF_TOKEN_ISSUANCE_ACTIONS,
+    REQUIRED_PUBLICATION_CYCLE_DETAIL_PROBES,
     REQUIRED_PUBLICATION_ROUTES,
     SOURCE_BOUND_KINDS,
     validate_evidence_payload,
@@ -31,6 +36,8 @@ from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_block,
     emit_checker_error_lines,
     emit_checker_exception,
+    fsync_checker_output_parent,
+    write_all_checker_summary_bytes,
     validate_checker_output_parent,
 )
 from sorafs_path_identity import path_diagnostic_label  # noqa: E402
@@ -82,6 +89,31 @@ def validate_name_set(
     if missing:
         errors.append(f"{option} must include every required value")
     return [name for name in allowed if name in value_set]
+
+
+def validate_inventory_labels(
+    values: Iterable[str],
+    *,
+    option: str,
+    pattern,
+    label_error: str,
+    errors: list[str],
+) -> None:
+    """Reject non-production inventory labels before building canary JSON."""
+
+    for index, value in enumerate(values):
+        if pattern.fullmatch(value) is None:
+            errors.append(label_error.replace("cycle_detail_probes[].name", option))
+            continue
+        forbidden = sorted(
+            marker
+            for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
+            if marker in value.split("-")
+        )
+        if forbidden:
+            errors.append(
+                f"{option}[{index}] must not contain non-production markers {forbidden}"
+            )
 
 
 def validate_output_path(path: Path, errors: list[str]) -> None:
@@ -194,6 +226,22 @@ def build_explorer_routes(args: argparse.Namespace) -> list[dict[str, Any]]:
     ]
 
 
+def build_cycle_detail_probe_records(args: argparse.Namespace) -> list[dict[str, Any]]:
+    """Build payload-free publication cycle-detail probe records."""
+
+    return [
+        {
+            "name": name,
+            "status_code": args.route_status_code,
+            "body_blake3_hex": args.route_body_blake3,
+            "anchor_metadata_present": True,
+            "publisher_identity_present": True,
+            "verification_valid": True,
+        }
+        for name in args.cycle_detail_probes
+    ]
+
+
 def build_payload(args: argparse.Namespace) -> dict[str, Any]:
     """Build a payload-free transparency rollout canary payload."""
 
@@ -214,13 +262,15 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
         )
     elif args.kind == "publication":
         routes = build_publication_routes(args)
+        cycle_detail_probes = build_cycle_detail_probe_records(args)
         payload.update(
             {
                 "source_batch_digest_hex": args.source_batch_digest_hex,
                 "cycle_digest_hex": args.cycle_digest_hex,
                 "route_count": len(routes),
                 "passed_route_count": len(routes),
-                "cycle_detail_probe_count": args.cycle_detail_probe_count,
+                "cycle_detail_probe_count": len(cycle_detail_probes),
+                "cycle_detail_probes": cycle_detail_probes,
                 "publisher_identity_required": True,
                 "payload_bytes_included": False,
                 "publication_bodies_included": False,
@@ -244,7 +294,11 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
             }
         )
     elif args.kind == "proof_token_issuance":
-        probes = build_probe_records(["proof_token_issuance"], field=None, args=args)
+        probes = build_probe_records(
+            REQUIRED_PROOF_TOKEN_ISSUANCE_ACTIONS,
+            field="action",
+            args=args,
+        )
         payload.update(
             {
                 "cycle_digest_hex": args.cycle_digest_hex,
@@ -306,12 +360,35 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             errors=errors,
         )
     elif args.kind == "publication":
+        cycle_detail_probe_names = split_csv_values(args.cycle_detail_probe)
+        validate_inventory_labels(
+            cycle_detail_probe_names,
+            option="--cycle-detail-probe",
+            pattern=CYCLE_DETAIL_PROBE_LABEL_PATTERN,
+            label_error=CYCLE_DETAIL_PROBE_LABEL_ERROR,
+            errors=errors,
+        )
         args.publication_routes = validate_name_set(
             split_csv_values(args.publication_route),
             allowed=REQUIRED_PUBLICATION_ROUTES,
             option="--publication-route",
             errors=errors,
         )
+        args.cycle_detail_probes = validate_name_set(
+            cycle_detail_probe_names,
+            allowed=REQUIRED_PUBLICATION_CYCLE_DETAIL_PROBES,
+            option="--cycle-detail-probe",
+            errors=errors,
+        )
+        if (
+            args.cycle_detail_probe_count is not None
+            and args.cycle_detail_probes
+            and args.cycle_detail_probe_count != len(args.cycle_detail_probes)
+        ):
+            errors.append(
+                "--cycle-detail-probe-count must match "
+                "--cycle-detail-probe inventory"
+            )
     elif args.kind == "privacy_aggregate":
         args.privacy_actions = validate_name_set(
             split_csv_values(args.privacy_action),
@@ -357,12 +434,14 @@ def write_payload_atomic(path: Path, payload: dict[str, Any]) -> list[str]:
         if nofollow:
             flags |= nofollow
         fd = os.open(tmp_path, flags, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            fd = -1
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
+        write_all_checker_summary_bytes(fd, text.encode("utf-8"))
+        os.fsync(fd)
+        os.close(fd)
+        fd = -1
         os.replace(tmp_path, path)
+        parent_sync_errors = fsync_checker_output_parent(path, label="--out")
+        if parent_sync_errors:
+            return parent_sync_errors
     except (OSError, RuntimeError) as error:
         del error
         try:
@@ -392,6 +471,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--cycle-digest-hex")
     parser.add_argument("--source-kind", action="append", default=[])
     parser.add_argument("--publication-route", action="append", default=[])
+    parser.add_argument("--cycle-detail-probe", action="append", default=[])
     parser.add_argument("--privacy-action", action="append", default=[])
     parser.add_argument("--explorer-route", action="append", default=[])
     parser.add_argument("--probe-status-code", type=positive_int_arg, default=202)

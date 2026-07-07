@@ -9,8 +9,10 @@ import sys
 import time
 from collections import Counter
 from dataclasses import dataclass
+from html import unescape
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -59,74 +61,157 @@ from sorafs_response_args import (  # noqa: E402
 from check_sorafs_ai_prescreen_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as AI_PRESCREEN_REQUIRED_KINDS,
     KIND_BY_NAME as AI_PRESCREEN_KIND_BY_NAME,
+    POLICY_BOUND_KINDS as AI_PRESCREEN_POLICY_BOUND_KINDS,
+    RUNNER_BOUND_KINDS as AI_PRESCREEN_RUNNER_BOUND_KINDS,
+    WORKFLOW_BOUND_KINDS as AI_PRESCREEN_WORKFLOW_BOUND_KINDS,
 )
 from check_sorafs_appeal_finance_rollout_evidence import (  # noqa: E402
+    CONFIG_BOUND_KINDS as APPEAL_FINANCE_CONFIG_BOUND_KINDS,
     DEFAULT_REQUIRED_KINDS as APPEAL_FINANCE_REQUIRED_KINDS,
     KIND_BY_NAME as APPEAL_FINANCE_KIND_BY_NAME,
+    POLICY_BOUND_KINDS as APPEAL_FINANCE_POLICY_BOUND_KINDS,
+    REQUIRED_METRICS as APPEAL_FINANCE_REQUIRED_METRICS,
 )
 from check_sorafs_gateway_compliance_rollout_evidence import (  # noqa: E402
+    BUNDLE_BOUND_KINDS as GATEWAY_COMPLIANCE_BUNDLE_BOUND_KINDS,
     DEFAULT_REQUIRED_KINDS as GATEWAY_COMPLIANCE_REQUIRED_KINDS,
     KIND_BY_NAME as GATEWAY_COMPLIANCE_KIND_BY_NAME,
+    POLICY_BOUND_KINDS as GATEWAY_COMPLIANCE_POLICY_BOUND_KINDS,
+    REQUIRED_METRICS as GATEWAY_COMPLIANCE_REQUIRED_METRICS,
 )
 from check_sorafs_gateway_load_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as GATEWAY_LOAD_REQUIRED_KINDS,
     KIND_BY_NAME as GATEWAY_LOAD_KIND_BY_NAME,
+    POLICY_BOUND_KINDS as GATEWAY_LOAD_POLICY_BOUND_KINDS,
+    REQUIRED_METRICS as GATEWAY_LOAD_REQUIRED_METRICS,
+    STAGING_REPORT_BOUND_KINDS as GATEWAY_LOAD_STAGING_REPORT_BOUND_KINDS,
 )
 from check_sorafs_governance_dag_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as GOVERNANCE_DAG_REQUIRED_KINDS,
     KIND_BY_NAME as GOVERNANCE_DAG_KIND_BY_NAME,
+    POLICY_BOUND_KINDS as GOVERNANCE_DAG_POLICY_BOUND_KINDS,
+    PUBLIC_HEAD_BOUND_KINDS as GOVERNANCE_DAG_PUBLIC_HEAD_BOUND_KINDS,
+    REQUIRED_METRICS as GOVERNANCE_DAG_REQUIRED_METRICS,
 )
 from check_sorafs_hedging_rollout_evidence import (  # noqa: E402
+    CYCLE_ID_PATTERN as HEDGING_BILLING_CYCLE_ID_PATTERN,
+    CYCLE_BOUND_KINDS as HEDGING_BILLING_CYCLE_BOUND_KINDS,
     DEFAULT_REQUIRED_KINDS as HEDGING_BILLING_REQUIRED_KINDS,
+    FORBIDDEN_CYCLE_ID_MARKERS as HEDGING_BILLING_FORBIDDEN_CYCLE_ID_MARKERS,
     KIND_BY_NAME as HEDGING_BILLING_KIND_BY_NAME,
+    POLICY_BOUND_KINDS as HEDGING_BILLING_POLICY_BOUND_KINDS,
+    REQUIRED_METRICS as HEDGING_BILLING_REQUIRED_METRICS,
 )
 from check_sorafs_moderation_panel_rollout_evidence import (  # noqa: E402
+    CASE_BOUND_KINDS as MODERATION_PANEL_CASE_BOUND_KINDS,
     DEFAULT_REQUIRED_KINDS as MODERATION_PANEL_REQUIRED_KINDS,
     KIND_BY_NAME as MODERATION_PANEL_KIND_BY_NAME,
+    POLICY_BOUND_KINDS as MODERATION_PANEL_POLICY_BOUND_KINDS,
+    REQUIRED_METRICS as MODERATION_PANEL_REQUIRED_METRICS,
+    ROSTER_BOUND_KINDS as MODERATION_PANEL_ROSTER_BOUND_KINDS,
+    TALLY_BOUND_KINDS as MODERATION_PANEL_TALLY_BOUND_KINDS,
 )
 from check_sorafs_orderbook_rollout_evidence import (  # noqa: E402
+    CONTRACT_BOUND_KINDS as ORDERBOOK_CONTRACT_BOUND_KINDS,
     DEFAULT_REQUIRED_KINDS as ORDERBOOK_REQUIRED_KINDS,
     KIND_BY_NAME as ORDERBOOK_KIND_BY_NAME,
+    POLICY_BOUND_KINDS as ORDERBOOK_POLICY_BOUND_KINDS,
+    REQUIRED_METRICS as ORDERBOOK_REQUIRED_METRICS,
 )
 from check_sorafs_pdp_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as PDP_REQUIRED_KINDS,
     KIND_BY_NAME as PDP_KIND_BY_NAME,
+    POLICY_BOUND_KINDS as PDP_POLICY_BOUND_KINDS,
+    PROOF_SUMMARY_BOUND_KINDS as PDP_PROOF_SUMMARY_BOUND_KINDS,
+    PROVIDER_ROSTER_BOUND_KINDS as PDP_PROVIDER_ROSTER_BOUND_KINDS,
+    REQUIRED_METRICS as PDP_REQUIRED_METRICS,
 )
 from check_sorafs_pop_credentials_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as POP_CREDENTIALS_REQUIRED_KINDS,
     KIND_BY_NAME as POP_CREDENTIALS_KIND_BY_NAME,
+    POLICY_BOUND_KINDS as POP_CREDENTIALS_POLICY_BOUND_KINDS,
+    REQUIRED_METRICS as POP_CREDENTIALS_REQUIRED_METRICS,
+    REVOCATION_BOUND_KINDS as POP_CREDENTIALS_REVOCATION_BOUND_KINDS,
+    ROOT_BOUND_KINDS as POP_CREDENTIALS_ROOT_BOUND_KINDS,
 )
 from check_sorafs_por_rollout_evidence import (  # noqa: E402
+    ALLOWED_ARCHIVE_BACKENDS as POR_ALLOWED_ARCHIVE_BACKENDS,
     DEFAULT_REQUIRED_KINDS as POR_REQUIRED_KINDS,
     KIND_BY_NAME as POR_KIND_BY_NAME,
+    POLICY_BOUND_KINDS as POR_POLICY_BOUND_KINDS,
+    REQUIRED_METRICS as POR_REQUIRED_METRICS,
+    SEED_REPLAY_BOUND_KINDS as POR_SEED_REPLAY_BOUND_KINDS,
 )
 from check_sorafs_potr_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as POTR_REQUIRED_KINDS,
     KIND_BY_NAME as POTR_KIND_BY_NAME,
+    PQ_KEY_ROSTER_BOUND_KINDS as POTR_PQ_KEY_ROSTER_BOUND_KINDS,
+    RECEIPT_SUMMARY_BOUND_KINDS as POTR_RECEIPT_SUMMARY_BOUND_KINDS,
+    REPUTATION_WEIGHT_BOUND_KINDS as POTR_REPUTATION_WEIGHT_BOUND_KINDS,
+    REQUIRED_METRICS as POTR_REQUIRED_METRICS,
 )
 from check_sorafs_reference_sdk_release_evidence import (  # noqa: E402
+    ALLOWED_MANIFEST_SIGNATURE_ALGORITHMS as REFERENCE_SDK_ALLOWED_SIGNATURE_ALGORITHMS,
     DEFAULT_REQUIRED_KINDS as REFERENCE_SDK_REQUIRED_KINDS,
     KIND_BY_NAME as REFERENCE_SDK_KIND_BY_NAME,
+    POLICY_BOUND_KINDS as REFERENCE_SDK_POLICY_BOUND_KINDS,
+    RELEASE_MANIFEST_BOUND_KINDS as REFERENCE_SDK_RELEASE_MANIFEST_BOUND_KINDS,
 )
 from check_sorafs_repair_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as REPAIR_REQUIRED_KINDS,
+    FAILURE_BOUND_KINDS as REPAIR_FAILURE_BOUND_KINDS,
+    HANDOFF_BOUND_KINDS as REPAIR_HANDOFF_BOUND_KINDS,
     KIND_BY_NAME as REPAIR_KIND_BY_NAME,
+    POLICY_BOUND_KINDS as REPAIR_POLICY_BOUND_KINDS,
+    REQUIRED_METRICS as REPAIR_REQUIRED_METRICS,
+    ROSTER_BOUND_KINDS as REPAIR_ROSTER_BOUND_KINDS,
 )
 from check_sorafs_reputation_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as REPUTATION_REQUIRED_KINDS,
+    FORBIDDEN_PROVIDER_ID_MARKERS as REPUTATION_FORBIDDEN_PROVIDER_ID_MARKERS,
     KIND_BY_NAME as REPUTATION_KIND_BY_NAME,
+    PROVIDER_ID_PATTERN as REPUTATION_PROVIDER_ID_PATTERN,
+    REQUIRED_METRICS as REPUTATION_REQUIRED_METRICS,
+    SNAPSHOT_ANCHOR_KINDS as REPUTATION_SNAPSHOT_ANCHOR_KINDS,
+    SNAPSHOT_BOUND_KINDS as REPUTATION_SNAPSHOT_BOUND_KINDS,
 )
 from check_sorafs_reserve_rent_rollout_evidence import (  # noqa: E402
+    BAKE_ID_PATTERN as RESERVE_RENT_BAKE_ID_PATTERN,
     DEFAULT_REQUIRED_KINDS as RESERVE_RENT_REQUIRED_KINDS,
+    FORBIDDEN_BAKE_ID_MARKERS as RESERVE_RENT_FORBIDDEN_BAKE_ID_MARKERS,
     KIND_BY_NAME as RESERVE_RENT_KIND_BY_NAME,
+    LEDGER_BOUND_KINDS as RESERVE_RENT_LEDGER_BOUND_KINDS,
+    MATRIX_BOUND_KINDS as RESERVE_RENT_MATRIX_BOUND_KINDS,
+    POLICY_BOUND_KINDS as RESERVE_RENT_POLICY_BOUND_KINDS,
+    REQUIRED_METRICS as RESERVE_RENT_REQUIRED_METRICS,
 )
 from check_sorafs_transparency_rollout_evidence import (  # noqa: E402
+    CYCLE_BOUND_KINDS as TRANSPARENCY_CYCLE_BOUND_KINDS,
     DEFAULT_REQUIRED_KINDS as TRANSPARENCY_REQUIRED_KINDS,
     KIND_BY_NAME as TRANSPARENCY_KIND_BY_NAME,
+    SOURCE_BOUND_KINDS as TRANSPARENCY_SOURCE_BOUND_KINDS,
 )
 
 
 SUMMARY_SCHEMA = "sorafs.production_readiness.aggregate_gate.v1"
+POP_CREDENTIALS_ROOT_BOUND_FINGERPRINT_FIELDS = tuple(
+    (
+        kind_name,
+        "synced_root_digest_hex" if kind_name == "juror_client" else "root_digest_hex",
+    )
+    for kind_name in POP_CREDENTIALS_ROOT_BOUND_KINDS
+)
+POP_CREDENTIALS_REVOCATION_BOUND_FINGERPRINT_FIELDS = tuple(
+    (
+        kind_name,
+        (
+            "synced_revocation_list_digest_hex"
+            if kind_name == "juror_client"
+            else "revocation_list_digest_hex"
+        ),
+    )
+    for kind_name in POP_CREDENTIALS_REVOCATION_BOUND_KINDS
+)
 MAX_SUMMARY_BYTES = 4 * 1024 * 1024
 DEFAULT_MAX_SUMMARY_ARTIFACT_AGE_SECS = 14 * 24 * 60 * 60
 LOWER_HEX_DIGITS = set("0123456789abcdef")
@@ -160,6 +245,9 @@ SENSITIVE_KEYS = {
     "signed_transaction",
     "token",
 }
+PATH_SENSITIVE_KEY_FRAGMENTS = HIGH_RISK_SENSITIVE_KEY_FRAGMENTS - frozenset(
+    {"requestbody", "responsebody"}
+)
 
 GATE_METADATA_FIELDS: dict[str, frozenset[str]] = {
     "ai_prescreen": frozenset(
@@ -172,11 +260,26 @@ GATE_METADATA_FIELDS: dict[str, frozenset[str]] = {
         }
     ),
     "appeal_finance": frozenset(
-        {"valid_config_digests", "valid_multi_peer_runs", "valid_policy_digests"}
+        {
+            "metric_count_values",
+            "metrics",
+            "valid_config_digests",
+            "valid_multi_peer_runs",
+            "valid_policy_digests",
+        }
     ),
-    "gateway_compliance": frozenset({"valid_bundle_digests", "valid_policy_digests"}),
+    "gateway_compliance": frozenset(
+        {
+            "metric_count_values",
+            "metrics",
+            "valid_bundle_digests",
+            "valid_policy_digests",
+        }
+    ),
     "gateway_load": frozenset(
         {
+            "metric_count_values",
+            "metrics",
             "valid_policy_digests",
             "valid_staging_report_digests",
             "valid_suite_report_digests",
@@ -184,6 +287,8 @@ GATE_METADATA_FIELDS: dict[str, frozenset[str]] = {
     ),
     "governance_dag": frozenset(
         {
+            "metric_count_values",
+            "metrics",
             "valid_checkpoint_digests",
             "valid_policy_digests",
             "valid_public_head_cids",
@@ -191,6 +296,8 @@ GATE_METADATA_FIELDS: dict[str, frozenset[str]] = {
     ),
     "hedging_billing": frozenset(
         {
+            "metric_count_values",
+            "metrics",
             "valid_billing_cycles",
             "valid_cycle_bindings",
             "valid_policy_digests",
@@ -200,6 +307,8 @@ GATE_METADATA_FIELDS: dict[str, frozenset[str]] = {
     "moderation_panel": frozenset(
         {
             "deployment_context",
+            "metric_count_values",
+            "metrics",
             "valid_case_digests",
             "valid_e2e_runs",
             "valid_evidence_viewer_digest_sets",
@@ -208,16 +317,28 @@ GATE_METADATA_FIELDS: dict[str, frozenset[str]] = {
             "valid_tally_bindings",
         }
     ),
-    "orderbook": frozenset({"valid_contract_digests", "valid_policy_digests"}),
+    "orderbook": frozenset(
+        {
+            "metric_count_values",
+            "metrics",
+            "valid_contract_digests",
+            "valid_policy_digests",
+        }
+    ),
     "pdp": frozenset(
         {
+            "metric_count_values",
+            "metrics",
             "valid_policy_digests",
             "valid_proof_summary_digests",
             "valid_provider_roster_digests",
+            "valid_repair_handoff_digests",
         }
     ),
     "pop_credentials": frozenset(
         {
+            "metric_count_values",
+            "metrics",
             "valid_juror_sync_bindings",
             "valid_policy_digests",
             "valid_pop_snapshot_digests",
@@ -225,9 +346,20 @@ GATE_METADATA_FIELDS: dict[str, frozenset[str]] = {
             "valid_root_digests",
         }
     ),
-    "por": frozenset({"valid_policy_digests", "valid_seed_replay_digests"}),
+    "por": frozenset(
+        {
+            "archive_backends",
+            "metric_count_values",
+            "metrics",
+            "valid_governance_archive_handoff_digests",
+            "valid_policy_digests",
+            "valid_seed_replay_digests",
+        }
+    ),
     "potr": frozenset(
         {
+            "metric_count_values",
+            "metrics",
             "valid_policy_digests",
             "valid_pq_key_roster_digests",
             "valid_receipt_summary_digests",
@@ -236,6 +368,7 @@ GATE_METADATA_FIELDS: dict[str, frozenset[str]] = {
     ),
     "reference_sdk_release": frozenset(
         {
+            "signature_algorithms",
             "valid_archive_index_digests",
             "valid_ffi_contract_digests",
             "valid_header_digests",
@@ -249,6 +382,8 @@ GATE_METADATA_FIELDS: dict[str, frozenset[str]] = {
     ),
     "repair": frozenset(
         {
+            "metric_count_values",
+            "metrics",
             "valid_failure_bundle_digests",
             "valid_handoff_digests",
             "valid_policy_digests",
@@ -257,22 +392,33 @@ GATE_METADATA_FIELDS: dict[str, frozenset[str]] = {
     ),
     "reputation": frozenset(
         {
+            "metric_count_values",
+            "metrics",
             "merkle_root_hex",
             "provider_count_values",
             "provider_ids",
             "snapshot_id_hex",
+            "valid_reputation_weight_digests",
             "valid_snapshot_bindings",
         }
     ),
     "reserve_rent": frozenset(
         {
+            "metric_count_values",
+            "metrics",
             "valid_policy_digests",
             "valid_policy_matrix_bindings",
             "valid_policy_matrix_ledger_bindings",
             "valid_provider_bakes",
         }
     ),
-    "transparency": frozenset({"valid_cycle_digests", "valid_source_batch_digests"}),
+    "transparency": frozenset(
+        {
+            "valid_cycle_digests",
+            "valid_publication_bindings",
+            "valid_source_batch_digests",
+        }
+    ),
 }
 PAYLOAD_FREE_SUMMARY_CORE_FIELDS = frozenset(
     {
@@ -298,7 +444,16 @@ PAYLOAD_FREE_SUMMARY_LIST_METADATA_FIELDS = frozenset(
     field
     for field in PAYLOAD_FREE_SUMMARY_METADATA_FIELDS
     if field.startswith("valid_")
-) | frozenset({"provider_count_values", "provider_ids"})
+) | frozenset(
+    {
+        "archive_backends",
+        "metric_count_values",
+        "metrics",
+        "provider_count_values",
+        "provider_ids",
+        "signature_algorithms",
+    }
+)
 PAYLOAD_FREE_SUMMARY_HEX_LIST_METADATA_FIELDS = frozenset(
     {
         "valid_bundle_digests",
@@ -309,6 +464,7 @@ PAYLOAD_FREE_SUMMARY_HEX_LIST_METADATA_FIELDS = frozenset(
         "valid_cycle_digests",
         "valid_executor_summary_digests",
         "valid_failure_bundle_digests",
+        "valid_governance_archive_handoff_digests",
         "valid_handoff_digests",
         "valid_notification_manifest_digests",
         "valid_policy_digests",
@@ -318,7 +474,9 @@ PAYLOAD_FREE_SUMMARY_HEX_LIST_METADATA_FIELDS = frozenset(
         "valid_provider_roster_digests",
         "valid_public_head_cids",
         "valid_receipt_summary_digests",
+        "valid_reputation_weight_digests",
         "valid_reputation_weight_policy_digests",
+        "valid_repair_handoff_digests",
         "valid_reference_decision_ids",
         "valid_archive_index_digests",
         "valid_ffi_contract_digests",
@@ -356,6 +514,10 @@ PAYLOAD_FREE_SUMMARY_HEX_BINDING_METADATA_FIELDS = {
         "matrix_digest_hex": 64,
         "ledger_digest_hex": 64,
     },
+    "valid_publication_bindings": {
+        "source_batch_digest_hex": 64,
+        "cycle_digest_hex": 64,
+    },
     "valid_roster_bindings": {
         "case_digest_hex": 64,
         "roster_hash_hex": 64,
@@ -376,7 +538,7 @@ PAYLOAD_FREE_SUMMARY_HEX_BINDING_METADATA_FIELDS = {
     },
 }
 PAYLOAD_FREE_SUMMARY_POSITIVE_INT_LIST_METADATA_FIELDS = frozenset(
-    {"provider_count_values"}
+    {"metric_count_values", "provider_count_values"}
 )
 PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS: dict[str, dict[str, Any]] = {
     "valid_billing_cycles": {
@@ -426,15 +588,32 @@ PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS: dict[str, dict[str, Any]] = {
     "valid_provider_bakes": {
         "strings": frozenset({"bake_id", "deployment_id", "environment"}),
         "positive_ints": frozenset(
-            {"completed_at_unix", "provider_count", "started_at_unix"}
+            {
+                "completed_at_unix",
+                "provider_count",
+                "scheduled_lifecycle_canary_defaulted_provider_count",
+                "scheduled_lifecycle_canary_last_tick_at_unix",
+                "scheduled_lifecycle_canary_tick_count",
+                "started_at_unix",
+            }
         ),
         "hex": {
             "ledger_digest_hex": 64,
             "matrix_digest_hex": 64,
             "policy_digest_hex": 64,
         },
-        "ordered_int_pairs": (("started_at_unix", "completed_at_unix"),),
+        "ordered_int_pairs": (
+            ("started_at_unix", "completed_at_unix"),
+            ("scheduled_lifecycle_canary_last_tick_at_unix", "completed_at_unix"),
+        ),
     },
+}
+PAYLOAD_FREE_SUMMARY_OBJECT_LIST_DOMAIN_IDENTITY_FIELDS = {
+    "valid_billing_cycles": ("cycle_id",),
+    "valid_e2e_runs": ("case_digest_hex", "roster_hash_hex", "tally_digest_hex"),
+    "valid_evidence_viewer_digest_sets": ("case_digest_hex", "roster_hash_hex"),
+    "valid_multi_peer_runs": ("deployment_id", "environment", "generated_at_unix"),
+    "valid_provider_bakes": ("bake_id",),
 }
 PAYLOAD_FREE_SUMMARY_OBJECT_LIST_REQUIRED_KIND_COUNTS = {
     "valid_billing_cycles": "billing_cycle",
@@ -449,6 +628,18 @@ PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS = {
     ("moderation_panel", "valid_e2e_runs"): "e2e_panel",
     ("moderation_panel", "valid_evidence_viewer_digest_sets"): "evidence_viewer",
     ("reserve_rent", "valid_provider_bakes"): "provider_bake",
+}
+PAYLOAD_FREE_SUMMARY_OBJECT_LIST_STRING_FIELD_POLICIES = {
+    ("hedging_billing", "valid_billing_cycles", "cycle_id"): {
+        "forbidden_markers": HEDGING_BILLING_FORBIDDEN_CYCLE_ID_MARKERS,
+        "pattern": HEDGING_BILLING_CYCLE_ID_PATTERN,
+        "pattern_error": "must match canonical lowercase `billing-cycle-*`",
+    },
+    ("reserve_rent", "valid_provider_bakes", "bake_id"): {
+        "forbidden_markers": RESERVE_RENT_FORBIDDEN_BAKE_ID_MARKERS,
+        "pattern": RESERVE_RENT_BAKE_ID_PATTERN,
+        "pattern_error": "must match canonical lowercase `reserve-bake-*`",
+    },
 }
 PAYLOAD_FREE_SUMMARY_OBJECT_LIST_FINGERPRINT_HEX_BINDINGS = {
     field: {
@@ -473,8 +664,11 @@ PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_BINDINGS = {
     "valid_cycle_digests": "cycle_digest_hex",
     "valid_executor_summary_digests": "execution_summary_digest_hex",
     "valid_failure_bundle_digests": "evidence_bundle_digest_hex",
+    "valid_governance_archive_handoff_digests": (
+        "governance_archive_handoff_digest_hex"
+    ),
     "valid_handoff_digests": "handoff_digest_hex",
-    "valid_notification_manifest_digests": "manifest_body_blake3",
+    "valid_notification_manifest_digests": "manifest_body_blake3_hex",
     "valid_policy_digests": "policy_digest_hex",
     "valid_pop_snapshot_digests": "pop_snapshot_digest_hex",
     "valid_pq_key_roster_digests": "pq_key_roster_digest_hex",
@@ -482,7 +676,9 @@ PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_BINDINGS = {
     "valid_provider_roster_digests": "provider_roster_digest_hex",
     "valid_public_head_cids": "public_head_cid_hex",
     "valid_receipt_summary_digests": "receipt_summary_digest_hex",
+    "valid_reputation_weight_digests": "weights_digest_hex",
     "valid_reputation_weight_policy_digests": "reputation_weight_policy_digest_hex",
+    "valid_repair_handoff_digests": "repair_handoff_digest_hex",
     "valid_reference_decision_ids": "decision_id_hex",
     "valid_archive_index_digests": "archive_index_digest_hex",
     "valid_ffi_contract_digests": "ffi_contract_digest_hex",
@@ -527,6 +723,7 @@ PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_SOURCE_KINDS = {
     ("pdp", "valid_policy_digests"): ("proof_generation",),
     ("pdp", "valid_proof_summary_digests"): ("proof_generation",),
     ("pdp", "valid_provider_roster_digests"): ("proof_generation",),
+    ("pdp", "valid_repair_handoff_digests"): ("governance_repair",),
     ("pop_credentials", "valid_policy_digests"): ("verifier_service",),
     ("pop_credentials", "valid_pop_snapshot_digests"): ("moderation_integration",),
     ("pop_credentials", "valid_revocation_list_digests"): (
@@ -534,6 +731,7 @@ PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_SOURCE_KINDS = {
         "revocation_registry",
     ),
     ("pop_credentials", "valid_root_digests"): ("issuer_bundle", "commitment_root"),
+    ("por", "valid_governance_archive_handoff_digests"): ("reporting_archive",),
     ("por", "valid_policy_digests"): ("randomness",),
     ("por", "valid_seed_replay_digests"): ("randomness",),
     ("potr", "valid_policy_digests"): ("governance_approval",),
@@ -567,6 +765,7 @@ PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_SOURCE_KINDS = {
     ("repair", "valid_handoff_digests"): ("governance_handoff",),
     ("repair", "valid_policy_digests"): ("governance_handoff",),
     ("repair", "valid_roster_digests"): ("auditor_roster",),
+    ("reputation", "valid_reputation_weight_digests"): ("publish", "latest"),
     ("reserve_rent", "valid_policy_digests"): ("policy_config",),
     ("transparency", "valid_cycle_digests"): ("publication",),
     ("transparency", "valid_source_batch_digests"): ("source_entry",),
@@ -580,16 +779,93 @@ PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_SCALAR_SOURCE_KINDS = {
     ("reputation", "snapshot_id_hex"): ("publish", "latest"),
 }
 PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_BINDINGS = {
+    "archive_backends": "archive_backend",
     "provider_ids": "provider_id",
+    "signature_algorithms": "signature_algorithm",
 }
 PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_SOURCE_KINDS = {
+    ("por", "archive_backends"): ("reporting_archive",),
+    ("reference_sdk_release", "signature_algorithms"): ("signed_manifest",),
     ("reputation", "provider_ids"): ("provider",),
 }
+PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_BINDINGS = {
+    "metrics": "metrics",
+}
+PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_SOURCE_KINDS = {
+    ("appeal_finance", "metrics"): ("dashboard_metrics",),
+    ("gateway_compliance", "metrics"): ("observability",),
+    ("gateway_load", "metrics"): ("telemetry_slo",),
+    ("governance_dag", "metrics"): ("observability",),
+    ("hedging_billing", "metrics"): ("metrics_alerts",),
+    ("moderation_panel", "metrics"): ("metrics_alerts",),
+    ("orderbook", "metrics"): ("observability",),
+    ("pdp", "metrics"): ("observability",),
+    ("pop_credentials", "metrics"): ("metrics_alerts",),
+    ("por", "metrics"): ("observability",),
+    ("potr", "metrics"): ("observability",),
+    ("repair", "metrics"): ("observability",),
+    ("reputation", "metrics"): ("metrics",),
+    ("reserve_rent", "metrics"): ("metrics_alerts",),
+}
+PAYLOAD_FREE_SUMMARY_ALLOWED_STRING_LIST_VALUES = {
+    ("por", "archive_backends"): POR_ALLOWED_ARCHIVE_BACKENDS,
+    (
+        "reference_sdk_release",
+        "signature_algorithms",
+    ): REFERENCE_SDK_ALLOWED_SIGNATURE_ALGORITHMS,
+}
+PAYLOAD_FREE_SUMMARY_REQUIRED_STRING_LIST_VALUES = {
+    ("appeal_finance", "metrics"): APPEAL_FINANCE_REQUIRED_METRICS,
+    ("gateway_compliance", "metrics"): GATEWAY_COMPLIANCE_REQUIRED_METRICS,
+    ("gateway_load", "metrics"): GATEWAY_LOAD_REQUIRED_METRICS,
+    ("governance_dag", "metrics"): GOVERNANCE_DAG_REQUIRED_METRICS,
+    ("hedging_billing", "metrics"): HEDGING_BILLING_REQUIRED_METRICS,
+    ("moderation_panel", "metrics"): MODERATION_PANEL_REQUIRED_METRICS,
+    ("orderbook", "metrics"): ORDERBOOK_REQUIRED_METRICS,
+    ("pdp", "metrics"): PDP_REQUIRED_METRICS,
+    ("pop_credentials", "metrics"): POP_CREDENTIALS_REQUIRED_METRICS,
+    ("por", "metrics"): POR_REQUIRED_METRICS,
+    ("potr", "metrics"): POTR_REQUIRED_METRICS,
+    ("repair", "metrics"): REPAIR_REQUIRED_METRICS,
+    ("reputation", "metrics"): REPUTATION_REQUIRED_METRICS,
+    ("reserve_rent", "metrics"): RESERVE_RENT_REQUIRED_METRICS,
+}
+PAYLOAD_FREE_SUMMARY_STRING_LIST_COUNT_BINDINGS = {
+    ("appeal_finance", "metrics"): "metric_count_values",
+    ("gateway_compliance", "metrics"): "metric_count_values",
+    ("gateway_load", "metrics"): "metric_count_values",
+    ("governance_dag", "metrics"): "metric_count_values",
+    ("hedging_billing", "metrics"): "metric_count_values",
+    ("moderation_panel", "metrics"): "metric_count_values",
+    ("orderbook", "metrics"): "metric_count_values",
+    ("pdp", "metrics"): "metric_count_values",
+    ("pop_credentials", "metrics"): "metric_count_values",
+    ("por", "metrics"): "metric_count_values",
+    ("potr", "metrics"): "metric_count_values",
+    ("repair", "metrics"): "metric_count_values",
+    ("reputation", "metrics"): "metric_count_values",
+    ("reserve_rent", "metrics"): "metric_count_values",
+}
 PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_BINDINGS = {
+    "metric_count_values": "metric_count",
     "provider_count_values": "provider_count",
 }
 PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_SOURCE_KINDS = {
+    ("appeal_finance", "metric_count_values"): ("dashboard_metrics",),
+    ("gateway_compliance", "metric_count_values"): ("observability",),
+    ("gateway_load", "metric_count_values"): ("telemetry_slo",),
+    ("governance_dag", "metric_count_values"): ("observability",),
+    ("hedging_billing", "metric_count_values"): ("metrics_alerts",),
+    ("moderation_panel", "metric_count_values"): ("metrics_alerts",),
+    ("orderbook", "metric_count_values"): ("observability",),
+    ("pdp", "metric_count_values"): ("observability",),
+    ("pop_credentials", "metric_count_values"): ("metrics_alerts",),
+    ("por", "metric_count_values"): ("observability",),
+    ("potr", "metric_count_values"): ("observability",),
+    ("repair", "metric_count_values"): ("observability",),
+    ("reputation", "metric_count_values"): ("metrics",),
     ("reputation", "provider_count_values"): ("publish", "latest"),
+    ("reserve_rent", "metric_count_values"): ("metrics_alerts",),
 }
 PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_BINDING_FIELDS = {
     "valid_cycle_bindings": (
@@ -608,6 +884,10 @@ PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_BINDING_FIELDS = {
         "policy_digest_hex",
         "matrix_digest_hex",
         "ledger_digest_hex",
+    ),
+    "valid_publication_bindings": (
+        "source_batch_digest_hex",
+        "cycle_digest_hex",
     ),
     "valid_roster_bindings": (
         "case_digest_hex",
@@ -637,6 +917,7 @@ PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_BINDING_SOURCE_KINDS = {
     ("reputation", "valid_snapshot_bindings"): ("publish", "latest"),
     ("reserve_rent", "valid_policy_matrix_bindings"): ("quote_matrix",),
     ("reserve_rent", "valid_policy_matrix_ledger_bindings"): ("ledger_digest",),
+    ("transparency", "valid_publication_bindings"): ("publication",),
 }
 PAYLOAD_FREE_SUMMARY_OBJECT_METADATA_FIELDS = {
     "deployment_context": frozenset({"deployment_id", "environment"}),
@@ -645,7 +926,9 @@ PAYLOAD_FREE_SUMMARY_ORDERED_LIST_METADATA_FIELDS = (
     PAYLOAD_FREE_SUMMARY_HEX_LIST_METADATA_FIELDS
     | frozenset(PAYLOAD_FREE_SUMMARY_HEX_BINDING_METADATA_FIELDS)
     | PAYLOAD_FREE_SUMMARY_POSITIVE_INT_LIST_METADATA_FIELDS
-    | frozenset({"provider_ids"})
+    | frozenset(
+        {"archive_backends", "metrics", "provider_ids", "signature_algorithms"}
+    )
 )
 MAX_SUMMARY_METADATA_DEPTH = 32
 PAYLOAD_FREE_ARTIFACT_FIELDS = frozenset(
@@ -1056,6 +1339,80 @@ def require_threshold_map(
     return valid_thresholds
 
 
+def decoded_text_variants(value: str) -> tuple[str, ...]:
+    """Return raw plus repeatedly percent/HTML-decoded text variants."""
+
+    variants = [value]
+    seen = {value}
+    current = value
+    for _ in range(4):
+        decoded = unescape(unquote(current))
+        if decoded == current or decoded in seen:
+            break
+        variants.append(decoded)
+        seen.add(decoded)
+        current = decoded
+    return tuple(variants)
+
+
+def path_component_has_windows_drive_prefix(component: str) -> bool:
+    """Return whether a path component starts with a Windows drive prefix."""
+
+    return len(component) >= 2 and component[1] == ":" and component[0].isalpha()
+
+
+def path_component_has_uri_scheme_prefix(component: str) -> bool:
+    """Return whether a path component starts with a URI-like scheme."""
+
+    head, separator, _tail = component.partition(":")
+    if not separator:
+        return False
+    return re.fullmatch(r"[A-Za-z][A-Za-z0-9+.-]*", head) is not None
+
+
+def path_component_has_sensitive_label(component: str) -> bool:
+    """Return whether a path component looks like runtime-only secret material."""
+
+    sensitive_key_labels = (
+        frozenset(key.lower() for key in SENSITIVE_KEYS) | COMMON_SENSITIVE_KEYS
+    )
+    normalized_sensitive_keys = frozenset(
+        normalize_sensitive_key(key) for key in sensitive_key_labels
+    )
+    for variant in decoded_text_variants(component):
+        stem = variant.rsplit(".", 1)[0]
+        normalized_values = {
+            normalize_sensitive_key(variant),
+            normalize_sensitive_key(stem),
+        }
+        if any(value in normalized_sensitive_keys for value in normalized_values):
+            return True
+        if any(
+            fragment in value
+            for value in normalized_values
+            for fragment in PATH_SENSITIVE_KEY_FRAGMENTS
+        ):
+            return True
+    return False
+
+
+def archive_path_component_is_portable(component: str) -> bool:
+    """Return whether an archive path component is safe in raw or decoded form."""
+
+    for variant in decoded_text_variants(component):
+        if (
+            canonical_string(variant) is None
+            or variant in {".", ".."}
+            or "/" in variant
+            or "\\" in variant
+            or path_component_has_windows_drive_prefix(variant)
+            or path_component_has_uri_scheme_prefix(variant)
+            or path_component_has_sensitive_label(variant)
+        ):
+            return False
+    return True
+
+
 def is_archive_portable_artifact_path(path: str) -> bool:
     """Return whether an artifact label is portable inside release archives."""
 
@@ -1065,11 +1422,7 @@ def is_archive_portable_artifact_path(path: str) -> bool:
         return False
     if len(path) >= 2 and path[1] == ":" and path[0].isalpha():
         return False
-    parts = path.split("/")
-    return all(
-        canonical_string(part) is not None and part not in {".", ".."}
-        for part in parts
-    )
+    return all(archive_path_component_is_portable(part) for part in path.split("/"))
 
 
 def aggregate_summary_path_label(path: Path, evidence_dirs: list[Path]) -> str:
@@ -1111,7 +1464,8 @@ def require_artifact_identity_fields(
     elif not is_archive_portable_artifact_path(artifact_path):
         errors.append(
             f"{path}.path must be archive-relative without absolute, empty, "
-            "current, parent, or platform-specific segments"
+            "current, parent, encoded, URI-scheme-like, platform-specific, "
+            "or secret-looking segments"
         )
     sha256 = artifact.get("sha256")
     if (
@@ -1249,6 +1603,46 @@ def payload_free_object_list_metadata_identity(
     return tuple(identity)
 
 
+def payload_free_object_list_metadata_domain_identity(
+    field: str,
+    item: Any,
+    schema: dict[str, Any],
+) -> tuple[tuple[str, Any], ...] | None:
+    """Return the domain identity for validated object-list metadata."""
+
+    if payload_free_object_list_metadata_identity(item, schema) is None:
+        return None
+    identity_fields = PAYLOAD_FREE_SUMMARY_OBJECT_LIST_DOMAIN_IDENTITY_FIELDS.get(field)
+    if identity_fields is None:
+        return None
+    string_fields = schema.get("strings", frozenset())
+    positive_int_fields = schema.get("positive_ints", frozenset())
+    hex_fields = schema.get("hex", {})
+    identity: list[tuple[str, Any]] = []
+    for key in identity_fields:
+        if key in string_fields:
+            value = canonical_string(item.get(key))
+            if value is None:
+                return None
+        elif key in positive_int_fields:
+            value = item.get(key)
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                return None
+        elif key in hex_fields:
+            value = item.get(key)
+            expected_hex_length = hex_fields[key]
+            if (
+                not isinstance(value, str)
+                or len(value) != expected_hex_length
+                or any(character not in LOWER_HEX_DIGITS for character in value)
+            ):
+                return None
+        else:
+            return None
+        identity.append((key, value))
+    return tuple(identity)
+
+
 def validate_payload_free_object_list_metadata(
     field: str,
     value: Any,
@@ -1262,6 +1656,7 @@ def validate_payload_free_object_list_metadata(
     hex_fields = schema.get("hex", {})
     allowed_fields = set(string_fields) | set(positive_int_fields) | set(hex_fields)
     identities: list[tuple[tuple[str, Any], ...]] = []
+    domain_identities: list[tuple[tuple[str, Any], ...]] = []
     for index, item in enumerate(value):
         item_path = f"{field}[{index}]"
         if not isinstance(item, dict):
@@ -1270,6 +1665,13 @@ def validate_payload_free_object_list_metadata(
         identity = payload_free_object_list_metadata_identity(item, schema)
         if identity is not None:
             identities.append(identity)
+        domain_identity = payload_free_object_list_metadata_domain_identity(
+            field,
+            item,
+            schema,
+        )
+        if domain_identity is not None:
+            domain_identities.append(domain_identity)
         for key in item:
             key_label = canonical_string(key)
             if key_label is None:
@@ -1315,6 +1717,8 @@ def validate_payload_free_object_list_metadata(
                 errors.append(f"{item_path}.{end_key} must be >= {start_key}")
     if len(set(identities)) != len(identities):
         errors.append(f"{field} must not contain duplicate metadata entries")
+    if len(set(domain_identities)) != len(domain_identities):
+        errors.append(f"{field} must not contain duplicate metadata identities")
 
 
 def validate_payload_free_object_metadata(
@@ -1508,6 +1912,56 @@ def payload_free_object_list_hex_metadata_values(
     return values
 
 
+def payload_free_object_list_hex_tuple_metadata_values(
+    field: str,
+    value: Any,
+    tuple_fields: tuple[str, ...],
+) -> set[tuple[str, ...]] | None:
+    """Return selected canonical hex tuples from object-list metadata."""
+
+    if not isinstance(value, list):
+        return None
+    schema = PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS[field]
+    hex_schema = schema.get("hex", {})
+    if not set(tuple_fields) <= set(hex_schema):
+        return None
+    values: set[tuple[str, ...]] = set()
+    for item in value:
+        if not isinstance(item, dict):
+            return None
+        tuple_value = tuple(
+            canonical_lower_hex(item.get(tuple_field), hex_schema[tuple_field])
+            for tuple_field in tuple_fields
+        )
+        if not all(value is not None for value in tuple_value):
+            return None
+        values.add(tuple_value)
+    return values
+
+
+def payload_free_object_list_string_metadata_values(
+    field: str,
+    value: Any,
+    string_field: str,
+) -> set[str] | None:
+    """Return selected canonical strings from object-list metadata."""
+
+    if not isinstance(value, list):
+        return None
+    schema = PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS[field]
+    if string_field not in schema.get("strings", frozenset()):
+        return None
+    values: set[str] = set()
+    for item in value:
+        if payload_free_object_list_metadata_identity(item, schema) is None:
+            return None
+        item_value = canonical_string(item.get(string_field))
+        if item_value is None:
+            return None
+        values.add(item_value)
+    return values
+
+
 def payload_free_object_list_metadata_identities(
     field: str,
     value: Any,
@@ -1584,6 +2038,24 @@ def fingerprint_string_values(
         for value in [canonical_string(fingerprint.get(fingerprint_field))]
         if value is not None
     }
+
+
+def fingerprint_string_array_values(
+    fingerprints: list[dict[str, Any]],
+    fingerprint_field: str,
+) -> set[str]:
+    """Return canonical string-array values from recognized artifact fingerprints."""
+
+    values: set[str] = set()
+    for fingerprint in fingerprints:
+        items = fingerprint.get(fingerprint_field)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            item_label = canonical_string(item)
+            if item_label is not None:
+                values.add(item_label)
+    return values
 
 
 def fingerprint_positive_int_values(
@@ -1714,6 +2186,35 @@ def validate_payload_free_summary_metadata_fingerprint_tethers(
             kind_names=source_kinds,
         )
         fingerprint_values = fingerprint_string_values(
+            source_fingerprints,
+            fingerprint_field,
+        )
+        if not metadata_values <= fingerprint_values:
+            errors.append(f"{field} must match recognized artifact fingerprints")
+
+    for field, fingerprint_field in (
+        PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_BINDINGS.items()
+    ):
+        if field not in allowed_metadata_fields or field not in payload:
+            continue
+        metadata_values = payload_free_string_list_metadata_values(payload.get(field))
+        if metadata_values is None or not metadata_values:
+            continue
+        source_kinds = (
+            PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_SOURCE_KINDS.get(
+                (gate.name, field),
+            )
+        )
+        if source_kinds is None:
+            errors.append(
+                f"{field} source-kind tether is not configured for `{gate.name}`"
+            )
+            continue
+        source_fingerprints = payload_free_summary_artifact_fingerprints(
+            payload,
+            kind_names=source_kinds,
+        )
+        fingerprint_values = fingerprint_string_array_values(
             source_fingerprints,
             fingerprint_field,
         )
@@ -1938,6 +2439,1303 @@ def validate_payload_free_ordered_list_metadata(
         errors.append(f"{field} must be sorted in canonical order")
 
 
+def validate_payload_free_required_string_list_values(
+    gate: GateSummaryKind,
+    field: str,
+    value: Any,
+    errors: list[str],
+) -> None:
+    """Require exact reviewed values for configured string-list metadata."""
+
+    required_values = PAYLOAD_FREE_SUMMARY_REQUIRED_STRING_LIST_VALUES.get(
+        (gate.name, field)
+    )
+    if required_values is None or not isinstance(value, list):
+        return
+    metadata_values = payload_free_string_list_metadata_values(value)
+    if metadata_values is None:
+        return
+    required_set = frozenset(required_values)
+    for required_value in required_values:
+        if required_value not in metadata_values:
+            errors.append(f"{field} must include metadata value `{required_value}`")
+    if not metadata_values <= required_set:
+        errors.append(f"{field} must not include unknown metadata values")
+
+
+def validate_payload_free_allowed_string_list_values(
+    gate: GateSummaryKind,
+    field: str,
+    value: Any,
+    errors: list[str],
+) -> None:
+    """Reject values outside a reviewed closed set for string-list metadata."""
+
+    allowed_values = PAYLOAD_FREE_SUMMARY_ALLOWED_STRING_LIST_VALUES.get(
+        (gate.name, field)
+    )
+    if allowed_values is None or not isinstance(value, list):
+        return
+    metadata_values = payload_free_string_list_metadata_values(value)
+    if metadata_values is None:
+        return
+    if not metadata_values <= frozenset(allowed_values):
+        errors.append(f"{field} must not include unknown metadata values")
+
+
+def validate_payload_free_provider_id_metadata_values(
+    gate: GateSummaryKind,
+    field: str,
+    value: Any,
+    errors: list[str],
+) -> None:
+    """Reject forged aggregate provider-id labels outside the reputation policy."""
+
+    if gate.name != "reputation" or field != "provider_ids" or not isinstance(value, list):
+        return
+    for index, item in enumerate(value):
+        provider_id = canonical_string(item)
+        if provider_id is None:
+            continue
+        path = f"{field}[{index}]"
+        if REPUTATION_PROVIDER_ID_PATTERN.fullmatch(provider_id) is None:
+            errors.append(f"{path} must match canonical lowercase `provider-*`")
+            continue
+        forbidden = sorted(
+            marker
+            for marker in REPUTATION_FORBIDDEN_PROVIDER_ID_MARKERS
+            if marker in provider_id.split("-")
+        )
+        if forbidden:
+            errors.append(
+                f"{path} must not contain non-production markers {forbidden}"
+            )
+
+
+def validate_payload_free_object_list_string_field_policies(
+    gate: GateSummaryKind,
+    field: str,
+    value: Any,
+    errors: list[str],
+) -> None:
+    """Replay lane-owned string identity policies for aggregate object metadata."""
+
+    if not isinstance(value, list):
+        return
+    policies = {
+        key_field: policy
+        for (gate_name, metadata_field, key_field), policy in (
+            PAYLOAD_FREE_SUMMARY_OBJECT_LIST_STRING_FIELD_POLICIES.items()
+        )
+        if gate_name == gate.name and metadata_field == field
+    }
+    if not policies:
+        return
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            continue
+        for key_field, policy in policies.items():
+            metadata_value = canonical_string(item.get(key_field))
+            if metadata_value is None:
+                continue
+            path = f"{field}[{index}].{key_field}"
+            pattern = policy["pattern"]
+            if pattern.fullmatch(metadata_value) is None:
+                errors.append(f"{path} {policy['pattern_error']}")
+                continue
+            forbidden_markers = policy["forbidden_markers"]
+            forbidden = sorted(
+                marker
+                for marker in forbidden_markers
+                if marker in metadata_value.split("-")
+            )
+            if forbidden:
+                errors.append(
+                    f"{path} must not contain non-production markers {forbidden}"
+                )
+
+
+def validate_payload_free_deployment_context_metadata(
+    path: str,
+    value: Any,
+    errors: list[str],
+) -> None:
+    """Reject non-production deployment contexts in payload-free metadata."""
+
+    if not isinstance(value, dict):
+        return
+    deployment_id = canonical_string(value.get("deployment_id"))
+    if deployment_id is not None:
+        require_production_deployment_id_value(
+            deployment_id,
+            errors,
+            f"{path}.deployment_id",
+        )
+    environment = canonical_string(value.get("environment"))
+    if environment is not None and not is_production_ready_environment(environment):
+        errors.append(f"{path}.environment must be production")
+
+
+def validate_payload_free_object_list_deployment_context_metadata(
+    field: str,
+    value: Any,
+    schema: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Reject non-production deployment contexts in object-list metadata."""
+
+    string_fields = schema.get("strings", frozenset())
+    if not {"deployment_id", "environment"} <= set(string_fields):
+        return
+    if not isinstance(value, list):
+        return
+    for index, item in enumerate(value):
+        validate_payload_free_deployment_context_metadata(
+            f"{field}[{index}]",
+            item,
+            errors,
+        )
+
+
+def validate_payload_free_string_list_count_binding(
+    gate: GateSummaryKind,
+    payload: dict[str, Any],
+    field: str,
+    value: Any,
+    errors: list[str],
+) -> None:
+    """Require configured string-list metadata counts to match companion counts."""
+
+    count_field = PAYLOAD_FREE_SUMMARY_STRING_LIST_COUNT_BINDINGS.get(
+        (gate.name, field)
+    )
+    if count_field is None or not isinstance(value, list):
+        return
+    metadata_values = payload_free_string_list_metadata_values(value)
+    count_values = payload_free_positive_int_list_metadata_values(
+        payload.get(count_field)
+    )
+    if metadata_values is None or count_values is None:
+        return
+    if len(metadata_values) not in count_values:
+        errors.append(f"{count_field} must include the unique {field} count")
+
+
+def validate_transparency_publication_binding_metadata(
+    payload: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Require transparency cycle claims to carry their source-publication edge."""
+
+    source_values = payload_free_hex_list_metadata_values(
+        "valid_source_batch_digests",
+        payload.get("valid_source_batch_digests"),
+    )
+    cycle_values = payload_free_hex_list_metadata_values(
+        "valid_cycle_digests",
+        payload.get("valid_cycle_digests"),
+    )
+    publication_bindings = payload_free_hex_binding_metadata_values(
+        "valid_publication_bindings",
+        payload.get("valid_publication_bindings"),
+    )
+    if (
+        source_values is None
+        or cycle_values is None
+        or publication_bindings is None
+    ):
+        return
+
+    binding_source_values = {
+        source_batch_digest
+        for source_batch_digest, _cycle_digest in publication_bindings
+    }
+    binding_cycle_values = {
+        cycle_digest for _source_batch_digest, cycle_digest in publication_bindings
+    }
+    if cycle_values != binding_cycle_values:
+        errors.append(
+            "valid_cycle_digests must match valid_publication_bindings cycle digests"
+        )
+    if not binding_source_values <= source_values:
+        errors.append(
+            "valid_publication_bindings source batches must match valid_source_batch_digests"
+        )
+
+
+def validate_transparency_bound_artifact_metadata(
+    payload: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Require aggregate transparency metadata to preserve lane bindings."""
+
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=TRANSPARENCY_SOURCE_BOUND_KINDS,
+        metadata_field="valid_source_batch_digests",
+        fingerprint_field="source_batch_digest_hex",
+        error=(
+            "transparency source-bound artifact fingerprints must match "
+            "valid_source_batch_digests"
+        ),
+        errors=errors,
+    )
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=TRANSPARENCY_CYCLE_BOUND_KINDS,
+        metadata_field="valid_cycle_digests",
+        fingerprint_field="cycle_digest_hex",
+        error=(
+            "transparency cycle-bound artifact fingerprints must match "
+            "valid_cycle_digests"
+        ),
+        errors=errors,
+    )
+
+
+def validate_hedging_billing_cycle_metadata(
+    payload: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Require hedging billing-cycle metadata to preserve lane bindings."""
+
+    cycle_bindings = payload_free_hex_binding_metadata_values(
+        "valid_cycle_bindings",
+        payload.get("valid_cycle_bindings"),
+    )
+    cycle_tuple_values = payload_free_object_list_hex_tuple_metadata_values(
+        "valid_billing_cycles",
+        payload.get("valid_billing_cycles"),
+        ("statement_bundle_digest_hex", "reconciliation_digest_hex"),
+    )
+    cycle_hex_values = payload_free_object_list_hex_metadata_values(
+        "valid_billing_cycles",
+        payload.get("valid_billing_cycles"),
+    )
+    policy_values = payload_free_hex_list_metadata_values(
+        "valid_policy_digests",
+        payload.get("valid_policy_digests"),
+    )
+    reference_values = payload_free_hex_list_metadata_values(
+        "valid_reference_decision_ids",
+        payload.get("valid_reference_decision_ids"),
+    )
+
+    if cycle_bindings is not None and cycle_tuple_values is not None:
+        if cycle_bindings != cycle_tuple_values:
+            errors.append(
+                "valid_cycle_bindings must match valid_billing_cycles cycle tuples"
+            )
+    if cycle_hex_values is None:
+        return
+    cycle_policy_values = cycle_hex_values.get("policy_digest_hex", set())
+    if policy_values is not None and policy_values != cycle_policy_values:
+        errors.append(
+            "valid_policy_digests must match valid_billing_cycles policy digests"
+        )
+    cycle_reference_values = cycle_hex_values.get("reference_decision_id_hex", set())
+    if reference_values is not None and not cycle_reference_values <= reference_values:
+        errors.append(
+            "valid_billing_cycles reference decisions must match valid_reference_decision_ids"
+        )
+
+
+def validate_hedging_billing_bound_artifact_metadata(
+    payload: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Require aggregate hedging billing metadata to preserve lane bindings."""
+
+    bound_artifact_fingerprints_match_hex_binding_metadata(
+        payload,
+        kind_names=HEDGING_BILLING_CYCLE_BOUND_KINDS,
+        metadata_field="valid_cycle_bindings",
+        fingerprint_fields=(
+            "statement_bundle_digest_hex",
+            "reconciliation_digest_hex",
+        ),
+        error=(
+            "hedging_billing cycle-bound artifact fingerprints must match "
+            "valid_cycle_bindings"
+        ),
+        errors=errors,
+    )
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=HEDGING_BILLING_POLICY_BOUND_KINDS,
+        metadata_field="valid_policy_digests",
+        fingerprint_field="policy_digest_hex",
+        error=(
+            "hedging_billing policy-bound artifact fingerprints must match "
+            "valid_policy_digests"
+        ),
+        errors=errors,
+    )
+
+
+def validate_reserve_rent_policy_matrix_metadata(
+    payload: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Require reserve-rent aggregate metadata to preserve policy/matrix chain."""
+
+    policy_values = payload_free_hex_list_metadata_values(
+        "valid_policy_digests",
+        payload.get("valid_policy_digests"),
+    )
+    matrix_bindings = payload_free_hex_binding_metadata_values(
+        "valid_policy_matrix_bindings",
+        payload.get("valid_policy_matrix_bindings"),
+    )
+    ledger_bindings = payload_free_hex_binding_metadata_values(
+        "valid_policy_matrix_ledger_bindings",
+        payload.get("valid_policy_matrix_ledger_bindings"),
+    )
+    provider_bake_tuples = payload_free_object_list_hex_tuple_metadata_values(
+        "valid_provider_bakes",
+        payload.get("valid_provider_bakes"),
+        ("policy_digest_hex", "matrix_digest_hex", "ledger_digest_hex"),
+    )
+    provider_bake_ids = payload_free_object_list_string_metadata_values(
+        "valid_provider_bakes",
+        payload.get("valid_provider_bakes"),
+        "bake_id",
+    )
+    if provider_bake_ids is not None:
+        for fingerprint in payload_free_summary_artifact_fingerprints(
+            payload,
+            kind_name="governance_approval",
+        ):
+            bake_id = canonical_string(fingerprint.get("bake_id"))
+            if bake_id is None or bake_id not in provider_bake_ids:
+                errors.append(
+                    "reserve_rent governance approval bake_id fingerprints must "
+                    "match valid_provider_bakes"
+                )
+                break
+
+    if policy_values is not None and matrix_bindings is not None:
+        matrix_policy_values = {
+            policy_digest for policy_digest, _matrix_digest in matrix_bindings
+        }
+        if not matrix_policy_values <= policy_values:
+            errors.append(
+                "valid_policy_matrix_bindings policies must match valid_policy_digests"
+            )
+    if matrix_bindings is None or ledger_bindings is None:
+        return
+    ledger_matrix_pairs = {
+        (policy_digest, matrix_digest)
+        for policy_digest, matrix_digest, _ledger_digest in ledger_bindings
+    }
+    if not ledger_matrix_pairs <= matrix_bindings:
+        errors.append(
+            "valid_policy_matrix_ledger_bindings matrix pairs must match "
+            "valid_policy_matrix_bindings"
+        )
+    if provider_bake_tuples is not None and not provider_bake_tuples <= ledger_bindings:
+        errors.append(
+            "valid_provider_bakes ledger tuples must match "
+            "valid_policy_matrix_ledger_bindings"
+        )
+
+
+def validate_reserve_rent_bound_artifact_metadata(
+    payload: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Require aggregate reserve-rent metadata to preserve lane bindings."""
+
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=RESERVE_RENT_POLICY_BOUND_KINDS,
+        metadata_field="valid_policy_digests",
+        fingerprint_field="policy_digest_hex",
+        error=(
+            "reserve_rent policy-bound artifact fingerprints must match "
+            "valid_policy_digests"
+        ),
+        errors=errors,
+    )
+    bound_artifact_fingerprints_match_hex_binding_metadata(
+        payload,
+        kind_names=RESERVE_RENT_MATRIX_BOUND_KINDS,
+        metadata_field="valid_policy_matrix_bindings",
+        fingerprint_fields=("policy_digest_hex", "matrix_digest_hex"),
+        error=(
+            "reserve_rent matrix-bound artifact fingerprints must match "
+            "valid_policy_matrix_bindings"
+        ),
+        errors=errors,
+    )
+    bound_artifact_fingerprints_match_hex_binding_metadata(
+        payload,
+        kind_names=RESERVE_RENT_LEDGER_BOUND_KINDS,
+        metadata_field="valid_policy_matrix_ledger_bindings",
+        fingerprint_fields=(
+            "policy_digest_hex",
+            "matrix_digest_hex",
+            "ledger_digest_hex",
+        ),
+        error=(
+            "reserve_rent ledger-bound artifact fingerprints must match "
+            "valid_policy_matrix_ledger_bindings"
+        ),
+        errors=errors,
+    )
+
+
+def validate_pop_credentials_sync_metadata(
+    payload: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Require Pop juror sync bindings to reference valid roots and revocations."""
+
+    root_values = payload_free_hex_list_metadata_values(
+        "valid_root_digests",
+        payload.get("valid_root_digests"),
+    )
+    revocation_values = payload_free_hex_list_metadata_values(
+        "valid_revocation_list_digests",
+        payload.get("valid_revocation_list_digests"),
+    )
+    sync_bindings = payload_free_hex_binding_metadata_values(
+        "valid_juror_sync_bindings",
+        payload.get("valid_juror_sync_bindings"),
+    )
+    if sync_bindings is None:
+        return
+    synced_root_values = {
+        synced_root for synced_root, _synced_revocation in sync_bindings
+    }
+    if root_values is not None and not synced_root_values <= root_values:
+        errors.append(
+            "valid_juror_sync_bindings roots must match valid_root_digests"
+        )
+    synced_revocation_values = {
+        synced_revocation for _synced_root, synced_revocation in sync_bindings
+    }
+    if (
+        revocation_values is not None
+        and not synced_revocation_values <= revocation_values
+    ):
+        errors.append(
+            "valid_juror_sync_bindings revocations must match "
+            "valid_revocation_list_digests"
+        )
+
+
+def validate_pop_credentials_bound_artifact_metadata(
+    payload: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Require aggregate Pop metadata to preserve lane bindings."""
+
+    bound_artifact_fingerprints_match_hex_list_metadata_by_kind(
+        payload,
+        kind_fingerprint_fields=POP_CREDENTIALS_ROOT_BOUND_FINGERPRINT_FIELDS,
+        metadata_field="valid_root_digests",
+        error=(
+            "pop_credentials root-bound artifact fingerprints must match "
+            "valid_root_digests"
+        ),
+        errors=errors,
+    )
+    bound_artifact_fingerprints_match_hex_list_metadata_by_kind(
+        payload,
+        kind_fingerprint_fields=POP_CREDENTIALS_REVOCATION_BOUND_FINGERPRINT_FIELDS,
+        metadata_field="valid_revocation_list_digests",
+        error=(
+            "pop_credentials revocation-bound artifact fingerprints must match "
+            "valid_revocation_list_digests"
+        ),
+        errors=errors,
+    )
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=POP_CREDENTIALS_POLICY_BOUND_KINDS,
+        metadata_field="valid_policy_digests",
+        fingerprint_field="policy_digest_hex",
+        error=(
+            "pop_credentials policy-bound artifact fingerprints must match "
+            "valid_policy_digests"
+        ),
+        errors=errors,
+    )
+
+
+def validate_reputation_snapshot_metadata(
+    payload: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Require reputation scalar snapshot metadata to match binding tuples."""
+
+    snapshot_id = canonical_lower_hex(payload.get("snapshot_id_hex"), 32)
+    merkle_root = canonical_lower_hex(payload.get("merkle_root_hex"), 64)
+    snapshot_bindings = payload_free_hex_binding_metadata_values(
+        "valid_snapshot_bindings",
+        payload.get("valid_snapshot_bindings"),
+    )
+    if snapshot_id is None or merkle_root is None or snapshot_bindings is None:
+        return
+    if snapshot_bindings != {(snapshot_id, merkle_root)}:
+        errors.append(
+            "valid_snapshot_bindings must match snapshot_id_hex and merkle_root_hex"
+        )
+
+
+def validate_moderation_panel_chain_metadata(
+    payload: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Require moderation-panel aggregate metadata to preserve lane bindings."""
+
+    case_values = payload_free_hex_list_metadata_values(
+        "valid_case_digests",
+        payload.get("valid_case_digests"),
+    )
+    roster_bindings = payload_free_hex_binding_metadata_values(
+        "valid_roster_bindings",
+        payload.get("valid_roster_bindings"),
+    )
+    tally_bindings = payload_free_hex_binding_metadata_values(
+        "valid_tally_bindings",
+        payload.get("valid_tally_bindings"),
+    )
+    e2e_tallies = payload_free_object_list_hex_tuple_metadata_values(
+        "valid_e2e_runs",
+        payload.get("valid_e2e_runs"),
+        ("case_digest_hex", "roster_hash_hex", "tally_digest_hex"),
+    )
+    evidence_viewer_rosters = payload_free_object_list_hex_tuple_metadata_values(
+        "valid_evidence_viewer_digest_sets",
+        payload.get("valid_evidence_viewer_digest_sets"),
+        ("case_digest_hex", "roster_hash_hex"),
+    )
+    if case_values is None or roster_bindings is None:
+        return
+
+    roster_case_values = {
+        case_digest for case_digest, _roster_hash in roster_bindings
+    }
+    if not roster_case_values <= case_values:
+        errors.append(
+            "valid_roster_bindings case digests must match valid_case_digests"
+        )
+    if tally_bindings is None:
+        return
+
+    tally_roster_pairs = {
+        (case_digest, roster_hash)
+        for case_digest, roster_hash, _tally_digest in tally_bindings
+    }
+    if not tally_roster_pairs <= roster_bindings:
+        errors.append(
+            "valid_tally_bindings roster pairs must match valid_roster_bindings"
+        )
+    if e2e_tallies is not None and not e2e_tallies <= tally_bindings:
+        errors.append(
+            "valid_e2e_runs tally bindings must match valid_tally_bindings"
+        )
+    if (
+        evidence_viewer_rosters is not None
+        and not evidence_viewer_rosters <= roster_bindings
+    ):
+        errors.append(
+            "valid_evidence_viewer_digest_sets roster pairs must match valid_roster_bindings"
+        )
+
+
+def fingerprint_hex_tuple_value(
+    fingerprint: dict[str, Any],
+    metadata_field: str,
+    fingerprint_fields: tuple[str, ...],
+) -> tuple[str, ...] | None:
+    """Return one canonical hex tuple from an artifact fingerprint."""
+
+    binding_fields = PAYLOAD_FREE_SUMMARY_HEX_BINDING_METADATA_FIELDS[metadata_field]
+    tuple_value = []
+    for fingerprint_field in fingerprint_fields:
+        expected_hex_length = binding_fields.get(fingerprint_field)
+        if expected_hex_length is None:
+            return None
+        value = canonical_lower_hex(
+            fingerprint.get(fingerprint_field),
+            expected_hex_length,
+        )
+        if value is None:
+            return None
+        tuple_value.append(value)
+    return tuple(tuple_value)
+
+
+def bound_artifact_fingerprints_match_hex_list_metadata(
+    payload: dict[str, Any],
+    *,
+    kind_names: tuple[str, ...],
+    metadata_field: str,
+    fingerprint_field: str,
+    error: str,
+    errors: list[str],
+    expected_hex_length: int = 64,
+) -> None:
+    """Require every bound artifact fingerprint to carry a valid metadata value."""
+
+    metadata_values = payload_free_hex_list_metadata_values(
+        metadata_field,
+        payload.get(metadata_field),
+    )
+    if metadata_values is None:
+        return
+    fingerprints = payload_free_summary_artifact_fingerprints(
+        payload,
+        kind_names=kind_names,
+    )
+    for fingerprint in fingerprints:
+        value = canonical_lower_hex(
+            fingerprint.get(fingerprint_field),
+            expected_hex_length,
+        )
+        if value is None or value not in metadata_values:
+            errors.append(error)
+            return
+
+
+def bound_artifact_fingerprints_match_hex_list_metadata_by_kind(
+    payload: dict[str, Any],
+    *,
+    kind_fingerprint_fields: tuple[tuple[str, str], ...],
+    metadata_field: str,
+    error: str,
+    errors: list[str],
+    expected_hex_length: int = 64,
+) -> None:
+    """Require every bound artifact fingerprint to carry a valid metadata value."""
+
+    metadata_values = payload_free_hex_list_metadata_values(
+        metadata_field,
+        payload.get(metadata_field),
+    )
+    if metadata_values is None:
+        return
+    for kind_name, fingerprint_field in kind_fingerprint_fields:
+        fingerprints = payload_free_summary_artifact_fingerprints(
+            payload,
+            kind_name=kind_name,
+        )
+        for fingerprint in fingerprints:
+            value = canonical_lower_hex(
+                fingerprint.get(fingerprint_field),
+                expected_hex_length,
+            )
+            if value is None or value not in metadata_values:
+                errors.append(error)
+                return
+
+
+def bound_artifact_fingerprints_match_hex_binding_metadata(
+    payload: dict[str, Any],
+    *,
+    kind_names: tuple[str, ...],
+    metadata_field: str,
+    fingerprint_fields: tuple[str, ...],
+    error: str,
+    errors: list[str],
+) -> None:
+    """Require every bound artifact fingerprint to carry a valid metadata tuple."""
+
+    metadata_values = payload_free_hex_binding_metadata_values(
+        metadata_field,
+        payload.get(metadata_field),
+    )
+    if metadata_values is None:
+        return
+    fingerprints = payload_free_summary_artifact_fingerprints(
+        payload,
+        kind_names=kind_names,
+    )
+    for fingerprint in fingerprints:
+        tuple_value = fingerprint_hex_tuple_value(
+            fingerprint,
+            metadata_field,
+            fingerprint_fields,
+        )
+        if tuple_value is None or tuple_value not in metadata_values:
+            errors.append(error)
+            return
+
+
+def validate_moderation_panel_bound_artifact_metadata(
+    payload: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Require aggregate moderation-panel metadata to preserve lane bindings."""
+
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=MODERATION_PANEL_CASE_BOUND_KINDS,
+        metadata_field="valid_case_digests",
+        fingerprint_field="case_digest_hex",
+        error=(
+            "moderation_panel case-bound artifact fingerprints must match "
+            "valid_case_digests"
+        ),
+        errors=errors,
+    )
+    bound_artifact_fingerprints_match_hex_binding_metadata(
+        payload,
+        kind_names=MODERATION_PANEL_ROSTER_BOUND_KINDS,
+        metadata_field="valid_roster_bindings",
+        fingerprint_fields=("case_digest_hex", "roster_hash_hex"),
+        error=(
+            "moderation_panel roster-bound artifact fingerprints must match "
+            "valid_roster_bindings"
+        ),
+        errors=errors,
+    )
+    bound_artifact_fingerprints_match_hex_binding_metadata(
+        payload,
+        kind_names=MODERATION_PANEL_TALLY_BOUND_KINDS,
+        metadata_field="valid_tally_bindings",
+        fingerprint_fields=(
+            "case_digest_hex",
+            "roster_hash_hex",
+            "tally_digest_hex",
+        ),
+        error=(
+            "moderation_panel tally-bound artifact fingerprints must match "
+            "valid_tally_bindings"
+        ),
+        errors=errors,
+    )
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=MODERATION_PANEL_POLICY_BOUND_KINDS,
+        metadata_field="valid_policy_digests",
+        fingerprint_field="policy_digest_hex",
+        error=(
+            "moderation_panel policy-bound artifact fingerprints must match "
+            "valid_policy_digests"
+        ),
+        errors=errors,
+    )
+
+
+def validate_reputation_bound_artifact_metadata(
+    payload: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Require aggregate reputation metadata to preserve lane bindings."""
+
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=REPUTATION_SNAPSHOT_ANCHOR_KINDS,
+        metadata_field="valid_reputation_weight_digests",
+        fingerprint_field="weights_digest_hex",
+        error=(
+            "reputation publish/latest artifact fingerprints must match "
+            "valid_reputation_weight_digests"
+        ),
+        errors=errors,
+    )
+    bound_artifact_fingerprints_match_hex_binding_metadata(
+        payload,
+        kind_names=REPUTATION_SNAPSHOT_BOUND_KINDS,
+        metadata_field="valid_snapshot_bindings",
+        fingerprint_fields=("snapshot_id_hex", "merkle_root_hex"),
+        error=(
+            "reputation snapshot-bound artifact fingerprints must match "
+            "valid_snapshot_bindings"
+        ),
+        errors=errors,
+    )
+
+
+def validate_appeal_finance_multi_peer_metadata(
+    payload: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Require multi-peer run metadata to use lane-proven pricing configs."""
+
+    config_values = payload_free_hex_list_metadata_values(
+        "valid_config_digests",
+        payload.get("valid_config_digests"),
+    )
+    run_hex_values = payload_free_object_list_hex_metadata_values(
+        "valid_multi_peer_runs",
+        payload.get("valid_multi_peer_runs"),
+    )
+    if config_values is None or run_hex_values is None:
+        return
+
+    run_config_values = run_hex_values.get("config_digest_hex", set())
+    if not run_config_values <= config_values:
+        errors.append(
+            "valid_multi_peer_runs config digests must match valid_config_digests"
+        )
+
+
+def validate_appeal_finance_bound_artifact_metadata(
+    payload: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Require aggregate appeal finance metadata to preserve lane bindings."""
+
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=APPEAL_FINANCE_CONFIG_BOUND_KINDS,
+        metadata_field="valid_config_digests",
+        fingerprint_field="config_digest_hex",
+        error=(
+            "appeal_finance config-bound artifact fingerprints must match "
+            "valid_config_digests"
+        ),
+        errors=errors,
+    )
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=APPEAL_FINANCE_POLICY_BOUND_KINDS,
+        metadata_field="valid_policy_digests",
+        fingerprint_field="policy_digest_hex",
+        error=(
+            "appeal_finance policy-bound artifact fingerprints must match "
+            "valid_policy_digests"
+        ),
+        errors=errors,
+    )
+
+
+def validate_ai_prescreen_bound_artifact_metadata(
+    payload: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Require aggregate AI pre-screen metadata to preserve lane bindings."""
+
+    bound_artifact_fingerprints_match_hex_binding_metadata(
+        payload,
+        kind_names=AI_PRESCREEN_RUNNER_BOUND_KINDS,
+        metadata_field="valid_runner_bindings",
+        fingerprint_fields=(
+            "manifest_id_hex",
+            "runner_hash_hex",
+            "subject_digest_hex",
+        ),
+        error=(
+            "ai_prescreen runner-bound artifact fingerprints must match "
+            "valid_runner_bindings"
+        ),
+        errors=errors,
+    )
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=AI_PRESCREEN_WORKFLOW_BOUND_KINDS,
+        metadata_field="valid_workflow_digests",
+        fingerprint_field="workflow_digest_hex",
+        error=(
+            "ai_prescreen workflow-bound artifact fingerprints must match "
+            "valid_workflow_digests"
+        ),
+        errors=errors,
+    )
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=AI_PRESCREEN_POLICY_BOUND_KINDS,
+        metadata_field="valid_policy_digests",
+        fingerprint_field="policy_digest_hex",
+        error=(
+            "ai_prescreen policy-bound artifact fingerprints must match "
+            "valid_policy_digests"
+        ),
+        errors=errors,
+    )
+
+
+def validate_governance_dag_bound_artifact_metadata(
+    payload: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Require aggregate Governance DAG metadata to preserve lane bindings."""
+
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=GOVERNANCE_DAG_PUBLIC_HEAD_BOUND_KINDS,
+        metadata_field="valid_public_head_cids",
+        fingerprint_field="public_head_cid_hex",
+        error=(
+            "governance_dag public-head-bound artifact fingerprints must match "
+            "valid_public_head_cids"
+        ),
+        errors=errors,
+    )
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=GOVERNANCE_DAG_POLICY_BOUND_KINDS,
+        metadata_field="valid_policy_digests",
+        fingerprint_field="policy_digest_hex",
+        error=(
+            "governance_dag policy-bound artifact fingerprints must match "
+            "valid_policy_digests"
+        ),
+        errors=errors,
+    )
+
+
+def validate_gateway_load_bound_artifact_metadata(
+    payload: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Require aggregate gateway-load metadata to preserve lane bindings."""
+
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=("staging_load",),
+        metadata_field="valid_suite_report_digests",
+        fingerprint_field="suite_report_digest_hex",
+        error=(
+            "gateway_load suite-bound artifact fingerprints must match "
+            "valid_suite_report_digests"
+        ),
+        errors=errors,
+    )
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=GATEWAY_LOAD_STAGING_REPORT_BOUND_KINDS,
+        metadata_field="valid_staging_report_digests",
+        fingerprint_field="staging_report_digest_hex",
+        error=(
+            "gateway_load staging-bound artifact fingerprints must match "
+            "valid_staging_report_digests"
+        ),
+        errors=errors,
+    )
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=GATEWAY_LOAD_POLICY_BOUND_KINDS,
+        metadata_field="valid_policy_digests",
+        fingerprint_field="policy_digest_hex",
+        error=(
+            "gateway_load policy-bound artifact fingerprints must match "
+            "valid_policy_digests"
+        ),
+        errors=errors,
+    )
+
+
+def validate_gateway_compliance_bound_artifact_metadata(
+    payload: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Require aggregate gateway-compliance metadata to preserve lane bindings."""
+
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=GATEWAY_COMPLIANCE_BUNDLE_BOUND_KINDS,
+        metadata_field="valid_bundle_digests",
+        fingerprint_field="bundle_digest_hex",
+        error=(
+            "gateway_compliance bundle-bound artifact fingerprints must match "
+            "valid_bundle_digests"
+        ),
+        errors=errors,
+    )
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=GATEWAY_COMPLIANCE_POLICY_BOUND_KINDS,
+        metadata_field="valid_policy_digests",
+        fingerprint_field="policy_digest_hex",
+        error=(
+            "gateway_compliance policy-bound artifact fingerprints must match "
+            "valid_policy_digests"
+        ),
+        errors=errors,
+    )
+
+
+def validate_pdp_bound_artifact_metadata(
+    payload: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Require aggregate PDP metadata to preserve lane bindings."""
+
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=PDP_PROOF_SUMMARY_BOUND_KINDS,
+        metadata_field="valid_proof_summary_digests",
+        fingerprint_field="proof_summary_digest_hex",
+        error=(
+            "pdp proof-summary-bound artifact fingerprints must match "
+            "valid_proof_summary_digests"
+        ),
+        errors=errors,
+    )
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=PDP_POLICY_BOUND_KINDS,
+        metadata_field="valid_policy_digests",
+        fingerprint_field="policy_digest_hex",
+        error=(
+            "pdp policy-bound artifact fingerprints must match "
+            "valid_policy_digests"
+        ),
+        errors=errors,
+    )
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=PDP_PROVIDER_ROSTER_BOUND_KINDS,
+        metadata_field="valid_provider_roster_digests",
+        fingerprint_field="provider_roster_digest_hex",
+        error=(
+            "pdp provider-roster-bound artifact fingerprints must match "
+            "valid_provider_roster_digests"
+        ),
+        errors=errors,
+    )
+
+
+def validate_orderbook_bound_artifact_metadata(
+    payload: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Require aggregate orderbook metadata to preserve lane bindings."""
+
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=ORDERBOOK_CONTRACT_BOUND_KINDS,
+        metadata_field="valid_contract_digests",
+        fingerprint_field="contract_digest_hex",
+        error=(
+            "orderbook contract-bound artifact fingerprints must match "
+            "valid_contract_digests"
+        ),
+        errors=errors,
+    )
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=ORDERBOOK_POLICY_BOUND_KINDS,
+        metadata_field="valid_policy_digests",
+        fingerprint_field="policy_digest_hex",
+        error=(
+            "orderbook policy-bound artifact fingerprints must match "
+            "valid_policy_digests"
+        ),
+        errors=errors,
+    )
+
+
+def validate_potr_bound_artifact_metadata(
+    payload: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Require aggregate PoTR metadata to preserve lane bindings."""
+
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=POTR_RECEIPT_SUMMARY_BOUND_KINDS,
+        metadata_field="valid_receipt_summary_digests",
+        fingerprint_field="receipt_summary_digest_hex",
+        error=(
+            "potr receipt-summary-bound artifact fingerprints must match "
+            "valid_receipt_summary_digests"
+        ),
+        errors=errors,
+    )
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=POTR_PQ_KEY_ROSTER_BOUND_KINDS,
+        metadata_field="valid_pq_key_roster_digests",
+        fingerprint_field="pq_key_roster_digest_hex",
+        error=(
+            "potr pq-key-roster-bound artifact fingerprints must match "
+            "valid_pq_key_roster_digests"
+        ),
+        errors=errors,
+    )
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=POTR_REPUTATION_WEIGHT_BOUND_KINDS,
+        metadata_field="valid_reputation_weight_policy_digests",
+        fingerprint_field="reputation_weight_policy_digest_hex",
+        error=(
+            "potr reputation-weight-bound artifact fingerprints must match "
+            "valid_reputation_weight_policy_digests"
+        ),
+        errors=errors,
+    )
+
+
+def validate_por_bound_artifact_metadata(
+    payload: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Require aggregate PoR metadata to preserve lane bindings."""
+
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=POR_SEED_REPLAY_BOUND_KINDS,
+        metadata_field="valid_seed_replay_digests",
+        fingerprint_field="seed_replay_digest_hex",
+        error=(
+            "por seed-replay-bound artifact fingerprints must match "
+            "valid_seed_replay_digests"
+        ),
+        errors=errors,
+    )
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=POR_POLICY_BOUND_KINDS,
+        metadata_field="valid_policy_digests",
+        fingerprint_field="policy_digest_hex",
+        error=(
+            "por policy-bound artifact fingerprints must match "
+            "valid_policy_digests"
+        ),
+        errors=errors,
+    )
+
+
+def validate_repair_bound_artifact_metadata(
+    payload: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Require aggregate repair metadata to preserve lane bindings."""
+
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=REPAIR_ROSTER_BOUND_KINDS,
+        metadata_field="valid_roster_digests",
+        fingerprint_field="roster_digest_hex",
+        error=(
+            "repair roster-bound artifact fingerprints must match "
+            "valid_roster_digests"
+        ),
+        errors=errors,
+    )
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=REPAIR_FAILURE_BOUND_KINDS,
+        metadata_field="valid_failure_bundle_digests",
+        fingerprint_field="evidence_bundle_digest_hex",
+        error=(
+            "repair failure-bound artifact fingerprints must match "
+            "valid_failure_bundle_digests"
+        ),
+        errors=errors,
+    )
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=REPAIR_HANDOFF_BOUND_KINDS,
+        metadata_field="valid_handoff_digests",
+        fingerprint_field="handoff_digest_hex",
+        error=(
+            "repair handoff-bound artifact fingerprints must match "
+            "valid_handoff_digests"
+        ),
+        errors=errors,
+    )
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=REPAIR_POLICY_BOUND_KINDS,
+        metadata_field="valid_policy_digests",
+        fingerprint_field="policy_digest_hex",
+        error=(
+            "repair policy-bound artifact fingerprints must match "
+            "valid_policy_digests"
+        ),
+        errors=errors,
+    )
+
+
+def validate_reference_sdk_release_bound_artifact_metadata(
+    payload: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Require aggregate reference SDK release metadata to preserve lane bindings."""
+
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=REFERENCE_SDK_RELEASE_MANIFEST_BOUND_KINDS,
+        metadata_field="valid_release_manifest_digests",
+        fingerprint_field="release_manifest_digest_hex",
+        error=(
+            "reference_sdk_release manifest-bound artifact fingerprints must match "
+            "valid_release_manifest_digests"
+        ),
+        errors=errors,
+    )
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=REFERENCE_SDK_POLICY_BOUND_KINDS,
+        metadata_field="valid_policy_digests",
+        fingerprint_field="policy_digest_hex",
+        error=(
+            "reference_sdk_release policy-bound artifact fingerprints must match "
+            "valid_policy_digests"
+        ),
+        errors=errors,
+    )
+    bound_artifact_fingerprints_match_hex_list_metadata(
+        payload,
+        kind_names=("governance_approval",),
+        metadata_field="valid_release_key_fingerprints",
+        fingerprint_field="public_key_fingerprint_hex",
+        error=(
+            "reference_sdk_release governance approval release-key fingerprints "
+            "must match valid_release_key_fingerprints"
+        ),
+        errors=errors,
+    )
+
+
+def validate_payload_free_cross_metadata_bindings(
+    gate: GateSummaryKind,
+    payload: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Validate lane-specific relationships between metadata fields."""
+
+    if gate.name == "ai_prescreen":
+        validate_ai_prescreen_bound_artifact_metadata(payload, errors)
+    if gate.name == "appeal_finance":
+        validate_appeal_finance_multi_peer_metadata(payload, errors)
+        validate_appeal_finance_bound_artifact_metadata(payload, errors)
+    if gate.name == "governance_dag":
+        validate_governance_dag_bound_artifact_metadata(payload, errors)
+    if gate.name == "gateway_load":
+        validate_gateway_load_bound_artifact_metadata(payload, errors)
+    if gate.name == "gateway_compliance":
+        validate_gateway_compliance_bound_artifact_metadata(payload, errors)
+    if gate.name == "hedging_billing":
+        validate_hedging_billing_cycle_metadata(payload, errors)
+        validate_hedging_billing_bound_artifact_metadata(payload, errors)
+    if gate.name == "moderation_panel":
+        validate_moderation_panel_chain_metadata(payload, errors)
+        validate_moderation_panel_bound_artifact_metadata(payload, errors)
+    if gate.name == "orderbook":
+        validate_orderbook_bound_artifact_metadata(payload, errors)
+    if gate.name == "pdp":
+        validate_pdp_bound_artifact_metadata(payload, errors)
+    if gate.name == "pop_credentials":
+        validate_pop_credentials_sync_metadata(payload, errors)
+        validate_pop_credentials_bound_artifact_metadata(payload, errors)
+    if gate.name == "por":
+        validate_por_bound_artifact_metadata(payload, errors)
+    if gate.name == "potr":
+        validate_potr_bound_artifact_metadata(payload, errors)
+    if gate.name == "repair":
+        validate_repair_bound_artifact_metadata(payload, errors)
+    if gate.name == "reference_sdk_release":
+        validate_reference_sdk_release_bound_artifact_metadata(payload, errors)
+    if gate.name == "reputation":
+        validate_reputation_snapshot_metadata(payload, errors)
+        validate_reputation_bound_artifact_metadata(payload, errors)
+    if gate.name == "reserve_rent":
+        validate_reserve_rent_policy_matrix_metadata(payload, errors)
+        validate_reserve_rent_bound_artifact_metadata(payload, errors)
+    if gate.name == "transparency":
+        validate_transparency_publication_binding_metadata(payload, errors)
+        validate_transparency_bound_artifact_metadata(payload, errors)
+
+
 def validate_payload_free_summary_metadata(
     gate: GateSummaryKind,
     payload: dict[str, Any],
@@ -1966,9 +3764,50 @@ def validate_payload_free_summary_metadata(
             errors.append(f"{field} must not be empty for `{gate.name}` lane metadata")
         if field in PAYLOAD_FREE_SUMMARY_ORDERED_LIST_METADATA_FIELDS:
             validate_payload_free_ordered_list_metadata(field, value, errors)
+        if (
+            field in PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_BINDINGS
+            or field in PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_BINDINGS
+        ):
+            validate_payload_free_allowed_string_list_values(
+                gate,
+                field,
+                value,
+                errors,
+            )
+            validate_payload_free_required_string_list_values(
+                gate,
+                field,
+                value,
+                errors,
+            )
+            validate_payload_free_provider_id_metadata_values(
+                gate,
+                field,
+                value,
+                errors,
+            )
+            validate_payload_free_string_list_count_binding(
+                gate,
+                payload,
+                field,
+                value,
+                errors,
+            )
         object_list_schema = PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS.get(field)
         if object_list_schema is not None:
             validate_payload_free_object_list_metadata(
+                field,
+                value,
+                object_list_schema,
+                errors,
+            )
+            validate_payload_free_object_list_string_field_policies(
+                gate,
+                field,
+                value,
+                errors,
+            )
+            validate_payload_free_object_list_deployment_context_metadata(
                 field,
                 value,
                 object_list_schema,
@@ -2024,7 +3863,10 @@ def validate_payload_free_summary_metadata(
                 if not isinstance(item, int) or isinstance(item, bool) or item <= 0:
                     errors.append(f"{field}[{index}] must be a positive integer")
             continue
-        if field in PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_BINDINGS:
+        if (
+            field in PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_BINDINGS
+            or field in PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_BINDINGS
+        ):
             for index, item in enumerate(value):
                 if canonical_string(item) is None:
                     errors.append(f"{field}[{index}] must be a canonical string")
@@ -2044,8 +3886,10 @@ def validate_payload_free_summary_metadata(
         object_fields = PAYLOAD_FREE_SUMMARY_OBJECT_METADATA_FIELDS.get(field)
         if object_fields is not None:
             validate_payload_free_object_metadata(field, value, object_fields, errors)
+            validate_payload_free_deployment_context_metadata(field, value, errors)
             continue
         errors.append(f"{field} validator is not configured for `{gate.name}`")
+    validate_payload_free_cross_metadata_bindings(gate, payload, errors)
 
 
 def require_payload_free_artifact_fields(

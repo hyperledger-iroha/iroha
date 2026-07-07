@@ -11,10 +11,10 @@ use iroha_data_model::{
         SumeragiDataspaceCommitment, SumeragiLaneCommitment, SumeragiLaneGovernance,
         SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
         SumeragiNposRepairCoverageStatus, SumeragiNposTimeoutsStatus, SumeragiPeerKeyPolicyStatus,
-        SumeragiPendingRbcEntry, SumeragiPendingRbcStatus, SumeragiQcEntry, SumeragiQcStatus,
-        SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus, SumeragiRoundGapStatus,
-        SumeragiRuntimeUpgradeHook, SumeragiStatusWire, SumeragiV1StatusWire,
-        SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
+        SumeragiPendingRbcEntry, SumeragiPendingRbcStatus, SumeragiProposalGateStatus,
+        SumeragiQcEntry, SumeragiQcStatus, SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus,
+        SumeragiRoundGapStatus, SumeragiRuntimeUpgradeHook, SumeragiStatusWire,
+        SumeragiV1StatusWire, SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
         SumeragiVoteValidationDropEntry, SumeragiVoteValidationDropPeerEntry,
         SumeragiVoteValidationDropReasonCount, SumeragiVoteValidationDropStatus,
         SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths, SumeragiWorkerQueueDiagnostics,
@@ -2194,6 +2194,75 @@ fn sumeragi_v1_status_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Val
     ])
 }
 
+fn proposal_gate_status(
+    gate: sumeragi::status::ProposalGateSnapshot,
+) -> SumeragiProposalGateStatus {
+    SumeragiProposalGateStatus {
+        height: gate.height,
+        view: gate.view,
+        queue_len: gate.queue_len,
+        pending_blocks_total: gate.pending_blocks_total,
+        pending_blocks_blocking: gate.pending_blocks_blocking,
+        active_pending_for_tip: gate.active_pending_for_tip,
+        queue_saturated: gate.queue_saturated,
+        active_pending: gate.active_pending,
+        rbc_backlog: gate.rbc_backlog,
+        relay_backpressure: gate.relay_backpressure,
+        consensus_queue_backpressure: gate.consensus_queue_backpressure,
+        should_defer: gate.should_defer,
+        only_pacing_backpressure: gate.only_pacing_backpressure,
+        commit_inflight_active: gate.commit_inflight_active,
+        cached_proposal_present: gate.cached_proposal_present,
+        cached_proposal_hint_present: gate.cached_proposal_hint_present,
+        round_liveness_present: gate.round_liveness_present,
+        frontier_owner_present: gate.frontier_owner_present,
+        missing_qc_liveness_active: gate.missing_qc_liveness_active,
+        last_pacemaker_attempt_age_ms: gate.last_pacemaker_attempt_age_ms,
+        last_successful_proposal_age_ms: gate.last_successful_proposal_age_ms,
+    }
+}
+
+fn proposal_gate_json(gate: sumeragi::status::ProposalGateSnapshot) -> norito::json::Value {
+    json_object(vec![
+        json_entry("height", gate.height),
+        json_entry("view", gate.view),
+        json_entry("queue_len", gate.queue_len),
+        json_entry("pending_blocks_total", gate.pending_blocks_total),
+        json_entry("pending_blocks_blocking", gate.pending_blocks_blocking),
+        json_entry("active_pending_for_tip", gate.active_pending_for_tip),
+        json_entry("queue_saturated", gate.queue_saturated),
+        json_entry("active_pending", gate.active_pending),
+        json_entry("rbc_backlog", gate.rbc_backlog),
+        json_entry("relay_backpressure", gate.relay_backpressure),
+        json_entry(
+            "consensus_queue_backpressure",
+            gate.consensus_queue_backpressure,
+        ),
+        json_entry("should_defer", gate.should_defer),
+        json_entry("only_pacing_backpressure", gate.only_pacing_backpressure),
+        json_entry("commit_inflight_active", gate.commit_inflight_active),
+        json_entry("cached_proposal_present", gate.cached_proposal_present),
+        json_entry(
+            "cached_proposal_hint_present",
+            gate.cached_proposal_hint_present,
+        ),
+        json_entry("round_liveness_present", gate.round_liveness_present),
+        json_entry("frontier_owner_present", gate.frontier_owner_present),
+        json_entry(
+            "missing_qc_liveness_active",
+            gate.missing_qc_liveness_active,
+        ),
+        json_entry(
+            "last_pacemaker_attempt_age_ms",
+            gate.last_pacemaker_attempt_age_ms,
+        ),
+        json_entry(
+            "last_successful_proposal_age_ms",
+            gate.last_successful_proposal_age_ms,
+        ),
+    ])
+}
+
 fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value {
     let highest_qc = json_object(vec![
         json_entry("height", snap.highest_qc_height),
@@ -3633,6 +3702,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "pacemaker_backpressure_deferrals_total",
             snap.pacemaker_backpressure_deferrals_total,
         ),
+        json_entry("proposal_gate", proposal_gate_json(snap.proposal_gate)),
         json_entry(
             "commit_pipeline_tick_total",
             snap.commit_pipeline_tick_total,
@@ -5314,16 +5384,101 @@ mod status_tests {
             Some(7_500)
         );
     }
+
+    #[test]
+    fn status_reconciliation_uses_committed_npos_epoch_parameters() {
+        let world = iroha_core::state::World::default();
+        {
+            let mut block = world.block();
+            let parameters = block.parameters.get_mut();
+            parameters.sumeragi.next_mode =
+                Some(iroha_data_model::parameter::system::SumeragiConsensusMode::Npos);
+            parameters.sumeragi.mode_activation_height = Some(0);
+            let npos_params = iroha_data_model::parameter::system::SumeragiNposParameters {
+                epoch_length_blocks: 6,
+                vrf_commit_window_blocks: 2,
+                vrf_reveal_window_blocks: 4,
+                ..iroha_data_model::parameter::system::SumeragiNposParameters::default()
+                    .with_epoch_seed([0x42; 32])
+            };
+            parameters.custom.insert(
+                iroha_data_model::parameter::system::SumeragiNposParameters::parameter_id(),
+                npos_params.into_custom_parameter(),
+            );
+            block.commit();
+        }
+        let state = CoreState::new_for_testing(
+            world,
+            iroha_core::kura::Kura::blank_kura_for_testing(),
+            iroha_core::query::store::LiveQueryStore::start_test(),
+        );
+        let stale_snapshot = sumeragi::StatusSnapshot {
+            mode_tag: iroha_core::sumeragi::consensus::PERMISSIONED_TAG.to_owned(),
+            epoch_length_blocks: 0,
+            epoch_commit_deadline_offset: 0,
+            epoch_reveal_deadline_offset: 0,
+            prf_epoch_seed: None,
+            ..Default::default()
+        };
+
+        let reconciled = reconcile_sumeragi_status_snapshot_with_world(stale_snapshot, &state);
+
+        assert_eq!(
+            reconciled.mode_tag,
+            iroha_core::sumeragi::consensus::NPOS_TAG
+        );
+        assert_eq!(
+            reconciled.staged_mode_tag.as_deref(),
+            Some(iroha_core::sumeragi::consensus::NPOS_TAG)
+        );
+        assert_eq!(reconciled.staged_mode_activation_height, Some(0));
+        assert_eq!(reconciled.epoch_length_blocks, 6);
+        assert_eq!(reconciled.epoch_commit_deadline_offset, 2);
+        assert_eq!(reconciled.epoch_reveal_deadline_offset, 6);
+        assert_eq!(reconciled.prf_epoch_seed, Some([0x42; 32]));
+    }
+
+    #[test]
+    fn status_reconciliation_preserves_permissioned_prf_seed() {
+        let state = CoreState::new_for_testing(
+            iroha_core::state::World::default(),
+            iroha_core::kura::Kura::blank_kura_for_testing(),
+            iroha_core::query::store::LiveQueryStore::start_test(),
+        );
+        let snapshot = sumeragi::StatusSnapshot {
+            mode_tag: iroha_core::sumeragi::consensus::PERMISSIONED_TAG.to_owned(),
+            epoch_length_blocks: 99,
+            epoch_commit_deadline_offset: 12,
+            epoch_reveal_deadline_offset: 34,
+            prf_epoch_seed: Some([0x7A; 32]),
+            ..Default::default()
+        };
+
+        let reconciled = reconcile_sumeragi_status_snapshot_with_world(snapshot, &state);
+
+        assert_eq!(
+            reconciled.mode_tag,
+            iroha_core::sumeragi::consensus::PERMISSIONED_TAG
+        );
+        assert_eq!(reconciled.epoch_length_blocks, 0);
+        assert_eq!(reconciled.epoch_commit_deadline_offset, 0);
+        assert_eq!(reconciled.epoch_reveal_deadline_offset, 0);
+        assert_eq!(reconciled.prf_epoch_seed, Some([0x7A; 32]));
+    }
 }
 
 /// GET /v1/sumeragi/status — latest consensus status snapshot
 /// Returns leader index and HighestQC (height, view).
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_status(
+    State(state): State<std::sync::Arc<CoreState>>,
     accept: Option<axum::http::HeaderValue>,
     nexus_enabled: bool,
 ) -> Result<Response> {
-    let mut snap = sumeragi::status_snapshot();
+    let mut snap = reconcile_sumeragi_status_snapshot_with_world(
+        sumeragi::status_snapshot(),
+        state.as_ref(),
+    );
     if !nexus_enabled {
         snap = snap.strip_lane_details();
     }
@@ -5562,6 +5717,7 @@ pub async fn handle_v1_sumeragi_status(
                     .drop_unsolicited_share_blocks_total,
             },
             pacemaker_backpressure_deferrals_total: snap.pacemaker_backpressure_deferrals_total,
+            proposal_gate: proposal_gate_status(snap.proposal_gate),
             commit_pipeline_tick_total: snap.commit_pipeline_tick_total,
             da_reschedule_total: snap.da_reschedule_total,
             missing_block_fetch: SumeragiMissingBlockFetchStatus {
@@ -5801,6 +5957,7 @@ pub async fn handle_v1_sumeragi_status(
                 .collect(),
             lane_settlement_commitments: snap.lane_settlement_commitments.clone(),
             lane_relay_envelopes: snap.lane_relay_envelopes.clone(),
+            lane_payload_ownerships: snap.lane_payload_ownerships.clone(),
             lane_governance_sealed_total: snap.lane_governance_sealed_total,
             lane_governance_sealed_aliases: snap.lane_governance_sealed_aliases.clone(),
             lane_governance: snap
@@ -6041,25 +6198,110 @@ pub async fn handle_v1_sumeragi_status(
     Ok(resp)
 }
 
+fn sumeragi_mode_tag(mode: ConsensusMode) -> &'static str {
+    match mode {
+        ConsensusMode::Permissioned => iroha_core::sumeragi::consensus::PERMISSIONED_TAG,
+        ConsensusMode::Npos => iroha_core::sumeragi::consensus::NPOS_TAG,
+    }
+}
+
+fn staged_sumeragi_mode_tag(
+    mode: iroha_data_model::parameter::system::SumeragiConsensusMode,
+) -> &'static str {
+    match mode {
+        iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned => {
+            iroha_core::sumeragi::consensus::PERMISSIONED_TAG
+        }
+        iroha_data_model::parameter::system::SumeragiConsensusMode::Npos => {
+            iroha_core::sumeragi::consensus::NPOS_TAG
+        }
+    }
+}
+
+fn status_snapshot_fallback_mode(
+    snap: &sumeragi::StatusSnapshot,
+    world_has_npos_params: bool,
+) -> ConsensusMode {
+    match snap.mode_tag.as_str() {
+        iroha_core::sumeragi::consensus::NPOS_TAG | "Npos" => ConsensusMode::Npos,
+        iroha_core::sumeragi::consensus::PERMISSIONED_TAG | "Permissioned" => {
+            ConsensusMode::Permissioned
+        }
+        _ if world_has_npos_params => ConsensusMode::Npos,
+        _ => ConsensusMode::Permissioned,
+    }
+}
+
+fn reconcile_sumeragi_status_snapshot_with_world(
+    mut snap: sumeragi::StatusSnapshot,
+    state: &CoreState,
+) -> sumeragi::StatusSnapshot {
+    let world = state.world_view();
+    let sumeragi_params = world.parameters().sumeragi();
+    snap.staged_mode_tag = sumeragi_params
+        .next_mode
+        .map(staged_sumeragi_mode_tag)
+        .map(ToOwned::to_owned);
+    snap.staged_mode_activation_height = sumeragi_params.mode_activation_height;
+
+    let npos_params = world.sumeragi_npos_parameters();
+    let chain_height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
+    let fallback_mode = status_snapshot_fallback_mode(&snap, npos_params.is_some());
+    let effective_mode = sumeragi::effective_consensus_mode_for_height_from_world(
+        &world,
+        chain_height,
+        fallback_mode,
+    );
+    snap.mode_tag = sumeragi_mode_tag(effective_mode).to_owned();
+
+    match effective_mode {
+        ConsensusMode::Permissioned => {
+            snap.epoch_length_blocks = 0;
+            snap.epoch_commit_deadline_offset = 0;
+            snap.epoch_reveal_deadline_offset = 0;
+            snap.npos_repair_coverage = None;
+        }
+        ConsensusMode::Npos => {
+            if let Some(params) = npos_params {
+                let commit_offset = params.vrf_commit_window_blocks();
+                snap.epoch_length_blocks = params.epoch_length_blocks();
+                snap.epoch_commit_deadline_offset = commit_offset;
+                snap.epoch_reveal_deadline_offset =
+                    commit_offset.saturating_add(params.vrf_reveal_window_blocks());
+                snap.prf_epoch_seed = snap.prf_epoch_seed.or(Some(params.epoch_seed()));
+            }
+        }
+    }
+
+    snap
+}
+
 /// SSE stream for `/v1/sumeragi/status/sse`, emitting the same payload as the JSON snapshot.
 pub fn handle_v1_sumeragi_status_sse(
+    state: std::sync::Arc<CoreState>,
     poll_ms: u64,
     nexus_enabled: bool,
 ) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
     let interval = Duration::from_millis(poll_ms.max(100));
     let ticker = tokio::time::interval(interval);
-    let stream = stream::unfold(ticker, move |mut ticker| async move {
-        ticker.tick().await;
-        let snapshot = sumeragi::status_snapshot();
-        let filtered = if nexus_enabled {
-            snapshot
-        } else {
-            snapshot.strip_lane_details()
-        };
-        let payload = status_snapshot_json(&filtered);
-        let body = norito::json::to_json(&payload).unwrap_or_else(|_| "{}".to_owned());
-        let ev = SseEvent::default().data(body);
-        Some((Ok(ev), ticker))
+    let stream = stream::unfold(ticker, move |mut ticker| {
+        let state = state.clone();
+        async move {
+            ticker.tick().await;
+            let snapshot = reconcile_sumeragi_status_snapshot_with_world(
+                sumeragi::status_snapshot(),
+                state.as_ref(),
+            );
+            let filtered = if nexus_enabled {
+                snapshot
+            } else {
+                snapshot.strip_lane_details()
+            };
+            let payload = status_snapshot_json(&filtered);
+            let body = norito::json::to_json(&payload).unwrap_or_else(|_| "{}".to_owned());
+            let ev = SseEvent::default().data(body);
+            Some((Ok(ev), ticker))
+        }
     });
     Sse::new(stream)
 }

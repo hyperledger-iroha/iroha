@@ -114,7 +114,44 @@
         {
           "Register": {
             "Domain": {
-              "id": "sora",
+              "id": "universal.universal",
+              "logo": null,
+              "metadata": {}
+            }
+          }
+        },
+        {
+          "Register": {
+            "AssetDefinition": {
+              "confidential_policy": {
+                "mode": "Convertible",
+                "pedersen_params_id": null,
+                "pending_transition": null,
+                "poseidon_params_id": null,
+                "vk_set_hash": null
+              },
+              "id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+              "logo": null,
+              "metadata": {},
+              "mintable": "Infinitely",
+              "spec": {
+                "scale": null
+              },
+              "name": "xor"
+            }
+          }
+        },
+        {
+          "SetAssetDefinitionAlias": {
+            "alias": "xor#universal",
+            "asset_definition_id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+            "lease_expiry_ms": null
+          }
+        },
+        {
+          "Register": {
+            "Domain": {
+              "id": "sora.universal",
               "logo": null,
               "metadata": {}
             }
@@ -141,7 +178,7 @@
                 "poseidon_params_id": null,
                 "vk_set_hash": null
               },
-              "id": "xor#sora",
+              "id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
               "logo": null,
               "metadata": {},
               "mintable": "Infinitely",
@@ -150,6 +187,13 @@
               },
               "name": "xor"
             }
+          }
+        },
+        {
+          "SetAssetDefinitionAlias": {
+            "alias": "xor#sora",
+            "asset_definition_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
+            "lease_expiry_ms": null
           }
         }
       ],

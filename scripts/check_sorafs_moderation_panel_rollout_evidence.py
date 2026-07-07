@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -40,12 +41,14 @@ from sorafs_evidence_validation import (  # noqa: E402
     evidence_artifact_is_valid,
     evidence_artifact_fingerprint,
     evidence_schema_by_kind,
+    hashable_evidence_values,
     init_evidence_artifact_buckets,
     build_required_evidence_summary,
     record_explicit_evidence_validation_errors,
     record_evidence_artifact,
     record_evidence_validation_errors,
     record_consistent_evidence_value,
+    record_observed_evidence_value,
     require_2xx_status,
     require_bool_true,
     require_count_equal,
@@ -55,7 +58,6 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_config_backed_governance_approval,
     validate_standard_evidence_payload,
     require_maximum_int,
-    require_maximum_number,
     require_maximum_value,
     require_minimum_int,
     require_non_negative_int,
@@ -94,6 +96,85 @@ DEFAULT_MAX_VIEWER_URL_TTL_SECS = 5 * 60
 DEFAULT_MIN_PANEL_SIZE = 7
 DEFAULT_MIN_PEERS = 4
 HEX64_LEN = 64
+APPEAL_CASE_LABEL_PATTERN = re.compile(
+    r"^moderation-appeal-case-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+APPEAL_CASE_LABEL_ERROR = (
+    "cases[].name must match canonical lowercase `moderation-appeal-case-*`"
+)
+ROSTER_JUROR_LABEL_PATTERN = re.compile(
+    r"^moderation-roster-juror-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+ROSTER_JUROR_LABEL_ERROR = (
+    "jurors[].name must match canonical lowercase `moderation-roster-juror-*`"
+)
+VIEWER_SESSION_LABEL_PATTERN = re.compile(
+    r"^moderation-viewer-session-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+VIEWER_SESSION_LABEL_ERROR = (
+    "sessions[].name must match canonical lowercase `moderation-viewer-session-*`"
+)
+NOTIFICATION_LABEL_PATTERN = re.compile(
+    r"^moderation-notification-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+NOTIFICATION_LABEL_ERROR = (
+    "notifications[].name must match canonical lowercase `moderation-notification-*`"
+)
+JUROR_LABEL_PATTERN = re.compile(r"^moderation-juror-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+JUROR_LABEL_ERROR = (
+    "jurors[].name must match canonical lowercase `moderation-juror-*`"
+)
+COMMIT_LABEL_PATTERN = re.compile(r"^moderation-commit-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+COMMIT_LABEL_ERROR = (
+    "commits[].name must match canonical lowercase `moderation-commit-*`"
+)
+REVEAL_LABEL_PATTERN = re.compile(r"^moderation-reveal-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+REVEAL_LABEL_ERROR = (
+    "reveals[].name must match canonical lowercase `moderation-reveal-*`"
+)
+SETTLEMENT_LABEL_PATTERN = re.compile(
+    r"^moderation-settlement-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+SETTLEMENT_LABEL_ERROR = (
+    "settlements[].name must match canonical lowercase `moderation-settlement-*`"
+)
+E2E_PEER_LABEL_PATTERN = re.compile(
+    r"^moderation-peer-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+E2E_PEER_LABEL_ERROR = (
+    "peers[].name must match canonical lowercase `moderation-peer-*`"
+)
+E2E_VALIDATOR_LABEL_PATTERN = re.compile(
+    r"^moderation-validator-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+E2E_VALIDATOR_LABEL_ERROR = (
+    "validators[].name must match canonical lowercase `moderation-validator-*`"
+)
+E2E_CASE_LABEL_PATTERN = re.compile(
+    r"^moderation-case-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+E2E_CASE_LABEL_ERROR = (
+    "cases[].name must match canonical lowercase `moderation-case-*`"
+)
+FORBIDDEN_INVENTORY_LABEL_MARKERS = frozenset(
+    (
+        "debug",
+        "dev",
+        "draft",
+        "example",
+        "fake",
+        "latest",
+        "local",
+        "mock",
+        "placeholder",
+        "private",
+        "sample",
+        "sandbox",
+        "secret",
+        "test",
+        "todo",
+    )
+)
 
 REQUIRED_INTAKE_ROUTES = (
     "appeal_submit",
@@ -198,6 +279,7 @@ TALLY_BOUND_KINDS = (
     "metrics_alerts",
     "governance_approval",
 )
+POLICY_BOUND_KINDS = ("governance_approval",)
 
 SENSITIVE_KEYS = {
     "account_private_key",
@@ -243,6 +325,31 @@ SENSITIVE_KEYS = {
     "watermark_key",
     "webauthn_assertion",
 }
+
+
+def require_only_required_values(
+    payload: dict[str, Any],
+    array_field: str,
+    field: str,
+    required_values: tuple[str, ...],
+    errors: list[str],
+) -> None:
+    """Reject reviewed inventory rows outside a required closed string set."""
+
+    values = payload.get(array_field)
+    if not isinstance(values, list):
+        return
+    allowed = frozenset(required_values)
+    for item in values:
+        if field:
+            if not isinstance(item, dict):
+                continue
+            value = item.get(field)
+        else:
+            value = item
+        if not isinstance(value, str) or value.strip() not in allowed:
+            errors.append(f"{array_field} must not include unknown values")
+            return
 
 
 @dataclass(frozen=True)
@@ -336,9 +443,11 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "offline_mode_disabled",
         "per_session_access_logged",
         "append_only_log_verified",
+        "audit_log_tamper_rejected",
         "anomaly_events_recorded",
         "watermark_overlay_rendered",
         "watermark_metadata_hashed",
+        "watermark_metadata_mismatch_rejected",
         "audit_digest_exported",
         "transparency_report_exported",
         "daily_digest_published",
@@ -350,9 +459,13 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "legal_hold_policy_bound",
         "max_url_ttl_secs",
         "logged_session_count",
+        "role_count",
         "roles_tested",
+        "security_control_count",
         "viewer_security_controls",
+        "access_event_kind_count",
         "access_event_kinds",
+        "export_target_count",
         "export_targets",
         "session_manifest_digest_hex",
         "watermark_metadata_digest_hex",
@@ -425,6 +538,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "governance_event_digest_bound",
         "executor_canary_passed",
         "max_event_lag_seconds",
+        "scenario_count",
         "scenarios_exercised",
         "tally_digest_hex",
         "commit_payloads_included",
@@ -438,6 +552,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "route_count",
         "passed_route_count",
         "routes",
+        "outcome_count",
         "outcomes",
         "decision_signature_verified",
         "governance_dag_event_published",
@@ -465,6 +580,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "case_digest_hex",
         "roster_hash_hex",
         "tally_digest_hex",
+        "publication_target_count",
         "publication_targets",
         "moderation_cache_updated",
         "transparency_source_entry_published",
@@ -505,6 +621,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "alert_rules_installed",
         "critical_alerts_firing",
         "metrics",
+        "metric_count",
         "response_bodies_included",
     ),
     "governance_approval": COMMON_EVIDENCE_REQUIRED_FIELDS
@@ -559,6 +676,8 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "peer_count",
     "validator_count",
     "case_count",
+    "metric_count",
+    "metrics",
 )
 E2E_RUN_DETAIL_FIELDS: tuple[str, ...] = (
     "deployment_id",
@@ -592,6 +711,13 @@ def validate_routes(payload: dict[str, Any], errors: list[str], options: Validat
             errors,
             path=f"routes[{index}].status_code",
         )
+        require_hex(
+            record,
+            "body_blake3_hex",
+            HEX64_LEN,
+            errors,
+            path=f"routes[{index}].body_blake3_hex",
+        )
         require_bool_true(
             record,
             "authz_enforced",
@@ -604,14 +730,13 @@ def validate_routes(payload: dict[str, Any], errors: list[str], options: Validat
             errors,
             path=f"routes[{index}].signature_verified",
         )
-        if record.get("latency_ms") is not None:
-            require_maximum_number(
-                record,
-                "latency_ms",
-                options.max_route_latency_ms,
-                errors,
-                path=f"routes[{index}].latency_ms",
-            )
+        require_maximum_int(
+            record,
+            "latency_ms",
+            options.max_route_latency_ms,
+            errors,
+            path=f"routes[{index}].latency_ms",
+        )
 
 
 def validate_route_inventory(
@@ -629,6 +754,7 @@ def validate_route_inventory(
         field="name",
         allow_scalar_items=False,
     )
+    require_only_required_values(payload, "routes", "name", required_routes, errors)
 
 
 def validate_fresh(payload: dict[str, Any], errors: list[str], options: ValidationOptions) -> None:
@@ -639,6 +765,31 @@ def validate_fresh(payload: dict[str, Any], errors: list[str], options: Validati
         now_unix=options.now_unix,
         max_age_secs=options.max_canary_age_secs,
     )
+
+
+def require_inventory_label(
+    value: Any,
+    *,
+    path: str,
+    pattern: re.Pattern[str],
+    label_error: str,
+    errors: list[str],
+) -> str:
+    """Require a reviewed production inventory label with the expected family."""
+
+    if not isinstance(value, str):
+        return ""
+    if pattern.fullmatch(value) is None:
+        errors.append(label_error)
+        return value
+    forbidden = sorted(
+        marker
+        for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
+        if marker in value.split("-")
+    )
+    if forbidden:
+        errors.append(f"{path} must not contain non-production markers {forbidden}")
+    return value
 
 
 def validate_appeal_intake(
@@ -660,7 +811,14 @@ def validate_appeal_intake(
     )
     accepted_case_count = 0
     for index, record in require_object_array(payload, "cases", errors):
-        require_string(record, "name", errors)
+        name = require_string(record, "name", errors)
+        require_inventory_label(
+            name,
+            path=f"cases[{index}].name",
+            pattern=APPEAL_CASE_LABEL_PATTERN,
+            label_error=APPEAL_CASE_LABEL_ERROR,
+            errors=errors,
+        )
         accepted = record.get("accepted")
         if not isinstance(accepted, bool):
             errors.append(f"cases[{index}].accepted must be a boolean")
@@ -705,7 +863,14 @@ def validate_sortition_roster(
     )
     eligible_juror_count = 0
     for index, record in require_object_array(payload, "jurors", errors):
-        require_string(record, "name", errors)
+        name = require_string(record, "name", errors)
+        require_inventory_label(
+            name,
+            path=f"jurors[{index}].name",
+            pattern=ROSTER_JUROR_LABEL_PATTERN,
+            label_error=ROSTER_JUROR_LABEL_ERROR,
+            errors=errors,
+        )
         eligible = record.get("eligible")
         if not isinstance(eligible, bool):
             errors.append(f"jurors[{index}].eligible must be a boolean")
@@ -749,7 +914,14 @@ def validate_evidence_viewer(
     attested_session_count = 0
     logged_session_count = 0
     for index, record in require_object_array(payload, "sessions", errors):
-        require_string(record, "name", errors)
+        name = require_string(record, "name", errors)
+        require_inventory_label(
+            name,
+            path=f"sessions[{index}].name",
+            pattern=VIEWER_SESSION_LABEL_PATTERN,
+            label_error=VIEWER_SESSION_LABEL_ERROR,
+            errors=errors,
+        )
         attested = record.get("attested")
         if not isinstance(attested, bool):
             errors.append(f"sessions[{index}].attested must be a boolean")
@@ -768,9 +940,11 @@ def validate_evidence_viewer(
     require_bool_true(payload, "offline_mode_disabled", errors)
     require_bool_true(payload, "per_session_access_logged", errors)
     require_bool_true(payload, "append_only_log_verified", errors)
+    require_bool_true(payload, "audit_log_tamper_rejected", errors)
     require_bool_true(payload, "anomaly_events_recorded", errors)
     require_bool_true(payload, "watermark_overlay_rendered", errors)
     require_bool_true(payload, "watermark_metadata_hashed", errors)
+    require_bool_true(payload, "watermark_metadata_mismatch_rejected", errors)
     require_bool_true(payload, "audit_digest_exported", errors)
     require_bool_true(payload, "transparency_report_exported", errors)
     require_bool_true(payload, "daily_digest_published", errors)
@@ -805,7 +979,34 @@ def validate_evidence_viewer(
     ):
         errors.append("logged_session_count must match logged sessions count")
     require_string_coverage(payload, "roles_tested", "", REQUIRED_VIEWER_ROLES, errors)
+    require_minimum_int(payload, "role_count", len(REQUIRED_VIEWER_ROLES), errors)
+    require_string_inventory_count_match(
+        payload,
+        "roles_tested",
+        "role_count",
+        errors,
+    )
+    require_only_required_values(payload, "roles_tested", "", REQUIRED_VIEWER_ROLES, errors)
     require_string_coverage(
+        payload,
+        "viewer_security_controls",
+        "",
+        REQUIRED_VIEWER_SECURITY_CONTROLS,
+        errors,
+    )
+    require_minimum_int(
+        payload,
+        "security_control_count",
+        len(REQUIRED_VIEWER_SECURITY_CONTROLS),
+        errors,
+    )
+    require_string_inventory_count_match(
+        payload,
+        "viewer_security_controls",
+        "security_control_count",
+        errors,
+    )
+    require_only_required_values(
         payload,
         "viewer_security_controls",
         "",
@@ -819,7 +1020,45 @@ def validate_evidence_viewer(
         REQUIRED_VIEWER_EVENT_KINDS,
         errors,
     )
+    require_minimum_int(
+        payload,
+        "access_event_kind_count",
+        len(REQUIRED_VIEWER_EVENT_KINDS),
+        errors,
+    )
+    require_string_inventory_count_match(
+        payload,
+        "access_event_kinds",
+        "access_event_kind_count",
+        errors,
+    )
+    require_only_required_values(
+        payload,
+        "access_event_kinds",
+        "",
+        REQUIRED_VIEWER_EVENT_KINDS,
+        errors,
+    )
     require_string_coverage(
+        payload,
+        "export_targets",
+        "",
+        REQUIRED_VIEWER_EXPORT_TARGETS,
+        errors,
+    )
+    require_minimum_int(
+        payload,
+        "export_target_count",
+        len(REQUIRED_VIEWER_EXPORT_TARGETS),
+        errors,
+    )
+    require_string_inventory_count_match(
+        payload,
+        "export_targets",
+        "export_target_count",
+        errors,
+    )
+    require_only_required_values(
         payload,
         "export_targets",
         "",
@@ -881,7 +1120,14 @@ def validate_juror_notifications(
     )
     delivered_notification_count = 0
     for index, record in require_object_array(payload, "notifications", errors):
-        require_string(record, "name", errors)
+        name = require_string(record, "name", errors)
+        require_inventory_label(
+            name,
+            path=f"notifications[{index}].name",
+            pattern=NOTIFICATION_LABEL_PATTERN,
+            label_error=NOTIFICATION_LABEL_ERROR,
+            errors=errors,
+        )
         delivered = record.get("delivered")
         if not isinstance(delivered, bool):
             errors.append(f"notifications[{index}].delivered must be a boolean")
@@ -896,8 +1142,15 @@ def validate_juror_notifications(
         field="name",
         allow_scalar_items=False,
     )
-    for _index, record in require_object_array(payload, "jurors", errors):
-        require_string(record, "name", errors)
+    for index, record in require_object_array(payload, "jurors", errors):
+        name = require_string(record, "name", errors)
+        require_inventory_label(
+            name,
+            path=f"jurors[{index}].name",
+            pattern=JUROR_LABEL_PATTERN,
+            label_error=JUROR_LABEL_ERROR,
+            errors=errors,
+        )
     if (
         isinstance(notification_count, int)
         and notification_count != delivered_notification_count
@@ -944,8 +1197,15 @@ def validate_commit_reveal(
         field="name",
         allow_scalar_items=False,
     )
-    for _index, record in require_object_array(payload, "commits", errors):
-        require_string(record, "name", errors)
+    for index, record in require_object_array(payload, "commits", errors):
+        name = require_string(record, "name", errors)
+        require_inventory_label(
+            name,
+            path=f"commits[{index}].name",
+            pattern=COMMIT_LABEL_PATTERN,
+            label_error=COMMIT_LABEL_ERROR,
+            errors=errors,
+        )
     require_string_inventory_count_match(
         payload,
         "reveals",
@@ -954,8 +1214,15 @@ def validate_commit_reveal(
         field="name",
         allow_scalar_items=False,
     )
-    for _index, record in require_object_array(payload, "reveals", errors):
-        require_string(record, "name", errors)
+    for index, record in require_object_array(payload, "reveals", errors):
+        name = require_string(record, "name", errors)
+        require_inventory_label(
+            name,
+            path=f"reveals[{index}].name",
+            pattern=REVEAL_LABEL_PATTERN,
+            label_error=REVEAL_LABEL_ERROR,
+            errors=errors,
+        )
     if commit_count > 0 and reveal_count > 0 and reveal_count > commit_count:
         errors.append("reveal_count must be <= commit_count")
     require_bool_true(payload, "commit_auth_bound_to_juror", errors)
@@ -974,13 +1241,32 @@ def validate_commit_reveal(
     require_bool_true(payload, "tally_deterministic_replay_verified", errors)
     require_bool_true(payload, "governance_event_digest_bound", errors)
     require_bool_true(payload, "executor_canary_passed", errors)
-    require_maximum_number(
+    require_maximum_int(
         payload,
         "max_event_lag_seconds",
         options.max_event_lag_secs,
         errors,
     )
     require_string_coverage(
+        payload,
+        "scenarios_exercised",
+        "",
+        REQUIRED_COMMIT_REVEAL_SCENARIOS,
+        errors,
+    )
+    require_minimum_int(
+        payload,
+        "scenario_count",
+        len(REQUIRED_COMMIT_REVEAL_SCENARIOS),
+        errors,
+    )
+    require_string_inventory_count_match(
+        payload,
+        "scenarios_exercised",
+        "scenario_count",
+        errors,
+    )
+    require_only_required_values(
         payload,
         "scenarios_exercised",
         "",
@@ -1004,6 +1290,9 @@ def validate_decision_publication(
     require_hex(payload, "tally_digest_hex", HEX64_LEN, errors)
     validate_route_inventory(payload, REQUIRED_DECISION_ROUTES, errors)
     require_string_coverage(payload, "outcomes", "", REQUIRED_OUTCOMES, errors)
+    require_minimum_int(payload, "outcome_count", len(REQUIRED_OUTCOMES), errors)
+    require_string_inventory_count_match(payload, "outcomes", "outcome_count", errors)
+    require_only_required_values(payload, "outcomes", "", REQUIRED_OUTCOMES, errors)
     require_bool_true(payload, "decision_signature_verified", errors)
     require_bool_true(payload, "governance_dag_event_published", errors)
     require_bool_true(payload, "public_decision_trail_published", errors)
@@ -1030,8 +1319,15 @@ def validate_settlement_integration(
         field="name",
         allow_scalar_items=False,
     )
-    for _index, record in require_object_array(payload, "settlements", errors):
-        require_string(record, "name", errors)
+    for index, record in require_object_array(payload, "settlements", errors):
+        name = require_string(record, "name", errors)
+        require_inventory_label(
+            name,
+            path=f"settlements[{index}].name",
+            pattern=SETTLEMENT_LABEL_PATTERN,
+            label_error=SETTLEMENT_LABEL_ERROR,
+            errors=errors,
+        )
     require_bool_true(payload, "appeal_finance_report_published", errors)
     require_bool_true(payload, "settlement_receipt_published", errors)
     require_bool_true(payload, "treasury_reconciliation_passed", errors)
@@ -1051,6 +1347,25 @@ def validate_transparency_reputation(
     require_hex(payload, "roster_hash_hex", HEX64_LEN, errors)
     require_hex(payload, "tally_digest_hex", HEX64_LEN, errors)
     require_string_coverage(
+        payload,
+        "publication_targets",
+        "",
+        REQUIRED_PUBLICATION_TARGETS,
+        errors,
+    )
+    require_minimum_int(
+        payload,
+        "publication_target_count",
+        len(REQUIRED_PUBLICATION_TARGETS),
+        errors,
+    )
+    require_string_inventory_count_match(
+        payload,
+        "publication_targets",
+        "publication_target_count",
+        errors,
+    )
+    require_only_required_values(
         payload,
         "publication_targets",
         "",
@@ -1084,8 +1399,15 @@ def validate_e2e_panel(
         field="name",
         allow_scalar_items=False,
     )
-    for _index, record in require_object_array(payload, "peers", errors):
-        require_string(record, "name", errors)
+    for index, record in require_object_array(payload, "peers", errors):
+        name = require_string(record, "name", errors)
+        require_inventory_label(
+            name,
+            path=f"peers[{index}].name",
+            pattern=E2E_PEER_LABEL_PATTERN,
+            label_error=E2E_PEER_LABEL_ERROR,
+            errors=errors,
+        )
     require_minimum_int(payload, "validator_count", options.min_peers, errors)
     require_string_inventory_count_match(
         payload,
@@ -1095,8 +1417,15 @@ def validate_e2e_panel(
         field="name",
         allow_scalar_items=False,
     )
-    for _index, record in require_object_array(payload, "validators", errors):
-        require_string(record, "name", errors)
+    for index, record in require_object_array(payload, "validators", errors):
+        name = require_string(record, "name", errors)
+        require_inventory_label(
+            name,
+            path=f"validators[{index}].name",
+            pattern=E2E_VALIDATOR_LABEL_PATTERN,
+            label_error=E2E_VALIDATOR_LABEL_ERROR,
+            errors=errors,
+        )
     case_count = require_positive_int(payload, "case_count", errors)
     require_string_inventory_count_match(
         payload,
@@ -1108,7 +1437,14 @@ def validate_e2e_panel(
     )
     passed_case_count = 0
     for index, record in require_object_array(payload, "cases", errors):
-        require_string(record, "name", errors)
+        name = require_string(record, "name", errors)
+        require_inventory_label(
+            name,
+            path=f"cases[{index}].name",
+            pattern=E2E_CASE_LABEL_PATTERN,
+            label_error=E2E_CASE_LABEL_ERROR,
+            errors=errors,
+        )
         passed = record.get("passed")
         if not isinstance(passed, bool):
             errors.append(f"cases[{index}].passed must be a boolean")
@@ -1136,6 +1472,9 @@ def validate_metrics_alerts(payload: dict[str, Any], errors: list[str]) -> None:
     require_bool_true(payload, "alert_rules_installed", errors)
     require_false(payload, "critical_alerts_firing", errors)
     require_string_coverage(payload, "metrics", "", REQUIRED_METRICS, errors)
+    require_positive_int(payload, "metric_count", errors)
+    require_string_inventory_count_match(payload, "metrics", "metric_count", errors)
+    require_only_required_values(payload, "metrics", "", REQUIRED_METRICS, errors)
     require_false(payload, "response_bodies_included", errors)
 
 
@@ -1228,6 +1567,8 @@ def build_summary(
     e2e_candidate_artifacts: list[dict[str, Any]] = []
     evidence_viewer_candidate_artifacts: list[dict[str, Any]] = []
     deployment_context: dict[str, str] = {}
+    metric_counts: set[int] = set()
+    metric_names: set[str] = set()
     files = discover_evidence_files(
         evidence_dirs,
         evidence_files,
@@ -1279,6 +1620,9 @@ def build_summary(
                 valid_case_digests.add(case_digest.lower())
             elif kind_name in CASE_BOUND_KINDS:
                 case_bound_artifacts.append((kind_name, artifact))
+            if kind_name == "metrics_alerts":
+                record_observed_evidence_value(metric_counts, payload.get("metric_count"))
+                metric_names.update(hashable_evidence_values(payload.get("metrics")))
             if (
                 kind_name == "sortition_roster"
                 and isinstance(case_digest, str)
@@ -1300,7 +1644,7 @@ def build_summary(
                 e2e_candidate_artifacts.append(artifact)
             elif kind_name == "evidence_viewer":
                 evidence_viewer_candidate_artifacts.append(artifact)
-            elif kind_name == "governance_approval":
+            elif kind_name in POLICY_BOUND_KINDS:
                 policy_bound_artifacts.append((kind_name, artifact))
         record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         record_evidence_validation_errors(path, validation_errors, errors)
@@ -1390,7 +1734,7 @@ def build_summary(
 
     validate_bound_evidence_digest_references(
         required_kinds=required_kinds,
-        missing_anchor_required_kinds=("e2e_panel", "governance_approval"),
+        missing_anchor_required_kinds=("e2e_panel",) + POLICY_BOUND_KINDS,
         bound_artifacts=policy_bound_artifacts,
         valid_anchor_digests=valid_policy_digests,
         digest_field="policy_digest_hex",
@@ -1468,6 +1812,8 @@ def build_summary(
         "valid_policy_digests": sorted(valid_policy_digests),
         "valid_e2e_runs": valid_e2e_runs,
         "valid_evidence_viewer_digest_sets": valid_evidence_viewer_digest_sets,
+        "metrics": sorted(metric_names),
+        "metric_count_values": sorted(metric_counts),
         "required": required,
         "errors": errors,
     }

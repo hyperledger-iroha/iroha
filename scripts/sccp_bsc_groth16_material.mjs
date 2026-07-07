@@ -12,7 +12,7 @@ import {
   sign as signDetachedPayload,
   verify as verifyDetachedSignature,
 } from "node:crypto";
-import { createReadStream, existsSync } from "node:fs";
+import { createReadStream, existsSync, realpathSync } from "node:fs";
 import {
   copyFile,
   lstat,
@@ -218,6 +218,15 @@ function ownValue(record, key) {
     : undefined;
 }
 
+function bscNetworkOption(options, fallback = "testnet", key = "bsc-network") {
+  if (ownValue(options, "network") !== undefined) {
+    throw new Error(
+      "BSC Groth16 material network alias was removed; use --bsc-network.",
+    );
+  }
+  return ownValue(options, key) ?? fallback;
+}
+
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -350,6 +359,9 @@ function parseArgs(argv) {
       throw new Error(`Unexpected argument: ${token}`);
     }
     const key = token.slice(2);
+    if (key === "network" || key.startsWith("network=")) {
+      throw new Error("Unknown option.");
+    }
     if (Object.prototype.hasOwnProperty.call(args, key)) {
       throw new Error(`Duplicate option: --${key}`);
     }
@@ -452,8 +464,33 @@ function requiredPathEntry(options, names, label) {
   throw new Error(`${label} requires --${keys[0]}.`);
 }
 
+function canonicalPathForCollision(pathName) {
+  const resolved = resolve(pathName);
+  if (resolved.includes("\0")) {
+    return resolved;
+  }
+  try {
+    return realpathSync(resolved);
+  } catch (error) {
+    if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") {
+      throw error;
+    }
+  }
+  try {
+    return resolve(realpathSync(dirname(resolved)), basename(resolved));
+  } catch (error) {
+    if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") {
+      throw error;
+    }
+  }
+  return resolved;
+}
+
 function assertDistinctResolvedPaths(leftPath, leftLabel, rightPath, rightLabel) {
-  if (resolve(leftPath) === resolve(rightPath)) {
+  if (
+    resolve(leftPath) === resolve(rightPath) ||
+    canonicalPathForCollision(leftPath) === canonicalPathForCollision(rightPath)
+  ) {
     throw new Error(`${leftLabel} must not be the same path as ${rightLabel}.`);
   }
 }
@@ -472,7 +509,7 @@ function assertDistinctOutputEntries(entries) {
     if (!entry?.path) {
       continue;
     }
-    const resolved = resolve(entry.path);
+    const resolved = canonicalPathForCollision(entry.path);
     const existing = seen.get(resolved);
     if (existing) {
       throw new Error(`${entry.label} must not write the same path as ${existing}.`);
@@ -655,9 +692,11 @@ async function writePublicJson(pathName, value) {
   }
   const resolved = resolve(pathName);
   await mkdir(dirname(resolved), { recursive: true });
-  const temp = `${resolved}.tmp-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  await writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o644 });
-  await rename(temp, resolved);
+  await replaceWithTemporaryFile(
+    resolved,
+    `${JSON.stringify(value, null, 2)}\n`,
+    0o644,
+  );
   return resolved;
 }
 
@@ -668,10 +707,38 @@ async function writePublicText(pathName, value) {
   }
   const resolved = resolve(pathName);
   await mkdir(dirname(resolved), { recursive: true });
-  const temp = `${resolved}.tmp-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  await writeFile(temp, value, { mode: 0o644 });
-  await rename(temp, resolved);
+  await replaceWithTemporaryFile(resolved, value, 0o644);
   return resolved;
+}
+
+function temporaryOutputPath(out) {
+  return `${out}.tmp-${process.pid}-${Date.now()}-${Math.random()
+    .toString(16)
+    .slice(2)}`;
+}
+
+async function replaceWithTemporaryFile(out, value, mode) {
+  let lastCollision = null;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const temp = temporaryOutputPath(out);
+    let created = false;
+    try {
+      await writeFile(temp, value, { flag: "wx", mode });
+      created = true;
+      await rename(temp, out);
+      return;
+    } catch (error) {
+      if (created) {
+        await rm(temp, { force: true }).catch(() => {});
+      }
+      if (error?.code === "EEXIST") {
+        lastCollision = error;
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw lastCollision ?? new Error("unable to allocate temporary output file");
 }
 
 async function assertReadableRegularFile(pathName, label) {
@@ -898,7 +965,7 @@ export function snarkjsVerificationKeyToBscVerifierMaterial(
     throw new Error("SnarkJS verification key nPublic must be 9.");
   }
   const profile = normalizeBscNetworkProfile(
-    ownValue(options, "bscNetwork") ?? ownValue(options, "network") ?? "testnet",
+    bscNetworkOption(options, "testnet", "bscNetwork"),
   );
   const material = {
     schema: BSC_GROTH16_VERIFIER_KEY_SCHEMA,
@@ -2454,6 +2521,30 @@ function materialManifestShapeBlockers(manifest, label = "material manifest") {
   if (!isRecord(manifest)) {
     return [];
   }
+  const materialManifestAliasGroups = [
+    ["generatedAt", "generated_at"],
+    ["routeId", "route_id"],
+    ["assetKey", "asset_key"],
+    ["bscNetwork", "bsc_network", "network"],
+    ["chainIdHex", "chain_id_hex"],
+    ["networkIdHex", "network_id_hex"],
+    ["proofBackend", "proof_backend"],
+    ["proofFamily", "proof_family"],
+    ["sourceDomain", "source_domain"],
+    ["targetDomain", "target_domain"],
+    ["circuitProfile", "circuit_profile"],
+    ["publicInputCount", "public_input_count"],
+    ["publicSignalNames", "public_signal_names"],
+    ["verifierKeyHash", "verifier_key_hash"],
+    ["proofArtifactHash", "proof_artifact_hash"],
+    ["provingKeyHash", "proving_key_hash"],
+    ["productionReady", "production_ready"],
+    ["productionBlockers", "production_blockers"],
+    ["trustedSetup", "trusted_setup"],
+    ["selfChecks", "self_checks"],
+    ["attestationTrustPolicy", "attestation_trust_policy"],
+    ["nextStep", "next_step"],
+  ];
   const blockers = [
     ...unknownFieldBlockers(
       manifest,
@@ -2512,32 +2603,10 @@ function materialManifestShapeBlockers(manifest, label = "material manifest") {
     ),
     ...aliasFieldBlockers(
       manifest,
-      [
-        ["generatedAt", "generated_at"],
-        ["routeId", "route_id"],
-        ["assetKey", "asset_key"],
-        ["bscNetwork", "bsc_network", "network"],
-        ["chainIdHex", "chain_id_hex"],
-        ["networkIdHex", "network_id_hex"],
-        ["proofBackend", "proof_backend"],
-        ["proofFamily", "proof_family"],
-        ["sourceDomain", "source_domain"],
-        ["targetDomain", "target_domain"],
-        ["circuitProfile", "circuit_profile"],
-        ["publicInputCount", "public_input_count"],
-        ["publicSignalNames", "public_signal_names"],
-        ["verifierKeyHash", "verifier_key_hash"],
-        ["proofArtifactHash", "proof_artifact_hash"],
-        ["provingKeyHash", "proving_key_hash"],
-        ["productionReady", "production_ready"],
-        ["productionBlockers", "production_blockers"],
-        ["trustedSetup", "trusted_setup"],
-        ["selfChecks", "self_checks"],
-        ["attestationTrustPolicy", "attestation_trust_policy"],
-        ["nextStep", "next_step"],
-      ],
+      materialManifestAliasGroups,
       label,
     ),
+    ...retiredAliasFieldBlockers(manifest, materialManifestAliasGroups, label),
   ];
 
   const artifacts = ownValue(manifest, "artifacts");
@@ -3025,6 +3094,22 @@ function aliasFieldBlockers(record, groups, label) {
     if (present.length > 1) {
       blockers.push(
         `${label} ${group[0]} must not use multiple aliases: ${present.join(", ")}`,
+      );
+    }
+  }
+  return blockers;
+}
+
+function retiredAliasFieldBlockers(record, groups, label) {
+  if (!isRecord(record)) {
+    return [];
+  }
+  const blockers = [];
+  for (const group of groups) {
+    const present = group.filter((key) => ownValue(record, key) !== undefined);
+    if (present.length === 1 && present[0] !== group[0]) {
+      blockers.push(
+        `${label} ${group[0]} must not use retired alias ${present[0]}; use ${group[0]}`,
       );
     }
   }
@@ -4894,39 +4979,6 @@ function validateAttestationsForMaterial(
   return blockers;
 }
 
-async function createLocalPtau({ snarkjsBin, outDir, power }) {
-  if (!Number.isSafeInteger(power) || power < 5 || power > 28) {
-    throw new Error("--create-local-ptau-power must be an integer from 5 to 28.");
-  }
-  const initial = join(outDir, `powersOfTau28_hez_${power.toString().padStart(2, "0")}_0000.ptau`);
-  const contributed = join(outDir, `powersOfTau28_hez_${power.toString().padStart(2, "0")}_0001.ptau`);
-  const finalPtau = join(outDir, `powersOfTau28_hez_${power.toString().padStart(2, "0")}_final.ptau`);
-  await runCommand(snarkjsBin, [
-    "powersoftau",
-    "new",
-    "bn128",
-    String(power),
-    initial,
-  ]);
-  await runCommand(snarkjsBin, [
-    "powersoftau",
-    "contribute",
-    initial,
-    contributed,
-    "--name=local testnet candidate",
-    "-v",
-    `-e=${randomBytes(32).toString("hex")}`,
-  ]);
-  await runCommand(snarkjsBin, [
-    "powersoftau",
-    "prepare",
-    "phase2",
-    contributed,
-    finalPtau,
-  ]);
-  return finalPtau;
-}
-
 async function runSnarkjsSetup({
   snarkjsBin,
   r1csPath,
@@ -5148,7 +5200,7 @@ async function generateMaterialFromVerificationKey({
 
 export async function generateBscGroth16Material(options = {}) {
   const profile = normalizeBscNetworkProfile(
-    ownValue(options, "bsc-network") ?? ownValue(options, "network") ?? "testnet",
+    bscNetworkOption(options),
   );
   const outDir = resolve(ownValue(options, "out-dir") ?? defaultMaterialOut(profile));
   const circuitProfile = trim(
@@ -5164,25 +5216,15 @@ export async function generateBscGroth16Material(options = {}) {
   }
   const circomBin = commandValue(options, "circom-bin", "circom2");
   const snarkjsBin = commandValue(options, "snarkjs-bin", "snarkjs");
-  const createLocalPowerValue = ownValue(options, "create-local-ptau-power");
-  const createLocalPower =
-    createLocalPowerValue === undefined ? null : Number(createLocalPowerValue);
-  const localPtauRequested = createLocalPower !== null;
-  if (localPtauRequested && !optionEnabled(options, "allow-local-testnet-setup")) {
-    throw new Error(
-      "--create-local-ptau-power requires --allow-local-testnet-setup true.",
-    );
-  }
-  if (localPtauRequested && profile.key !== "testnet") {
-    throw new Error("local Powers of Tau generation is only allowed for testnet candidates.");
-  }
-  if (
-    localPtauRequested &&
-    (!Number.isSafeInteger(createLocalPower) ||
-      createLocalPower < 5 ||
-      createLocalPower > 28)
-  ) {
-    throw new Error("--create-local-ptau-power must be an integer from 5 to 28.");
+  for (const removedOption of [
+    "create-local-ptau-power",
+    "allow-local-testnet-setup",
+  ]) {
+    if (ownValue(options, removedOption) !== undefined) {
+      throw new Error(
+        `--${removedOption} was removed; generate requires externally supplied Powers of Tau material.`,
+      );
+    }
   }
   const artifactStem = circuitProfile;
   const circuitSourcePath = join(outDir, `${artifactStem}.circom`);
@@ -5204,9 +5246,7 @@ export async function generateBscGroth16Material(options = {}) {
     `${profile.key}-bsc-groth16-material.manifest.json`,
   );
   const externalCircuitSource = optionalPathEntry(options, "circuit-source");
-  const ptauInput = localPtauRequested
-    ? null
-    : requiredPathEntry(options, "ptau", "Powers of Tau file");
+  const ptauInput = requiredPathEntry(options, "ptau", "Powers of Tau file");
   const trustedSetupTranscriptInput = optionalPathEntry(options, [
     "trusted-setup-transcript",
     "contribution-transcript",
@@ -5229,37 +5269,6 @@ export async function generateBscGroth16Material(options = {}) {
     },
     { path: bscVerifierKeyPath, label: "BSC Groth16 verifier key output" },
     { path: materialManifestPath, label: "BSC Groth16 material manifest output" },
-    ...(localPtauRequested
-      ? [
-          {
-            path: join(
-              outDir,
-              `powersOfTau28_hez_${createLocalPower
-                .toString()
-                .padStart(2, "0")}_0000.ptau`,
-            ),
-            label: "BSC Groth16 local initial Powers of Tau output",
-          },
-          {
-            path: join(
-              outDir,
-              `powersOfTau28_hez_${createLocalPower
-                .toString()
-                .padStart(2, "0")}_0001.ptau`,
-            ),
-            label: "BSC Groth16 local contributed Powers of Tau output",
-          },
-          {
-            path: join(
-              outDir,
-              `powersOfTau28_hez_${createLocalPower
-                .toString()
-                .padStart(2, "0")}_final.ptau`,
-            ),
-            label: "BSC Groth16 local final Powers of Tau output",
-          },
-        ]
-      : []),
     trustedSetupTranscriptInput
       ? {
           path: join(outDir, basename(trustedSetupTranscriptInput.path)),
@@ -5311,9 +5320,7 @@ export async function generateBscGroth16Material(options = {}) {
     "-o",
       outDir,
   ]);
-  const ptauPath = localPtauRequested
-    ? await createLocalPtau({ snarkjsBin, outDir, power: createLocalPower })
-    : await assertReadableRegularFile(ptauInput.path, "Powers of Tau file");
+  const ptauPath = await assertReadableRegularFile(ptauInput.path, "Powers of Tau file");
   const trustedSetupTranscriptPath = trustedSetupTranscriptInput
     ? await copyPublicFile(
         trustedSetupTranscriptInput.path,
@@ -5348,7 +5355,7 @@ export async function generateBscGroth16Material(options = {}) {
     ptauPath,
     trustedSetupTranscriptPath,
     reproducibleBuildTranscriptPath,
-    localPtau: localPtauRequested,
+    localPtau: false,
     localPhase2: true,
     circuitProfile,
     attestations,
@@ -5359,7 +5366,7 @@ export async function generateBscGroth16Material(options = {}) {
 
 export async function materializeBscGroth16Material(options = {}) {
   const profile = normalizeBscNetworkProfile(
-    ownValue(options, "bsc-network") ?? ownValue(options, "network") ?? "testnet",
+    bscNetworkOption(options),
   );
   const outDir = resolve(
     ownValue(options, "out-dir") ??
@@ -6849,6 +6856,16 @@ export async function runBscGroth16ProofSelfTest(options = {}) {
     ["manifest", "material-manifest", "groth16-material-manifest"],
     "BSC Groth16 proof self-test",
   );
+  for (const removedOption of [
+    "allow-unready-candidate",
+    "allow-unready-mainnet-candidate",
+  ]) {
+    if (ownValue(options, removedOption) !== undefined) {
+      throw new Error(
+        `--${removedOption} was removed; proof-self-test requires productionReady Groth16 material manifests.`,
+      );
+    }
+  }
   const explicitOutPath = optionalPath(options, "out");
   const explicitInputPathEntries = [
     { path: resolve(String(manifestOption)), label: "--manifest" },
@@ -6867,63 +6884,15 @@ export async function runBscGroth16ProofSelfTest(options = {}) {
     throw new Error(secretReason);
   }
   const profile = normalizeBscNetworkProfile(
-    ownValue(options, "bsc-network") ??
-      ownValue(options, "network") ??
-      ownValue(manifest, "bscNetwork"),
+    bscNetworkOption(options, ownValue(manifest, "bscNetwork")),
   );
   validateMaterialManifestForAttestationRequest(manifest, profile);
-  const allowUnreadyCandidate = optionEnabled(
-    options,
-    "allow-unready-candidate",
-    false,
-  );
-  const allowUnreadyMainnetCandidate = optionEnabled(
-    options,
-    "allow-unready-mainnet-candidate",
-    false,
-  );
   const manifestProductionState = proofSelfTestManifestProductionState(manifest);
-  if (allowUnreadyCandidate && allowUnreadyMainnetCandidate) {
-    throw new Error(
-      "--allow-unready-candidate and --allow-unready-mainnet-candidate are mutually exclusive.",
-    );
-  }
-  if (
-    manifestProductionState.productionReady === true &&
-    manifestProductionState.productionBlockers.length === 0 &&
-    (allowUnreadyCandidate || allowUnreadyMainnetCandidate)
-  ) {
-    throw new Error(
-      "unready candidate proof-self-test flags are only allowed for manifests that are not production-ready.",
-    );
-  }
   if (
     manifestProductionState.productionReady !== true ||
     manifestProductionState.productionBlockers.length > 0
   ) {
-    if (!allowUnreadyCandidate && !allowUnreadyMainnetCandidate) {
-      requireProductionReadyMaterialManifestForProofSelfTest(manifest);
-    }
-    if (allowUnreadyCandidate && profile.key !== "testnet") {
-      throw new Error(
-        "--allow-unready-candidate is only allowed for testnet candidate proof reports.",
-      );
-    }
-    if (allowUnreadyMainnetCandidate && profile.key !== "mainnet") {
-      throw new Error(
-        "--allow-unready-mainnet-candidate is only allowed for mainnet candidate proof reports.",
-      );
-    }
-    if (profile.key === "testnet" && !allowUnreadyCandidate) {
-      throw new Error(
-        "--allow-unready-candidate true is required to refresh unready testnet candidate proof reports.",
-      );
-    }
-    if (profile.key === "mainnet" && !allowUnreadyMainnetCandidate) {
-      throw new Error(
-        "--allow-unready-mainnet-candidate true is required to refresh unready mainnet candidate proof reports.",
-      );
-    }
+    requireProductionReadyMaterialManifestForProofSelfTest(manifest);
   }
   const artifacts = {
     circuitSource: materialManifestArtifact(manifest, "circuitSource", "circuitSource"),
@@ -7719,7 +7688,7 @@ function transcriptMaterializeCommand({
 
 export async function writeBscGroth16TranscriptTemplates(options = {}) {
   const profile = normalizeBscNetworkProfile(
-    ownValue(options, "bsc-network") ?? ownValue(options, "network") ?? "testnet",
+    bscNetworkOption(options),
   );
   const r1csPath = await assertReadableRegularFile(
     requiredOption(options, "r1cs", "BSC Groth16 transcript template package"),
@@ -8138,9 +8107,7 @@ export async function writeBscGroth16EvidenceTemplates(options = {}) {
     throw new Error(secretReason);
   }
   const profile = normalizeBscNetworkProfile(
-    ownValue(options, "bsc-network") ??
-      ownValue(options, "network") ??
-      ownValue(manifest, "bscNetwork"),
+    bscNetworkOption(options, ownValue(manifest, "bscNetwork")),
   );
   validateMaterialManifestForAttestationRequest(manifest, profile);
   const artifacts = materialManifestAttestationArtifacts(manifest);
@@ -8426,9 +8393,7 @@ export async function writeBscGroth16AttestationHandoff(options = {}) {
     throw new Error(secretReason);
   }
   const profile = normalizeBscNetworkProfile(
-    ownValue(options, "bsc-network") ??
-      ownValue(options, "network") ??
-      ownValue(manifest, "bscNetwork"),
+    bscNetworkOption(options, ownValue(manifest, "bscNetwork")),
   );
   validateMaterialManifestForAttestationRequest(manifest, profile);
   const materialDir = dirname(manifestPath);
@@ -9167,9 +9132,7 @@ export async function verifyBscGroth16AttestationHandoff(options = {}) {
     shapeBlockers.push(`BSC Groth16 attestation handoff assetKey must be ${ASSET_KEY}.`);
   }
   const profile = normalizeBscNetworkProfile(
-    ownValue(options, "bsc-network") ??
-      ownValue(options, "network") ??
-      ownValue(handoff, "bscNetwork"),
+    bscNetworkOption(options, ownValue(handoff, "bscNetwork")),
   );
   if (trim(ownValue(handoff, "chainIdHex")) !== profile.chainIdHex) {
     shapeBlockers.push(
@@ -9474,9 +9437,7 @@ export async function generateBscGroth16AttestationRequestPackage(options = {}) 
     throw new Error(secretReason);
   }
   const profile = normalizeBscNetworkProfile(
-    ownValue(options, "bsc-network") ??
-      ownValue(options, "network") ??
-      ownValue(manifest, "bscNetwork"),
+    bscNetworkOption(options, ownValue(manifest, "bscNetwork")),
   );
   validateMaterialManifestForAttestationRequest(manifest, profile);
   const artifacts = materialManifestAttestationArtifacts(manifest);
@@ -10435,9 +10396,7 @@ export async function signBscGroth16AttestationRole(options = {}) {
     throw new Error(secretReason);
   }
   const profile = normalizeBscNetworkProfile(
-    ownValue(options, "bsc-network") ??
-      ownValue(options, "network") ??
-      ownValue(request, "bscNetwork"),
+    bscNetworkOption(options, ownValue(request, "bscNetwork")),
   );
   const manifestBlock = requestManifestBlock(request);
   const manifestPath = await resolveManifestArtifactPath(
@@ -10668,9 +10627,7 @@ export async function auditBscGroth16AttestationStatus(options = {}) {
     throw new Error(secretReason);
   }
   const profile = normalizeBscNetworkProfile(
-    ownValue(options, "bsc-network") ??
-      ownValue(options, "network") ??
-      ownValue(request, "bscNetwork"),
+    bscNetworkOption(options, ownValue(request, "bscNetwork")),
   );
   const manifestBlock = requestManifestBlock(request);
   const manifestPath = await resolveManifestArtifactPath(
@@ -11164,9 +11121,7 @@ export async function finalizeBscGroth16Attestations(options = {}) {
     throw new Error(secretReason);
   }
   const profile = normalizeBscNetworkProfile(
-    ownValue(options, "bsc-network") ??
-      ownValue(options, "network") ??
-      ownValue(request, "bscNetwork"),
+    bscNetworkOption(options, ownValue(request, "bscNetwork")),
   );
   const manifestBlock = requestManifestBlock(request);
   const manifestPath = await resolveManifestArtifactPath(
@@ -11291,7 +11246,7 @@ export async function finalizeBscGroth16Attestations(options = {}) {
 
 export async function preflightBscGroth16Material(options = {}) {
   const profile = normalizeBscNetworkProfile(
-    ownValue(options, "bsc-network") ?? ownValue(options, "network") ?? "testnet",
+    bscNetworkOption(options),
   );
   const outDir = resolve(ownValue(options, "out-dir") ?? defaultMaterialOut(profile));
   const circuitProfile = trim(
@@ -11620,7 +11575,7 @@ export async function preflightBscGroth16Material(options = {}) {
       toolchainFingerprint: `node scripts/sccp_bsc_groth16_material.mjs toolchain-fingerprint --circom-bin ${displayCircomBin} --snarkjs-bin ${displaySnarkjsBin} --transcript <reproducible-build-transcript.json> --out <reproducible-build-transcript.with-toolchain-hashes.json>`,
       transcriptTemplate: `node scripts/sccp_bsc_groth16_material.mjs transcript-template --bsc-network ${profile.key} --r1cs ${repoRelativePath(paths.r1cs)} --zkey ${repoRelativePath(paths.provingKey)} --ptau <powersOfTau28_hez_final_22.ptau> --snarkjs-verifier-key ${repoRelativePath(paths.snarkjsVerificationKey)} --circuit-source ${repoRelativePath(paths.circuitSource)} --witness-wasm ${repoRelativePath(paths.witnessWasm)} --circom-bin ${displayCircomBin} --snarkjs-bin ${displaySnarkjsBin} --out-dir ${repoRelativePath(join(outDir, "transcripts"))}`,
       materialize: `node scripts/sccp_bsc_groth16_material.mjs materialize --bsc-network ${profile.key} --r1cs ${repoRelativePath(paths.r1cs)} --zkey ${repoRelativePath(paths.provingKey)} --ptau <powersOfTau28_hez_final_22.ptau> --snarkjs-verifier-key ${repoRelativePath(paths.snarkjsVerificationKey)} --circuit-source ${repoRelativePath(paths.circuitSource)} --witness-wasm ${repoRelativePath(paths.witnessWasm)} --out-dir ${repoRelativePath(outDir)} --trusted-setup-transcript <json> --reproducible-build-transcript <json> --snarkjs-bin ${displaySnarkjsBin}`,
-      proofSelfTest: `node scripts/sccp_bsc_groth16_material.mjs proof-self-test --manifest ${repoRelativePath(paths.manifest)} --witness-wasm ${repoRelativePath(paths.witnessWasm)} --snarkjs-bin ${displaySnarkjsBin}${profile.key === "testnet" ? " --allow-unready-candidate true" : " --allow-unready-mainnet-candidate true"} --out ${repoRelativePath(join(outDir, `${profile.key}-bsc-groth16-proof-self-test.json`))}`,
+      proofSelfTest: `node scripts/sccp_bsc_groth16_material.mjs proof-self-test --manifest ${repoRelativePath(paths.manifest)} --witness-wasm ${repoRelativePath(paths.witnessWasm)} --snarkjs-bin ${displaySnarkjsBin} --out ${repoRelativePath(join(outDir, `${profile.key}-bsc-groth16-proof-self-test.json`))}`,
       evidenceTemplate: `node scripts/sccp_bsc_groth16_material.mjs evidence-template --manifest ${repoRelativePath(paths.manifest)} --out-dir ${repoRelativePath(join(outDir, "review-evidence"))}`,
       attestationRequest: `node scripts/sccp_bsc_groth16_material.mjs attestation-request --manifest ${repoRelativePath(paths.manifest)} --semantic-review-evidence <semantic-review-evidence.json> --circuit-security-audit-evidence <circuit-security-audit-evidence.json> --out ${repoRelativePath(join(outDir, `${profile.key}-bsc-groth16-attestation-request.json`))}`,
       handoffBundle: `node scripts/sccp_bsc_groth16_material.mjs handoff-bundle --manifest ${repoRelativePath(paths.manifest)} --transcript-template-package <transcript-template-package.json> --evidence-template-package <evidence-template-package.json> --request ${repoRelativePath(join(outDir, `${profile.key}-bsc-groth16-attestation-request.json`))} --out ${repoRelativePath(join(outDir, `${profile.key}-bsc-groth16-attestation-handoff.json`))}`,
@@ -11634,11 +11589,10 @@ export async function preflightBscGroth16Material(options = {}) {
 function usage() {
   return `Usage:
   node scripts/sccp_bsc_groth16_material.mjs generate --bsc-network testnet --ptau <phase2.ptau> [--circuit-profile ${BSC_SIGNAL_BINDING_CIRCUIT_PROFILE}|${BSC_FULL_SCCP_CIRCUIT_PROFILE}] [--circuit-source <full-message.circom>] [--out-dir ${DEFAULT_GENERATED_MATERIAL_OUT}/testnet] [--toolchain-root ${DEFAULT_GROTH16_TOOLCHAIN_ROOT}] [--circom-bin circom2] [--snarkjs-bin snarkjs]
-  node scripts/sccp_bsc_groth16_material.mjs generate --bsc-network testnet --create-local-ptau-power 8 --allow-local-testnet-setup true [--out-dir ${DEFAULT_GENERATED_MATERIAL_OUT}/testnet] [--toolchain-root ${DEFAULT_GROTH16_TOOLCHAIN_ROOT}]
   node scripts/sccp_bsc_groth16_material.mjs toolchain-fingerprint [--transcript <reproducible-build-transcript.json>] [--circom-bin circom2] [--snarkjs-bin snarkjs] [--out <json>]
   node scripts/sccp_bsc_groth16_material.mjs transcript-template --bsc-network testnet|mainnet --r1cs <file.r1cs> --zkey <file.zkey> --ptau <powersOfTau28_hez_final_22.ptau> --snarkjs-verifier-key <verification_key.json> [--circuit-source <full-message.circom>] [--witness-wasm <circuit.wasm>] [--circom-bin circom2] [--snarkjs-bin snarkjs] [--out-dir <transcript-dir>] [--overwrite true]
   node scripts/sccp_bsc_groth16_material.mjs materialize --bsc-network testnet|mainnet --r1cs <file.r1cs> --zkey <file.zkey> --ptau <powersOfTau28_hez_final_22.ptau> --snarkjs-verifier-key <verification_key.json> [--circuit-source <full-message.circom>] [--witness-wasm <circuit.wasm>] --trusted-setup-transcript <json> --reproducible-build-transcript <json> [--snarkjs-bin snarkjs] [--out-dir ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT}/testnet]
-  node scripts/sccp_bsc_groth16_material.mjs proof-self-test --manifest <testnet|mainnet-bsc-groth16-material.manifest.json> [--witness-wasm <circuit.wasm>] [--snarkjs-bin snarkjs] [--allow-unready-candidate true|--allow-unready-mainnet-candidate true] [--out <proof-self-test.json>]
+  node scripts/sccp_bsc_groth16_material.mjs proof-self-test --manifest <testnet|mainnet-bsc-groth16-material.manifest.json> [--witness-wasm <circuit.wasm>] [--snarkjs-bin snarkjs] [--out <proof-self-test.json>]
   node scripts/sccp_bsc_groth16_material.mjs evidence-template --manifest <testnet-bsc-groth16-material.manifest.json> [--out-dir <review-evidence-dir>] [--overwrite true]
   node scripts/sccp_bsc_groth16_material.mjs attestation-request --manifest <testnet-bsc-groth16-material.manifest.json> --semantic-review-evidence <semantic-review-evidence.json> --circuit-security-audit-evidence <circuit-security-audit-evidence.json> [--toolchain-sha256 <0x...>] [--out <request.json>]
   node scripts/sccp_bsc_groth16_material.mjs handoff-bundle --manifest <testnet-bsc-groth16-material.manifest.json> [--transcript-template-package <json>] [--evidence-template-package <json>] [--request <attestation-request.json>] [--out <handoff.json>]
@@ -11671,13 +11625,9 @@ replaces them. The
 proof-self-test command runs a deterministic synthetic witness through SnarkJS
 wtns/prove/verify, checks the prover-returned public signals against the
 Keccak-derived expected values, and verifies adversarial witnesses are rejected.
-By default it requires a productionReady manifest; --allow-unready-candidate
-true is accepted only for unready testnet candidate evidence refreshes, while
---allow-unready-mainnet-candidate true is the separate explicit opt-in for
-unready mainnet candidate evidence refreshes. The two opt-ins are mutually
-exclusive and are rejected for productionReady manifests. Both modes still
-write the manifest production blockers into the report. They are evidence only
-and do not mark candidate material production-ready. The
+It requires a productionReady manifest; the previous unready candidate
+refresh flags were removed so public proof-self-test reports cannot be emitted
+from blocked material. The
 evidence-template command writes manifest-bound public review/audit draft
 envelopes and report files for external reviewers. These drafts intentionally
 carry pending/false results, are not signable, and are refused by

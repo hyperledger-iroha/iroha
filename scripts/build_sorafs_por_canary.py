@@ -20,13 +20,19 @@ if str(SCRIPT_DIR) not in sys.path:
 from check_sorafs_por_rollout_evidence import (  # noqa: E402
     ALLOWED_MANUAL_TRIGGER_STATES,
     ALLOWED_ARCHIVE_BACKENDS,
+    CHALLENGE_LABEL_ERROR,
+    CHALLENGE_LABEL_PATTERN,
     DEFAULT_MAX_EVIDENCE_AGE_SECS,
     DEFAULT_MAX_REPORT_LATENCY_MS,
     DEFAULT_MAX_ROUTE_LATENCY_MS,
     DEFAULT_MAX_SCHEDULER_LAG_SECS,
     DEFAULT_MIN_CHALLENGES,
     DEFAULT_MIN_PROVIDERS,
+    FORBIDDEN_CHALLENGE_LABEL_MARKERS,
+    FORBIDDEN_PROVIDER_LABEL_MARKERS,
     KIND_BY_NAME,
+    PROVIDER_LABEL_ERROR,
+    PROVIDER_LABEL_PATTERN,
     REQUIRED_METRICS,
     REQUIRED_REPORTING_ROUTES,
     REQUIRED_RUNTIME_ROUTES,
@@ -39,6 +45,8 @@ from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_block,
     emit_checker_error_lines,
     emit_checker_exception,
+    fsync_checker_output_parent,
+    write_all_checker_summary_bytes,
     validate_checker_output_parent,
 )
 from sorafs_path_identity import path_diagnostic_label  # noqa: E402
@@ -96,6 +104,7 @@ def validate_reviewed_inventory(
     expected_count: int,
     option: str,
     count_option: str,
+    label_validator: Any | None = None,
     errors: list[str],
 ) -> list[str]:
     """Return reviewed unique inventory labels whose count matches a CLI count."""
@@ -105,6 +114,8 @@ def validate_reviewed_inventory(
         errors.append(f"{option} is required for randomness")
     for index, item in enumerate(items):
         validate_canonical_string(item, label=f"{option}[{index}]", errors=errors)
+        if label_validator is not None:
+            label_validator(item, option=option, errors=errors)
     unique_items = set(items)
     if len(unique_items) != len(items):
         errors.append(f"{option} must not contain duplicates")
@@ -156,6 +167,50 @@ def validate_canonical_string(value: str | None, *, label: str, errors: list[str
         errors.append(f"{label} must be a non-empty canonical string")
 
 
+def validate_provider_label_arg(
+    value: str | None,
+    *,
+    option: str,
+    errors: list[str],
+) -> None:
+    """Require a reviewed lowercase production provider inventory label."""
+
+    if not isinstance(value, str):
+        return
+    if PROVIDER_LABEL_PATTERN.fullmatch(value) is None:
+        errors.append(PROVIDER_LABEL_ERROR.replace("providers[].name", option))
+        return
+    forbidden = sorted(
+        marker
+        for marker in FORBIDDEN_PROVIDER_LABEL_MARKERS
+        if marker in value.split("-")
+    )
+    if forbidden:
+        errors.append(f"{option} must not contain non-production markers {forbidden}")
+
+
+def validate_challenge_label_arg(
+    value: str | None,
+    *,
+    option: str,
+    errors: list[str],
+) -> None:
+    """Require a reviewed lowercase production challenge inventory label."""
+
+    if not isinstance(value, str):
+        return
+    if CHALLENGE_LABEL_PATTERN.fullmatch(value) is None:
+        errors.append(CHALLENGE_LABEL_ERROR.replace("challenges[].name", option))
+        return
+    forbidden = sorted(
+        marker
+        for marker in FORBIDDEN_CHALLENGE_LABEL_MARKERS
+        if marker in value.split("-")
+    )
+    if forbidden:
+        errors.append(f"{option} must not contain non-production markers {forbidden}")
+
+
 def require_kind_options(
     args: argparse.Namespace,
     errors: list[str],
@@ -189,6 +244,7 @@ def build_route_records(args: argparse.Namespace, routes: Sequence[str]) -> list
             "name": name,
             "passed": True,
             "status_code": args.route_status_code,
+            "body_blake3_hex": args.route_body_blake3_hex,
             "latency_ms": args.route_latency_ms,
             "authz_enforced": True,
             "norito_verified": True,
@@ -220,6 +276,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "provider_count": args.provider_count,
                 "providers": build_inventory_records(args.providers),
                 "challenge_count": args.challenge_count,
+                "challenges": build_inventory_records(args.challenges),
                 "seed_replay_digest_hex": args.seed_replay_digest_hex,
                 "policy_digest_hex": args.policy_digest_hex,
                 "raw_randomness_included": False,
@@ -270,6 +327,9 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "weekly_report_generated": True,
                 "status_export_verified": True,
                 "governance_archive_handoff_verified": True,
+                "governance_archive_handoff_digest_hex": (
+                    args.governance_archive_handoff_digest_hex
+                ),
                 "archive_retention_bound": True,
                 "operator_archive_decision_recorded": True,
                 "archive_backend": args.archive_backend,
@@ -292,6 +352,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "ingest_backlog_alert_tested": True,
                 "critical_alerts_firing": False,
                 "metrics": args.metrics,
+                "metric_count": len(args.metrics),
                 "seed_replay_digest_hex": args.seed_replay_digest_hex,
                 "response_bodies_included": False,
             }
@@ -349,9 +410,23 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             expected_count=args.provider_count,
             option="--provider",
             count_option="--provider-count",
+            label_validator=validate_provider_label_arg,
+            errors=errors,
+        )
+        args.challenges = validate_reviewed_inventory(
+            split_csv_values(args.challenge),
+            expected_count=args.challenge_count,
+            option="--challenge",
+            count_option="--challenge-count",
+            label_validator=validate_challenge_label_arg,
             errors=errors,
         )
     elif args.kind == "scheduler_runtime":
+        validate_hex64(
+            args.route_body_blake3_hex,
+            option="--route-body-blake3-hex",
+            errors=errors,
+        )
         args.runtime_routes = validate_name_set(
             split_csv_values(args.runtime_route),
             allowed=REQUIRED_RUNTIME_ROUTES,
@@ -375,7 +450,23 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
         require_kind_options(
             args,
             errors,
-            (("--report-digest-hex", args.report_digest_hex),),
+            (
+                (
+                    "--governance-archive-handoff-digest-hex",
+                    args.governance_archive_handoff_digest_hex,
+                ),
+                ("--report-digest-hex", args.report_digest_hex),
+            ),
+        )
+        validate_hex64(
+            args.route_body_blake3_hex,
+            option="--route-body-blake3-hex",
+            errors=errors,
+        )
+        validate_hex64(
+            args.governance_archive_handoff_digest_hex,
+            option="--governance-archive-handoff-digest-hex",
+            errors=errors,
         )
         validate_hex64(
             args.report_digest_hex,
@@ -469,12 +560,14 @@ def write_payload_atomic(path: Path, payload: dict[str, Any]) -> list[str]:
         if nofollow:
             flags |= nofollow
         fd = os.open(tmp_path, flags, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            fd = -1
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
+        write_all_checker_summary_bytes(fd, text.encode("utf-8"))
+        os.fsync(fd)
+        os.close(fd)
+        fd = -1
         os.replace(tmp_path, path)
+        parent_sync_errors = fsync_checker_output_parent(path, label="--out")
+        if parent_sync_errors:
+            return parent_sync_errors
     except (OSError, RuntimeError) as error:
         del error
         try:
@@ -504,12 +597,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--seed-replay-digest-hex")
     parser.add_argument("--validation-bundle-digest-hex")
     parser.add_argument("--report-digest-hex")
+    parser.add_argument("--governance-archive-handoff-digest-hex")
     parser.add_argument("--policy-digest-hex")
     parser.add_argument("--provider", action="append", default=[])
+    parser.add_argument("--challenge", action="append", default=[])
     parser.add_argument("--runtime-route", action="append", default=[])
     parser.add_argument("--reporting-route", action="append", default=[])
     parser.add_argument("--metric", action="append", default=[])
     parser.add_argument("--route-status-code", type=positive_int_arg, default=200)
+    parser.add_argument("--route-body-blake3-hex")
     parser.add_argument("--route-latency-ms", type=non_negative_int_arg, default=200)
     parser.add_argument("--scheduler-lag-seconds", type=non_negative_int_arg, default=60)
     parser.add_argument("--report-latency-ms", type=non_negative_int_arg, default=300)

@@ -8147,13 +8147,15 @@ test("submitTransactionBatch posts a Norito transaction payload vector", async (
     assert.equal(init.headers["Content-Type"], "application/x-norito");
     assert.equal(init.headers.Accept, "application/json");
     assert.ok(Buffer.isBuffer(init.body));
-    const body = Buffer.from(init.body);
+    const frame = noritoFramePayload(init.body, "transaction batch");
+    assert.equal(frame.flags, 0x02);
+    const body = frame.payload;
     let offset = 0;
     const count = readU64Length(body, offset, "batch.count");
     assert.equal(count.length, 2);
     offset += count.bytes;
     for (const [index, payload] of payloads.entries()) {
-      const item = readNoritoFieldPayload(body, offset, `batch.item${index}`, false);
+      const item = readNoritoFieldPayload(body, offset, `batch.item${index}`, true);
       const itemLength = readU64Length(item.payload, 0, `batch.item${index}.bytes`);
       assert.deepEqual(
         [...item.payload.subarray(itemLength.bytes)],

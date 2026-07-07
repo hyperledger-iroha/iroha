@@ -6,13 +6,15 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." && pwd)"
 PUBLIC_TORII_ROOT="${PUBLIC_TORII_ROOT:-}"
 WRITE_CONFIG="${WRITE_CONFIG:-}"
 WRITE_CONFIG_EXPLICIT=0
-WRITE_CONFIG_DEFAULT="${WRITE_CONFIG_DEFAULT:-/run/secrets/taira-canary-client.toml}"
+WRITE_CONFIG_DEFAULT="${WRITE_CONFIG_DEFAULT:-}"
 IROHA_BIN="${IROHA_BIN:-}"
 SORAFS_MANIFEST_STUB_BIN="${SORAFS_MANIFEST_STUB_BIN:-}"
 SORAFS_TX_STDIN_BUILDER_BIN="${SORAFS_TX_STDIN_BUILDER_BIN:-}"
 ROLLOUT_CANARY_ALIAS_PREFIX="${ROLLOUT_CANARY_ALIAS_PREFIX:-taira-rollout-canary}"
 ROLLOUT_CANARY_TIME_TO_LIVE_MS="${ROLLOUT_CANARY_TIME_TO_LIVE_MS:-120000}"
 ROLLOUT_CANARY_STATUS_TIMEOUT_MS="${ROLLOUT_CANARY_STATUS_TIMEOUT_MS:-120000}"
+ROLLOUT_CANARY_GAS_ASSET_ID="${ROLLOUT_CANARY_GAS_ASSET_ID:-6TEAJqbb8oEPmLncoNiMRbLEK6tw}"
+ROLLOUT_CANARY_SKIP_FAUCET="${ROLLOUT_CANARY_SKIP_FAUCET:-auto}"
 DECLARED_CAPACITY_GIB="${DECLARED_CAPACITY_GIB:-1}"
 STAKE_AMOUNT="${STAKE_AMOUNT:-1}"
 DECLARATION_VALID_BLOCKS="${DECLARATION_VALID_BLOCKS:-10000}"
@@ -34,6 +36,7 @@ Usage: check_sorafs_rollout.sh --public-root URL [--write-config PATH]
                                [--iroha-bin PATH]
                                [--sorafs-manifest-stub-bin PATH]
                                [--sorafs-tx-stdin-builder-bin PATH]
+                               [--gas-asset-id ASSET_DEFINITION_ID]
                                [--declared-capacity-gib N]
                                [--stake-amount N]
                                [--declaration-valid-blocks N]
@@ -54,13 +57,63 @@ The check fails unless:
   - a deterministic capacity declaration lands through `iroha ledger transaction stdin`
   - the declaration is visible in /v1/sorafs/capacity/state
 
-When `--write-config` is omitted, the script bootstraps
-`/run/secrets/taira-canary-client.toml` automatically, onboarding a fresh
-ordinary account on Taira before running the capacity declaration canary.
+When `--write-config` is omitted, the script bootstraps a runtime-only canary
+config automatically, preferring `/run/secrets/taira-canary-client.toml` when
+that directory is writable and otherwise falling back to the local temp
+directory. The bootstrap onboards a fresh ordinary account on Taira before
+running the capacity declaration canary. When a gas asset is configured, the
+bootstrap passes that asset to onboarding and skips faucet funding by default,
+so the canary proves the sponsored-fee path directly. Set
+`ROLLOUT_CANARY_SKIP_FAUCET=0` to require an initial faucet claim.
 When `--write-config` is supplied, that runtime-only signer config is read
 as-is and is never overwritten by bootstrap.
 Use `--skip-write-canary` only for read-only validation.
 EOF
+}
+
+default_write_config_path() {
+  if [[ -n "$WRITE_CONFIG_DEFAULT" ]]; then
+    printf '%s\n' "$WRITE_CONFIG_DEFAULT"
+    return 0
+  fi
+
+  local linux_secret_path="/run/secrets/taira-canary-client.toml"
+  local linux_secret_dir="${linux_secret_path%/*}"
+  if [[ -d "$linux_secret_dir" && -w "$linux_secret_dir" ]]; then
+    printf '%s\n' "$linux_secret_path"
+    return 0
+  fi
+
+  local temp_root="${TMPDIR:-/tmp}"
+  temp_root="$(physical_path "$temp_root")"
+  printf '%s\n' "${temp_root%/}/taira-canary-client.toml"
+}
+
+physical_path() {
+  python3 - "$1" <<'PY'
+import os
+import sys
+
+print(os.path.realpath(sys.argv[1]))
+PY
+}
+
+should_skip_canary_faucet() {
+  case "$ROLLOUT_CANARY_SKIP_FAUCET" in
+    auto|"")
+      [[ -n "$ROLLOUT_CANARY_GAS_ASSET_ID" ]]
+      ;;
+    1|true|TRUE|yes|YES)
+      return 0
+      ;;
+    0|false|FALSE|no|NO)
+      return 1
+      ;;
+    *)
+      echo "ROLLOUT_CANARY_SKIP_FAUCET must be auto, 1, 0, true, false, yes, or no" >&2
+      exit 1
+      ;;
+  esac
 }
 
 while [[ $# -gt 0 ]]; do
@@ -104,6 +157,14 @@ while [[ $# -gt 0 ]]; do
         exit 1
       }
       SORAFS_TX_STDIN_BUILDER_BIN="$2"
+      shift 2
+      ;;
+    --gas-asset-id)
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --gas-asset-id" >&2
+        exit 1
+      }
+      ROLLOUT_CANARY_GAS_ASSET_ID="$2"
       shift 2
       ;;
     --declared-capacity-gib)
@@ -239,7 +300,7 @@ validate_numeric_inputs() {
 validate_numeric_inputs
 
 if [[ -z "$WRITE_CONFIG" && $SKIP_WRITE_CANARY -eq 0 ]]; then
-  WRITE_CONFIG="$WRITE_CONFIG_DEFAULT"
+  WRITE_CONFIG="$(default_write_config_path)"
 fi
 
 normalize_root_url() {
@@ -424,9 +485,56 @@ canonical_height = first_int(
     payload.get("canonical_height"),
     dig(payload, "canonical", "height"),
 )
+canonical_phase = str(
+    dig(payload, "canonical", "phase") or payload.get("canonical_phase") or ""
+).strip().lower()
+canonical_view = first_int(
+    payload.get("canonical_view"),
+    dig(payload, "canonical", "view"),
+    dig(payload, "membership", "view"),
+)
+membership_height = first_int(
+    payload.get("membership_height"),
+    dig(payload, "membership", "height"),
+)
+worker_stage = str(
+    dig(payload, "worker_loop", "stage") or payload.get("worker_stage") or ""
+).strip().lower()
 validator_set_len = first_int(
     payload.get("commit_qc_validator_set_len"),
     dig(payload, "commit_qc", "validator_set_len"),
+)
+tx_queue_depth = first_int(
+    payload.get("tx_queue_depth"),
+    dig(payload, "tx_queue", "depth"),
+)
+tx_queue_capacity = first_int(
+    payload.get("tx_queue_capacity"),
+    dig(payload, "tx_queue", "capacity"),
+)
+tx_queue_saturated_by_age = payload.get("tx_queue_saturated_by_age")
+if not isinstance(tx_queue_saturated_by_age, bool):
+    tx_queue_saturated_by_age = dig(payload, "tx_queue", "saturated_by_age")
+if not isinstance(tx_queue_saturated_by_age, bool):
+    tx_queue_saturated_by_age = None
+tx_queue_oldest_queued_age_ms = first_int(
+    payload.get("tx_queue_oldest_queued_age_ms"),
+    dig(payload, "tx_queue", "oldest_queued_age_ms"),
+)
+view_change_last_cause = dig(payload, "view_change_causes", "last_cause")
+canonical_rbc_status = str(
+    dig(payload, "canonical", "rbc_status")
+    or payload.get("canonical_rbc_status")
+    or ""
+).strip().lower()
+canonical_pending_finality = (
+    dig(payload, "canonical", "pending_finality")
+    if isinstance(dig(payload, "canonical"), dict)
+    else payload.get("canonical_pending_finality")
+)
+pending_rbc_sessions = first_int(
+    payload.get("pending_rbc_sessions"),
+    dig(payload, "pending_rbc", "sessions"),
 )
 
 if commit_qc_height is None or commit_qc_height < 1:
@@ -457,6 +565,60 @@ if validator_set_len < 4:
         "sumeragi/status reported only "
         f"{validator_set_len} validators in the commit QC set; Taira rollout expects at least 4"
     )
+if (
+    membership_height is not None
+    and commit_qc_height is not None
+    and membership_height > commit_qc_height
+):
+    cause = view_change_last_cause or "unknown"
+    pending_finality_present = canonical_pending_finality not in (None, False, "", "false", "0")
+    rbc_waiting = canonical_rbc_status not in (
+        "",
+        "0",
+        "false",
+        "none",
+        "null",
+        "idle",
+        "disabled",
+        "ready",
+        "complete",
+        "completed",
+        "delivered",
+    )
+    one_ahead_prepare = (
+        canonical_phase == "prepare"
+        and canonical_height == membership_height == commit_qc_height + 1
+        and highest_qc_height == commit_qc_height
+        and locked_qc_height == commit_qc_height
+    )
+    stalled_one_ahead_idle = (
+        one_ahead_prepare
+        and worker_stage == "idle"
+        and canonical_view is not None
+        and canonical_view > 1
+    )
+    if not (
+        one_ahead_prepare
+        and not stalled_one_ahead_idle
+        and not pending_finality_present
+        and not rbc_waiting
+        and (pending_rbc_sessions in (None, 0))
+        and cause not in ("missing_qc", "quorum_timeout", "stake_quorum_timeout")
+        and tx_queue_saturated_by_age is not True
+    ):
+        raise SystemExit(
+            "sumeragi/status reports a finality fault "
+            f"({cause}) with membership height ahead of commit QC "
+            f"({membership_height} > {commit_qc_height}); "
+            f"queue depth={tx_queue_depth!r}, capacity={tx_queue_capacity!r}, "
+            f"saturated_by_age={tx_queue_saturated_by_age!r}, "
+            f"oldest_queued_age_ms={tx_queue_oldest_queued_age_ms!r}, "
+            f"phase={canonical_phase!r}, worker_stage={worker_stage!r}, "
+            f"canonical_view={canonical_view!r}, "
+            f"pending_finality={canonical_pending_finality!r}, "
+            f"rbc_status={canonical_rbc_status!r}, "
+            f"pending_rbc_sessions={pending_rbc_sessions!r}"
+        )
 PY
 }
 
@@ -573,6 +735,12 @@ ensure_write_canary_config() {
   if [[ -n "$IROHA_BIN" ]]; then
     bootstrap_cmd+=(--iroha-bin "$IROHA_BIN")
   fi
+  if [[ -n "$ROLLOUT_CANARY_GAS_ASSET_ID" ]]; then
+    bootstrap_cmd+=(--gas-asset-id "$ROLLOUT_CANARY_GAS_ASSET_ID")
+  fi
+  if should_skip_canary_faucet; then
+    bootstrap_cmd+=(--skip-faucet)
+  fi
 
   echo "==> canary bootstrap: ${WRITE_CONFIG}" >&2
   "${bootstrap_cmd[@]}" >&2
@@ -581,7 +749,7 @@ ensure_write_canary_config() {
 prepare_write_canary_config() {
   local target_url="$1"
 
-  [[ -n "$WRITE_CONFIG" ]] || WRITE_CONFIG="$WRITE_CONFIG_DEFAULT"
+  [[ -n "$WRITE_CONFIG" ]] || WRITE_CONFIG="$(default_write_config_path)"
   if [[ $WRITE_CONFIG_EXPLICIT -eq 1 ]]; then
     [[ -f "$WRITE_CONFIG" ]] || {
       echo "write canary config not found: $WRITE_CONFIG" >&2
@@ -837,6 +1005,20 @@ claim_faucet_for_canary() {
     --torii-root "$target_url"
 }
 
+write_canary_metadata_file() {
+  local output_file="$1"
+  local gas_asset_id="$2"
+  python3 - "$output_file" "$gas_asset_id" <<'PY'
+import json
+import sys
+
+path, gas_asset_id = sys.argv[1:]
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump({"gas_asset_id": gas_asset_id}, handle, sort_keys=True)
+    handle.write("\n")
+PY
+}
+
 current_block_height() {
   local root_url="$1"
   expect_status "status" GET "${root_url}/status" 200
@@ -927,8 +1109,15 @@ submit_capacity_canary() {
   local config_path="$1"
   local tx_stdin_path="$2"
   local output_file="$3"
+  local metadata_file="${4:-}"
+  local submit_cmd=("${IROHA_RUNNER[@]}" --output-format json -c "$config_path")
 
-  "${IROHA_RUNNER[@]}" --output-format json -c "$config_path" ledger transaction stdin \
+  if [[ -n "$metadata_file" ]]; then
+    submit_cmd+=(-m "$metadata_file")
+  fi
+  submit_cmd+=(ledger transaction stdin)
+
+  "${submit_cmd[@]}" \
     <"$tx_stdin_path" >"$output_file" 2>&1
 }
 
@@ -939,20 +1128,34 @@ run_write_canary() {
   ensure_sorafs_tx_stdin_builder_bin
   prepare_write_canary_config "$target_url"
 
-  local temp_config work_dir request_path tx_stdin_path spec_path output_file account_id private_key current_blocks provider_id_hex
-  temp_config="$(mktemp)"
-  work_dir="$(mktemp -d)"
-  output_file="$(mktemp)"
-  trap 'rm -f "${temp_config:-}" "${output_file:-}"; rm -rf "${work_dir:-}"; cleanup' EXIT
+  local temp_config work_dir request_path tx_stdin_path spec_path output_file metadata_file private_key_file account_id private_key current_blocks provider_id_hex
+  temp_config="$(physical_path "$(mktemp)")"
+  work_dir="$(physical_path "$(mktemp -d)")"
+  output_file="$(physical_path "$(mktemp)")"
+  metadata_file="$(physical_path "$(mktemp)")"
+  private_key_file="$(physical_path "$(mktemp)")"
+  trap 'rm -f "${temp_config:-}" "${metadata_file:-}" "${private_key_file:-}" "${output_file:-}"; rm -rf "${work_dir:-}"; cleanup' EXIT
   build_write_canary_config \
     "$WRITE_CONFIG" \
     "$target_url" \
     "$temp_config" \
     "$ROLLOUT_CANARY_TIME_TO_LIVE_MS" \
     "$ROLLOUT_CANARY_STATUS_TIMEOUT_MS"
+  if [[ -n "$ROLLOUT_CANARY_GAS_ASSET_ID" ]]; then
+    write_canary_metadata_file "$metadata_file" "$ROLLOUT_CANARY_GAS_ASSET_ID"
+  else
+    rm -f "$metadata_file"
+    metadata_file=""
+  fi
 
   account_id="$(resolve_canary_account_id "$temp_config")"
   private_key="$(resolve_canary_private_key "$temp_config")"
+  local previous_umask
+  previous_umask="$(umask)"
+  umask 077
+  printf '%s\n' "$private_key" >"$private_key_file"
+  umask "$previous_umask"
+  unset private_key
   current_blocks="$(current_block_height "$target_url")"
   spec_path="${work_dir}/capacity_canary.spec.json"
   provider_id_hex="$(
@@ -974,21 +1177,24 @@ run_write_canary() {
     "--spec=${spec_path}" \
     "--request-out=${request_path}" \
     "--authority=${account_id}" \
-    "--private-key=${private_key}" \
+    "--private-key-file=${private_key_file}" \
     --quiet
   "${SORAFS_TX_STDIN_BUILDER_RUNNER[@]}" \
     capacity-declaration-request \
     "--request=${request_path}" \
     >"$tx_stdin_path"
 
-  if ! submit_capacity_canary "$temp_config" "$tx_stdin_path" "$output_file"; then
+  if ! submit_capacity_canary "$temp_config" "$tx_stdin_path" "$output_file" "$metadata_file"; then
     if grep -q 'Failed to find asset' "$output_file"; then
       claim_faucet_for_canary "$target_url" "$account_id" >/dev/null
-      if ! submit_capacity_canary "$temp_config" "$tx_stdin_path" "$output_file"; then
+      if ! submit_capacity_canary "$temp_config" "$tx_stdin_path" "$output_file" "$metadata_file"; then
         sed -n '1,120p' "$output_file" >&2 || true
         exit 1
       fi
     else
+      if grep -q 'missing gas_asset_id' "$output_file"; then
+        echo "SoraFS capacity canary failed: Taira requires gas_asset_id transaction metadata; pass --gas-asset-id with an accepted asset definition id" >&2
+      fi
       if grep -q 'Unknown instruction type' "$output_file"; then
         echo "SoraFS capacity canary failed: the served validator binary is stale and missing SoraFS capacity/order instruction dispatch" >&2
       fi

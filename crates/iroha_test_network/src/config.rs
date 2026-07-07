@@ -1076,14 +1076,16 @@ fn build_placeholder_block(
         .iter()
         .map(|_| Ok(DataTriggerSequence::default()))
         .collect::<Vec<_>>();
-    rebuild_block_from_parts(
+    let mut block = rebuild_block_from_parts(
         template,
         transactions,
         Vec::new(),
         hashes,
         results,
         genesis_key_pair,
-    )
+    );
+    block.set_committed_fragment_count(0);
+    block
 }
 
 fn rebuild_block_with_results(
@@ -1489,6 +1491,44 @@ mod tests {
             &block.0,
             &genesis_key_pair
         ));
+    }
+
+    #[test]
+    fn placeholder_block_advertises_unknown_committed_fragment_count() {
+        init_instruction_registry();
+        let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer_id = PeerId::new(bls.public_key().clone());
+        let topology = [peer_id.clone()]
+            .into_iter()
+            .collect::<iroha_primitives::unique_vec::UniqueVec<_>>();
+        let entry = GenesisTopologyEntry::new(
+            PeerId::new(bls.public_key().clone()),
+            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
+        );
+        let (block, _genesis_account, _topology_vec, genesis_key_pair) =
+            super::build_minimal_genesis_unexecuted(
+                Vec::new(),
+                topology,
+                vec![entry],
+                SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
+            );
+
+        let placeholder = super::build_placeholder_block(&block.0, &genesis_key_pair);
+
+        assert_eq!(
+            placeholder.results().count(),
+            block.0.transactions_vec().len(),
+            "placeholder block must still carry result rows for every transaction"
+        );
+        assert_eq!(
+            placeholder.committed_fragment_count(),
+            Some(0),
+            "placeholder block must let validation derive committed fragment count"
+        );
+        assert!(
+            super::genesis_signature_is_canonical(&placeholder, &genesis_key_pair),
+            "placeholder committed fragment count must be signed canonically"
+        );
     }
 
     #[test]

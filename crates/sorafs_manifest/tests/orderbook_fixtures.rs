@@ -5,10 +5,11 @@
 use std::fs;
 
 use sorafs_manifest::{
-    ORDERBOOK_CANCEL_VERSION_V1, ORDERBOOK_ORDER_VERSION_V1, ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1,
-    ORDERBOOK_TRADE_EVENT_VERSION_V1, OrderCancelV1, OrderRequestV1, OrderbookRuntimeSnapshotV1,
-    SETTLEMENT_CHANNEL_VERSION_V1, SETTLEMENT_RECEIPT_VERSION_V1, SettlementChannelV1,
-    SettlementReceiptV1, TradeEventV1,
+    BYTES_PER_GIB, ORDERBOOK_CANCEL_VERSION_V1, ORDERBOOK_ORDER_VERSION_V1,
+    ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1, ORDERBOOK_TRADE_EVENT_VERSION_V1, OrderCancelV1,
+    OrderRequestV1, OrderbookRuntimeSnapshotV1, SETTLEMENT_CHANNEL_VERSION_V1,
+    SETTLEMENT_RECEIPT_VERSION_V1, SettlementChannelV1, SettlementReceiptV1, TradeEventV1,
+    trade_escrow_requirement_v1,
 };
 
 const FIXTURES_ROOT: &str = concat!(
@@ -144,7 +145,20 @@ fn runtime_snapshot_fixture_decodes_and_validates() {
     assert_eq!(snapshot.trades[0].trade_id, [0x83; 32]);
     assert_eq!(snapshot.settlement_channels.len(), 1);
     assert_eq!(snapshot.settlement_channels[0].channel_id, [0x82; 32]);
-    assert_eq!(snapshot.settlement_channels[0].remaining_bytes, 1_048_320);
+    let expected_total_bytes = snapshot.trades[0].filled_gib * BYTES_PER_GIB;
+    assert_eq!(
+        snapshot.settlement_channels[0].total_bytes,
+        expected_total_bytes
+    );
+    assert_eq!(
+        snapshot.settlement_channels[0].remaining_bytes,
+        expected_total_bytes - snapshot.settlement_receipts[0].bytes_delivered
+    );
+    let expected_escrow = trade_escrow_requirement_v1(&snapshot.trades[0])
+        .expect("fixture trade escrow should compute")
+        .checked_sub(snapshot.settlement_receipts[0].xor_debited)
+        .expect("fixture receipt debit should fit escrow");
+    assert_eq!(snapshot.settlement_channels[0].xor_locked, expected_escrow);
     assert_eq!(
         snapshot.settlement_channels[0].updated_at_unix,
         1_700_000_120

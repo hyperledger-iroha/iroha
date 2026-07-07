@@ -9001,6 +9001,7 @@ impl Actor {
         block_hash: HashOf<BlockHeader>,
         height: u64,
         purge_persisted_sessions: bool,
+        publish_empty_commitment_snapshot: bool,
     ) {
         let telemetry = self.telemetry_handle().cloned();
         let live_session_keys: BTreeSet<_> = self
@@ -9128,14 +9129,15 @@ impl Actor {
         }
 
         let telemetry_ref = self.telemetry_handle();
-        if !lane_totals.is_empty() || !dataspace_totals.is_empty() {
+        let has_commitment_totals = !lane_totals.is_empty() || !dataspace_totals.is_empty();
+        if has_commitment_totals || publish_empty_commitment_snapshot {
             let (lane_commitments, dataspace_commitments) = build_commitment_snapshots_from_totals(
                 lane_totals,
                 dataspace_totals,
                 block_hash,
                 height,
             );
-            if let Some(telemetry) = telemetry_ref {
+            if has_commitment_totals && let Some(telemetry) = telemetry_ref {
                 let queue_limits = self.queue.queue_limits();
                 telemetry.record_lane_commitments(
                     &lane_commitments,
@@ -9251,7 +9253,7 @@ impl Actor {
         block_hash: HashOf<BlockHeader>,
         height: u64,
     ) {
-        self.clean_rbc_sessions_for_block_inner(block_hash, height, true);
+        self.clean_rbc_sessions_for_block_inner(block_hash, height, true, false);
     }
 
     pub(super) fn should_retain_rbc_sessions_after_commit(
@@ -9286,7 +9288,7 @@ impl Actor {
 
         // Keep the persisted RBC snapshot after commit so lagging peers and restart recovery
         // can still hydrate block bodies from disk even after runtime session state is drained.
-        self.clean_rbc_sessions_for_block_inner(block_hash, height, false);
+        self.clean_rbc_sessions_for_block_inner(block_hash, height, false, true);
         true
     }
 

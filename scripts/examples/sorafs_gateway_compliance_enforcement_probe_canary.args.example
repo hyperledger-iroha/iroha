@@ -1,0 +1,19 @@
+# Reviewed enforcement-probe canary inputs for the SFM-4 gateway compliance gate.
+--kind enforcement_probe
+--out artifacts/sorafs_gateway/enforcement-probe-canary.json
+--deployment-id sorafs-gateway-prod-20260701
+--environment production
+--generated-at-unix 1800100000
+--now-unix 1800100000
+--bundle-digest-hex aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+--route-latency-ms 120
+--route-body-blake3-hex aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+--denial-reason provider
+--denial-reason manifest_digest
+--denial-reason cid
+--denial-reason url
+--denial-reason account_id
+--denial-reason account_alias
+--denial-reason perceptual_family
+--denial-reason gar_ttl
+--denial-reason legal_hold

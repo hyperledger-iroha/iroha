@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import secrets
 import sys
 from collections.abc import Sequence
@@ -20,16 +21,27 @@ if str(SCRIPT_DIR) not in sys.path:
 from check_sorafs_reputation_rollout_evidence import (  # noqa: E402
     DEFAULT_MAX_INGEST_LAG_SECS,
     DEFAULT_MAX_SNAPSHOT_AGE_SECS,
+    FORBIDDEN_PROVIDER_ID_MARKERS,
+    FORBIDDEN_TRANSPORT_EVENT_LABEL_MARKERS,
     KIND_BY_NAME,
     LoadedEvidence,
+    PROVIDER_ID_ERROR,
+    PROVIDER_ID_PATTERN,
+    REQUIRED_METRICS,
+    SSE_EVENT_LABEL_ERROR,
+    SSE_EVENT_LABEL_PATTERN,
     SNAPSHOT_ANCHOR_KINDS,
     SNAPSHOT_BOUND_KINDS,
+    WEBSOCKET_EVENT_LABEL_ERROR,
+    WEBSOCKET_EVENT_LABEL_PATTERN,
     validate_evidence_set,
 )
 from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_block,
     emit_checker_error_lines,
     emit_checker_exception,
+    fsync_checker_output_parent,
+    write_all_checker_summary_bytes,
     validate_checker_output_parent,
 )
 from sorafs_path_identity import path_diagnostic_label  # noqa: E402
@@ -90,6 +102,35 @@ def validate_canonical_string(value: str | None, *, label: str, errors: list[str
         errors.append(f"{label} must be a non-empty canonical string")
 
 
+def validate_provider_label_arg(
+    value: str | None,
+    *,
+    option: str,
+    errors: list[str],
+) -> None:
+    """Require a reviewed lowercase production provider label."""
+
+    validate_canonical_string(value, label=option, errors=errors)
+    if not isinstance(value, str):
+        return
+    if PROVIDER_ID_PATTERN.fullmatch(value) is None:
+        errors.append(PROVIDER_ID_ERROR.replace("provider_id", option))
+        return
+    forbidden = sorted(
+        marker
+        for marker in FORBIDDEN_PROVIDER_ID_MARKERS
+        if marker in value.split("-")
+    )
+    if forbidden:
+        errors.append(f"{option} must not contain non-production markers {forbidden}")
+
+
+def validate_provider_id_arg(value: str | None, *, errors: list[str]) -> None:
+    """Require a reviewed lowercase production provider identifier."""
+
+    validate_provider_label_arg(value, option="--provider-id", errors=errors)
+
+
 def split_csv_values(values: Sequence[str]) -> list[str]:
     """Split repeated comma-separated CLI values into canonical strings."""
 
@@ -102,6 +143,27 @@ def split_csv_values(values: Sequence[str]) -> list[str]:
     return items
 
 
+def validate_name_set(
+    values: Sequence[str],
+    *,
+    allowed: Sequence[str],
+    option: str,
+    errors: list[str],
+) -> list[str]:
+    """Return allowed-order values, requiring complete known non-duplicate coverage."""
+
+    allowed_set = frozenset(allowed)
+    value_set = frozenset(values)
+    if len(value_set) != len(values):
+        errors.append(f"{option} must not contain duplicates")
+    if any(name not in allowed_set for name in value_set):
+        errors.append(f"{option} contains an unknown value")
+    missing = [name for name in allowed if name not in value_set]
+    if missing:
+        errors.append(f"{option} must include every required value")
+    return [name for name in allowed if name in value_set]
+
+
 def validate_provider_inventory(args: argparse.Namespace, errors: list[str]) -> None:
     """Validate reviewed provider names and bind them to provider_count."""
 
@@ -109,7 +171,7 @@ def validate_provider_inventory(args: argparse.Namespace, errors: list[str]) -> 
     if not provider_names:
         errors.append("--provider-name is required")
     for name in provider_names:
-        validate_canonical_string(name, label="--provider-name", errors=errors)
+        validate_provider_label_arg(name, option="--provider-name", errors=errors)
     if len(set(provider_names)) != len(provider_names):
         errors.append("--provider-name must not contain duplicates")
     if args.provider_count != len(set(provider_names)):
@@ -117,6 +179,46 @@ def validate_provider_inventory(args: argparse.Namespace, errors: list[str]) -> 
             "--provider-count must match the number of unique --provider-name values"
         )
     args.providers = provider_names
+
+
+def validate_reviewed_inventory(
+    values: Sequence[str],
+    *,
+    expected_count: int,
+    option: str,
+    count_option: str,
+    pattern: re.Pattern[str] | None = None,
+    label_error: str | None = None,
+    errors: list[str],
+) -> list[str]:
+    """Validate reviewed unique labels and bind them to a CLI count."""
+
+    items = split_csv_values(values)
+    if not items:
+        errors.append(f"{option} is required")
+    for index, item in enumerate(items):
+        validate_canonical_string(item, label=option, errors=errors)
+        if pattern is not None and isinstance(item, str):
+            if pattern.fullmatch(item) is None:
+                errors.append(label_error or f"{option} uses an invalid label")
+            tokens = frozenset(
+                token for token in re.split(r"[^a-z0-9]+", item) if token
+            )
+            forbidden = sorted(
+                marker
+                for marker in FORBIDDEN_TRANSPORT_EVENT_LABEL_MARKERS
+                if marker in tokens
+            )
+            if forbidden:
+                errors.append(
+                    f"{option}[{index}] must not contain non-production "
+                    f"markers {forbidden}"
+                )
+    if len(set(items)) != len(items):
+        errors.append(f"{option} must not contain duplicates")
+    if expected_count != len(set(items)):
+        errors.append(f"{option} unique values must match {count_option}")
+    return items
 
 
 def common_payload(args: argparse.Namespace) -> dict[str, Any]:
@@ -149,6 +251,12 @@ def provider_rows(args: argparse.Namespace) -> list[dict[str, str]]:
     return [{"name": name} for name in providers]
 
 
+def inventory_rows(names: Sequence[str]) -> list[dict[str, str]]:
+    """Return payload-free reviewed inventory rows."""
+
+    return [{"name": name} for name in names]
+
+
 def build_payload(args: argparse.Namespace) -> dict[str, Any]:
     """Build a payload-free reputation rollout canary payload."""
 
@@ -158,6 +266,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
         payload.update(
             {
                 "status": "accepted",
+                "weights_digest_hex": args.weights_digest_hex,
                 "provider_count": args.provider_count,
                 "providers": provider_rows(args),
             }
@@ -213,6 +322,8 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "metrics_scrape_success": True,
                 "provider_count": args.provider_count,
                 "providers": provider_rows(args),
+                "metrics": args.metrics,
+                "metric_count": len(args.metrics),
                 "snapshot_age_seconds": args.snapshot_age_seconds,
                 "ingest_lag_seconds": args.ingest_lag_seconds,
                 "response_bodies_included": False,
@@ -225,7 +336,9 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "sse_connected": True,
                 "websocket_connected": True,
                 "sse_event_count": args.sse_event_count,
+                "sse_events": inventory_rows(args.sse_events),
                 "websocket_event_count": args.websocket_event_count,
+                "websocket_events": inventory_rows(args.websocket_events),
                 "response_bodies_included": False,
             }
         )
@@ -264,13 +377,45 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
     validate_output_path(args.out, errors)
     validate_canonical_string(args.deployment_id, label="--deployment-id", errors=errors)
     validate_canonical_string(args.environment, label="--environment", errors=errors)
-    validate_canonical_string(args.provider_id, label="--provider-id", errors=errors)
+    validate_provider_id_arg(args.provider_id, errors=errors)
     validate_hex(args.snapshot_id_hex, option="--snapshot-id-hex", length=HEX32_LEN, errors=errors)
     validate_hex(args.merkle_root_hex, option="--merkle-root-hex", length=HEX64_LEN, errors=errors)
+    validate_hex(
+        args.weights_digest_hex,
+        option="--weights-digest-hex",
+        length=HEX64_LEN,
+        errors=errors,
+    )
     validate_thresholds(args, errors)
     validate_provider_inventory(args, errors)
+    if args.kind == "metrics":
+        args.metrics = validate_name_set(
+            split_csv_values(args.metric),
+            allowed=REQUIRED_METRICS,
+            option="--metric",
+            errors=errors,
+        )
     if args.provider_score_bps > 10_000:
         errors.append("--provider-score-bps must be <= 10000")
+    if args.kind == "transport":
+        args.sse_events = validate_reviewed_inventory(
+            args.sse_event,
+            expected_count=args.sse_event_count,
+            option="--sse-event",
+            count_option="--sse-event-count",
+            pattern=SSE_EVENT_LABEL_PATTERN,
+            label_error=SSE_EVENT_LABEL_ERROR,
+            errors=errors,
+        )
+        args.websocket_events = validate_reviewed_inventory(
+            args.websocket_event,
+            expected_count=args.websocket_event_count,
+            option="--websocket-event",
+            count_option="--websocket-event-count",
+            pattern=WEBSOCKET_EVENT_LABEL_PATTERN,
+            label_error=WEBSOCKET_EVENT_LABEL_ERROR,
+            errors=errors,
+        )
     if args.kind == "provider":
         if not args.sibling_hex:
             errors.append("--sibling-hex is required for provider")
@@ -362,12 +507,14 @@ def write_payload_atomic(path: Path, payload: dict[str, Any]) -> list[str]:
         if nofollow:
             flags |= nofollow
         fd = os.open(tmp_path, flags, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            fd = -1
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
+        write_all_checker_summary_bytes(fd, text.encode("utf-8"))
+        os.fsync(fd)
+        os.close(fd)
+        fd = -1
         os.replace(tmp_path, path)
+        parent_sync_errors = fsync_checker_output_parent(path, label="--out")
+        if parent_sync_errors:
+            return parent_sync_errors
     except (OSError, RuntimeError) as error:
         del error
         try:
@@ -396,6 +543,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--now-unix", type=positive_int_arg)
     parser.add_argument("--snapshot-id-hex", required=True)
     parser.add_argument("--merkle-root-hex", required=True)
+    parser.add_argument("--weights-digest-hex", required=True)
     parser.add_argument("--provider-id", default="provider-a")
     parser.add_argument("--provider-count", type=positive_int_arg, default=2)
     parser.add_argument("--provider-name", action="append", default=[])
@@ -407,8 +555,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--event-count", type=positive_int_arg, default=1)
     parser.add_argument("--snapshot-age-seconds", type=non_negative_int_arg, default=120)
     parser.add_argument("--ingest-lag-seconds", type=non_negative_int_arg, default=60)
+    parser.add_argument("--metric", action="append", default=[])
     parser.add_argument("--sse-event-count", type=positive_int_arg, default=1)
+    parser.add_argument("--sse-event", action="append", default=[])
     parser.add_argument("--websocket-event-count", type=positive_int_arg, default=1)
+    parser.add_argument("--websocket-event", action="append", default=[])
     raw_args = sys.argv[1:] if argv is None else argv
     try:
         expanded_args = expand_response_args(raw_args, parser)

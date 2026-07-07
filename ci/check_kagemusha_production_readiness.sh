@@ -21749,5 +21749,5 @@ if errors:
         print(f"error: {error}", file=sys.stderr)
     raise SystemExit(1)
 
-print("Kagemusha production readiness is routed through ABI-6 Reserved-lineage recursive spend; ABI-7 recursive compact has package-aware one-hop/append proof wiring and cross-SDK compact-first selection, with C# Windows host certification tracked separately")
+print("Kagemusha production readiness is routed through ABI-6 Reserved-lineage recursive spend; ABI-7 recursive compact has package-aware one-hop/append proof wiring, cross-SDK compact-first selection, and dedicated C# SDK native-bridge certification")
 PY

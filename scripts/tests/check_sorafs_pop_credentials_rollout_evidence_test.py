@@ -37,6 +37,7 @@ def route(name: str) -> dict[str, object]:
         "name": name,
         "passed": True,
         "status_code": 200,
+        "body_blake3_hex": HEX,
         "authz_enforced": True,
         "signature_verified": True,
     }
@@ -47,16 +48,16 @@ def complete_payloads() -> dict[str, dict[str, object]]:
         "issuer_bundle": {
             "schema": "sorafs.pop.issuer_bundle_canary.v1",
             "status": "passed",
-            "issuer_id": "issuer-a",
+            "issuer_id": "pop-issuer-a",
             "bundle_id_hex": HEX,
             "root_digest_hex": HEX,
             "revocation_list_digest_hex": HEX_2,
             "credential_count": 3,
             "signed_credential_count": 3,
             "credentials": [
-                {"name": "credential-00"},
-                {"name": "credential-01"},
-                {"name": "credential-02"},
+                {"name": "pop-credential-00"},
+                {"name": "pop-credential-01"},
+                {"name": "pop-credential-02"},
             ],
             "canonical_norito_verified": True,
             "issuer_signature_verified": True,
@@ -86,6 +87,10 @@ def complete_payloads() -> dict[str, dict[str, object]]:
             "rollback_detected": False,
             "revoked_nonces_included": False,
             "revoked_nonce_count": 2,
+            "revoked_nonce_refs": [
+                {"name": "pop-revoked-nonce-00"},
+                {"name": "pop-revoked-nonce-01"},
+            ],
         },
         "enrollment_portal": {
             "schema": "sorafs.pop.enrollment_portal_canary.v1",
@@ -125,11 +130,13 @@ def complete_payloads() -> dict[str, dict[str, object]]:
             "proof_probe_count": 4,
             "accepted_valid_proof_count": 1,
             "rejected_invalid_proof_count": 3,
+            "route_count": 3,
+            "passed_route_count": 3,
             "probes": [
-                {"name": "valid-proof-00", "accepted": True},
-                {"name": "invalid-proof-00", "accepted": False},
-                {"name": "invalid-proof-01", "accepted": False},
-                {"name": "invalid-proof-02", "accepted": False},
+                {"name": "pop-valid-proof-00", "accepted": True},
+                {"name": "pop-invalid-proof-00", "accepted": False},
+                {"name": "pop-invalid-proof-01", "accepted": False},
+                {"name": "pop-invalid-proof-02", "accepted": False},
             ],
             "expired_proof_rejected": True,
             "revoked_proof_rejected": True,
@@ -154,13 +161,13 @@ def complete_payloads() -> dict[str, dict[str, object]]:
             "pop_snapshot_digest_hex": HEX,
             "sortition_probe_count": 2,
             "sortition_probes": [
-                {"name": "sortition-probe-00"},
-                {"name": "sortition-probe-01"},
+                {"name": "pop-sortition-probe-00"},
+                {"name": "pop-sortition-probe-01"},
             ],
             "commit_reveal_probe_count": 2,
             "commit_reveal_probes": [
-                {"name": "commit-reveal-probe-00"},
-                {"name": "commit-reveal-probe-01"},
+                {"name": "pop-commit-reveal-probe-00"},
+                {"name": "pop-commit-reveal-probe-01"},
             ],
             "juror_pool_bound": True,
             "moderation_case_binding_verified": True,
@@ -179,6 +186,7 @@ def complete_payloads() -> dict[str, dict[str, object]]:
             "alert_rules_installed": True,
             "critical_alerts_firing": False,
             "metrics": list(MODULE.REQUIRED_METRICS),
+            "metric_count": len(MODULE.REQUIRED_METRICS),
             "response_bodies_included": False,
         },
         "governance_approval": {
@@ -215,6 +223,27 @@ def write_complete_evidence(tmp_path: Path) -> Path:
     return evidence_dir
 
 
+ROOT_BOUND_FIXTURES = (
+    ("juror_client", "synced_root_digest_hex"),
+    ("verifier_service", "root_digest_hex"),
+    ("moderation_integration", "root_digest_hex"),
+    ("metrics_alerts", "root_digest_hex"),
+    ("governance_approval", "root_digest_hex"),
+)
+
+REVOCATION_BOUND_FIXTURES = (
+    ("juror_client", "synced_revocation_list_digest_hex"),
+    ("verifier_service", "revocation_list_digest_hex"),
+    ("moderation_integration", "revocation_list_digest_hex"),
+    ("metrics_alerts", "revocation_list_digest_hex"),
+    ("governance_approval", "revocation_list_digest_hex"),
+)
+
+POLICY_BOUND_FIXTURES = (
+    ("governance_approval", "policy_digest_hex"),
+)
+
+
 def write_args_file(path: Path, evidence_dir: Path, summary: Path) -> Path:
     path.write_text(
         "\n".join(
@@ -232,6 +261,20 @@ def write_args_file(path: Path, evidence_dir: Path, summary: Path) -> Path:
         encoding="utf-8",
     )
     return path
+
+
+def validation_options() -> object:
+    return MODULE.ValidationOptions(
+        now_unix=NOW,
+        max_root_age_secs=MODULE.DEFAULT_MAX_ROOT_AGE_SECS,
+        max_revocation_age_secs=MODULE.DEFAULT_MAX_REVOCATION_AGE_SECS,
+        max_service_lag_secs=MODULE.DEFAULT_MAX_SERVICE_LAG_SECS,
+        max_verify_latency_ms=MODULE.DEFAULT_MAX_VERIFY_LATENCY_MS,
+    )
+
+
+def run_gate(root: Path, *extra: str) -> int:
+    return MODULE.main(["--evidence-dir", str(root), "--now-unix", str(NOW), *extra])
 
 
 def test_complete_evidence_is_ready(tmp_path: Path, capsys) -> None:
@@ -268,9 +311,92 @@ def test_complete_evidence_is_ready(tmp_path: Path, capsys) -> None:
     assert payload["valid_root_digests"] == [HEX]
     assert payload["valid_revocation_list_digests"] == [HEX_2]
     assert payload["valid_policy_digests"] == [HEX]
+    assert payload["metrics"] == sorted(MODULE.REQUIRED_METRICS)
+    assert payload["metric_count_values"] == [len(MODULE.REQUIRED_METRICS)]
+    metrics_alerts_artifact = payload["required"]["metrics_alerts"]["artifacts"][0]
+    assert metrics_alerts_artifact["fingerprint"]["metric_count"] == len(
+        MODULE.REQUIRED_METRICS
+    )
+    assert metrics_alerts_artifact["fingerprint"]["metrics"] == list(
+        MODULE.REQUIRED_METRICS
+    )
     assert payload["required"]["issuer_bundle"]["artifacts"][0]["fingerprint"][
         "deployment_id"
     ] == DEPLOYMENT_ID
+
+
+def test_bound_fixture_tables_cover_checker_bound_kind_sets() -> None:
+    assert (
+        tuple(kind_name for kind_name, _digest_field in ROOT_BOUND_FIXTURES)
+        == MODULE.ROOT_BOUND_KINDS
+    )
+    assert (
+        tuple(kind_name for kind_name, _digest_field in REVOCATION_BOUND_FIXTURES)
+        == MODULE.REVOCATION_BOUND_KINDS
+    )
+    assert (
+        tuple(kind_name for kind_name, _digest_field in POLICY_BOUND_FIXTURES)
+        == MODULE.POLICY_BOUND_KINDS
+    )
+
+
+def test_fixture_inventories_cover_checker_required_sets() -> None:
+    payloads = complete_payloads()
+    assert tuple(
+        route["name"] for route in payloads["enrollment_portal"]["routes"]
+    ) == MODULE.REQUIRED_ENROLLMENT_ROUTES
+    assert tuple(
+        route["name"] for route in payloads["verifier_service"]["routes"]
+    ) == MODULE.REQUIRED_VERIFIER_ROUTES
+    assert tuple(payloads["metrics_alerts"]["metrics"]) == MODULE.REQUIRED_METRICS
+
+
+def test_payload_safety_flags_are_required(tmp_path: Path) -> None:
+    required_false_fields = (
+        ("issuer_bundle", "credential_payloads_included"),
+        ("issuer_bundle", "holder_identities_included"),
+        ("commitment_root", "credential_leaves_included"),
+        ("revocation_registry", "rollback_detected"),
+        ("revocation_registry", "revoked_nonces_included"),
+        ("enrollment_portal", "pii_fields_included"),
+        ("enrollment_portal", "attestations_included"),
+        ("juror_client", "holder_identity_included"),
+        ("juror_client", "proof_payloads_included"),
+        ("verifier_service", "raw_proofs_included"),
+        ("verifier_service", "holder_identity_disclosed"),
+        ("moderation_integration", "identity_payloads_included"),
+        ("moderation_integration", "credential_payloads_included"),
+        ("metrics_alerts", "critical_alerts_firing"),
+        ("metrics_alerts", "response_bodies_included"),
+    )
+
+    for kind, field in required_false_fields:
+        root = tmp_path / f"{kind}_{field}"
+        root.mkdir()
+        evidence_dir = write_complete_evidence(root)
+        payload = complete_payloads()[kind]
+        del payload[field]
+        write_json(evidence_dir / f"{kind}.json", payload)
+        summary = root / "summary.json"
+
+        assert (
+            MODULE.main(
+                [
+                    "--evidence-dir",
+                    str(evidence_dir),
+                    "--summary-out",
+                    str(summary),
+                    "--now-unix",
+                    str(NOW),
+                ]
+            )
+            == 1
+        )
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"][kind]["artifacts"][0]
+        assert artifact["valid"] is False
+        assert f"{field} must be false" in artifact["errors"]
 
 
 def test_response_file_complete_evidence_is_ready(tmp_path: Path, capsys) -> None:
@@ -284,6 +410,41 @@ def test_response_file_complete_evidence_is_ready(tmp_path: Path, capsys) -> Non
     assert "is ready" in capsys.readouterr().err
     payload = json.loads(summary.read_text(encoding="utf-8"))
     assert payload["status"] == "ready"
+
+
+def test_issuer_id_must_be_canonical() -> None:
+    for issuer_id in (
+        "pop-issuer-a",
+        "pop-issuer-prod-a",
+        "pop-issuer-governance-12",
+    ):
+        payload = complete_payloads()["issuer_bundle"]
+        payload["issuer_id"] = issuer_id
+        kind, errors = MODULE.validate_evidence_payload(payload, validation_options())
+        assert kind == "issuer_bundle"
+        assert errors == []
+
+    for issuer_id in ("pop-issuer", "Pop-issuer-a", "pop-issuer--a", "issuer-a"):
+        payload = complete_payloads()["issuer_bundle"]
+        payload["issuer_id"] = issuer_id
+        kind, errors = MODULE.validate_evidence_payload(payload, validation_options())
+        assert kind == "issuer_bundle"
+        assert MODULE.ISSUER_ID_ERROR in errors
+
+    payload = complete_payloads()["issuer_bundle"]
+    payload["issuer_id"] = "pop-issuer-dev-a"
+    _kind, errors = MODULE.validate_evidence_payload(payload, validation_options())
+    assert "issuer_id must not contain non-production markers ['dev']" in errors
+
+
+def test_issuer_id_rejects_generic_issuer_family() -> None:
+    payload = complete_payloads()["issuer_bundle"]
+    payload["issuer_id"] = "issuer-prod-a"
+
+    kind, errors = MODULE.validate_evidence_payload(payload, validation_options())
+
+    assert kind == "issuer_bundle"
+    assert MODULE.ISSUER_ID_ERROR in errors
 
 
 def test_issuer_credential_count_must_match_unique_credentials(
@@ -342,6 +503,87 @@ def test_issuer_credentials_must_not_duplicate(tmp_path: Path) -> None:
     artifact = payload["required"]["issuer_bundle"]["artifacts"][0]
     assert "credentials must not contain duplicate values" in artifact["errors"]
     assert "credential_count must match unique credentials count" in artifact["errors"]
+
+
+def test_issuer_credentials_must_use_reviewed_labels(tmp_path: Path) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    issuer = complete_payloads()["issuer_bundle"]
+    issuer["credentials"][0]["name"] = "credential_00"
+    write_json(evidence_dir / "issuer_bundle.json", issuer)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["issuer_bundle"]["artifacts"][0]
+    assert MODULE.CREDENTIAL_LABEL_ERROR in artifact["errors"]
+
+
+def test_issuer_credentials_reject_non_production_markers(tmp_path: Path) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    issuer = complete_payloads()["issuer_bundle"]
+    issuer["credentials"][0]["name"] = "pop-credential-placeholder"
+    write_json(evidence_dir / "issuer_bundle.json", issuer)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["issuer_bundle"]["artifacts"][0]
+    assert (
+        "credentials[].name must not contain non-production markers ['placeholder']"
+        in artifact["errors"]
+    )
+
+
+def test_issuer_credentials_must_use_pop_family(tmp_path: Path) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    issuer = complete_payloads()["issuer_bundle"]
+    issuer["credentials"][0]["name"] = "credential-00"
+    write_json(evidence_dir / "issuer_bundle.json", issuer)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["issuer_bundle"]["artifacts"][0]
+    assert MODULE.CREDENTIAL_LABEL_ERROR in artifact["errors"]
 
 
 def test_verifier_proof_probe_count_must_match_unique_probes(
@@ -406,6 +648,94 @@ def test_verifier_probes_must_not_duplicate(tmp_path: Path) -> None:
     assert "proof_probe_count must match unique probes count" in artifact["errors"]
 
 
+def test_verifier_probes_must_use_partitioned_reviewed_labels(
+    tmp_path: Path,
+) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    verifier = complete_payloads()["verifier_service"]
+    verifier["probes"][0]["name"] = "pop-invalid-proof-on-accepted-side"
+    verifier["probes"][1]["name"] = "pop-valid-proof-on-rejected-side"
+    write_json(evidence_dir / "verifier_service.json", verifier)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["verifier_service"]["artifacts"][0]
+    assert MODULE.VALID_PROOF_PROBE_LABEL_ERROR in artifact["errors"]
+    assert MODULE.INVALID_PROOF_PROBE_LABEL_ERROR in artifact["errors"]
+
+
+def test_verifier_probes_reject_non_production_markers(tmp_path: Path) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    verifier = complete_payloads()["verifier_service"]
+    verifier["probes"][0]["name"] = "pop-valid-proof-placeholder"
+    verifier["probes"][1]["name"] = "pop-invalid-proof-placeholder"
+    write_json(evidence_dir / "verifier_service.json", verifier)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["verifier_service"]["artifacts"][0]
+    assert (
+        "probes[].name must not contain non-production markers ['placeholder']"
+        in artifact["errors"]
+    )
+
+
+def test_verifier_probes_must_use_pop_families(tmp_path: Path) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    verifier = complete_payloads()["verifier_service"]
+    verifier["probes"][0]["name"] = "valid-proof-00"
+    verifier["probes"][1]["name"] = "invalid-proof-00"
+    write_json(evidence_dir / "verifier_service.json", verifier)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["verifier_service"]["artifacts"][0]
+    assert MODULE.VALID_PROOF_PROBE_LABEL_ERROR in artifact["errors"]
+    assert MODULE.INVALID_PROOF_PROBE_LABEL_ERROR in artifact["errors"]
+
+
 def test_verifier_probe_partition_counts_must_match_probes(tmp_path: Path) -> None:
     evidence_dir = write_complete_evidence(tmp_path)
     verifier = complete_payloads()["verifier_service"]
@@ -437,6 +767,158 @@ def test_verifier_probe_partition_counts_must_match_probes(tmp_path: Path) -> No
         "rejected_invalid_proof_count must match rejected probes count"
         in artifact["errors"]
     )
+
+
+def test_verifier_route_count_must_match_unique_routes(tmp_path: Path) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    verifier = complete_payloads()["verifier_service"]
+    verifier["route_count"] += 1
+    verifier["passed_route_count"] = verifier["route_count"]
+    write_json(evidence_dir / "verifier_service.json", verifier)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["verifier_service"]["artifacts"][0]
+    assert "route_count must match unique routes count" in artifact["errors"]
+
+
+def test_verifier_routes_must_not_duplicate(tmp_path: Path) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    verifier = complete_payloads()["verifier_service"]
+    verifier["routes"].append(dict(verifier["routes"][0]))
+    verifier["route_count"] = len(verifier["routes"])
+    verifier["passed_route_count"] = len(verifier["routes"])
+    write_json(evidence_dir / "verifier_service.json", verifier)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["verifier_service"]["artifacts"][0]
+    assert "routes must not contain duplicate values" in artifact["errors"]
+    assert "route_count must match unique routes count" in artifact["errors"]
+
+
+def test_verifier_routes_must_not_include_unknown_values(tmp_path: Path) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    verifier = complete_payloads()["verifier_service"]
+    verifier["routes"].append(route("proof_unknown"))
+    verifier["route_count"] = len(verifier["routes"])
+    verifier["passed_route_count"] = len(verifier["routes"])
+    write_json(evidence_dir / "verifier_service.json", verifier)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["verifier_service"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "routes must not include unknown values" in artifact["errors"]
+
+
+def test_verifier_payload_free_flags_are_required(tmp_path: Path) -> None:
+    for field in ("raw_proofs_included", "holder_identity_disclosed"):
+        root = tmp_path / field
+        root.mkdir()
+        evidence_dir = write_complete_evidence(root)
+        verifier = complete_payloads()["verifier_service"]
+        del verifier[field]
+        write_json(evidence_dir / "verifier_service.json", verifier)
+        summary = root / "summary.json"
+
+        assert (
+            MODULE.main(
+                [
+                    "--evidence-dir",
+                    str(evidence_dir),
+                    "--summary-out",
+                    str(summary),
+                    "--now-unix",
+                    str(NOW),
+                ]
+            )
+            == 1
+        )
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"]["verifier_service"]["artifacts"][0]
+        assert artifact["valid"] is False
+        assert f"{field} must be false" in artifact["errors"]
+
+
+def test_route_body_hash_is_required_for_route_artifacts(tmp_path: Path) -> None:
+    route_artifacts = (
+        ("enrollment_portal", "enrollment_portal.json"),
+        ("verifier_service", "verifier_service.json"),
+    )
+    for kind, filename in route_artifacts:
+        root = tmp_path / kind
+        root.mkdir()
+        evidence_dir = write_complete_evidence(root)
+        payload = complete_payloads()[kind]
+        del payload["routes"][0]["body_blake3_hex"]
+        write_json(evidence_dir / filename, payload)
+        summary = root / "summary.json"
+
+        assert (
+            MODULE.main(
+                [
+                    "--evidence-dir",
+                    str(evidence_dir),
+                    "--summary-out",
+                    str(summary),
+                    "--now-unix",
+                    str(NOW),
+                ]
+            )
+            == 1
+        )
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"][kind]["artifacts"][0]
+        assert artifact["valid"] is False
+        assert (
+            "routes[0].body_blake3_hex must be a non-empty string"
+            in artifact["errors"]
+        )
 
 
 def test_moderation_sortition_probe_count_must_match_unique_probes(
@@ -501,6 +983,93 @@ def test_moderation_sortition_probes_must_not_duplicate(tmp_path: Path) -> None:
     )
 
 
+def test_moderation_sortition_probes_must_use_reviewed_labels(
+    tmp_path: Path,
+) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    moderation = complete_payloads()["moderation_integration"]
+    moderation["sortition_probes"][0]["name"] = "sortition_probe_00"
+    write_json(evidence_dir / "moderation_integration.json", moderation)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["moderation_integration"]["artifacts"][0]
+    assert MODULE.SORTITION_PROBE_LABEL_ERROR in artifact["errors"]
+
+
+def test_moderation_sortition_probes_reject_non_production_markers(
+    tmp_path: Path,
+) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    moderation = complete_payloads()["moderation_integration"]
+    moderation["sortition_probes"][0]["name"] = "pop-sortition-probe-placeholder"
+    write_json(evidence_dir / "moderation_integration.json", moderation)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["moderation_integration"]["artifacts"][0]
+    assert (
+        "sortition_probes[].name must not contain non-production markers ['placeholder']"
+        in artifact["errors"]
+    )
+
+
+def test_moderation_probes_must_use_pop_families(tmp_path: Path) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    moderation = complete_payloads()["moderation_integration"]
+    moderation["sortition_probes"][0]["name"] = "sortition-probe-00"
+    moderation["commit_reveal_probes"][0]["name"] = "commit-reveal-probe-00"
+    write_json(evidence_dir / "moderation_integration.json", moderation)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["moderation_integration"]["artifacts"][0]
+    assert MODULE.SORTITION_PROBE_LABEL_ERROR in artifact["errors"]
+    assert MODULE.COMMIT_REVEAL_PROBE_LABEL_ERROR in artifact["errors"]
+
+
 def test_moderation_commit_reveal_probe_count_must_match_unique_probes(
     tmp_path: Path,
 ) -> None:
@@ -528,6 +1097,66 @@ def test_moderation_commit_reveal_probe_count_must_match_unique_probes(
     artifact = payload["required"]["moderation_integration"]["artifacts"][0]
     assert (
         "commit_reveal_probe_count must match unique commit_reveal_probes count"
+        in artifact["errors"]
+    )
+
+
+def test_moderation_commit_reveal_probes_must_use_reviewed_labels(
+    tmp_path: Path,
+) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    moderation = complete_payloads()["moderation_integration"]
+    moderation["commit_reveal_probes"][0]["name"] = "commit_reveal_probe_00"
+    write_json(evidence_dir / "moderation_integration.json", moderation)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["moderation_integration"]["artifacts"][0]
+    assert MODULE.COMMIT_REVEAL_PROBE_LABEL_ERROR in artifact["errors"]
+
+
+def test_moderation_commit_reveal_probes_reject_non_production_markers(
+    tmp_path: Path,
+) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    moderation = complete_payloads()["moderation_integration"]
+    moderation["commit_reveal_probes"][0]["name"] = "pop-commit-reveal-probe-placeholder"
+    write_json(evidence_dir / "moderation_integration.json", moderation)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["moderation_integration"]["artifacts"][0]
+    assert (
+        "commit_reveal_probes[].name must not contain non-production markers "
+        "['placeholder']"
         in artifact["errors"]
     )
 
@@ -626,6 +1255,37 @@ def test_enrollment_portal_routes_must_not_duplicate(tmp_path: Path) -> None:
     artifact = payload["required"]["enrollment_portal"]["artifacts"][0]
     assert "routes must not contain duplicate values" in artifact["errors"]
     assert "route_count must match unique routes count" in artifact["errors"]
+
+
+def test_enrollment_portal_routes_must_not_include_unknown_values(
+    tmp_path: Path,
+) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    portal = complete_payloads()["enrollment_portal"]
+    portal["routes"].append(route("application_unknown"))
+    portal["route_count"] = len(portal["routes"])
+    portal["passed_route_count"] = len(portal["routes"])
+    write_json(evidence_dir / "enrollment_portal.json", portal)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["enrollment_portal"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "routes must not include unknown values" in artifact["errors"]
 
 
 def test_deployment_context_is_required(tmp_path: Path) -> None:
@@ -789,6 +1449,84 @@ def test_governance_policy_digest_must_match_verifier_service(
     ]
 
 
+def test_all_root_bound_artifacts_reject_published_root_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, digest_field in ROOT_BOUND_FIXTURES:
+        case_root = tmp_path / kind_name
+        case_root.mkdir()
+        evidence_dir = write_complete_evidence(case_root)
+        payload = complete_payloads()[kind_name]
+        payload[digest_field] = HEX_2
+        write_json(evidence_dir / f"{kind_name}.json", payload)
+        summary = case_root / "summary.json"
+
+        assert run_gate(evidence_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert result["valid_root_digests"] == [HEX]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} root binding must match a valid "
+            "issuer_bundle/commitment_root root_digest_hex"
+        ) in artifact["errors"]
+
+
+def test_all_revocation_bound_artifacts_reject_registry_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, digest_field in REVOCATION_BOUND_FIXTURES:
+        case_root = tmp_path / kind_name
+        case_root.mkdir()
+        evidence_dir = write_complete_evidence(case_root)
+        payload = complete_payloads()[kind_name]
+        payload[digest_field] = HEX
+        write_json(evidence_dir / f"{kind_name}.json", payload)
+        summary = case_root / "summary.json"
+
+        assert run_gate(evidence_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert result["valid_revocation_list_digests"] == [HEX_2]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} revocation binding must match a valid "
+            "issuer_bundle/revocation_registry revocation_list_digest_hex"
+        ) in artifact["errors"]
+
+
+def test_all_policy_bound_artifacts_reject_verifier_policy_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, digest_field in POLICY_BOUND_FIXTURES:
+        case_root = tmp_path / kind_name
+        case_root.mkdir()
+        evidence_dir = write_complete_evidence(case_root)
+        payload = complete_payloads()[kind_name]
+        payload[digest_field] = HEX_2
+        write_json(evidence_dir / f"{kind_name}.json", payload)
+        summary = case_root / "summary.json"
+
+        assert run_gate(evidence_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert result["valid_policy_digests"] == [HEX]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} policy_digest_hex must match a valid "
+            "verifier_service policy_digest_hex"
+        ) in artifact["errors"]
+
+
 def test_policy_bound_subset_requires_verifier_service_anchor(tmp_path: Path) -> None:
     evidence_dir = tmp_path / "evidence"
     evidence_dir.mkdir()
@@ -846,6 +1584,121 @@ def test_stale_revocation_registry_blocks_rollout(tmp_path: Path, capsys) -> Non
     assert MODULE.main(["--evidence-dir", str(evidence_dir), "--now-unix", str(NOW)]) == 1
 
     assert "published_at_unix is older" in capsys.readouterr().err
+
+
+def test_revoked_nonce_count_must_match_unique_refs(tmp_path: Path) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    revocation = complete_payloads()["revocation_registry"]
+    revocation["revoked_nonce_count"] += 1
+    write_json(evidence_dir / "revocation_registry.json", revocation)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["revocation_registry"]["artifacts"][0]
+    assert (
+        "revoked_nonce_count must match unique revoked_nonce_refs count"
+        in artifact["errors"]
+    )
+
+
+def test_revoked_nonce_refs_must_not_duplicate(tmp_path: Path) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    revocation = complete_payloads()["revocation_registry"]
+    revocation["revoked_nonce_refs"].append(dict(revocation["revoked_nonce_refs"][0]))
+    revocation["revoked_nonce_count"] = len(revocation["revoked_nonce_refs"])
+    write_json(evidence_dir / "revocation_registry.json", revocation)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["revocation_registry"]["artifacts"][0]
+    assert "revoked_nonce_refs must not contain duplicate values" in artifact["errors"]
+    assert (
+        "revoked_nonce_count must match unique revoked_nonce_refs count"
+        in artifact["errors"]
+    )
+
+
+def test_revoked_nonce_refs_must_use_reviewed_labels(tmp_path: Path) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    revocation = complete_payloads()["revocation_registry"]
+    revocation["revoked_nonce_refs"][0]["name"] = "revoked-nonce-00"
+    write_json(evidence_dir / "revocation_registry.json", revocation)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["revocation_registry"]["artifacts"][0]
+    assert MODULE.REVOKED_NONCE_LABEL_ERROR in artifact["errors"]
+
+
+def test_revoked_nonce_refs_reject_non_production_markers(tmp_path: Path) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    revocation = complete_payloads()["revocation_registry"]
+    revocation["revoked_nonce_refs"][0]["name"] = "pop-revoked-nonce-placeholder"
+    write_json(evidence_dir / "revocation_registry.json", revocation)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["revocation_registry"]["artifacts"][0]
+    assert (
+        "revoked_nonce_refs[0].name must not contain non-production markers "
+        "['placeholder']"
+    ) in artifact["errors"]
 
 
 def test_verifier_service_requires_root_revocation_binding(tmp_path: Path, capsys) -> None:
@@ -955,6 +1808,89 @@ def test_missing_required_metric_blocks_rollout(tmp_path: Path, capsys) -> None:
     assert MODULE.main(["--evidence-dir", str(evidence_dir), "--now-unix", str(NOW)]) == 1
 
     assert "metrics must include value `pop_revocation_publication_total`" in capsys.readouterr().err
+
+
+def test_metrics_must_not_duplicate(tmp_path: Path) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    metrics = complete_payloads()["metrics_alerts"]
+    metrics["metrics"].append(metrics["metrics"][0])
+    metrics["metric_count"] = len(metrics["metrics"])
+    write_json(evidence_dir / "metrics_alerts.json", metrics)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--now-unix",
+                str(NOW),
+                "--summary-out",
+                str(summary),
+            ]
+        )
+        == 1
+    )
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["metrics_alerts"]["artifacts"][0]
+    assert "metrics must not contain duplicate values" in artifact["errors"]
+    assert "metric_count must match unique metrics count" in artifact["errors"]
+
+
+def test_metrics_must_not_include_unknown_values(tmp_path: Path) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    metrics = complete_payloads()["metrics_alerts"]
+    metrics["metrics"].append("pop_unknown_metric_total")
+    metrics["metric_count"] = len(metrics["metrics"])
+    write_json(evidence_dir / "metrics_alerts.json", metrics)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--now-unix",
+                str(NOW),
+                "--summary-out",
+                str(summary),
+            ]
+        )
+        == 1
+    )
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["metrics_alerts"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "metrics must not include unknown values" in artifact["errors"]
+
+
+def test_metrics_payload_free_flags_are_required(tmp_path: Path) -> None:
+    for field in ("critical_alerts_firing", "response_bodies_included"):
+        root = tmp_path / field
+        root.mkdir()
+        evidence_dir = write_complete_evidence(root)
+        metrics = complete_payloads()["metrics_alerts"]
+        del metrics[field]
+        write_json(evidence_dir / "metrics_alerts.json", metrics)
+        summary = root / "summary.json"
+
+        assert (
+            MODULE.main(
+                [
+                    "--evidence-dir",
+                    str(evidence_dir),
+                    "--now-unix",
+                    str(NOW),
+                    "--summary-out",
+                    str(summary),
+                ]
+            )
+            == 1
+        )
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"]["metrics_alerts"]["artifacts"][0]
+        assert artifact["valid"] is False
+        assert f"{field} must be false" in artifact["errors"]
 
 
 def test_explicit_unknown_schema_fails(tmp_path: Path, capsys) -> None:

@@ -24,3 +24,9 @@ provider-01
 provider-02
 --challenge-count
 3
+--challenge
+por-challenge-00
+--challenge
+por-challenge-01
+--challenge
+por-challenge-02

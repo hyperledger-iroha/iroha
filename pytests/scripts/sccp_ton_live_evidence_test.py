@@ -194,6 +194,35 @@ def fake_ton_opener(
 def test_live_ton_api_url_rejects_hidden_request_state():
     module = load_live_module()
 
+    class HostileTonApiUrl(str):
+        def __new__(cls):
+            return str.__new__(cls, "https://toncenter.example")
+
+        def __str__(self):
+            raise AssertionError("secret-token TON API URL was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token TON API URL was repr'd")
+
+        def __eq__(self, _other):
+            raise AssertionError("secret-token TON API URL was compared")
+
+        def __ne__(self, _other):
+            raise AssertionError("secret-token TON API URL was compared")
+
+        def __iter__(self):
+            raise AssertionError("secret-token TON API URL was iterated")
+
+        def strip(self, *_args):
+            raise AssertionError("secret-token TON API URL was stripped")
+
+    class HostileTonApiUrlLabel:
+        def __str__(self):
+            raise AssertionError("secret-token TON API URL label was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token TON API URL label was repr'd")
+
     assert module._account_states_url("https://toncenter.example") == (
         "https://toncenter.example/api/v3/accountStates"
     )
@@ -217,6 +246,8 @@ def test_live_ton_api_url_rejects_hidden_request_state():
         ("https://bad_host.toncenter.example", "public DNS"),
         (" https://toncenter.example", "exact http(s) URL"),
         ("https://toncenter.example\nsecret", "exact http(s) URL"),
+        (HostileTonApiUrl(), "exact http(s) URL"),
+        (HostileTonApiUrlLabel(), "exact http(s) URL"),
     ):
         try:
             module._account_states_url(api_url)
@@ -1346,6 +1377,116 @@ def test_live_ton_evidence_rejects_non_string_imported_metadata_without_stringif
             raise AssertionError(f"non-string TON live {field} metadata was accepted")
 
 
+def test_live_ton_offline_args_reject_non_string_copied_summary_metadata_without_stringifying(
+    monkeypatch,
+):
+    module = load_live_module()
+    fake = fake_ton_opener(module)
+    live = module.collect_live_evidence(
+        "https://toncenter.example",
+        verifier_contract_address=TON_VERIFIER_CONTRACT_ADDRESS,
+        opener=fake.opener,
+        timeout=3.0,
+    )
+    args = live_args(
+        module,
+        code_hash=fake.code_hash,
+        account_state_hash=fake.account_state_hash,
+    )
+    original_json_summary = module.evidence._json_summary
+
+    for path, expected_error in (
+        (
+            ("destination_binding_hash",),
+            "destination binding hash must be an exact non-empty string",
+        ),
+        (
+            ("route_allowlist_hash",),
+            "route allowlist hash must be an exact non-empty string",
+        ),
+        (
+            ("route_canary", "evidence_hash"),
+            "route canary evidence hash must be an exact non-empty string",
+        ),
+    ):
+
+        def malformed_json_summary(*summary_args, _path=path, **summary_kwargs):
+            summary = original_json_summary(*summary_args, **summary_kwargs)
+            target = summary
+            for key in _path[:-1]:
+                target = target[key]
+            target[_path[-1]] = HostileImportedScalar()
+            return summary
+
+        with monkeypatch.context() as patch:
+            patch.setattr(module.evidence, "_json_summary", malformed_json_summary)
+            try:
+                module._summary(args, live)
+            except ValueError as exc:
+                rendered = str(exc)
+                assert rendered == expected_error
+                assert "secret-token" not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError(
+                    "TON offline args accepted hostile copied summary "
+                    f"{'.'.join(path)}"
+                )
+
+
+def test_live_ton_destination_args_reject_non_string_validated_live_metadata_without_stringifying():
+    module = load_live_module()
+    fake = fake_ton_opener(module)
+    live = module.collect_live_evidence(
+        "https://toncenter.example",
+        verifier_contract_address=TON_VERIFIER_CONTRACT_ADDRESS,
+        opener=fake.opener,
+        timeout=3.0,
+    )
+    args = live_args(
+        module,
+        code_hash=fake.code_hash,
+        account_state_hash=fake.account_state_hash,
+    )
+
+    cases = (
+        ("code_boc_base64", "code_boc_base64 must be an exact non-empty string"),
+        (
+            "verifier_contract_address",
+            "verifier_contract_address must be an exact non-empty string",
+        ),
+        ("account_status", "account_status must be an exact non-empty string"),
+        ("account_state_hash", "account_state_hash must be an exact non-empty string"),
+        ("last_transaction_lt", "last_transaction_lt must be a decimal string"),
+        (
+            "last_transaction_hash",
+            "last_transaction_hash must be an exact non-empty string",
+        ),
+        ("code_boc_root_hash", "code_boc_root_hash must be an exact non-empty string"),
+    )
+    for field, expected_error in cases:
+        forged = dict(live)
+        forged[field] = HostileImportedScalar()
+        try:
+            module._destination_args_from_validated_live(
+                args,
+                forged,
+                fake.code_hash,
+                bytes.fromhex(TON_CODE_BOC_HEX),
+            )
+        except (RuntimeError, ValueError) as exc:
+            rendered = str(exc)
+            assert rendered == expected_error
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(
+                f"TON destination args accepted hostile validated live {field}"
+            )
+
+
 def test_live_ton_summary_rejects_hostile_expected_pins_without_hooks():
     module = load_live_module()
     fake = fake_ton_opener(module)
@@ -1723,6 +1864,45 @@ def test_ton_live_api_key_file_rejects_unreadable_file_shapes(tmp_path):
     symlink_parent = tmp_path / "secret-token-ton-api-key-parent-link"
     symlink_parent.symlink_to(real_parent, target_is_directory=True)
     missing_token_file = tmp_path / "secret-token-ton-api-key-missing"
+
+    class HostileApiKeyFile(str):
+        def __new__(cls):
+            return str.__new__(cls, str(outside_token_file))
+
+        def __str__(self):
+            raise AssertionError("secret-token TON API key file was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token TON API key file was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token TON API key file fspath ran")
+
+    class HostileApiKeyPathLike:
+        def __str__(self):
+            raise AssertionError("secret-token TON API key path-like was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token TON API key path-like was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token TON API key path-like fspath ran")
+
+    for hidden_file in (
+        outside_token_file,
+        HostileApiKeyFile(),
+        HostileApiKeyPathLike(),
+    ):
+        try:
+            module._read_api_key(SimpleNamespace(api_key=None, api_key_file=hidden_file))
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == "--api-key-file cannot be read"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError("non-exact TON API key file path was accepted")
 
     for unreadable_file in (
         symlink_token_file,

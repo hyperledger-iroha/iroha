@@ -10,6 +10,7 @@ use base64::{
     engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
 };
 use iroha_config::parameters::actual;
+use iroha_core::state::WorldReadOnly;
 use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey, Signature};
 use iroha_data_model::{
     ValidationFail,
@@ -182,6 +183,7 @@ struct ParsedOfflineRequest {
     operation_id: String,
     device_id: String,
     offline_public_key: String,
+    asset_id: AssetId,
     asset_definition_id: AssetDefinitionId,
     asset_definition_literal: String,
     device_binding: Value,
@@ -367,10 +369,7 @@ pub(crate) async fn handle_notes_issue(
     let issue = IssueOfflineNote::new(OfflineNoteIssue {
         note_commitment: note_commitment.clone(),
         key_certificate: chain_certificate,
-        asset: AssetId::new(
-            parsed.asset_definition_id.clone(),
-            parsed.account_id.clone(),
-        ),
+        asset: parsed.asset_id.clone(),
         amount: amount.clone(),
     });
     let tx = issuer.sign_transaction(
@@ -789,6 +788,7 @@ fn parse_and_authorize(
                 format!("Unknown or invalid asset_definition_id `{asset_literal}`."),
             )
         })?;
+    let asset_id = resolve_offline_issue_asset_id(&world, &account_id, &asset_definition_id);
     let operation_id = required_exact_protocol_string(
         &value,
         "operation_id",
@@ -804,10 +804,28 @@ fn parse_and_authorize(
         operation_id,
         device_id,
         offline_public_key,
+        asset_id,
         asset_definition_id,
         asset_definition_literal: asset_literal,
         device_binding,
     })
+}
+
+fn resolve_offline_issue_asset_id(
+    world: &impl WorldReadOnly,
+    account_id: &AccountId,
+    asset_definition_id: &AssetDefinitionId,
+) -> AssetId {
+    let mut account_assets = world
+        .assets_in_account_by_definition_iter(account_id, asset_definition_id)
+        .map(|asset| asset.id().clone());
+    let Some(first) = account_assets.next() else {
+        return AssetId::new(asset_definition_id.clone(), account_id.clone());
+    };
+    if account_assets.next().is_some() {
+        return AssetId::new(asset_definition_id.clone(), account_id.clone());
+    }
+    first
 }
 
 fn reject_x_iroha_auth_headers(headers: &HeaderMap) -> Result<(), Error> {
@@ -3186,8 +3204,16 @@ fn validation_owned(code: &'static str, message: String) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::{HeaderMap, Method, Uri};
+    use iroha_core::prelude::World;
     use iroha_crypto::Algorithm;
-    use iroha_data_model::domain::DomainId;
+    use iroha_data_model::{
+        Registrable,
+        account::Account,
+        asset::{Asset, AssetBalanceScope, AssetDefinition},
+        domain::{Domain, DomainId},
+        nexus::DataSpaceId,
+    };
 
     const NOW_MS: u64 = 1_700_000_000_000;
     const REPORT_BYTES: &[u8] = b"offline-v2-platform-attestation";
@@ -3247,6 +3273,150 @@ mod tests {
             },
             verifier_key_pair,
         )
+    }
+
+    fn asset_definition_for_parse_tests() -> AssetDefinitionId {
+        AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain id"),
+            "rose".parse().expect("asset name"),
+        )
+    }
+
+    fn app_with_account_and_asset_scope(
+        account_id: &AccountId,
+        asset_definition_id: &AssetDefinitionId,
+        scope: AssetBalanceScope,
+    ) -> SharedAppState {
+        let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(account_id);
+        let account = Account::new(account_id.clone()).build(account_id);
+        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
+            .with_name(asset_definition_id.name().to_string())
+            .build(account_id);
+        let asset = Asset::new(
+            AssetId::with_scope(asset_definition_id.clone(), account_id.clone(), scope),
+            Numeric::new(200, 0),
+        );
+        let world = World::with_assets([domain], [account], [asset_definition], [asset], []);
+        crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(world)
+    }
+
+    fn minimal_parse_body(account_literal: &str, asset_literal: &str) -> Value {
+        let offline_public_key = "a5".repeat(32);
+        let device_binding = json_object(vec![
+            ("device_id", string_value("device-1")),
+            ("offline_public_key", string_value(&offline_public_key)),
+            (
+                "signature_base64",
+                string_value("nested-device-signature-is-not-body-auth"),
+            ),
+        ]);
+        json_object(vec![
+            ("account_id", string_value(account_literal)),
+            ("operation_id", string_value("operation-1")),
+            ("device_id", string_value("device-1")),
+            ("offline_public_key", string_value(offline_public_key)),
+            ("asset_definition_id", string_value(asset_literal)),
+            ("device_binding", device_binding),
+        ])
+    }
+
+    fn add_body_freshness(
+        value: &mut Value,
+        account_literal: &str,
+        timestamp_ms: u64,
+        nonce: &str,
+    ) {
+        insert_field(value, "account_id", string_value(account_literal));
+        insert_field(value, "timestamp_ms", number_value(timestamp_ms));
+        insert_field(value, "nonce", string_value(nonce));
+    }
+
+    fn unsigned_body_bytes(value: &Value) -> Vec<u8> {
+        let mut unsigned = value.clone();
+        let Value::Object(map) = &mut unsigned else {
+            panic!("expected object body");
+        };
+        map.remove("signature_base64");
+        map.remove("witness_base64");
+        json::to_vec(&unsigned).expect("unsigned body json")
+    }
+
+    fn sign_body_value(
+        method: &Method,
+        uri: &Uri,
+        key_pair: &KeyPair,
+        mut value: Value,
+        account_literal: &str,
+        timestamp_ms: u64,
+        nonce: &str,
+    ) -> Value {
+        add_body_freshness(&mut value, account_literal, timestamp_ms, nonce);
+        let unsigned = unsigned_body_bytes(&value);
+        let message = app_auth::canonical_request_signature_message(
+            method,
+            uri,
+            &unsigned,
+            timestamp_ms,
+            nonce,
+        );
+        let signature = checked_signature(key_pair, &message);
+        insert_field(
+            &mut value,
+            "signature_base64",
+            string_value(BASE64_STANDARD.encode(signature.payload())),
+        );
+        value
+    }
+
+    fn parse_offline_request(
+        app: &SharedAppState,
+        method: &Method,
+        uri: &Uri,
+        headers: &HeaderMap,
+        body: &Value,
+        endpoint: &'static str,
+    ) -> Result<ParsedOfflineRequest, Error> {
+        let body = json::to_vec(body).expect("request body json");
+        parse_and_authorize(app.as_ref(), method, uri, headers, &body, endpoint)
+    }
+
+    #[test]
+    fn parse_and_authorize_uses_unique_existing_asset_balance_scope_for_issue_asset() {
+        let _guard = crate::tests_runtime_handlers::app_auth_test_guard(Default::default());
+        let key_pair = checked_seed_keypair(0x34);
+        let account = AccountId::new(key_pair.public_key().clone());
+        let account_literal = account.canonical_i105().expect("i105 account");
+        let asset_definition_id = asset_definition_for_parse_tests();
+        let asset_literal = asset_definition_id.to_string();
+        let balance_scope = AssetBalanceScope::Dataspace(DataSpaceId::new(10));
+        let app = app_with_account_and_asset_scope(&account, &asset_definition_id, balance_scope);
+        let method = Method::POST;
+        let uri: Uri = PATH_NOTES_ISSUE.parse().expect("uri");
+        let body = sign_body_value(
+            &method,
+            &uri,
+            &key_pair,
+            minimal_parse_body(&account_literal, &asset_literal),
+            &account_literal,
+            now_ms(),
+            "scoped-offline-issue-asset",
+        );
+
+        let parsed = parse_offline_request(
+            &app,
+            &method,
+            &uri,
+            &HeaderMap::new(),
+            &body,
+            ENDPOINT_NOTES_ISSUE,
+        )
+        .expect("valid body auth");
+
+        assert_eq!(
+            parsed.asset_id,
+            AssetId::with_scope(asset_definition_id, account, balance_scope)
+        );
     }
 
     #[test]
@@ -3315,11 +3485,12 @@ mod tests {
         ]);
         ParsedOfflineRequest {
             value,
-            account_id,
+            account_id: account_id.clone(),
             account_literal,
             operation_id: "operation-1".to_string(),
             device_id: "device-1".to_string(),
             offline_public_key,
+            asset_id: AssetId::new(asset_definition_id.clone(), account_id),
             asset_definition_id,
             asset_definition_literal,
             device_binding,
@@ -3528,6 +3699,10 @@ mod tests {
             operation_id: "fixture-kagemusha-redeem".to_string(),
             device_id: "device-1".to_string(),
             offline_public_key,
+            asset_id: AssetId::new(
+                model.bundle.accumulator.asset.clone(),
+                model.recipient.clone(),
+            ),
             asset_definition_id: model.bundle.accumulator.asset.clone(),
             asset_definition_literal,
             device_binding,
@@ -3575,11 +3750,12 @@ mod tests {
         ]);
         ParsedOfflineRequest {
             value,
-            account_id,
+            account_id: account_id.clone(),
             account_literal,
             operation_id: "fixture-redeem".to_string(),
             device_id,
             offline_public_key,
+            asset_id: AssetId::new(asset_definition_id.clone(), account_id),
             asset_definition_id,
             asset_definition_literal,
             device_binding,

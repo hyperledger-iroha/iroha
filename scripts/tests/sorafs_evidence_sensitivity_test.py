@@ -11,9 +11,37 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from sorafs_evidence_sensitivity import (  # noqa: E402
+    COMMON_SENSITIVE_KEYS,
     MAX_SENSITIVE_FIELD_DEPTH,
+    normalize_sensitive_key,
     visit_sensitive_fields,
 )
+
+
+def test_common_sensitive_keys_inventory_is_canonical_and_enforced() -> None:
+    assert COMMON_SENSITIVE_KEYS
+    assert len(COMMON_SENSITIVE_KEYS) == len(
+        {normalize_sensitive_key(key) for key in COMMON_SENSITIVE_KEYS}
+    )
+    assert all(
+        isinstance(key, str)
+        and key
+        and key == key.strip()
+        and key == key.lower()
+        and all(character.isalnum() or character == "_" for character in key)
+        for key in COMMON_SENSITIVE_KEYS
+    )
+
+    errors: list[str] = []
+    visit_sensitive_fields(
+        {key: "redacted" for key in COMMON_SENSITIVE_KEYS},
+        "",
+        errors,
+        sensitive_keys=frozenset(),
+    )
+
+    assert len(errors) == len(COMMON_SENSITIVE_KEYS)
+    assert set(errors) == {"<sensitive-key> must not be present in rollout evidence"}
 
 
 def test_normalized_sensitive_key_variants_fail() -> None:
@@ -72,6 +100,271 @@ def test_sensitive_key_fragments_do_not_reject_legitimate_proof_token_fields() -
     assert errors == []
 
 
+def test_token_alias_sensitive_key_fragments_fail_without_leaking_names() -> None:
+    errors: list[str] = []
+    payload = {
+        "apiToken": "runtime-only-token",
+        "auth-token": "runtime-only-token",
+        "idToken": "runtime-only-token",
+        "jwt": "runtime-only-token",
+        "oauthToken": "runtime-only-token",
+        "refreshToken": "runtime-only-token",
+        "sessionToken": "runtime-only-token",
+        "setCookie": "runtime-only-cookie",
+        "xApiToken": "runtime-only-token",
+        "password": "runtime-only-password",
+    }
+
+    visit_sensitive_fields(payload, "", errors, sensitive_keys={"payload"})
+
+    assert errors == [
+        "<sensitive-key> must not be present in rollout evidence"
+    ] * len(payload)
+    joined = "\n".join(errors)
+    assert "apiToken" not in joined
+    assert "auth-token" not in joined
+    assert "idToken" not in joined
+    assert "jwt" not in joined
+    assert "oauthToken" not in joined
+    assert "refreshToken" not in joined
+    assert "sessionToken" not in joined
+    assert "setCookie" not in joined
+    assert "xApiToken" not in joined
+    assert "password" not in joined
+
+
+def test_encoded_sensitive_key_fragments_fail_without_leaking_names() -> None:
+    errors: list[str] = []
+    payload = {
+        "transport": {
+            "private%5Fkey": "runtime-only-private-key",
+            "access%54oken": "runtime-only-token",
+            "response&#95;body": "{}",
+            "session%26%2395%3Btoken": "runtime-only-token",
+        },
+    }
+
+    visit_sensitive_fields(
+        payload,
+        "",
+        errors,
+        sensitive_keys={"private_key", "response_body"},
+    )
+
+    assert errors == [
+        "transport.<sensitive-key> must not be present in rollout evidence"
+    ] * 4
+    joined = "\n".join(errors)
+    assert "private%5Fkey" not in joined
+    assert "access%54oken" not in joined
+    assert "response&#95;body" not in joined
+    assert "session%26%2395%3Btoken" not in joined
+    assert "private_key" not in joined
+    assert "accessToken" not in joined
+    assert "response_body" not in joined
+    assert "session_token" not in joined
+
+
+def test_secret_like_values_under_neutral_keys_fail_without_leaking_values() -> None:
+    errors: list[str] = []
+    jwt_value = (
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+        "eyJzdWIiOiIxMjM0NTY3ODkwIn0."
+        "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+    )
+    payload = {
+        "transport": {
+            "observedHeader": "Bearer runtime-only-token",
+            "encodedHeader": "Bearer%20runtime-only-token",
+            "zeroWidthHeader": "Be\u200darer runtime-only-token",
+            "encodedZeroWidthHeader": "Be%E2%80%8Darer runtime-only-token",
+            "authorizationAssignment": "authorization=Bearer runtime-only-assignment",
+            "encodedAssignment": "auth%2Dtoken=runtime-only-assignment",
+            "basicHeader": "Basic dXNlcjpwYXNz",
+            "headers": [
+                "Authorization: Bearer runtime-only-header",
+                "Cookie: session=runtime-only-cookie",
+                "Set-Cookie: session=runtime-only-cookie",
+            ],
+            "headerBlock": (
+                "HTTP/1.1 200 OK\n"
+                "Content-Type: application/json\n"
+                "Authorization: Bearer runtime-only-block"
+            ),
+            "encodedHeaderBlock": (
+                "HTTP%2F1.1%20200%20OK%0A"
+                "Set-Cookie%3A%20session%3Druntime-only-block"
+            ),
+            "foldedAuthorizationBlock": (
+                "HTTP/1.1 200 OK\n"
+                "Content-Type: application/json\n"
+                "Authorization:\n"
+                " runtime-only-folded-token"
+            ),
+            "encodedFoldedCookieBlock": (
+                "HTTP%2F1.1%20200%20OK%0A"
+                "Cache-Control%3A%20no-store%0A"
+                "Set-Cookie%3A%0A%20session%3Druntime-only-folded"
+            ),
+            "jwtValue": jwt_value,
+            "pemValue": "-----BEGIN PRIVATE KEY-----\nruntime-only-key",
+        },
+    }
+
+    visit_sensitive_fields(payload, "", errors, sensitive_keys={"payload"})
+
+    assert errors == [
+        "transport.observedHeader must not contain secret-looking values in rollout evidence",
+        "transport.encodedHeader must not contain secret-looking values in rollout evidence",
+        "transport.zeroWidthHeader must not contain secret-looking values in rollout evidence",
+        "transport.encodedZeroWidthHeader must not contain secret-looking values in rollout evidence",
+        "transport.authorizationAssignment must not contain secret-looking values in rollout evidence",
+        "transport.encodedAssignment must not contain secret-looking values in rollout evidence",
+        "transport.basicHeader must not contain secret-looking values in rollout evidence",
+        "transport.headers[0] must not contain secret-looking values in rollout evidence",
+        "transport.headers[1] must not contain secret-looking values in rollout evidence",
+        "transport.headers[2] must not contain secret-looking values in rollout evidence",
+        "transport.headerBlock must not contain secret-looking values in rollout evidence",
+        "transport.encodedHeaderBlock must not contain secret-looking values in rollout evidence",
+        "transport.foldedAuthorizationBlock must not contain secret-looking values in rollout evidence",
+        "transport.encodedFoldedCookieBlock must not contain secret-looking values in rollout evidence",
+        "transport.jwtValue must not contain secret-looking values in rollout evidence",
+        "transport.pemValue must not contain secret-looking values in rollout evidence",
+    ]
+    joined = "\n".join(errors)
+    assert "Bearer runtime-only-token" not in joined
+    assert "Bearer%20runtime-only-token" not in joined
+    assert "Be\u200darer runtime-only-token" not in joined
+    assert "Be%E2%80%8Darer runtime-only-token" not in joined
+    assert "authorization=Bearer" not in joined
+    assert "auth%2Dtoken" not in joined
+    assert "runtime-only-assignment" not in joined
+    assert "runtime-only-header" not in joined
+    assert "runtime-only-block" not in joined
+    assert "runtime-only-folded-token" not in joined
+    assert "runtime-only-folded" not in joined
+    assert "Set-Cookie" not in joined
+    assert "dXNlcjpwYXNz" not in joined
+    assert "runtime-only-cookie" not in joined
+    assert jwt_value not in joined
+    assert "BEGIN PRIVATE KEY" not in joined
+
+
+def test_secret_like_url_values_under_neutral_keys_fail_without_leaking() -> None:
+    errors: list[str] = []
+    payload = {
+        "transport": {
+            "safeUrl": "https://torii.example/request_body_digest/abc?digest=123",
+            "safeEncodedUrl": (
+                "https%3A%2F%2Ftorii.example%2Frequest_body_digest%2Fabc"
+                "%3Fdigest%3D123"
+            ),
+            "safeIpfsDigestUrl": "ipfs://bafybeigdyrzt/request_body_digest?digest=123",
+            "userinfoUrl": "https://user:runtime-secret@torii.example/path",
+            "encodedWholeUrl": (
+                "https%3A%2F%2Fuser%3Aruntime-secret%40torii.example%2Fpath"
+            ),
+            "databaseUserinfoUrl": "postgres://user:runtime-secret@db.example/sorafs",
+            "encodedDatabaseUserinfoUrl": (
+                "postgres%3A%2F%2Fuser%3Aruntime-secret%40db.example%2Fsorafs"
+            ),
+            "queryUrl": "https://torii.example/path?access_token=runtime-secret",
+            "websocketQueryUrl": (
+                "wss://torii.example/socket?access_token=runtime-secret"
+            ),
+            "zeroWidthWebsocketQueryUrl": (
+                "w\u200dss://torii.example/socket?access_token=runtime-secret"
+            ),
+            "encodedZeroWidthWebsocketQueryUrl": (
+                "w%E2%80%8Dss://torii.example/socket?access_token=runtime-secret"
+            ),
+            "doubleEncodedQueryUrl": (
+                "https%253A%252F%252Ftorii.example%252Fpath"
+                "%253Faccess_token%253Druntime-secret"
+            ),
+            "queryBearerValueUrl": (
+                "https://torii.example/path?redirect=Bearer%20runtime-secret"
+            ),
+            "queryJwtValueUrl": (
+                "https://torii.example/path?"
+                "assertion=eyJhbGciOiJIUzI1NiJ9."
+                "eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature000"
+            ),
+            "queryRedirectValueUrl": (
+                "https://torii.example/path?"
+                "return_to=https%3A%2F%2Fuser%3Aruntime-secret%40torii.example"
+            ),
+            "encodedQueryUrl": (
+                "https://torii.example/path?session%255Ftoken=runtime-secret"
+            ),
+            "hostUrl": "https://api-token.example/hook",
+            "pathUrl": "https://torii.example/private%5Fkey/hook",
+            "filePathUrl": "file:///tmp/private_key/material",
+        },
+    }
+
+    visit_sensitive_fields(payload, "", errors, sensitive_keys={"payload"})
+
+    assert errors == [
+        "transport.userinfoUrl must not contain secret-looking values in rollout evidence",
+        "transport.encodedWholeUrl must not contain secret-looking values in rollout evidence",
+        "transport.databaseUserinfoUrl must not contain secret-looking values in rollout evidence",
+        "transport.encodedDatabaseUserinfoUrl must not contain secret-looking values in rollout evidence",
+        "transport.queryUrl must not contain secret-looking values in rollout evidence",
+        "transport.websocketQueryUrl must not contain secret-looking values in rollout evidence",
+        "transport.zeroWidthWebsocketQueryUrl must not contain secret-looking values in rollout evidence",
+        "transport.encodedZeroWidthWebsocketQueryUrl must not contain secret-looking values in rollout evidence",
+        "transport.doubleEncodedQueryUrl must not contain secret-looking values in rollout evidence",
+        "transport.queryBearerValueUrl must not contain secret-looking values in rollout evidence",
+        "transport.queryJwtValueUrl must not contain secret-looking values in rollout evidence",
+        "transport.queryRedirectValueUrl must not contain secret-looking values in rollout evidence",
+        "transport.encodedQueryUrl must not contain secret-looking values in rollout evidence",
+        "transport.hostUrl must not contain secret-looking values in rollout evidence",
+        "transport.pathUrl must not contain secret-looking values in rollout evidence",
+        "transport.filePathUrl must not contain secret-looking values in rollout evidence",
+    ]
+    joined = "\n".join(errors)
+    assert "safeUrl" not in joined
+    assert "safeEncodedUrl" not in joined
+    assert "safeIpfsDigestUrl" not in joined
+    assert "runtime-secret" not in joined
+    assert "encodedWholeUrl" in joined
+    assert "encodedDatabaseUserinfoUrl" in joined
+    assert "websocketQueryUrl" in joined
+    assert "zeroWidthWebsocketQueryUrl" in joined
+    assert "encodedZeroWidthWebsocketQueryUrl" in joined
+    assert "doubleEncodedQueryUrl" in joined
+    assert "access_token" not in joined
+    assert "postgres://" not in joined
+    assert "w\u200dss://" not in joined
+    assert "w%E2%80%8Dss://" not in joined
+    assert "Bearer%20runtime-secret" not in joined
+    assert "signature000" not in joined
+    assert "return_to" not in joined
+    assert "session%255Ftoken" not in joined
+    assert "api-token" not in joined
+    assert "private%5Fkey" not in joined
+    assert "file:///tmp" not in joined
+
+
+def test_secret_like_values_under_sensitive_keys_do_not_duplicate_errors() -> None:
+    errors: list[str] = []
+    payload = {
+        "authorization": "Bearer runtime-only-token",
+        "token": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature000",
+    }
+
+    visit_sensitive_fields(payload, "", errors, sensitive_keys={"payload"})
+
+    assert errors == [
+        "<sensitive-key> must not be present in rollout evidence",
+        "<sensitive-key> must not be present in rollout evidence",
+    ]
+    joined = "\n".join(errors)
+    assert "Bearer runtime-only-token" not in joined
+    assert "signature000" not in joined
+
+
 def test_sensitive_key_fragments_allow_payload_free_digest_and_absence_fields() -> None:
     errors: list[str] = []
     payload = {
@@ -80,7 +373,43 @@ def test_sensitive_key_fragments_allow_payload_free_digest_and_absence_fields() 
             "responseBodySha256": "b" * 64,
             "response_body_included": False,
             "private_key_absent": True,
+            "absenceAssignment": "private_key_absent=true",
+            "digestAssignment": "request_body_digest=" + "a" * 64,
+            "multilineDigestMetadata": "\n".join(
+                (
+                    "request_body_digest=" + "a" * 64,
+                    "response_body_included=false",
+                )
+            ),
+            "foldedDigestMetadata": "\n".join(
+                (
+                    "request_body_digest:",
+                    " " + "a" * 64,
+                    "response_body_included:",
+                    " false",
+                )
+            ),
             "included": False,
+        }
+    }
+
+    visit_sensitive_fields(
+        payload,
+        "",
+        errors,
+        sensitive_keys={"request_body", "response_body", "private_key"},
+    )
+
+    assert errors == []
+
+
+def test_encoded_payload_free_sensitive_references_remain_allowed() -> None:
+    errors: list[str] = []
+    payload = {
+        "probe": {
+            "private%5Fkey%5Fabsent": True,
+            "request%5Fbody%5Fdigest": "a" * 64,
+            "response%42odySha256": "b" * 64,
         }
     }
 
@@ -151,6 +480,35 @@ def test_sensitive_inclusion_marker_key_names_are_redacted() -> None:
     assert "responseBodyIncluded" not in joined
 
 
+def test_encoded_sensitive_inclusion_marker_key_names_are_redacted() -> None:
+    errors: list[str] = []
+    payload = {
+        "transport": {
+            "private%4BeyIncluded": True,
+            "access%54okenIncluded": True,
+            "response%5Fbody%5Fincluded": True,
+        },
+    }
+
+    visit_sensitive_fields(
+        payload,
+        "",
+        errors,
+        sensitive_keys={"access_token", "private_key", "response_body"},
+    )
+
+    assert errors == [
+        "transport.<sensitive-inclusion-marker> must be false"
+    ] * 3
+    joined = "\n".join(errors)
+    assert "private%4BeyIncluded" not in joined
+    assert "access%54okenIncluded" not in joined
+    assert "response%5Fbody%5Fincluded" not in joined
+    assert "privateKeyIncluded" not in joined
+    assert "accessTokenIncluded" not in joined
+    assert "response_body_included" not in joined
+
+
 def test_non_string_payload_keys_fail_closed_and_still_scan_children() -> None:
     errors: list[str] = []
     payload = {
@@ -195,6 +553,61 @@ def test_noncanonical_sensitive_key_paths_are_sanitized() -> None:
     assert "response\nbody" not in joined
 
 
+def test_encoded_noncanonical_marker_paths_are_sanitized() -> None:
+    errors: list[str] = []
+    payload = {
+        "public%0Aincluded": True,
+        "nested": {
+            "public%2Fincluded": True,
+            "public.included": True,
+            "public[included]": True,
+            "public%5Fincluded": True,
+            "public included": True,
+            "publïcIncluded": True,
+            "public&#95;included": True,
+            "_publicIncluded": True,
+            "publicIncluded_": True,
+            "---included": True,
+        },
+    }
+
+    visit_sensitive_fields(
+        payload,
+        "",
+        errors,
+        sensitive_keys={"private_key", "response_body"},
+    )
+
+    assert errors == [
+        "<non-canonical-key> must be false",
+        "nested.<non-canonical-key> must be false",
+        "nested.<non-canonical-key> must be false",
+        "nested.<non-canonical-key> must be false",
+        "nested.<non-canonical-key> must be false",
+        "nested.<non-canonical-key> must be false",
+        "nested.<non-canonical-key> must be false",
+        "nested.<non-canonical-key> must be false",
+        "nested.<non-canonical-key> must be false",
+        "nested.<non-canonical-key> must be false",
+        "nested.<non-canonical-key> must be false",
+    ]
+    joined = "\n".join(errors)
+    assert "public%0Aincluded" not in joined
+    assert "public%2Fincluded" not in joined
+    assert "public.included" not in joined
+    assert "public[included]" not in joined
+    assert "public%5Fincluded" not in joined
+    assert "public included" not in joined
+    assert "publïcIncluded" not in joined
+    assert "public&#95;included" not in joined
+    assert "_publicIncluded" not in joined
+    assert "publicIncluded_" not in joined
+    assert "---included" not in joined
+    assert "public_included" not in joined
+    assert "public\nincluded" not in joined
+    assert "public/included" not in joined
+
+
 def test_sensitive_parent_path_is_redacted_for_nested_diagnostics() -> None:
     errors: list[str] = []
     payload = {
@@ -233,6 +646,11 @@ def test_malformed_sensitive_key_configuration_fails_closed() -> None:
         ("payload", " private_key"),
         ("payload", "private_key "),
         ("payload", "private\nkey"),
+        ("payload", "idToken"),
+        ("payload", "api-key"),
+        ("payload", "_secret"),
+        ("payload", "secret_"),
+        ("payload", "private__key"),
     )
 
     for sensitive_keys in cases:
@@ -247,6 +665,33 @@ def test_malformed_sensitive_key_configuration_fails_closed() -> None:
             ["sensitive keys must be a sequence of strings"],
             ["sensitive keys must be non-empty canonical strings"],
         )
+
+
+def test_duplicate_sensitive_key_configuration_fails_closed() -> None:
+    for sensitive_keys in (("payload", "payload"), ("raw_payload", "rawpayload")):
+        errors: list[str] = []
+        visit_sensitive_fields(
+            {"payloadIncluded": True},
+            "",
+            errors,
+            sensitive_keys=sensitive_keys,
+        )
+        assert errors == [
+            "sensitive keys must not contain duplicate normalized names"
+        ]
+
+
+def test_common_sensitive_key_alias_configuration_fails_closed() -> None:
+    errors: list[str] = []
+
+    visit_sensitive_fields(
+        {"payloadIncluded": True},
+        "",
+        errors,
+        sensitive_keys={"apitoken"},
+    )
+
+    assert errors == ["sensitive keys must not alias common sensitive names"]
 
 
 def test_sensitive_scan_rejects_malformed_error_container() -> None:
@@ -283,7 +728,24 @@ def test_sensitive_scan_rejects_malformed_existing_error_text() -> None:
 
 
 def test_sensitive_scan_rejects_malformed_path_before_payload_scan() -> None:
-    for path in (" root", "root ", "root\nchild", 7):
+    for path in (
+        " root",
+        "root ",
+        "root\nchild",
+        "root%5Fchild",
+        "root..child",
+        "root[01]",
+        "root[]",
+        "root[0]tail",
+        "root[0].child%2Ename",
+        "root.χild",
+        "_",
+        "---",
+        "root._child",
+        "root.child_",
+        "root.-child",
+        7,
+    ):
         errors: list[str] = []
 
         visit_sensitive_fields(
@@ -298,8 +760,47 @@ def test_sensitive_scan_rejects_malformed_path_before_payload_scan() -> None:
         ]
 
 
+def test_sensitive_scan_accepts_canonical_starting_paths() -> None:
+    for path in ("root", "root_child", "root-child", "root[0]", "root[0].child[12]"):
+        errors: list[str] = []
+
+        visit_sensitive_fields(
+            {"privateKey": "runtime-only-private-key"},
+            path,
+            errors,
+            sensitive_keys={"private_key"},
+        )
+
+        assert errors == [
+            f"{path}.<sensitive-key> must not be present in rollout evidence"
+        ]
+
+
 def test_sensitive_scan_rejects_malformed_evidence_label_before_payload_scan() -> None:
-    for evidence_label in ("", " rollout", "rollout ", "rollout\nevidence", 7):
+    for evidence_label in (
+        "",
+        " rollout",
+        "rollout ",
+        "rollout  evidence",
+        "rollout\nevidence",
+        "rollout%20evidence",
+        "rollout&#95;evidence",
+        "rollout/evidence",
+        "rollout.evidence",
+        "rollout[evidence]",
+        "rollout|evidence",
+        "rolloutévidence",
+        "private_key evidence",
+        "accessToken evidence",
+        "_",
+        "---",
+        "_rollout",
+        "rollout_",
+        "-rollout",
+        "rollout-",
+        "rollout -",
+        7,
+    ):
         errors: list[str] = []
 
         visit_sensitive_fields(
@@ -312,6 +813,30 @@ def test_sensitive_scan_rejects_malformed_evidence_label_before_payload_scan() -
 
         assert errors == [
             "sensitive field evidence label must be a non-empty canonical string"
+        ]
+
+
+def test_sensitive_scan_accepts_canonical_evidence_labels() -> None:
+    for evidence_label in (
+        "rollout",
+        "rollout evidence",
+        "rollout_evidence",
+        "rollout-evidence",
+        "release",
+        "SoraFS production readiness summary",
+    ):
+        errors: list[str] = []
+
+        visit_sensitive_fields(
+            {"privateKey": "runtime-only-private-key"},
+            "",
+            errors,
+            sensitive_keys={"private_key"},
+            evidence_label=evidence_label,
+        )
+
+        assert errors == [
+            f"<sensitive-key> must not be present in {evidence_label}"
         ]
 
 

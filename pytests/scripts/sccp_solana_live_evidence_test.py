@@ -56,6 +56,32 @@ class HostileCommitmentScalar:
         raise AssertionError("secret-token Solana commitment was compared")
 
 
+class HostileDecimalText(str):
+    def __new__(cls):
+        return str.__new__(cls, "4321")
+
+    def __str__(self):
+        raise AssertionError("secret-token Solana decimal text was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token Solana decimal text was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token Solana decimal text was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token Solana decimal text was compared")
+
+    def isascii(self):
+        raise AssertionError("secret-token Solana decimal text isascii ran")
+
+    def isdecimal(self):
+        raise AssertionError("secret-token Solana decimal text isdecimal ran")
+
+    def startswith(self, _prefix):
+        raise AssertionError("secret-token Solana decimal text startswith ran")
+
+
 def load_live_module():
     script_path = (
         Path(__file__).resolve().parents[2] / "scripts" / "sccp_solana_live_evidence.py"
@@ -127,13 +153,20 @@ def _program_account_data(module, programdata_raw):
     return module.UPGRADEABLE_LOADER_PROGRAM_TAG.to_bytes(4, "little") + programdata_raw
 
 
-def _programdata_account_data(module, *, slot, program_bytes, authority=None):
+def _programdata_account_data(
+    module,
+    *,
+    slot,
+    program_bytes,
+    authority=None,
+    stale_authority=None,
+):
     data = bytearray()
     data.extend(module.UPGRADEABLE_LOADER_PROGRAMDATA_TAG.to_bytes(4, "little"))
     data.extend(slot.to_bytes(8, "little"))
     if authority is None:
         data.append(0)
-        data.extend(bytes(32))
+        data.extend(stale_authority or bytes(32))
     else:
         data.append(1)
         data.extend(authority)
@@ -311,6 +344,35 @@ def test_solana_json_rpc_rejects_duplicate_json_keys():
 def test_solana_json_rpc_url_rejects_hidden_request_state():
     module = load_live_module()
 
+    class HostileSolanaRpcUrl(str):
+        def __new__(cls):
+            return str.__new__(cls, "https://solana.example.invalid")
+
+        def __str__(self):
+            raise AssertionError("secret-token Solana RPC URL was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token Solana RPC URL was repr'd")
+
+        def __eq__(self, _other):
+            raise AssertionError("secret-token Solana RPC URL was compared")
+
+        def __ne__(self, _other):
+            raise AssertionError("secret-token Solana RPC URL was compared")
+
+        def __iter__(self):
+            raise AssertionError("secret-token Solana RPC URL was iterated")
+
+        def strip(self, *_args):
+            raise AssertionError("secret-token Solana RPC URL was stripped")
+
+    class HostileSolanaRpcUrlLabel:
+        def __str__(self):
+            raise AssertionError("secret-token Solana RPC URL label was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token Solana RPC URL label was repr'd")
+
     assert module._normalize_solana_rpc_url("https://solana.example.invalid") == (
         "https://solana.example.invalid"
     )
@@ -337,6 +399,8 @@ def test_solana_json_rpc_url_rejects_hidden_request_state():
         ("https://bad_host.solana.example.invalid", "public DNS"),
         (" https://solana.example.invalid", "exact http(s) URL"),
         ("https://solana.example.invalid\nsecret", "exact http(s) URL"),
+        (HostileSolanaRpcUrl(), "exact http(s) URL"),
+        (HostileSolanaRpcUrlLabel(), "exact http(s) URL"),
     ):
         try:
             module._json_rpc(
@@ -698,7 +762,12 @@ def test_live_solana_evidence_collects_immutable_program_hash_and_toml():
     ).decode("ascii")
     assert live["verifier_code_hash"] == "0x" + code_hash.hex()
 
-    args = _live_args(module, code_hash=code_hash, programdata_address=programdata_address)
+    args = _live_args(
+        module,
+        code_hash=code_hash,
+        programdata_address=programdata_address,
+        program_bytes=program_bytes,
+    )
     summary = module._summary(args, live)
     assert summary["expected_verifier_code_hash_matches"] is True
     assert summary["rpc_commitment_finalized"] is True
@@ -805,6 +874,50 @@ def test_live_solana_evidence_collects_immutable_program_hash_and_toml():
     assert rendered.count("# sccp_solana_programdata_metadata_base64") == 1
     assert rendered.count("# sccp_solana_programdata_executable_blake2b256") == 1
     assert rendered.count("# sccp_solana_programdata_executable_base64") == 1
+
+
+def test_live_solana_evidence_accepts_immutable_programdata_with_retained_authority_bytes():
+    module = load_live_module()
+    program_id = module._encode_solana_base58(bytes.fromhex("33" * 32))
+    programdata_address = module._encode_solana_base58(bytes.fromhex("11" * 32))
+    program_bytes = bytes.fromhex("7f454c460102030405")
+    stale_authority = bytes.fromhex("c4f2feefb3ccdacce6859d6302876c2ea14084081193d57133ba6b6cef08d5aa")
+    programdata_data = _programdata_account_data(
+        module,
+        slot=4321,
+        program_bytes=program_bytes,
+        stale_authority=stale_authority,
+    )
+    programdata_metadata = programdata_data[: module.PROGRAMDATA_METADATA_LEN]
+
+    live = module.collect_live_evidence(
+        "https://solana.example.invalid",
+        verifier_program_id=program_id,
+        opener=_fake_solana_rpc(
+            module,
+            program_id=program_id,
+            programdata_address=programdata_address,
+            programdata_data=programdata_data,
+        ),
+        timeout=3.0,
+    )
+
+    assert live["program_immutable"] is True
+    assert live["programdata_metadata_base64"] == base64.b64encode(
+        programdata_metadata
+    ).decode("ascii")
+    assert live["programdata_metadata_blake2b256"] == (
+        "0x" + hashlib.blake2b(programdata_metadata, digest_size=32).hexdigest()
+    )
+    code_hash = module.evidence.solana_verifier_program_code_hash(program_bytes)
+    args = _live_args(
+        module,
+        code_hash=code_hash,
+        program_id=program_id,
+        programdata_address=programdata_address,
+        program_bytes=program_bytes,
+    )
+    rendered = module.render_toml(args, live)
     assert "[[zk.sccp_destination_rollouts]]" in rendered
     assert "[[zk.sccp_route_allowlists]]" in rendered
     assert f'verifier_identity = "{program_id}"' in rendered
@@ -821,7 +934,12 @@ def test_live_solana_direct_api_rejects_forged_live_metadata():
     programdata_address = module._encode_solana_base58(bytes.fromhex("11" * 32))
     program_bytes = b"\x7fELFsol"
     code_hash = module.evidence.solana_verifier_program_code_hash(program_bytes)
-    args = _live_args(module, code_hash=code_hash, programdata_address=programdata_address)
+    args = _live_args(
+        module,
+        code_hash=code_hash,
+        programdata_address=programdata_address,
+        program_bytes=program_bytes,
+    )
 
     for field, forged_value, expected_message in (
         ("program_owner", "11111111111111111111111111111111", "program owner"),
@@ -942,6 +1060,120 @@ def test_live_solana_evidence_rejects_non_string_imported_metadata_without_strin
             assert exc.__suppress_context__ is True
         else:
             raise AssertionError(f"non-string Solana live {field} metadata was accepted")
+
+
+def test_live_solana_offline_args_reject_non_string_copied_summary_metadata_without_stringifying(
+    monkeypatch,
+):
+    module = load_live_module()
+    program_id = module._encode_solana_base58(bytes.fromhex("33" * 32))
+    programdata_address = module._encode_solana_base58(bytes.fromhex("11" * 32))
+    program_bytes = b"\x7fELFsol"
+    code_hash = module.evidence.solana_verifier_program_code_hash(program_bytes)
+    args = _live_args(
+        module,
+        code_hash=code_hash,
+        programdata_address=programdata_address,
+        program_bytes=program_bytes,
+    )
+    live = _live_record(
+        module,
+        program_id=program_id,
+        programdata_address=programdata_address,
+        program_bytes=program_bytes,
+    )
+    original_json_summary = module.evidence._json_summary
+
+    for path, expected_error in (
+        (
+            ("destination_binding_hash",),
+            "destination binding hash must be an exact non-empty string",
+        ),
+        (
+            ("route_allowlist_hash",),
+            "route allowlist hash must be an exact non-empty string",
+        ),
+        (
+            ("route_canary", "evidence_hash"),
+            "route canary evidence hash must be an exact non-empty string",
+        ),
+    ):
+
+        def malformed_json_summary(*summary_args, _path=path, **summary_kwargs):
+            summary = original_json_summary(*summary_args, **summary_kwargs)
+            target = summary
+            for key in _path[:-1]:
+                target = target[key]
+            target[_path[-1]] = HostileImportedScalar()
+            return summary
+
+        with monkeypatch.context() as patch:
+            patch.setattr(module.evidence, "_json_summary", malformed_json_summary)
+            try:
+                module._summary(args, live)
+            except ValueError as exc:
+                rendered = str(exc)
+                assert rendered == expected_error
+                assert "secret-token" not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError(
+                    "Solana offline args accepted hostile copied summary "
+                    f"{'.'.join(path)}"
+                )
+
+
+def test_live_solana_destination_args_reject_non_string_validated_live_metadata_without_stringifying():
+    module = load_live_module()
+    program_id = module._encode_solana_base58(bytes.fromhex("33" * 32))
+    programdata_address = module._encode_solana_base58(bytes.fromhex("11" * 32))
+    program_bytes = b"\x7fELFsol"
+    code_hash = module.evidence.solana_verifier_program_code_hash(program_bytes)
+    args = _live_args(
+        module,
+        code_hash=code_hash,
+        programdata_address=programdata_address,
+        program_bytes=program_bytes,
+    )
+
+    for field, expected_error in (
+        ("verifier_program_id", "verifier_program_id must be an exact non-empty string"),
+        ("programdata_address", "programdata_address must be an exact non-empty string"),
+        ("programdata_slot", "Solana ProgramData slot metadata must be a positive decimal"),
+        (
+            "program_account_context_slot",
+            "Solana program account RPC context slot metadata must be a positive decimal",
+        ),
+        (
+            "programdata_account_context_slot",
+            "Solana ProgramData account RPC context slot metadata must be a positive decimal",
+        ),
+    ):
+        live = _live_record(
+            module,
+            program_id=program_id,
+            programdata_address=programdata_address,
+            program_bytes=program_bytes,
+        )
+        live[field] = HostileImportedScalar()
+        try:
+            module._destination_args_from_validated_live(
+                args,
+                live,
+                code_hash,
+                program_bytes,
+            )
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == expected_error
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(
+                f"Solana destination args accepted hostile validated live {field}"
+            )
 
 
 def test_live_solana_evidence_rejects_hostile_commitment_before_rpc():
@@ -1386,6 +1618,63 @@ def test_live_solana_decimal_parsers_reject_noncanonical_text():
             assert "must be a positive decimal" in str(exc)
         else:
             raise AssertionError(f"noncanonical live Solana slot {value!r} was accepted")
+
+
+def test_live_solana_decimal_parsers_reject_string_subclasses_without_hooks():
+    module = load_live_module()
+    hostile = HostileDecimalText()
+
+    try:
+        module._parse_positive_u64(hostile, label="programdata slot")
+    except module.argparse.ArgumentTypeError as exc:
+        rendered = str(exc)
+        assert rendered == "programdata slot must be a positive u64"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+    else:
+        raise AssertionError("Solana live CLI u64 parser accepted hostile text")
+
+    try:
+        module._live_positive_u64(
+            {"programdata_slot": hostile},
+            "programdata_slot",
+            label="programdata slot",
+        )
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "programdata slot must be a positive decimal"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("Solana live u64 metadata accepted hostile text")
+
+    program_id = module._encode_solana_base58(bytes.fromhex("33" * 32))
+    programdata_address = module._encode_solana_base58(bytes.fromhex("11" * 32))
+    program_bytes = bytes.fromhex("7f454c460102030405")
+    code_hash = module.evidence.solana_verifier_program_code_hash(program_bytes)
+    live = _live_record(
+        module,
+        program_id=program_id,
+        programdata_address=programdata_address,
+        program_bytes=program_bytes,
+    )
+    args = _live_args(module, code_hash=code_hash, programdata_address=programdata_address)
+    args.expected_programdata_slot = hostile
+
+    for render in (module._summary, module.render_toml):
+        try:
+            render(args, live)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == "expected ProgramData slot must be a positive decimal"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(
+                "Solana live expected ProgramData slot accepted hostile text"
+            )
 
 
 def test_solana_live_cli_parsers_reject_non_string_values_without_stringification():

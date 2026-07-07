@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -39,11 +40,13 @@ from sorafs_evidence_validation import (  # noqa: E402
     evidence_artifact_is_valid,
     evidence_artifact_fingerprint,
     evidence_schema_by_kind,
+    hashable_evidence_values,
     init_evidence_artifact_buckets,
     build_required_evidence_summary,
     record_explicit_evidence_validation_errors,
     record_evidence_artifact,
     record_evidence_validation_errors,
+    record_observed_evidence_value,
     validate_bound_evidence_digest_references,
     require_2xx_status,
     require_bool_true,
@@ -52,7 +55,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_hex,
     require_config_backed_governance_approval,
     validate_standard_evidence_payload,
-    require_maximum_number,
+    require_maximum_int,
     require_minimum_int,
     require_object,
     require_object_array,
@@ -86,6 +89,45 @@ DEFAULT_MAX_WARM_LATENCY_MS = 300_000
 DEFAULT_MIN_PROVIDERS = 3
 DEFAULT_MIN_RECEIPTS = 6
 HEX64_LEN = 64
+PROVIDER_LABEL_PATTERN = re.compile(r"^provider-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+PROVIDER_LABEL_ERROR = "providers[].name must match canonical lowercase `provider-*`"
+RECEIPT_LABEL_PATTERN = re.compile(r"^potr-receipt-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+RECEIPT_LABEL_ERROR = "receipts[].name must match canonical lowercase `potr-receipt-*`"
+FORBIDDEN_PROVIDER_LABEL_MARKERS = frozenset(
+    (
+        "debug",
+        "dev",
+        "draft",
+        "example",
+        "fake",
+        "latest",
+        "placeholder",
+        "private",
+        "sample",
+        "secret",
+        "test",
+        "todo",
+    )
+)
+FORBIDDEN_INVENTORY_LABEL_MARKERS = frozenset(
+    (
+        "debug",
+        "dev",
+        "draft",
+        "example",
+        "fake",
+        "latest",
+        "local",
+        "mock",
+        "placeholder",
+        "private",
+        "sample",
+        "sandbox",
+        "secret",
+        "test",
+        "todo",
+    )
+)
 
 REQUIRED_TIERS = ("hot", "warm")
 REQUIRED_ROUTES = ("gateway_range_fetch", "proof_stream_potr", "proof_stream_filter")
@@ -103,6 +145,8 @@ RECEIPT_SUMMARY_BOUND_KINDS = (
     "observability",
     "governance_approval",
 )
+PQ_KEY_ROSTER_BOUND_KINDS = ("receipt_validation",)
+REPUTATION_WEIGHT_BOUND_KINDS = ("reputation_integration",)
 
 SENSITIVE_KEYS = {
     "authorization",
@@ -165,6 +209,7 @@ COMMON_EVIDENCE_REQUIRED_FIELDS: tuple[str, ...] = (
 EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "multi_provider_probe": COMMON_EVIDENCE_REQUIRED_FIELDS
     + (
+        "tier_count",
         "tiers_observed",
         "gateway_receipts_captured",
         "range_fetch_verified",
@@ -232,6 +277,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "deadline_breach_alert_tested",
         "critical_alerts_firing",
         "metrics",
+        "metric_count",
         "receipt_summary_digest_hex",
         "response_bodies_included",
     ),
@@ -266,6 +312,31 @@ class ValidationOptions:
     min_receipts: int
 
 
+def require_only_required_values(
+    payload: dict[str, Any],
+    array_field: str,
+    field: str,
+    required_values: tuple[str, ...],
+    errors: list[str],
+) -> None:
+    """Reject reviewed inventory rows outside a required closed string set."""
+
+    values = payload.get(array_field)
+    if not isinstance(values, list):
+        return
+    allowed = frozenset(required_values)
+    for item in values:
+        if field:
+            if not isinstance(item, dict):
+                continue
+            value = item.get(field)
+        else:
+            value = item
+        if not isinstance(value, str) or value.strip() not in allowed:
+            errors.append(f"{array_field} must not include unknown values")
+            return
+
+
 
 FINGERPRINT_FIELDS: tuple[str, ...] = (
     "schema",
@@ -277,6 +348,8 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "pq_key_roster_digest_hex",
     "reputation_weight_policy_digest_hex",
     "policy_digest_hex",
+    "metric_count",
+    "metrics",
 )
 
 
@@ -289,7 +362,14 @@ def validate_routes(payload: dict[str, Any], errors: list[str], options: Validat
             errors,
             path=f"routes[{index}].status_code",
         )
-        require_maximum_number(
+        require_hex(
+            record,
+            "body_blake3_hex",
+            HEX64_LEN,
+            errors,
+            path=f"routes[{index}].body_blake3_hex",
+        )
+        require_maximum_int(
             record,
             "latency_ms",
             options.max_route_latency_ms,
@@ -304,12 +384,63 @@ def validate_routes(payload: dict[str, Any], errors: list[str], options: Validat
         )
 
 
+def require_provider_label(record: dict[str, Any], errors: list[str]) -> str:
+    """Require a reviewed lowercase production provider inventory label."""
+
+    provider = require_string(record, "name", errors)
+    if not provider:
+        return ""
+    if PROVIDER_LABEL_PATTERN.fullmatch(provider) is None:
+        errors.append(PROVIDER_LABEL_ERROR)
+        return ""
+    forbidden = sorted(
+        marker
+        for marker in FORBIDDEN_PROVIDER_LABEL_MARKERS
+        if marker in provider.split("-")
+    )
+    if forbidden:
+        errors.append(
+            f"providers[].name must not contain non-production markers {forbidden}"
+        )
+        return ""
+    return provider
+
+
+def require_inventory_label(
+    value: Any,
+    *,
+    path: str,
+    pattern: re.Pattern[str],
+    label_error: str,
+    errors: list[str],
+) -> str:
+    """Require a reviewed lowercase production inventory label."""
+
+    if not isinstance(value, str):
+        return ""
+    if pattern.fullmatch(value) is None:
+        errors.append(label_error)
+        return ""
+    forbidden = sorted(
+        marker
+        for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
+        if marker in value.split("-")
+    )
+    if forbidden:
+        errors.append(f"{path} must not contain non-production markers {forbidden}")
+        return ""
+    return value
+
+
 def validate_multi_provider_probe(
     payload: dict[str, Any],
     errors: list[str],
     options: ValidationOptions,
 ) -> None:
     require_string_coverage(payload, "tiers_observed", "", REQUIRED_TIERS, errors)
+    require_only_required_values(payload, "tiers_observed", "", REQUIRED_TIERS, errors)
+    require_minimum_int(payload, "tier_count", len(REQUIRED_TIERS), errors)
+    require_string_inventory_count_match(payload, "tiers_observed", "tier_count", errors)
     require_bool_true(payload, "gateway_receipts_captured", errors)
     require_bool_true(payload, "range_fetch_verified", errors)
     require_bool_true(payload, "deadline_headers_verified", errors)
@@ -325,7 +456,7 @@ def validate_multi_provider_probe(
         allow_scalar_items=False,
     )
     for _index, record in require_object_array(payload, "providers", errors):
-        require_string(record, "name", errors)
+        require_provider_label(record, errors)
     require_minimum_int(payload, "receipt_count", options.min_receipts, errors)
     require_string_inventory_count_match(
         payload,
@@ -336,9 +467,16 @@ def validate_multi_provider_probe(
         allow_scalar_items=False,
     )
     for _index, record in require_object_array(payload, "receipts", errors):
-        require_string(record, "name", errors)
-    require_maximum_number(payload, "max_hot_latency_ms", options.max_hot_latency_ms, errors)
-    require_maximum_number(
+        receipt = require_string(record, "name", errors)
+        require_inventory_label(
+            receipt,
+            path="receipts[].name",
+            pattern=RECEIPT_LABEL_PATTERN,
+            label_error=RECEIPT_LABEL_ERROR,
+            errors=errors,
+        )
+    require_maximum_int(payload, "max_hot_latency_ms", options.max_hot_latency_ms, errors)
+    require_maximum_int(
         payload,
         "max_warm_latency_ms",
         options.max_warm_latency_ms,
@@ -373,6 +511,7 @@ def validate_proof_stream(
 ) -> None:
     require_count_equal(payload, "route_count", "passed_route_count", errors)
     require_string_coverage(payload, "routes", "name", REQUIRED_ROUTES, errors)
+    require_only_required_values(payload, "routes", "name", REQUIRED_ROUTES, errors)
     require_string_inventory_count_match(
         payload,
         "routes",
@@ -411,6 +550,9 @@ def validate_observability(payload: dict[str, Any], errors: list[str]) -> None:
     require_bool_true(payload, "deadline_breach_alert_tested", errors)
     require_false(payload, "critical_alerts_firing", errors)
     require_string_coverage(payload, "metrics", "", REQUIRED_METRICS, errors)
+    require_only_required_values(payload, "metrics", "", REQUIRED_METRICS, errors)
+    require_positive_int(payload, "metric_count", errors)
+    require_string_inventory_count_match(payload, "metrics", "metric_count", errors)
     require_hex(payload, "receipt_summary_digest_hex", HEX64_LEN, errors)
     require_false(payload, "response_bodies_included", errors)
 
@@ -492,6 +634,8 @@ def build_summary(
     valid_receipt_summary_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     pq_key_roster_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     reputation_weight_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
+    metric_counts: set[int] = set()
+    metric_names: set[str] = set()
     files = discover_evidence_files(
         evidence_dirs,
         evidence_files,
@@ -520,6 +664,9 @@ def build_summary(
             validation_errors,
             FINGERPRINT_FIELDS,
         )
+        if kind_name == "observability":
+            record_observed_evidence_value(metric_counts, payload.get("metric_count"))
+            metric_names.update(hashable_evidence_values(payload.get("metrics")))
         if evidence_artifact_is_valid(artifact):
             fingerprint = evidence_artifact_fingerprint(artifact)
             digest = fingerprint.get("receipt_summary_digest_hex")
@@ -541,9 +688,9 @@ def build_summary(
                 policy_digest = fingerprint.get("policy_digest_hex")
                 if isinstance(policy_digest, str):
                     valid_policy_digests.add(policy_digest.lower())
-            elif kind_name == "receipt_validation":
+            elif kind_name in PQ_KEY_ROSTER_BOUND_KINDS:
                 pq_key_roster_bound_artifacts.append((kind_name, artifact))
-            elif kind_name == "reputation_integration":
+            elif kind_name in REPUTATION_WEIGHT_BOUND_KINDS:
                 reputation_weight_bound_artifacts.append((kind_name, artifact))
         record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         record_evidence_validation_errors(path, validation_errors, errors)
@@ -567,7 +714,8 @@ def build_summary(
     )
     validate_bound_evidence_digest_references(
         required_kinds=required_kinds,
-        missing_anchor_required_kinds=("governance_approval", "receipt_validation"),
+        missing_anchor_required_kinds=("governance_approval",)
+        + PQ_KEY_ROSTER_BOUND_KINDS,
         bound_artifacts=pq_key_roster_bound_artifacts,
         valid_anchor_digests=valid_pq_key_roster_digests,
         digest_field="pq_key_roster_digest_hex",
@@ -585,8 +733,8 @@ def build_summary(
         required_kinds=required_kinds,
         missing_anchor_required_kinds=(
             "governance_approval",
-            "reputation_integration",
-        ),
+        )
+        + REPUTATION_WEIGHT_BOUND_KINDS,
         bound_artifacts=reputation_weight_bound_artifacts,
         valid_anchor_digests=valid_reputation_weight_policy_digests,
         digest_field="reputation_weight_policy_digest_hex",
@@ -630,6 +778,8 @@ def build_summary(
             valid_reputation_weight_policy_digests
         ),
         "valid_policy_digests": sorted(valid_policy_digests),
+        "metrics": sorted(metric_names),
+        "metric_count_values": sorted(metric_counts),
         "required": required,
         "errors": errors,
     }

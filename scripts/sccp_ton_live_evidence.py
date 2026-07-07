@@ -157,7 +157,7 @@ def _decode_hash_text(value: Any, *, label: str) -> bytes:
 
 def _account_states_url(api_url: str) -> str:
     if (
-        not isinstance(api_url, str)
+        type(api_url) is not str
         or api_url != api_url.strip()
         or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in api_url)
     ):
@@ -235,6 +235,15 @@ def _read_runtime_text_file(path: Path, *, error_message: str) -> str:
         raise ValueError(error_message) from None
 
 
+def _read_runtime_text_file_arg(value: Any, *, error_message: str) -> str:
+    if type(value) is not str:
+        raise ValueError(error_message) from None
+    return _read_runtime_text_file(
+        Path(value).expanduser(),
+        error_message=error_message,
+    )
+
+
 def _read_api_key(args: argparse.Namespace) -> str | None:
     if args.api_key is not None and args.api_key_file is not None:
         raise ValueError("--api-key and --api-key-file cannot both be supplied")
@@ -242,8 +251,8 @@ def _read_api_key(args: argparse.Namespace) -> str | None:
         return _api_key_token(args.api_key, label="--api-key")
     if args.api_key_file is None:
         return None
-    token = _read_runtime_text_file(
-        Path(args.api_key_file).expanduser(),
+    token = _read_runtime_text_file_arg(
+        args.api_key_file,
         error_message="--api-key-file cannot be read",
     )
     return _api_key_token(
@@ -551,27 +560,42 @@ def _destination_args_from_validated_live(
     verifier_code_hash: bytes,
     code_boc_bytes: bytes,
 ) -> argparse.Namespace:
-    code_boc_base64 = str(live["code_boc_base64"])
+    code_boc_base64 = _exact_live_string(
+        live,
+        "code_boc_base64",
+        label="code_boc_base64",
+    )
     return argparse.Namespace(
-        verifier_contract_address=live["verifier_contract_address"],
+        verifier_contract_address=_exact_live_string(
+            live,
+            "verifier_contract_address",
+            label="verifier_contract_address",
+        ),
         verifier_code_hash=verifier_code_hash,
         route_allowlist_hash=args.route_allowlist_hash,
         source_verifier_material_hash=args.source_verifier_material_hash,
         source_adapter_engine_deployment_hash=args.source_adapter_engine_deployment_hash,
         route_canary_evidence_hash=getattr(args, "route_canary_evidence_hash", None),
         expected_destination_binding_hash=args.expected_destination_binding_hash,
-        account_status=str(live["account_status"]),
+        account_status=_exact_live_string(live, "account_status", label="account_status"),
         account_state_hash=_parse_hex32(
-            str(live["account_state_hash"]),
+            _exact_live_string(live, "account_state_hash", label="account_state_hash"),
             label="account_state_hash",
         ),
-        last_transaction_lt=str(live["last_transaction_lt"]),
+        last_transaction_lt=_positive_decimal(
+            live.get("last_transaction_lt"),
+            label="last_transaction_lt",
+        ),
         last_transaction_hash=_parse_hex32(
-            str(live["last_transaction_hash"]),
+            _exact_live_string(
+                live,
+                "last_transaction_hash",
+                label="last_transaction_hash",
+            ),
             label="last_transaction_hash",
         ),
         verifier_code_boc_root_hash=_parse_hex32(
-            str(live["code_boc_root_hash"]),
+            _exact_live_string(live, "code_boc_root_hash", label="code_boc_root_hash"),
             label="code_boc_root_hash",
         ),
         verifier_code_boc_base64=code_boc_bytes,
@@ -597,41 +621,93 @@ def _offline_args_from_summary(
     live: dict[str, Any],
     summary: dict[str, Any],
 ) -> list[str]:
+    account_status = _exact_live_string(live, "account_status", label="account_status")
+    if account_status != "active":
+        raise ValueError("TON live account status metadata must be active") from None
     offline = [
         "--verifier-contract-address",
-        str(live["verifier_contract_address"]),
+        _exact_live_string(
+            live,
+            "verifier_contract_address",
+            label="verifier_contract_address",
+        ),
         "--verifier-code-hash",
-        str(live["verifier_code_hash"]),
+        _hex(
+            _parse_hex32(
+                _exact_live_string(
+                    live,
+                    "verifier_code_hash",
+                    label="verifier_code_hash",
+                ),
+                label="verifier_code_hash",
+            )
+        ),
+        "--verifier-code-boc-base64",
+        _exact_live_string(live, "code_boc_base64", label="code_boc_base64"),
     ]
-    code_boc_base64 = live.get("code_boc_base64")
-    if isinstance(code_boc_base64, str) and code_boc_base64:
-        if code_boc_base64 != code_boc_base64.strip():
-            raise ValueError("code_boc_base64 must be an exact non-empty string")
-        offline.extend(["--verifier-code-boc-base64", code_boc_base64])
     offline.extend(
         [
             "--account-status",
-            str(live["account_status"]),
+            account_status,
             "--account-state-hash",
-            str(live["account_state_hash"]),
+            _hex(
+                _parse_hex32(
+                    _exact_live_string(
+                        live,
+                        "account_state_hash",
+                        label="account_state_hash",
+                    ),
+                    label="account_state_hash",
+                )
+            ),
             "--last-transaction-lt",
-            str(live["last_transaction_lt"]),
+            _positive_decimal(
+                live.get("last_transaction_lt"),
+                label="last_transaction_lt",
+            ),
             "--last-transaction-hash",
-            str(live["last_transaction_hash"]),
+            _hex(
+                _parse_hex32(
+                    _exact_live_string(
+                        live,
+                        "last_transaction_hash",
+                        label="last_transaction_hash",
+                    ),
+                    label="last_transaction_hash",
+                )
+            ),
         ]
     )
     if summary.get("expected_destination_binding_hash_matches") is True:
         offline.extend(
             [
                 "--expected-destination-binding-hash",
-                str(summary["destination_binding_hash"]),
+                _hex(
+                    _parse_hex32(
+                        _exact_live_string(
+                            summary,
+                            "destination_binding_hash",
+                            label="destination binding hash",
+                        ),
+                        label="destination binding hash",
+                    )
+                ),
             ]
         )
     if "route_allowlist_hash" in summary:
         offline.extend(
             [
                 "--route-allowlist-hash",
-                str(summary["route_allowlist_hash"]),
+                _hex(
+                    _parse_hex32(
+                        _exact_live_string(
+                            summary,
+                            "route_allowlist_hash",
+                            label="route allowlist hash",
+                        ),
+                        label="route allowlist hash",
+                    )
+                ),
                 "--source-verifier-material-hash",
                 _hex(args.source_verifier_material_hash),
                 "--source-adapter-engine-deployment-hash",
@@ -643,7 +719,16 @@ def _offline_args_from_summary(
             offline.extend(
                 [
                     "--route-canary-evidence-hash",
-                    str(route_canary["evidence_hash"]),
+                    _hex(
+                        _parse_hex32(
+                            _exact_live_string(
+                                route_canary,
+                                "evidence_hash",
+                                label="route canary evidence hash",
+                            ),
+                            label="route canary evidence hash",
+                        )
+                    ),
                 ]
             )
     return offline
@@ -737,17 +822,48 @@ def render_toml(args: argparse.Namespace, live: dict[str, Any]) -> str:
         ),
         evidence.ton_destination_binding_hash(),
     )
+    account_state_hash = _hex(
+        _parse_hex32(
+            _exact_live_string(live, "account_state_hash", label="account_state_hash"),
+            label="account_state_hash",
+        )
+    )
+    last_transaction_lt = _positive_decimal(
+        live.get("last_transaction_lt"),
+        label="last_transaction_lt",
+    )
+    last_transaction_hash = _hex(
+        _parse_hex32(
+            _exact_live_string(
+                live,
+                "last_transaction_hash",
+                label="last_transaction_hash",
+            ),
+            label="last_transaction_hash",
+        )
+    )
+    verifier_code_hash_text = _hex(
+        _parse_hex32(
+            _exact_live_string(live, "verifier_code_hash", label="verifier_code_hash"),
+            label="verifier_code_hash",
+        )
+    )
+    code_boc_root_hash = _hex(
+        _parse_hex32(
+            _exact_live_string(live, "code_boc_root_hash", label="code_boc_root_hash"),
+            label="code_boc_root_hash",
+        )
+    )
     comments = [
-        "# sccp_ton_account_status = " + json.dumps(str(live["account_status"])),
-        "# sccp_ton_account_state_hash = "
-        + json.dumps(str(live["account_state_hash"])),
-        "# sccp_ton_last_transaction_lt = "
-        + json.dumps(str(live["last_transaction_lt"])),
-        "# sccp_ton_last_transaction_hash = "
-        + json.dumps(str(live["last_transaction_hash"])),
-        "# sccp_ton_code_hash = " + json.dumps(str(live["verifier_code_hash"])),
-        "# sccp_ton_code_boc_root_hash = "
-        + json.dumps(str(live["code_boc_root_hash"])),
+        "# sccp_ton_account_status = "
+        + json.dumps(
+            _exact_live_string(live, "account_status", label="account_status")
+        ),
+        "# sccp_ton_account_state_hash = " + json.dumps(account_state_hash),
+        "# sccp_ton_last_transaction_lt = " + json.dumps(last_transaction_lt),
+        "# sccp_ton_last_transaction_hash = " + json.dumps(last_transaction_hash),
+        "# sccp_ton_code_hash = " + json.dumps(verifier_code_hash_text),
+        "# sccp_ton_code_boc_root_hash = " + json.dumps(code_boc_root_hash),
         "# sccp_ton_code_boc_base64 = "
         + json.dumps(
             _exact_live_string(live, "code_boc_base64", label="code_boc_base64")

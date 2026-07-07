@@ -5,7 +5,7 @@ import java.util.Arrays;
 /** Native record-backed Kagemusha compact payment token prover. */
 public final class KagemushaCompactPaymentTokenProver {
   private static final String LIBRARY_NAME = "connect_norito_bridge";
-  public static final int NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;
+  public static final int NATIVE_ARCHIVE_MAX_BYTES = 256 * 1024 * 1024;
   private static final int NORITO_HEADER_BYTES = 40;
   private static final int NORITO_MAX_HEADER_PADDING_BYTES = 64;
   private static final int NORITO_SUPPORTED_FLAGS_MASK = 0x27;

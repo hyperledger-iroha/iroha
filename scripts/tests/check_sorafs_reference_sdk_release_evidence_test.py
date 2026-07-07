@@ -77,7 +77,11 @@ def release_archive(
     return payload
 
 
-def signed_manifest(*, private_key_absent: bool = True) -> dict:
+def signed_manifest(
+    *,
+    private_key_absent: bool = True,
+    signature_algorithm: str = "ed25519",
+) -> dict:
     payload = base("sorafs.reference_sdk.signed_manifest_canary.v1")
     payload.update(
         {
@@ -87,7 +91,7 @@ def signed_manifest(*, private_key_absent: bool = True) -> dict:
             "governed_release_key_used": True,
             "public_key_fingerprint_recorded": True,
             "private_key_absent": private_key_absent,
-            "signature_algorithm": "ed25519",
+            "signature_algorithm": signature_algorithm,
             "manifest_digest_hex": DIGEST,
             "policy_digest_hex": DIGEST,
             "public_key_fingerprint_hex": DIGEST,
@@ -175,6 +179,7 @@ def governance_approval(*, source: str = "governed_release") -> dict:
             "governance_source": source,
             "release_manifest_digest_hex": DIGEST,
             "policy_digest_hex": DIGEST,
+            "public_key_fingerprint_hex": DIGEST,
         }
     )
     return payload
@@ -187,6 +192,23 @@ def write_complete_evidence(root: Path) -> None:
     write_json(root / "cookbook-smoke.json", cookbook_smoke())
     write_json(root / "ffi-header-contract.json", ffi_header_contract())
     write_json(root / "governance-approval.json", governance_approval())
+
+
+RELEASE_MANIFEST_BOUND_FIXTURES = (
+    ("release_archive", "release-archive.json", release_archive),
+    ("downstream_bindings", "downstream-bindings.json", downstream_bindings),
+    ("cookbook_smoke", "cookbook-smoke.json", cookbook_smoke),
+    ("ffi_header_contract", "ffi-header-contract.json", ffi_header_contract),
+    ("governance_approval", "governance-approval.json", governance_approval),
+)
+
+POLICY_BOUND_FIXTURES = (
+    ("governance_approval", "governance-approval.json", governance_approval),
+)
+
+RELEASE_KEY_BOUND_FIXTURES = (
+    ("governance_approval", "governance-approval.json", governance_approval),
+)
 
 
 def run_gate(root: Path, *extra: str) -> int:
@@ -209,9 +231,121 @@ def test_complete_release_evidence_passes(tmp_path: Path) -> None:
     assert payload["valid_release_manifest_digests"] == [DIGEST]
     assert payload["valid_release_manifest_reference_digests"] == [DIGEST]
     assert payload["valid_release_key_fingerprints"] == [DIGEST]
+    assert payload["signature_algorithms"] == ["ed25519"]
+    signed_manifest_artifact = payload["required"]["signed_manifest"]["artifacts"][0]
+    assert signed_manifest_artifact["fingerprint"]["signature_algorithm"] == "ed25519"
+    governance_artifact = payload["required"]["governance_approval"]["artifacts"][0]
+    assert governance_artifact["fingerprint"]["public_key_fingerprint_hex"] == DIGEST
     assert payload["valid_smoke_output_digests"] == [DIGEST]
     assert payload["valid_policy_digests"] == [DIGEST]
     assert payload["required"]["release_archive"]["valid"] is True
+
+
+def test_bound_fixture_tables_cover_checker_bound_kind_sets() -> None:
+    assert (
+        tuple(
+            kind_name
+            for kind_name, _file_name, _factory in RELEASE_MANIFEST_BOUND_FIXTURES
+        )
+        == MODULE.RELEASE_MANIFEST_BOUND_KINDS
+    )
+    assert (
+        tuple(kind_name for kind_name, _file_name, _factory in POLICY_BOUND_FIXTURES)
+        == MODULE.POLICY_BOUND_KINDS
+    )
+    assert (
+        tuple(kind_name for kind_name, _file_name, _factory in RELEASE_KEY_BOUND_FIXTURES)
+        == MODULE.RELEASE_KEY_BOUND_KINDS
+    )
+
+
+def test_fixture_inventories_cover_checker_required_sets() -> None:
+    assert tuple(release_archive()["targets"]) == MODULE.REQUIRED_RELEASE_TARGETS
+    assert tuple(downstream_bindings()["packages"]) == (
+        MODULE.REQUIRED_DOWNSTREAM_PACKAGES
+    )
+    assert (
+        signed_manifest()["signature_algorithm"]
+        in MODULE.ALLOWED_MANIFEST_SIGNATURE_ALGORITHMS
+    )
+
+
+def test_all_manifest_bound_artifacts_reject_signed_manifest_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in RELEASE_MANIFEST_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["release_manifest_digest_hex"] = DIGEST_2
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert result["valid_release_manifest_digests"] == [DIGEST]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} release_manifest_digest_hex must reference a valid "
+            "signed_manifest manifest_digest_hex"
+        ) in artifact["errors"]
+
+
+def test_all_policy_bound_artifacts_reject_signed_manifest_policy_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in POLICY_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["policy_digest_hex"] = DIGEST_2
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert result["valid_policy_digests"] == [DIGEST]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} policy_digest_hex must reference a valid "
+            "signed_manifest policy_digest_hex"
+        ) in artifact["errors"]
+
+
+def test_all_release_key_bound_artifacts_reject_signed_manifest_key_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in RELEASE_KEY_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["public_key_fingerprint_hex"] = DIGEST_2
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert result["valid_release_key_fingerprints"] == [DIGEST]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} public_key_fingerprint_hex must reference a valid "
+            "signed_manifest public_key_fingerprint_hex"
+        ) in artifact["errors"]
 
 
 def test_response_file_arguments_pass(tmp_path: Path) -> None:
@@ -292,6 +426,23 @@ def test_release_archive_targets_must_not_duplicate(tmp_path: Path) -> None:
     assert "target_count must match unique targets count" in artifact["errors"]
 
 
+def test_release_archive_targets_must_not_include_unknown_values(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = release_archive()
+    payload["targets"].append("riscv64-unknown-linux-gnu")
+    payload["target_count"] = len(payload["targets"])
+    write_json(tmp_path / "release-archive.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["release_archive"]["artifacts"][0]
+    assert "targets must not include unknown values" in artifact["errors"]
+
+
 def test_signed_manifest_rejects_private_key_presence(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     write_json(tmp_path / "signed-manifest.json", signed_manifest(private_key_absent=False))
@@ -315,6 +466,68 @@ def test_signed_manifest_requires_policy_digest(tmp_path: Path) -> None:
     assert required["valid"] is False
     assert artifact["valid"] is False
     assert "policy_digest_hex must be a non-empty string" in artifact["errors"]
+
+
+def test_signed_manifest_rejects_rsa_sha256_signature_algorithm(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    write_json(
+        tmp_path / "signed-manifest.json",
+        signed_manifest(signature_algorithm="rsa-sha256"),
+    )
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["signed_manifest"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "signature_algorithm must be `ed25519`" in artifact["errors"]
+    assert payload["valid_release_manifest_digests"] == []
+
+
+def test_signed_manifest_rejects_unsupported_signature_algorithm(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    write_json(
+        tmp_path / "signed-manifest.json",
+        signed_manifest(signature_algorithm="none"),
+    )
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    required = payload["required"]["signed_manifest"]
+    artifact = required["artifacts"][0]
+    assert required["valid"] is False
+    assert artifact["valid"] is False
+    assert "signature_algorithm must be `ed25519`" in artifact["errors"]
+    assert payload["valid_release_manifest_digests"] == []
+
+
+def test_signed_manifest_unsupported_signature_algorithm_stdout_does_not_echo_algorithm(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    write_complete_evidence(tmp_path)
+    invalid_algorithm = "none"
+    write_json(
+        tmp_path / "signed-manifest.json",
+        signed_manifest(signature_algorithm=invalid_algorithm),
+    )
+
+    assert run_gate(tmp_path) == 1
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    diagnostics = json.dumps(payload, sort_keys=True)
+    assert "signature_algorithm must be `ed25519`" in diagnostics
+    assert invalid_algorithm not in diagnostics
+    assert "signature_algorithm must be `ed25519`" in captured.err
+    assert invalid_algorithm not in captured.err
 
 
 def test_stale_signed_manifest_does_not_anchor_release_bound_evidence(
@@ -389,6 +602,21 @@ def test_downstream_packages_must_not_duplicate(tmp_path: Path) -> None:
     assert "package_count must match unique packages count" in artifact["errors"]
 
 
+def test_downstream_packages_must_not_include_unknown_values(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = downstream_bindings()
+    payload["packages"].append("csharp")
+    payload["package_count"] = len(payload["packages"])
+    write_json(tmp_path / "downstream-bindings.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["downstream_bindings"]["artifacts"][0]
+    assert "packages must not include unknown values" in artifact["errors"]
+
+
 def test_downstream_bindings_require_release_manifest_binding(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = downstream_bindings()
@@ -440,11 +668,64 @@ def test_governance_policy_digest_must_match_signed_manifest(tmp_path: Path) -> 
     ]
 
 
+def test_governance_release_key_fingerprint_is_required(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = governance_approval()
+    del payload["public_key_fingerprint_hex"]
+    write_json(tmp_path / "governance-approval.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    required = payload["required"]["governance_approval"]
+    artifact = required["artifacts"][0]
+    assert required["valid"] is False
+    assert artifact["valid"] is False
+    assert "public_key_fingerprint_hex must be a non-empty string" in artifact["errors"]
+
+
+def test_governance_release_key_fingerprint_must_match_signed_manifest(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = governance_approval()
+    payload["public_key_fingerprint_hex"] = DIGEST_2
+    write_json(tmp_path / "governance-approval.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    required = payload["required"]["governance_approval"]
+    artifact = required["artifacts"][0]
+    assert payload["valid_release_key_fingerprints"] == [DIGEST]
+    assert required["valid"] is False
+    assert artifact["valid"] is False
+    assert artifact["errors"] == [
+        "governance_approval public_key_fingerprint_hex must reference a valid "
+        "signed_manifest public_key_fingerprint_hex"
+    ]
+
+
 def test_cookbook_smoke_duration_above_threshold_fails(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     write_json(tmp_path / "cookbook-smoke.json", cookbook_smoke(duration=4_000))
 
     assert run_gate(tmp_path) == 1
+
+
+def test_cookbook_smoke_duration_must_be_integer(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    write_json(tmp_path / "cookbook-smoke.json", cookbook_smoke(duration=12.5))
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["cookbook_smoke"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "smoke_duration_seconds must be a positive integer" in artifact["errors"]
 
 
 def test_ffi_contract_requires_ci_guard(tmp_path: Path) -> None:

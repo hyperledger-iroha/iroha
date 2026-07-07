@@ -415,7 +415,14 @@ fn record_reward_telemetry(
 ) {
     if let Some(handle) = iroha_telemetry::metrics::global() {
         let relay_label = hex_encode(relay_id);
-        let nanos = numeric_to_nanos(amount).unwrap_or(0);
+        let Some(nanos) = numeric_to_nanos(amount) else {
+            warn!(
+                relay_id = %relay_label,
+                amount = %amount,
+                "relay reward amount cannot be represented as nanos for telemetry"
+            );
+            return;
+        };
         handle.record_soranet_reward(&relay_label, nanos, result);
         if let Some(reason) = skip_reason {
             handle.record_soranet_reward_skip(&relay_label, reason);
@@ -425,9 +432,7 @@ fn record_reward_telemetry(
 
 pub(crate) fn numeric_to_nanos(amount: &Numeric) -> Option<u128> {
     let scale = amount.scale();
-    let mantissa = amount
-        .try_mantissa_u128()
-        .expect("amount mantissa must fit u128");
+    let mantissa = amount.try_mantissa_u128()?;
     if scale >= 9 {
         let divisor = 10u128.checked_pow(scale.saturating_sub(9))?;
         mantissa.checked_div(divisor)
@@ -760,6 +765,11 @@ mod tests {
         assert_eq!(observed, expected);
 
         metrics.soranet_reward_base_payout_nanos.set(0);
+    }
+
+    #[test]
+    fn numeric_to_nanos_rejects_negative_amount_without_panic() {
+        assert_eq!(numeric_to_nanos(&Numeric::new(-1_i128, 0)), None);
     }
 
     #[test]

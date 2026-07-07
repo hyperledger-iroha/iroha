@@ -229,6 +229,8 @@ pub use governance::{
     SoraFsAppealFinanceReportValidationError, SoraFsAppealFinanceSettlementReceiptV1,
     SoraFsAppealFinanceSettlementReceiptValidationError, SoraFsAppealFinanceWeeklyRollupBuildError,
     SoraFsAppealFinanceWeeklyRollupV1, SoraFsAppealFinanceWeeklyRollupValidationError,
+    SoraFsModerationBallotGovernanceChallengeDecisionV1,
+    SoraFsModerationBallotGovernanceChallengeKindV1, SoraFsModerationBallotGovernanceChallengeV1,
     SoraFsModerationBallotGovernanceEventKindV1, SoraFsModerationBallotGovernanceEventV1,
     SoraFsModerationBallotGovernanceEventValidationError, SoraFsModerationBallotGovernanceTallyV1,
     SoraFsModerationVoteChoiceV1, SoraFsModerationVoteCountsV1, governance_dag_block_cid_v1,

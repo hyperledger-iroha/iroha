@@ -9524,9 +9524,9 @@ if mode == "--negative-control-active-kagemusha-todo":
         ),
         (
             "crates/iroha_torii/tests/offline_kagemusha_only_smoke.rs",
-            "//! Source-level guards for the Kagemusha-only offline payment surface.",
+            "//! Source-level guards for the Kagemusha-first offline payment surface.",
             "// TODO: bypass Kagemusha-only offline smoke\n"
-            "//! Source-level guards for the Kagemusha-only offline payment surface.",
+            "//! Source-level guards for the Kagemusha-first offline payment surface.",
             "Torii Kagemusha-only smoke active marker",
         ),
         (

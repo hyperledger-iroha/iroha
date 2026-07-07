@@ -1297,9 +1297,8 @@ impl LaneRelayStore {
     /// Insert or replace a lane relay envelope.
     ///
     /// # Errors
-    /// Returns [`LaneRelayError::StaleRelay`] when the relay height regresses and
-    /// [`LaneRelayError::ConflictingRelay`] when a different payload is already recorded for the
-    /// same lane/height.
+    /// Returns [`LaneRelayError::ConflictingRelay`] when a different payload is already recorded
+    /// for the same lane/height.
     pub fn insert(
         &mut self,
         envelope: LaneRelayEnvelope,
@@ -1330,20 +1329,6 @@ impl LaneRelayStore {
                 return Ok(LaneRelayInsert::Duplicate);
             }
             return Err(LaneRelayError::ConflictingRelay { lane, height });
-        }
-
-        if let Some(((_, _, latest_height), _)) = self
-            .entries
-            .range((lane, envelope.dataspace_id, 0)..=(lane, envelope.dataspace_id, u64::MAX))
-            .next_back()
-        {
-            if height < *latest_height {
-                return Err(LaneRelayError::StaleRelay {
-                    lane,
-                    latest_height: *latest_height,
-                    new_height: height,
-                });
-            }
         }
 
         self.entries.insert(key, envelope);
@@ -1400,6 +1385,34 @@ impl LaneRelayStore {
         latest.into_values().collect()
     }
 
+    /// Return the next contiguous merge-admissible relay for each active lane/dataspace pair.
+    #[must_use]
+    pub fn next_merge_admissible_relays(
+        &self,
+        previous_snapshots: &BTreeMap<(LaneId, DataSpaceId), MergeLaneSnapshot>,
+        reset_heights: &BTreeMap<LaneId, u64>,
+    ) -> Vec<&LaneRelayEnvelope> {
+        let mut next = BTreeMap::new();
+        for envelope in self.entries.values() {
+            if !envelope.is_merge_admissible() {
+                continue;
+            }
+            let key = (envelope.lane_id, envelope.dataspace_id);
+            let Some(expected_height) = expected_next_merge_lane_height(
+                previous_snapshots,
+                reset_heights,
+                envelope.lane_id,
+                envelope.dataspace_id,
+            ) else {
+                continue;
+            };
+            if envelope.block_height == expected_height {
+                next.insert(key, envelope);
+            }
+        }
+        next.into_values().collect()
+    }
+
     /// Snapshot stored envelopes in deterministic order.
     #[must_use]
     pub fn snapshot(&self) -> Vec<LaneRelayEnvelope> {
@@ -1411,6 +1424,19 @@ impl LaneRelayStore {
         self.entries
             .retain(|(lane_id, _, _), _| !retired.contains(lane_id));
     }
+}
+
+fn expected_next_merge_lane_height(
+    previous_snapshots: &BTreeMap<(LaneId, DataSpaceId), MergeLaneSnapshot>,
+    reset_heights: &BTreeMap<LaneId, u64>,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+) -> Option<u64> {
+    let committed_height = previous_snapshots
+        .get(&(lane_id, dataspace_id))
+        .map_or(0, |snapshot| snapshot.lane_block_height);
+    let reset_height = reset_heights.get(&lane_id).copied().unwrap_or(0);
+    committed_height.max(reset_height).checked_add(1)
 }
 
 const LANE_RELAY_SEED_DOMAIN: &[u8] = b"iroha:lane-relay:committee-seed:v1";
@@ -1636,6 +1662,20 @@ pub enum MergeLedgerCommitError {
         dataspace_id: DataSpaceId,
         /// Latest committed lane block height.
         latest_height: u64,
+        /// Attempted lane block height.
+        attempted_height: u64,
+    },
+    /// Merge entry tried to skip one or more lane block artifacts.
+    #[error(
+        "merge ledger lane snapshot must advance contiguously for lane={lane_id} dataspace={dataspace_id}: expected_height={expected_height}, attempted_height={attempted_height}"
+    )]
+    NonContiguousLaneSnapshot {
+        /// Lane identifier whose merged height skipped ahead.
+        lane_id: LaneId,
+        /// Dataspace identifier paired with the lane.
+        dataspace_id: DataSpaceId,
+        /// Next admissible lane block height.
+        expected_height: u64,
         /// Attempted lane block height.
         attempted_height: u64,
     },
@@ -21473,6 +21513,15 @@ impl State {
         self.da_receipt_cursors.read().snapshot()
     }
 
+    /// Snapshot already-loaded DA lane reset watermarks without replaying Kura.
+    ///
+    /// Proposal assembly uses these watermarks to avoid assigning lane-local
+    /// block heights from an earlier lane incarnation while holding the
+    /// consensus actor lock.
+    pub(crate) fn da_shard_reset_heights_snapshot_cached(&self) -> BTreeMap<LaneId, u64> {
+        self.da_shard_cursors.read().reset_heights().clone()
+    }
+
     /// Check already-loaded DA commitments without forcing Kura hydration.
     pub(crate) fn da_commitments_contains_record_identity_cached(
         &self,
@@ -24335,6 +24384,46 @@ impl State {
         tx.commit();
     }
 
+    fn prune_verified_lane_relay_contract_state_record(&self, record: &VerifiedLaneRelayRecord) {
+        let Ok(relay_state_key) = Self::verified_lane_relay_state_key(&record.relay_envelope)
+        else {
+            return;
+        };
+        let mut candidate_keys = vec![relay_state_key.clone()];
+        if let Some(contract_map_key) =
+            Self::verified_lane_relay_contract_map_state_key(&relay_state_key)
+        {
+            candidate_keys.push(contract_map_key);
+        }
+
+        let stale_keys = {
+            let smart_contract_state = self.world.smart_contract_state.view();
+            candidate_keys
+                .into_iter()
+                .filter(|key| {
+                    let Some(payload) = smart_contract_state.get(key) else {
+                        return false;
+                    };
+                    Self::decode_verified_lane_relay_record_state(payload).is_ok_and(|decoded| {
+                        decoded == *record
+                            && Self::verified_lane_relay_contract_state_key_matches_record(
+                                key, &decoded,
+                            )
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        if stale_keys.is_empty() {
+            return;
+        }
+
+        let mut tx = self.world.smart_contract_state.block();
+        for key in stale_keys {
+            tx.remove(key);
+        }
+        tx.commit();
+    }
+
     fn reset_lane_scoped_runtime_state(&self, lanes_to_reset: &BTreeSet<LaneId>) {
         if lanes_to_reset.is_empty() {
             return;
@@ -24351,6 +24440,7 @@ impl State {
             let mut cursors = self.da_shard_cursors.write();
             cursors.prune_lanes(lanes_to_reset);
         }
+        crate::sumeragi::status::prune_lane_scoped_snapshots(lanes_to_reset);
         crate::sumeragi::status::reset_public_lane_staking_lanes(lanes_to_reset);
         if self.da_indexes_hydrated.read().is_some() {
             self.persist_da_shard_cursor_journal();
@@ -25160,6 +25250,9 @@ impl State {
                     hydrated += 1;
                 }
                 Ok(LaneRelayInsert::Duplicate) => {}
+                Err(LaneRelayError::StaleLaneIncarnation { .. }) => {
+                    self.prune_verified_lane_relay_contract_state_record(&record);
+                }
                 Err(LaneRelayError::StaleRelay { .. }) => {}
                 Err(err) => iroha_logger::warn!(
                     lane_id = %record.relay_ref.lane_id,
@@ -25201,6 +25294,36 @@ impl State {
                 actual: envelope.dataspace_id,
             });
         }
+        if nexus_active_lane_dataspace_at_height(envelope.lane_id, &nexus, envelope.block_height)
+            != Some(envelope.dataspace_id)
+        {
+            return Err(LaneRelayError::UnknownLane(envelope.lane_id));
+        }
+        if let Some(reset_height) = self
+            .da_shard_cursors
+            .read()
+            .reset_height_for_lane(envelope.lane_id)
+            && envelope.block_height <= reset_height
+        {
+            return Err(LaneRelayError::StaleLaneIncarnation {
+                lane: envelope.lane_id,
+                reset_height,
+                relay_height: envelope.block_height,
+            });
+        }
+        if let Some(previous) = self
+            .merge_latest_lane_snapshots
+            .read()
+            .get(&(envelope.lane_id, envelope.dataspace_id))
+            .copied()
+            && envelope.block_height <= previous.lane_block_height
+        {
+            return Err(LaneRelayError::StaleRelay {
+                lane: envelope.lane_id,
+                latest_height: previous.lane_block_height,
+                new_height: envelope.block_height,
+            });
+        }
         let fault_tolerance = nexus
             .dataspace_catalog
             .entries()
@@ -25208,11 +25331,6 @@ impl State {
             .find(|entry| entry.id == envelope.dataspace_id)
             .map(|entry| entry.fault_tolerance)
             .ok_or(LaneRelayError::UnknownDataspace(envelope.dataspace_id))?;
-        if nexus_active_lane_dataspace_at_height(envelope.lane_id, &nexus, envelope.block_height)
-            != Some(envelope.dataspace_id)
-        {
-            return Err(LaneRelayError::UnknownLane(envelope.lane_id));
-        }
         let committee_size = fault_tolerance
             .checked_mul(3)
             .and_then(|value| value.checked_add(1))
@@ -25385,13 +25503,16 @@ impl State {
             .as_ref()
             .map_or(0, |entry| entry.merge_qc.view);
         let previous_snapshots = self.merge_latest_lane_snapshots.read().clone();
+        let reset_heights = self.da_shard_cursors.read().reset_heights().clone();
 
         let mut lane_snapshots = Vec::new();
         let mut max_view = previous_view;
 
         {
             let relays = self.lane_relays.read();
-            for latest_admissible in relays.latest_merge_admissible_relays() {
+            for latest_admissible in
+                relays.next_merge_admissible_relays(&previous_snapshots, &reset_heights)
+            {
                 if validate_merge_snapshot_against_nexus(
                     &nexus,
                     latest_admissible.lane_id,
@@ -25459,6 +25580,61 @@ impl State {
     #[must_use]
     pub fn lane_relay_snapshot(&self) -> Vec<LaneRelayEnvelope> {
         self.lane_relays.read().snapshot()
+    }
+
+    /// Snapshot latest committed lane-local artifacts for active catalog lanes.
+    ///
+    /// Each tuple is `(lane_id, dataspace_id, latest_lane_block_height)`.
+    /// Artifacts whose persisted dataspace no longer matches the active lane
+    /// catalog are skipped so proposal planning cannot cross lane incarnations.
+    #[must_use]
+    pub(crate) fn lane_block_artifact_tips_snapshot_cached(
+        &self,
+    ) -> Vec<(LaneId, DataSpaceId, u64)> {
+        let nexus = self.nexus_snapshot();
+        if !nexus.enabled {
+            return Vec::new();
+        }
+
+        nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .filter_map(|lane| {
+                let artifact = self
+                    .kura
+                    .latest_lane_block_artifact_for_dataspace(lane.id, lane.dataspace_id)?;
+                Some((
+                    lane.id,
+                    lane.dataspace_id,
+                    artifact.ownership.lane_block_height,
+                ))
+            })
+            .collect()
+    }
+
+    fn unmerged_merge_admissible_relay_progress(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+    ) -> Option<(u64, u64)> {
+        let expected_height = {
+            let previous_snapshots = self.merge_latest_lane_snapshots.read();
+            let reset_heights = self.da_shard_cursors.read();
+            expected_next_merge_lane_height(
+                &previous_snapshots,
+                reset_heights.reset_heights(),
+                lane_id,
+                dataspace_id,
+            )
+        }?;
+        let latest_unmerged_height = self
+            .lane_relays
+            .read()
+            .latest_merge_admissible_for_lane_dataspace(lane_id, dataspace_id)
+            .map(|relay| relay.block_height)
+            .filter(|height| *height >= expected_height)?;
+        Some((expected_height, latest_unmerged_height))
     }
 
     /// Access the unified settlement engine.
@@ -25863,15 +26039,34 @@ impl State {
         entry: &MergeLedgerEntry,
     ) -> Result<(), MergeLedgerCommitError> {
         let previous_snapshots = self.merge_latest_lane_snapshots.read();
+        let reset_heights = self.da_shard_cursors.read();
         for snapshot in &entry.lane_snapshots {
-            if let Some(previous) =
-                previous_snapshots.get(&(snapshot.lane_id, snapshot.dataspace_id))
-                && snapshot.lane_block_height <= previous.lane_block_height
-            {
+            let Some(expected_height) = expected_next_merge_lane_height(
+                &previous_snapshots,
+                reset_heights.reset_heights(),
+                snapshot.lane_id,
+                snapshot.dataspace_id,
+            ) else {
+                return Err(MergeLedgerCommitError::NonContiguousLaneSnapshot {
+                    lane_id: snapshot.lane_id,
+                    dataspace_id: snapshot.dataspace_id,
+                    expected_height: u64::MAX,
+                    attempted_height: snapshot.lane_block_height,
+                });
+            };
+            if snapshot.lane_block_height < expected_height {
                 return Err(MergeLedgerCommitError::NonMonotonicLaneSnapshot {
                     lane_id: snapshot.lane_id,
                     dataspace_id: snapshot.dataspace_id,
-                    latest_height: previous.lane_block_height,
+                    latest_height: expected_height.saturating_sub(1),
+                    attempted_height: snapshot.lane_block_height,
+                });
+            }
+            if snapshot.lane_block_height != expected_height {
+                return Err(MergeLedgerCommitError::NonContiguousLaneSnapshot {
+                    lane_id: snapshot.lane_id,
+                    dataspace_id: snapshot.dataspace_id,
+                    expected_height,
                     attempted_height: snapshot.lane_block_height,
                 });
             }
@@ -27006,6 +27201,24 @@ impl State {
         }
         ensure_autoscale_transition_matches_plan(&staged_plan, pending.transition)?;
         ensure_autoscale_transition_capacity_matches_nexus(&nexus, pending.transition)?;
+        if let PendingAutoscaleTransition::ScaleIn { lane, .. } = pending.transition {
+            let dataspace_id = update.previous_routing_policy.default_dataspace;
+            if let Some((expected_height, latest_unmerged_height)) =
+                self.unmerged_merge_admissible_relay_progress(lane, dataspace_id)
+            {
+                warn!(
+                    lane = lane.as_u32(),
+                    dataspace = dataspace_id.as_u64(),
+                    expected_height,
+                    latest_unmerged_height,
+                    "rejecting staged autoscale scale-in because the retire candidate has unmerged relay progress"
+                );
+                return Err(LaneLifecycleError::AutoscaleTransitionPlanMismatch {
+                    transition: pending.transition.name(),
+                    reason: "retire lane has unmerged relay progress",
+                });
+            }
+        }
         for lane in update.updated_catalog.lanes() {
             if nexus.dataspace_catalog.by_id(lane.dataspace_id).is_none() {
                 return Err(LaneLifecycleError::UnknownDataspace(lane.dataspace_id));
@@ -33058,12 +33271,28 @@ impl<'state> StateBlock<'state> {
     }
 
     fn select_autoscale_lane_for_retire(&self) -> Option<LaneId> {
-        autoscale_managed_lane_for_retire(
+        let candidate = autoscale_managed_lane_for_retire(
             self.nexus.lane_catalog.lanes(),
             self.nexus.autoscale.min_lanes.get(),
             self.nexus.autoscale.max_lanes.get(),
             self.nexus.routing_policy.default_dataspace,
-        )
+        )?;
+        let default_dataspace = self.nexus.routing_policy.default_dataspace;
+        if let Some((expected_height, latest_unmerged_height)) = self
+            .state_ref
+            .unmerged_merge_admissible_relay_progress(candidate, default_dataspace)
+        {
+            debug!(
+                lane = candidate.as_u32(),
+                dataspace = default_dataspace.as_u64(),
+                expected_height,
+                latest_unmerged_height,
+                "skipping deterministic lane autoscale scale-in because the retire candidate has unmerged relay progress"
+            );
+            return None;
+        }
+
+        Some(candidate)
     }
 
     fn collect_autoscale_samples(
@@ -47701,6 +47930,33 @@ mod tests {
             .insert_block(std::collections::HashSet::new(), block_height);
     }
 
+    fn insert_empty_transaction_block_for_test(state_block: &mut StateBlock<'_>) {
+        let block_height = state_block
+            ._curr_block
+            .height()
+            .try_into()
+            .expect("test block height fits storage height");
+        state_block
+            .transactions
+            .insert_block(std::collections::HashSet::new(), block_height);
+    }
+
+    fn commit_and_store_autoscale_previous_block_for_test(
+        state: &mut State,
+        kura: &Arc<Kura>,
+        block: &SignedBlock,
+    ) {
+        store_block_for_state_commit(kura, block);
+        let mut state_block = state.block(block.header());
+        let committed = ValidBlock::new_unverified_for_tests(block.clone())
+            .commit_unchecked()
+            .unpack(|_| {});
+        let _events = state_block.apply_without_execution(&committed, Vec::new());
+        state_block
+            .commit()
+            .expect("commit previous autoscale block");
+    }
+
     fn autoscale_transition_test_nexus(
         lanes: Vec<LaneConfig>,
         min_lanes: u32,
@@ -52464,6 +52720,86 @@ mod tests {
     }
 
     #[test]
+    fn autoscale_transition_scale_in_waits_for_unmerged_verified_lane_relay() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+        let retired_lane_id = LaneId::new(1);
+        let elastic_lane =
+            autoscale_elastic_lane_config(retired_lane_id, DataSpaceId::UNIVERSAL, 1);
+        state
+            .set_nexus(autoscale_transition_test_nexus(
+                vec![LaneConfig::default()],
+                1,
+                2,
+                200,
+            ))
+            .expect("apply autoscale test nexus config");
+        state
+            .apply_lane_lifecycle_with_options(
+                &iroha_data_model::nexus::LaneLifecyclePlan {
+                    additions: vec![elastic_lane],
+                    retire: Vec::new(),
+                },
+                false,
+                true,
+            )
+            .expect("seed internally managed elastic lane");
+
+        let (_, validator_keypairs) = bls_accounts_in("validators", 4);
+        let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
+        let future_relay =
+            sample_lane_relay_envelope(2, retired_lane_id, &signers, full_signer_bitmap(4));
+        assert!(
+            future_relay.is_merge_admissible(),
+            "test setup should seed verified relay progress"
+        );
+        state
+            .lane_relays
+            .write()
+            .insert(future_relay.clone())
+            .expect("verified future relay stored");
+
+        let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
+        let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
+        kura.store_block(Arc::new(first))
+            .expect("store previous autoscale block");
+
+        let mut state_block = state.block(second.header());
+        let committed_second = ValidBlock::new_unverified_for_tests(second)
+            .commit_unchecked()
+            .unpack(|_| {});
+        state_block.maybe_apply_nexus_autoscale(&committed_second);
+
+        let nexus = state_block.nexus.clone();
+        assert_eq!(
+            nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .map(|lane| lane.id)
+                .collect::<Vec<_>>(),
+            vec![LaneId::SINGLE, retired_lane_id],
+            "autoscale scale-in must wait until verified lane relay progress is merged"
+        );
+        assert_eq!(
+            nexus.autoscale.last_transition_height, 0,
+            "suppressed scale-in with unmerged relay progress must not record a transition"
+        );
+        assert!(
+            state_block.pending_autoscale_lifecycle.is_none(),
+            "suppressed scale-in must not stage lifecycle cleanup"
+        );
+        assert!(
+            state
+                .lane_relay_snapshot()
+                .iter()
+                .any(|relay| relay == &future_relay),
+            "suppressed scale-in must preserve the pending relay"
+        );
+    }
+
+    #[test]
     fn autoscale_transition_retires_managed_elastic_lane_when_window_is_cold() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -52536,16 +52872,7 @@ mod tests {
 
         let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-        let mut first_state_block = state.block(first.header());
-        let committed_first = ValidBlock::new_unverified_for_tests(first.clone())
-            .commit_unchecked()
-            .unpack(|_| {});
-        let _ = first_state_block.apply_without_execution(&committed_first, Vec::new());
-        first_state_block
-            .commit()
-            .expect("commit previous autoscale block before scale-in cleanup");
-        kura.store_block(Arc::new(first))
-            .expect("store previous autoscale block");
+        commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &first);
         store_block_for_state_commit(&kura, &second);
         seed_predecessor_height_for_state_commit(&state, &second);
 
@@ -52622,7 +52949,12 @@ mod tests {
         let (_, validator_keypair) = bls_account_in("validators");
         let signers = [&validator_keypair];
         let retired_relay =
-            sample_lane_relay_envelope(1, retired_lane_id, &signers, vec![0b0000_0001]);
+            sample_lane_relay_envelope(1, retired_lane_id, &signers, vec![0b0000_0001])
+                .with_fastpq_proof_material(None);
+        assert!(
+            !retired_relay.is_merge_admissible(),
+            "cleanup sentinel must not suppress autoscale scale-in staging"
+        );
         state
             .lane_relays
             .write()
@@ -52729,6 +53061,96 @@ mod tests {
             "height mismatch must not prune committed retired-lane pin intents"
         );
         assert_eq!(state.transactions.view().latest_height_for_tests(), 0);
+    }
+
+    #[test]
+    fn autoscale_commit_scale_in_rejects_late_unmerged_relay() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+        let retired_lane_id = LaneId::new(1);
+        let elastic_lane =
+            autoscale_elastic_lane_config(retired_lane_id, DataSpaceId::UNIVERSAL, 1);
+        state
+            .set_nexus(autoscale_transition_test_nexus(
+                vec![LaneConfig::default()],
+                1,
+                2,
+                200,
+            ))
+            .expect("apply autoscale test nexus config");
+        state
+            .apply_lane_lifecycle_with_options(
+                &iroha_data_model::nexus::LaneLifecyclePlan {
+                    additions: vec![elastic_lane],
+                    retire: Vec::new(),
+                },
+                false,
+                true,
+            )
+            .expect("seed internally managed elastic lane");
+
+        let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
+        let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
+        commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &first);
+        store_block_for_state_commit(&kura, &second);
+        seed_predecessor_height_for_state_commit(&state, &second);
+
+        let mut state_block = state.block(second.header());
+        insert_empty_transaction_block_for_state_commit(&mut state_block, &second);
+        let committed_second = ValidBlock::new_unverified_for_tests(second)
+            .commit_unchecked()
+            .unpack(|_| {});
+        let _events = state_block.apply_without_execution(&committed_second, Vec::new());
+        assert!(
+            state_block.pending_autoscale_lifecycle.is_some(),
+            "cold window should stage autoscale scale-in before the late relay arrives"
+        );
+
+        let (_, validator_keypairs) = bls_accounts_in("validators", 4);
+        let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
+        let late_relay =
+            sample_lane_relay_envelope(1, retired_lane_id, &signers, full_signer_bitmap(4));
+        assert!(
+            late_relay.is_merge_admissible(),
+            "test setup should inject verified relay progress after staging"
+        );
+        state
+            .lane_relays
+            .write()
+            .insert(late_relay.clone())
+            .expect("late verified relay stored");
+
+        let err = state_block
+            .commit()
+            .expect_err("late unmerged relay must abort staged scale-in commit");
+        assert!(matches!(
+            err,
+            TransactionsBlockError::AutoscaleLaneLifecycle
+        ));
+
+        let nexus = state.nexus_snapshot();
+        assert_eq!(
+            nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .map(|lane| lane.id)
+                .collect::<Vec<_>>(),
+            vec![LaneId::SINGLE, retired_lane_id],
+            "aborted autoscale scale-in must not publish the retired-lane catalog"
+        );
+        assert_eq!(
+            nexus.autoscale.last_transition_height, 0,
+            "aborted autoscale scale-in must not record a transition height"
+        );
+        assert!(
+            state
+                .lane_relay_snapshot()
+                .iter()
+                .any(|relay| relay == &late_relay),
+            "aborted autoscale scale-in must preserve the late relay"
+        );
     }
 
     #[test]
@@ -53072,7 +53494,7 @@ mod tests {
                 (retired_lane_id, DataSpaceId::UNIVERSAL, validator_ids),
             ],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
         let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
         let retired_relay =
             sample_lane_relay_envelope(2, retired_lane_id, &signers, full_signer_bitmap(4))
@@ -53104,8 +53526,7 @@ mod tests {
 
         let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-        kura.store_block(Arc::new(first))
-            .expect("store previous autoscale block");
+        commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &first);
         store_block_for_state_commit(&kura, &second);
         seed_predecessor_height_for_state_commit(&state, &second);
 
@@ -53197,6 +53618,7 @@ mod tests {
                 .is_some(),
             "autoscale scale-in must not prune spoofed contract-map siblings"
         );
+        insert_empty_transaction_block_for_test(&mut state_block);
         state_block
             .commit()
             .expect("autoscale scale-in block scope commits staged relay pruning");
@@ -53340,8 +53762,7 @@ mod tests {
 
         let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-        kura.store_block(Arc::new(first))
-            .expect("store previous autoscale block");
+        commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &first);
         store_block_for_state_commit(&kura, &second);
         seed_predecessor_height_for_state_commit(&state, &second);
 
@@ -53487,6 +53908,7 @@ mod tests {
             "autoscale scale-in must retain same-block surviving-lane economics"
         );
 
+        insert_empty_transaction_block_for_test(&mut state_block);
         state_block
             .commit()
             .expect("autoscale scale-in commits same-block cleanup");
@@ -53589,8 +54011,7 @@ mod tests {
 
         let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-        kura.store_block(Arc::new(first))
-            .expect("store previous autoscale block");
+        commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &first);
         store_block_for_state_commit(&kura, &second);
         seed_predecessor_height_for_state_commit(&state, &second);
 
@@ -53708,6 +54129,7 @@ mod tests {
             "autoscale scale-in must retain same-block replay entries for surviving lanes"
         );
 
+        insert_empty_transaction_block_for_test(&mut state_block);
         state_block
             .commit()
             .expect("autoscale scale-in commits same-block validator and replay cleanup");
@@ -53848,7 +54270,7 @@ mod tests {
                 AxtReplayRecord {
                     dataspace: DataSpaceId::UNIVERSAL,
                     used_slot: 1,
-                    retain_until_slot: 100,
+                    retain_until_slot: 10_000,
                 },
             );
             block.insert(
@@ -53898,8 +54320,7 @@ mod tests {
 
         let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-        kura.store_block(Arc::new(first))
-            .expect("store previous autoscale block");
+        commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &first);
         store_block_for_state_commit(&kura, &second);
         seed_predecessor_height_for_state_commit(&state, &second);
 
@@ -53924,6 +54345,7 @@ mod tests {
             },
             "test setup must exercise the real autoscale scale-in transition"
         );
+        insert_empty_transaction_block_for_test(&mut state_block);
         state_block
             .commit()
             .expect("committed autoscale lifecycle must publish and prune persistent state");
@@ -54661,8 +55083,7 @@ mod tests {
 
         let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-        kura.store_block(Arc::new(first))
-            .expect("store previous autoscale block");
+        commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &first);
         store_block_for_state_commit(&kura, &second);
         seed_predecessor_height_for_state_commit(&state, &second);
 
@@ -54672,6 +55093,7 @@ mod tests {
             .commit_unchecked()
             .unpack(|_| {});
         state_block.maybe_apply_nexus_autoscale(&committed_second);
+        insert_empty_transaction_block_for_test(&mut state_block);
         state_block
             .commit()
             .expect("autoscale scale-in block scope commits runtime cleanup");
@@ -55404,8 +55826,7 @@ mod tests {
 
         let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-        kura.store_block(Arc::new(first))
-            .expect("store previous autoscale block");
+        commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &first);
         store_block_for_state_commit(&kura, &second);
         seed_predecessor_height_for_state_commit(&state, &second);
 
@@ -55415,6 +55836,7 @@ mod tests {
             .commit_unchecked()
             .unpack(|_| {});
         state_block.maybe_apply_nexus_autoscale(&committed_second);
+        insert_empty_transaction_block_for_test(&mut state_block);
         state_block
             .commit()
             .expect("autoscale scale-in block scope commits validator cleanup");
@@ -55489,8 +55911,7 @@ mod tests {
 
         let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-        kura.store_block(Arc::new(first))
-            .expect("store previous autoscale block");
+        commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &first);
         store_block_for_state_commit(&kura, &second);
         seed_predecessor_height_for_state_commit(&state, &second);
 
@@ -55500,6 +55921,7 @@ mod tests {
             .commit_unchecked()
             .unpack(|_| {});
         state_block.maybe_apply_nexus_autoscale(&committed_second);
+        insert_empty_transaction_block_for_test(&mut state_block);
         state_block
             .commit()
             .expect("autoscale scale-in block scope commits embedded validator cleanup");
@@ -55570,8 +55992,7 @@ mod tests {
 
         let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-        kura.store_block(Arc::new(first))
-            .expect("store previous autoscale block");
+        commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &first);
         store_block_for_state_commit(&kura, &second);
         seed_predecessor_height_for_state_commit(&state, &second);
 
@@ -55631,6 +56052,7 @@ mod tests {
             "autoscale scale-in must preserve default-lane reward claim cursors"
         );
 
+        insert_empty_transaction_block_for_test(&mut state_block);
         state_block
             .commit()
             .expect("autoscale scale-in block scope commits public-lane economic cleanup");
@@ -55691,8 +56113,7 @@ mod tests {
 
         let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-        kura.store_block(Arc::new(first))
-            .expect("store previous autoscale block");
+        commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &first);
         store_block_for_state_commit(&kura, &second);
         seed_predecessor_height_for_state_commit(&state, &second);
 
@@ -55744,6 +56165,7 @@ mod tests {
             "autoscale scale-in must preserve unrelated rewards on the surviving lane"
         );
 
+        insert_empty_transaction_block_for_test(&mut state_block);
         state_block
             .commit()
             .expect("autoscale scale-in block scope commits embedded public-lane economic cleanup");
@@ -55901,8 +56323,7 @@ mod tests {
 
         let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-        kura.store_block(Arc::new(first))
-            .expect("store previous autoscale block");
+        commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &first);
         store_block_for_state_commit(&kura, &second);
         seed_predecessor_height_for_state_commit(&state, &second);
 
@@ -55930,6 +56351,7 @@ mod tests {
             Some(preserved_policy),
             "explicit AXT policy targeting a surviving lane should be preserved without directory data"
         );
+        insert_empty_transaction_block_for_test(&mut state_block);
         state_block
             .commit()
             .expect("autoscale scale-in block scope commits AXT cleanup");
@@ -56006,8 +56428,7 @@ mod tests {
 
         let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-        kura.store_block(Arc::new(first))
-            .expect("store previous autoscale block");
+        commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &first);
         store_block_for_state_commit(&kura, &second);
         seed_predecessor_height_for_state_commit(&state, &second);
 
@@ -56034,6 +56455,7 @@ mod tests {
                 .is_some(),
             "replay entries keyed by surviving lanes must remain"
         );
+        insert_empty_transaction_block_for_test(&mut state_block);
         state_block
             .commit()
             .expect("autoscale scale-in block scope commits replay-ledger cleanup");
@@ -61522,13 +61944,13 @@ mod tests {
             .set_nexus(two_lane_nexus)
             .expect("configure initial two-lane nexus");
         let commit_keypairs = configure_commit_topology(&state, 1);
-        let lane1_h2 = sample_lane_relay_envelope(2, LaneId::new(1), &signers, vec![0b0000_0001]);
+        let lane1_h1 = sample_lane_relay_envelope(1, LaneId::new(1), &signers, vec![0b0000_0001]);
         state
             .lane_relays
             .write()
-            .insert(lane1_h2.clone())
+            .insert(lane1_h1.clone())
             .expect("lane1 relay stored");
-        let candidate = merge_candidate_from_relay(1, &lane1_h2);
+        let candidate = merge_candidate_from_relay(1, &lane1_h1);
         let merge_qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
         state
             .commit_merge_entry(merge_entry_from_candidate(candidate, merge_qc))
@@ -64091,6 +64513,8 @@ mod tests {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn apply_lane_lifecycle_retire_prunes_lane_relays() {
+        let _status_guard = crate::sumeragi::status::lane_relay_test_guard();
+        crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
@@ -64111,20 +64535,15 @@ mod tests {
             .expect("added second lane");
         let commit_keypairs = configure_commit_topology(&state, 1);
 
-        let lane1_h2 = sample_lane_relay_envelope(2, LaneId::new(1), &signers, vec![0b0000_0001]);
+        let lane1_h1 = sample_lane_relay_envelope(1, LaneId::new(1), &signers, vec![0b0000_0001]);
+        let lane0_h1 = sample_lane_relay_envelope(1, LaneId::new(0), &signers, vec![0b0000_0001]);
         {
             let mut relays = state.lane_relays.write();
-            let _ = relays
-                .insert(sample_lane_relay_envelope(
-                    1,
-                    LaneId::new(0),
-                    &signers,
-                    vec![0b0000_0001],
-                ))
-                .expect("lane0 relay stored");
-            let _ = relays.insert(lane1_h2.clone()).expect("lane1 relay stored");
+            let _ = relays.insert(lane0_h1.clone()).expect("lane0 relay stored");
+            let _ = relays.insert(lane1_h1.clone()).expect("lane1 relay stored");
         }
-        let merge_candidate = merge_candidate_from_relay(1, &lane1_h2);
+        crate::sumeragi::status::set_lane_relay_envelopes(vec![lane0_h1.clone(), lane1_h1.clone()]);
+        let merge_candidate = merge_candidate_from_relay(1, &lane1_h1);
         let merge_qc = merge_qc_for_candidate(&state, &merge_candidate, &commit_keypairs, &[0]);
         state
             .commit_merge_entry(merge_entry_from_candidate(merge_candidate, merge_qc))
@@ -64195,6 +64614,12 @@ mod tests {
         let snapshot = state.lane_relay_snapshot();
         assert_eq!(snapshot.len(), 1);
         assert_eq!(snapshot[0].lane_id, LaneId::new(0));
+        let status_relays = crate::sumeragi::status::lane_relay_envelopes_snapshot();
+        assert_eq!(
+            status_relays,
+            vec![lane0_h1],
+            "retired lane relay status snapshot must be pruned with state"
+        );
         assert!(
             state
                 .da_commitments
@@ -64246,6 +64671,7 @@ mod tests {
         state
             .commit_merge_entry(merge_entry_from_candidate(candidate, merge_qc))
             .expect("recreated lane merge entry commits");
+        crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
     }
 
     #[test]
@@ -64498,13 +64924,13 @@ mod tests {
             .apply_lane_lifecycle(&add_lane)
             .expect("added second lane");
         let commit_keypairs = configure_commit_topology(&state, 1);
-        let lane1_h2 = sample_lane_relay_envelope(2, LaneId::new(1), &signers, vec![0b0000_0001]);
+        let lane1_h1 = sample_lane_relay_envelope(1, LaneId::new(1), &signers, vec![0b0000_0001]);
         state
             .lane_relays
             .write()
-            .insert(lane1_h2.clone())
+            .insert(lane1_h1.clone())
             .expect("lane1 relay stored");
-        let candidate = merge_candidate_from_relay(1, &lane1_h2);
+        let candidate = merge_candidate_from_relay(1, &lane1_h1);
         let merge_qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
         state
             .commit_merge_entry(merge_entry_from_candidate(candidate, merge_qc))
@@ -64780,9 +65206,9 @@ mod tests {
                 (recreated_lane_id, DataSpaceId::UNIVERSAL, validator_ids),
             ],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
         let old_envelope =
-            sample_lane_relay_envelope_for_state(&state, 2, recreated_lane_id, &validator_keypairs)
+            sample_lane_relay_envelope_for_state(&state, 1, recreated_lane_id, &validator_keypairs)
                 .with_manifest_root(Some([0x44; 32]));
         let old_key = State::verified_lane_relay_state_key(&old_envelope).expect("state key");
         let old_record = seed_verified_lane_relay_record(&state, &old_envelope);
@@ -64984,7 +65410,7 @@ mod tests {
                 (recreated_lane_id, DataSpaceId::UNIVERSAL, validator_ids),
             ],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
         let old_envelope =
             sample_lane_relay_envelope_for_state(&state, 2, recreated_lane_id, &validator_keypairs)
                 .with_manifest_root(Some([0x84; 32]));
@@ -67676,7 +68102,7 @@ mod tests {
                 validator_ids.clone(),
             )],
         );
-        configure_commit_topology(&state, 1);
+        set_commit_topology_from_keypairs(&state, &validator_keypairs);
         (state, validator_keypairs)
     }
 
@@ -67745,7 +68171,7 @@ mod tests {
     ) {
         let (state, validator_keypairs) = setup_lane_relay_burn_state();
         let envelope =
-            sample_lane_relay_envelope_for_state(&state, 2, LaneId::new(0), &validator_keypairs)
+            sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs)
                 .with_manifest_root(Some([0x44; 32]));
         let mut record = sample_verified_lane_relay_record(&envelope);
         mutate(&mut record);
@@ -67770,7 +68196,7 @@ mod tests {
     -> (State, LaneRelayEnvelope, VerifiedLaneRelayRecord) {
         let (state, validator_keypairs) = setup_lane_relay_burn_state();
         let envelope =
-            sample_lane_relay_envelope_for_state(&state, 2, LaneId::new(0), &validator_keypairs)
+            sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs)
                 .with_manifest_root(Some([0x44; 32]));
         let record = sample_verified_lane_relay_record(&envelope);
         (state, envelope, record)
@@ -67792,7 +68218,7 @@ mod tests {
                 validator_ids.clone(),
             )],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
 
         let envelope =
             sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
@@ -67830,7 +68256,7 @@ mod tests {
                 validator_ids.clone(),
             )],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
 
         let envelope =
             sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
@@ -67858,7 +68284,7 @@ mod tests {
                 validator_ids.clone(),
             )],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
 
         let mut envelope =
             sample_lane_relay_envelope_for_state(&state, 2, LaneId::new(0), &validator_keypairs);
@@ -67886,7 +68312,7 @@ mod tests {
                 validator_ids.clone(),
             )],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
 
         let mut envelope =
             sample_lane_relay_envelope_for_state(&state, 2, LaneId::new(0), &validator_keypairs);
@@ -67956,7 +68382,7 @@ mod tests {
                 validator_ids.clone(),
             )],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
 
         let mut envelope =
             sample_lane_relay_envelope_for_state(&state, 2, LaneId::new(0), &validator_keypairs);
@@ -67994,7 +68420,7 @@ mod tests {
                 validator_ids.clone(),
             )],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
 
         let envelope =
             sample_lane_relay_envelope_for_state(&state, 2, LaneId::new(0), &validator_keypairs)
@@ -68110,10 +68536,10 @@ mod tests {
                 validator_ids.clone(),
             )],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
 
         let envelope =
-            sample_lane_relay_envelope_for_state(&state, 2, LaneId::new(0), &validator_keypairs)
+            sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs)
                 .with_manifest_root(Some([0x44; 32]));
         seed_verified_lane_relay_record(&state, &envelope);
 
@@ -68128,7 +68554,7 @@ mod tests {
             .find(|snapshot| snapshot.lane_id == LaneId::new(0))
             .expect("hydrated relay included in merge candidate");
         assert_eq!(snapshot.dataspace_id, DataSpaceId::UNIVERSAL);
-        assert_eq!(snapshot.lane_block_height, 2);
+        assert_eq!(snapshot.lane_block_height, 1);
         assert_eq!(snapshot.tip_hash, envelope.block_header.hash());
         assert_eq!(
             snapshot.merge_hint_root,
@@ -68271,7 +68697,7 @@ mod tests {
     }
 
     #[test]
-    fn committed_verified_lane_relay_record_does_not_regress_newer_cached_relay() {
+    fn committed_verified_lane_relay_record_fills_cached_gap_before_newer_relay() {
         let (state, validator_keypairs) = setup_lane_relay_burn_state();
         let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
@@ -68291,8 +68717,8 @@ mod tests {
 
         assert_eq!(
             state.lane_relay_snapshot(),
-            vec![newer],
-            "commit hydration must not regress a lane relay cache to an older height"
+            vec![older, newer],
+            "commit hydration may fill a missing lower height without replacing the newer relay"
         );
     }
 
@@ -68382,13 +68808,13 @@ mod tests {
     fn merge_candidates_hydrate_verified_lane_relay_record_despite_spoofed_key_sibling() {
         let (state, validator_keypairs) = setup_lane_relay_burn_state();
         let valid_envelope =
-            sample_lane_relay_envelope_for_state(&state, 2, LaneId::new(0), &validator_keypairs)
+            sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs)
                 .with_manifest_root(Some([0x44; 32]));
         let spoofed_key_envelope =
-            sample_lane_relay_envelope_for_state(&state, 3, LaneId::new(0), &validator_keypairs)
+            sample_lane_relay_envelope_for_state(&state, 2, LaneId::new(0), &validator_keypairs)
                 .with_manifest_root(Some([0x44; 32]));
         let spoofed_payload_envelope =
-            sample_lane_relay_envelope_for_state(&state, 4, LaneId::new(0), &validator_keypairs)
+            sample_lane_relay_envelope_for_state(&state, 3, LaneId::new(0), &validator_keypairs)
                 .with_manifest_root(Some([0x44; 32]));
         let valid_record = sample_verified_lane_relay_record(&valid_envelope);
         let spoofed_record = sample_verified_lane_relay_record(&spoofed_payload_envelope);
@@ -68476,7 +68902,7 @@ mod tests {
         let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         let active_envelope =
-            sample_lane_relay_envelope_for_state(&state, 2, LaneId::SINGLE, &validator_keypairs)
+            sample_lane_relay_envelope_for_state(&state, 1, LaneId::SINGLE, &validator_keypairs)
                 .with_manifest_root(Some([0x44; 32]));
         let stale_unknown_envelope =
             sample_lane_relay_envelope(2, LaneId::new(7), &signers, signers_bitmap)
@@ -68584,6 +69010,212 @@ mod tests {
         assert!(
             contract_state.get(&future_created_key).is_some(),
             "future-created relay state should remain persisted but inert after restart hydration"
+        );
+    }
+
+    #[test]
+    fn merge_candidates_restart_rejects_replayed_verified_relay_from_old_lane_incarnation() {
+        let (state, validator_keypairs) = setup_lane_relay_burn_state();
+        let validator_ids: Vec<_> = validator_keypairs
+            .iter()
+            .map(|keypair| AccountId::new(keypair.public_key().clone()))
+            .collect();
+        let lane_id = LaneId::new(1);
+        let lane_config = LaneConfig {
+            id: lane_id,
+            alias: "replayed-verified-relay".to_owned(),
+            ..LaneConfig::default()
+        };
+        let add_lane = iroha_data_model::nexus::LaneLifecyclePlan {
+            additions: vec![lane_config.clone()],
+            retire: Vec::new(),
+        };
+        state.apply_lane_lifecycle(&add_lane).expect("add lane");
+        install_lane_manifest_registry(
+            &state,
+            &[
+                (
+                    LaneId::SINGLE,
+                    DataSpaceId::UNIVERSAL,
+                    validator_ids.clone(),
+                ),
+                (lane_id, DataSpaceId::UNIVERSAL, validator_ids.clone()),
+            ],
+        );
+
+        let old_envelope =
+            sample_lane_relay_envelope_for_state(&state, 1, lane_id, &validator_keypairs)
+                .with_manifest_root(Some([0x51; 32]));
+        let old_record = sample_verified_lane_relay_record(&old_envelope);
+        let old_key = State::verified_lane_relay_state_key(&old_envelope).expect("old state key");
+        let old_map_key = State::verified_lane_relay_contract_map_state_key(&old_key)
+            .expect("old contract map state key");
+        insert_verified_lane_relay_record_state(&state, old_key.clone(), &old_record);
+        assert!(
+            !state.merge_entry_candidates_from_lane_relays().is_empty(),
+            "test setup should prove the old verified relay can hydrate before lane reset"
+        );
+
+        seed_committed_height_for_state_test(&state, 2);
+        state
+            .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
+                additions: Vec::new(),
+                retire: vec![lane_id],
+            })
+            .expect("retire lane");
+        state
+            .apply_lane_lifecycle(&add_lane)
+            .expect("recreate lane");
+
+        insert_verified_lane_relay_record_state(&state, old_key.clone(), &old_record);
+        insert_smart_contract_state_payload(
+            &state,
+            old_map_key.clone(),
+            encode_verified_lane_relay_record_contract_map_state_for_test(&old_record),
+        );
+        assert_eq!(
+            state.verified_lane_relay_records_from_contract_state(),
+            vec![old_record.clone()],
+            "adversarial replay should restore the old canonical record to contract state"
+        );
+        let stale_error = state
+            .record_lane_relay(&old_envelope)
+            .expect_err("old-incarnation relay should fail reset-watermark validation");
+        assert!(matches!(
+            stale_error,
+            LaneRelayError::StaleLaneIncarnation {
+                lane,
+                reset_height: 2,
+                relay_height: 1,
+            } if lane == lane_id
+        ));
+        assert!(
+            state.merge_entry_candidates_from_lane_relays().is_empty(),
+            "old-incarnation verified relay must not hydrate after lane reset"
+        );
+        assert!(state.lane_relay_snapshot().is_empty());
+        assert!(
+            state
+                .verified_lane_relay_records_from_contract_state()
+                .is_empty(),
+            "stale replay should be pruned after failed hydration"
+        );
+        {
+            let contract_state = state.world.smart_contract_state.view();
+            assert!(
+                contract_state.get(&old_key).is_none(),
+                "stale canonical replay key should be pruned after failed hydration"
+            );
+            assert!(
+                contract_state.get(&old_map_key).is_none(),
+                "stale contract-map replay key should be pruned after failed hydration"
+            );
+        }
+
+        let json_value = norito::json::to_value(&state).expect("serialize state snapshot");
+        let restarted = deserialize::KuraSeed {
+            kura: Kura::blank_kura_for_testing(),
+            query_handle: LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            telemetry: crate::telemetry::StateTelemetry::default(),
+        }
+        .into_state_from_json(json_value)
+        .expect("deserialize restarted state");
+        {
+            let mut nexus = restarted.nexus.write();
+            nexus.enabled = true;
+            nexus.fees.settlement_mode =
+                iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
+            nexus.fees.fee_receipts_activation_height = 2;
+            nexus.fees.canonical_sponsor_account_id = Some("canonical-sponsor".to_owned());
+        }
+        if nexus_catalog_geometry_lane_dataspace(lane_id, &restarted.nexus_snapshot()).is_none() {
+            restarted
+                .apply_lane_lifecycle(&add_lane)
+                .expect("restore recreated lane");
+        }
+        install_lane_manifest_registry(
+            &restarted,
+            &[
+                (
+                    LaneId::SINGLE,
+                    DataSpaceId::UNIVERSAL,
+                    validator_ids.clone(),
+                ),
+                (lane_id, DataSpaceId::UNIVERSAL, validator_ids),
+            ],
+        );
+        insert_verified_lane_relay_record_state(&restarted, old_key.clone(), &old_record);
+        insert_smart_contract_state_payload(
+            &restarted,
+            old_map_key.clone(),
+            encode_verified_lane_relay_record_contract_map_state_for_test(&old_record),
+        );
+        assert_eq!(
+            restarted.verified_lane_relay_records_from_contract_state(),
+            vec![old_record.clone()],
+            "adversarial replay after restart should restore the old canonical record to contract state"
+        );
+        let restarted_stale_error = restarted
+            .record_lane_relay(&old_envelope)
+            .expect_err("old-incarnation relay should remain stale after restart");
+        assert!(matches!(
+            restarted_stale_error,
+            LaneRelayError::StaleLaneIncarnation {
+                lane,
+                reset_height: 2,
+                relay_height: 1,
+            } if lane == lane_id
+        ));
+        assert!(
+            restarted
+                .merge_entry_candidates_from_lane_relays()
+                .is_empty(),
+            "restart hydration must keep old-incarnation verified relays inert"
+        );
+        assert!(restarted.lane_relay_snapshot().is_empty());
+        assert!(
+            restarted
+                .verified_lane_relay_records_from_contract_state()
+                .is_empty(),
+            "restart stale replay should be pruned after failed hydration"
+        );
+        {
+            let contract_state = restarted.world.smart_contract_state.view();
+            assert!(
+                contract_state.get(&old_key).is_none(),
+                "restart stale canonical replay key should be pruned after failed hydration"
+            );
+            assert!(
+                contract_state.get(&old_map_key).is_none(),
+                "restart stale contract-map replay key should be pruned after failed hydration"
+            );
+        }
+
+        let fresh_envelope =
+            sample_lane_relay_envelope_for_state(&restarted, 3, lane_id, &validator_keypairs)
+                .with_manifest_root(Some([0x52; 32]));
+        let fresh_record = sample_verified_lane_relay_record(&fresh_envelope);
+        insert_verified_lane_relay_record_state(
+            &restarted,
+            State::verified_lane_relay_state_key(&fresh_envelope).expect("fresh state key"),
+            &fresh_record,
+        );
+
+        let candidates = restarted.merge_entry_candidates_from_lane_relays();
+
+        assert_eq!(
+            restarted.lane_relay_snapshot(),
+            vec![fresh_envelope.clone()],
+            "only the post-reset verified relay should hydrate"
+        );
+        assert_eq!(candidates.len(), 1);
+        assert!(
+            candidates[0].lane_snapshots.iter().any(|snapshot| {
+                snapshot.lane_id == lane_id
+                    && snapshot.lane_block_height == fresh_envelope.block_height
+            }),
+            "fresh post-reset relay must still produce a merge candidate"
         );
     }
 
@@ -68834,7 +69466,7 @@ mod tests {
                 validator_ids.clone(),
             )],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
 
         let mut envelope =
             sample_lane_relay_envelope_for_state(&state, 3, LaneId::new(0), &validator_keypairs);
@@ -68861,33 +69493,105 @@ mod tests {
                 validator_ids.clone(),
             )],
         );
-        configure_commit_topology(&state, 1);
+        let keypairs = configure_commit_topology_preserving_world_peers(&state, 1);
 
+        let first_relay =
+            sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
         state
-            .record_lane_relay(&sample_lane_relay_envelope_for_state(
-                &state,
-                2,
-                LaneId::new(0),
-                &validator_keypairs,
-            ))
+            .record_lane_relay(&first_relay)
             .expect("new relay accepted");
+        let first_candidate = state
+            .merge_entry_candidates_from_lane_relays()
+            .into_iter()
+            .next()
+            .expect("height 1 merge candidate");
+        let first_qc = merge_qc_for_candidate(&state, &first_candidate, &keypairs, &[0]);
+        state
+            .commit_merge_entry(merge_entry_from_candidate(first_candidate, first_qc))
+            .expect("height 1 merge committed");
 
         let err = state
-            .record_lane_relay(&sample_lane_relay_envelope_for_state(
-                &state,
-                1,
-                LaneId::new(0),
-                &validator_keypairs,
-            ))
+            .record_lane_relay(&first_relay)
             .expect_err("stale relay should be rejected");
         assert!(matches!(
             err,
             LaneRelayError::StaleRelay {
                 lane,
-                latest_height: 2,
+                latest_height: 1,
                 new_height: 1
             } if lane == LaneId::new(0)
         ));
+    }
+
+    #[test]
+    fn record_lane_relay_accepts_out_of_order_future_relay_but_merge_waits_for_gap() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+        state.nexus.write().enabled = true;
+        let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
+        seed_consensus_keys_with_pops(&state, &validator_keypairs);
+        install_lane_manifest_registry(
+            &state,
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
+        );
+        let keypairs = configure_commit_topology_preserving_world_peers(&state, 1);
+
+        let height2 =
+            sample_lane_relay_envelope_for_state(&state, 2, LaneId::new(0), &validator_keypairs);
+        let height1 =
+            sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
+
+        assert_eq!(
+            state
+                .record_lane_relay(&height2)
+                .expect("future relay should be cached"),
+            LaneRelayInsert::Inserted
+        );
+        assert!(
+            state.merge_entry_candidates_from_lane_relays().is_empty(),
+            "merge synthesis must wait for the missing lower lane height"
+        );
+
+        assert_eq!(
+            state
+                .record_lane_relay(&height1)
+                .expect("missing predecessor should still be accepted"),
+            LaneRelayInsert::Inserted
+        );
+        let first_candidate = state
+            .merge_entry_candidates_from_lane_relays()
+            .into_iter()
+            .next()
+            .expect("height 1 candidate should be selected first");
+        assert_eq!(first_candidate.lane_snapshots.len(), 1);
+        assert_eq!(first_candidate.lane_snapshots[0].lane_block_height, 1);
+        assert_eq!(
+            first_candidate.lane_snapshots[0].tip_hash,
+            height1.block_header.hash()
+        );
+
+        let first_qc = merge_qc_for_candidate(&state, &first_candidate, &keypairs, &[0]);
+        state
+            .commit_merge_entry(merge_entry_from_candidate(first_candidate, first_qc))
+            .expect("height 1 merge committed");
+
+        let second_candidate = state
+            .merge_entry_candidates_from_lane_relays()
+            .into_iter()
+            .next()
+            .expect("cached height 2 should become mergeable after height 1");
+        assert_eq!(second_candidate.epoch_id, 2);
+        assert_eq!(second_candidate.lane_snapshots.len(), 1);
+        assert_eq!(second_candidate.lane_snapshots[0].lane_block_height, 2);
+        assert_eq!(
+            second_candidate.lane_snapshots[0].tip_hash,
+            height2.block_header.hash()
+        );
     }
 
     #[test]
@@ -68906,7 +69610,7 @@ mod tests {
                 validator_ids.clone(),
             )],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
 
         let envelope =
             sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
@@ -68951,7 +69655,7 @@ mod tests {
                 validator_ids.clone(),
             )],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
 
         let mut envelope =
             sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
@@ -68984,7 +69688,7 @@ mod tests {
                 validator_ids.clone(),
             )],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
 
         let envelope = sample_lane_relay_envelope(1, LaneId::new(0), &signers, signers_bitmap);
         let err = state
@@ -69009,7 +69713,7 @@ mod tests {
                 validator_ids.clone(),
             )],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
 
         let mut envelope =
             sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
@@ -69040,7 +69744,7 @@ mod tests {
                 validator_ids.clone(),
             )],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
 
         let envelope =
             sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
@@ -69093,7 +69797,7 @@ mod tests {
                 validator_ids.clone(),
             )],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
 
         let mut envelope =
             sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
@@ -69142,7 +69846,7 @@ mod tests {
     }
 
     #[test]
-    fn record_lane_relay_rejects_unknown_dataspace_catalog_entry() {
+    fn record_lane_relay_rejects_lane_with_missing_dataspace_catalog_entry() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
@@ -69162,10 +69866,9 @@ mod tests {
 
         assert!(matches!(
             err,
-            LaneRelayError::UnknownDataspace(dataspace_id)
-                if dataspace_id == DataSpaceId::UNIVERSAL
+            LaneRelayError::UnknownLane(lane_id) if lane_id == LaneId::SINGLE
         ));
-        assert_eq!(err.as_label(), "unknown_dataspace");
+        assert_eq!(err.as_label(), "unknown_lane");
         assert!(state.lane_relay_snapshot().is_empty());
     }
 
@@ -72123,7 +72826,7 @@ mod tests {
                 validator_ids.clone(),
             )],
         );
-        let keypairs = configure_commit_topology(&state, 1);
+        let keypairs = configure_commit_topology_preserving_world_peers(&state, 1);
 
         let envelope =
             sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
@@ -72199,7 +72902,7 @@ mod tests {
                 ),
             ],
         );
-        let keypairs = configure_commit_topology(&state, 1);
+        let keypairs = configure_commit_topology_preserving_world_peers(&state, 1);
 
         let lane0 =
             sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
@@ -72319,7 +73022,7 @@ mod tests {
                 (LaneId::new(1), DataSpaceId::UNIVERSAL, validator_ids),
             ],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
 
         let lane0 = sample_lane_relay_envelope_for_state_with_view(
             &state,
@@ -72389,7 +73092,7 @@ mod tests {
                 ),
             ],
         );
-        let keypairs = configure_commit_topology(&state, 1);
+        let keypairs = configure_commit_topology_preserving_world_peers(&state, 1);
 
         let lane0_h1 =
             sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
@@ -74756,7 +75459,7 @@ mod tests {
     fn missing_insert_block_does_not_hydrate_staged_verified_lane_relays() {
         let (state, validator_keypairs) = setup_lane_relay_burn_state();
         let envelope =
-            sample_lane_relay_envelope_for_state(&state, 1, LaneId::SINGLE, &validator_keypairs)
+            sample_lane_relay_envelope_for_state(&state, 2, LaneId::SINGLE, &validator_keypairs)
                 .with_manifest_root(Some([0x44; 32]));
         let record = sample_verified_lane_relay_record(&envelope);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -79028,7 +79731,31 @@ mod tests {
 
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::with_telemetry(world, kura, query_handle, telemetry);
+        let mut state = State::with_telemetry(world, kura, query_handle, telemetry);
+        let lane_catalog = LaneCatalog::new(
+            nonzero!(5_u32),
+            vec![LaneConfig {
+                id: policy.target_lane,
+                dataspace_id: dsid,
+                alias: "axt-cache-hit".to_owned(),
+                description: None,
+                visibility: LaneVisibility::Public,
+                lane_type: None,
+                governance: None,
+                settlement: None,
+                storage: LaneStorageProfile::FullReplica,
+                proof_scheme: DaProofScheme::default(),
+                metadata: BTreeMap::new(),
+            }],
+        )
+        .expect("AXT cache-hit test lane catalog");
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        install_test_nexus_lane_catalog(&mut nexus, lane_catalog);
+        nexus.routing_policy.default_lane = policy.target_lane;
+        nexus.routing_policy.default_dataspace = dsid;
+        state
+            .set_nexus(nexus)
+            .expect("AXT cache-hit test Nexus catalog");
         let snapshot = state.view().axt_policy_snapshot();
 
         let expected = if snapshot.version != 0 {
@@ -84342,6 +85069,15 @@ mod tests {
         candidate.into_entry(merge_qc)
     }
 
+    fn set_commit_topology_from_keypairs(state: &State, keypairs: &[KeyPair]) {
+        let mut topo = state.commit_topology.block();
+        topo.clear();
+        for keypair in keypairs {
+            topo.push(PeerId::new(keypair.public_key().clone()));
+        }
+        topo.commit();
+    }
+
     fn configure_commit_topology(state: &State, count: usize) -> Vec<KeyPair> {
         let mut peers = Vec::with_capacity(count);
         let mut keypairs = Vec::with_capacity(count);
@@ -84372,6 +85108,20 @@ mod tests {
             peers.apply();
         }
         world_block.commit();
+        seed_consensus_keys_with_pops(state, &keypairs);
+        keypairs
+    }
+
+    fn configure_commit_topology_preserving_world_peers(
+        state: &State,
+        count: usize,
+    ) -> Vec<KeyPair> {
+        let keypairs: Vec<_> = (0..count)
+            .map(|_| {
+                crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
+            })
+            .collect();
+        set_commit_topology_from_keypairs(state, &keypairs);
         seed_consensus_keys_with_pops(state, &keypairs);
         keypairs
     }
@@ -84422,12 +85172,12 @@ mod tests {
             })
             .collect();
         install_lane_manifest_registry(state, &registry_entries);
-        let commit_keypairs = configure_commit_topology(state, 1);
+        let commit_keypairs = configure_commit_topology_preserving_world_peers(state, 1);
 
         for idx in 0..lane_count {
             let envelope = sample_lane_relay_envelope_for_state(
                 state,
-                first_height.saturating_add(u64::from(idx)),
+                first_height,
                 LaneId::new(idx),
                 &validator_keypairs,
             );
@@ -85213,7 +85963,7 @@ mod tests {
             &state,
             &[(LaneId::new(0), DataSpaceId::UNIVERSAL, validator_ids)],
         );
-        let commit_keypairs = configure_commit_topology(&state, 1);
+        let commit_keypairs = configure_commit_topology_preserving_world_peers(&state, 1);
         let envelope =
             sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
         let mut settlement = envelope.settlement_commitment.clone();
@@ -85357,7 +86107,7 @@ mod tests {
         let query = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query);
         let (candidate, commit_keypairs) =
-            record_commit_ready_merge_candidate_with_lanes(&mut state, 1, 2);
+            record_commit_ready_merge_candidate_with_lanes(&mut state, 1, 1);
         let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
         state
             .commit_merge_entry(merge_entry_from_candidate(candidate.clone(), qc))
@@ -85378,15 +86128,15 @@ mod tests {
             MergeLedgerCommitError::NonMonotonicLaneSnapshot {
                 lane_id,
                 dataspace_id,
-                latest_height: 2,
-                attempted_height: 2,
+                latest_height: 1,
+                attempted_height: 1,
             } if lane_id == LaneId::new(0) && dataspace_id == DataSpaceId::UNIVERSAL
         ));
         assert_eq!(state.merge_ledger().len(), 1);
     }
 
     #[test]
-    fn commit_merge_entry_rejects_regressed_lane_snapshot_at_higher_epoch() {
+    fn commit_merge_entry_rejects_non_contiguous_lane_snapshot() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
@@ -85394,31 +86144,19 @@ mod tests {
         let commit_keypairs = configure_commit_topology(&state, 1);
         let (_, validator_keypair) = bls_account_in("validators");
         let signers = [&validator_keypair];
-        let older = sample_lane_relay_envelope(
+        let skipped = sample_lane_relay_envelope(
             2,
             LaneId::new(0),
             &signers,
             full_signer_bitmap(signers.len()),
         );
-        let newer = sample_lane_relay_envelope(
-            3,
-            LaneId::new(0),
-            &signers,
-            full_signer_bitmap(signers.len()),
-        );
-        {
-            let mut relays = state.lane_relays.write();
-            relays.insert(older.clone()).expect("seed older relay");
-            relays.insert(newer.clone()).expect("seed newer relay");
-        }
-
-        let first_candidate = merge_candidate_from_relay(1, &newer);
-        let first_qc = merge_qc_for_candidate(&state, &first_candidate, &commit_keypairs, &[0]);
         state
-            .commit_merge_entry(merge_entry_from_candidate(first_candidate, first_qc))
-            .expect("newer merge entry commits");
+            .lane_relays
+            .write()
+            .insert(skipped.clone())
+            .expect("seed skipped relay");
 
-        let regressed_candidate = merge_candidate_from_relay(2, &older);
+        let regressed_candidate = merge_candidate_from_relay(1, &skipped);
         let regressed_qc =
             merge_qc_for_candidate(&state, &regressed_candidate, &commit_keypairs, &[0]);
         let err = state
@@ -85426,17 +86164,17 @@ mod tests {
                 regressed_candidate,
                 regressed_qc,
             ))
-            .expect_err("higher-epoch lane snapshot regression must be rejected");
+            .expect_err("merge commit must reject a skipped lane height");
         assert!(matches!(
             err,
-            MergeLedgerCommitError::NonMonotonicLaneSnapshot {
+            MergeLedgerCommitError::NonContiguousLaneSnapshot {
                 lane_id,
                 dataspace_id,
-                latest_height: 3,
+                expected_height: 1,
                 attempted_height: 2,
             } if lane_id == LaneId::new(0) && dataspace_id == DataSpaceId::UNIVERSAL
         ));
-        assert_eq!(state.merge_ledger().len(), 1);
+        assert!(state.merge_ledger().is_empty());
     }
 
     #[test]
@@ -85459,8 +86197,8 @@ mod tests {
 
         let (_, validator_keypair) = bls_account_in("validators");
         let signers = [&validator_keypair];
-        let lane0_h3 = sample_lane_relay_envelope(
-            3,
+        let lane0_h2 = sample_lane_relay_envelope(
+            2,
             LaneId::new(0),
             &signers,
             full_signer_bitmap(signers.len()),
@@ -85468,9 +86206,9 @@ mod tests {
         state
             .lane_relays
             .write()
-            .insert(lane0_h3.clone())
+            .insert(lane0_h2.clone())
             .expect("seed newer lane0 relay");
-        let second_candidate = merge_candidate_from_relay(2, &lane0_h3);
+        let second_candidate = merge_candidate_from_relay(2, &lane0_h2);
         let second_qc = merge_qc_for_candidate(&state, &second_candidate, &commit_keypairs, &[0]);
         state
             .commit_merge_entry(merge_entry_from_candidate(second_candidate, second_qc))
@@ -85492,8 +86230,8 @@ mod tests {
             MergeLedgerCommitError::NonMonotonicLaneSnapshot {
                 lane_id,
                 dataspace_id,
-                latest_height: 2,
-                attempted_height: 2,
+                latest_height: 1,
+                attempted_height: 1,
             } if lane_id == LaneId::new(1) && dataspace_id == DataSpaceId::UNIVERSAL
         ));
         assert_eq!(state.merge_ledger().len(), 2);
@@ -85858,7 +86596,7 @@ mod tests {
         let mut state = State::new(World::default(), kura, query);
 
         let (candidate, keypairs) =
-            record_commit_ready_merge_candidate_with_lanes(&mut state, 2, 2);
+            record_commit_ready_merge_candidate_with_lanes(&mut state, 2, 1);
         let qc = merge_qc_for_candidate(&state, &candidate, &keypairs, &[0]);
         let entry = merge_entry_from_candidate(candidate, qc);
         let epoch_id = entry.epoch_id;
@@ -85893,7 +86631,7 @@ mod tests {
         let mut state = State::new(World::default(), Arc::clone(&kura), query);
 
         let (candidate, keypairs) =
-            record_commit_ready_merge_candidate_with_lanes(&mut state, 3, 9);
+            record_commit_ready_merge_candidate_with_lanes(&mut state, 3, 1);
         let qc = merge_qc_for_candidate(&state, &candidate, &keypairs, &[0]);
         let entry = merge_entry_from_candidate(candidate, qc);
         let epoch = entry.epoch_id;
@@ -85913,7 +86651,7 @@ mod tests {
         let mut state = State::new(World::default(), kura, query);
 
         let (candidate, keypairs) =
-            record_commit_ready_merge_candidate_with_lanes(&mut state, 2, 5);
+            record_commit_ready_merge_candidate_with_lanes(&mut state, 2, 1);
         let qc = merge_qc_for_candidate(&state, &candidate, &keypairs, &[0]);
         let entry = merge_entry_from_candidate(candidate, qc);
         let stored = state

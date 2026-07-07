@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -39,11 +40,13 @@ from sorafs_evidence_validation import (  # noqa: E402
     evidence_artifact_is_valid,
     evidence_artifact_fingerprint,
     evidence_schema_by_kind,
+    hashable_evidence_values,
     init_evidence_artifact_buckets,
     build_required_evidence_summary,
     record_explicit_evidence_validation_errors,
     record_evidence_artifact,
     record_evidence_validation_errors,
+    record_observed_evidence_value,
     validate_bound_evidence_digest_references,
     require_2xx_status,
     require_bool_true,
@@ -52,7 +55,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_hex,
     require_config_backed_governance_approval,
     validate_standard_evidence_payload,
-    require_maximum_number,
+    require_maximum_int,
     require_minimum_int,
     require_object,
     require_object_array,
@@ -86,6 +89,29 @@ DEFAULT_MAX_REPORT_LATENCY_MS = 3_000
 DEFAULT_MIN_PROVIDERS = 3
 DEFAULT_MIN_CHALLENGES = 3
 HEX64_LEN = 64
+PROVIDER_LABEL_PATTERN = re.compile(r"^provider-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+PROVIDER_LABEL_ERROR = "providers[].name must match canonical lowercase `provider-*`"
+CHALLENGE_LABEL_PATTERN = re.compile(r"^por-challenge-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+CHALLENGE_LABEL_ERROR = (
+    "challenges[].name must match canonical lowercase `por-challenge-*`"
+)
+FORBIDDEN_PROVIDER_LABEL_MARKERS = frozenset(
+    (
+        "debug",
+        "dev",
+        "draft",
+        "example",
+        "fake",
+        "latest",
+        "placeholder",
+        "private",
+        "sample",
+        "secret",
+        "test",
+        "todo",
+    )
+)
+FORBIDDEN_CHALLENGE_LABEL_MARKERS = FORBIDDEN_PROVIDER_LABEL_MARKERS
 
 REQUIRED_RUNTIME_ROUTES = (
     "por_status",
@@ -200,6 +226,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "provider_count",
         "providers",
         "challenge_count",
+        "challenges",
         "seed_replay_digest_hex",
         "policy_digest_hex",
         "raw_randomness_included",
@@ -242,6 +269,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "weekly_report_generated",
         "status_export_verified",
         "governance_archive_handoff_verified",
+        "governance_archive_handoff_digest_hex",
         "archive_retention_bound",
         "operator_archive_decision_recorded",
         "archive_backend",
@@ -262,6 +290,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "ingest_backlog_alert_tested",
         "critical_alerts_firing",
         "metrics",
+        "metric_count",
         "seed_replay_digest_hex",
         "response_bodies_included",
     ),
@@ -294,6 +323,31 @@ class ValidationOptions:
     min_challenges: int
 
 
+def require_only_required_values(
+    payload: dict[str, Any],
+    array_field: str,
+    field: str,
+    required_values: tuple[str, ...],
+    errors: list[str],
+) -> None:
+    """Reject reviewed inventory rows outside a required closed string set."""
+
+    values = payload.get(array_field)
+    if not isinstance(values, list):
+        return
+    allowed = frozenset(required_values)
+    for item in values:
+        if field:
+            if not isinstance(item, dict):
+                continue
+            value = item.get(field)
+        else:
+            value = item
+        if not isinstance(value, str) or value.strip() not in allowed:
+            errors.append(f"{array_field} must not include unknown values")
+            return
+
+
 
 FINGERPRINT_FIELDS: tuple[str, ...] = (
     "schema",
@@ -303,7 +357,24 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "deployment_context_reviewed",
     "seed_replay_digest_hex",
     "policy_digest_hex",
+    "governance_archive_handoff_digest_hex",
+    "metric_count",
+    "metrics",
 )
+
+
+def validated_archive_backend_fingerprint_values(
+    kind_name: str,
+    payload: dict[str, Any],
+) -> dict[str, str]:
+    """Return archive backend fingerprint fields only after closed-set validation."""
+
+    if kind_name != "reporting_archive":
+        return {}
+    archive_backend = payload.get("archive_backend")
+    if isinstance(archive_backend, str) and archive_backend in ALLOWED_ARCHIVE_BACKENDS:
+        return {"archive_backend": archive_backend}
+    return {}
 
 
 def validate_routes(payload: dict[str, Any], errors: list[str], options: ValidationOptions) -> None:
@@ -315,7 +386,14 @@ def validate_routes(payload: dict[str, Any], errors: list[str], options: Validat
             errors,
             path=f"routes[{index}].status_code",
         )
-        require_maximum_number(
+        require_hex(
+            record,
+            "body_blake3_hex",
+            HEX64_LEN,
+            errors,
+            path=f"routes[{index}].body_blake3_hex",
+        )
+        require_maximum_int(
             record,
             "latency_ms",
             options.max_route_latency_ms,
@@ -334,6 +412,50 @@ def validate_routes(payload: dict[str, Any], errors: list[str], options: Validat
             errors,
             path=f"routes[{index}].norito_verified",
         )
+
+
+def require_provider_label(record: dict[str, Any], errors: list[str]) -> str:
+    """Require a reviewed lowercase production provider inventory label."""
+
+    provider = require_string(record, "name", errors)
+    if not provider:
+        return ""
+    if PROVIDER_LABEL_PATTERN.fullmatch(provider) is None:
+        errors.append(PROVIDER_LABEL_ERROR)
+        return ""
+    forbidden = sorted(
+        marker
+        for marker in FORBIDDEN_PROVIDER_LABEL_MARKERS
+        if marker in provider.split("-")
+    )
+    if forbidden:
+        errors.append(
+            f"providers[].name must not contain non-production markers {forbidden}"
+        )
+        return ""
+    return provider
+
+
+def require_challenge_label(record: dict[str, Any], errors: list[str]) -> str:
+    """Require a reviewed lowercase production challenge inventory label."""
+
+    challenge = require_string(record, "name", errors)
+    if not challenge:
+        return ""
+    if CHALLENGE_LABEL_PATTERN.fullmatch(challenge) is None:
+        errors.append(CHALLENGE_LABEL_ERROR)
+        return ""
+    forbidden = sorted(
+        marker
+        for marker in FORBIDDEN_CHALLENGE_LABEL_MARKERS
+        if marker in challenge.split("-")
+    )
+    if forbidden:
+        errors.append(
+            f"challenges[].name must not contain non-production markers {forbidden}"
+        )
+        return ""
+    return challenge
 
 
 def validate_randomness(
@@ -358,8 +480,18 @@ def validate_randomness(
         allow_scalar_items=False,
     )
     for _index, record in require_object_array(payload, "providers", errors):
-        require_string(record, "name", errors)
+        require_provider_label(record, errors)
     require_minimum_int(payload, "challenge_count", options.min_challenges, errors)
+    require_string_inventory_count_match(
+        payload,
+        "challenges",
+        "challenge_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _index, record in require_object_array(payload, "challenges", errors):
+        require_challenge_label(record, errors)
     require_hex(payload, "seed_replay_digest_hex", HEX64_LEN, errors)
     require_policy_digest(payload, errors)
     require_false(payload, "raw_randomness_included", errors)
@@ -373,6 +505,9 @@ def validate_scheduler_runtime(
 ) -> None:
     require_count_equal(payload, "route_count", "passed_route_count", errors)
     require_string_coverage(payload, "routes", "name", REQUIRED_RUNTIME_ROUTES, errors)
+    require_only_required_values(
+        payload, "routes", "name", REQUIRED_RUNTIME_ROUTES, errors
+    )
     require_string_inventory_count_match(
         payload,
         "routes",
@@ -388,7 +523,7 @@ def validate_scheduler_runtime(
     require_bool_true(payload, "ingestion_backlog_bounded", errors)
     require_bool_true(payload, "duplicate_samples_within_budget", errors)
     require_hex(payload, "seed_replay_digest_hex", HEX64_LEN, errors)
-    require_maximum_number(
+    require_maximum_int(
         payload,
         "max_scheduler_lag_seconds",
         options.max_scheduler_lag_secs,
@@ -419,6 +554,9 @@ def validate_reporting_archive(
 ) -> None:
     require_count_equal(payload, "route_count", "passed_route_count", errors)
     require_string_coverage(payload, "routes", "name", REQUIRED_REPORTING_ROUTES, errors)
+    require_only_required_values(
+        payload, "routes", "name", REQUIRED_REPORTING_ROUTES, errors
+    )
     require_string_inventory_count_match(
         payload,
         "routes",
@@ -430,6 +568,12 @@ def validate_reporting_archive(
     require_bool_true(payload, "weekly_report_generated", errors)
     require_bool_true(payload, "status_export_verified", errors)
     require_bool_true(payload, "governance_archive_handoff_verified", errors)
+    require_hex(
+        payload,
+        "governance_archive_handoff_digest_hex",
+        HEX64_LEN,
+        errors,
+    )
     require_bool_true(payload, "archive_retention_bound", errors)
     require_bool_true(payload, "operator_archive_decision_recorded", errors)
     archive_backend = require_string(payload, "archive_backend", errors)
@@ -442,7 +586,7 @@ def validate_reporting_archive(
         REQUIRED_MANUAL_TRIGGER_STATE,
         errors,
     )
-    require_maximum_number(
+    require_maximum_int(
         payload,
         "report_latency_ms",
         options.max_report_latency_ms,
@@ -463,6 +607,9 @@ def validate_observability(payload: dict[str, Any], errors: list[str]) -> None:
     require_bool_true(payload, "ingest_backlog_alert_tested", errors)
     require_false(payload, "critical_alerts_firing", errors)
     require_string_coverage(payload, "metrics", "", REQUIRED_METRICS, errors)
+    require_only_required_values(payload, "metrics", "", REQUIRED_METRICS, errors)
+    require_positive_int(payload, "metric_count", errors)
+    require_string_inventory_count_match(payload, "metrics", "metric_count", errors)
     require_hex(payload, "seed_replay_digest_hex", HEX64_LEN, errors)
     require_false(payload, "response_bodies_included", errors)
 
@@ -539,6 +686,10 @@ def build_summary(
     valid_policy_digests: set[str] = set()
     valid_seed_replay_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     valid_policy_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
+    archive_backends: set[str] = set()
+    valid_governance_archive_handoff_digests: set[str] = set()
+    metric_counts: set[int] = set()
+    metric_names: set[str] = set()
     files = discover_evidence_files(
         evidence_dirs,
         evidence_files,
@@ -567,15 +718,34 @@ def build_summary(
             validation_errors,
             FINGERPRINT_FIELDS,
         )
+        fingerprint_values = validated_archive_backend_fingerprint_values(
+            kind_name,
+            payload,
+        )
+        if fingerprint_values:
+            evidence_artifact_fingerprint(artifact).update(fingerprint_values)
+        if kind_name == "observability":
+            record_observed_evidence_value(metric_counts, payload.get("metric_count"))
+            metric_names.update(hashable_evidence_values(payload.get("metrics")))
         if evidence_artifact_is_valid(artifact):
-            digest = evidence_artifact_fingerprint(artifact).get("seed_replay_digest_hex")
+            fingerprint = evidence_artifact_fingerprint(artifact)
+            if kind_name == "reporting_archive":
+                archive_backend = fingerprint.get("archive_backend")
+                if isinstance(archive_backend, str):
+                    archive_backends.add(archive_backend)
+                handoff_digest = fingerprint.get(
+                    "governance_archive_handoff_digest_hex"
+                )
+                if isinstance(handoff_digest, str):
+                    valid_governance_archive_handoff_digests.add(
+                        handoff_digest.lower()
+                    )
+            digest = fingerprint.get("seed_replay_digest_hex")
             if kind_name == "randomness" and isinstance(digest, str):
                 valid_seed_replay_digests.add(digest.lower())
             elif kind_name in SEED_REPLAY_BOUND_KINDS:
                 valid_seed_replay_bound_artifacts.append((kind_name, artifact))
-            policy_digest = evidence_artifact_fingerprint(artifact).get(
-                "policy_digest_hex"
-            )
+            policy_digest = fingerprint.get("policy_digest_hex")
             if kind_name == "randomness" and isinstance(policy_digest, str):
                 valid_policy_digests.add(policy_digest.lower())
             elif kind_name in POLICY_BOUND_KINDS:
@@ -641,6 +811,12 @@ def build_summary(
         "recognized_artifacts": recognized_evidence_artifacts(artifacts_by_kind),
         "valid_seed_replay_digests": sorted(valid_seed_replay_digests),
         "valid_policy_digests": sorted(valid_policy_digests),
+        "archive_backends": sorted(archive_backends),
+        "valid_governance_archive_handoff_digests": sorted(
+            valid_governance_archive_handoff_digests
+        ),
+        "metrics": sorted(metric_names),
+        "metric_count_values": sorted(metric_counts),
         "required": required,
         "errors": errors,
     }

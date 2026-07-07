@@ -18,8 +18,9 @@ pub use generate::{
 };
 pub use npos::ensure_npos_parameters;
 pub use profile::{
-    GenesisProfile, ProfileDefaults, parse_vrf_seed_hex, profile_defaults, profile_requires_npos,
-    resolve_vrf_seed,
+    GenesisProfile, PUBLIC_XOR_ALIAS, ProfileDefaults, TAIRA_XOR_ASSET_DEFINITION_ID,
+    parse_vrf_seed_hex, profile_defaults, profile_requires_npos, profile_uses_public_xor,
+    public_xor_profile_for_chain_id, resolve_vrf_seed,
 };
 
 #[derive(Debug, Clone, Subcommand)]

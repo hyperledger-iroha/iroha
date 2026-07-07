@@ -4300,11 +4300,8 @@ def verify_canary_summary(
 
     plan_only = _required_bool(summary, "plan_only", label)
     ok = _required_bool(summary, "ok", label)
-    if plan_only:
-        if ok:
-            raise EvidenceError(f"{label}.ok must be false for plan-only evidence")
-    elif not ok:
-        raise EvidenceError(f"{label} is not an ok canary summary")
+    if plan_only and ok:
+        raise EvidenceError(f"{label}.ok must be false for plan-only evidence")
     if plan_only and not args.allow_plan_only:
         raise EvidenceError(f"{label} is plan-only evidence")
     policy = _require_object(summary.get("policy"), f"{label}.policy")
@@ -4463,15 +4460,16 @@ def verify_canary_summary(
         or stage.get("_uses_default_profile_policy", False)
         for stage in policy_stage_results
     )
-    compact_ok = (
-        ok
-        and not plan_only
+    expected_ok = (
+        not plan_only
         and require_explicit_policy
         and tuple(stage_names) == EXPECTED_CANARY_STAGE_ORDER
         and not uses_local_diagnostic_policy
         and receipt_summary is not None
         and receipt_summary.get("ok") is True
     )
+    if ok != expected_ok:
+        raise EvidenceError(f"{label}.ok does not match canary summary production policy")
 
     return {
         "version": version,
@@ -4481,7 +4479,7 @@ def verify_canary_summary(
         "environment": environment,
         "started_at": started_at_raw,
         "finished_at": finished_at_raw,
-        "ok": compact_ok,
+        "ok": expected_ok,
         "plan_only": plan_only,
         "require_explicit_policy": require_explicit_policy,
         "stage_names": stage_names,

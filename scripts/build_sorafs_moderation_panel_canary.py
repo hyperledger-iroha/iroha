@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import secrets
 import sys
 from collections.abc import Iterable, Sequence
@@ -18,13 +19,36 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from check_sorafs_moderation_panel_rollout_evidence import (  # noqa: E402
+    APPEAL_CASE_LABEL_ERROR,
+    APPEAL_CASE_LABEL_PATTERN,
+    COMMIT_LABEL_ERROR,
+    COMMIT_LABEL_PATTERN,
     DEFAULT_MAX_CANARY_AGE_SECS,
     DEFAULT_MAX_EVENT_LAG_SECS,
     DEFAULT_MAX_ROUTE_LATENCY_MS,
     DEFAULT_MAX_VIEWER_URL_TTL_SECS,
     DEFAULT_MIN_PANEL_SIZE,
     DEFAULT_MIN_PEERS,
+    E2E_CASE_LABEL_ERROR,
+    E2E_CASE_LABEL_PATTERN,
+    E2E_PEER_LABEL_ERROR,
+    E2E_PEER_LABEL_PATTERN,
+    E2E_VALIDATOR_LABEL_ERROR,
+    E2E_VALIDATOR_LABEL_PATTERN,
+    FORBIDDEN_INVENTORY_LABEL_MARKERS,
+    JUROR_LABEL_ERROR,
+    JUROR_LABEL_PATTERN,
     KIND_BY_NAME,
+    NOTIFICATION_LABEL_ERROR,
+    NOTIFICATION_LABEL_PATTERN,
+    REVEAL_LABEL_ERROR,
+    REVEAL_LABEL_PATTERN,
+    ROSTER_JUROR_LABEL_ERROR,
+    ROSTER_JUROR_LABEL_PATTERN,
+    SETTLEMENT_LABEL_ERROR,
+    SETTLEMENT_LABEL_PATTERN,
+    VIEWER_SESSION_LABEL_ERROR,
+    VIEWER_SESSION_LABEL_PATTERN,
     REQUIRED_BALLOT_ROUTES,
     REQUIRED_COMMIT_REVEAL_SCENARIOS,
     REQUIRED_DECISION_ROUTES,
@@ -44,6 +68,8 @@ from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_block,
     emit_checker_error_lines,
     emit_checker_exception,
+    fsync_checker_output_parent,
+    write_all_checker_summary_bytes,
     validate_checker_output_parent,
 )
 from sorafs_path_identity import path_diagnostic_label  # noqa: E402
@@ -65,6 +91,12 @@ TALLY_DIGEST_KINDS = (
     "e2e_panel",
     "metrics_alerts",
     "governance_approval",
+)
+ROUTE_BODY_DIGEST_KINDS = (
+    "appeal_intake",
+    "operator_workflow",
+    "commit_reveal",
+    "decision_publication",
 )
 HEX64_LEN = 64
 TRUE_CLAIMS: dict[str, tuple[str, ...]] = {
@@ -91,9 +123,11 @@ TRUE_CLAIMS: dict[str, tuple[str, ...]] = {
         "offline_mode_disabled",
         "per_session_access_logged",
         "append_only_log_verified",
+        "audit_log_tamper_rejected",
         "anomaly_events_recorded",
         "watermark_overlay_rendered",
         "watermark_metadata_hashed",
+        "watermark_metadata_mismatch_rejected",
         "audit_digest_exported",
         "transparency_report_exported",
         "daily_digest_published",
@@ -238,6 +272,23 @@ def validate_name_set(
     return [name for name in allowed if name in value_set]
 
 
+def render_inventory_label_error(label_error: str, option: str) -> str:
+    """Render checker inventory label diagnostics as CLI option diagnostics."""
+
+    return (
+        label_error.replace("jurors[].name", option)
+        .replace("cases[].name", option)
+        .replace("sessions[].name", option)
+        .replace("notifications[].name", option)
+        .replace("commits[].name", option)
+        .replace("reveals[].name", option)
+        .replace("settlements[].name", option)
+        .replace("peers[].name", option)
+        .replace("validators[].name", option)
+        .replace("cases[].name", option)
+    )
+
+
 def validate_reviewed_inventory(
     values: Iterable[str],
     *,
@@ -246,6 +297,8 @@ def validate_reviewed_inventory(
     kind: str,
     count_option: str,
     errors: list[str],
+    pattern: re.Pattern[str] | None = None,
+    label_error: str | None = None,
 ) -> list[str]:
     """Return reviewed unique inventory labels whose count matches a CLI count."""
 
@@ -254,6 +307,25 @@ def validate_reviewed_inventory(
         errors.append(f"{option} is required for {kind}")
     for index, item in enumerate(items):
         validate_canonical_string(item, label=f"{option}[{index}]", errors=errors)
+        if pattern is None or not isinstance(item, str):
+            continue
+        if pattern.fullmatch(item) is None:
+            errors.append(
+                render_inventory_label_error(
+                    label_error or f"{option} must use the expected label family",
+                    option,
+                )
+            )
+            continue
+        forbidden = sorted(
+            marker
+            for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
+            if marker in item.split("-")
+        )
+        if forbidden:
+            errors.append(
+                f"{option}[{index}] must not contain non-production markers {forbidden}"
+            )
     unique_items = set(items)
     if len(unique_items) != len(items):
         errors.append(f"{option} must not contain duplicates")
@@ -353,6 +425,7 @@ def build_route_records(args: argparse.Namespace, routes: Sequence[str]) -> list
             "name": route,
             "passed": True,
             "status_code": args.route_status_code,
+            "body_blake3_hex": args.route_body_blake3_hex,
             "authz_enforced": True,
             "signature_verified": True,
             "latency_ms": args.route_latency_ms,
@@ -432,9 +505,13 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "logged_session_count": args.session_count,
                 "sessions": build_viewer_session_records(args.viewer_sessions),
                 "max_url_ttl_secs": args.max_url_ttl_secs,
+                "role_count": len(args.viewer_roles),
                 "roles_tested": args.viewer_roles,
+                "security_control_count": len(args.viewer_security_controls),
                 "viewer_security_controls": args.viewer_security_controls,
+                "access_event_kind_count": len(args.viewer_event_kinds),
                 "access_event_kinds": args.viewer_event_kinds,
+                "export_target_count": len(args.viewer_export_targets),
                 "export_targets": args.viewer_export_targets,
                 "session_manifest_digest_hex": args.session_manifest_digest_hex,
                 "watermark_metadata_digest_hex": args.watermark_metadata_digest_hex,
@@ -476,6 +553,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "reveal_count": args.reveal_count,
                 "reveals": build_inventory_records(args.reveals),
                 "max_event_lag_seconds": args.max_event_lag_seconds,
+                "scenario_count": len(args.scenarios_exercised),
                 "scenarios_exercised": args.scenarios_exercised,
             }
         )
@@ -486,6 +564,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "route_count": len(routes),
                 "passed_route_count": len(routes),
                 "routes": routes,
+                "outcome_count": len(args.outcomes),
                 "outcomes": args.outcomes,
             }
         )
@@ -497,6 +576,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
             }
         )
     elif args.kind == "transparency_reputation":
+        payload["publication_target_count"] = len(args.publication_targets)
         payload["publication_targets"] = args.publication_targets
     elif args.kind == "e2e_panel":
         payload.update(
@@ -512,7 +592,12 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
             }
         )
     elif args.kind == "metrics_alerts":
-        payload["metrics"] = args.metrics
+        payload.update(
+            {
+                "metrics": args.metrics,
+                "metric_count": len(args.metrics),
+            }
+        )
     elif args.kind == "governance_approval":
         payload.update(
             {
@@ -545,6 +630,12 @@ def validate_common_digests(args: argparse.Namespace, errors: list[str]) -> None
         validate_hex64(args.roster_hash_hex, option="--roster-hash-hex", errors=errors)
     if args.kind in TALLY_DIGEST_KINDS:
         validate_hex64(args.tally_digest_hex, option="--tally-digest-hex", errors=errors)
+    if args.kind in ROUTE_BODY_DIGEST_KINDS:
+        validate_hex64(
+            args.route_body_blake3_hex,
+            option="--route-body-blake3-hex",
+            errors=errors,
+        )
 
 
 def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
@@ -565,6 +656,8 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             kind="appeal_intake",
             count_option="--case-count",
             errors=errors,
+            pattern=APPEAL_CASE_LABEL_PATTERN,
+            label_error=APPEAL_CASE_LABEL_ERROR,
         )
         args.intake_routes = validate_name_set(
             split_csv_values(args.intake_route),
@@ -600,6 +693,8 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             kind="sortition_roster",
             count_option="--panel-size",
             errors=errors,
+            pattern=ROSTER_JUROR_LABEL_PATTERN,
+            label_error=ROSTER_JUROR_LABEL_ERROR,
         )
     elif args.kind == "evidence_viewer":
         require_kind_options(
@@ -647,6 +742,8 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             kind="evidence_viewer",
             count_option="--session-count",
             errors=errors,
+            pattern=VIEWER_SESSION_LABEL_PATTERN,
+            label_error=VIEWER_SESSION_LABEL_ERROR,
         )
         for option, value in (
             ("--session-manifest-digest-hex", args.session_manifest_digest_hex),
@@ -680,6 +777,8 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             kind="juror_notifications",
             count_option="--notification-count",
             errors=errors,
+            pattern=NOTIFICATION_LABEL_PATTERN,
+            label_error=NOTIFICATION_LABEL_ERROR,
         )
         args.jurors = validate_reviewed_inventory(
             split_csv_values(args.juror),
@@ -688,6 +787,8 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             kind="juror_notifications",
             count_option="--juror-count",
             errors=errors,
+            pattern=JUROR_LABEL_PATTERN,
+            label_error=JUROR_LABEL_ERROR,
         )
         if (
             args.notification_count is not None
@@ -713,6 +814,8 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             kind="commit_reveal",
             count_option="--commit-count",
             errors=errors,
+            pattern=COMMIT_LABEL_PATTERN,
+            label_error=COMMIT_LABEL_ERROR,
         )
         args.reveals = validate_reviewed_inventory(
             split_csv_values(args.reveal),
@@ -721,6 +824,8 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             kind="commit_reveal",
             count_option="--reveal-count",
             errors=errors,
+            pattern=REVEAL_LABEL_PATTERN,
+            label_error=REVEAL_LABEL_ERROR,
         )
         if (
             args.commit_count is not None
@@ -766,6 +871,8 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             kind="settlement_integration",
             count_option="--settlement-count",
             errors=errors,
+            pattern=SETTLEMENT_LABEL_PATTERN,
+            label_error=SETTLEMENT_LABEL_ERROR,
         )
     elif args.kind == "transparency_reputation":
         args.publication_targets = validate_name_set(
@@ -797,6 +904,8 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             kind="e2e_panel",
             count_option="--peer-count",
             errors=errors,
+            pattern=E2E_PEER_LABEL_PATTERN,
+            label_error=E2E_PEER_LABEL_ERROR,
         )
         args.validators = validate_reviewed_inventory(
             split_csv_values(args.validator),
@@ -805,6 +914,8 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             kind="e2e_panel",
             count_option="--validator-count",
             errors=errors,
+            pattern=E2E_VALIDATOR_LABEL_PATTERN,
+            label_error=E2E_VALIDATOR_LABEL_ERROR,
         )
         args.panel_cases = validate_reviewed_inventory(
             split_csv_values(args.panel_case),
@@ -813,6 +924,8 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             kind="e2e_panel",
             count_option="--case-count",
             errors=errors,
+            pattern=E2E_CASE_LABEL_PATTERN,
+            label_error=E2E_CASE_LABEL_ERROR,
         )
     elif args.kind == "metrics_alerts":
         args.metrics = validate_name_set(
@@ -889,12 +1002,14 @@ def write_payload_atomic(path: Path, payload: dict[str, Any]) -> list[str]:
         if nofollow:
             flags |= nofollow
         fd = os.open(tmp_path, flags, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            fd = -1
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
+        write_all_checker_summary_bytes(fd, text.encode("utf-8"))
+        os.fsync(fd)
+        os.close(fd)
+        fd = -1
         os.replace(tmp_path, path)
+        parent_sync_errors = fsync_checker_output_parent(path, label="--out")
+        if parent_sync_errors:
+            return parent_sync_errors
     except (OSError, RuntimeError) as error:
         del error
         try:
@@ -927,6 +1042,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--verified-claim", action="append", default=[])
     parser.add_argument("--route-status-code", type=positive_int_arg, default=200)
     parser.add_argument("--route-latency-ms", type=non_negative_int_arg, default=40)
+    parser.add_argument("--route-body-blake3-hex")
     parser.add_argument("--intake-route", action="append", default=[])
     parser.add_argument("--case-count", type=positive_int_arg)
     parser.add_argument("--case", action="append", default=[])

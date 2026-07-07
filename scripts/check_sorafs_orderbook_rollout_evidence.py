@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -39,22 +40,23 @@ from sorafs_evidence_validation import (  # noqa: E402
     evidence_artifact_is_valid,
     evidence_artifact_fingerprint,
     evidence_schema_by_kind,
+    hashable_evidence_values,
     init_evidence_artifact_buckets,
     build_required_evidence_summary,
     record_explicit_evidence_validation_errors,
     record_evidence_artifact,
     record_evidence_validation_errors,
+    record_observed_evidence_value,
     validate_bound_evidence_digest_references,
     require_2xx_status,
     require_bool_true,
     require_count_equal,
     require_count_length_match,
     require_false,
-    require_false_or_absent,
     require_hex,
     require_config_backed_governance_approval,
     validate_standard_evidence_payload,
-    require_maximum_number,
+    require_maximum_int,
     require_minimum_int,
     require_non_negative_int,
     require_object,
@@ -89,6 +91,30 @@ DEFAULT_MAX_STREAM_LAG_MS = 2_000
 DEFAULT_MAX_MATCHER_LAG_MS = 1_000
 DEFAULT_MIN_RECONCILIATION_PEERS = 4
 HEX64_LEN = 64
+ORDER_REF_PATTERN = re.compile(r"^orderbook-order-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+CHANNEL_REF_PATTERN = re.compile(r"^orderbook-channel-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+RECEIPT_REF_PATTERN = re.compile(r"^orderbook-receipt-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+PEER_LABEL_PATTERN = re.compile(r"^orderbook-peer-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+ORDER_REF_ERROR = "{path} must match canonical lowercase `orderbook-order-*`"
+CHANNEL_REF_ERROR = "{path} must match canonical lowercase `orderbook-channel-*`"
+RECEIPT_REF_ERROR = "{path} must match canonical lowercase `orderbook-receipt-*`"
+PEER_LABEL_ERROR = "{path} must match canonical lowercase `orderbook-peer-*`"
+FORBIDDEN_INVENTORY_LABEL_MARKERS = frozenset(
+    (
+        "debug",
+        "dev",
+        "draft",
+        "example",
+        "fake",
+        "latest",
+        "placeholder",
+        "private",
+        "sample",
+        "secret",
+        "test",
+        "todo",
+    )
+)
 
 REQUIRED_API_ROUTES = (
     "orders_post",
@@ -124,6 +150,9 @@ REQUIRED_SDK_LANGUAGES = (
     "kotlin-jvm",
     "java-android",
     "swift",
+)
+SDK_ARTIFACT_LANGUAGE_PREFIXES = tuple(
+    (language, f"{language}-") for language in REQUIRED_SDK_LANGUAGES
 )
 CONTRACT_BOUND_KINDS = (
     "matcher_service",
@@ -227,8 +256,11 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "divergence_detected",
         "matcher_lag_ms",
         "accepted_order_count",
+        "accepted_orders",
         "matched_order_count",
+        "matched_orders",
         "rejected_invalid_order_count",
+        "rejected_invalid_orders",
         "raw_snapshot_included",
     ),
     "settlement_service": COMMON_EVIDENCE_REQUIRED_FIELDS
@@ -240,8 +272,11 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "non_overlapping_ranges_enforced",
         "governance_receipts_published",
         "open_channel_count",
+        "open_channels",
         "settled_receipt_count",
+        "settled_receipts",
         "settlement_backlog_count",
+        "settlement_backlog_channels",
         "raw_receipts_included",
     ),
     "api_gateway": COMMON_EVIDENCE_REQUIRED_FIELDS
@@ -259,6 +294,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "event_streams": COMMON_EVIDENCE_REQUIRED_FIELDS
     + (
         "contract_digest_hex",
+        "stream_count",
         "streams",
         "response_bodies_included",
     ),
@@ -268,6 +304,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "contract_digest_hex",
         "live_smoke_passed",
         "submitter_helpers_verified",
+        "language_count",
         "languages",
         "artifact_count",
         "artifacts",
@@ -281,6 +318,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "live_dashboard_wired",
         "critical_alerts_firing",
         "metrics",
+        "metric_count",
         "response_bodies_included",
     ),
     "reconciliation": COMMON_EVIDENCE_REQUIRED_FIELDS
@@ -325,6 +363,113 @@ class ValidationOptions:
     min_reconciliation_peers: int
 
 
+def require_only_required_values(
+    payload: dict[str, Any],
+    array_field: str,
+    field: str,
+    required_values: tuple[str, ...],
+    errors: list[str],
+) -> None:
+    """Reject reviewed inventory rows outside a required closed string set."""
+
+    values = payload.get(array_field)
+    if not isinstance(values, list):
+        return
+    allowed = frozenset(required_values)
+    for item in values:
+        if field:
+            if not isinstance(item, dict):
+                continue
+            value = item.get(field)
+        else:
+            value = item
+        if not isinstance(value, str) or value.strip() not in allowed:
+            errors.append(f"{array_field} must not include unknown values")
+            return
+
+
+def require_inventory_label(
+    value: Any,
+    *,
+    path: str,
+    pattern: re.Pattern[str],
+    label_error: str,
+    errors: list[str],
+) -> str:
+    """Require a reviewed production inventory label."""
+
+    if not isinstance(value, str):
+        return ""
+    if pattern.fullmatch(value) is None:
+        errors.append(label_error.format(path=path))
+        return value
+    forbidden = sorted(
+        marker for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS if marker in value.split("-")
+    )
+    if forbidden:
+        errors.append(f"{path} must not contain non-production markers {forbidden}")
+    return value
+
+
+def require_scalar_inventory_labels(
+    payload: dict[str, Any],
+    array_field: str,
+    *,
+    pattern: re.Pattern[str],
+    label_error: str,
+    errors: list[str],
+) -> None:
+    """Require reviewed production labels for scalar inventory entries."""
+
+    values = payload.get(array_field)
+    if not isinstance(values, list):
+        return
+    for value in values:
+        require_inventory_label(
+            value,
+            path=f"{array_field}[]",
+            pattern=pattern,
+            label_error=label_error,
+            errors=errors,
+        )
+
+
+def sdk_artifact_language(artifact_id: Any) -> str | None:
+    """Return the reviewed SDK language prefix for an artifact id."""
+
+    if not isinstance(artifact_id, str):
+        return None
+    for language, prefix in SDK_ARTIFACT_LANGUAGE_PREFIXES:
+        if artifact_id.startswith(prefix):
+            return language
+    return None
+
+
+def validate_sdk_artifact_language_coverage(
+    artifact_records: list[tuple[int, dict[str, Any]]],
+    errors: list[str],
+) -> None:
+    """Require SDK release artifacts to cover every reviewed language."""
+
+    covered_languages: set[str] = set()
+    found_unknown_artifact_family = False
+    for _index, record in artifact_records:
+        artifact_id = record.get("id")
+        language = sdk_artifact_language(artifact_id)
+        if language is None:
+            if isinstance(artifact_id, str) and artifact_id:
+                found_unknown_artifact_family = True
+            continue
+        covered_languages.add(language)
+
+    if found_unknown_artifact_family:
+        errors.append("artifacts[].id must start with a reviewed SDK language prefix")
+    if set(REQUIRED_SDK_LANGUAGES) - covered_languages:
+        errors.append(
+            "artifacts must include at least one SDK release artifact for every "
+            "reviewed language"
+        )
+
 
 FINGERPRINT_FIELDS: tuple[str, ...] = (
     "schema",
@@ -334,6 +479,8 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "deployment_context_reviewed",
     "contract_digest_hex",
     "policy_digest_hex",
+    "metric_count",
+    "metrics",
 )
 
 
@@ -348,7 +495,14 @@ def validate_route_records(
             errors,
             path=f"routes[{index}].status_code",
         )
-        require_maximum_number(
+        require_hex(
+            record,
+            "body_blake3_hex",
+            HEX64_LEN,
+            errors,
+            path=f"routes[{index}].body_blake3_hex",
+        )
+        require_maximum_int(
             record,
             "latency_ms",
             options.max_route_latency_ms,
@@ -384,10 +538,57 @@ def validate_matcher_service(
     require_bool_true(payload, "durable_checkpoint_verified", errors)
     require_hex(payload, "contract_digest_hex", HEX64_LEN, errors)
     require_false(payload, "divergence_detected", errors)
-    require_maximum_number(payload, "matcher_lag_ms", options.max_matcher_lag_ms, errors)
+    require_maximum_int(payload, "matcher_lag_ms", options.max_matcher_lag_ms, errors)
     require_positive_int(payload, "accepted_order_count", errors)
     require_positive_int(payload, "matched_order_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "accepted_orders",
+        "accepted_order_count",
+        errors,
+    )
+    require_string_inventory_count_match(
+        payload,
+        "matched_orders",
+        "matched_order_count",
+        errors,
+    )
+    require_scalar_inventory_labels(
+        payload,
+        "accepted_orders",
+        pattern=ORDER_REF_PATTERN,
+        label_error=ORDER_REF_ERROR,
+        errors=errors,
+    )
+    require_scalar_inventory_labels(
+        payload,
+        "matched_orders",
+        pattern=ORDER_REF_PATTERN,
+        label_error=ORDER_REF_ERROR,
+        errors=errors,
+    )
+    accepted_orders = payload.get("accepted_orders")
+    matched_orders = payload.get("matched_orders")
+    if isinstance(accepted_orders, list) and isinstance(matched_orders, list):
+        accepted_set = {order for order in accepted_orders if isinstance(order, str)}
+        for order in matched_orders:
+            if isinstance(order, str) and order not in accepted_set:
+                errors.append("matched_orders must be a subset of accepted_orders")
+                break
     require_non_negative_int(payload, "rejected_invalid_order_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "rejected_invalid_orders",
+        "rejected_invalid_order_count",
+        errors,
+    )
+    require_scalar_inventory_labels(
+        payload,
+        "rejected_invalid_orders",
+        pattern=ORDER_REF_PATTERN,
+        label_error=ORDER_REF_ERROR,
+        errors=errors,
+    )
     require_false(payload, "raw_snapshot_included", errors)
 
 
@@ -400,7 +601,46 @@ def validate_settlement_service(payload: dict[str, Any], errors: list[str]) -> N
     require_bool_true(payload, "governance_receipts_published", errors)
     require_positive_int(payload, "open_channel_count", errors)
     require_positive_int(payload, "settled_receipt_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "open_channels",
+        "open_channel_count",
+        errors,
+    )
+    require_string_inventory_count_match(
+        payload,
+        "settled_receipts",
+        "settled_receipt_count",
+        errors,
+    )
+    require_scalar_inventory_labels(
+        payload,
+        "open_channels",
+        pattern=CHANNEL_REF_PATTERN,
+        label_error=CHANNEL_REF_ERROR,
+        errors=errors,
+    )
+    require_scalar_inventory_labels(
+        payload,
+        "settled_receipts",
+        pattern=RECEIPT_REF_PATTERN,
+        label_error=RECEIPT_REF_ERROR,
+        errors=errors,
+    )
     require_non_negative_int(payload, "settlement_backlog_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "settlement_backlog_channels",
+        "settlement_backlog_count",
+        errors,
+    )
+    require_scalar_inventory_labels(
+        payload,
+        "settlement_backlog_channels",
+        pattern=CHANNEL_REF_PATTERN,
+        label_error=CHANNEL_REF_ERROR,
+        errors=errors,
+    )
     require_false(payload, "raw_receipts_included", errors)
 
 
@@ -412,6 +652,7 @@ def validate_api_gateway(
     require_count_equal(payload, "route_count", "passed_route_count", errors)
     require_hex(payload, "contract_digest_hex", HEX64_LEN, errors)
     require_string_coverage(payload, "routes", "name", REQUIRED_API_ROUTES, errors)
+    require_only_required_values(payload, "routes", "name", REQUIRED_API_ROUTES, errors)
     require_string_inventory_count_match(
         payload,
         "routes",
@@ -433,7 +674,17 @@ def validate_event_streams(
     errors: list[str],
     options: ValidationOptions,
 ) -> None:
+    require_positive_int(payload, "stream_count", errors)
     require_string_coverage(payload, "streams", "name", REQUIRED_STREAMS, errors)
+    require_only_required_values(payload, "streams", "name", REQUIRED_STREAMS, errors)
+    require_string_inventory_count_match(
+        payload,
+        "streams",
+        "stream_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
     require_hex(payload, "contract_digest_hex", HEX64_LEN, errors)
     stream_records = require_object_array(payload, "streams", errors)
     if not stream_records:
@@ -442,7 +693,7 @@ def validate_event_streams(
         require_bool_true(record, "passed", errors, path=f"streams[{index}].passed")
         for field in ("backlog_replay_verified", "live_delivery_verified", "contract_backed"):
             require_bool_true(record, field, errors, path=f"streams[{index}].{field}")
-        require_maximum_number(
+        require_maximum_int(
             record,
             "lag_ms",
             options.max_stream_lag_ms,
@@ -457,12 +708,43 @@ def validate_sdk_release(payload: dict[str, Any], errors: list[str]) -> None:
     require_hex(payload, "contract_digest_hex", HEX64_LEN, errors)
     require_bool_true(payload, "live_smoke_passed", errors)
     require_bool_true(payload, "submitter_helpers_verified", errors)
-    require_false_or_absent(payload, "debug_artifacts", errors)
+    require_false(payload, "debug_artifacts", errors)
     require_string_coverage(payload, "languages", "name", REQUIRED_SDK_LANGUAGES, errors)
+    require_only_required_values(
+        payload, "languages", "name", REQUIRED_SDK_LANGUAGES, errors
+    )
+    require_minimum_int(
+        payload,
+        "language_count",
+        len(REQUIRED_SDK_LANGUAGES),
+        errors,
+    )
+    require_string_inventory_count_match(
+        payload,
+        "languages",
+        "language_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
     artifact_count = require_positive_int(payload, "artifact_count", errors)
+    require_minimum_int(
+        payload,
+        "artifact_count",
+        len(REQUIRED_SDK_LANGUAGES),
+        errors,
+    )
     artifact_records = require_object_array(payload, "artifacts", errors)
     if not artifact_records:
         return
+    require_string_inventory_count_match(
+        payload,
+        "artifacts",
+        "artifact_count",
+        errors,
+        field="id",
+        allow_scalar_items=False,
+    )
     require_count_length_match(
         artifact_count,
         artifact_records,
@@ -473,6 +755,7 @@ def validate_sdk_release(payload: dict[str, Any], errors: list[str]) -> None:
     for _index, record in artifact_records:
         require_string(record, "id", errors)
         require_hex(record, "sha256", HEX64_LEN, errors)
+    validate_sdk_artifact_language_coverage(artifact_records, errors)
 
 
 def validate_observability(payload: dict[str, Any], errors: list[str]) -> None:
@@ -483,6 +766,9 @@ def validate_observability(payload: dict[str, Any], errors: list[str]) -> None:
     require_bool_true(payload, "live_dashboard_wired", errors)
     require_false(payload, "critical_alerts_firing", errors)
     require_string_coverage(payload, "metrics", "", REQUIRED_METRICS, errors)
+    require_only_required_values(payload, "metrics", "", REQUIRED_METRICS, errors)
+    require_positive_int(payload, "metric_count", errors)
+    require_string_inventory_count_match(payload, "metrics", "metric_count", errors)
     require_false(payload, "response_bodies_included", errors)
 
 
@@ -501,10 +787,20 @@ def validate_reconciliation(
         allow_scalar_items=False,
     )
     for _index, record in require_object_array(payload, "peers", errors):
-        require_string(record, "name", errors)
+        peer = require_string(record, "name", errors)
+        require_inventory_label(
+            peer,
+            path="peers[].name",
+            pattern=PEER_LABEL_PATTERN,
+            label_error=PEER_LABEL_ERROR,
+            errors=errors,
+        )
     require_hex(payload, "contract_digest_hex", HEX64_LEN, errors)
     require_positive_int(payload, "source_count", errors)
     require_string_coverage(payload, "sources", "name", REQUIRED_RECONCILIATION_SOURCES, errors)
+    require_only_required_values(
+        payload, "sources", "name", REQUIRED_RECONCILIATION_SOURCES, errors
+    )
     require_string_inventory_count_match(
         payload,
         "sources",
@@ -599,6 +895,8 @@ def build_summary(
     valid_policy_digests: set[str] = set()
     valid_contract_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     valid_policy_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
+    metric_counts: set[int] = set()
+    metric_names: set[str] = set()
     files = discover_evidence_files(
         evidence_dirs,
         evidence_files,
@@ -637,6 +935,9 @@ def build_summary(
                 policy_digest = fingerprint.get("policy_digest_hex")
                 if isinstance(policy_digest, str):
                     valid_policy_digests.add(policy_digest.lower())
+            if kind_name == "observability":
+                record_observed_evidence_value(metric_counts, payload.get("metric_count"))
+                metric_names.update(hashable_evidence_values(payload.get("metrics")))
             if kind_name in CONTRACT_BOUND_KINDS:
                 valid_contract_bound_artifacts.append((kind_name, artifact))
             if kind_name in POLICY_BOUND_KINDS:
@@ -701,6 +1002,8 @@ def build_summary(
         "recognized_artifacts": recognized_evidence_artifacts(artifacts_by_kind),
         "valid_contract_digests": sorted(valid_contract_digests),
         "valid_policy_digests": sorted(valid_policy_digests),
+        "metrics": sorted(metric_names),
+        "metric_count_values": sorted(metric_counts),
         "required": required,
         "errors": errors,
     }

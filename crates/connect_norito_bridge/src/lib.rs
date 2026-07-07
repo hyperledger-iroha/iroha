@@ -87,7 +87,7 @@ use zeroize::Zeroizing;
 mod privacy_production;
 
 const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 15;
-const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 64 * 1024 * 1024;
+const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 256 * 1024 * 1024;
 const SORAFS_ORDERBOOK_SIDE_BID: u32 = 1;
 const SORAFS_ORDERBOOK_SIDE_ASK: u32 = 2;
 const SORAFS_ORDERBOOK_TIER_HOT: u32 = 1;
@@ -3901,7 +3901,8 @@ fn parse_identifier_receipt_signature(value: Option<&JsonValue>) -> BridgeResult
         .and_then(JsonValue::as_str)
         .ok_or(BridgeError::IdentifierReceipt)?;
     let signature_bytes = decode_identifier_receipt_hex(signature_hex)?;
-    Signature::try_from_bytes(&signature_bytes).map_err(|_| BridgeError::IdentifierReceipt)
+    iroha_crypto::ed25519_parse_signature(&signature_bytes)
+        .map_err(|_| BridgeError::IdentifierReceipt)
 }
 
 fn parse_identifier_receipt_signature_for_algorithm(
@@ -33023,9 +33024,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_identifier_receipt_output_opening_rejects_malformed_ed25519_r_on_verify() {
-        let opening_signer = checked_identifier_receipt_ed25519_key_fixture();
-
+    fn parse_identifier_receipt_rejects_malformed_output_opening_signature_r() {
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_ED25519_R),
             ("noncanonical", NONCANONICAL_ED25519_R),
@@ -33034,23 +33033,24 @@ mod tests {
             let mut signature = payload.opening.signature.payload().to_vec();
             signature[..replacement_r.len()].copy_from_slice(&replacement_r);
             payload.opening.signature = Signature::from_bytes(&signature);
-            let receipt =
+            let err =
                 parse_identifier_receipt_value(sample_identifier_signed_receipt_json(&payload))
-                    .expect("receipt with outer-valid malformed opening should parse");
-            receipt
-                .verify(sample_identifier_receipt_attestation_signer().public_key())
-                .expect("outer receipt attestation remains valid for mutated payload");
-
-            let err = receipt
-                .payload
-                .opening
-                .verify_signature(opening_signer.public_key())
-                .expect_err("malformed output-opening signature R must reject on verification");
+                    .expect_err("malformed output-opening signature R must reject while parsing");
             assert!(
-                matches!(err, iroha_crypto::Error::BadSignature),
-                "{label} output-opening signature R produced unexpected error: {err:?}"
+                matches!(err, BridgeError::IdentifierReceipt),
+                "{label} output-opening signature R produced unexpected parse error: {err:?}"
             );
         }
+    }
+
+    #[test]
+    fn parse_identifier_receipt_rejects_all_zero_output_opening_signature() {
+        let mut payload = sample_identifier_receipt_payload();
+        payload.opening.signature = Signature::from_bytes(&[0_u8; 64]);
+
+        let err = parse_identifier_receipt_value(sample_identifier_signed_receipt_json(&payload))
+            .expect_err("all-zero output-opening signature must reject while parsing");
+        assert!(matches!(err, BridgeError::IdentifierReceipt));
     }
 
     #[test]
@@ -34136,6 +34136,42 @@ mod tests {
         };
 
         assert_eq!(rc, ERR_SM2_PARSE);
+    }
+
+    #[test]
+    fn sm2_verify_ffi_rejects_zero_scalar_signature_material() {
+        let distid = "connect-sm2-zero-scalar-signature";
+        let distid_c = CString::new(distid).expect("distid c string");
+        let private = Sm2PrivateKey::from_seed(distid, b"connect-sm2-zero-scalar-seed")
+            .expect("derive SM2 key");
+        let public_bytes = private.public_key().to_sec1_bytes(false);
+        let message = b"connect-sm2-zero-scalar-signature";
+
+        let mut zero_r = [0u8; Sm2Signature::LENGTH];
+        zero_r[Sm2Signature::LENGTH - 1] = 1;
+        let mut zero_s = [0u8; Sm2Signature::LENGTH];
+        zero_s[31] = 1;
+
+        for (label, signature) in [
+            ("all-zero", [0u8; Sm2Signature::LENGTH]),
+            ("zero-r", zero_r),
+            ("zero-s", zero_s),
+        ] {
+            let rc = unsafe {
+                connect_norito_sm2_verify(
+                    distid_c.as_ptr(),
+                    distid_c.as_bytes().len() as c_ulong,
+                    public_bytes.as_ptr(),
+                    public_bytes.len() as c_ulong,
+                    message.as_ptr(),
+                    message.len() as c_ulong,
+                    signature.as_ptr(),
+                    signature.len() as c_ulong,
+                )
+            };
+
+            assert_eq!(rc, ERR_SM2_PARSE, "{label} signature must fail parsing");
+        }
     }
 
     #[test]

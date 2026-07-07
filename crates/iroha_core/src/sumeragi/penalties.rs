@@ -769,8 +769,8 @@ mod tests {
         consensus::{Qc, ValidatorSetCheckpoint, VrfEpochRecord},
         domain::Domain,
         nexus::{
-            AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceId, LaneCatalog,
-            LaneConfig, LaneVisibility,
+            AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceId, DataSpaceMetadata,
+            LaneCatalog, LaneConfig, LaneVisibility,
         },
         parameter::system::SumeragiConsensusMode,
         prelude::{BlockHeader, DomainId, PeerId},
@@ -1479,6 +1479,58 @@ mod tests {
         validator
     }
 
+    fn seed_active_nexus_lanes<I>(state: &State, lane_ids: I)
+    where
+        I: IntoIterator<Item = LaneId>,
+    {
+        let lane_ids = lane_ids.into_iter().collect::<BTreeSet<_>>();
+        let first_lane = lane_ids.iter().next().copied().unwrap_or(LaneId::SINGLE);
+        let lane_count = lane_ids
+            .iter()
+            .map(|lane_id| lane_id.as_u32())
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1)
+            .max(1);
+        let lanes = lane_ids
+            .iter()
+            .map(|lane_id| LaneConfig {
+                id: *lane_id,
+                alias: format!("lane-{}", lane_id.as_u32()),
+                dataspace_id: DataSpaceId::new(u64::from(lane_id.as_u32())),
+                visibility: LaneVisibility::Public,
+                ..LaneConfig::default()
+            })
+            .collect();
+        let dataspace_catalog = DataSpaceCatalog::new(
+            lane_ids
+                .iter()
+                .map(|lane_id| {
+                    let id = DataSpaceId::new(u64::from(lane_id.as_u32()));
+                    DataSpaceMetadata {
+                        id,
+                        alias: format!("dataspace{}", id.as_u64()),
+                        description: None,
+                        fault_tolerance: 1,
+                    }
+                })
+                .collect(),
+        )
+        .expect("test Nexus dataspace catalog");
+        let mut nexus = state.nexus.write();
+        nexus.enabled = true;
+        nexus.routing_policy.default_lane = first_lane;
+        nexus.routing_policy.default_dataspace = DataSpaceId::new(u64::from(first_lane.as_u32()));
+        nexus.lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(lane_count).expect("test lane count is nonzero"),
+            lanes,
+        )
+        .expect("test Nexus lane catalog");
+        nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        nexus.dataspace_catalog = dataspace_catalog;
+    }
+
     fn install_future_created_autoscale_lane(state: &State, lane_id: LaneId, created_height: u64) {
         let mut lane = LaneConfig {
             id: lane_id,
@@ -1798,6 +1850,7 @@ mod tests {
     #[test]
     fn vrf_penalties_jail_offenders_and_mark_record() -> Result<()> {
         let state = fresh_state();
+        seed_active_nexus_lanes(&state, [LaneId::new(1)]);
         let mut config = test_sumeragi_config();
         config.npos.reconfig.activation_lag_blocks = 0;
 
@@ -2481,6 +2534,7 @@ mod tests {
         crate::sumeragi::status::reset_validator_checkpoints_for_tests();
 
         let state = fresh_state();
+        seed_active_nexus_lanes(&state, [LaneId::new(1)]);
         let mut config = test_sumeragi_config();
         config.consensus_mode = ConsensusMode::Permissioned;
         config.npos.reconfig.slashing_delay_blocks = 3;
@@ -2554,6 +2608,7 @@ mod tests {
         crate::sumeragi::status::reset_validator_checkpoints_for_tests();
 
         let state = fresh_state();
+        seed_active_nexus_lanes(&state, [LaneId::new(1), LaneId::new(2)]);
         let mut config = test_sumeragi_config();
         config.consensus_mode = ConsensusMode::Permissioned;
         config.npos.reconfig.slashing_delay_blocks = 0;
@@ -2613,6 +2668,7 @@ mod tests {
         crate::sumeragi::status::reset_validator_checkpoints_for_tests();
 
         let state = fresh_state();
+        seed_active_nexus_lanes(&state, [LaneId::new(1), LaneId::new(2)]);
         let mut config = test_sumeragi_config();
         config.consensus_mode = ConsensusMode::Permissioned;
         config.npos.reconfig.slashing_delay_blocks = 0;
@@ -3205,6 +3261,15 @@ mod tests {
     #[test]
     fn locate_validator_in_roster_prefers_matching_peer() {
         let state = fresh_state();
+        seed_active_nexus_lanes(
+            &state,
+            [
+                LaneId::new(1),
+                LaneId::new(2),
+                LaneId::new(3),
+                LaneId::new(4),
+            ],
+        );
         let mut config = test_sumeragi_config();
         config.npos.reconfig.activation_lag_blocks = 0;
 
