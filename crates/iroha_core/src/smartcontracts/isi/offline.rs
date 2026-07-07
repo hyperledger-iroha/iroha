@@ -2781,6 +2781,22 @@ pub mod isi {
         }
     }
 
+    fn ensure_can_submit_kagemusha_topup(
+        asset: &AssetId,
+        authority: &AccountId,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        if asset.account() == authority || is_offline_escrow_manager(authority, state_transaction) {
+            Ok(())
+        } else {
+            Err(labeled_invariant(
+                "unauthorized_controller",
+                "only the top-up payer or an offline escrow manager may submit recursive Kagemusha top-ups",
+            )
+            .into())
+        }
+    }
+
     fn ensure_offline_note_certificate_signature(
         certificate: &OfflineNoteKeyCertificate,
         issuer: &AccountId,
@@ -5198,7 +5214,7 @@ pub mod isi {
                 )
                 .into());
             }
-            ensure_can_issue_offline_note(authority, state_transaction)?;
+            ensure_can_submit_kagemusha_topup(&self.asset, authority, state_transaction)?;
             if self.amount <= Numeric::zero() {
                 return Err(labeled_invariant(
                     "invalid_amount",
@@ -7049,6 +7065,19 @@ pub mod isi {
             );
         }
 
+        fn grant_offline_escrow_manager(
+            transaction: &mut StateTransaction<'_, '_>,
+            authority: &AccountId,
+        ) {
+            transaction.world.account_permissions.insert(
+                authority.clone(),
+                BTreeSet::from([Permission::new(
+                    CAN_MANAGE_OFFLINE_ESCROW_PERMISSION.into(),
+                    Json::new(()),
+                )]),
+            );
+        }
+
         fn execute_policy_update_for_tests(
             policy: OfflineDeviceAttestationPolicy,
         ) -> Result<(), Error> {
@@ -8733,6 +8762,82 @@ pub mod isi {
                 message.contains(detail),
                 "expected error detail `{detail}`, got: {message}"
             );
+        }
+
+        fn recursive_topup_instruction_for_authorization_test(
+            asset: AssetId,
+            amount: Numeric,
+        ) -> TopUpKagemushaRecursive {
+            let note_commitment = fixed_bytes(b"kagemusha-topup-auth-note");
+            let verifier_key_id =
+                VerifyingKeyId::new(crate::zk::ZK_BACKEND_HALO2_IPA, "kagemusha-topup-auth-test");
+            let step = KagemushaVerifiedFoldStep {
+                root_before: fixed_bytes(b"kagemusha-topup-auth-root-before"),
+                input_nullifiers: vec![fixed_bytes(b"kagemusha-topup-auth-input")],
+                output_commitments: vec![note_commitment],
+                root_after: fixed_bytes(b"kagemusha-topup-auth-root-after"),
+                attachment: ProofAttachment::new_ref(
+                    crate::zk::ZK_BACKEND_HALO2_IPA.into(),
+                    ProofBox::new(crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(), Vec::new()),
+                    verifier_key_id,
+                ),
+                verifier_key: VerifyingKeyBox::new(crate::zk::ZK_BACKEND_HALO2_IPA.into(), vec![]),
+            };
+            let init_request = iroha_data_model::offline::KagemushaRecursiveSpendInitRequestV1 {
+                record_bundle: KagemushaVerifiedFoldRecordBundle {
+                    bundle: KagemushaVerifiedFoldBundle {
+                        chain_id: "kagemusha-topup-auth-chain".parse().expect("chain id"),
+                        asset: asset.definition().clone(),
+                        steps: vec![step],
+                    },
+                    verifier_records: Vec::new(),
+                },
+                pallas_open_envelopes_archive: Vec::new(),
+                current_note: iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1 {
+                    note_commitment,
+                    spend_nullifier: fixed_bytes(b"kagemusha-topup-auth-nullifier"),
+                    amount: amount.clone(),
+                },
+                lineage_verifier_key: None,
+                lineage_proving_key_archive: None,
+                block_height: None,
+            };
+            TopUpKagemushaRecursive::new(asset, amount, init_request)
+        }
+
+        #[test]
+        fn top_up_kagemusha_recursive_authorizes_payer_or_escrow_manager() {
+            let (mut state, asset_id, payer, _definition_id) =
+                distinct_escrow_test_state(Numeric::new(100, 0), 0x7A);
+            state.settlement.offline.kagemusha_enabled = true;
+            let manager = sample_account(0x7B);
+            let unrelated = sample_account(0x7C);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            grant_offline_escrow_manager(&mut transaction, &manager);
+
+            let payer_err = recursive_topup_instruction_for_authorization_test(
+                asset_id.clone(),
+                Numeric::zero(),
+            )
+            .execute(&payer, &mut transaction)
+            .expect_err("payer-signed recursive top-up must pass authorization");
+            assert_offline_rejection(payer_err, "invalid_amount", "must be positive");
+
+            let manager_err = recursive_topup_instruction_for_authorization_test(
+                asset_id.clone(),
+                Numeric::zero(),
+            )
+            .execute(&manager, &mut transaction)
+            .expect_err("escrow manager recursive top-up must pass authorization");
+            assert_offline_rejection(manager_err, "invalid_amount", "must be positive");
+
+            let unrelated_err =
+                recursive_topup_instruction_for_authorization_test(asset_id, Numeric::zero())
+                    .execute(&unrelated, &mut transaction)
+                    .expect_err("unrelated recursive top-up submitter must reject");
+            assert_offline_rejection(unrelated_err, "unauthorized_controller", "top-up payer");
         }
 
         #[test]

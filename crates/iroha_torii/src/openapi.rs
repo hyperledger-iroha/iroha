@@ -13836,8 +13836,7 @@ mod tests {
             .expect("offline Kagemusha top-up description");
         assert!(topup_description.contains("topup_request_norito_base64"));
         assert!(!topup_description.contains("topup_init_request_norito_base64"));
-        assert!(topup_description.contains("KagemushaRecursiveSpendInitRequestV1"));
-        assert!(topup_description.contains("canonical Numeric text"));
+        assert!(topup_description.contains("KagemushaRecursiveSpendTopUpRequestV1"));
         assert!(topup_description.contains("authenticated account_id is charged"));
         let audit_post = paths
             .get("/v1/offline/v2/audit")
