@@ -1576,6 +1576,16 @@ def test_tron_route_canary_evidence_binds_transaction_transcript() -> None:
             tron_sccp_route_canary_evidence_hash(
                 sample_tron_route_canary_evidence(**override)
             )
+    for override in (
+        {"transaction_id": evidence["route_allowlist_hash"]},
+        {"message_id": evidence["source_verifier_material_hash"]},
+        {"finality_height": evidence["source_adapter_engine_deployment_hash"]},
+        {"signature_sha256": evidence["destination_binding_hash"]},
+    ):
+        with pytest.raises(TypeError, match="TRON route canary governed hashes"):
+            tron_sccp_route_canary_evidence_hash(
+                sample_tron_route_canary_evidence(**override)
+            )
     package_root_tron_route_canary_governed_hash_reuse = {
         "route_allowlist_hash": evidence["source_verifier_material_hash"],
     }
@@ -1583,6 +1593,24 @@ def test_tron_route_canary_evidence_binds_transaction_transcript() -> None:
         iroha_torii_client_package.tron_sccp_route_canary_evidence_hash(
             sample_tron_route_canary_evidence(
                 **package_root_tron_route_canary_governed_hash_reuse
+            )
+        )
+    package_root_tron_route_canary_governed_transcript_hash_reuse = {
+        "finality_height": evidence["route_allowlist_hash"],
+    }
+    with pytest.raises(TypeError, match="TRON route canary governed hashes"):
+        iroha_torii_client_package.tron_sccp_route_canary_evidence_hash(
+            sample_tron_route_canary_evidence(
+                **package_root_tron_route_canary_governed_transcript_hash_reuse
+            )
+        )
+    package_root_tron_route_canary_transcript_hash_reuse = {
+        "finality_height": evidence["transaction_id"],
+    }
+    with pytest.raises(TypeError, match="TRON route canary transcript hashes"):
+        iroha_torii_client_package.tron_sccp_route_canary_evidence_hash(
+            sample_tron_route_canary_evidence(
+                **package_root_tron_route_canary_transcript_hash_reuse
             )
         )
 

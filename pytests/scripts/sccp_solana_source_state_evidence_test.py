@@ -65,6 +65,74 @@ class HostileExpectedRecordHash:
         raise AssertionError("secret-token Solana expected record hash was compared")
 
 
+class HostileSolanaSourceStateBytes(bytes):
+    """Bytes subclass that source-state evidence must reject before hooks."""
+
+    def __new__(cls, value):
+        return bytes.__new__(cls, value)
+
+    def __bytes__(self):
+        raise AssertionError("secret-token Solana source bytes coerced")
+
+    def __repr__(self):
+        raise AssertionError("secret-token Solana source bytes repr'd")
+
+    def __str__(self):
+        raise AssertionError("secret-token Solana source bytes stringified")
+
+    def __len__(self):
+        raise AssertionError("secret-token Solana source bytes length read")
+
+    def __iter__(self):
+        raise AssertionError("secret-token Solana source bytes iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token Solana source bytes indexed")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token Solana source bytes compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token Solana source bytes compared")
+
+    def __hash__(self):
+        raise AssertionError("secret-token Solana source bytes hashed")
+
+
+class HostileSolanaSourceStateBytearray(bytearray):
+    """Bytearray subclass that source-state evidence must reject before hooks."""
+
+    def __init__(self, value):
+        super().__init__(value)
+
+    def __bytes__(self):
+        raise AssertionError("secret-token Solana source bytearray coerced")
+
+    def __repr__(self):
+        raise AssertionError("secret-token Solana source bytearray repr'd")
+
+    def __str__(self):
+        raise AssertionError("secret-token Solana source bytearray stringified")
+
+    def __len__(self):
+        raise AssertionError("secret-token Solana source bytearray length read")
+
+    def __iter__(self):
+        raise AssertionError("secret-token Solana source bytearray iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token Solana source bytearray indexed")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token Solana source bytearray compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token Solana source bytearray compared")
+
+    def __hash__(self):
+        raise AssertionError("secret-token Solana source bytearray hashed")
+
+
 class HostileTomlString(str):
     def __new__(cls):
         return str.__new__(cls, "blocked")
@@ -250,6 +318,98 @@ def test_solana_hex_parser_rejects_zero_and_wrong_width():
             raise AssertionError(
                 f"noncanonical Solana source-state verifier hash {value!r} "
                 "was accepted"
+            )
+
+
+def test_solana_source_state_fixed_bytes_reject_subclasses_without_hooks():
+    module = load_evidence_module()
+    raw = b"\x44" * 32
+
+    assert (
+        module._require_fixed_bytes(
+            bytearray(raw),
+            label="source_trust_anchor_hash",
+            byte_length=32,
+        )
+        == raw
+    )
+    exact_bytearray_args = solana_args(module)
+    exact_bytearray_args.source_trust_anchor_hash = bytearray(raw)
+    assert type(module.solana_source_verifier_material_record_hash(exact_bytearray_args)) is bytes
+
+    hostile_values = (
+        HostileSolanaSourceStateBytes(raw),
+        HostileSolanaSourceStateBytearray(raw),
+    )
+    for hostile in hostile_values:
+        cases = (
+            (
+                lambda hostile=hostile: module._require_fixed_bytes(
+                    hostile,
+                    label="source_trust_anchor_hash",
+                    byte_length=32,
+                ),
+                ValueError,
+                "source_trust_anchor_hash must be bytes",
+            ),
+            (
+                lambda hostile=hostile: module._require_nonzero_fixed_bytes(
+                    hostile,
+                    label="source_trust_anchor_hash",
+                    byte_length=32,
+                ),
+                ValueError,
+                "source_trust_anchor_hash must be bytes",
+            ),
+            (
+                lambda hostile=hostile: module._optional_expected_record_hash(
+                    SimpleNamespace(expected_source_verifier_material_hash=hostile),
+                    "expected_source_verifier_material_hash",
+                    label="--expected-source-verifier-material-hash",
+                ),
+                ValueError,
+                "--expected-source-verifier-material-hash must be bytes",
+            ),
+        )
+        for call, exception_type, expected_message in cases:
+            try:
+                call()
+            except exception_type as exc:
+                rendered = str(exc)
+                assert rendered == expected_message
+                assert "secret-token" not in rendered
+                assert exc.__cause__ is None
+            else:
+                raise AssertionError(
+                    "Solana source-state byte subclass value was accepted"
+                )
+
+        material_args = solana_args(module)
+        material_args.source_trust_anchor_hash = hostile
+        try:
+            module.solana_source_verifier_material_record_hash(material_args)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == "source_trust_anchor_hash must be bytes"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError(
+                "Solana source material accepted hostile source hash"
+            )
+
+        adapter_args = solana_args(module)
+        adapter_args.adapter_verifier_vk_hash = hostile
+        try:
+            module._require_canonical_adapter_verifier_vk_hash(adapter_args)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == "adapter_verifier_vk_hash must be bytes"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError(
+                "Solana source adapter accepted hostile verifier hash"
             )
 
 

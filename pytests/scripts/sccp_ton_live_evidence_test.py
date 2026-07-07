@@ -794,6 +794,122 @@ def test_ton_live_exact_string_parsers_reject_string_subclasses_without_hooks(
                 )
 
 
+def test_ton_live_container_and_bytes_boundaries_reject_subclasses_without_hooks():
+    module = load_live_module()
+
+    class HostileTonLiveDict(dict):
+        def __contains__(self, key):
+            raise AssertionError("secret-token TON live dict contains ran")
+
+        def __getitem__(self, key):
+            raise AssertionError("secret-token TON live dict getitem ran")
+
+        def __iter__(self):
+            raise AssertionError("secret-token TON live dict iter ran")
+
+        def get(self, key, default=None):
+            raise AssertionError("secret-token TON live dict get ran")
+
+        def items(self):
+            raise AssertionError("secret-token TON live dict items ran")
+
+        def __repr__(self):
+            return "secret-token-hostile-ton-live-dict"
+
+    class HostileTonLiveList(list):
+        def __len__(self):
+            raise AssertionError("secret-token TON live list len ran")
+
+        def __getitem__(self, key):
+            raise AssertionError("secret-token TON live list getitem ran")
+
+        def __iter__(self):
+            raise AssertionError("secret-token TON live list iter ran")
+
+        def __repr__(self):
+            return "secret-token-hostile-ton-live-list"
+
+    class HostileTonLiveBytes(bytes):
+        def __new__(cls, value):
+            return bytes.__new__(cls, value)
+
+        def __bytes__(self):
+            raise AssertionError("secret-token TON live bytes conversion ran")
+
+        def __repr__(self):
+            return "secret-token-hostile-ton-live-bytes"
+
+    def expect_error(call, exception_type, expected_message):
+        try:
+            call()
+        except exception_type as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError(
+                f"hostile TON live value was accepted: {expected_message}"
+            )
+
+    expect_error(
+        lambda: module._optional_live_bytes32_arg(
+            SimpleNamespace(value=HostileTonLiveBytes(b"\x11" * 32)),
+            "value",
+            label="optional TON hash",
+        ),
+        ValueError,
+        "optional TON hash must be bytes",
+    )
+    expect_error(
+        lambda: module._account_from_response(
+            {"result": HostileTonLiveDict({"accounts": []})}
+        ),
+        RuntimeError,
+        "TON accountStates result must be an object",
+    )
+    expect_error(
+        lambda: module._account_from_response(
+            {"accounts": HostileTonLiveList([{}])}
+        ),
+        RuntimeError,
+        "TON accountStates response must contain accounts",
+    )
+    expect_error(
+        lambda: module._account_from_response(
+            {"accounts": [HostileTonLiveDict({"status": "active"})]}
+        ),
+        RuntimeError,
+        "TON accountStates account must be an object",
+    )
+    expect_error(
+        lambda: module._validate_live_evidence(HostileTonLiveDict()),
+        ValueError,
+        "TON live evidence must be an object",
+    )
+
+    fake = fake_ton_opener(module)
+    live = module.collect_live_evidence(
+        "https://toncenter.example",
+        verifier_contract_address=TON_VERIFIER_CONTRACT_ADDRESS,
+        opener=fake.opener,
+        timeout=3.0,
+    )
+    args = live_args(
+        module,
+        code_hash=fake.code_hash,
+        account_state_hash=fake.account_state_hash,
+    )
+    summary = module._summary(args, live)
+    summary["route_canary"] = HostileTonLiveDict(
+        {"evidence_hash": "0x" + TON_ROUTE_CANARY_EVIDENCE_HASH}
+    )
+
+    offline_args = module._offline_args_from_summary(args, live, summary)
+
+    assert "--route-canary-evidence-hash" not in offline_args
+
+
 def live_args(module, *, code_hash, account_state_hash):
     return SimpleNamespace(
         route_allowlist_hash=bytes.fromhex(TON_ROUTE_ALLOWLIST_HASH_VECTOR),

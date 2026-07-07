@@ -236,7 +236,7 @@ def _json_rpc(
         if str(exc) == "JSON-RPC returned duplicate JSON keys":
             raise RuntimeError(f"JSON-RPC {method} returned duplicate JSON keys") from None
         raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from None
-    if not isinstance(decoded, dict):
+    if type(decoded) is not dict:
         raise RuntimeError(f"JSON-RPC {method} returned a non-object response")
     if decoded.get("jsonrpc") != "2.0":
         raise RuntimeError(f"JSON-RPC {method} returned an invalid protocol version")
@@ -324,20 +324,13 @@ def _rlp_list(items: Sequence[bytes]) -> bytes:
 
 
 def _is_non_text_sequence(value: object) -> bool:
-    value_type = type(value)
-    if (
-        str in value_type.__mro__
-        or bytes in value_type.__mro__
-        or bytearray in value_type.__mro__
-    ):
-        return False
-    return isinstance(value, Sequence)
+    return type(value) in (list, tuple)
 
 
 def rlp_encode(value: Any) -> bytes:
     """Encode bytes or nested byte lists using Ethereum RLP."""
 
-    if isinstance(value, (bytes, bytearray)):
+    if type(value) in (bytes, bytearray):
         return _rlp_bytes(bytes(value))
     if _is_non_text_sequence(value):
         return _rlp_list([rlp_encode(item) for item in value])
@@ -373,7 +366,7 @@ def _receipt_logs(receipt: dict[str, Any]) -> list[Any]:
         raise RuntimeError("receipt.logs must be a list")
     encoded = []
     for log_index, log in enumerate(logs):
-        if not isinstance(log, dict):
+        if type(log) is not dict:
             raise RuntimeError(f"receipt.logs[{log_index}] must be an object")
         _require_log_not_removed(log, label=f"receipt.logs[{log_index}]")
         address = _rpc_fixed_hex_data(
@@ -590,6 +583,11 @@ def build_receipt_trie_proof_from_receipts(
 ) -> dict[str, Any]:
     """Build and verify an index-keyed receipt-trie proof for a block receipt list."""
 
+    if type(receipts) not in (list, tuple):
+        raise ValueError(
+            "block receipts must contain "
+            f"1..{EVM_RECEIPT_PROOF_MAX_BLOCK_RECEIPTS} entries"
+        )
     if not receipts or len(receipts) > EVM_RECEIPT_PROOF_MAX_BLOCK_RECEIPTS:
         raise ValueError(
             "block receipts must contain "
@@ -602,7 +600,7 @@ def build_receipt_trie_proof_from_receipts(
     seen_transaction_hashes: set[bytes] = set()
     target_receipt_rlp = b""
     for index, receipt in enumerate(receipts):
-        if not isinstance(receipt, dict):
+        if type(receipt) is not dict:
             raise TypeError(f"block receipts[{index}] must be an object")
         receipt_index = _rpc_quantity(
             receipt.get("transactionIndex"),
@@ -688,7 +686,7 @@ def _require_mainnet_chain(
 def _require_direct_bytes_arg(
     value: object, *, label: str, byte_length: int
 ) -> bytes:
-    if not isinstance(value, (bytes, bytearray)):
+    if type(value) not in (bytes, bytearray):
         raise ValueError(f"{label} must be bytes")
     raw = bytes(value)
     if len(raw) != byte_length:
@@ -711,7 +709,7 @@ def _source_event_digest_from_receipt(
         raise RuntimeError("receipt.logs is required for SCCP source event validation")
     matched_digest: bytes | None = None
     for index, log in enumerate(logs):
-        if not isinstance(log, dict):
+        if type(log) is not dict:
             raise RuntimeError(f"receipt.logs[{index}] must be an object")
         _require_log_not_removed(log, label=f"receipt.logs[{index}]")
         address = _rpc_fixed_hex_data(
@@ -803,7 +801,7 @@ def collect_receipt_proof_evidence(
         opener=opener,
         timeout=timeout,
     )
-    if not isinstance(receipt, dict):
+    if type(receipt) is not dict:
         raise RuntimeError("eth_getTransactionReceipt returned a non-object receipt")
     receipt_tx_hash = _rpc_fixed_hex_data(
         receipt.get("transactionHash"),
@@ -833,7 +831,7 @@ def collect_receipt_proof_evidence(
         opener=opener,
         timeout=timeout,
     )
-    if not isinstance(block, dict):
+    if type(block) is not dict:
         raise RuntimeError("eth_getBlockByHash returned a non-object block")
     block_number_check = _rpc_quantity(block.get("number"), method="block.number")
     if block_number_check != block_number:
@@ -866,7 +864,7 @@ def collect_receipt_proof_evidence(
     if proof["receipts_root"] != block_receipts_root:
         raise RuntimeError("computed receipt trie root does not match block.receiptsRoot")
     indexed_receipt = block_receipts[transaction_index]
-    if not isinstance(indexed_receipt, dict):
+    if type(indexed_receipt) is not dict:
         raise RuntimeError("eth_getBlockReceipts target receipt must be an object")
     indexed_tx_hash = _rpc_fixed_hex_data(
         indexed_receipt.get("transactionHash"),

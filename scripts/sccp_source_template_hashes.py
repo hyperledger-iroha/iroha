@@ -217,7 +217,7 @@ def sccp_active_source_template_component_hash_errors(
     }
 
     for index, entry in enumerate(entries):
-        if not isinstance(entry, tuple) or len(entry) != 3:
+        if type(entry) is not tuple or len(entry) != 3:
             errors.append(f"entry {index} must be a lane, field, hash tuple")
             continue
 
@@ -313,7 +313,7 @@ def sccp_source_template_hash_match(
 def sccp_source_template_hash_human_label(match: tuple[str | None, str]) -> str:
     """Return a diagnostic label for a template-hash match."""
 
-    if not isinstance(match, tuple) or len(match) != 2:
+    if type(match) is not tuple or len(match) != 2:
         raise TypeError("source template match must be a lane, field tuple")
     lane, field = match
     if lane is not None:

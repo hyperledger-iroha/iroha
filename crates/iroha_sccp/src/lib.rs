@@ -8584,7 +8584,7 @@ pub fn sccp_manifest_allows_transparent_proofs(manifest: &SccpProofManifestV1) -
     sccp_manifest_allows_transparent_proofs_internal(manifest, false)
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub fn sccp_manifest_allows_transparent_proofs_allow_unready(
     manifest: &SccpProofManifestV1,
     allow_unready: bool,
@@ -8934,7 +8934,7 @@ pub fn build_sccp_counterparty_proof_job_from_bundle_with_signer(
     )
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub fn build_sccp_counterparty_proof_job_from_bundle_with_signer_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     signer: &KeyPair,
@@ -8965,7 +8965,7 @@ pub fn build_sccp_counterparty_proof_job_from_bundle_with_destination_binding_an
     )
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub fn build_sccp_counterparty_proof_job_from_bundle_with_destination_binding_and_signer_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     destination_binding: &SccpDestinationBindingV1,
@@ -8988,7 +8988,7 @@ pub fn build_sccp_counterparty_proof_job_from_bundle(
     build_sccp_counterparty_proof_job_from_bundle_internal(bundle, None, None, false, None, None)
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub fn build_sccp_counterparty_proof_job_from_bundle_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     allow_unready: bool,
@@ -9017,7 +9017,7 @@ pub fn build_sccp_counterparty_proof_job_from_bundle_with_source_verifier_materi
     )
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub fn build_sccp_counterparty_proof_job_from_bundle_with_source_verifier_material_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     material: &SccpSourceVerifierMaterialV1,
@@ -9048,7 +9048,7 @@ pub fn build_sccp_counterparty_proof_job_from_bundle_with_source_verifier_materi
     )
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub fn build_sccp_counterparty_proof_job_from_bundle_with_source_verifier_material_and_deployment_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     material: &SccpSourceVerifierMaterialV1,
@@ -9090,7 +9090,7 @@ pub fn build_sccp_counterparty_proof_job_from_bundle_with_evm_groth16_proof_and_
     )
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub fn build_sccp_counterparty_proof_job_from_bundle_with_evm_groth16_proof_and_destination_binding_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     groth16_proof_bytes: &[u8],
@@ -9136,7 +9136,7 @@ pub fn build_sccp_bsc_mainnet_counterparty_proof_job_from_bundle_with_groth16_pr
 }
 
 /// Build a BSC mainnet counterparty proof job, optionally bypassing readiness checks in tests.
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub fn build_sccp_bsc_mainnet_counterparty_proof_job_from_bundle_with_groth16_proof_and_destination_binding_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     groth16_proof_bytes: &[u8],
@@ -9167,7 +9167,7 @@ pub fn build_sccp_counterparty_proof_job_from_bundle_with_tron_groth16_proof(
     )
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub fn build_sccp_counterparty_proof_job_from_bundle_with_tron_groth16_proof_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     groth16_proof_bytes: &[u8],
@@ -9209,7 +9209,7 @@ pub fn build_sccp_counterparty_proof_job_from_bundle_with_tron_groth16_proof_and
     )
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub fn build_sccp_counterparty_proof_job_from_bundle_with_tron_groth16_proof_and_destination_binding_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     groth16_proof_bytes: &[u8],
@@ -9319,9 +9319,6 @@ fn build_sccp_counterparty_proof_job_from_bundle_with_proof_bytes_internal(
     {
         return None;
     }
-    if !sccp_manifest_allows_transparent_proofs_internal(manifest, allow_unready) {
-        return None;
-    }
     let chain_family = sccp_transparent_chain_family_for_domain(counterparty_domain)?;
     let chain = sccp_chain_key_for_domain(counterparty_domain)?;
     let public_inputs = sccp_message_transparent_public_inputs_internal_with_deployment(
@@ -9375,7 +9372,7 @@ pub fn build_sccp_counterparty_proof_job_from_artifact(
     build_sccp_counterparty_proof_job_from_verified_artifact(artifact)
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub fn build_sccp_counterparty_proof_job_from_artifact_allow_unready(
     artifact: &NexusSccpMessageTransparentProofV1,
     allow_unready: bool,
@@ -19565,7 +19562,7 @@ pub fn build_sccp_counterparty_submission_package_with_signer(
     )
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub fn build_sccp_counterparty_submission_package_with_signer_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     manifest: &SccpProofManifestV1,
@@ -19622,7 +19619,7 @@ pub fn build_sccp_counterparty_submission_package_with_destination_binding(
     )
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub fn build_sccp_counterparty_submission_package_with_destination_binding_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     manifest: &SccpProofManifestV1,
@@ -19663,7 +19660,7 @@ pub fn build_sccp_bsc_mainnet_counterparty_submission_package_with_destination_b
 }
 
 /// Build a signer-free BSC mainnet submission package, optionally bypassing readiness checks.
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub fn build_sccp_bsc_mainnet_counterparty_submission_package_with_destination_binding_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     proof_bytes: &[u8],
@@ -19685,7 +19682,7 @@ pub fn build_sccp_bsc_mainnet_counterparty_submission_package_with_destination_b
     )
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub fn build_sccp_counterparty_submission_package_with_destination_binding_and_signer_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     manifest: &SccpProofManifestV1,
@@ -19723,7 +19720,7 @@ pub fn build_sccp_counterparty_submission_package(
     )
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub fn build_sccp_counterparty_submission_package_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     manifest: &SccpProofManifestV1,
@@ -19760,7 +19757,7 @@ pub fn build_sccp_counterparty_submission_package_with_source_verifier_material(
     )
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub fn build_sccp_counterparty_submission_package_with_source_verifier_material_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     manifest: &SccpProofManifestV1,
@@ -19799,7 +19796,7 @@ pub fn build_sccp_counterparty_submission_package_with_source_verifier_material_
     )
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub fn build_sccp_counterparty_submission_package_with_source_verifier_material_and_deployment_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     manifest: &SccpProofManifestV1,
@@ -19831,9 +19828,6 @@ fn build_sccp_counterparty_submission_package_internal(
     source_deployment: Option<&SccpSourceAdapterEngineDeploymentV1>,
 ) -> Option<SccpCounterpartySubmissionPackageV1> {
     let allow_unready_source_proof = sccp_allow_unready_source_proof_bypass_enabled(allow_unready);
-    if !sccp_manifest_allows_transparent_proofs_internal(manifest, allow_unready) {
-        return None;
-    }
     if !sccp_message_bundle_matches_manifest_counterparty(bundle, manifest) {
         return None;
     }
@@ -19851,6 +19845,33 @@ fn build_sccp_counterparty_submission_package_internal(
         source_material,
         source_deployment,
     )?;
+    if destination_binding.is_none() && signer.is_none() {
+        if let Some(local_admission_submission_package) = source_material.and_then(|material| {
+            sccp_local_admission_is_allowed(
+                manifest,
+                &public_inputs,
+                bundle,
+                Some(material),
+                source_deployment,
+            )
+            .then(|| {
+                build_sccp_local_admission_submission_package(
+                    manifest,
+                    proof_bytes,
+                    &public_inputs,
+                    bundle,
+                    material,
+                    source_deployment,
+                )
+            })
+            .flatten()
+        }) {
+            return Some(local_admission_submission_package);
+        }
+    }
+    if !sccp_manifest_allows_transparent_proofs_internal(manifest, allow_unready) {
+        return None;
+    }
     let platform_payload = build_sccp_platform_submission_payload(
         manifest,
         proof_bytes,
@@ -20548,7 +20569,7 @@ pub fn build_nexus_sccp_message_transparent_proof_with_signer(
     )
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub fn build_nexus_sccp_message_transparent_proof_with_signer_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     signer: &KeyPair,
@@ -20579,7 +20600,7 @@ pub fn build_nexus_sccp_message_transparent_proof_with_destination_binding_and_s
     )
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub fn build_nexus_sccp_message_transparent_proof_with_destination_binding_and_signer_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     destination_binding: &SccpDestinationBindingV1,
@@ -20602,7 +20623,7 @@ pub fn build_nexus_sccp_message_transparent_proof(
     build_nexus_sccp_message_transparent_proof_internal(bundle, None, None, false, None, None)
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub fn build_nexus_sccp_message_transparent_proof_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     allow_unready: bool,
@@ -20839,7 +20860,7 @@ pub fn build_nexus_sccp_message_transparent_proof_with_source_verifier_material(
     )
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub fn build_nexus_sccp_message_transparent_proof_with_source_verifier_material_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     material: &SccpSourceVerifierMaterialV1,
@@ -20870,7 +20891,7 @@ pub fn build_nexus_sccp_message_transparent_proof_with_source_verifier_material_
     )
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub fn build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     material: &SccpSourceVerifierMaterialV1,
@@ -20932,7 +20953,7 @@ pub fn build_nexus_sccp_message_transparent_proof_with_evm_groth16_proof_and_des
     })
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub fn build_nexus_sccp_message_transparent_proof_with_evm_groth16_proof_and_destination_binding_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     groth16_proof_bytes: &[u8],
@@ -20990,7 +21011,7 @@ pub fn build_nexus_sccp_message_transparent_proof_with_tron_groth16_proof(
     )
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub fn build_nexus_sccp_message_transparent_proof_with_tron_groth16_proof_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     groth16_proof_bytes: &[u8],
@@ -21052,7 +21073,7 @@ pub fn build_nexus_sccp_message_transparent_proof_with_tron_groth16_proof_and_de
     })
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub fn build_nexus_sccp_message_transparent_proof_with_tron_groth16_proof_and_destination_binding_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     groth16_proof_bytes: &[u8],
@@ -21113,9 +21134,6 @@ fn build_nexus_sccp_message_transparent_proof_internal(
     let counterparty_domain = sccp_counterparty_domain_for_message_payload(&bundle.payload)?;
     let manifest = sccp_proof_manifest_for_domain(counterparty_domain)?;
     let allow_unready_source_proof = sccp_allow_unready_source_proof_bypass_enabled(allow_unready);
-    if !sccp_manifest_allows_transparent_proofs_internal(&manifest, allow_unready) {
-        return None;
-    }
     if !allow_unready_source_proof
         && !sccp_bundle_source_proof_satisfies_production_build_gate(
             bundle,
@@ -21136,43 +21154,16 @@ fn build_nexus_sccp_message_transparent_proof_internal(
         source_material,
         source_deployment,
     )?;
-    let local_admission_submission_package =
-        if platform_destination_binding.is_none() && signer.is_none() {
-            source_material.and_then(|material| {
-                sccp_local_admission_is_allowed(
-                    &manifest,
-                    &public_inputs,
-                    bundle,
-                    Some(material),
-                    source_deployment,
-                )
-                .then(|| {
-                    build_sccp_local_admission_submission_package(
-                        &manifest,
-                        &proof_bytes,
-                        &public_inputs,
-                        bundle,
-                        material,
-                        source_deployment,
-                    )
-                })
-                .flatten()
-            })
-        } else {
-            None
-        };
-    let submission_package = local_admission_submission_package.or_else(|| {
-        build_sccp_counterparty_submission_package_internal(
-            bundle,
-            &manifest,
-            &proof_bytes,
-            platform_destination_binding,
-            signer,
-            allow_unready,
-            source_material,
-            source_deployment,
-        )
-    })?;
+    let submission_package = build_sccp_counterparty_submission_package_internal(
+        bundle,
+        &manifest,
+        &proof_bytes,
+        platform_destination_binding,
+        signer,
+        allow_unready,
+        source_material,
+        source_deployment,
+    )?;
     Some(NexusSccpMessageTransparentProofV1 {
         version: 1,
         local_domain: manifest.local_domain,
@@ -21610,7 +21601,7 @@ pub fn verify_nexus_sccp_message_transparent_proof_structure(
     )
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub fn verify_nexus_sccp_message_transparent_proof_structure_allow_unready(
     proof: &NexusSccpMessageTransparentProofV1,
     allow_unready: bool,
@@ -21643,7 +21634,7 @@ pub fn verify_nexus_sccp_message_transparent_proof_structure_with_source_verifie
 ///
 /// This is a diagnostic helper: setting `allow_unready` also relaxes the production source-proof
 /// gate. Production admission should use the `*_allow_unready_manifest` helpers instead.
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub fn verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material_allow_unready(
     proof: &NexusSccpMessageTransparentProofV1,
     material: &SccpSourceVerifierMaterialV1,
@@ -21663,6 +21654,7 @@ pub fn verify_nexus_sccp_message_transparent_proof_structure_with_source_verifie
 ///
 /// Production local admission should use the deployment-bound helper below so disabled
 /// destination manifests are opened only by governed source-adapter deployment evidence.
+#[cfg(test)]
 pub fn verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material_allow_unready_manifest(
     proof: &NexusSccpMessageTransparentProofV1,
     material: &SccpSourceVerifierMaterialV1,
@@ -21693,7 +21685,7 @@ pub fn verify_nexus_sccp_message_transparent_proof_structure_with_source_verifie
 }
 
 /// Verify deployment-bound transparent proof structure with test-gated diagnostic relaxations.
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub fn verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material_and_deployment_allow_unready(
     proof: &NexusSccpMessageTransparentProofV1,
     material: &SccpSourceVerifierMaterialV1,
@@ -33898,7 +33890,7 @@ pub fn recover_nexus_sccp_message_transparent_proof(
         .then_some(proof)
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub fn recover_nexus_sccp_message_transparent_proof_allow_unready(
     backend: &str,
     proof_bytes: &[u8],
@@ -67994,13 +67986,12 @@ pub mod tests {
             Some(&deployment),
         );
         let proof =
-            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready(
+            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment(
                 &bundle,
                 &material,
                 &deployment,
-            true,
-        )
-        .expect("deployment-bound transparent proof");
+            )
+            .expect("deployment-bound transparent proof");
 
         assert!(
             !verify_nexus_sccp_message_transparent_proof_structure_allow_unready(&proof, true),
@@ -68067,11 +68058,10 @@ pub mod tests {
             "built-in placeholder source material must not build jobs for configured source proofs",
         );
         let job =
-            build_sccp_counterparty_proof_job_from_bundle_with_source_verifier_material_and_deployment_allow_unready(
+            build_sccp_counterparty_proof_job_from_bundle_with_source_verifier_material_and_deployment(
                 &bundle,
                 &material,
                 &deployment,
-                true,
             )
             .expect("deployment-bound counterparty proof job");
         assert_eq!(job.counterparty_domain, SCCP_DOMAIN_SOL);
@@ -68084,11 +68074,10 @@ pub mod tests {
         let mut replayed_deployment = deployment;
         replayed_deployment.deployment_receipt_hash = [0x9A; 32];
         assert!(
-            build_sccp_counterparty_proof_job_from_bundle_with_source_verifier_material_and_deployment_allow_unready(
+            build_sccp_counterparty_proof_job_from_bundle_with_source_verifier_material_and_deployment(
                 &job.bundle,
                 &material,
                 &replayed_deployment,
-                true,
             )
             .is_none(),
             "counterparty jobs must stay bound to the configured source deployment",
@@ -76559,9 +76548,9 @@ pub mod tests {
     }
 
     #[test]
-    fn public_boolean_unready_helpers_are_fixture_only() {
+    fn public_boolean_unready_helpers_are_test_only() {
         let source = include_str!("lib.rs");
-        let cfg_marker = "#[cfg(any(test, feature = \"test-fixtures\"))]";
+        let cfg_marker = "#[cfg(test)]";
         for (index, _) in source.match_indices("pub fn ") {
             let tail = &source[index..];
             let Some(signature_end) = tail.find('{') else {
@@ -76571,14 +76560,16 @@ pub mod tests {
             if !signature.contains("allow_unready") && !signature.contains("allow_unready: bool") {
                 continue;
             }
-            if signature.contains("_allow_unready_manifest") {
+            if signature
+                .contains("with_source_verifier_material_and_deployment_allow_unready_manifest")
+            {
                 continue;
             }
             let prefix_start = index.saturating_sub(96);
             let prefix = &source[prefix_start..index];
             assert!(
                 prefix.contains(cfg_marker),
-                "public boolean unready helper must be fixture-only: {}",
+                "public boolean unready helper must be test-only: {}",
                 signature.lines().next().unwrap_or(signature).trim()
             );
         }
@@ -78292,11 +78283,10 @@ pub mod tests {
             "source proof byte recovery must reject copied BSC proof bytes under an ETH source label"
         );
         let artifact =
-            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready(
+            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment(
                 &bundle,
                 &material,
                 &deployment,
-                true,
             )
             .expect("BSC -> SORA local admission artifact");
         assert_eq!(artifact.public_inputs.target_domain, SCCP_DOMAIN_SORA);
@@ -78845,11 +78835,10 @@ pub mod tests {
         );
 
         let artifact =
-            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready(
+            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment(
                 &bundle,
                 &material,
                 &deployment,
-                true,
             )
             .expect("ETH -> SORA local admission artifact");
         assert_eq!(artifact.public_inputs.target_domain, SCCP_DOMAIN_SORA);
@@ -81211,6 +81200,166 @@ pub mod tests {
 
 #[cfg(feature = "test-fixtures")]
 pub mod test_fixtures {
+    fn unchecked_transparent_proof_from_bundle_fixture(
+        bundle: &super::NexusSccpMessageProofV1,
+        source_material: Option<&super::SccpSourceVerifierMaterialV1>,
+        source_deployment: Option<&super::SccpSourceAdapterEngineDeploymentV1>,
+    ) -> Option<super::NexusSccpMessageTransparentProofV1> {
+        let counterparty_domain =
+            super::sccp_counterparty_domain_for_message_payload(&bundle.payload)?;
+        let manifest = super::sccp_proof_manifest_for_domain(counterparty_domain)?;
+        let source_domain = super::sccp_message_source_domain(&bundle.payload);
+        let target_domain = super::sccp_message_target_domain(&bundle.payload);
+        let (finality_height, finality_block_hash) = if source_domain == super::SCCP_DOMAIN_SORA {
+            let finality_proof = super::decode_nexus_bridge_finality_proof(&bundle.finality_proof)?;
+            (finality_proof.height, finality_proof.block_hash)
+        } else {
+            let source_proof =
+                super::decode_sccp_source_chain_proof_envelope(&bundle.finality_proof)?;
+            if source_proof.source_domain != source_domain
+                || source_proof.target_domain != target_domain
+                || source_proof.message_id != bundle.commitment.message_id
+                || source_proof.payload_hash != bundle.commitment.payload_hash
+                || source_proof.commitment_root != bundle.commitment_root
+            {
+                return None;
+            }
+            (
+                source_proof.finality_height,
+                source_proof.finality_block_hash,
+            )
+        };
+        let public_inputs = super::SccpMessageTransparentPublicInputsV1 {
+            version: 1,
+            message_id: bundle.commitment.message_id,
+            payload_hash: bundle.commitment.payload_hash,
+            target_domain: bundle.commitment.target_domain,
+            commitment_root: bundle.commitment_root,
+            finality_height,
+            finality_block_hash,
+        };
+        if !super::sccp_transparent_public_inputs_match_manifest(&manifest, &public_inputs) {
+            return None;
+        }
+        let proof_bytes = super::prefixed_blake2b(
+            b"sccp:test-fixture:transparent-proof-bytes:v1",
+            &super::canonical_sccp_message_transparent_public_inputs_bytes(&public_inputs),
+        )
+        .to_vec();
+        let source_verifier_material_hash = source_material
+            .map(super::sccp_source_verifier_material_hash)
+            .unwrap_or_else(|| {
+                super::prefixed_blake2b(
+                    b"sccp:test-fixture:source-material:v1",
+                    &super::canonical_nexus_sccp_message_bundle_bytes_len_checked(bundle)
+                        .unwrap_or_default(),
+                )
+            });
+        let source_adapter_engine_deployment_hash = source_deployment
+            .map(super::sccp_source_adapter_engine_deployment_hash)
+            .unwrap_or_else(|| {
+                super::prefixed_blake2b(
+                    b"sccp:test-fixture:source-deployment:v1",
+                    &source_verifier_material_hash,
+                )
+            });
+        let payload = super::SccpLocalAdmissionSubmissionPayloadV1 {
+            version: 1,
+            proof_bytes: proof_bytes.clone(),
+            public_inputs_bytes: super::canonical_sccp_message_transparent_public_inputs_bytes(
+                &public_inputs,
+            ),
+            bundle_bytes: super::canonical_nexus_sccp_message_bundle_bytes_len_checked(bundle)?,
+            statement_hash: super::prefixed_blake2b(
+                b"sccp:test-fixture:statement:v1",
+                &proof_bytes,
+            ),
+            source_verifier_material_hash,
+            source_adapter_engine_deployment_hash,
+        };
+        let platform_payload = super::SccpPlatformSubmissionPayloadV1::LocalAdmission(payload);
+        let envelope_bytes = super::to_bytes(&platform_payload).ok()?;
+        let submission_package = super::SccpCounterpartySubmissionPackageV1 {
+            version: 1,
+            proof_family: manifest.proof_family.clone(),
+            verifier_backend: manifest.verifier_backend.clone(),
+            envelope_encoding: super::SCCP_LOCAL_ADMISSION_ENVELOPE_ENCODING_V1.to_owned(),
+            submission_kind: super::SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1.to_owned(),
+            verifier_entrypoint: super::SCCP_LOCAL_ADMISSION_ENTRYPOINT_V1.to_owned(),
+            platform_payload,
+            arguments: Vec::new(),
+            envelope_bytes,
+        };
+        Some(super::NexusSccpMessageTransparentProofV1 {
+            version: 1,
+            local_domain: manifest.local_domain,
+            counterparty_domain,
+            security_model: manifest.security_model,
+            anchor_governance: manifest.anchor_governance,
+            destination_binding: manifest.destination_binding.clone(),
+            proof_family: manifest.proof_family,
+            verifier_backend: manifest.verifier_backend,
+            message_backend: manifest.message_backend,
+            registry_backend: manifest.registry_backend,
+            manifest_seed: manifest.manifest_seed,
+            finality_model: manifest.finality_model,
+            verifier_target: manifest.verifier_target,
+            public_inputs,
+            proof_bytes,
+            submission_package,
+            bundle: bundle.clone(),
+        })
+    }
+
+    /// Build a transparent-proof fixture directly from a message bundle.
+    pub fn transparent_proof_from_bundle_fixture(
+        bundle: &super::NexusSccpMessageProofV1,
+    ) -> Option<super::NexusSccpMessageTransparentProofV1> {
+        super::build_nexus_sccp_message_transparent_proof_internal(
+            bundle, None, None, true, None, None,
+        )
+        .or_else(|| unchecked_transparent_proof_from_bundle_fixture(bundle, None, None))
+    }
+
+    /// Build a transparent-proof fixture with source verifier material.
+    pub fn transparent_proof_from_bundle_with_source_verifier_material_fixture(
+        bundle: &super::NexusSccpMessageProofV1,
+        material: &super::SccpSourceVerifierMaterialV1,
+    ) -> Option<super::NexusSccpMessageTransparentProofV1> {
+        super::build_nexus_sccp_message_transparent_proof_internal(
+            bundle,
+            None,
+            None,
+            true,
+            Some(material),
+            None,
+        )
+        .or_else(|| unchecked_transparent_proof_from_bundle_fixture(bundle, Some(material), None))
+    }
+
+    /// Build a deployment-bound transparent-proof fixture.
+    pub fn transparent_proof_from_bundle_with_source_verifier_material_and_deployment_fixture(
+        bundle: &super::NexusSccpMessageProofV1,
+        material: &super::SccpSourceVerifierMaterialV1,
+        deployment: &super::SccpSourceAdapterEngineDeploymentV1,
+    ) -> Option<super::NexusSccpMessageTransparentProofV1> {
+        super::build_nexus_sccp_message_transparent_proof_internal(
+            bundle,
+            None,
+            None,
+            true,
+            Some(material),
+            Some(deployment),
+        )
+        .or_else(|| {
+            unchecked_transparent_proof_from_bundle_fixture(
+                bundle,
+                Some(material),
+                Some(deployment),
+            )
+        })
+    }
+
     pub use super::tests::{
         sample_eth_mainnet_sync_committee_root,
         sample_eth_mainnet_to_sora_local_admission_transparent_proof_with_material_and_deployment,

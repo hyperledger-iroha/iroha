@@ -11938,20 +11938,24 @@ test("package dist entrypoint enforces SCCP route-canary role separation", () =>
     () => tronSccpRouteCanaryEvidenceHash(distTronRouteCanaryGovernedHashReuse),
     /TRON route canary governed hashes/u,
   );
+  const distTronRouteCanaryGovernedTranscriptHashReuse = {
+    ...distTronRouteCanaryEvidence,
+    payloadHash: distTronRouteCanaryEvidence.routeAllowlistHash,
+  };
   assert.throws(
     () =>
-      tronSccpRouteCanaryEvidenceHash({
-        ...distTronRouteCanaryEvidence,
-        payloadHash: distTronRouteCanaryEvidence.routeAllowlistHash,
-      }),
+      tronSccpRouteCanaryEvidenceHash(
+        distTronRouteCanaryGovernedTranscriptHashReuse,
+      ),
     /TRON route canary governed hashes/u,
   );
+  const distTronRouteCanaryTranscriptHashReuse = {
+    ...distTronRouteCanaryEvidence,
+    finalityHeight: distTronRouteCanaryEvidence.transactionId,
+  };
   assert.throws(
     () =>
-      tronSccpRouteCanaryEvidenceHash({
-        ...distTronRouteCanaryEvidence,
-        finalityHeight: distTronRouteCanaryEvidence.transactionId,
-      }),
+      tronSccpRouteCanaryEvidenceHash(distTronRouteCanaryTranscriptHashReuse),
     /TRON route canary transcript hashes/u,
   );
 });

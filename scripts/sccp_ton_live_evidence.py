@@ -98,7 +98,7 @@ def _optional_live_bytes32_arg(
     value = getattr(args, name, None)
     if value is None:
         return None
-    if not isinstance(value, (bytes, bytearray)):
+    if type(value) not in (bytes, bytearray):
         raise ValueError(f"{label} must be bytes")
     raw = bytes(value)
     if len(raw) != 32:
@@ -328,7 +328,7 @@ def _http_get_json(
         if str(exc) == "TON accountStates returned duplicate JSON keys":
             raise RuntimeError("TON accountStates returned duplicate JSON keys") from None
         raise RuntimeError("TON accountStates returned invalid JSON") from None
-    if not isinstance(decoded, dict):
+    if type(decoded) is not dict:
         raise RuntimeError("TON accountStates returned a non-object response")
     if decoded.get("error") is not None:
         raise RuntimeError("TON accountStates returned error response")
@@ -341,20 +341,20 @@ def _http_get_json(
 def _account_from_response(decoded: dict[str, Any]) -> dict[str, Any]:
     has_direct_accounts = "accounts" in decoded
     result = decoded.get("result")
-    if result is not None and not isinstance(result, dict):
+    if result is not None and type(result) is not dict:
         raise RuntimeError("TON accountStates result must be an object")
-    has_wrapped_accounts = isinstance(result, dict) and "accounts" in result
+    has_wrapped_accounts = type(result) is dict and "accounts" in result
     if has_direct_accounts and has_wrapped_accounts:
         raise RuntimeError("TON accountStates returned ambiguous accounts")
     accounts = decoded.get("accounts")
     if not has_direct_accounts and has_wrapped_accounts:
         accounts = result["accounts"]
-    if not isinstance(accounts, list):
+    if type(accounts) is not list:
         raise RuntimeError("TON accountStates response must contain accounts")
     if len(accounts) != 1:
         raise RuntimeError("TON accountStates must return exactly one account")
     account = accounts[0]
-    if not isinstance(account, dict):
+    if type(account) is not dict:
         raise RuntimeError("TON accountStates account must be an object")
     return account
 
@@ -460,7 +460,7 @@ def collect_live_evidence(
 def _validate_live_evidence(
     live: dict[str, Any],
 ) -> tuple[dict[str, Any], bytes, bytes, bytes]:
-    if not isinstance(live, dict):
+    if type(live) is not dict:
         raise ValueError("TON live evidence must be an object")
     try:
         verifier = evidence.normalize_ton_raw_address(
@@ -715,7 +715,7 @@ def _offline_args_from_summary(
             ]
         )
         route_canary = summary.get("route_canary")
-        if isinstance(route_canary, dict):
+        if type(route_canary) is dict:
             offline.extend(
                 [
                     "--route-canary-evidence-hash",

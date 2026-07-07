@@ -1421,7 +1421,7 @@ private func requireTronRouteCanaryHashesDistinct(_ fields: [String: Data]) thro
     var seen: [Data: String] = [:]
     for (field, bytes) in fields where bytes.contains(where: { $0 != 0 }) {
         if let previous = seen[bytes] {
-            throw TronSccpProverError.invalidPublicInputs("\(field):\(previous)")
+            throw TronSccpProverError.invalidPublicInputs("routeCanaryTranscriptHashes:\(field):\(previous)")
         }
         seen[bytes] = field
     }

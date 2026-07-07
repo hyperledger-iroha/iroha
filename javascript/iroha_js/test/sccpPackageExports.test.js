@@ -750,12 +750,26 @@ test("published package root enforces SCCP route-canary role separation", () => 
       ),
     /TRON route canary governed hashes/u,
   );
+  const packageRootTronRouteCanaryGovernedTranscriptHashReuse = {
+    ...packageRootTronRouteCanaryEvidence,
+    payloadHash: packageRootTronRouteCanaryEvidence.routeAllowlistHash,
+  };
   assert.throws(
     () =>
-      rootExports.tronSccpRouteCanaryEvidenceHash({
-        ...packageRootTronRouteCanaryEvidence,
-        payloadHash: packageRootTronRouteCanaryEvidence.routeAllowlistHash,
-      }),
+      rootExports.tronSccpRouteCanaryEvidenceHash(
+        packageRootTronRouteCanaryGovernedTranscriptHashReuse,
+      ),
     /TRON route canary governed hashes/u,
+  );
+  const packageRootTronRouteCanaryTranscriptHashReuse = {
+    ...packageRootTronRouteCanaryEvidence,
+    finalityHeight: packageRootTronRouteCanaryEvidence.transactionId,
+  };
+  assert.throws(
+    () =>
+      rootExports.tronSccpRouteCanaryEvidenceHash(
+        packageRootTronRouteCanaryTranscriptHashReuse,
+      ),
+    /TRON route canary transcript hashes/u,
   );
 });

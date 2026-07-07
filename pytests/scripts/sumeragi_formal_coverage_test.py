@@ -13744,6 +13744,59 @@ def test_byzantine_top_conjunct_contract_errors_rejects_missing_conjunct(
     ) in errors[0]
 
 
+def test_byzantine_top_conjunct_contract_errors_rejects_aggregate_shape_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    operator = "ByzantineDeliveredFirstTopExactness"
+    conjuncts = module.SUMERAGI_BYZANTINE_TOP_CONJUNCT_CONTRACTS[operator]
+    cases = (
+        (
+            "missing_operator",
+            [],
+            f"does not define top-level Byzantine direct-commit aggregate {operator}",
+        ),
+        (
+            "non_named_conjunct",
+            [
+                f"{operator} ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                "  /\\ TRUE",
+            ],
+            f"defines {operator}, but contains direct non-named conjunct TRUE; "
+            "keep top-level Byzantine direct-commit aggregate proof operators "
+            "on the documented conjunct contract",
+        ),
+        (
+            "unexpected_conjunct",
+            [
+                f"{operator} ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                "  /\\ UnexpectedByzantineTopWitness",
+            ],
+            f"defines {operator}, but contains unexpected direct conjunct(s) "
+            "UnexpectedByzantineTopWitness; keep top-level Byzantine "
+            "direct-commit aggregate proof operators on the documented "
+            "conjunct contract",
+        ),
+    )
+
+    for suffix, override, expected_error in cases:
+        tla = tmp_path / f"Sumeragi_{suffix}.tla"
+        tla.write_text(
+            byzantine_top_contract_text(
+                module,
+                overrides={operator: override},
+            ),
+            encoding="utf-8",
+        )
+
+        errors = module.byzantine_top_conjunct_contract_errors(tla)
+
+        assert len(errors) == 1
+        assert expected_error in errors[0]
+
+
 def test_byzantine_top_conjunct_contract_errors_rejects_dropped_implication(
     tmp_path: Path,
 ) -> None:
@@ -13774,6 +13827,154 @@ def test_byzantine_top_conjunct_contract_errors_rejects_dropped_implication(
     ) in errors[0]
 
 
+def test_byzantine_top_conjunct_contract_errors_rejects_wrong_implication_antecedent(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    operator = "ByzantineDirectTopCoversOrderedTopCorridors"
+    conjuncts = module.SUMERAGI_BYZANTINE_TOP_CONJUNCT_CONTRACTS[operator]
+    tla.write_text(
+        byzantine_top_contract_text(
+            module,
+            overrides={
+                operator: [
+                    f"{operator} ==",
+                    "  ByzantineVoteFirstTopExactness =>",
+                    *(f"    /\\ {conjunct}" for conjunct in conjuncts),
+                ]
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.byzantine_top_conjunct_contract_errors(tla)
+
+    assert len(errors) == 1
+    assert (
+        "defines ByzantineDirectTopCoversOrderedTopCorridors, but its "
+        "implication antecedent is ByzantineVoteFirstTopExactness; expected "
+        "ByzantineDirectTopExactness"
+    ) in errors[0]
+
+
+def test_byzantine_top_conjunct_contract_errors_rejects_parameterized_aggregate(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    operator = "ByzantineDeliveredFirstTopExactness"
+    conjuncts = module.SUMERAGI_BYZANTINE_TOP_CONJUNCT_CONTRACTS[operator]
+    tla.write_text(
+        byzantine_top_contract_text(
+            module,
+            overrides={
+                operator: [
+                    f"{operator}(view) ==",
+                    *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                ],
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.byzantine_top_conjunct_contract_errors(tla)
+
+    assert len(errors) == 1
+    assert (
+        f"defines top-level Byzantine direct-commit aggregate {operator} with "
+        "arity 1; top-level Byzantine direct-commit aggregate operators must "
+        "be zero-arity operators"
+    ) in errors[0]
+
+
+def test_byzantine_top_conjunct_contract_errors_rejects_duplicate_direct_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    operator = "ByzantineDeliveredFirstTopExactness"
+    conjuncts = module.SUMERAGI_BYZANTINE_TOP_CONJUNCT_CONTRACTS[operator]
+    duplicate = "CommitImpliesHonestSupport"
+    tla.write_text(
+        byzantine_top_contract_text(
+            module,
+            overrides={
+                operator: [
+                    f"{operator} ==",
+                    *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                    f"  /\\ {duplicate}",
+                ],
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.byzantine_top_conjunct_contract_errors(tla)
+
+    assert errors == [
+        f"{tla}:2 defines {operator}, but repeats direct conjunct(s) "
+        f"{duplicate}; each top-level Byzantine direct-commit obligation "
+        "must be counted once"
+    ]
+
+
+def test_byzantine_top_conjunct_contract_errors_rejects_duplicate_expected_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    tla.write_text(byzantine_top_contract_text(module), encoding="utf-8")
+    contracts = copied_contracts(module.SUMERAGI_BYZANTINE_TOP_CONJUNCT_CONTRACTS)
+    duplicate = "CommitImpliesHonestSupport"
+    contracts["ByzantineDeliveredFirstTopExactness"] = (
+        *contracts["ByzantineDeliveredFirstTopExactness"],
+        duplicate,
+    )
+
+    errors = module.byzantine_top_conjunct_contract_errors(
+        tla,
+        contracts=contracts,
+    )
+
+    assert errors == [
+        "top-level Byzantine direct-commit aggregate "
+        "ByzantineDeliveredFirstTopExactness conjunct contract repeats "
+        f"conjunct(s) {duplicate}; each top-level Byzantine direct-commit "
+        "obligation must be counted once"
+    ]
+
+
+def test_byzantine_top_conjunct_contract_errors_rejects_duplicate_implication_inventory(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    tla.write_text(byzantine_top_contract_text(module), encoding="utf-8")
+
+    errors = module.byzantine_top_conjunct_contract_errors(
+        tla,
+        implication_contracts=(
+            (
+                "ByzantineDirectTopCoversOrderedTopCorridors",
+                "ByzantineDirectTopExactness",
+            ),
+            (
+                "ByzantineDirectTopCoversOrderedTopCorridors",
+                "ByzantineDeliveredFirstTopExactness",
+            ),
+        ),
+    )
+
+    assert errors == [
+        "Byzantine top implication antecedent contract inventory repeats "
+        "ByzantineDirectTopCoversOrderedTopCorridors; first expected "
+        "ByzantineDirectTopExactness, then "
+        "ByzantineDeliveredFirstTopExactness; each implication antecedent "
+        "contract must be counted once"
+    ]
+
+
 def copied_contracts(
     contracts: dict[str, tuple[str, ...]],
 ) -> dict[str, tuple[str, ...]]:
@@ -13785,6 +13986,22 @@ def test_byzantine_top_corridor_contract_alignment_errors_accepts_family(
     module = load_coverage_module()
 
     assert module.byzantine_top_corridor_contract_alignment_errors() == []
+
+
+def test_byzantine_top_corridor_contract_alignment_errors_rejects_missing_contract(
+) -> None:
+    module = load_coverage_module()
+    top_contracts = copied_contracts(module.SUMERAGI_BYZANTINE_TOP_CONJUNCT_CONTRACTS)
+    missing = "ByzantineDirectTopExactness"
+    del top_contracts[missing]
+
+    errors = module.byzantine_top_corridor_contract_alignment_errors(
+        top_contracts=top_contracts,
+    )
+
+    assert errors == [
+        f"Byzantine top corridor alignment references missing contract {missing}"
+    ]
 
 
 def test_byzantine_top_corridor_contract_alignment_errors_rejects_delivered_wait_conjunct(
@@ -13849,11 +14066,108 @@ def test_byzantine_top_corridor_contract_alignment_errors_rejects_duplicate_actu
     ]
 
 
+def test_byzantine_top_corridor_contract_alignment_errors_rejects_duplicate_delivered_actual(
+) -> None:
+    module = load_coverage_module()
+    top_contracts = copied_contracts(module.SUMERAGI_BYZANTINE_TOP_CONJUNCT_CONTRACTS)
+    duplicate = "CommitImpliesHonestSupport"
+    top_contracts["ByzantineDeliveredFirstTopExactness"] = (
+        *top_contracts["ByzantineDeliveredFirstTopExactness"],
+        duplicate,
+    )
+
+    errors = module.byzantine_top_corridor_contract_alignment_errors(
+        top_contracts=top_contracts,
+    )
+
+    assert errors == [
+        "Byzantine top corridor actual ByzantineDeliveredFirstTopExactness "
+        f"conjunct contract repeats conjunct(s) {duplicate}; each Byzantine "
+        "top corridor obligation must be counted once"
+    ]
+
+
+def test_byzantine_top_corridor_contract_alignment_errors_rejects_duplicate_expected(
+) -> None:
+    module = load_coverage_module()
+    duplicate = "RbcDeliveredWithoutFinalityWaitsForCommitEvidence"
+
+    errors = module.byzantine_top_corridor_contract_alignment_errors(
+        wait_conjuncts=(
+            *module.SUMERAGI_BYZANTINE_TOP_WAIT_CONJUNCTS,
+            duplicate,
+        ),
+    )
+
+    assert errors == [
+        "Byzantine top corridor expected ByzantineVoteFirstTopExactness conjunct "
+        f"contract repeats conjunct(s) {duplicate}; each Byzantine top "
+        "corridor obligation must be counted once",
+        "Byzantine top corridor expected ByzantineDirectTopExactness conjunct "
+        f"contract repeats conjunct(s) {duplicate}; each Byzantine top "
+        "corridor obligation must be counted once",
+    ]
+
+
 def test_byzantine_top_projection_contract_alignment_errors_accepts_mirror(
 ) -> None:
     module = load_coverage_module()
 
     assert module.byzantine_top_projection_contract_alignment_errors() == []
+
+
+def test_byzantine_top_projection_contract_alignment_errors_rejects_missing_alignment_contracts(
+) -> None:
+    module = load_coverage_module()
+
+    assert module.byzantine_top_projection_contract_alignment_errors(
+        operator_map=(
+            (
+                "MissingByzantineTopContract",
+                "ProjectedByzantineDirectTopExactness",
+            ),
+        ),
+        top_implication_contracts=(),
+        projection_implication_contracts=(),
+    ) == [
+        "Byzantine top/projection alignment references missing top contract "
+        "MissingByzantineTopContract"
+    ]
+
+    assert module.byzantine_top_projection_contract_alignment_errors(
+        operator_map=(
+            (
+                "ByzantineDirectTopExactness",
+                "MissingProjectedTopContract",
+            ),
+        ),
+        top_implication_contracts=(),
+        projection_implication_contracts=(),
+    ) == [
+        "Byzantine top/projection alignment references missing projection "
+        "contract MissingProjectedTopContract"
+    ]
+
+
+def test_byzantine_top_projection_contract_alignment_errors_rejects_unmapped_implication(
+) -> None:
+    module = load_coverage_module()
+
+    errors = module.byzantine_top_projection_contract_alignment_errors(
+        operator_map=(),
+        top_implication_contracts=(
+            (
+                "ByzantineDirectTopCoversOrderedTopCorridors",
+                "ByzantineDirectTopExactness",
+            ),
+        ),
+        projection_implication_contracts=(),
+    )
+
+    assert errors == [
+        "Byzantine top/projection alignment cannot map implication operator "
+        "ByzantineDirectTopCoversOrderedTopCorridors"
+    ]
 
 
 def test_byzantine_top_projection_contract_alignment_errors_rejects_missing_conjunct(
@@ -13923,6 +14237,103 @@ def test_byzantine_top_projection_contract_alignment_errors_rejects_duplicate_ac
         "Byzantine top/projection actual ProjectedByzantineDirectTopExactness "
         f"conjunct contract repeats conjunct(s) {duplicate}; each Byzantine "
         "top/projection obligation must be counted once"
+    ]
+
+
+def test_byzantine_top_projection_contract_alignment_errors_rejects_duplicate_delivered_actual(
+) -> None:
+    module = load_coverage_module()
+    projection_contracts = copied_contracts(
+        module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS
+    )
+    duplicate = "ProjectedCommitImpliesHonestSupport"
+    projection_contracts["ProjectedByzantineDeliveredFirstTopExactness"] = (
+        *projection_contracts["ProjectedByzantineDeliveredFirstTopExactness"],
+        duplicate,
+    )
+
+    errors = module.byzantine_top_projection_contract_alignment_errors(
+        projection_contracts=projection_contracts,
+    )
+
+    assert errors == [
+        "Byzantine top/projection actual "
+        "ProjectedByzantineDeliveredFirstTopExactness conjunct contract "
+        f"repeats conjunct(s) {duplicate}; each Byzantine top/projection "
+        "obligation must be counted once"
+    ]
+
+
+def test_byzantine_top_projection_contract_alignment_errors_rejects_duplicate_expected(
+) -> None:
+    module = load_coverage_module()
+    projected_duplicate = "ProjectedTlcByzantineDirectCommitCorridor"
+
+    errors = module.byzantine_top_projection_contract_alignment_errors(
+        top_contracts={
+            "ByzantineDirectTopExactness": (
+                "TlcByzantineDirectCommitCorridor",
+                "NoCommitEvidenceBeforeCommit",
+            ),
+        },
+        projection_contracts={
+            "ProjectedByzantineDirectTopExactness": (projected_duplicate,),
+        },
+        operator_map=(
+            (
+                "ByzantineDirectTopExactness",
+                "ProjectedByzantineDirectTopExactness",
+            ),
+        ),
+        top_implication_contracts=(),
+        projection_implication_contracts=(),
+        literal_conjuncts={
+            "NoCommitEvidenceBeforeCommit": projected_duplicate,
+        },
+    )
+
+    assert errors == [
+        "Byzantine top/projection expected "
+        "ProjectedByzantineDirectTopExactness conjunct contract repeats "
+        f"conjunct(s) {projected_duplicate}; each Byzantine top/projection "
+        "obligation must be counted once"
+    ]
+
+
+def test_byzantine_top_projection_contract_alignment_errors_rejects_duplicate_source(
+) -> None:
+    module = load_coverage_module()
+    duplicate = "CommitImpliesHonestSupport"
+    projected_duplicate = "ProjectedCommitImpliesHonestSupport"
+
+    errors = module.byzantine_top_projection_contract_alignment_errors(
+        top_contracts={
+            "ByzantineDeliveredFirstTopExactness": (
+                duplicate,
+                duplicate,
+            ),
+        },
+        projection_contracts={
+            "ProjectedByzantineDeliveredFirstTopExactness": (projected_duplicate,),
+        },
+        operator_map=(
+            (
+                "ByzantineDeliveredFirstTopExactness",
+                "ProjectedByzantineDeliveredFirstTopExactness",
+            ),
+        ),
+        top_implication_contracts=(),
+        projection_implication_contracts=(),
+    )
+
+    assert errors == [
+        "Byzantine top source ByzantineDeliveredFirstTopExactness conjunct "
+        f"contract repeats conjunct(s) {duplicate}; each Byzantine "
+        "top/projection obligation must be counted once",
+        "Byzantine top/projection expected "
+        "ProjectedByzantineDeliveredFirstTopExactness conjunct contract "
+        f"repeats conjunct(s) {projected_duplicate}; each Byzantine "
+        "top/projection obligation must be counted once",
     ]
 
 
@@ -14099,6 +14510,25 @@ def test_projection_bridge_interleaving_contract_alignment_errors_accepts_compos
     assert module.projection_bridge_interleaving_contract_alignment_errors() == []
 
 
+def test_projection_bridge_interleaving_contract_alignment_errors_rejects_missing_contract(
+) -> None:
+    module = load_coverage_module()
+    projection_contracts = copied_contracts(
+        module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS
+    )
+    missing = "ProjectionBridgeMatchesInterleavingCore"
+    del projection_contracts[missing]
+
+    errors = module.projection_bridge_interleaving_contract_alignment_errors(
+        projection_contracts=projection_contracts,
+    )
+
+    assert errors == [
+        "projection bridge interleaving alignment references missing "
+        f"contract(s) {missing}"
+    ]
+
+
 def test_projection_bridge_interleaving_contract_alignment_errors_rejects_missing_top_conjunct(
 ) -> None:
     module = load_coverage_module()
@@ -14199,11 +14629,83 @@ def test_projection_bridge_interleaving_contract_alignment_errors_rejects_duplic
     ]
 
 
+def test_projection_bridge_interleaving_contract_alignment_errors_rejects_duplicate_core_component(
+) -> None:
+    module = load_coverage_module()
+    projection_contracts = copied_contracts(
+        module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS
+    )
+    duplicate = "BufferedVotesWaitForDelivery"
+    projection_contracts["ProjectionBridgeMatchesInterleavingCore"] = (
+        *projection_contracts["ProjectionBridgeMatchesInterleavingCore"],
+        duplicate,
+    )
+
+    errors = module.projection_bridge_interleaving_contract_alignment_errors(
+        projection_contracts=projection_contracts,
+    )
+
+    assert errors == [
+        "projection bridge interleaving expected "
+        "ProjectionBridgeMatchesInterleavingExactness conjunct contract "
+        f"repeats conjunct(s) {duplicate}; each projection bridge "
+        "interleaving obligation must be counted once"
+    ]
+
+
+def test_projection_bridge_interleaving_contract_alignment_errors_rejects_duplicate_actual(
+) -> None:
+    module = load_coverage_module()
+    projection_contracts = copied_contracts(
+        module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS
+    )
+    duplicate = "BufferedVotesWaitForDelivery"
+    projection_contracts["ProjectionBridgeMatchesInterleavingExactness"] = (
+        *projection_contracts["ProjectionBridgeMatchesInterleavingExactness"],
+        duplicate,
+    )
+
+    errors = module.projection_bridge_interleaving_contract_alignment_errors(
+        projection_contracts=projection_contracts,
+    )
+
+    assert errors == [
+        "projection bridge interleaving actual "
+        "ProjectionBridgeMatchesInterleavingExactness conjunct contract "
+        f"repeats conjunct(s) {duplicate}; each projection bridge "
+        "interleaving obligation must be counted once"
+    ]
+
+
 def test_projection_bridge_core_source_alignment_errors_accepts_source_exactness(
 ) -> None:
     module = load_coverage_module()
 
     assert module.projection_bridge_core_source_alignment_errors() == []
+
+
+def test_projection_bridge_core_source_alignment_errors_rejects_missing_contract(
+) -> None:
+    module = load_coverage_module()
+    source_contracts = copied_contracts(
+        module.SUMERAGI_BYZANTINE_INTERLEAVING_GATE_CONJUNCT_CONTRACTS
+    )
+    projection_contracts = copied_contracts(
+        module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS
+    )
+    del source_contracts["ByzantineCommitInterleavingExactness"]
+    del projection_contracts["ProjectionBridgeMatchesInterleavingCore"]
+
+    errors = module.projection_bridge_core_source_alignment_errors(
+        source_contracts=source_contracts,
+        projection_contracts=projection_contracts,
+    )
+
+    assert errors == [
+        "projection bridge core/source alignment references missing "
+        "contract(s) ByzantineCommitInterleavingExactness, "
+        "ProjectionBridgeMatchesInterleavingCore"
+    ]
 
 
 def test_projection_bridge_core_source_alignment_errors_rejects_missing_source_conjunct(
@@ -14275,6 +14777,54 @@ def test_projection_bridge_core_source_alignment_errors_rejects_duplicate_actual
     ]
 
 
+def test_projection_bridge_core_source_alignment_errors_rejects_duplicate_byzantine_only_actual(
+) -> None:
+    module = load_coverage_module()
+    projection_contracts = copied_contracts(
+        module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS
+    )
+    duplicate = "ProposedRoundInitializesRbc"
+    projection_contracts["ProjectionBridgeMatchesInterleavingCore"] = (
+        *projection_contracts["ProjectionBridgeMatchesInterleavingCore"],
+        duplicate,
+    )
+
+    errors = module.projection_bridge_core_source_alignment_errors(
+        projection_contracts=projection_contracts,
+    )
+
+    assert errors == [
+        "projection bridge core/source actual "
+        "ProjectionBridgeMatchesInterleavingCore conjunct contract repeats "
+        f"conjunct(s) {duplicate}; each projection bridge core/source "
+        "obligation must be counted once"
+    ]
+
+
+def test_projection_bridge_core_source_alignment_errors_rejects_duplicate_expected(
+) -> None:
+    module = load_coverage_module()
+    source_contracts = copied_contracts(
+        module.SUMERAGI_BYZANTINE_INTERLEAVING_GATE_CONJUNCT_CONTRACTS
+    )
+    duplicate = "BufferedVotesWaitForDelivery"
+    source_contracts["ByzantineCommitInterleavingExactness"] = (
+        *source_contracts["ByzantineCommitInterleavingExactness"],
+        duplicate,
+    )
+
+    errors = module.projection_bridge_core_source_alignment_errors(
+        source_contracts=source_contracts,
+    )
+
+    assert errors == [
+        "projection bridge core/source expected "
+        "ByzantineCommitInterleavingExactness conjunct contract repeats "
+        f"conjunct(s) {duplicate}; each projection bridge core/source "
+        "obligation must be counted once"
+    ]
+
+
 def replace_source_progress_alignment_contract(
     module,
     envelope: str,
@@ -14301,6 +14851,38 @@ def test_source_progress_safety_contract_alignment_errors_accepts_envelopes(
     module = load_coverage_module()
 
     assert module.source_progress_safety_contract_alignment_errors() == []
+
+
+def test_source_progress_safety_contract_alignment_errors_rejects_missing_envelope_contract(
+) -> None:
+    module = load_coverage_module()
+    (
+        family,
+        conjunct_contracts,
+        envelope_operator,
+        expected_components,
+    ) = module.SOURCE_PROGRESS_SAFETY_ENVELOPE_ALIGNMENT_CONTRACTS[2]
+    missing_contracts = {
+        operator: conjuncts
+        for operator, conjuncts in conjunct_contracts.items()
+        if operator != envelope_operator
+    }
+
+    errors = module.source_progress_safety_contract_alignment_errors(
+        alignment_contracts=(
+            (
+                family,
+                missing_contracts,
+                envelope_operator,
+                expected_components,
+            ),
+        ),
+    )
+
+    assert errors == [
+        "direct interleaving progress safety alignment references missing "
+        "contract DirectCommitProgressSafetyEnvelope"
+    ]
 
 
 def test_source_progress_safety_contract_alignment_errors_rejects_missing_exactness(
@@ -14381,6 +14963,61 @@ def test_source_progress_safety_contract_alignment_errors_rejects_duplicate_actu
     ]
 
 
+def test_source_progress_safety_contract_alignment_errors_rejects_duplicate_byzantine_actual(
+) -> None:
+    module = load_coverage_module()
+    envelope = "ByzantineCommitProgressSafetyEnvelope"
+    byzantine_contracts = copied_contracts(
+        module.SUMERAGI_BYZANTINE_INTERLEAVING_GATE_CONJUNCT_CONTRACTS
+    )
+    duplicate = "ByzantineCommitInterleavingExactness"
+    byzantine_contracts[envelope] = (*byzantine_contracts[envelope], duplicate)
+
+    errors = module.source_progress_safety_contract_alignment_errors(
+        alignment_contracts=replace_source_progress_alignment_contract(
+            module,
+            envelope,
+            byzantine_contracts,
+        ),
+    )
+
+    assert errors == [
+        "Byzantine interleaving progress safety actual "
+        f"{envelope} conjunct contract repeats conjunct(s) {duplicate}; each "
+        "Byzantine interleaving progress safety obligation must be counted once"
+    ]
+
+
+def test_source_progress_safety_contract_alignment_errors_rejects_duplicate_expected(
+) -> None:
+    module = load_coverage_module()
+    (
+        family,
+        conjunct_contracts,
+        envelope_operator,
+        expected_components,
+    ) = module.SOURCE_PROGRESS_SAFETY_ENVELOPE_ALIGNMENT_CONTRACTS[2]
+    duplicate = "TypeInvariant"
+
+    errors = module.source_progress_safety_contract_alignment_errors(
+        alignment_contracts=(
+            (
+                family,
+                conjunct_contracts,
+                envelope_operator,
+                (*expected_components, duplicate),
+            ),
+        ),
+    )
+
+    assert errors == [
+        "direct interleaving progress safety expected "
+        "DirectCommitProgressSafetyEnvelope conjunct contract repeats "
+        f"conjunct(s) {duplicate}; each direct interleaving progress safety "
+        "obligation must be counted once"
+    ]
+
+
 def test_source_progress_safety_contract_alignment_errors_rejects_duplicate_inventory_row(
 ) -> None:
     module = load_coverage_module()
@@ -14405,6 +15042,50 @@ def test_projected_commit_progress_contract_alignment_errors_accepts_bridge_comp
     module = load_coverage_module()
 
     assert module.projected_commit_progress_contract_alignment_errors() == []
+
+
+def test_projected_commit_progress_contract_alignment_errors_rejects_missing_bridge_contract(
+) -> None:
+    module = load_coverage_module()
+    missing = "ProjectionBridgeCoversOrderedTopCorridors"
+    projection_contracts = {
+        operator: conjuncts
+        for operator, conjuncts in (
+            module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS.items()
+        )
+        if operator != missing
+    }
+
+    errors = module.projected_commit_progress_contract_alignment_errors(
+        projection_contracts=projection_contracts,
+    )
+
+    assert errors == [
+        "projected commit progress alignment references missing "
+        f"contract(s) {missing}"
+    ]
+
+
+def test_projected_commit_progress_contract_alignment_errors_rejects_missing_envelope_contract(
+) -> None:
+    module = load_coverage_module()
+    missing = "ProjectedCommitProgressSafetyEnvelope"
+    projection_contracts = {
+        operator: conjuncts
+        for operator, conjuncts in (
+            module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS.items()
+        )
+        if operator != missing
+    }
+
+    errors = module.projected_commit_progress_contract_alignment_errors(
+        projection_contracts=projection_contracts,
+    )
+
+    assert errors == [
+        "projected commit progress alignment references missing "
+        f"contract(s) {missing}"
+    ]
 
 
 def test_projected_commit_progress_contract_alignment_errors_rejects_missing_component(
@@ -14474,6 +15155,49 @@ def test_projected_commit_progress_contract_alignment_errors_rejects_duplicate_a
 
     assert errors == [
         "projected commit progress actual ProjectedCommitProgressSafetyEnvelope "
+        f"conjunct contract repeats conjunct(s) {duplicate}; each projected "
+        "commit progress obligation must be counted once"
+    ]
+
+
+def test_projected_commit_progress_contract_alignment_errors_rejects_duplicate_interleaving_actual(
+) -> None:
+    module = load_coverage_module()
+    projection_contracts = copied_contracts(
+        module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS
+    )
+    duplicate = "ProjectionBridgeMatchesInterleavingExactnessCorrectnessEnvelope"
+    projection_contracts["ProjectedCommitProgressSafetyEnvelope"] = (
+        *projection_contracts["ProjectedCommitProgressSafetyEnvelope"],
+        duplicate,
+    )
+
+    errors = module.projected_commit_progress_contract_alignment_errors(
+        projection_contracts=projection_contracts,
+    )
+
+    assert errors == [
+        "projected commit progress actual ProjectedCommitProgressSafetyEnvelope "
+        f"conjunct contract repeats conjunct(s) {duplicate}; each projected "
+        "commit progress obligation must be counted once"
+    ]
+
+
+def test_projected_commit_progress_contract_alignment_errors_rejects_duplicate_expected(
+) -> None:
+    module = load_coverage_module()
+    duplicate = "ProjectionBridgeCoversOrderedTopCorridors"
+
+    errors = module.projected_commit_progress_contract_alignment_errors(
+        expected_components=(
+            duplicate,
+            "ProjectionBridgeMatchesInterleavingExactnessCorrectnessEnvelope",
+            duplicate,
+        ),
+    )
+
+    assert errors == [
+        "projected commit progress expected ProjectedCommitProgressSafetyEnvelope "
         f"conjunct contract repeats conjunct(s) {duplicate}; each projected "
         "commit progress obligation must be counted once"
     ]
@@ -15517,6 +16241,171 @@ def test_progress_transition_direct_disjunct_errors_rejects_transitive_transitio
     ]
 
 
+def test_progress_transition_direct_disjunct_errors_rejects_transitive_transition_alias_undefined_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiTransitionAliasInnerTarget.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionAliasInnerTarget ----",
+                "VARIABLES vars",
+                "Other == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiTransitionAliasTargetUndefinedOperator.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionAliasTargetUndefinedOperator ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiTransitionAliasInnerTarget",
+                "Start == Inner!HonestPropose",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = tmp_path / "SumeragiTransitiveTransitionAliasUndefinedTarget.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitiveTransitionAliasUndefinedTarget ----",
+                "VARIABLES vars",
+                "Interleaving == INSTANCE SumeragiTransitionAliasTargetUndefinedOperator",
+                "Next == Interleaving!Start",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.progress_transition_direct_disjunct_errors(
+        tla,
+        "Next",
+        "projected commit progress",
+    ) == [
+        f"{target}:4 defines projected commit progress transition operator "
+        f"Start as Inner!HonestPropose, but target {inner} does not define "
+        "HonestPropose; projected commit progress transition aliases must "
+        "resolve to defined zero-arity transition operators"
+    ]
+
+
+def test_progress_transition_direct_disjunct_errors_rejects_transitive_transition_alias_parameterized_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiTransitionAliasParameterizedInnerTarget.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionAliasParameterizedInnerTarget ----",
+                "VARIABLES vars",
+                "HonestPropose(value) == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiTransitionAliasTargetParameterizedOperator.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionAliasTargetParameterizedOperator ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiTransitionAliasParameterizedInnerTarget",
+                "Start == Inner!HonestPropose",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = tmp_path / "SumeragiTransitiveTransitionAliasParameterizedTarget.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitiveTransitionAliasParameterizedTarget ----",
+                "VARIABLES vars",
+                "Interleaving == INSTANCE SumeragiTransitionAliasTargetParameterizedOperator",
+                "Next == Interleaving!Start",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.progress_transition_direct_disjunct_errors(
+        tla,
+        "Next",
+        "projected commit progress",
+    ) == [
+        f"{target}:4 defines projected commit progress transition operator "
+        f"Start as Inner!HonestPropose, but target {inner}:3 has arity 1; "
+        "projected commit progress transition aliases must resolve to "
+        "defined zero-arity transition operators"
+    ]
+
+
+def test_progress_transition_direct_disjunct_errors_rejects_transitive_transition_alias_noninspectable_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiTransitionAliasNoninspectableInnerTarget.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionAliasNoninspectableInnerTarget ----",
+                "VARIABLES vars",
+                "HonestPropose ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiTransitionAliasTargetNoninspectableOperator.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionAliasTargetNoninspectableOperator ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiTransitionAliasNoninspectableInnerTarget",
+                "Start == Inner!HonestPropose",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = tmp_path / "SumeragiTransitiveTransitionAliasNoninspectableTarget.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitiveTransitionAliasNoninspectableTarget ----",
+                "VARIABLES vars",
+                "Interleaving == INSTANCE SumeragiTransitionAliasTargetNoninspectableOperator",
+                "Next == Interleaving!Start",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.progress_transition_direct_disjunct_errors(
+        tla,
+        "Next",
+        "projected commit progress",
+    ) == [
+        f"{target}:4 defines projected commit progress transition operator "
+        f"Start as Inner!HonestPropose, but target {inner}:3 is not an "
+        "inspectable single-expression definition; projected commit progress "
+        "transition aliases must resolve to inspectable transition operators"
+    ]
+
+
 def test_projected_commit_progress_spec_contract_errors_rejects_cyclic_transition_alias(
     tmp_path: Path,
 ) -> None:
@@ -15986,6 +16875,231 @@ def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_tra
     ]
 
 
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_transition_helper_onward_missing_target_module(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionHelperOnwardMissingTarget.tla"
+    missing = tmp_path / "SumeragiTransitionHelperOnwardMissingInner.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionHelperOnwardMissingTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiTransitionHelperOnwardMissingInner",
+                "Start == Inner!HonestPropose",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasTransitionHelperOnwardMissingTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionHelperOnwardMissingTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ WrappedRbcChunk",
+                *(f"  \\/ {action}" for action in fair_actions),
+                "WrappedRbcChunk == Interleaving!Start",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:4 defines projected commit progress transition helper "
+        "Start, but aliases Inner!HonestPropose, but target module "
+        f"{missing} does not exist; projected commit progress transition "
+        "module-alias helper wrappers must resolve to local modules with "
+        "defined zero-arity transition operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_transition_helper_onward_undefined_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiTransitionHelperOnwardUndefinedInner.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionHelperOnwardUndefinedInner ----",
+                "VARIABLES vars",
+                "Other == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiTransitionHelperOnwardUndefinedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionHelperOnwardUndefinedTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiTransitionHelperOnwardUndefinedInner",
+                "Start == Inner!HonestPropose",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasTransitionHelperOnwardUndefinedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionHelperOnwardUndefinedTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ WrappedRbcChunk",
+                *(f"  \\/ {action}" for action in fair_actions),
+                "WrappedRbcChunk == Interleaving!Start",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:4 defines projected commit progress transition helper "
+        "Start, but aliases Inner!HonestPropose, but target "
+        f"{inner} does not define HonestPropose; projected commit progress "
+        "transition module-alias helper wrappers must resolve to defined "
+        "zero-arity transition operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_transition_helper_onward_parameterized_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiTransitionHelperOnwardParameterizedInner.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionHelperOnwardParameterizedInner ----",
+                "VARIABLES vars",
+                "HonestPropose(value) == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiTransitionHelperOnwardParameterizedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionHelperOnwardParameterizedTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiTransitionHelperOnwardParameterizedInner",
+                "Start == Inner!HonestPropose",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasTransitionHelperOnwardParameterizedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionHelperOnwardParameterizedTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ WrappedRbcChunk",
+                *(f"  \\/ {action}" for action in fair_actions),
+                "WrappedRbcChunk == Interleaving!Start",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:4 defines projected commit progress transition helper "
+        "Start, but aliases Inner!HonestPropose, but target "
+        f"{inner}:3 has arity 1; projected commit progress transition "
+        "module-alias helper wrappers must resolve to defined zero-arity "
+        "transition operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_transition_helper_onward_noninspectable_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiTransitionHelperOnwardNoninspectableInner.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionHelperOnwardNoninspectableInner ----",
+                "VARIABLES vars",
+                "HonestPropose ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiTransitionHelperOnwardNoninspectableTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionHelperOnwardNoninspectableTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiTransitionHelperOnwardNoninspectableInner",
+                "Start == Inner!HonestPropose",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasTransitionHelperOnwardNoninspectableTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionHelperOnwardNoninspectableTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ WrappedRbcChunk",
+                *(f"  \\/ {action}" for action in fair_actions),
+                "WrappedRbcChunk == Interleaving!Start",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:4 defines projected commit progress transition helper "
+        "Start, but aliases Inner!HonestPropose, but target "
+        f"{inner}:3 is not an inspectable single-expression definition; "
+        "projected commit progress transition module-alias helper wrappers "
+        "must resolve to inspectable transition operators"
+    ]
+
+
 def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_transition_helper_undefined_target(
     tmp_path: Path,
 ) -> None:
@@ -16124,6 +17238,199 @@ def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_tra
     ]
 
 
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_transition_helper_multi_hop_recursive_helper_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+
+    def projection_for(target_name: str) -> Path:
+        tla = (
+            tmp_path
+            / f"SumeragiByzantineCommitProjectionGateTransitionHelperMultiHop{target_name}.tla"
+        )
+        tla.write_text(
+            projected_commit_progress_spec_contract_text(
+                module,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                next_lines=[
+                    "Next ==",
+                    "  \\/ WrappedRbcChunk",
+                    *(f"  \\/ {action}" for action in fair_actions),
+                    "WrappedRbcChunk == Interleaving!Start",
+                ],
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def write_imported_target(target_name: str, inner_name: str) -> None:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    f"Inner == INSTANCE {inner_name}",
+                    "Start == HiddenStart",
+                    "HiddenStart == Inner!Branch",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_inner_without_leaf_instance(inner_name: str) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    "Branch == LocalBranch",
+                    "LocalBranch == Leaf!Action",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_inner_with_leaf_instance(inner_name: str, leaf_name: str) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    f"Leaf == INSTANCE {leaf_name}",
+                    "Branch == LocalBranch",
+                    "LocalBranch == Leaf!Action",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_leaf(leaf_name: str, body: str) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    body,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    def write_cyclic_leaf(leaf_name: str) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    "Action == HiddenAction",
+                    "HiddenAction == Action",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    def write_chain_without_leaf_instance(suffix: str) -> tuple[Path, Path]:
+        target_name = f"SumeragiTransitionHelperMultiHop{suffix}Target"
+        inner_name = f"SumeragiTransitionHelperMultiHop{suffix}Inner"
+        write_imported_target(target_name, inner_name)
+        inner = write_inner_without_leaf_instance(inner_name)
+        return projection_for(target_name), inner
+
+    def write_chain_with_leaf(suffix: str, body: str) -> tuple[Path, Path, Path]:
+        target_name = f"SumeragiTransitionHelperMultiHop{suffix}Target"
+        inner_name = f"SumeragiTransitionHelperMultiHop{suffix}Inner"
+        leaf_name = f"SumeragiTransitionHelperMultiHop{suffix}Leaf"
+        write_imported_target(target_name, inner_name)
+        inner = write_inner_with_leaf_instance(inner_name, leaf_name)
+        leaf = write_leaf(leaf_name, body)
+        return projection_for(target_name), inner, leaf
+
+    def write_chain_with_cyclic_leaf(suffix: str) -> tuple[Path, Path]:
+        target_name = f"SumeragiTransitionHelperMultiHop{suffix}Target"
+        inner_name = f"SumeragiTransitionHelperMultiHop{suffix}Inner"
+        leaf_name = f"SumeragiTransitionHelperMultiHop{suffix}Leaf"
+        write_imported_target(target_name, inner_name)
+        write_inner_with_leaf_instance(inner_name, leaf_name)
+        leaf = write_cyclic_leaf(leaf_name)
+        return projection_for(target_name), leaf
+
+    tla, inner = write_chain_without_leaf_instance("NoInstance")
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{inner}:4 defines projected commit progress transition helper "
+        "LocalBranch, but aliases Leaf!Action without a named INSTANCE "
+        "alias Leaf; projected commit progress transition module-alias "
+        "helper wrappers must resolve through named local INSTANCE "
+        "declarations"
+    ]
+
+    target_name = "SumeragiTransitionHelperMultiHopMissingTarget"
+    inner_name = "SumeragiTransitionHelperMultiHopMissingInner"
+    leaf_name = "SumeragiTransitionHelperMultiHopMissingLeaf"
+    write_imported_target(target_name, inner_name)
+    inner = write_inner_with_leaf_instance(inner_name, leaf_name)
+    missing = tmp_path / f"{leaf_name}.tla"
+    tla = projection_for(target_name)
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{inner}:5 defines projected commit progress transition helper "
+        "LocalBranch, but aliases Leaf!Action, but target module "
+        f"{missing} does not exist; projected commit progress transition "
+        "module-alias helper wrappers must resolve to local modules with "
+        "defined zero-arity transition operators"
+    ]
+
+    tla, inner, leaf = write_chain_with_leaf("Undefined", "Other == UNCHANGED vars")
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{inner}:5 defines projected commit progress transition helper "
+        f"LocalBranch, but aliases Leaf!Action, but target {leaf} does not "
+        "define Action; projected commit progress transition module-alias "
+        "helper wrappers must resolve to defined zero-arity transition "
+        "operators"
+    ]
+
+    tla, inner, leaf = write_chain_with_leaf(
+        "Parameterized",
+        "Action(value) == UNCHANGED vars",
+    )
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{inner}:5 defines projected commit progress transition helper "
+        f"LocalBranch, but aliases Leaf!Action, but target {leaf}:3 has "
+        "arity 1; projected commit progress transition module-alias helper "
+        "wrappers must resolve to defined zero-arity transition operators"
+    ]
+
+    tla, inner, leaf = write_chain_with_leaf("Noninspectable", "Action ==")
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{inner}:5 defines projected commit progress transition helper "
+        "LocalBranch, but aliases Leaf!Action, but target "
+        f"{leaf}:3 is not an inspectable single-expression definition; "
+        "projected commit progress transition module-alias helper wrappers "
+        "must resolve to inspectable transition operators"
+    ]
+
+    tla, leaf = write_chain_with_cyclic_leaf("Cycle")
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{leaf}:3 defines projected commit progress transition helper "
+        "Action, but transition helper resolution cycles at Action; "
+        "projected commit progress transition helper wrappers must be "
+        "acyclic and resolve to inspectable transition operators"
+    ]
+
+
 def test_projected_commit_progress_spec_contract_errors_rejects_identity_gated_module_alias_transition_helper_without_instance(
     tmp_path: Path,
 ) -> None:
@@ -16187,6 +17494,231 @@ def test_projected_commit_progress_spec_contract_errors_rejects_identity_gated_m
         f"{target} does not exist; projected commit progress transition "
         "identity-gated module-alias helper wrappers must resolve to local "
         "modules with defined zero-arity transition operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_identity_gated_module_alias_transition_helper_onward_missing_target_module(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionIdentityHelperOnwardMissingTarget.tla"
+    missing = tmp_path / "SumeragiTransitionIdentityHelperOnwardMissingInner.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionIdentityHelperOnwardMissingTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiTransitionIdentityHelperOnwardMissingInner",
+                "Start == Inner!HonestPropose",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateIdentityModuleAliasTransitionHelperOnwardMissingTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionIdentityHelperOnwardMissingTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ WrappedRbcChunk",
+                *(f"  \\/ {action}" for action in fair_actions),
+                "WrappedRbcChunk == TRUE /\\ Interleaving!Start",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:4 defines projected commit progress transition helper "
+        "Start, but aliases Inner!HonestPropose, but target module "
+        f"{missing} does not exist; projected commit progress transition "
+        "module-alias helper wrappers must resolve to local modules with "
+        "defined zero-arity transition operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_identity_gated_module_alias_transition_helper_onward_undefined_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiTransitionIdentityHelperOnwardUndefinedInner.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionIdentityHelperOnwardUndefinedInner ----",
+                "VARIABLES vars",
+                "Other == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiTransitionIdentityHelperOnwardUndefinedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionIdentityHelperOnwardUndefinedTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiTransitionIdentityHelperOnwardUndefinedInner",
+                "Start == Inner!HonestPropose",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateIdentityModuleAliasTransitionHelperOnwardUndefinedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionIdentityHelperOnwardUndefinedTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ WrappedRbcChunk",
+                *(f"  \\/ {action}" for action in fair_actions),
+                "WrappedRbcChunk == TRUE /\\ Interleaving!Start",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:4 defines projected commit progress transition helper "
+        "Start, but aliases Inner!HonestPropose, but target "
+        f"{inner} does not define HonestPropose; projected commit progress "
+        "transition module-alias helper wrappers must resolve to defined "
+        "zero-arity transition operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_identity_gated_module_alias_transition_helper_onward_parameterized_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiTransitionIdentityHelperOnwardParameterizedInner.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionIdentityHelperOnwardParameterizedInner ----",
+                "VARIABLES vars",
+                "HonestPropose(value) == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiTransitionIdentityHelperOnwardParameterizedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionIdentityHelperOnwardParameterizedTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiTransitionIdentityHelperOnwardParameterizedInner",
+                "Start == Inner!HonestPropose",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateIdentityModuleAliasTransitionHelperOnwardParameterizedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionIdentityHelperOnwardParameterizedTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ WrappedRbcChunk",
+                *(f"  \\/ {action}" for action in fair_actions),
+                "WrappedRbcChunk == TRUE /\\ Interleaving!Start",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:4 defines projected commit progress transition helper "
+        "Start, but aliases Inner!HonestPropose, but target "
+        f"{inner}:3 has arity 1; projected commit progress transition "
+        "module-alias helper wrappers must resolve to defined zero-arity "
+        "transition operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_identity_gated_module_alias_transition_helper_onward_noninspectable_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiTransitionIdentityHelperOnwardNoninspectableInner.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionIdentityHelperOnwardNoninspectableInner ----",
+                "VARIABLES vars",
+                "HonestPropose ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiTransitionIdentityHelperOnwardNoninspectableTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionIdentityHelperOnwardNoninspectableTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiTransitionIdentityHelperOnwardNoninspectableInner",
+                "Start == Inner!HonestPropose",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateIdentityModuleAliasTransitionHelperOnwardNoninspectableTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionIdentityHelperOnwardNoninspectableTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ WrappedRbcChunk",
+                *(f"  \\/ {action}" for action in fair_actions),
+                "WrappedRbcChunk == TRUE /\\ Interleaving!Start",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:4 defines projected commit progress transition helper "
+        "Start, but aliases Inner!HonestPropose, but target "
+        f"{inner}:3 is not an inspectable single-expression definition; "
+        "projected commit progress transition module-alias helper wrappers "
+        "must resolve to inspectable transition operators"
     ]
 
 
@@ -16325,6 +17857,199 @@ def test_projected_commit_progress_spec_contract_errors_rejects_identity_gated_m
         f"{target}:3 is not an inspectable single-expression definition; "
         "projected commit progress transition identity-gated module-alias "
         "helper wrappers must resolve to inspectable transition operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_identity_gated_module_alias_transition_helper_multi_hop_recursive_helper_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+
+    def projection_for(target_name: str) -> Path:
+        tla = (
+            tmp_path
+            / f"SumeragiByzantineCommitProjectionGateIdentityTransitionHelperMultiHop{target_name}.tla"
+        )
+        tla.write_text(
+            projected_commit_progress_spec_contract_text(
+                module,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                next_lines=[
+                    "Next ==",
+                    "  \\/ WrappedRbcChunk",
+                    *(f"  \\/ {action}" for action in fair_actions),
+                    "WrappedRbcChunk == TRUE /\\ Interleaving!Start",
+                ],
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def write_imported_target(target_name: str, inner_name: str) -> None:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    f"Inner == INSTANCE {inner_name}",
+                    "Start == HiddenStart",
+                    "HiddenStart == Inner!Branch",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_inner_without_leaf_instance(inner_name: str) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    "Branch == LocalBranch",
+                    "LocalBranch == Leaf!Action",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_inner_with_leaf_instance(inner_name: str, leaf_name: str) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    f"Leaf == INSTANCE {leaf_name}",
+                    "Branch == LocalBranch",
+                    "LocalBranch == Leaf!Action",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_leaf(leaf_name: str, body: str) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    body,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    def write_cyclic_leaf(leaf_name: str) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    "Action == HiddenAction",
+                    "HiddenAction == Action",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    def write_chain_without_leaf_instance(suffix: str) -> tuple[Path, Path]:
+        target_name = f"SumeragiTransitionIdentityHelperMultiHop{suffix}Target"
+        inner_name = f"SumeragiTransitionIdentityHelperMultiHop{suffix}Inner"
+        write_imported_target(target_name, inner_name)
+        inner = write_inner_without_leaf_instance(inner_name)
+        return projection_for(target_name), inner
+
+    def write_chain_with_leaf(suffix: str, body: str) -> tuple[Path, Path, Path]:
+        target_name = f"SumeragiTransitionIdentityHelperMultiHop{suffix}Target"
+        inner_name = f"SumeragiTransitionIdentityHelperMultiHop{suffix}Inner"
+        leaf_name = f"SumeragiTransitionIdentityHelperMultiHop{suffix}Leaf"
+        write_imported_target(target_name, inner_name)
+        inner = write_inner_with_leaf_instance(inner_name, leaf_name)
+        leaf = write_leaf(leaf_name, body)
+        return projection_for(target_name), inner, leaf
+
+    def write_chain_with_cyclic_leaf(suffix: str) -> tuple[Path, Path]:
+        target_name = f"SumeragiTransitionIdentityHelperMultiHop{suffix}Target"
+        inner_name = f"SumeragiTransitionIdentityHelperMultiHop{suffix}Inner"
+        leaf_name = f"SumeragiTransitionIdentityHelperMultiHop{suffix}Leaf"
+        write_imported_target(target_name, inner_name)
+        write_inner_with_leaf_instance(inner_name, leaf_name)
+        leaf = write_cyclic_leaf(leaf_name)
+        return projection_for(target_name), leaf
+
+    tla, inner = write_chain_without_leaf_instance("NoInstance")
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{inner}:4 defines projected commit progress transition helper "
+        "LocalBranch, but aliases Leaf!Action without a named INSTANCE "
+        "alias Leaf; projected commit progress transition module-alias "
+        "helper wrappers must resolve through named local INSTANCE "
+        "declarations"
+    ]
+
+    target_name = "SumeragiTransitionIdentityHelperMultiHopMissingTarget"
+    inner_name = "SumeragiTransitionIdentityHelperMultiHopMissingInner"
+    leaf_name = "SumeragiTransitionIdentityHelperMultiHopMissingLeaf"
+    write_imported_target(target_name, inner_name)
+    inner = write_inner_with_leaf_instance(inner_name, leaf_name)
+    missing = tmp_path / f"{leaf_name}.tla"
+    tla = projection_for(target_name)
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{inner}:5 defines projected commit progress transition helper "
+        "LocalBranch, but aliases Leaf!Action, but target module "
+        f"{missing} does not exist; projected commit progress transition "
+        "module-alias helper wrappers must resolve to local modules with "
+        "defined zero-arity transition operators"
+    ]
+
+    tla, inner, leaf = write_chain_with_leaf("Undefined", "Other == UNCHANGED vars")
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{inner}:5 defines projected commit progress transition helper "
+        f"LocalBranch, but aliases Leaf!Action, but target {leaf} does not "
+        "define Action; projected commit progress transition module-alias "
+        "helper wrappers must resolve to defined zero-arity transition "
+        "operators"
+    ]
+
+    tla, inner, leaf = write_chain_with_leaf(
+        "Parameterized",
+        "Action(value) == UNCHANGED vars",
+    )
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{inner}:5 defines projected commit progress transition helper "
+        f"LocalBranch, but aliases Leaf!Action, but target {leaf}:3 has "
+        "arity 1; projected commit progress transition module-alias helper "
+        "wrappers must resolve to defined zero-arity transition operators"
+    ]
+
+    tla, inner, leaf = write_chain_with_leaf("Noninspectable", "Action ==")
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{inner}:5 defines projected commit progress transition helper "
+        "LocalBranch, but aliases Leaf!Action, but target "
+        f"{leaf}:3 is not an inspectable single-expression definition; "
+        "projected commit progress transition module-alias helper wrappers "
+        "must resolve to inspectable transition operators"
+    ]
+
+    tla, leaf = write_chain_with_cyclic_leaf("Cycle")
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{leaf}:3 defines projected commit progress transition helper "
+        "Action, but transition helper resolution cycles at Action; "
+        "projected commit progress transition helper wrappers must be "
+        "acyclic and resolve to inspectable transition operators"
     ]
 
 
@@ -16714,6 +18439,419 @@ def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_tra
     ]
 
 
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_transition_disjunct_onward_missing_target_module(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionDisjunctOnwardMissingTarget.tla"
+    missing = tmp_path / "SumeragiTransitionDisjunctOnwardMissingInner.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionDisjunctOnwardMissingTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiTransitionDisjunctOnwardMissingInner",
+                "Start == Inner!HonestPropose",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasTransitionDisjunctOnwardMissingTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionDisjunctOnwardMissingTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ Interleaving!Start",
+                *(f"  \\/ {action}" for action in fair_actions),
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:4 defines projected commit progress transition helper "
+        "Start, but aliases Inner!HonestPropose, but target module "
+        f"{missing} does not exist; projected commit progress transition "
+        "module-alias helper wrappers must resolve to local modules with "
+        "defined zero-arity transition operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_transition_disjunct_onward_undefined_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiTransitionDisjunctOnwardUndefinedInner.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionDisjunctOnwardUndefinedInner ----",
+                "VARIABLES vars",
+                "Other == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiTransitionDisjunctOnwardUndefinedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionDisjunctOnwardUndefinedTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiTransitionDisjunctOnwardUndefinedInner",
+                "Start == Inner!HonestPropose",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasTransitionDisjunctOnwardUndefinedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionDisjunctOnwardUndefinedTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ Interleaving!Start",
+                *(f"  \\/ {action}" for action in fair_actions),
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:4 defines projected commit progress transition helper "
+        "Start, but aliases Inner!HonestPropose, but target "
+        f"{inner} does not define HonestPropose; projected commit progress "
+        "transition module-alias helper wrappers must resolve to defined "
+        "zero-arity transition operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_transition_disjunct_onward_parameterized_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiTransitionDisjunctOnwardParameterizedInner.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionDisjunctOnwardParameterizedInner ----",
+                "VARIABLES vars",
+                "HonestPropose(value) == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiTransitionDisjunctOnwardParameterizedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionDisjunctOnwardParameterizedTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiTransitionDisjunctOnwardParameterizedInner",
+                "Start == Inner!HonestPropose",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasTransitionDisjunctOnwardParameterizedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionDisjunctOnwardParameterizedTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ Interleaving!Start",
+                *(f"  \\/ {action}" for action in fair_actions),
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:4 defines projected commit progress transition helper "
+        "Start, but aliases Inner!HonestPropose, but target "
+        f"{inner}:3 has arity 1; projected commit progress transition "
+        "module-alias helper wrappers must resolve to defined zero-arity "
+        "transition operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_transition_disjunct_onward_noninspectable_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiTransitionDisjunctOnwardNoninspectableInner.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionDisjunctOnwardNoninspectableInner ----",
+                "VARIABLES vars",
+                "HonestPropose ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiTransitionDisjunctOnwardNoninspectableTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionDisjunctOnwardNoninspectableTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiTransitionDisjunctOnwardNoninspectableInner",
+                "Start == Inner!HonestPropose",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasTransitionDisjunctOnwardNoninspectableTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionDisjunctOnwardNoninspectableTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ Interleaving!Start",
+                *(f"  \\/ {action}" for action in fair_actions),
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:4 defines projected commit progress transition helper "
+        "Start, but aliases Inner!HonestPropose, but target "
+        f"{inner}:3 is not an inspectable single-expression definition; "
+        "projected commit progress transition module-alias helper wrappers "
+        "must resolve to inspectable transition operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_transition_disjunct_multi_hop_recursive_helper_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+
+    def projection_for(target_name: str) -> Path:
+        tla = (
+            tmp_path
+            / f"SumeragiByzantineCommitProjectionGateTransitionDisjunctMultiHop{target_name}.tla"
+        )
+        tla.write_text(
+            projected_commit_progress_spec_contract_text(
+                module,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                next_lines=[
+                    "Next ==",
+                    "  \\/ Interleaving!Start",
+                    *(f"  \\/ {action}" for action in fair_actions),
+                ],
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def write_imported_target(target_name: str, inner_name: str) -> None:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    f"Inner == INSTANCE {inner_name}",
+                    "Start == HiddenStart",
+                    "HiddenStart == Inner!Branch",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_inner_without_leaf_instance(inner_name: str) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    "Branch == LocalBranch",
+                    "LocalBranch == Leaf!Action",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_inner_with_leaf_instance(inner_name: str, leaf_name: str) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    f"Leaf == INSTANCE {leaf_name}",
+                    "Branch == LocalBranch",
+                    "LocalBranch == Leaf!Action",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_leaf(leaf_name: str, body: str) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    body,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    def write_cyclic_leaf(leaf_name: str) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    "Action == HiddenAction",
+                    "HiddenAction == Action",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    def write_chain_without_leaf_instance(suffix: str) -> tuple[Path, Path]:
+        target_name = f"SumeragiTransitionDisjunctMultiHop{suffix}Target"
+        inner_name = f"SumeragiTransitionDisjunctMultiHop{suffix}Inner"
+        write_imported_target(target_name, inner_name)
+        inner = write_inner_without_leaf_instance(inner_name)
+        return projection_for(target_name), inner
+
+    def write_chain_with_leaf(suffix: str, body: str) -> tuple[Path, Path, Path]:
+        target_name = f"SumeragiTransitionDisjunctMultiHop{suffix}Target"
+        inner_name = f"SumeragiTransitionDisjunctMultiHop{suffix}Inner"
+        leaf_name = f"SumeragiTransitionDisjunctMultiHop{suffix}Leaf"
+        write_imported_target(target_name, inner_name)
+        inner = write_inner_with_leaf_instance(inner_name, leaf_name)
+        leaf = write_leaf(leaf_name, body)
+        return projection_for(target_name), inner, leaf
+
+    def write_chain_with_cyclic_leaf(suffix: str) -> tuple[Path, Path]:
+        target_name = f"SumeragiTransitionDisjunctMultiHop{suffix}Target"
+        inner_name = f"SumeragiTransitionDisjunctMultiHop{suffix}Inner"
+        leaf_name = f"SumeragiTransitionDisjunctMultiHop{suffix}Leaf"
+        write_imported_target(target_name, inner_name)
+        write_inner_with_leaf_instance(inner_name, leaf_name)
+        leaf = write_cyclic_leaf(leaf_name)
+        return projection_for(target_name), leaf
+
+    tla, inner = write_chain_without_leaf_instance("NoInstance")
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{inner}:4 defines projected commit progress transition helper "
+        "LocalBranch, but aliases Leaf!Action without a named INSTANCE "
+        "alias Leaf; projected commit progress transition module-alias "
+        "helper wrappers must resolve through named local INSTANCE "
+        "declarations"
+    ]
+
+    target_name = "SumeragiTransitionDisjunctMultiHopMissingTarget"
+    inner_name = "SumeragiTransitionDisjunctMultiHopMissingInner"
+    leaf_name = "SumeragiTransitionDisjunctMultiHopMissingLeaf"
+    write_imported_target(target_name, inner_name)
+    inner = write_inner_with_leaf_instance(inner_name, leaf_name)
+    missing = tmp_path / f"{leaf_name}.tla"
+    tla = projection_for(target_name)
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{inner}:5 defines projected commit progress transition helper "
+        "LocalBranch, but aliases Leaf!Action, but target module "
+        f"{missing} does not exist; projected commit progress transition "
+        "module-alias helper wrappers must resolve to local modules with "
+        "defined zero-arity transition operators"
+    ]
+
+    tla, inner, leaf = write_chain_with_leaf("Undefined", "Other == UNCHANGED vars")
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{inner}:5 defines projected commit progress transition helper "
+        f"LocalBranch, but aliases Leaf!Action, but target {leaf} does not "
+        "define Action; projected commit progress transition module-alias "
+        "helper wrappers must resolve to defined zero-arity transition "
+        "operators"
+    ]
+
+    tla, inner, leaf = write_chain_with_leaf(
+        "Parameterized",
+        "Action(value) == UNCHANGED vars",
+    )
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{inner}:5 defines projected commit progress transition helper "
+        f"LocalBranch, but aliases Leaf!Action, but target {leaf}:3 has "
+        "arity 1; projected commit progress transition module-alias helper "
+        "wrappers must resolve to defined zero-arity transition operators"
+    ]
+
+    tla, inner, leaf = write_chain_with_leaf("Noninspectable", "Action ==")
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{inner}:5 defines projected commit progress transition helper "
+        "LocalBranch, but aliases Leaf!Action, but target "
+        f"{leaf}:3 is not an inspectable single-expression definition; "
+        "projected commit progress transition module-alias helper wrappers "
+        "must resolve to inspectable transition operators"
+    ]
+
+    tla, leaf = write_chain_with_cyclic_leaf("Cycle")
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{leaf}:3 defines projected commit progress transition helper "
+        "Action, but transition helper resolution cycles at Action; "
+        "projected commit progress transition helper wrappers must be "
+        "acyclic and resolve to inspectable transition operators"
+    ]
+
+
 def test_projected_commit_progress_spec_contract_errors_rejects_identity_gated_module_alias_transition_disjunct_without_instance(
     tmp_path: Path,
 ) -> None:
@@ -16776,6 +18914,419 @@ def test_projected_commit_progress_spec_contract_errors_rejects_identity_gated_m
         "exist; projected commit progress transition module-alias disjuncts "
         "must resolve to local modules with defined zero-arity transition "
         "operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_identity_gated_module_alias_transition_disjunct_onward_missing_target_module(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionIdentityDisjunctOnwardMissingTarget.tla"
+    missing = tmp_path / "SumeragiTransitionIdentityDisjunctOnwardMissingInner.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionIdentityDisjunctOnwardMissingTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiTransitionIdentityDisjunctOnwardMissingInner",
+                "Start == Inner!HonestPropose",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateIdentityModuleAliasTransitionDisjunctOnwardMissingTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionIdentityDisjunctOnwardMissingTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ TRUE /\\ Interleaving!Start",
+                *(f"  \\/ {action}" for action in fair_actions),
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:4 defines projected commit progress transition helper "
+        "Start, but aliases Inner!HonestPropose, but target module "
+        f"{missing} does not exist; projected commit progress transition "
+        "module-alias helper wrappers must resolve to local modules with "
+        "defined zero-arity transition operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_identity_gated_module_alias_transition_disjunct_onward_undefined_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiTransitionIdentityDisjunctOnwardUndefinedInner.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionIdentityDisjunctOnwardUndefinedInner ----",
+                "VARIABLES vars",
+                "Other == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiTransitionIdentityDisjunctOnwardUndefinedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionIdentityDisjunctOnwardUndefinedTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiTransitionIdentityDisjunctOnwardUndefinedInner",
+                "Start == Inner!HonestPropose",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateIdentityModuleAliasTransitionDisjunctOnwardUndefinedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionIdentityDisjunctOnwardUndefinedTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ TRUE /\\ Interleaving!Start",
+                *(f"  \\/ {action}" for action in fair_actions),
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:4 defines projected commit progress transition helper "
+        "Start, but aliases Inner!HonestPropose, but target "
+        f"{inner} does not define HonestPropose; projected commit progress "
+        "transition module-alias helper wrappers must resolve to defined "
+        "zero-arity transition operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_identity_gated_module_alias_transition_disjunct_onward_parameterized_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiTransitionIdentityDisjunctOnwardParameterizedInner.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionIdentityDisjunctOnwardParameterizedInner ----",
+                "VARIABLES vars",
+                "HonestPropose(value) == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiTransitionIdentityDisjunctOnwardParameterizedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionIdentityDisjunctOnwardParameterizedTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiTransitionIdentityDisjunctOnwardParameterizedInner",
+                "Start == Inner!HonestPropose",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateIdentityModuleAliasTransitionDisjunctOnwardParameterizedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionIdentityDisjunctOnwardParameterizedTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ TRUE /\\ Interleaving!Start",
+                *(f"  \\/ {action}" for action in fair_actions),
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:4 defines projected commit progress transition helper "
+        "Start, but aliases Inner!HonestPropose, but target "
+        f"{inner}:3 has arity 1; projected commit progress transition "
+        "module-alias helper wrappers must resolve to defined zero-arity "
+        "transition operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_identity_gated_module_alias_transition_disjunct_onward_noninspectable_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiTransitionIdentityDisjunctOnwardNoninspectableInner.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionIdentityDisjunctOnwardNoninspectableInner ----",
+                "VARIABLES vars",
+                "HonestPropose ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiTransitionIdentityDisjunctOnwardNoninspectableTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionIdentityDisjunctOnwardNoninspectableTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiTransitionIdentityDisjunctOnwardNoninspectableInner",
+                "Start == Inner!HonestPropose",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateIdentityModuleAliasTransitionDisjunctOnwardNoninspectableTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionIdentityDisjunctOnwardNoninspectableTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ TRUE /\\ Interleaving!Start",
+                *(f"  \\/ {action}" for action in fair_actions),
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:4 defines projected commit progress transition helper "
+        "Start, but aliases Inner!HonestPropose, but target "
+        f"{inner}:3 is not an inspectable single-expression definition; "
+        "projected commit progress transition module-alias helper wrappers "
+        "must resolve to inspectable transition operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_identity_gated_module_alias_transition_disjunct_multi_hop_recursive_helper_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+
+    def projection_for(target_name: str) -> Path:
+        tla = (
+            tmp_path
+            / f"SumeragiByzantineCommitProjectionGateIdentityTransitionDisjunctMultiHop{target_name}.tla"
+        )
+        tla.write_text(
+            projected_commit_progress_spec_contract_text(
+                module,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                next_lines=[
+                    "Next ==",
+                    "  \\/ TRUE /\\ Interleaving!Start",
+                    *(f"  \\/ {action}" for action in fair_actions),
+                ],
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def write_imported_target(target_name: str, inner_name: str) -> None:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    f"Inner == INSTANCE {inner_name}",
+                    "Start == HiddenStart",
+                    "HiddenStart == Inner!Branch",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_inner_without_leaf_instance(inner_name: str) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    "Branch == LocalBranch",
+                    "LocalBranch == Leaf!Action",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_inner_with_leaf_instance(inner_name: str, leaf_name: str) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    f"Leaf == INSTANCE {leaf_name}",
+                    "Branch == LocalBranch",
+                    "LocalBranch == Leaf!Action",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_leaf(leaf_name: str, body: str) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    body,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    def write_cyclic_leaf(leaf_name: str) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    "Action == HiddenAction",
+                    "HiddenAction == Action",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    def write_chain_without_leaf_instance(suffix: str) -> tuple[Path, Path]:
+        target_name = f"SumeragiTransitionIdentityDisjunctMultiHop{suffix}Target"
+        inner_name = f"SumeragiTransitionIdentityDisjunctMultiHop{suffix}Inner"
+        write_imported_target(target_name, inner_name)
+        inner = write_inner_without_leaf_instance(inner_name)
+        return projection_for(target_name), inner
+
+    def write_chain_with_leaf(suffix: str, body: str) -> tuple[Path, Path, Path]:
+        target_name = f"SumeragiTransitionIdentityDisjunctMultiHop{suffix}Target"
+        inner_name = f"SumeragiTransitionIdentityDisjunctMultiHop{suffix}Inner"
+        leaf_name = f"SumeragiTransitionIdentityDisjunctMultiHop{suffix}Leaf"
+        write_imported_target(target_name, inner_name)
+        inner = write_inner_with_leaf_instance(inner_name, leaf_name)
+        leaf = write_leaf(leaf_name, body)
+        return projection_for(target_name), inner, leaf
+
+    def write_chain_with_cyclic_leaf(suffix: str) -> tuple[Path, Path]:
+        target_name = f"SumeragiTransitionIdentityDisjunctMultiHop{suffix}Target"
+        inner_name = f"SumeragiTransitionIdentityDisjunctMultiHop{suffix}Inner"
+        leaf_name = f"SumeragiTransitionIdentityDisjunctMultiHop{suffix}Leaf"
+        write_imported_target(target_name, inner_name)
+        write_inner_with_leaf_instance(inner_name, leaf_name)
+        leaf = write_cyclic_leaf(leaf_name)
+        return projection_for(target_name), leaf
+
+    tla, inner = write_chain_without_leaf_instance("NoInstance")
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{inner}:4 defines projected commit progress transition helper "
+        "LocalBranch, but aliases Leaf!Action without a named INSTANCE "
+        "alias Leaf; projected commit progress transition module-alias "
+        "helper wrappers must resolve through named local INSTANCE "
+        "declarations"
+    ]
+
+    target_name = "SumeragiTransitionIdentityDisjunctMultiHopMissingTarget"
+    inner_name = "SumeragiTransitionIdentityDisjunctMultiHopMissingInner"
+    leaf_name = "SumeragiTransitionIdentityDisjunctMultiHopMissingLeaf"
+    write_imported_target(target_name, inner_name)
+    inner = write_inner_with_leaf_instance(inner_name, leaf_name)
+    missing = tmp_path / f"{leaf_name}.tla"
+    tla = projection_for(target_name)
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{inner}:5 defines projected commit progress transition helper "
+        "LocalBranch, but aliases Leaf!Action, but target module "
+        f"{missing} does not exist; projected commit progress transition "
+        "module-alias helper wrappers must resolve to local modules with "
+        "defined zero-arity transition operators"
+    ]
+
+    tla, inner, leaf = write_chain_with_leaf("Undefined", "Other == UNCHANGED vars")
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{inner}:5 defines projected commit progress transition helper "
+        f"LocalBranch, but aliases Leaf!Action, but target {leaf} does not "
+        "define Action; projected commit progress transition module-alias "
+        "helper wrappers must resolve to defined zero-arity transition "
+        "operators"
+    ]
+
+    tla, inner, leaf = write_chain_with_leaf(
+        "Parameterized",
+        "Action(value) == UNCHANGED vars",
+    )
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{inner}:5 defines projected commit progress transition helper "
+        f"LocalBranch, but aliases Leaf!Action, but target {leaf}:3 has "
+        "arity 1; projected commit progress transition module-alias helper "
+        "wrappers must resolve to defined zero-arity transition operators"
+    ]
+
+    tla, inner, leaf = write_chain_with_leaf("Noninspectable", "Action ==")
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{inner}:5 defines projected commit progress transition helper "
+        "LocalBranch, but aliases Leaf!Action, but target "
+        f"{leaf}:3 is not an inspectable single-expression definition; "
+        "projected commit progress transition module-alias helper wrappers "
+        "must resolve to inspectable transition operators"
+    ]
+
+    tla, leaf = write_chain_with_cyclic_leaf("Cycle")
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{leaf}:3 defines projected commit progress transition helper "
+        "Action, but transition helper resolution cycles at Action; "
+        "projected commit progress transition helper wrappers must be "
+        "acyclic and resolve to inspectable transition operators"
     ]
 
 
@@ -17163,6 +19714,56 @@ def test_projected_commit_progress_spec_contract_errors_rejects_compound_raw_spe
     ]
 
 
+def test_projected_commit_progress_spec_contract_errors_rejects_missing_or_parameterized_fairness_operator(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+
+    def progress_text(fairness_lines: list[str]) -> str:
+        return "\n".join(
+            [
+                "ProjectedCommitProgressSpec ==",
+                "  /\\ Init",
+                "  /\\ [][Next]_vars",
+                "  /\\ ProjectedCommitProgressFairness",
+                "",
+                *fairness_lines,
+                "",
+                *fairness_action_definition_lines(fair_actions),
+                "",
+                *next_operator_definition_lines("Next", fair_actions),
+                "",
+                "Init == TRUE",
+            ]
+        )
+
+    missing = tmp_path / "SumeragiByzantineCommitProjectionGateMissingFairness.tla"
+    parameterized = (
+        tmp_path / "SumeragiByzantineCommitProjectionGateParameterizedFairness.tla"
+    )
+    missing.write_text(progress_text([]), encoding="utf-8")
+    parameterized.write_text(
+        progress_text(
+            [
+                "ProjectedCommitProgressFairness(value) ==",
+                *(f"  /\\ WF_vars({action})" for action in fair_actions),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(missing) == [
+        f"{missing} does not define projected commit progress fairness "
+        "ProjectedCommitProgressFairness"
+    ]
+    assert module.projected_commit_progress_spec_contract_errors(parameterized) == [
+        f"{parameterized}:6 defines projected commit progress fairness "
+        "ProjectedCommitProgressFairness with arity 1; projected commit "
+        "progress fairness operators must be zero-arity"
+    ]
+
+
 def test_projected_commit_progress_spec_contract_errors_rejects_missing_next_closure(
     tmp_path: Path,
 ) -> None:
@@ -17485,6 +20086,201 @@ def test_projected_commit_progress_spec_contract_errors_rejects_local_action_ini
     ]
 
 
+def test_projected_commit_progress_spec_contract_errors_rejects_local_init_alias_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    undefined = (
+        tmp_path / "SumeragiByzantineCommitProjectionGateLocalUndefinedInitAlias.tla"
+    )
+    parameterized = (
+        tmp_path / "SumeragiByzantineCommitProjectionGateLocalParameterizedInitAlias.tla"
+    )
+    noninspectable = (
+        tmp_path / "SumeragiByzantineCommitProjectionGateLocalNoninspectableInitAlias.tla"
+    )
+    undefined.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            init_lines=["Init == HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+    parameterized.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=["HiddenInit(value) == TRUE"],
+            init_lines=["Init == HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+    noninspectable.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=["HiddenInit =="],
+            init_lines=["Init == HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(undefined) == [
+        f"{undefined}:32 defines projected commit progress init operator Init "
+        f"as HiddenInit, but target {undefined} does not define HiddenInit; "
+        "projected commit progress init aliases must resolve to defined "
+        "zero-arity initial-state predicates"
+    ]
+    assert module.projected_commit_progress_spec_contract_errors(parameterized) == [
+        f"{parameterized}:33 defines projected commit progress init operator "
+        f"Init as HiddenInit, but target {parameterized}:1 has arity 1; "
+        "projected commit progress init aliases must resolve to defined "
+        "zero-arity initial-state predicates"
+    ]
+    assert module.projected_commit_progress_spec_contract_errors(noninspectable) == [
+        f"{noninspectable}:33 defines projected commit progress init operator "
+        f"Init as HiddenInit, but target {noninspectable}:1 is not an "
+        "inspectable single-expression definition; projected commit progress "
+        "init aliases must resolve to inspectable initial-state predicates"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_local_init_alias_onward_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    action = tmp_path / "SumeragiByzantineCommitProjectionGateLocalOnwardActionInitAlias.tla"
+    undefined = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateLocalOnwardUndefinedInitAlias.tla"
+    )
+    parameterized = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateLocalOnwardParameterizedInitAlias.tla"
+    )
+    noninspectable = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateLocalOnwardNoninspectableInitAlias.tla"
+    )
+    action.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "HiddenInit == OtherInit",
+                "OtherInit == UNCHANGED vars",
+            ],
+            init_lines=["Init == HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+    undefined.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=["HiddenInit == OtherInit"],
+            init_lines=["Init == HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+    parameterized.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "HiddenInit == OtherInit",
+                "OtherInit(value) == TRUE",
+            ],
+            init_lines=["Init == HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+    noninspectable.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "HiddenInit == OtherInit",
+                "OtherInit ==",
+            ],
+            init_lines=["Init == HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    shape_requirement = (
+        "projected commit progress init operators must be initial-state "
+        "predicates without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or "
+        "<> temporal markers"
+    )
+    assert module.projected_commit_progress_spec_contract_errors(action) == [
+        f"{action}:1 defines projected commit progress init operator "
+        f"HiddenInit as OtherInit, but target {action}:2 is not an "
+        f"initial-state predicate; {shape_requirement}"
+    ]
+    assert module.projected_commit_progress_spec_contract_errors(undefined) == [
+        f"{undefined}:1 defines projected commit progress init operator "
+        f"HiddenInit as OtherInit, but target {undefined} does not define "
+        "OtherInit; projected commit progress init aliases must resolve to "
+        "defined zero-arity initial-state predicates"
+    ]
+    assert module.projected_commit_progress_spec_contract_errors(parameterized) == [
+        f"{parameterized}:1 defines projected commit progress init operator "
+        f"HiddenInit as OtherInit, but target {parameterized}:2 has arity 1; "
+        "projected commit progress init aliases must resolve to defined "
+        "zero-arity initial-state predicates"
+    ]
+    assert module.projected_commit_progress_spec_contract_errors(noninspectable) == [
+        f"{noninspectable}:1 defines projected commit progress init operator "
+        f"HiddenInit as OtherInit, but target {noninspectable}:2 is not an "
+        "inspectable single-expression definition; projected commit progress "
+        "init aliases must resolve to inspectable initial-state predicates"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_local_onward_cyclic_init_alias(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateLocalOnwardCyclicInitAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "HiddenInit == OtherInit",
+                "OtherInit == HiddenInit",
+            ],
+            init_lines=["Init == HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:1 defines projected commit progress init operator HiddenInit, "
+        "but init alias resolution cycles at HiddenInit; projected commit "
+        "progress init aliases must be acyclic and resolve to inspectable "
+        "initial-state predicates"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_local_cyclic_init_alias(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGateLocalCyclicInitAlias.tla"
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            init_lines=["Init == Init"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:32 defines projected commit progress init operator Init, but "
+        "init alias resolution cycles at Init; projected commit progress "
+        "init aliases must be acyclic and resolve to inspectable "
+        "initial-state predicates"
+    ]
+
+
 def test_projected_commit_progress_spec_contract_errors_rejects_action_init_helper_conjunct(
     tmp_path: Path,
 ) -> None:
@@ -17511,6 +20307,518 @@ def test_projected_commit_progress_spec_contract_errors_rejects_action_init_help
         f"{tla}:34 defines projected commit progress init operator Init, but "
         f"helper HiddenInit at {tla}:2 is not an initial-state predicate; "
         f"{shape_requirement}"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_action_or_temporal_init_boolean_helper(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    action_helper = tmp_path / "SumeragiByzantineCommitProjectionGateActionInitBooleanHelper.tla"
+    temporal_helper = (
+        tmp_path / "SumeragiByzantineCommitProjectionGateTemporalInitBooleanHelper.tla"
+    )
+    action_helper.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "GoodInit == ready = ready",
+                "HiddenInit == UNCHANGED vars",
+            ],
+            init_lines=["Init == GoodInit \\/ HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+    temporal_helper.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "GoodInit == ready = ready",
+                "HiddenInit == <>committed",
+            ],
+            init_lines=["Init == GoodInit \\/ HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    shape_requirement = (
+        "projected commit progress init operators must be initial-state "
+        "predicates without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or "
+        "<> temporal markers"
+    )
+    assert module.projected_commit_progress_spec_contract_errors(action_helper) == [
+        f"{action_helper}:34 defines projected commit progress init operator "
+        f"Init, but helper HiddenInit at {action_helper}:2 is not an "
+        f"initial-state predicate; {shape_requirement}"
+    ]
+    assert module.projected_commit_progress_spec_contract_errors(temporal_helper) == [
+        f"{temporal_helper}:34 defines projected commit progress init operator "
+        f"Init, but helper HiddenInit at {temporal_helper}:2 is not an "
+        f"initial-state predicate; {shape_requirement}"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_parameterized_init_boolean_helper(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateParameterizedInitBooleanHelper.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "GoodInit == ready = ready",
+                "HiddenInit(value) == TRUE",
+            ],
+            init_lines=["Init == GoodInit \\/ HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:34 defines projected commit progress init operator Init, but "
+        f"helper HiddenInit at {tla}:2 has arity 1; projected commit "
+        "progress init helpers must resolve to defined zero-arity "
+        "initial-state predicates"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_noninspectable_init_boolean_helper(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateNoninspectableInitBooleanHelper.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "GoodInit == ready = ready",
+                "HiddenInit ==",
+            ],
+            init_lines=["Init == GoodInit \\/ HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:34 defines projected commit progress init operator Init, but "
+        f"helper HiddenInit at {tla}:2 is not an inspectable "
+        "single-expression definition; projected commit progress init "
+        "helpers must resolve to inspectable initial-state predicates"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_cyclic_init_helpers(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    conjunct_helper = (
+        tmp_path / "SumeragiByzantineCommitProjectionGateCyclicInitConjunctHelper.tla"
+    )
+    boolean_helper = (
+        tmp_path / "SumeragiByzantineCommitProjectionGateCyclicInitBooleanHelper.tla"
+    )
+    conjunct_helper.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "GoodInit == ready = ready",
+                "HiddenInit == GoodInit /\\ HiddenInit",
+            ],
+            init_lines=["Init == GoodInit /\\ HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+    boolean_helper.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "GoodInit == ready = ready",
+                "HiddenInit == GoodInit \\/ HiddenInit",
+            ],
+            init_lines=["Init == GoodInit \\/ HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    helper_cycle_requirement = (
+        "projected commit progress init helpers must be acyclic and resolve "
+        "to inspectable initial-state predicates"
+    )
+    assert module.projected_commit_progress_spec_contract_errors(conjunct_helper) == [
+        f"{conjunct_helper}:2 defines projected commit progress init operator "
+        "HiddenInit, but init helper resolution cycles at HiddenInit; "
+        f"{helper_cycle_requirement}"
+    ]
+    assert module.projected_commit_progress_spec_contract_errors(boolean_helper) == [
+        f"{boolean_helper}:2 defines projected commit progress init operator "
+        "HiddenInit, but init helper resolution cycles at HiddenInit; "
+        f"{helper_cycle_requirement}"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_local_init_helper_onward_alias_cycle(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    conjunct_helper = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateLocalInitHelperOnwardAliasCycle.tla"
+    )
+    boolean_helper = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateLocalInitBooleanHelperOnwardAliasCycle.tla"
+    )
+    conjunct_helper.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "GoodInit == ready = ready",
+                "HiddenInit == OtherInit",
+                "OtherInit == HiddenInit",
+            ],
+            init_lines=["Init == GoodInit /\\ HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+    boolean_helper.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "GoodInit == ready = ready",
+                "HiddenInit == OtherInit",
+                "OtherInit == HiddenInit",
+            ],
+            init_lines=["Init == GoodInit \\/ HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    alias_cycle_requirement = (
+        "projected commit progress init aliases must be acyclic and resolve "
+        "to inspectable initial-state predicates"
+    )
+    assert module.projected_commit_progress_spec_contract_errors(conjunct_helper) == [
+        f"{conjunct_helper}:2 defines projected commit progress init operator "
+        "HiddenInit, but init alias resolution cycles at HiddenInit; "
+        f"{alias_cycle_requirement}"
+    ]
+    assert module.projected_commit_progress_spec_contract_errors(boolean_helper) == [
+        f"{boolean_helper}:2 defines projected commit progress init operator "
+        "HiddenInit, but init alias resolution cycles at HiddenInit; "
+        f"{alias_cycle_requirement}"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_local_init_helper_onward_missing_target_module(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    missing = tmp_path / "SumeragiInitLocalHelperOnwardMissingInner.tla"
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateLocalInitHelperOnwardMissingTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Inner == INSTANCE SumeragiInitLocalHelperOnwardMissingInner",
+                "GoodInit == ready = ready",
+                "HiddenInit == Inner!Init",
+            ],
+            init_lines=["Init == GoodInit /\\ HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines projected commit progress init operator "
+        f"HiddenInit as Inner!Init, but target module {missing} does not "
+        "exist; projected commit progress init aliases must resolve to local "
+        "modules"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_local_init_helper_onward_undefined_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiInitLocalHelperOnwardUndefinedInner.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitLocalHelperOnwardUndefinedInner ----",
+                "VARIABLES vars",
+                "Other == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateLocalInitHelperOnwardUndefinedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Inner == INSTANCE SumeragiInitLocalHelperOnwardUndefinedInner",
+                "GoodInit == ready = ready",
+                "HiddenInit == Inner!Init",
+            ],
+            init_lines=["Init == GoodInit /\\ HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines projected commit progress init operator "
+        f"HiddenInit as Inner!Init, but target {inner} does not define Init; "
+        "projected commit progress init aliases must resolve to defined "
+        "zero-arity initial-state predicates"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_local_init_helper_onward_parameterized_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiInitLocalHelperOnwardParameterizedInner.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitLocalHelperOnwardParameterizedInner ----",
+                "VARIABLES vars",
+                "Init(value) == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateLocalInitHelperOnwardParameterizedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Inner == INSTANCE SumeragiInitLocalHelperOnwardParameterizedInner",
+                "GoodInit == ready = ready",
+                "HiddenInit == Inner!Init",
+            ],
+            init_lines=["Init == GoodInit /\\ HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines projected commit progress init operator "
+        f"HiddenInit as Inner!Init, but target {inner}:3 has arity 1; "
+        "projected commit progress init aliases must resolve to defined "
+        "zero-arity initial-state predicates"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_local_init_helper_onward_noninspectable_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiInitLocalHelperOnwardNoninspectableInner.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitLocalHelperOnwardNoninspectableInner ----",
+                "VARIABLES vars",
+                "Init ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateLocalInitHelperOnwardNoninspectableTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Inner == INSTANCE SumeragiInitLocalHelperOnwardNoninspectableInner",
+                "GoodInit == ready = ready",
+                "HiddenInit == Inner!Init",
+            ],
+            init_lines=["Init == GoodInit /\\ HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines projected commit progress init operator "
+        f"HiddenInit as Inner!Init, but target {inner}:3 is not an "
+        "inspectable single-expression definition; projected commit progress "
+        "init aliases must resolve to inspectable initial-state predicates"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_local_init_boolean_helper_onward_missing_target_module(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    missing = tmp_path / "SumeragiInitLocalBooleanHelperOnwardMissingInner.tla"
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateLocalInitBooleanHelperOnwardMissingTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Inner == INSTANCE SumeragiInitLocalBooleanHelperOnwardMissingInner",
+                "GoodInit == ready = ready",
+                "HiddenInit == Inner!Init",
+            ],
+            init_lines=["Init == GoodInit \\/ HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines projected commit progress init operator "
+        f"HiddenInit as Inner!Init, but target module {missing} does not "
+        "exist; projected commit progress init aliases must resolve to local "
+        "modules"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_local_init_boolean_helper_onward_undefined_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiInitLocalBooleanHelperOnwardUndefinedInner.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitLocalBooleanHelperOnwardUndefinedInner ----",
+                "VARIABLES vars",
+                "Other == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateLocalInitBooleanHelperOnwardUndefinedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Inner == INSTANCE SumeragiInitLocalBooleanHelperOnwardUndefinedInner",
+                "GoodInit == ready = ready",
+                "HiddenInit == Inner!Init",
+            ],
+            init_lines=["Init == GoodInit \\/ HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines projected commit progress init operator "
+        f"HiddenInit as Inner!Init, but target {inner} does not define Init; "
+        "projected commit progress init aliases must resolve to defined "
+        "zero-arity initial-state predicates"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_local_init_boolean_helper_onward_parameterized_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiInitLocalBooleanHelperOnwardParameterizedInner.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitLocalBooleanHelperOnwardParameterizedInner ----",
+                "VARIABLES vars",
+                "Init(value) == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateLocalInitBooleanHelperOnwardParameterizedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Inner == INSTANCE SumeragiInitLocalBooleanHelperOnwardParameterizedInner",
+                "GoodInit == ready = ready",
+                "HiddenInit == Inner!Init",
+            ],
+            init_lines=["Init == GoodInit \\/ HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines projected commit progress init operator "
+        f"HiddenInit as Inner!Init, but target {inner}:3 has arity 1; "
+        "projected commit progress init aliases must resolve to defined "
+        "zero-arity initial-state predicates"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_local_init_boolean_helper_onward_noninspectable_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiInitLocalBooleanHelperOnwardNoninspectableInner.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitLocalBooleanHelperOnwardNoninspectableInner ----",
+                "VARIABLES vars",
+                "Init ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateLocalInitBooleanHelperOnwardNoninspectableTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Inner == INSTANCE SumeragiInitLocalBooleanHelperOnwardNoninspectableInner",
+                "GoodInit == ready = ready",
+                "HiddenInit == Inner!Init",
+            ],
+            init_lines=["Init == GoodInit \\/ HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines projected commit progress init operator "
+        f"HiddenInit as Inner!Init, but target {inner}:3 is not an "
+        "inspectable single-expression definition; projected commit progress "
+        "init aliases must resolve to inspectable initial-state predicates"
     ]
 
 
@@ -17558,6 +20866,50 @@ def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_ini
     ]
 
 
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_init_boolean_helper(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiInitBooleanHelperModuleAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitBooleanHelperModuleAliasTarget ----",
+                "VARIABLES vars",
+                "HiddenInit == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasInitBooleanHelper.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiInitBooleanHelperModuleAliasTarget",
+                "GoodInit == ready = ready",
+            ],
+            init_lines=["Init == GoodInit \\/ Interleaving!HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    shape_requirement = (
+        "projected commit progress init operators must be initial-state "
+        "predicates without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or "
+        "<> temporal markers"
+    )
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:34 defines projected commit progress init operator Init, but "
+        f"module helper Interleaving!HiddenInit target {target}:3 is not an "
+        f"initial-state predicate; {shape_requirement}"
+    ]
+
+
 def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_init_helper_without_instance(
     tmp_path: Path,
 ) -> None:
@@ -17571,6 +20923,31 @@ def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_ini
             module,
             preamble_lines=["GoodInit == ready = ready"],
             init_lines=["Init == GoodInit /\\ Missing!HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:33 defines projected commit progress init operator Init, but "
+        "module helper Missing!HiddenInit has no named INSTANCE alias Missing; "
+        "projected commit progress init module-alias helpers must resolve "
+        "through named local INSTANCE declarations"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_init_boolean_helper_without_instance(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasInitBooleanHelperWithoutInstance.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=["GoodInit == ready = ready"],
+            init_lines=["Init == GoodInit \\/ Missing!HiddenInit"],
         ),
         encoding="utf-8",
     )
@@ -17600,6 +20977,35 @@ def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_ini
                 "GoodInit == ready = ready",
             ],
             init_lines=["Init == GoodInit /\\ Interleaving!HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:34 defines projected commit progress init operator Init, but "
+        "module helper Interleaving!HiddenInit targets missing module "
+        f"{target}; projected commit progress init module-alias helpers must "
+        "resolve to local modules"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_init_boolean_helper_missing_target_module(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiInitBooleanHelperMissingTarget.tla"
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasInitBooleanHelperMissingTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiInitBooleanHelperMissingTarget",
+                "GoodInit == ready = ready",
+            ],
+            init_lines=["Init == GoodInit \\/ Interleaving!HiddenInit"],
         ),
         encoding="utf-8",
     )
@@ -17652,6 +21058,46 @@ def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_ini
     ]
 
 
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_init_boolean_helper_undefined_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiInitBooleanHelperUndefinedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitBooleanHelperUndefinedTarget ----",
+                "VARIABLES vars",
+                "Other == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasInitBooleanHelperUndefinedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiInitBooleanHelperUndefinedTarget",
+                "GoodInit == ready = ready",
+            ],
+            init_lines=["Init == GoodInit \\/ Interleaving!HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:34 defines projected commit progress init operator Init, but "
+        f"module helper Interleaving!HiddenInit target {target} does not "
+        "define HiddenInit; projected commit progress init module-alias "
+        "helpers must resolve to defined zero-arity initial-state predicates"
+    ]
+
+
 def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_init_helper_parameterized_target(
     tmp_path: Path,
 ) -> None:
@@ -17680,6 +21126,46 @@ def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_ini
                 "GoodInit == ready = ready",
             ],
             init_lines=["Init == GoodInit /\\ Interleaving!HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:34 defines projected commit progress init operator Init, but "
+        f"module helper Interleaving!HiddenInit target {target}:3 has arity "
+        "1; projected commit progress init module-alias helpers must resolve "
+        "to defined zero-arity initial-state predicates"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_init_boolean_helper_parameterized_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiInitBooleanHelperParameterizedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitBooleanHelperParameterizedTarget ----",
+                "VARIABLES vars",
+                "HiddenInit(value) == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasInitBooleanHelperParameterizedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiInitBooleanHelperParameterizedTarget",
+                "GoodInit == ready = ready",
+            ],
+            init_lines=["Init == GoodInit \\/ Interleaving!HiddenInit"],
         ),
         encoding="utf-8",
     )
@@ -17730,6 +21216,607 @@ def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_ini
         "inspectable single-expression definition; projected commit progress "
         "init module-alias helpers must resolve to inspectable initial-state "
         "predicates"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_init_boolean_helper_noninspectable_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiInitBooleanHelperNoninspectableTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitBooleanHelperNoninspectableTarget ----",
+                "VARIABLES vars",
+                "HiddenInit ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasInitBooleanHelperNoninspectableTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiInitBooleanHelperNoninspectableTarget",
+                "GoodInit == ready = ready",
+            ],
+            init_lines=["Init == GoodInit \\/ Interleaving!HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:34 defines projected commit progress init operator Init, but "
+        f"module helper Interleaving!HiddenInit target {target}:3 is not an "
+        "inspectable single-expression definition; projected commit progress "
+        "init module-alias helpers must resolve to inspectable initial-state "
+        "predicates"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_cyclic_module_alias_init_helpers(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    conjunct_target = tmp_path / "SumeragiInitHelperModuleAliasCycleTarget.tla"
+    boolean_target = tmp_path / "SumeragiInitBooleanHelperModuleAliasCycleTarget.tla"
+    conjunct_target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitHelperModuleAliasCycleTarget ----",
+                "VARIABLES vars",
+                "Self == INSTANCE SumeragiInitHelperModuleAliasCycleTarget",
+                "GoodInit == vars = vars",
+                "HiddenInit == GoodInit /\\ Self!HiddenInit",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    boolean_target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitBooleanHelperModuleAliasCycleTarget ----",
+                "VARIABLES vars",
+                "Self == INSTANCE SumeragiInitBooleanHelperModuleAliasCycleTarget",
+                "GoodInit == vars = vars",
+                "HiddenInit == GoodInit \\/ Self!HiddenInit",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    conjunct_tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateCyclicModuleAliasInitHelper.tla"
+    )
+    boolean_tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateCyclicModuleAliasInitBooleanHelper.tla"
+    )
+    conjunct_tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiInitHelperModuleAliasCycleTarget",
+                "GoodInit == ready = ready",
+            ],
+            init_lines=["Init == GoodInit /\\ Interleaving!HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+    boolean_tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiInitBooleanHelperModuleAliasCycleTarget",
+                "GoodInit == ready = ready",
+            ],
+            init_lines=["Init == GoodInit \\/ Interleaving!HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    module_helper_cycle_requirement = (
+        "projected commit progress init module-alias helpers must be acyclic "
+        "and resolve to inspectable initial-state predicates"
+    )
+    assert module.projected_commit_progress_spec_contract_errors(conjunct_tla) == [
+        f"{conjunct_target}:5 defines projected commit progress init operator "
+        "HiddenInit, but module helper Self!HiddenInit cycles at HiddenInit; "
+        f"{module_helper_cycle_requirement}"
+    ]
+    assert module.projected_commit_progress_spec_contract_errors(boolean_tla) == [
+        f"{boolean_target}:5 defines projected commit progress init operator "
+        "HiddenInit, but module helper Self!HiddenInit cycles at HiddenInit; "
+        f"{module_helper_cycle_requirement}"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_init_helper_onward_missing_target_module(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiInitHelperOnwardMissingTarget.tla"
+    missing = tmp_path / "SumeragiInitHelperOnwardMissingInner.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitHelperOnwardMissingTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiInitHelperOnwardMissingInner",
+                "HiddenInit == Inner!Init",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasInitHelperOnwardMissingTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiInitHelperOnwardMissingTarget",
+                "GoodInit == ready = ready",
+            ],
+            init_lines=["Init == GoodInit /\\ Interleaving!HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:4 defines projected commit progress init operator "
+        "HiddenInit as Inner!Init, but target module "
+        f"{missing} does not exist; projected commit progress init aliases "
+        "must resolve to local modules"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_init_helper_onward_undefined_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiInitHelperOnwardUndefinedInner.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitHelperOnwardUndefinedInner ----",
+                "VARIABLES vars",
+                "Other == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiInitHelperOnwardUndefinedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitHelperOnwardUndefinedTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiInitHelperOnwardUndefinedInner",
+                "HiddenInit == Inner!Init",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasInitHelperOnwardUndefinedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiInitHelperOnwardUndefinedTarget",
+                "GoodInit == ready = ready",
+            ],
+            init_lines=["Init == GoodInit /\\ Interleaving!HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:4 defines projected commit progress init operator "
+        f"HiddenInit as Inner!Init, but target {inner} does not define Init; "
+        "projected commit progress init aliases must resolve to defined "
+        "zero-arity initial-state predicates"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_init_helper_onward_parameterized_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiInitHelperOnwardParameterizedInner.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitHelperOnwardParameterizedInner ----",
+                "VARIABLES vars",
+                "Init(value) == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiInitHelperOnwardParameterizedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitHelperOnwardParameterizedTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiInitHelperOnwardParameterizedInner",
+                "HiddenInit == Inner!Init",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasInitHelperOnwardParameterizedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiInitHelperOnwardParameterizedTarget",
+                "GoodInit == ready = ready",
+            ],
+            init_lines=["Init == GoodInit /\\ Interleaving!HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:4 defines projected commit progress init operator "
+        f"HiddenInit as Inner!Init, but target {inner}:3 has arity 1; "
+        "projected commit progress init aliases must resolve to defined "
+        "zero-arity initial-state predicates"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_init_helper_onward_noninspectable_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiInitHelperOnwardNoninspectableInner.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitHelperOnwardNoninspectableInner ----",
+                "VARIABLES vars",
+                "Init ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiInitHelperOnwardNoninspectableTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitHelperOnwardNoninspectableTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiInitHelperOnwardNoninspectableInner",
+                "HiddenInit == Inner!Init",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasInitHelperOnwardNoninspectableTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiInitHelperOnwardNoninspectableTarget",
+                "GoodInit == ready = ready",
+            ],
+            init_lines=["Init == GoodInit /\\ Interleaving!HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:4 defines projected commit progress init operator "
+        f"HiddenInit as Inner!Init, but target {inner}:3 is not an "
+        "inspectable single-expression definition; projected commit progress "
+        "init aliases must resolve to inspectable initial-state predicates"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_init_helper_onward_alias_cycle(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    conjunct_target = tmp_path / "SumeragiInitHelperOnwardAliasCycleTarget.tla"
+    boolean_target = tmp_path / "SumeragiInitBooleanHelperOnwardAliasCycleTarget.tla"
+    conjunct_target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitHelperOnwardAliasCycleTarget ----",
+                "VARIABLES vars",
+                "GoodInit == vars = vars",
+                "HiddenInit == OtherInit",
+                "OtherInit == HiddenInit",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    boolean_target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitBooleanHelperOnwardAliasCycleTarget ----",
+                "VARIABLES vars",
+                "GoodInit == vars = vars",
+                "HiddenInit == OtherInit",
+                "OtherInit == HiddenInit",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    conjunct_tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasInitHelperOnwardAliasCycle.tla"
+    )
+    boolean_tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasInitBooleanHelperOnwardAliasCycle.tla"
+    )
+    conjunct_tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiInitHelperOnwardAliasCycleTarget",
+                "GoodInit == ready = ready",
+            ],
+            init_lines=["Init == GoodInit /\\ Interleaving!HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+    boolean_tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiInitBooleanHelperOnwardAliasCycleTarget",
+                "GoodInit == ready = ready",
+            ],
+            init_lines=["Init == GoodInit \\/ Interleaving!HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    alias_cycle_requirement = (
+        "projected commit progress init aliases must be acyclic and resolve "
+        "to inspectable initial-state predicates"
+    )
+    assert module.projected_commit_progress_spec_contract_errors(conjunct_tla) == [
+        f"{conjunct_target}:4 defines projected commit progress init operator "
+        "HiddenInit, but init alias resolution cycles at HiddenInit; "
+        f"{alias_cycle_requirement}"
+    ]
+    assert module.projected_commit_progress_spec_contract_errors(boolean_tla) == [
+        f"{boolean_target}:4 defines projected commit progress init operator "
+        "HiddenInit, but init alias resolution cycles at HiddenInit; "
+        f"{alias_cycle_requirement}"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_init_boolean_helper_onward_missing_target_module(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiInitBooleanHelperOnwardMissingTarget.tla"
+    missing = tmp_path / "SumeragiInitBooleanHelperOnwardMissingInner.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitBooleanHelperOnwardMissingTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiInitBooleanHelperOnwardMissingInner",
+                "HiddenInit == Inner!Init",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasInitBooleanHelperOnwardMissingTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiInitBooleanHelperOnwardMissingTarget",
+                "GoodInit == ready = ready",
+            ],
+            init_lines=["Init == GoodInit \\/ Interleaving!HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:4 defines projected commit progress init operator "
+        "HiddenInit as Inner!Init, but target module "
+        f"{missing} does not exist; projected commit progress init aliases "
+        "must resolve to local modules"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_init_boolean_helper_onward_undefined_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiInitBooleanHelperOnwardUndefinedInner.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitBooleanHelperOnwardUndefinedInner ----",
+                "VARIABLES vars",
+                "Other == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiInitBooleanHelperOnwardUndefinedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitBooleanHelperOnwardUndefinedTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiInitBooleanHelperOnwardUndefinedInner",
+                "HiddenInit == Inner!Init",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasInitBooleanHelperOnwardUndefinedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiInitBooleanHelperOnwardUndefinedTarget",
+                "GoodInit == ready = ready",
+            ],
+            init_lines=["Init == GoodInit \\/ Interleaving!HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:4 defines projected commit progress init operator "
+        f"HiddenInit as Inner!Init, but target {inner} does not define Init; "
+        "projected commit progress init aliases must resolve to defined "
+        "zero-arity initial-state predicates"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_init_boolean_helper_onward_parameterized_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiInitBooleanHelperOnwardParameterizedInner.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitBooleanHelperOnwardParameterizedInner ----",
+                "VARIABLES vars",
+                "Init(value) == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiInitBooleanHelperOnwardParameterizedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitBooleanHelperOnwardParameterizedTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiInitBooleanHelperOnwardParameterizedInner",
+                "HiddenInit == Inner!Init",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasInitBooleanHelperOnwardParameterizedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiInitBooleanHelperOnwardParameterizedTarget",
+                "GoodInit == ready = ready",
+            ],
+            init_lines=["Init == GoodInit \\/ Interleaving!HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:4 defines projected commit progress init operator "
+        f"HiddenInit as Inner!Init, but target {inner}:3 has arity 1; "
+        "projected commit progress init aliases must resolve to defined "
+        "zero-arity initial-state predicates"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_init_boolean_helper_onward_noninspectable_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiInitBooleanHelperOnwardNoninspectableInner.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitBooleanHelperOnwardNoninspectableInner ----",
+                "VARIABLES vars",
+                "Init ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiInitBooleanHelperOnwardNoninspectableTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitBooleanHelperOnwardNoninspectableTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiInitBooleanHelperOnwardNoninspectableInner",
+                "HiddenInit == Inner!Init",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasInitBooleanHelperOnwardNoninspectableTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiInitBooleanHelperOnwardNoninspectableTarget",
+                "GoodInit == ready = ready",
+            ],
+            init_lines=["Init == GoodInit \\/ Interleaving!HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:4 defines projected commit progress init operator "
+        f"HiddenInit as Inner!Init, but target {inner}:3 is not an "
+        "inspectable single-expression definition; projected commit progress "
+        "init aliases must resolve to inspectable initial-state predicates"
     ]
 
 
@@ -17978,6 +22065,3596 @@ def test_projected_commit_progress_spec_contract_errors_rejects_transitive_actio
     ]
 
 
+def test_projected_commit_progress_spec_contract_errors_rejects_transitive_init_alias_missing_target_module(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiInitAliasOnwardMissingTarget.tla"
+    missing = tmp_path / "SumeragiInitAliasOnwardMissingInner.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitAliasOnwardMissingTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiInitAliasOnwardMissingInner",
+                "Init == Inner!Init",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateTransitiveInitAliasMissingTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=["Interleaving == INSTANCE SumeragiInitAliasOnwardMissingTarget"],
+            init_lines=["Init == Interleaving!Init"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:4 defines projected commit progress init operator Init as "
+        f"Inner!Init, but target module {missing} does not exist; projected "
+        "commit progress init aliases must resolve to local modules"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_transitive_init_alias_undefined_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiInitAliasOnwardUndefinedInner.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitAliasOnwardUndefinedInner ----",
+                "VARIABLES vars",
+                "Other == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiInitAliasOnwardUndefinedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitAliasOnwardUndefinedTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiInitAliasOnwardUndefinedInner",
+                "Init == Inner!Init",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateTransitiveInitAliasUndefinedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiInitAliasOnwardUndefinedTarget",
+            ],
+            init_lines=["Init == Interleaving!Init"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:4 defines projected commit progress init operator Init as "
+        f"Inner!Init, but target {inner} does not define Init; projected "
+        "commit progress init aliases must resolve to defined zero-arity "
+        "initial-state predicates"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_transitive_init_alias_parameterized_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiInitAliasOnwardParameterizedInner.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitAliasOnwardParameterizedInner ----",
+                "VARIABLES vars",
+                "Init(value) == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiInitAliasOnwardParameterizedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitAliasOnwardParameterizedTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiInitAliasOnwardParameterizedInner",
+                "Init == Inner!Init",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateTransitiveInitAliasParameterizedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiInitAliasOnwardParameterizedTarget",
+            ],
+            init_lines=["Init == Interleaving!Init"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:4 defines projected commit progress init operator Init as "
+        f"Inner!Init, but target {inner}:3 has arity 1; projected commit "
+        "progress init aliases must resolve to defined zero-arity "
+        "initial-state predicates"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_transitive_init_alias_noninspectable_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiInitAliasOnwardNoninspectableInner.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitAliasOnwardNoninspectableInner ----",
+                "VARIABLES vars",
+                "Init ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiInitAliasOnwardNoninspectableTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitAliasOnwardNoninspectableTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiInitAliasOnwardNoninspectableInner",
+                "Init == Inner!Init",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateTransitiveInitAliasNoninspectableTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiInitAliasOnwardNoninspectableTarget",
+            ],
+            init_lines=["Init == Interleaving!Init"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:4 defines projected commit progress init operator Init as "
+        f"Inner!Init, but target {inner}:3 is not an inspectable "
+        "single-expression definition; projected commit progress init aliases "
+        "must resolve to inspectable initial-state predicates"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_transitive_local_cyclic_init_alias(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiInitAliasOnwardLocalCycleTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitAliasOnwardLocalCycleTarget ----",
+                "VARIABLES vars",
+                "Init == HiddenInit",
+                "HiddenInit == Init",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateTransitiveLocalCyclicInitAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiInitAliasOnwardLocalCycleTarget",
+            ],
+            init_lines=["Init == Interleaving!Init"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:3 defines projected commit progress init operator Init, "
+        "but init alias resolution cycles at Init; projected commit progress "
+        "init aliases must be acyclic and resolve to inspectable "
+        "initial-state predicates"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_transitive_init_alias_helper_cycles(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    conjunct_target = tmp_path / "SumeragiInitAliasHelperCycleTarget.tla"
+    boolean_target = tmp_path / "SumeragiInitAliasBooleanHelperCycleTarget.tla"
+    conjunct_target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitAliasHelperCycleTarget ----",
+                "VARIABLES vars",
+                "GoodInit == vars = vars",
+                "Init == GoodInit /\\ HiddenInit",
+                "HiddenInit == GoodInit /\\ HiddenInit",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    boolean_target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitAliasBooleanHelperCycleTarget ----",
+                "VARIABLES vars",
+                "GoodInit == vars = vars",
+                "Init == GoodInit \\/ HiddenInit",
+                "HiddenInit == GoodInit \\/ HiddenInit",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    conjunct_tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateTransitiveInitAliasHelperCycle.tla"
+    )
+    boolean_tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateTransitiveInitAliasBooleanHelperCycle.tla"
+    )
+    conjunct_tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=["Interleaving == INSTANCE SumeragiInitAliasHelperCycleTarget"],
+            init_lines=["Init == Interleaving!Init"],
+        ),
+        encoding="utf-8",
+    )
+    boolean_tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiInitAliasBooleanHelperCycleTarget",
+            ],
+            init_lines=["Init == Interleaving!Init"],
+        ),
+        encoding="utf-8",
+    )
+
+    helper_cycle_requirement = (
+        "projected commit progress init helpers must be acyclic and resolve "
+        "to inspectable initial-state predicates"
+    )
+    assert module.projected_commit_progress_spec_contract_errors(conjunct_tla) == [
+        f"{conjunct_target}:5 defines projected commit progress init operator "
+        "HiddenInit, but init helper resolution cycles at HiddenInit; "
+        f"{helper_cycle_requirement}"
+    ]
+    assert module.projected_commit_progress_spec_contract_errors(boolean_tla) == [
+        f"{boolean_target}:5 defines projected commit progress init operator "
+        "HiddenInit, but init helper resolution cycles at HiddenInit; "
+        f"{helper_cycle_requirement}"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_transitive_init_alias_helper_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    action_target = tmp_path / "SumeragiInitAliasHelperActionTarget.tla"
+    parameterized_target = tmp_path / "SumeragiInitAliasHelperParameterizedTarget.tla"
+    noninspectable_target = tmp_path / "SumeragiInitAliasHelperNoninspectableTarget.tla"
+    boolean_action_target = tmp_path / "SumeragiInitAliasBooleanHelperActionTarget.tla"
+    boolean_parameterized_target = (
+        tmp_path / "SumeragiInitAliasBooleanHelperParameterizedTarget.tla"
+    )
+    boolean_noninspectable_target = (
+        tmp_path / "SumeragiInitAliasBooleanHelperNoninspectableTarget.tla"
+    )
+    action_target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitAliasHelperActionTarget ----",
+                "VARIABLES vars",
+                "GoodInit == vars = vars",
+                "Init == GoodInit /\\ HiddenInit",
+                "HiddenInit == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    parameterized_target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitAliasHelperParameterizedTarget ----",
+                "VARIABLES vars",
+                "GoodInit == vars = vars",
+                "Init == GoodInit /\\ HiddenInit",
+                "HiddenInit(value) == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    noninspectable_target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitAliasHelperNoninspectableTarget ----",
+                "VARIABLES vars",
+                "GoodInit == vars = vars",
+                "Init == GoodInit /\\ HiddenInit",
+                "HiddenInit ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    boolean_action_target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitAliasBooleanHelperActionTarget ----",
+                "VARIABLES vars",
+                "GoodInit == vars = vars",
+                "Init == GoodInit \\/ HiddenInit",
+                "HiddenInit == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    boolean_parameterized_target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitAliasBooleanHelperParameterizedTarget ----",
+                "VARIABLES vars",
+                "GoodInit == vars = vars",
+                "Init == GoodInit \\/ HiddenInit",
+                "HiddenInit(value) == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    boolean_noninspectable_target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitAliasBooleanHelperNoninspectableTarget ----",
+                "VARIABLES vars",
+                "GoodInit == vars = vars",
+                "Init == GoodInit \\/ HiddenInit",
+                "HiddenInit ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    def projection_for(target_name: str) -> Path:
+        tla = tmp_path / f"SumeragiByzantineCommitProjectionGate{target_name}.tla"
+        tla.write_text(
+            projected_commit_progress_spec_contract_text(
+                module,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                init_lines=["Init == Interleaving!Init"],
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    action_tla = projection_for("SumeragiInitAliasHelperActionTarget")
+    parameterized_tla = projection_for("SumeragiInitAliasHelperParameterizedTarget")
+    noninspectable_tla = projection_for("SumeragiInitAliasHelperNoninspectableTarget")
+    boolean_action_tla = projection_for("SumeragiInitAliasBooleanHelperActionTarget")
+    boolean_parameterized_tla = projection_for(
+        "SumeragiInitAliasBooleanHelperParameterizedTarget"
+    )
+    boolean_noninspectable_tla = projection_for(
+        "SumeragiInitAliasBooleanHelperNoninspectableTarget"
+    )
+
+    shape_requirement = (
+        "projected commit progress init operators must be initial-state "
+        "predicates without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or "
+        "<> temporal markers"
+    )
+    assert module.projected_commit_progress_spec_contract_errors(action_tla) == [
+        f"{action_target}:4 defines projected commit progress init operator "
+        f"Init, but helper HiddenInit at {action_target}:5 is not an "
+        f"initial-state predicate; {shape_requirement}"
+    ]
+    assert module.projected_commit_progress_spec_contract_errors(parameterized_tla) == [
+        f"{parameterized_target}:4 defines projected commit progress init "
+        f"operator Init, but helper HiddenInit at {parameterized_target}:5 "
+        "has arity 1; projected commit progress init helpers must resolve "
+        "to defined zero-arity initial-state predicates"
+    ]
+    assert module.projected_commit_progress_spec_contract_errors(noninspectable_tla) == [
+        f"{noninspectable_target}:4 defines projected commit progress init "
+        f"operator Init, but helper HiddenInit at {noninspectable_target}:5 "
+        "is not an inspectable single-expression definition; projected "
+        "commit progress init helpers must resolve to inspectable "
+        "initial-state predicates"
+    ]
+    assert module.projected_commit_progress_spec_contract_errors(boolean_action_tla) == [
+        f"{boolean_action_target}:4 defines projected commit progress init "
+        f"operator Init, but helper HiddenInit at {boolean_action_target}:5 "
+        f"is not an initial-state predicate; {shape_requirement}"
+    ]
+    assert module.projected_commit_progress_spec_contract_errors(
+        boolean_parameterized_tla
+    ) == [
+        f"{boolean_parameterized_target}:4 defines projected commit progress "
+        f"init operator Init, but helper HiddenInit at "
+        f"{boolean_parameterized_target}:5 has arity 1; projected commit "
+        "progress init helpers must resolve to defined zero-arity "
+        "initial-state predicates"
+    ]
+    assert module.projected_commit_progress_spec_contract_errors(
+        boolean_noninspectable_tla
+    ) == [
+        f"{boolean_noninspectable_target}:4 defines projected commit "
+        f"progress init operator Init, but helper HiddenInit at "
+        f"{boolean_noninspectable_target}:5 is not an inspectable "
+        "single-expression definition; projected commit progress init "
+        "helpers must resolve to inspectable initial-state predicates"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_transitive_init_alias_module_alias_helper_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def projection_for(target_name: str) -> Path:
+        tla = tmp_path / f"SumeragiByzantineCommitProjectionGate{target_name}.tla"
+        tla.write_text(
+            projected_commit_progress_spec_contract_text(
+                module,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                init_lines=["Init == Interleaving!Init"],
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def write_target_without_instance(target_name: str, connective: str) -> Path:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} Inner!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return target
+
+    def write_target_with_instance(
+        target_name: str,
+        inner_name: str,
+        connective: str,
+    ) -> Path:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    f"Inner == INSTANCE {inner_name}",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} Inner!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return target
+
+    def write_inner(inner_name: str, body: str) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    body,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    shape_requirement = (
+        "projected commit progress init operators must be initial-state "
+        "predicates without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or "
+        "<> temporal markers"
+    )
+    cases = [
+        ("Conjunct", "/\\"),
+        ("Boolean", "\\/"),
+    ]
+    for label, connective in cases:
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperWithoutInstanceTarget"
+        target = write_target_without_instance(target_name, connective)
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{target}:4 defines projected commit progress init operator "
+            "Init, but module helper Inner!HiddenInit has no named INSTANCE "
+            "alias Inner; projected commit progress init module-alias "
+            "helpers must resolve through named local INSTANCE declarations"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperMissingTarget"
+        missing_name = f"SumeragiInitAlias{label}ModuleAliasHelperMissingInner"
+        target = write_target_with_instance(target_name, missing_name, connective)
+        tla = projection_for(target_name)
+        missing = tmp_path / f"{missing_name}.tla"
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{target}:5 defines projected commit progress init operator "
+            "Init, but module helper Inner!HiddenInit targets missing module "
+            f"{missing}; projected commit progress init module-alias helpers "
+            "must resolve to local modules"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperUndefinedTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperUndefinedInner"
+        target = write_target_with_instance(target_name, inner_name, connective)
+        inner = write_inner(inner_name, "Other == TRUE")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{target}:5 defines projected commit progress init operator "
+            f"Init, but module helper Inner!HiddenInit target {inner} does "
+            "not define HiddenInit; projected commit progress init "
+            "module-alias helpers must resolve to defined zero-arity "
+            "initial-state predicates"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperActionTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperActionInner"
+        target = write_target_with_instance(target_name, inner_name, connective)
+        inner = write_inner(inner_name, "HiddenInit == UNCHANGED vars")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{target}:5 defines projected commit progress init operator "
+            f"Init, but module helper Inner!HiddenInit target {inner}:3 is "
+            f"not an initial-state predicate; {shape_requirement}"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperParameterizedTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperParameterizedInner"
+        target = write_target_with_instance(target_name, inner_name, connective)
+        inner = write_inner(inner_name, "HiddenInit(value) == TRUE")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{target}:5 defines projected commit progress init operator "
+            f"Init, but module helper Inner!HiddenInit target {inner}:3 has "
+            "arity 1; projected commit progress init module-alias helpers "
+            "must resolve to defined zero-arity initial-state predicates"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperNoninspectableTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNoninspectableInner"
+        target = write_target_with_instance(target_name, inner_name, connective)
+        inner = write_inner(inner_name, "HiddenInit ==")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{target}:5 defines projected commit progress init operator "
+            f"Init, but module helper Inner!HiddenInit target {inner}:3 is "
+            "not an inspectable single-expression definition; projected "
+            "commit progress init module-alias helpers must resolve to "
+            "inspectable initial-state predicates"
+        ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_transitive_init_alias_module_alias_helper_onward_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def projection_for(target_name: str) -> Path:
+        tla = tmp_path / f"SumeragiByzantineCommitProjectionGate{target_name}.tla"
+        tla.write_text(
+            projected_commit_progress_spec_contract_text(
+                module,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                init_lines=["Init == Interleaving!Init"],
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def write_imported_target(
+        target_name: str,
+        inner_name: str,
+        connective: str,
+    ) -> Path:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    f"Inner == INSTANCE {inner_name}",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} Inner!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return target
+
+    def write_inner(inner_name: str, leaf_name: str) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    f"Leaf == INSTANCE {leaf_name}",
+                    "HiddenInit == Leaf!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_leaf(leaf_name: str, body: str) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    body,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    def write_cyclic_leaf(leaf_name: str) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    "Init == HiddenInit",
+                    "HiddenInit == Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    shape_requirement = (
+        "projected commit progress init operators must be initial-state "
+        "predicates without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or "
+        "<> temporal markers"
+    )
+    cases = [
+        ("Conjunct", "/\\"),
+        ("Boolean", "\\/"),
+    ]
+    for label, connective in cases:
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperOnwardMissingTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperOnwardMissingInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperOnwardMissingLeaf"
+        write_imported_target(target_name, inner_name, connective)
+        inner = write_inner(inner_name, leaf_name)
+        missing = tmp_path / f"{leaf_name}.tla"
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{inner}:4 defines projected commit progress init operator "
+            f"HiddenInit as Leaf!Init, but target module {missing} does not "
+            "exist; projected commit progress init aliases must resolve to "
+            "local modules"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperOnwardUndefinedTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperOnwardUndefinedInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperOnwardUndefinedLeaf"
+        write_imported_target(target_name, inner_name, connective)
+        inner = write_inner(inner_name, leaf_name)
+        leaf = write_leaf(leaf_name, "Other == TRUE")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{inner}:4 defines projected commit progress init operator "
+            f"HiddenInit as Leaf!Init, but target {leaf} does not define "
+            "Init; projected commit progress init aliases must resolve to "
+            "defined zero-arity initial-state predicates"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperOnwardActionTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperOnwardActionInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperOnwardActionLeaf"
+        write_imported_target(target_name, inner_name, connective)
+        inner = write_inner(inner_name, leaf_name)
+        leaf = write_leaf(leaf_name, "Init == UNCHANGED vars")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{inner}:4 defines projected commit progress init operator "
+            f"HiddenInit as Leaf!Init, but target {leaf}:3 is not an "
+            f"initial-state predicate; {shape_requirement}"
+        ]
+
+        target_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperOnwardParameterizedTarget"
+        )
+        inner_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperOnwardParameterizedInner"
+        )
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperOnwardParameterizedLeaf"
+        write_imported_target(target_name, inner_name, connective)
+        inner = write_inner(inner_name, leaf_name)
+        leaf = write_leaf(leaf_name, "Init(value) == TRUE")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{inner}:4 defines projected commit progress init operator "
+            f"HiddenInit as Leaf!Init, but target {leaf}:3 has arity 1; "
+            "projected commit progress init aliases must resolve to defined "
+            "zero-arity initial-state predicates"
+        ]
+
+        target_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperOnwardNoninspectableTarget"
+        )
+        inner_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperOnwardNoninspectableInner"
+        )
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperOnwardNoninspectableLeaf"
+        write_imported_target(target_name, inner_name, connective)
+        inner = write_inner(inner_name, leaf_name)
+        leaf = write_leaf(leaf_name, "Init ==")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{inner}:4 defines projected commit progress init operator "
+            f"HiddenInit as Leaf!Init, but target {leaf}:3 is not an "
+            "inspectable single-expression definition; projected commit "
+            "progress init aliases must resolve to inspectable initial-state "
+            "predicates"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperOnwardCycleTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperOnwardCycleInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperOnwardCycleLeaf"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name)
+        leaf = write_cyclic_leaf(leaf_name)
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{leaf}:3 defines projected commit progress init operator Init, "
+            "but init alias resolution cycles at Init; projected commit "
+            "progress init aliases must be acyclic and resolve to inspectable "
+            "initial-state predicates"
+        ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_transitive_init_alias_module_alias_helper_nested_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def projection_for(target_name: str) -> Path:
+        tla = tmp_path / f"SumeragiByzantineCommitProjectionGate{target_name}.tla"
+        tla.write_text(
+            projected_commit_progress_spec_contract_text(
+                module,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                init_lines=["Init == Interleaving!Init"],
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def write_imported_target(
+        target_name: str,
+        inner_name: str,
+        connective: str,
+    ) -> None:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    f"Inner == INSTANCE {inner_name}",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} Inner!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_inner(inner_name: str, helper_body: str, connective: str) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} LocalInit",
+                    helper_body,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    shape_requirement = (
+        "projected commit progress init operators must be initial-state "
+        "predicates without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or "
+        "<> temporal markers"
+    )
+    cases = [
+        ("Conjunct", "/\\"),
+        ("Boolean", "\\/"),
+    ]
+    for label, connective in cases:
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedActionTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedActionInner"
+        write_imported_target(target_name, inner_name, connective)
+        inner = write_inner(inner_name, "LocalInit == UNCHANGED vars", connective)
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{inner}:4 defines projected commit progress init operator "
+            "HiddenInit, but helper LocalInit at "
+            f"{inner}:5 is not an initial-state predicate; {shape_requirement}"
+        ]
+
+        target_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedParameterizedTarget"
+        )
+        inner_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedParameterizedInner"
+        )
+        write_imported_target(target_name, inner_name, connective)
+        inner = write_inner(inner_name, "LocalInit(value) == TRUE", connective)
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{inner}:4 defines projected commit progress init operator "
+            f"HiddenInit, but helper LocalInit at {inner}:5 has arity 1; "
+            "projected commit progress init helpers must resolve to defined "
+            "zero-arity initial-state predicates"
+        ]
+
+        target_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedNoninspectableTarget"
+        )
+        inner_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedNoninspectableInner"
+        )
+        write_imported_target(target_name, inner_name, connective)
+        inner = write_inner(inner_name, "LocalInit ==", connective)
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{inner}:4 defines projected commit progress init operator "
+            f"HiddenInit, but helper LocalInit at {inner}:5 is not an "
+            "inspectable single-expression definition; projected commit "
+            "progress init helpers must resolve to inspectable "
+            "initial-state predicates"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedCycleTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedCycleInner"
+        write_imported_target(target_name, inner_name, connective)
+        inner = write_inner(
+            inner_name,
+            f"LocalInit == GoodInit {connective} LocalInit",
+            connective,
+        )
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{inner}:5 defines projected commit progress init operator "
+            "LocalInit, but init helper resolution cycles at LocalInit; "
+            "projected commit progress init helpers must be acyclic and "
+            "resolve to inspectable initial-state predicates"
+        ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_transitive_init_alias_module_alias_helper_nested_onward_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def projection_for(target_name: str) -> Path:
+        tla = tmp_path / f"SumeragiByzantineCommitProjectionGate{target_name}.tla"
+        tla.write_text(
+            projected_commit_progress_spec_contract_text(
+                module,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                init_lines=["Init == Interleaving!Init"],
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def write_imported_target(
+        target_name: str,
+        inner_name: str,
+        connective: str,
+    ) -> None:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    f"Inner == INSTANCE {inner_name}",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} Inner!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_inner_without_leaf_instance(
+        inner_name: str,
+        connective: str,
+    ) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} LocalInit",
+                    "LocalInit == Leaf!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_inner_with_leaf_instance(
+        inner_name: str,
+        leaf_name: str,
+        connective: str,
+    ) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    f"Leaf == INSTANCE {leaf_name}",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} LocalInit",
+                    "LocalInit == Leaf!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_leaf(leaf_name: str, body: str) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    body,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    def write_cyclic_leaf(leaf_name: str) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    "Init == HiddenInit",
+                    "HiddenInit == Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    shape_requirement = (
+        "projected commit progress init operators must be initial-state "
+        "predicates without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or "
+        "<> temporal markers"
+    )
+    cases = [
+        ("Conjunct", "/\\"),
+        ("Boolean", "\\/"),
+    ]
+    for label, connective in cases:
+        target_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedOnwardNoInstanceTarget"
+        )
+        inner_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedOnwardNoInstanceInner"
+        )
+        write_imported_target(target_name, inner_name, connective)
+        inner = write_inner_without_leaf_instance(inner_name, connective)
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{inner}:5 defines projected commit progress init operator "
+            "LocalInit, but aliases Leaf!Init without a named INSTANCE alias "
+            "Leaf; projected commit progress init aliases must resolve "
+            "through named local INSTANCE declarations"
+        ]
+
+        target_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedOnwardMissingTarget"
+        )
+        inner_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedOnwardMissingInner"
+        )
+        leaf_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedOnwardMissingLeaf"
+        )
+        write_imported_target(target_name, inner_name, connective)
+        inner = write_inner_with_leaf_instance(inner_name, leaf_name, connective)
+        missing = tmp_path / f"{leaf_name}.tla"
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{inner}:6 defines projected commit progress init operator "
+            f"LocalInit as Leaf!Init, but target module {missing} does not "
+            "exist; projected commit progress init aliases must resolve to "
+            "local modules"
+        ]
+
+        target_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedOnwardUndefinedTarget"
+        )
+        inner_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedOnwardUndefinedInner"
+        )
+        leaf_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedOnwardUndefinedLeaf"
+        )
+        write_imported_target(target_name, inner_name, connective)
+        inner = write_inner_with_leaf_instance(inner_name, leaf_name, connective)
+        leaf = write_leaf(leaf_name, "Other == TRUE")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{inner}:6 defines projected commit progress init operator "
+            f"LocalInit as Leaf!Init, but target {leaf} does not define Init; "
+            "projected commit progress init aliases must resolve to defined "
+            "zero-arity initial-state predicates"
+        ]
+
+        target_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedOnwardActionTarget"
+        )
+        inner_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedOnwardActionInner"
+        )
+        leaf_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedOnwardActionLeaf"
+        )
+        write_imported_target(target_name, inner_name, connective)
+        inner = write_inner_with_leaf_instance(inner_name, leaf_name, connective)
+        leaf = write_leaf(leaf_name, "Init == UNCHANGED vars")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{inner}:6 defines projected commit progress init operator "
+            f"LocalInit as Leaf!Init, but target {leaf}:3 is not an "
+            f"initial-state predicate; {shape_requirement}"
+        ]
+
+        target_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedOnwardParameterizedTarget"
+        )
+        inner_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedOnwardParameterizedInner"
+        )
+        leaf_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedOnwardParameterizedLeaf"
+        )
+        write_imported_target(target_name, inner_name, connective)
+        inner = write_inner_with_leaf_instance(inner_name, leaf_name, connective)
+        leaf = write_leaf(leaf_name, "Init(value) == TRUE")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{inner}:6 defines projected commit progress init operator "
+            f"LocalInit as Leaf!Init, but target {leaf}:3 has arity 1; "
+            "projected commit progress init aliases must resolve to defined "
+            "zero-arity initial-state predicates"
+        ]
+
+        target_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedOnwardNoninspectableTarget"
+        )
+        inner_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedOnwardNoninspectableInner"
+        )
+        leaf_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedOnwardNoninspectableLeaf"
+        )
+        write_imported_target(target_name, inner_name, connective)
+        inner = write_inner_with_leaf_instance(inner_name, leaf_name, connective)
+        leaf = write_leaf(leaf_name, "Init ==")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{inner}:6 defines projected commit progress init operator "
+            f"LocalInit as Leaf!Init, but target {leaf}:3 is not an "
+            "inspectable single-expression definition; projected commit "
+            "progress init aliases must resolve to inspectable "
+            "initial-state predicates"
+        ]
+
+        target_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedOnwardCycleTarget"
+        )
+        inner_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedOnwardCycleInner"
+        )
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedOnwardCycleLeaf"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner_with_leaf_instance(inner_name, leaf_name, connective)
+        leaf = write_cyclic_leaf(leaf_name)
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{leaf}:3 defines projected commit progress init operator Init, "
+            "but init alias resolution cycles at Init; projected commit "
+            "progress init aliases must be acyclic and resolve to inspectable "
+            "initial-state predicates"
+        ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_transitive_init_alias_module_alias_helper_nested_module_alias_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def projection_for(target_name: str) -> Path:
+        tla = tmp_path / f"SumeragiByzantineCommitProjectionGate{target_name}.tla"
+        tla.write_text(
+            projected_commit_progress_spec_contract_text(
+                module,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                init_lines=["Init == Interleaving!Init"],
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def write_imported_target(
+        target_name: str,
+        inner_name: str,
+        connective: str,
+    ) -> None:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    f"Inner == INSTANCE {inner_name}",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} Inner!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_inner_without_leaf_instance(
+        inner_name: str,
+        connective: str,
+    ) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} Leaf!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_inner_with_leaf_instance(
+        inner_name: str,
+        leaf_name: str,
+        connective: str,
+    ) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    f"Leaf == INSTANCE {leaf_name}",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} Leaf!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_cyclic_inner(inner_name: str, connective: str) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    f"Leaf == INSTANCE {inner_name}",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} Leaf!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_leaf(leaf_name: str, body: str) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    body,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    shape_requirement = (
+        "projected commit progress init operators must be initial-state "
+        "predicates without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or "
+        "<> temporal markers"
+    )
+    cases = [
+        ("Conjunct", "/\\"),
+        ("Boolean", "\\/"),
+    ]
+    for label, connective in cases:
+        target_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleNoInstanceTarget"
+        )
+        inner_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleNoInstanceInner"
+        )
+        write_imported_target(target_name, inner_name, connective)
+        inner = write_inner_without_leaf_instance(inner_name, connective)
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{inner}:4 defines projected commit progress init operator "
+            "HiddenInit, but module helper Leaf!Init has no named INSTANCE "
+            "alias Leaf; projected commit progress init module-alias helpers "
+            "must resolve through named local INSTANCE declarations"
+        ]
+
+        target_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleMissingTarget"
+        )
+        inner_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleMissingInner"
+        )
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleMissingLeaf"
+        write_imported_target(target_name, inner_name, connective)
+        inner = write_inner_with_leaf_instance(inner_name, leaf_name, connective)
+        missing = tmp_path / f"{leaf_name}.tla"
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{inner}:5 defines projected commit progress init operator "
+            "HiddenInit, but module helper Leaf!Init targets missing module "
+            f"{missing}; projected commit progress init module-alias helpers "
+            "must resolve to local modules"
+        ]
+
+        target_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleUndefinedTarget"
+        )
+        inner_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleUndefinedInner"
+        )
+        leaf_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleUndefinedLeaf"
+        )
+        write_imported_target(target_name, inner_name, connective)
+        inner = write_inner_with_leaf_instance(inner_name, leaf_name, connective)
+        leaf = write_leaf(leaf_name, "Other == TRUE")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{inner}:5 defines projected commit progress init operator "
+            f"HiddenInit, but module helper Leaf!Init target {leaf} does "
+            "not define Init; projected commit progress init "
+            "module-alias helpers must resolve to defined zero-arity "
+            "initial-state predicates"
+        ]
+
+        target_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleActionTarget"
+        )
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleActionInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleActionLeaf"
+        write_imported_target(target_name, inner_name, connective)
+        inner = write_inner_with_leaf_instance(inner_name, leaf_name, connective)
+        leaf = write_leaf(leaf_name, "Init == UNCHANGED vars")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{inner}:5 defines projected commit progress init operator "
+            f"HiddenInit, but module helper Leaf!Init target {leaf}:3 is "
+            f"not an initial-state predicate; {shape_requirement}"
+        ]
+
+        target_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleParameterizedTarget"
+        )
+        inner_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleParameterizedInner"
+        )
+        leaf_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleParameterizedLeaf"
+        )
+        write_imported_target(target_name, inner_name, connective)
+        inner = write_inner_with_leaf_instance(inner_name, leaf_name, connective)
+        leaf = write_leaf(leaf_name, "Init(value) == TRUE")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{inner}:5 defines projected commit progress init operator "
+            f"HiddenInit, but module helper Leaf!Init target {leaf}:3 has "
+            "arity 1; projected commit progress init module-alias helpers "
+            "must resolve to defined zero-arity initial-state predicates"
+        ]
+
+        target_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleNoninspectableTarget"
+        )
+        inner_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleNoninspectableInner"
+        )
+        leaf_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleNoninspectableLeaf"
+        )
+        write_imported_target(target_name, inner_name, connective)
+        inner = write_inner_with_leaf_instance(inner_name, leaf_name, connective)
+        leaf = write_leaf(leaf_name, "Init ==")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{inner}:5 defines projected commit progress init operator "
+            f"HiddenInit, but module helper Leaf!Init target {leaf}:3 is "
+            "not an inspectable single-expression definition; projected "
+            "commit progress init module-alias helpers must resolve to "
+            "inspectable initial-state predicates"
+        ]
+
+        target_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleCycleTarget"
+        )
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleCycleInner"
+        write_imported_target(target_name, inner_name, connective)
+        inner = write_cyclic_inner(inner_name, connective)
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{inner}:5 defines projected commit progress init operator "
+            "HiddenInit, but module helper Leaf!HiddenInit cycles at "
+            "HiddenInit; projected commit progress init module-alias helpers "
+            "must be acyclic and resolve to inspectable initial-state "
+            "predicates"
+        ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_transitive_init_alias_module_alias_helper_nested_module_alias_onward_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def projection_for(target_name: str) -> Path:
+        tla = tmp_path / f"SumeragiByzantineCommitProjectionGate{target_name}.tla"
+        tla.write_text(
+            projected_commit_progress_spec_contract_text(
+                module,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                init_lines=["Init == Interleaving!Init"],
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def write_imported_target(
+        target_name: str,
+        inner_name: str,
+        connective: str,
+    ) -> None:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    f"Inner == INSTANCE {inner_name}",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} Inner!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_inner(
+        inner_name: str,
+        leaf_name: str,
+        connective: str,
+    ) -> None:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    f"Leaf == INSTANCE {leaf_name}",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} Leaf!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_leaf_without_branch_instance(leaf_name: str) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    "HiddenInit == Branch!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    def write_leaf_with_branch_instance(leaf_name: str, branch_name: str) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    f"Branch == INSTANCE {branch_name}",
+                    "HiddenInit == Branch!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    def write_branch(branch_name: str, body: str) -> Path:
+        branch = tmp_path / f"{branch_name}.tla"
+        branch.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {branch_name} ----",
+                    "VARIABLES vars",
+                    body,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return branch
+
+    def write_cyclic_branch(branch_name: str) -> Path:
+        branch = tmp_path / f"{branch_name}.tla"
+        branch.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {branch_name} ----",
+                    "VARIABLES vars",
+                    "Init == HiddenInit",
+                    "HiddenInit == Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return branch
+
+    shape_requirement = (
+        "projected commit progress init operators must be initial-state "
+        "predicates without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or "
+        "<> temporal markers"
+    )
+    cases = [
+        ("Conjunct", "/\\"),
+        ("Boolean", "\\/"),
+    ]
+    for label, connective in cases:
+        target_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleOnwardNoInstanceTarget"
+        )
+        inner_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleOnwardNoInstanceInner"
+        )
+        leaf_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleOnwardNoInstanceLeaf"
+        )
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        leaf = write_leaf_without_branch_instance(leaf_name)
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{leaf}:3 defines projected commit progress init operator "
+            "HiddenInit, but aliases Branch!Init without a named INSTANCE "
+            "alias Branch; projected commit progress init aliases must "
+            "resolve through named local INSTANCE declarations"
+        ]
+
+        target_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleOnwardMissingTarget"
+        )
+        inner_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleOnwardMissingInner"
+        )
+        leaf_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleOnwardMissingLeaf"
+        )
+        branch_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleOnwardMissingBranch"
+        )
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        leaf = write_leaf_with_branch_instance(leaf_name, branch_name)
+        missing = tmp_path / f"{branch_name}.tla"
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{leaf}:4 defines projected commit progress init operator "
+            f"HiddenInit as Branch!Init, but target module {missing} does "
+            "not exist; projected commit progress init aliases must resolve "
+            "to local modules"
+        ]
+
+        target_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleOnwardUndefinedTarget"
+        )
+        inner_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleOnwardUndefinedInner"
+        )
+        leaf_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleOnwardUndefinedLeaf"
+        )
+        branch_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleOnwardUndefinedBranch"
+        )
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        leaf = write_leaf_with_branch_instance(leaf_name, branch_name)
+        branch = write_branch(branch_name, "Other == TRUE")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{leaf}:4 defines projected commit progress init operator "
+            f"HiddenInit as Branch!Init, but target {branch} does not define "
+            "Init; projected commit progress init aliases must resolve to "
+            "defined zero-arity initial-state predicates"
+        ]
+
+        target_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleOnwardActionTarget"
+        )
+        inner_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleOnwardActionInner"
+        )
+        leaf_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleOnwardActionLeaf"
+        )
+        branch_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleOnwardActionBranch"
+        )
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        leaf = write_leaf_with_branch_instance(leaf_name, branch_name)
+        branch = write_branch(branch_name, "Init == UNCHANGED vars")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{leaf}:4 defines projected commit progress init operator "
+            f"HiddenInit as Branch!Init, but target {branch}:3 is not an "
+            f"initial-state predicate; {shape_requirement}"
+        ]
+
+        target_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleOnwardParameterizedTarget"
+        )
+        inner_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleOnwardParameterizedInner"
+        )
+        leaf_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleOnwardParameterizedLeaf"
+        )
+        branch_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleOnwardParameterizedBranch"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        leaf = write_leaf_with_branch_instance(leaf_name, branch_name)
+        branch = write_branch(branch_name, "Init(value) == TRUE")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{leaf}:4 defines projected commit progress init operator "
+            f"HiddenInit as Branch!Init, but target {branch}:3 has arity 1; "
+            "projected commit progress init aliases must resolve to defined "
+            "zero-arity initial-state predicates"
+        ]
+
+        target_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleOnwardNoninspectableTarget"
+        )
+        inner_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleOnwardNoninspectableInner"
+        )
+        leaf_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleOnwardNoninspectableLeaf"
+        )
+        branch_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleOnwardNoninspectableBranch"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        leaf = write_leaf_with_branch_instance(leaf_name, branch_name)
+        branch = write_branch(branch_name, "Init ==")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{leaf}:4 defines projected commit progress init operator "
+            f"HiddenInit as Branch!Init, but target {branch}:3 is not an "
+            "inspectable single-expression definition; projected commit "
+            "progress init aliases must resolve to inspectable "
+            "initial-state predicates"
+        ]
+
+        target_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleOnwardCycleTarget"
+        )
+        inner_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleOnwardCycleInner"
+        )
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleOnwardCycleLeaf"
+        branch_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleOnwardCycleBranch"
+        )
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        write_leaf_with_branch_instance(leaf_name, branch_name)
+        branch = write_cyclic_branch(branch_name)
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{branch}:3 defines projected commit progress init operator "
+            "Init, but init alias resolution cycles at Init; projected "
+            "commit progress init aliases must be acyclic and resolve to "
+            "inspectable initial-state predicates"
+        ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_transitive_init_alias_module_alias_helper_nested_module_alias_target_helper_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def projection_for(target_name: str) -> Path:
+        tla = tmp_path / f"SumeragiByzantineCommitProjectionGate{target_name}.tla"
+        tla.write_text(
+            projected_commit_progress_spec_contract_text(
+                module,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                init_lines=["Init == Interleaving!Init"],
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def write_imported_target(
+        target_name: str,
+        inner_name: str,
+        connective: str,
+    ) -> None:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    f"Inner == INSTANCE {inner_name}",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} Inner!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_inner(
+        inner_name: str,
+        leaf_name: str,
+        connective: str,
+    ) -> None:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    f"Leaf == INSTANCE {leaf_name}",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} Leaf!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_leaf(
+        leaf_name: str,
+        helper_body: str,
+        connective: str,
+    ) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} LocalInit",
+                    helper_body,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    shape_requirement = (
+        "projected commit progress init operators must be initial-state "
+        "predicates without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or "
+        "<> temporal markers"
+    )
+    cases = [
+        ("Conjunct", "/\\"),
+        ("Boolean", "\\/"),
+    ]
+    for label, connective in cases:
+        target_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperActionTarget"
+        )
+        inner_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperActionInner"
+        )
+        leaf_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperActionLeaf"
+        )
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        leaf = write_leaf(leaf_name, "LocalInit == UNCHANGED vars", connective)
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{leaf}:4 defines projected commit progress init operator "
+            "HiddenInit, but helper LocalInit at "
+            f"{leaf}:5 is not an initial-state predicate; {shape_requirement}"
+        ]
+
+        target_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperParameterizedTarget"
+        )
+        inner_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperParameterizedInner"
+        )
+        leaf_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperParameterizedLeaf"
+        )
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        leaf = write_leaf(leaf_name, "LocalInit(value) == TRUE", connective)
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{leaf}:4 defines projected commit progress init operator "
+            f"HiddenInit, but helper LocalInit at {leaf}:5 has arity 1; "
+            "projected commit progress init helpers must resolve to defined "
+            "zero-arity initial-state predicates"
+        ]
+
+        target_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperNoninspectableTarget"
+        )
+        inner_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperNoninspectableInner"
+        )
+        leaf_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperNoninspectableLeaf"
+        )
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        leaf = write_leaf(leaf_name, "LocalInit ==", connective)
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{leaf}:4 defines projected commit progress init operator "
+            f"HiddenInit, but helper LocalInit at {leaf}:5 is not an "
+            "inspectable single-expression definition; projected commit "
+            "progress init helpers must resolve to inspectable "
+            "initial-state predicates"
+        ]
+
+        target_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperCycleTarget"
+        )
+        inner_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperCycleInner"
+        )
+        leaf_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperCycleLeaf"
+        )
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        leaf = write_leaf(
+            leaf_name,
+            f"LocalInit == GoodInit {connective} LocalInit",
+            connective,
+        )
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{leaf}:5 defines projected commit progress init operator "
+            "LocalInit, but init helper resolution cycles at LocalInit; "
+            "projected commit progress init helpers must be acyclic and "
+            "resolve to inspectable initial-state predicates"
+        ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_transitive_init_alias_module_alias_helper_nested_module_alias_target_helper_alias_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def projection_for(target_name: str) -> Path:
+        tla = tmp_path / f"SumeragiByzantineCommitProjectionGate{target_name}.tla"
+        tla.write_text(
+            projected_commit_progress_spec_contract_text(
+                module,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                init_lines=["Init == Interleaving!Init"],
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def write_imported_target(
+        target_name: str,
+        inner_name: str,
+        connective: str,
+    ) -> None:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    f"Inner == INSTANCE {inner_name}",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} Inner!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_inner(
+        inner_name: str,
+        leaf_name: str,
+        connective: str,
+    ) -> None:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    f"Leaf == INSTANCE {leaf_name}",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} Leaf!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_leaf_without_branch_instance(
+        leaf_name: str,
+        connective: str,
+    ) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} LocalInit",
+                    "LocalInit == Branch!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    def write_leaf_with_branch_instance(
+        leaf_name: str,
+        branch_name: str,
+        connective: str,
+    ) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    f"Branch == INSTANCE {branch_name}",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} LocalInit",
+                    "LocalInit == Branch!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    def write_branch(branch_name: str, body: str) -> Path:
+        branch = tmp_path / f"{branch_name}.tla"
+        branch.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {branch_name} ----",
+                    "VARIABLES vars",
+                    body,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return branch
+
+    def write_cyclic_branch(branch_name: str) -> Path:
+        branch = tmp_path / f"{branch_name}.tla"
+        branch.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {branch_name} ----",
+                    "VARIABLES vars",
+                    "Init == HiddenInit",
+                    "HiddenInit == Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return branch
+
+    shape_requirement = (
+        "projected commit progress init operators must be initial-state "
+        "predicates without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or "
+        "<> temporal markers"
+    )
+    cases = [
+        ("Conjunct", "/\\"),
+        ("Boolean", "\\/"),
+    ]
+    for label, connective in cases:
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasNoInstanceTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasNoInstanceInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasNoInstanceLeaf"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        leaf = write_leaf_without_branch_instance(leaf_name, connective)
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{leaf}:5 defines projected commit progress init operator "
+            "LocalInit, but aliases Branch!Init without a named INSTANCE "
+            "alias Branch; projected commit progress init aliases must "
+            "resolve through named local INSTANCE declarations"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasMissingTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasMissingInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasMissingLeaf"
+        branch_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasMissingBranch"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        leaf = write_leaf_with_branch_instance(leaf_name, branch_name, connective)
+        missing = tmp_path / f"{branch_name}.tla"
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{leaf}:6 defines projected commit progress init operator "
+            f"LocalInit as Branch!Init, but target module {missing} does "
+            "not exist; projected commit progress init aliases must resolve "
+            "to local modules"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasUndefinedTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasUndefinedInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasUndefinedLeaf"
+        branch_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasUndefinedBranch"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        leaf = write_leaf_with_branch_instance(leaf_name, branch_name, connective)
+        branch = write_branch(branch_name, "Other == TRUE")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{leaf}:6 defines projected commit progress init operator "
+            f"LocalInit as Branch!Init, but target {branch} does not define "
+            "Init; projected commit progress init aliases must resolve to "
+            "defined zero-arity initial-state predicates"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasActionTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasActionInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasActionLeaf"
+        branch_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasActionBranch"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        leaf = write_leaf_with_branch_instance(leaf_name, branch_name, connective)
+        branch = write_branch(branch_name, "Init == UNCHANGED vars")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{leaf}:6 defines projected commit progress init operator "
+            f"LocalInit as Branch!Init, but target {branch}:3 is not an "
+            f"initial-state predicate; {shape_requirement}"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasParameterizedTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasParameterizedInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasParameterizedLeaf"
+        branch_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasParameterizedBranch"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        leaf = write_leaf_with_branch_instance(leaf_name, branch_name, connective)
+        branch = write_branch(branch_name, "Init(value) == TRUE")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{leaf}:6 defines projected commit progress init operator "
+            f"LocalInit as Branch!Init, but target {branch}:3 has arity 1; "
+            "projected commit progress init aliases must resolve to defined "
+            "zero-arity initial-state predicates"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasNoninspectableTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasNoninspectableInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasNoninspectableLeaf"
+        branch_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasNoninspectableBranch"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        leaf = write_leaf_with_branch_instance(leaf_name, branch_name, connective)
+        branch = write_branch(branch_name, "Init ==")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{leaf}:6 defines projected commit progress init operator "
+            f"LocalInit as Branch!Init, but target {branch}:3 is not an "
+            "inspectable single-expression definition; projected commit "
+            "progress init aliases must resolve to inspectable "
+            "initial-state predicates"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasCycleTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasCycleInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasCycleLeaf"
+        branch_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasCycleBranch"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        write_leaf_with_branch_instance(leaf_name, branch_name, connective)
+        branch = write_cyclic_branch(branch_name)
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{branch}:3 defines projected commit progress init operator "
+            "Init, but init alias resolution cycles at Init; projected "
+            "commit progress init aliases must be acyclic and resolve to "
+            "inspectable initial-state predicates"
+        ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_transitive_init_alias_module_alias_helper_nested_module_alias_target_helper_alias_onward_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def projection_for(target_name: str) -> Path:
+        tla = tmp_path / f"SumeragiByzantineCommitProjectionGate{target_name}.tla"
+        tla.write_text(
+            projected_commit_progress_spec_contract_text(
+                module,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                init_lines=["Init == Interleaving!Init"],
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def write_imported_target(
+        target_name: str,
+        inner_name: str,
+        connective: str,
+    ) -> None:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    f"Inner == INSTANCE {inner_name}",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} Inner!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_inner(
+        inner_name: str,
+        leaf_name: str,
+        connective: str,
+    ) -> None:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    f"Leaf == INSTANCE {leaf_name}",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} Leaf!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_leaf(
+        leaf_name: str,
+        branch_name: str,
+        connective: str,
+    ) -> None:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    f"Branch == INSTANCE {branch_name}",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} LocalInit",
+                    "LocalInit == Branch!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_branch_without_twig_instance(branch_name: str) -> Path:
+        branch = tmp_path / f"{branch_name}.tla"
+        branch.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {branch_name} ----",
+                    "VARIABLES vars",
+                    "Init == Twig!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return branch
+
+    def write_branch_with_twig_instance(branch_name: str, twig_name: str) -> Path:
+        branch = tmp_path / f"{branch_name}.tla"
+        branch.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {branch_name} ----",
+                    "VARIABLES vars",
+                    f"Twig == INSTANCE {twig_name}",
+                    "Init == Twig!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return branch
+
+    def write_twig(twig_name: str, body: str) -> Path:
+        twig = tmp_path / f"{twig_name}.tla"
+        twig.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {twig_name} ----",
+                    "VARIABLES vars",
+                    body,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return twig
+
+    def write_cyclic_twig(twig_name: str) -> Path:
+        twig = tmp_path / f"{twig_name}.tla"
+        twig.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {twig_name} ----",
+                    "VARIABLES vars",
+                    "Init == HiddenInit",
+                    "HiddenInit == Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return twig
+
+    shape_requirement = (
+        "projected commit progress init operators must be initial-state "
+        "predicates without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or "
+        "<> temporal markers"
+    )
+    cases = [
+        ("Conjunct", "/\\"),
+        ("Boolean", "\\/"),
+    ]
+    for label, connective in cases:
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardNoInstanceTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardNoInstanceInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardNoInstanceLeaf"
+        branch_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardNoInstanceBranch"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        write_leaf(leaf_name, branch_name, connective)
+        branch = write_branch_without_twig_instance(branch_name)
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{branch}:3 defines projected commit progress init operator "
+            "Init, but aliases Twig!Init without a named INSTANCE alias "
+            "Twig; projected commit progress init aliases must resolve "
+            "through named local INSTANCE declarations"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardMissingTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardMissingInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardMissingLeaf"
+        branch_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardMissingBranch"
+        twig_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardMissingTwig"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        write_leaf(leaf_name, branch_name, connective)
+        branch = write_branch_with_twig_instance(branch_name, twig_name)
+        missing = tmp_path / f"{twig_name}.tla"
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{branch}:4 defines projected commit progress init operator "
+            f"Init as Twig!Init, but target module {missing} does not exist; "
+            "projected commit progress init aliases must resolve to local "
+            "modules"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardUndefinedTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardUndefinedInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardUndefinedLeaf"
+        branch_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardUndefinedBranch"
+        twig_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardUndefinedTwig"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        write_leaf(leaf_name, branch_name, connective)
+        branch = write_branch_with_twig_instance(branch_name, twig_name)
+        twig = write_twig(twig_name, "Other == TRUE")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{branch}:4 defines projected commit progress init operator "
+            f"Init as Twig!Init, but target {twig} does not define Init; "
+            "projected commit progress init aliases must resolve to defined "
+            "zero-arity initial-state predicates"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardActionTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardActionInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardActionLeaf"
+        branch_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardActionBranch"
+        twig_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardActionTwig"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        write_leaf(leaf_name, branch_name, connective)
+        branch = write_branch_with_twig_instance(branch_name, twig_name)
+        twig = write_twig(twig_name, "Init == UNCHANGED vars")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{branch}:4 defines projected commit progress init operator "
+            f"Init as Twig!Init, but target {twig}:3 is not an "
+            f"initial-state predicate; {shape_requirement}"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardParameterizedTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardParameterizedInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardParameterizedLeaf"
+        branch_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardParameterizedBranch"
+        twig_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardParameterizedTwig"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        write_leaf(leaf_name, branch_name, connective)
+        branch = write_branch_with_twig_instance(branch_name, twig_name)
+        twig = write_twig(twig_name, "Init(value) == TRUE")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{branch}:4 defines projected commit progress init operator "
+            f"Init as Twig!Init, but target {twig}:3 has arity 1; projected "
+            "commit progress init aliases must resolve to defined "
+            "zero-arity initial-state predicates"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardNoninspectableTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardNoninspectableInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardNoninspectableLeaf"
+        branch_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardNoninspectableBranch"
+        twig_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardNoninspectableTwig"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        write_leaf(leaf_name, branch_name, connective)
+        branch = write_branch_with_twig_instance(branch_name, twig_name)
+        twig = write_twig(twig_name, "Init ==")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{branch}:4 defines projected commit progress init operator "
+            f"Init as Twig!Init, but target {twig}:3 is not an inspectable "
+            "single-expression definition; projected commit progress init "
+            "aliases must resolve to inspectable initial-state predicates"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardCycleTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardCycleInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardCycleLeaf"
+        branch_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardCycleBranch"
+        twig_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardCycleTwig"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        write_leaf(leaf_name, branch_name, connective)
+        write_branch_with_twig_instance(branch_name, twig_name)
+        twig = write_cyclic_twig(twig_name)
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{twig}:3 defines projected commit progress init operator Init, "
+            "but init alias resolution cycles at Init; projected commit "
+            "progress init aliases must be acyclic and resolve to "
+            "inspectable initial-state predicates"
+        ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_transitive_init_alias_module_alias_helper_nested_module_alias_target_helper_alias_onward_target_helper_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def projection_for(target_name: str) -> Path:
+        tla = tmp_path / f"SumeragiByzantineCommitProjectionGate{target_name}.tla"
+        tla.write_text(
+            projected_commit_progress_spec_contract_text(
+                module,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                init_lines=["Init == Interleaving!Init"],
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def write_imported_target(
+        target_name: str,
+        inner_name: str,
+        connective: str,
+    ) -> None:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    f"Inner == INSTANCE {inner_name}",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} Inner!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_inner(
+        inner_name: str,
+        leaf_name: str,
+        connective: str,
+    ) -> None:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    f"Leaf == INSTANCE {leaf_name}",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} Leaf!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_leaf(
+        leaf_name: str,
+        branch_name: str,
+        connective: str,
+    ) -> None:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    f"Branch == INSTANCE {branch_name}",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} LocalInit",
+                    "LocalInit == Branch!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_branch(branch_name: str, twig_name: str) -> None:
+        branch = tmp_path / f"{branch_name}.tla"
+        branch.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {branch_name} ----",
+                    "VARIABLES vars",
+                    f"Twig == INSTANCE {twig_name}",
+                    "Init == Twig!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_twig(
+        twig_name: str,
+        helper_body: str,
+        connective: str,
+    ) -> Path:
+        twig = tmp_path / f"{twig_name}.tla"
+        twig.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {twig_name} ----",
+                    "VARIABLES vars",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} TailInit",
+                    helper_body,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return twig
+
+    shape_requirement = (
+        "projected commit progress init operators must be initial-state "
+        "predicates without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or "
+        "<> temporal markers"
+    )
+    cases = [
+        ("Conjunct", "/\\"),
+        ("Boolean", "\\/"),
+    ]
+    for label, connective in cases:
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperActionTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperActionInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperActionLeaf"
+        branch_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperActionBranch"
+        twig_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperActionTwig"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        write_leaf(leaf_name, branch_name, connective)
+        write_branch(branch_name, twig_name)
+        twig = write_twig(twig_name, "TailInit == UNCHANGED vars", connective)
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{twig}:4 defines projected commit progress init operator Init, "
+            "but helper TailInit at "
+            f"{twig}:5 is not an initial-state predicate; {shape_requirement}"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperParameterizedTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperParameterizedInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperParameterizedLeaf"
+        branch_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperParameterizedBranch"
+        twig_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperParameterizedTwig"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        write_leaf(leaf_name, branch_name, connective)
+        write_branch(branch_name, twig_name)
+        twig = write_twig(twig_name, "TailInit(value) == TRUE", connective)
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{twig}:4 defines projected commit progress init operator Init, "
+            f"but helper TailInit at {twig}:5 has arity 1; projected commit "
+            "progress init helpers must resolve to defined zero-arity "
+            "initial-state predicates"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperNoninspectableTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperNoninspectableInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperNoninspectableLeaf"
+        branch_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperNoninspectableBranch"
+        twig_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperNoninspectableTwig"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        write_leaf(leaf_name, branch_name, connective)
+        write_branch(branch_name, twig_name)
+        twig = write_twig(twig_name, "TailInit ==", connective)
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{twig}:4 defines projected commit progress init operator Init, "
+            f"but helper TailInit at {twig}:5 is not an inspectable "
+            "single-expression definition; projected commit progress init "
+            "helpers must resolve to inspectable initial-state predicates"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperCycleTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperCycleInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperCycleLeaf"
+        branch_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperCycleBranch"
+        twig_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperCycleTwig"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        write_leaf(leaf_name, branch_name, connective)
+        write_branch(branch_name, twig_name)
+        twig = write_twig(
+            twig_name,
+            f"TailInit == GoodInit {connective} TailInit",
+            connective,
+        )
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{twig}:5 defines projected commit progress init operator "
+            "TailInit, but init helper resolution cycles at TailInit; "
+            "projected commit progress init helpers must be acyclic and "
+            "resolve to inspectable initial-state predicates"
+        ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_transitive_init_alias_module_alias_helper_nested_module_alias_target_helper_alias_onward_target_helper_alias_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def projection_for(target_name: str) -> Path:
+        tla = tmp_path / f"SumeragiByzantineCommitProjectionGate{target_name}.tla"
+        tla.write_text(
+            projected_commit_progress_spec_contract_text(
+                module,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                init_lines=["Init == Interleaving!Init"],
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def write_imported_target(
+        target_name: str,
+        inner_name: str,
+        connective: str,
+    ) -> None:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    f"Inner == INSTANCE {inner_name}",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} Inner!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_inner(
+        inner_name: str,
+        leaf_name: str,
+        connective: str,
+    ) -> None:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    f"Leaf == INSTANCE {leaf_name}",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} Leaf!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_leaf(
+        leaf_name: str,
+        branch_name: str,
+        connective: str,
+    ) -> None:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    f"Branch == INSTANCE {branch_name}",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} LocalInit",
+                    "LocalInit == Branch!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_branch(branch_name: str, twig_name: str) -> None:
+        branch = tmp_path / f"{branch_name}.tla"
+        branch.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {branch_name} ----",
+                    "VARIABLES vars",
+                    f"Twig == INSTANCE {twig_name}",
+                    "Init == Twig!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_twig_without_sprout_instance(
+        twig_name: str,
+        connective: str,
+    ) -> Path:
+        twig = tmp_path / f"{twig_name}.tla"
+        twig.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {twig_name} ----",
+                    "VARIABLES vars",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} TailInit",
+                    "TailInit == Sprout!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return twig
+
+    def write_twig_with_sprout_instance(
+        twig_name: str,
+        sprout_name: str,
+        connective: str,
+    ) -> Path:
+        twig = tmp_path / f"{twig_name}.tla"
+        twig.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {twig_name} ----",
+                    "VARIABLES vars",
+                    f"Sprout == INSTANCE {sprout_name}",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} TailInit",
+                    "TailInit == Sprout!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return twig
+
+    def write_sprout(sprout_name: str, body: str) -> Path:
+        sprout = tmp_path / f"{sprout_name}.tla"
+        sprout.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {sprout_name} ----",
+                    "VARIABLES vars",
+                    body,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return sprout
+
+    def write_cyclic_sprout(sprout_name: str) -> Path:
+        sprout = tmp_path / f"{sprout_name}.tla"
+        sprout.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {sprout_name} ----",
+                    "VARIABLES vars",
+                    "Init == HiddenInit",
+                    "HiddenInit == Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return sprout
+
+    shape_requirement = (
+        "projected commit progress init operators must be initial-state "
+        "predicates without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or "
+        "<> temporal markers"
+    )
+    cases = [
+        ("Conjunct", "/\\"),
+        ("Boolean", "\\/"),
+    ]
+    for label, connective in cases:
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasNoInstanceTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasNoInstanceInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasNoInstanceLeaf"
+        branch_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasNoInstanceBranch"
+        twig_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasNoInstanceTwig"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        write_leaf(leaf_name, branch_name, connective)
+        write_branch(branch_name, twig_name)
+        twig = write_twig_without_sprout_instance(twig_name, connective)
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{twig}:5 defines projected commit progress init operator "
+            "TailInit, but aliases Sprout!Init without a named INSTANCE "
+            "alias Sprout; projected commit progress init aliases must "
+            "resolve through named local INSTANCE declarations"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasMissingTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasMissingInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasMissingLeaf"
+        branch_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasMissingBranch"
+        twig_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasMissingTwig"
+        sprout_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasMissingSprout"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        write_leaf(leaf_name, branch_name, connective)
+        write_branch(branch_name, twig_name)
+        twig = write_twig_with_sprout_instance(twig_name, sprout_name, connective)
+        missing = tmp_path / f"{sprout_name}.tla"
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{twig}:6 defines projected commit progress init operator "
+            f"TailInit as Sprout!Init, but target module {missing} does not "
+            "exist; projected commit progress init aliases must resolve to "
+            "local modules"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasUndefinedTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasUndefinedInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasUndefinedLeaf"
+        branch_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasUndefinedBranch"
+        twig_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasUndefinedTwig"
+        sprout_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasUndefinedSprout"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        write_leaf(leaf_name, branch_name, connective)
+        write_branch(branch_name, twig_name)
+        twig = write_twig_with_sprout_instance(twig_name, sprout_name, connective)
+        sprout = write_sprout(sprout_name, "Other == TRUE")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{twig}:6 defines projected commit progress init operator "
+            f"TailInit as Sprout!Init, but target {sprout} does not define "
+            "Init; projected commit progress init aliases must resolve to "
+            "defined zero-arity initial-state predicates"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasActionTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasActionInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasActionLeaf"
+        branch_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasActionBranch"
+        twig_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasActionTwig"
+        sprout_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasActionSprout"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        write_leaf(leaf_name, branch_name, connective)
+        write_branch(branch_name, twig_name)
+        twig = write_twig_with_sprout_instance(twig_name, sprout_name, connective)
+        sprout = write_sprout(sprout_name, "Init == UNCHANGED vars")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{twig}:6 defines projected commit progress init operator "
+            f"TailInit as Sprout!Init, but target {sprout}:3 is not an "
+            f"initial-state predicate; {shape_requirement}"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasParameterizedTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasParameterizedInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasParameterizedLeaf"
+        branch_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasParameterizedBranch"
+        twig_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasParameterizedTwig"
+        sprout_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasParameterizedSprout"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        write_leaf(leaf_name, branch_name, connective)
+        write_branch(branch_name, twig_name)
+        twig = write_twig_with_sprout_instance(twig_name, sprout_name, connective)
+        sprout = write_sprout(sprout_name, "Init(value) == TRUE")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{twig}:6 defines projected commit progress init operator "
+            f"TailInit as Sprout!Init, but target {sprout}:3 has arity 1; "
+            "projected commit progress init aliases must resolve to defined "
+            "zero-arity initial-state predicates"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasNoninspectableTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasNoninspectableInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasNoninspectableLeaf"
+        branch_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasNoninspectableBranch"
+        twig_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasNoninspectableTwig"
+        sprout_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasNoninspectableSprout"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        write_leaf(leaf_name, branch_name, connective)
+        write_branch(branch_name, twig_name)
+        twig = write_twig_with_sprout_instance(twig_name, sprout_name, connective)
+        sprout = write_sprout(sprout_name, "Init ==")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{twig}:6 defines projected commit progress init operator "
+            f"TailInit as Sprout!Init, but target {sprout}:3 is not an "
+            "inspectable single-expression definition; projected commit "
+            "progress init aliases must resolve to inspectable "
+            "initial-state predicates"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasCycleTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasCycleInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasCycleLeaf"
+        branch_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasCycleBranch"
+        twig_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasCycleTwig"
+        sprout_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasCycleSprout"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        write_leaf(leaf_name, branch_name, connective)
+        write_branch(branch_name, twig_name)
+        write_twig_with_sprout_instance(twig_name, sprout_name, connective)
+        sprout = write_cyclic_sprout(sprout_name)
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{sprout}:3 defines projected commit progress init operator "
+            "Init, but init alias resolution cycles at Init; projected "
+            "commit progress init aliases must be acyclic and resolve to "
+            "inspectable initial-state predicates"
+        ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_transitive_init_alias_module_alias_helper_nested_module_alias_target_helper_alias_onward_target_helper_alias_onward_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def projection_for(target_name: str) -> Path:
+        tla = tmp_path / f"SumeragiByzantineCommitProjectionGate{target_name}.tla"
+        tla.write_text(
+            projected_commit_progress_spec_contract_text(
+                module,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                init_lines=["Init == Interleaving!Init"],
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def write_imported_target(
+        target_name: str,
+        inner_name: str,
+        connective: str,
+    ) -> None:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    f"Inner == INSTANCE {inner_name}",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} Inner!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_inner(
+        inner_name: str,
+        leaf_name: str,
+        connective: str,
+    ) -> None:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    f"Leaf == INSTANCE {leaf_name}",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} Leaf!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_leaf(
+        leaf_name: str,
+        branch_name: str,
+        connective: str,
+    ) -> None:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    f"Branch == INSTANCE {branch_name}",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} LocalInit",
+                    "LocalInit == Branch!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_branch(branch_name: str, twig_name: str) -> None:
+        branch = tmp_path / f"{branch_name}.tla"
+        branch.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {branch_name} ----",
+                    "VARIABLES vars",
+                    f"Twig == INSTANCE {twig_name}",
+                    "Init == Twig!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_twig(
+        twig_name: str,
+        sprout_name: str,
+        connective: str,
+    ) -> None:
+        twig = tmp_path / f"{twig_name}.tla"
+        twig.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {twig_name} ----",
+                    "VARIABLES vars",
+                    f"Sprout == INSTANCE {sprout_name}",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} TailInit",
+                    "TailInit == Sprout!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_sprout_without_bud_instance(sprout_name: str) -> Path:
+        sprout = tmp_path / f"{sprout_name}.tla"
+        sprout.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {sprout_name} ----",
+                    "VARIABLES vars",
+                    "Init == Bud!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return sprout
+
+    def write_sprout_with_bud_instance(sprout_name: str, bud_name: str) -> Path:
+        sprout = tmp_path / f"{sprout_name}.tla"
+        sprout.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {sprout_name} ----",
+                    "VARIABLES vars",
+                    f"Bud == INSTANCE {bud_name}",
+                    "Init == Bud!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return sprout
+
+    def write_bud(bud_name: str, body: str) -> Path:
+        bud = tmp_path / f"{bud_name}.tla"
+        bud.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {bud_name} ----",
+                    "VARIABLES vars",
+                    body,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return bud
+
+    def write_cyclic_bud(bud_name: str) -> Path:
+        bud = tmp_path / f"{bud_name}.tla"
+        bud.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {bud_name} ----",
+                    "VARIABLES vars",
+                    "Init == HiddenInit",
+                    "HiddenInit == Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return bud
+
+    shape_requirement = (
+        "projected commit progress init operators must be initial-state "
+        "predicates without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or "
+        "<> temporal markers"
+    )
+    cases = [
+        ("Conjunct", "/\\"),
+        ("Boolean", "\\/"),
+    ]
+    for label, connective in cases:
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardNoInstanceTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardNoInstanceInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardNoInstanceLeaf"
+        branch_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardNoInstanceBranch"
+        twig_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardNoInstanceTwig"
+        sprout_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardNoInstanceSprout"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        write_leaf(leaf_name, branch_name, connective)
+        write_branch(branch_name, twig_name)
+        write_twig(twig_name, sprout_name, connective)
+        sprout = write_sprout_without_bud_instance(sprout_name)
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{sprout}:3 defines projected commit progress init operator "
+            "Init, but aliases Bud!Init without a named INSTANCE alias Bud; "
+            "projected commit progress init aliases must resolve through "
+            "named local INSTANCE declarations"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardMissingTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardMissingInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardMissingLeaf"
+        branch_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardMissingBranch"
+        twig_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardMissingTwig"
+        sprout_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardMissingSprout"
+        bud_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardMissingBud"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        write_leaf(leaf_name, branch_name, connective)
+        write_branch(branch_name, twig_name)
+        write_twig(twig_name, sprout_name, connective)
+        sprout = write_sprout_with_bud_instance(sprout_name, bud_name)
+        missing = tmp_path / f"{bud_name}.tla"
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{sprout}:4 defines projected commit progress init operator "
+            f"Init as Bud!Init, but target module {missing} does not exist; "
+            "projected commit progress init aliases must resolve to local "
+            "modules"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardUndefinedTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardUndefinedInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardUndefinedLeaf"
+        branch_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardUndefinedBranch"
+        twig_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardUndefinedTwig"
+        sprout_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardUndefinedSprout"
+        bud_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardUndefinedBud"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        write_leaf(leaf_name, branch_name, connective)
+        write_branch(branch_name, twig_name)
+        write_twig(twig_name, sprout_name, connective)
+        sprout = write_sprout_with_bud_instance(sprout_name, bud_name)
+        bud = write_bud(bud_name, "Other == TRUE")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{sprout}:4 defines projected commit progress init operator "
+            f"Init as Bud!Init, but target {bud} does not define Init; "
+            "projected commit progress init aliases must resolve to defined "
+            "zero-arity initial-state predicates"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardActionTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardActionInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardActionLeaf"
+        branch_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardActionBranch"
+        twig_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardActionTwig"
+        sprout_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardActionSprout"
+        bud_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardActionBud"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        write_leaf(leaf_name, branch_name, connective)
+        write_branch(branch_name, twig_name)
+        write_twig(twig_name, sprout_name, connective)
+        sprout = write_sprout_with_bud_instance(sprout_name, bud_name)
+        bud = write_bud(bud_name, "Init == UNCHANGED vars")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{sprout}:4 defines projected commit progress init operator "
+            f"Init as Bud!Init, but target {bud}:3 is not an "
+            f"initial-state predicate; {shape_requirement}"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardParameterizedTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardParameterizedInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardParameterizedLeaf"
+        branch_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardParameterizedBranch"
+        twig_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardParameterizedTwig"
+        sprout_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardParameterizedSprout"
+        bud_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardParameterizedBud"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        write_leaf(leaf_name, branch_name, connective)
+        write_branch(branch_name, twig_name)
+        write_twig(twig_name, sprout_name, connective)
+        sprout = write_sprout_with_bud_instance(sprout_name, bud_name)
+        bud = write_bud(bud_name, "Init(value) == TRUE")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{sprout}:4 defines projected commit progress init operator "
+            f"Init as Bud!Init, but target {bud}:3 has arity 1; projected "
+            "commit progress init aliases must resolve to defined "
+            "zero-arity initial-state predicates"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardNoninspectableTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardNoninspectableInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardNoninspectableLeaf"
+        branch_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardNoninspectableBranch"
+        twig_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardNoninspectableTwig"
+        sprout_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardNoninspectableSprout"
+        bud_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardNoninspectableBud"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        write_leaf(leaf_name, branch_name, connective)
+        write_branch(branch_name, twig_name)
+        write_twig(twig_name, sprout_name, connective)
+        sprout = write_sprout_with_bud_instance(sprout_name, bud_name)
+        bud = write_bud(bud_name, "Init ==")
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{sprout}:4 defines projected commit progress init operator "
+            f"Init as Bud!Init, but target {bud}:3 is not an inspectable "
+            "single-expression definition; projected commit progress init "
+            "aliases must resolve to inspectable initial-state predicates"
+        ]
+
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardCycleTarget"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardCycleInner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardCycleLeaf"
+        branch_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardCycleBranch"
+        twig_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardCycleTwig"
+        sprout_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardCycleSprout"
+        bud_name = f"SumeragiInitAlias{label}ModuleAliasHelperNestedModuleTargetHelperAliasOnwardTargetHelperAliasOnwardCycleBud"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        write_leaf(leaf_name, branch_name, connective)
+        write_branch(branch_name, twig_name)
+        write_twig(twig_name, sprout_name, connective)
+        write_sprout_with_bud_instance(sprout_name, bud_name)
+        bud = write_cyclic_bud(bud_name)
+        tla = projection_for(target_name)
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{bud}:3 defines projected commit progress init operator Init, "
+            "but init alias resolution cycles at Init; projected commit "
+            "progress init aliases must be acyclic and resolve to "
+            "inspectable initial-state predicates"
+        ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_transitive_init_alias_module_alias_helper_multi_hop_recursive_helper_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def projection_for(target_name: str) -> Path:
+        tla = tmp_path / f"SumeragiByzantineCommitProjectionGate{target_name}.tla"
+        tla.write_text(
+            projected_commit_progress_spec_contract_text(
+                module,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                init_lines=["Init == Interleaving!Init"],
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def write_imported_target(
+        target_name: str,
+        inner_name: str,
+        connective: str,
+    ) -> None:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    f"Inner == INSTANCE {inner_name}",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} Inner!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_inner(inner_name: str, leaf_name: str, connective: str) -> None:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    f"Leaf == INSTANCE {leaf_name}",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} Leaf!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_leaf(leaf_name: str, branch_name: str, connective: str) -> None:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    f"Branch == INSTANCE {branch_name}",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} LocalInit",
+                    "LocalInit == Branch!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_branch(branch_name: str, twig_name: str) -> None:
+        branch = tmp_path / f"{branch_name}.tla"
+        branch.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {branch_name} ----",
+                    "VARIABLES vars",
+                    f"Twig == INSTANCE {twig_name}",
+                    "Init == Twig!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_twig(twig_name: str, sprout_name: str, connective: str) -> None:
+        twig = tmp_path / f"{twig_name}.tla"
+        twig.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {twig_name} ----",
+                    "VARIABLES vars",
+                    f"Sprout == INSTANCE {sprout_name}",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} TailInit",
+                    "TailInit == Sprout!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_sprout(sprout_name: str, bud_name: str) -> None:
+        sprout = tmp_path / f"{sprout_name}.tla"
+        sprout.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {sprout_name} ----",
+                    "VARIABLES vars",
+                    f"Bud == INSTANCE {bud_name}",
+                    "Init == Bud!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_bud(bud_name: str, seed_name: str) -> None:
+        bud = tmp_path / f"{bud_name}.tla"
+        bud.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {bud_name} ----",
+                    "VARIABLES vars",
+                    f"Seed == INSTANCE {seed_name}",
+                    "Init == Seed!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_seed(seed_name: str, helper_body: str, connective: str) -> Path:
+        seed = tmp_path / f"{seed_name}.tla"
+        seed.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {seed_name} ----",
+                    "VARIABLES vars",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} HiddenInit",
+                    helper_body,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return seed
+
+    def write_chain(label: str, connective: str, suffix: str, helper_body: str) -> tuple[Path, Path]:
+        target_name = f"SumeragiInitAlias{label}ModuleAliasHelperMultiHop{suffix}Target"
+        inner_name = f"SumeragiInitAlias{label}ModuleAliasHelperMultiHop{suffix}Inner"
+        leaf_name = f"SumeragiInitAlias{label}ModuleAliasHelperMultiHop{suffix}Leaf"
+        branch_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperMultiHop{suffix}Branch"
+        )
+        twig_name = f"SumeragiInitAlias{label}ModuleAliasHelperMultiHop{suffix}Twig"
+        sprout_name = (
+            f"SumeragiInitAlias{label}ModuleAliasHelperMultiHop{suffix}Sprout"
+        )
+        bud_name = f"SumeragiInitAlias{label}ModuleAliasHelperMultiHop{suffix}Bud"
+        seed_name = f"SumeragiInitAlias{label}ModuleAliasHelperMultiHop{suffix}Seed"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        write_leaf(leaf_name, branch_name, connective)
+        write_branch(branch_name, twig_name)
+        write_twig(twig_name, sprout_name, connective)
+        write_sprout(sprout_name, bud_name)
+        write_bud(bud_name, seed_name)
+        seed = write_seed(seed_name, helper_body, connective)
+        return projection_for(target_name), seed
+
+    shape_requirement = (
+        "projected commit progress init operators must be initial-state "
+        "predicates without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or "
+        "<> temporal markers"
+    )
+    cases = [
+        ("Conjunct", "/\\"),
+        ("Boolean", "\\/"),
+    ]
+    for label, connective in cases:
+        tla, seed = write_chain(
+            label,
+            connective,
+            "Action",
+            "HiddenInit == UNCHANGED vars",
+        )
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{seed}:4 defines projected commit progress init operator Init, "
+            "but helper HiddenInit at "
+            f"{seed}:5 is not an initial-state predicate; {shape_requirement}"
+        ]
+
+        tla, seed = write_chain(
+            label,
+            connective,
+            "Parameterized",
+            "HiddenInit(value) == TRUE",
+        )
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{seed}:4 defines projected commit progress init operator Init, "
+            f"but helper HiddenInit at {seed}:5 has arity 1; projected "
+            "commit progress init helpers must resolve to defined "
+            "zero-arity initial-state predicates"
+        ]
+
+        tla, seed = write_chain(
+            label,
+            connective,
+            "Noninspectable",
+            "HiddenInit ==",
+        )
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{seed}:4 defines projected commit progress init operator Init, "
+            f"but helper HiddenInit at {seed}:5 is not an inspectable "
+            "single-expression definition; projected commit progress init "
+            "helpers must resolve to inspectable initial-state predicates"
+        ]
+
+        tla, seed = write_chain(
+            label,
+            connective,
+            "Cycle",
+            f"HiddenInit == GoodInit {connective} HiddenInit",
+        )
+        assert module.projected_commit_progress_spec_contract_errors(tla) == [
+            f"{seed}:5 defines projected commit progress init operator "
+            "HiddenInit, but init helper resolution cycles at HiddenInit; "
+            "projected commit progress init helpers must be acyclic and "
+            "resolve to inspectable initial-state predicates"
+        ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_transitive_init_alias_module_alias_helper_cycles(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    conjunct_target = tmp_path / "SumeragiInitAliasModuleAliasHelperCycleTarget.tla"
+    boolean_target = (
+        tmp_path / "SumeragiInitAliasBooleanModuleAliasHelperCycleTarget.tla"
+    )
+    conjunct_target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitAliasModuleAliasHelperCycleTarget ----",
+                "VARIABLES vars",
+                "Self == INSTANCE SumeragiInitAliasModuleAliasHelperCycleTarget",
+                "GoodInit == vars = vars",
+                "Init == GoodInit /\\ Self!Init",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    boolean_target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitAliasBooleanModuleAliasHelperCycleTarget ----",
+                "VARIABLES vars",
+                "Self == INSTANCE SumeragiInitAliasBooleanModuleAliasHelperCycleTarget",
+                "GoodInit == vars = vars",
+                "Init == GoodInit \\/ Self!Init",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    conjunct_tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateTransitiveInitAliasModuleAliasHelperCycle.tla"
+    )
+    boolean_tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateTransitiveInitAliasBooleanModuleAliasHelperCycle.tla"
+    )
+    conjunct_tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiInitAliasModuleAliasHelperCycleTarget",
+            ],
+            init_lines=["Init == Interleaving!Init"],
+        ),
+        encoding="utf-8",
+    )
+    boolean_tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiInitAliasBooleanModuleAliasHelperCycleTarget",
+            ],
+            init_lines=["Init == Interleaving!Init"],
+        ),
+        encoding="utf-8",
+    )
+
+    module_helper_cycle_requirement = (
+        "projected commit progress init module-alias helpers must be acyclic "
+        "and resolve to inspectable initial-state predicates"
+    )
+    assert module.projected_commit_progress_spec_contract_errors(conjunct_tla) == [
+        f"{conjunct_target}:5 defines projected commit progress init operator "
+        "Init, but module helper Self!Init cycles at Init; "
+        f"{module_helper_cycle_requirement}"
+    ]
+    assert module.projected_commit_progress_spec_contract_errors(boolean_tla) == [
+        f"{boolean_target}:5 defines projected commit progress init operator "
+        "Init, but module helper Self!Init cycles at Init; "
+        f"{module_helper_cycle_requirement}"
+    ]
+
+
 def test_projected_commit_progress_spec_contract_errors_rejects_cyclic_init_alias(
     tmp_path: Path,
 ) -> None:
@@ -18202,6 +25879,65 @@ def test_projected_commit_progress_spec_contract_errors_rejects_boolean_wrapped_
     ]
 
 
+def test_projected_commit_progress_spec_contract_errors_rejects_fairness_helper_wrapper_and_action_multi_hop_composed_fair_actions(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    wrapper_tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateHelperWrapperMultiHopComposedAction.tla"
+    )
+    wrapper_tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "WrappedRbcChunk == HiddenRbcChunk",
+                "HiddenRbcChunk == TailRbcChunk",
+                "TailRbcChunk == FALSE \\/ RbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars /\\ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(wrapper_tla) == [
+        f"{wrapper_tla}:5 defines ProjectedCommitProgressFairness, but "
+        "references WF_vars action HonestPropose at line 5 whose definition "
+        "at line 18 reaches fair action(s) RbcChunk through static helper "
+        "wrapper(s); projected commit progress fairness action helper "
+        "wrappers must not hide composed fair actions"
+    ]
+
+    action_tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateHelperActionMultiHopComposedAction.tla"
+    )
+    action_tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "WrappedRbcChunk == UNCHANGED vars /\\ HiddenRbcChunk",
+                "HiddenRbcChunk == FALSE \\/ TailRbcChunk",
+                "TailRbcChunk == RbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars /\\ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(action_tla) == [
+        f"{action_tla}:5 defines ProjectedCommitProgressFairness, but "
+        "references WF_vars action HonestPropose at line 5 whose definition "
+        "at line 18 reaches fair action(s) RbcChunk through action helper(s); "
+        "projected commit progress fairness action helper actions must not "
+        "hide composed fair actions"
+    ]
+
+
 def test_projected_commit_progress_spec_contract_errors_rejects_invalid_fairness_helper_references(
     tmp_path: Path,
 ) -> None:
@@ -18270,6 +26006,81 @@ def test_projected_commit_progress_spec_contract_errors_rejects_boolean_invalid_
     ]
 
 
+def test_projected_commit_progress_spec_contract_errors_rejects_fairness_helper_reference_multi_hop_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    conjunct_tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateFairnessHelperReferenceMultiHop.tla"
+    )
+    conjunct_tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "WrappedRbcChunk == HiddenRbcChunk",
+                "HiddenRbcChunk == ParameterizedHelper /\\ OpaqueHelper",
+                "ParameterizedHelper(peer) == UNCHANGED vars",
+                "OpaqueHelper ==",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars /\\ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(conjunct_tla) == [
+        f"{conjunct_tla}:6 defines ProjectedCommitProgressFairness, but "
+        "references WF_vars action HonestPropose at line 6 whose definition "
+        f"at line 19 reaches helper ParameterizedHelper at {conjunct_tla}:3, "
+        "but helper has arity 1; projected commit progress fairness action "
+        "helper references must resolve to defined zero-arity helper "
+        "definitions",
+        f"{conjunct_tla}:6 defines ProjectedCommitProgressFairness, but "
+        "references WF_vars action HonestPropose at line 6 whose definition "
+        f"at line 19 reaches helper OpaqueHelper at {conjunct_tla}:4, but "
+        "helper is not an inspectable single-expression definition; "
+        "projected commit progress fairness action helper references must "
+        "resolve to inspectable helper definitions",
+    ]
+
+    boolean_tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateBooleanFairnessHelperReferenceMultiHop.tla"
+    )
+    boolean_tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "WrappedRbcChunk == FALSE \\/ HiddenRbcChunk",
+                "HiddenRbcChunk == ParameterizedHelper \\/ OpaqueHelper",
+                "ParameterizedHelper(peer) == UNCHANGED vars",
+                "OpaqueHelper ==",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars \\/ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(boolean_tla) == [
+        f"{boolean_tla}:6 defines ProjectedCommitProgressFairness, but "
+        "references WF_vars action HonestPropose at line 6 whose definition "
+        f"at line 19 reaches helper OpaqueHelper at {boolean_tla}:4, but "
+        "helper is not an inspectable single-expression definition; "
+        "projected commit progress fairness action helper references must "
+        "resolve to inspectable helper definitions",
+        f"{boolean_tla}:6 defines ProjectedCommitProgressFairness, but "
+        "references WF_vars action HonestPropose at line 6 whose definition "
+        f"at line 19 reaches helper ParameterizedHelper at {boolean_tla}:3, "
+        "but helper has arity 1; projected commit progress fairness action "
+        "helper references must resolve to defined zero-arity helper "
+        "definitions",
+    ]
+
+
 def test_projected_commit_progress_spec_contract_errors_rejects_fairness_helper_wrapper_cycle(
     tmp_path: Path,
 ) -> None:
@@ -18331,6 +26142,67 @@ def test_projected_commit_progress_spec_contract_errors_rejects_boolean_operand_
         "wrapper resolution cycles at WrappedRbcChunk; projected commit "
         "progress fairness action helper wrappers must be acyclic and "
         "resolve to inspectable helper definitions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_fairness_helper_wrapper_and_action_multi_hop_cycles(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    wrapper_tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateFairnessHelperWrapperMultiHopCycle.tla"
+    )
+    wrapper_tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "WrappedRbcChunk == FirstRbcChunk",
+                "FirstRbcChunk == SecondRbcChunk",
+                "SecondRbcChunk == FALSE \\/ WrappedRbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars /\\ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(wrapper_tla) == [
+        f"{wrapper_tla}:5 defines ProjectedCommitProgressFairness, but "
+        "references WF_vars action HonestPropose at line 5 whose definition "
+        f"at line 18 reaches helper WrappedRbcChunk at {wrapper_tla}:1, but "
+        "fairness helper wrapper resolution cycles at WrappedRbcChunk; "
+        "projected commit progress fairness action helper wrappers must be "
+        "acyclic and resolve to inspectable helper definitions"
+    ]
+
+    action_tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateFairnessActionHelperMultiHopCycle.tla"
+    )
+    action_tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "WrappedRbcChunk == UNCHANGED vars /\\ FirstRbcChunk",
+                "FirstRbcChunk == SecondRbcChunk",
+                "SecondRbcChunk == FALSE \\/ WrappedRbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars /\\ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(action_tla) == [
+        f"{action_tla}:5 defines ProjectedCommitProgressFairness, but "
+        "references WF_vars action HonestPropose at line 5 whose definition "
+        f"at line 18 reaches helper WrappedRbcChunk at {action_tla}:1, but "
+        "fairness action helper resolution cycles at WrappedRbcChunk; "
+        "projected commit progress fairness action helper actions must be "
+        "acyclic and resolve to inspectable helper definitions"
     ]
 
 
@@ -19064,6 +26936,66 @@ def test_projected_commit_progress_spec_contract_errors_rejects_helper_alias_cyc
     ]
 
 
+def test_projected_commit_progress_spec_contract_errors_rejects_helper_alias_multi_hop_module_alias_cycle(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiFairActionHelperAliasCycleHopTarget.tla"
+    inner = tmp_path / "SumeragiFairActionHelperAliasCycleHopInner.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFairActionHelperAliasCycleHopTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiFairActionHelperAliasCycleHopInner",
+                "Start == HiddenStart",
+                "HiddenStart == Inner!Branch",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFairActionHelperAliasCycleHopInner ----",
+                "VARIABLES vars",
+                "Back == INSTANCE SumeragiFairActionHelperAliasCycleHopTarget",
+                "Branch == LocalBranch",
+                "LocalBranch == Back!Start",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateHelperAliasCycleHop.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiFairActionHelperAliasCycleHopTarget",
+                "WrappedRbcChunk == Interleaving!Start",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars /\\ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        f"reaches helper Start at {target}:4, but fairness helper alias "
+        "resolution cycles at Start; projected commit progress fairness "
+        "action helper aliases must be acyclic and resolve to inspectable "
+        "helper definitions"
+    ]
+
+
 def test_projected_commit_progress_spec_contract_errors_rejects_boolean_operand_helper_alias_cycle(
     tmp_path: Path,
 ) -> None:
@@ -19507,6 +27439,206 @@ def test_projected_commit_progress_spec_contract_errors_rejects_helper_alias_non
     ]
 
 
+def test_projected_commit_progress_spec_contract_errors_rejects_helper_alias_multi_hop_recursive_helper_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def projection_for(target_name: str) -> Path:
+        tla = (
+            tmp_path
+            / f"SumeragiByzantineCommitProjectionGateFairActionHelperAliasMultiHop{target_name}.tla"
+        )
+        tla.write_text(
+            projected_commit_progress_spec_contract_text(
+                module,
+                preamble_lines=[
+                    f"Interleaving == INSTANCE {target_name}",
+                    "WrappedRbcChunk == Interleaving!Start",
+                ],
+                action_definition_overrides={
+                    "HonestPropose": "HonestPropose == UNCHANGED vars /\\ WrappedRbcChunk",
+                },
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def write_imported_target(target_name: str, inner_name: str) -> None:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    f"Inner == INSTANCE {inner_name}",
+                    "Start == HiddenStart",
+                    "HiddenStart == Inner!Branch",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_inner_without_leaf_instance(inner_name: str) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    "Branch == LocalBranch",
+                    "LocalBranch == Leaf!Action",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_inner_with_leaf_instance(inner_name: str, leaf_name: str) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    f"Leaf == INSTANCE {leaf_name}",
+                    "Branch == LocalBranch",
+                    "LocalBranch == Leaf!Action",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_leaf(leaf_name: str, body: str) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    body,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    def write_cyclic_leaf(leaf_name: str) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    "Action == HiddenAction",
+                    "HiddenAction == Action",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    def write_chain_without_leaf_instance(suffix: str) -> tuple[Path, Path]:
+        target_name = f"SumeragiFairActionHelperAliasMultiHop{suffix}Target"
+        inner_name = f"SumeragiFairActionHelperAliasMultiHop{suffix}Inner"
+        write_imported_target(target_name, inner_name)
+        inner = write_inner_without_leaf_instance(inner_name)
+        return projection_for(target_name), inner
+
+    def write_chain_with_leaf(suffix: str, body: str) -> tuple[Path, Path, Path]:
+        target_name = f"SumeragiFairActionHelperAliasMultiHop{suffix}Target"
+        inner_name = f"SumeragiFairActionHelperAliasMultiHop{suffix}Inner"
+        leaf_name = f"SumeragiFairActionHelperAliasMultiHop{suffix}Leaf"
+        write_imported_target(target_name, inner_name)
+        inner = write_inner_with_leaf_instance(inner_name, leaf_name)
+        leaf = write_leaf(leaf_name, body)
+        return projection_for(target_name), inner, leaf
+
+    def write_chain_with_cyclic_leaf(suffix: str) -> tuple[Path, Path]:
+        target_name = f"SumeragiFairActionHelperAliasMultiHop{suffix}Target"
+        inner_name = f"SumeragiFairActionHelperAliasMultiHop{suffix}Inner"
+        leaf_name = f"SumeragiFairActionHelperAliasMultiHop{suffix}Leaf"
+        write_imported_target(target_name, inner_name)
+        write_inner_with_leaf_instance(inner_name, leaf_name)
+        leaf = write_cyclic_leaf(leaf_name)
+        return projection_for(target_name), leaf
+
+    tla, inner = write_chain_without_leaf_instance("NoInstance")
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        f"reaches helper LocalBranch at {inner}:4 aliasing Leaf!Action "
+        "without a named INSTANCE alias Leaf; projected commit progress "
+        "fairness action helper aliases must resolve through named local "
+        "INSTANCE declarations"
+    ]
+
+    target_name = "SumeragiFairActionHelperAliasMultiHopMissingTarget"
+    inner_name = "SumeragiFairActionHelperAliasMultiHopMissingInner"
+    leaf_name = "SumeragiFairActionHelperAliasMultiHopMissingLeaf"
+    write_imported_target(target_name, inner_name)
+    inner = write_inner_with_leaf_instance(inner_name, leaf_name)
+    missing = tmp_path / f"{leaf_name}.tla"
+    tla = projection_for(target_name)
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        f"reaches helper LocalBranch at {inner}:5 aliasing Leaf!Action, "
+        f"but target module {missing} does not exist; projected commit "
+        "progress fairness action helper aliases must resolve to local "
+        "action modules"
+    ]
+
+    tla, inner, leaf = write_chain_with_leaf("Undefined", "Other == UNCHANGED vars")
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        f"reaches helper LocalBranch at {inner}:5 aliasing Leaf!Action, "
+        f"but target {leaf} does not define Action; projected commit "
+        "progress fairness action helper aliases must resolve to defined "
+        "zero-arity actions"
+    ]
+
+    tla, inner, leaf = write_chain_with_leaf(
+        "Parameterized",
+        "Action(value) == UNCHANGED vars",
+    )
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        f"reaches helper LocalBranch at {inner}:5 aliasing Leaf!Action, "
+        f"but target {leaf}:3 has arity 1; projected commit progress "
+        "fairness action helper aliases must resolve to defined zero-arity "
+        "actions"
+    ]
+
+    tla, _inner, leaf = write_chain_with_leaf("Noninspectable", "Action ==")
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        f"reaches helper Action at {leaf}:3, but helper is not an "
+        "inspectable single-expression definition; projected commit progress "
+        "fairness action helper aliases must resolve imported helper "
+        "references to inspectable helper definitions"
+    ]
+
+    tla, leaf = write_chain_with_cyclic_leaf("Cycle")
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        f"reaches helper Action at {leaf}:3, but fairness helper alias "
+        "resolution cycles at Action; projected commit progress fairness "
+        "action helper aliases must be acyclic and resolve to inspectable "
+        "helper definitions"
+    ]
+
+
 def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_conjunct_fair_action_composition(
     tmp_path: Path,
 ) -> None:
@@ -19919,6 +28051,204 @@ def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_con
         f"{target}:3 is not an inspectable single-expression definition; "
         "projected commit progress fairness action module-alias conjuncts "
         "must resolve to inspectable action definitions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_conjunct_multi_hop_recursive_helper_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def projection_for(target_name: str) -> Path:
+        tla = (
+            tmp_path
+            / f"SumeragiByzantineCommitProjectionGateModuleAliasConjunctMultiHop{target_name}.tla"
+        )
+        tla.write_text(
+            projected_commit_progress_spec_contract_text(
+                module,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                action_definition_overrides={
+                    "HonestPropose": "HonestPropose == UNCHANGED vars /\\ Interleaving!Start",
+                },
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def write_imported_target(target_name: str, inner_name: str) -> None:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    f"Inner == INSTANCE {inner_name}",
+                    "Start == HiddenStart",
+                    "HiddenStart == Inner!Branch",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_inner_without_leaf_instance(inner_name: str) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    "Branch == LocalBranch",
+                    "LocalBranch == Leaf!Action",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_inner_with_leaf_instance(inner_name: str, leaf_name: str) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    f"Leaf == INSTANCE {leaf_name}",
+                    "Branch == LocalBranch",
+                    "LocalBranch == Leaf!Action",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_leaf(leaf_name: str, body: str) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    body,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    def write_cyclic_leaf(leaf_name: str) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    "Action == HiddenAction",
+                    "HiddenAction == Action",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    def write_chain_without_leaf_instance(suffix: str) -> tuple[Path, Path]:
+        target_name = f"SumeragiModuleAliasConjunctMultiHop{suffix}Target"
+        inner_name = f"SumeragiModuleAliasConjunctMultiHop{suffix}Inner"
+        write_imported_target(target_name, inner_name)
+        inner = write_inner_without_leaf_instance(inner_name)
+        return projection_for(target_name), inner
+
+    def write_chain_with_leaf(suffix: str, body: str) -> tuple[Path, Path, Path]:
+        target_name = f"SumeragiModuleAliasConjunctMultiHop{suffix}Target"
+        inner_name = f"SumeragiModuleAliasConjunctMultiHop{suffix}Inner"
+        leaf_name = f"SumeragiModuleAliasConjunctMultiHop{suffix}Leaf"
+        write_imported_target(target_name, inner_name)
+        inner = write_inner_with_leaf_instance(inner_name, leaf_name)
+        leaf = write_leaf(leaf_name, body)
+        return projection_for(target_name), inner, leaf
+
+    def write_chain_with_cyclic_leaf(suffix: str) -> tuple[Path, Path]:
+        target_name = f"SumeragiModuleAliasConjunctMultiHop{suffix}Target"
+        inner_name = f"SumeragiModuleAliasConjunctMultiHop{suffix}Inner"
+        leaf_name = f"SumeragiModuleAliasConjunctMultiHop{suffix}Leaf"
+        write_imported_target(target_name, inner_name)
+        write_inner_with_leaf_instance(inner_name, leaf_name)
+        leaf = write_cyclic_leaf(leaf_name)
+        return projection_for(target_name), leaf
+
+    tla, inner = write_chain_without_leaf_instance("NoInstance")
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 3 whose definition at line 16 "
+        "uses module-alias conjunct Interleaving!Start, but helper "
+        f"LocalBranch at {inner}:4 aliases Leaf!Action without a named "
+        "INSTANCE alias Leaf; projected commit progress fairness action "
+        "module-alias conjuncts must resolve through named local INSTANCE "
+        "declarations"
+    ]
+
+    target_name = "SumeragiModuleAliasConjunctMultiHopMissingTarget"
+    inner_name = "SumeragiModuleAliasConjunctMultiHopMissingInner"
+    leaf_name = "SumeragiModuleAliasConjunctMultiHopMissingLeaf"
+    write_imported_target(target_name, inner_name)
+    inner = write_inner_with_leaf_instance(inner_name, leaf_name)
+    missing = tmp_path / f"{leaf_name}.tla"
+    tla = projection_for(target_name)
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 3 whose definition at line 16 "
+        "uses module-alias conjunct Interleaving!Start, but helper "
+        f"LocalBranch at {inner}:5 aliases Leaf!Action, but target module "
+        f"{missing} does not exist; projected commit progress fairness "
+        "action module-alias conjuncts must resolve to local action modules"
+    ]
+
+    tla, inner, leaf = write_chain_with_leaf("Undefined", "Other == UNCHANGED vars")
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 3 whose definition at line 16 "
+        "uses module-alias conjunct Interleaving!Start, but helper "
+        f"LocalBranch at {inner}:5 aliases Leaf!Action, but target {leaf} "
+        "does not define Action; projected commit progress fairness action "
+        "module-alias conjuncts must resolve to defined zero-arity actions"
+    ]
+
+    tla, inner, leaf = write_chain_with_leaf(
+        "Parameterized",
+        "Action(value) == UNCHANGED vars",
+    )
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 3 whose definition at line 16 "
+        "uses module-alias conjunct Interleaving!Start, but helper "
+        f"LocalBranch at {inner}:5 aliases Leaf!Action, but target {leaf}:3 "
+        "has arity 1; projected commit progress fairness action "
+        "module-alias conjuncts must resolve to defined zero-arity actions"
+    ]
+
+    tla, _inner, leaf = write_chain_with_leaf("Noninspectable", "Action ==")
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 3 whose definition at line 16 "
+        "uses module-alias conjunct Interleaving!Start, but helper Action "
+        f"at {leaf}:3 is not an inspectable single-expression definition; "
+        "projected commit progress fairness action module-alias conjuncts "
+        "must resolve to inspectable action definitions"
+    ]
+
+    tla, leaf = write_chain_with_cyclic_leaf("Cycle")
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 3 whose definition at line 16 "
+        "uses module-alias conjunct Interleaving!Start, but module-alias "
+        f"conjunct resolution cycles at {leaf}:3 Action; projected commit "
+        "progress fairness action module-alias conjuncts must be acyclic and "
+        "resolve to inspectable action modules"
     ]
 
 
@@ -20339,6 +28669,207 @@ def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_boo
     ]
 
 
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_boolean_multi_hop_recursive_helper_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def projection_for(target_name: str) -> Path:
+        tla = (
+            tmp_path
+            / f"SumeragiByzantineCommitProjectionGateModuleAliasBooleanMultiHop{target_name}.tla"
+        )
+        tla.write_text(
+            projected_commit_progress_spec_contract_text(
+                module,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                action_definition_overrides={
+                    "HonestPropose": "HonestPropose == UNCHANGED vars \\/ Interleaving!Start",
+                },
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def write_imported_target(target_name: str, inner_name: str) -> None:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    f"Inner == INSTANCE {inner_name}",
+                    "Start == HiddenStart",
+                    "HiddenStart == Inner!Branch",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def write_inner_without_leaf_instance(inner_name: str) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    "Branch == LocalBranch",
+                    "LocalBranch == Leaf!Action",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_inner_with_leaf_instance(inner_name: str, leaf_name: str) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    f"Leaf == INSTANCE {leaf_name}",
+                    "Branch == LocalBranch",
+                    "LocalBranch == Leaf!Action",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_leaf(leaf_name: str, body: str) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    body,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    def write_cyclic_leaf(leaf_name: str) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    "Action == HiddenAction",
+                    "HiddenAction == Action",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    def write_chain_without_leaf_instance(suffix: str) -> tuple[Path, Path]:
+        target_name = f"SumeragiModuleAliasBooleanMultiHop{suffix}Target"
+        inner_name = f"SumeragiModuleAliasBooleanMultiHop{suffix}Inner"
+        write_imported_target(target_name, inner_name)
+        inner = write_inner_without_leaf_instance(inner_name)
+        return projection_for(target_name), inner
+
+    def write_chain_with_leaf(suffix: str, body: str) -> tuple[Path, Path, Path]:
+        target_name = f"SumeragiModuleAliasBooleanMultiHop{suffix}Target"
+        inner_name = f"SumeragiModuleAliasBooleanMultiHop{suffix}Inner"
+        leaf_name = f"SumeragiModuleAliasBooleanMultiHop{suffix}Leaf"
+        write_imported_target(target_name, inner_name)
+        inner = write_inner_with_leaf_instance(inner_name, leaf_name)
+        leaf = write_leaf(leaf_name, body)
+        return projection_for(target_name), inner, leaf
+
+    def write_chain_with_cyclic_leaf(suffix: str) -> tuple[Path, Path]:
+        target_name = f"SumeragiModuleAliasBooleanMultiHop{suffix}Target"
+        inner_name = f"SumeragiModuleAliasBooleanMultiHop{suffix}Inner"
+        leaf_name = f"SumeragiModuleAliasBooleanMultiHop{suffix}Leaf"
+        write_imported_target(target_name, inner_name)
+        write_inner_with_leaf_instance(inner_name, leaf_name)
+        leaf = write_cyclic_leaf(leaf_name)
+        return projection_for(target_name), leaf
+
+    tla, inner = write_chain_without_leaf_instance("NoInstance")
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 3 whose definition at line 16 "
+        "uses module-alias boolean operand Interleaving!Start, but helper "
+        f"LocalBranch at {inner}:4 aliases Leaf!Action without a named "
+        "INSTANCE alias Leaf; projected commit progress fairness action "
+        "module-alias boolean operands must resolve through named local "
+        "INSTANCE declarations"
+    ]
+
+    target_name = "SumeragiModuleAliasBooleanMultiHopMissingTarget"
+    inner_name = "SumeragiModuleAliasBooleanMultiHopMissingInner"
+    leaf_name = "SumeragiModuleAliasBooleanMultiHopMissingLeaf"
+    write_imported_target(target_name, inner_name)
+    inner = write_inner_with_leaf_instance(inner_name, leaf_name)
+    missing = tmp_path / f"{leaf_name}.tla"
+    tla = projection_for(target_name)
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 3 whose definition at line 16 "
+        "uses module-alias boolean operand Interleaving!Start, but helper "
+        f"LocalBranch at {inner}:5 aliases Leaf!Action, but target module "
+        f"{missing} does not exist; projected commit progress fairness "
+        "action module-alias boolean operands must resolve to local action "
+        "modules"
+    ]
+
+    tla, inner, leaf = write_chain_with_leaf("Undefined", "Other == UNCHANGED vars")
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 3 whose definition at line 16 "
+        "uses module-alias boolean operand Interleaving!Start, but helper "
+        f"LocalBranch at {inner}:5 aliases Leaf!Action, but target {leaf} "
+        "does not define Action; projected commit progress fairness action "
+        "module-alias boolean operands must resolve to defined zero-arity "
+        "actions"
+    ]
+
+    tla, inner, leaf = write_chain_with_leaf(
+        "Parameterized",
+        "Action(value) == UNCHANGED vars",
+    )
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 3 whose definition at line 16 "
+        "uses module-alias boolean operand Interleaving!Start, but helper "
+        f"LocalBranch at {inner}:5 aliases Leaf!Action, but target {leaf}:3 "
+        "has arity 1; projected commit progress fairness action "
+        "module-alias boolean operands must resolve to defined zero-arity "
+        "actions"
+    ]
+
+    tla, _inner, leaf = write_chain_with_leaf("Noninspectable", "Action ==")
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 3 whose definition at line 16 "
+        "uses module-alias boolean operand Interleaving!Start, but helper "
+        f"Action at {leaf}:3 is not an inspectable single-expression "
+        "definition; projected commit progress fairness action module-alias "
+        "boolean operands must resolve to inspectable action definitions"
+    ]
+
+    tla, leaf = write_chain_with_cyclic_leaf("Cycle")
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 3 whose definition at line 16 "
+        "uses module-alias boolean operand Interleaving!Start, but "
+        f"module-alias boolean operand resolution cycles at {leaf}:3 Action; "
+        "projected commit progress fairness action module-alias boolean "
+        "operands must be acyclic and resolve to inspectable action modules"
+    ]
+
+
 def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_fair_action_composition(
     tmp_path: Path,
 ) -> None:
@@ -20452,6 +28983,80 @@ def test_projected_commit_progress_spec_contract_errors_rejects_action_alias_cyc
 
     assert module.projected_commit_progress_spec_contract_errors(tla) == [
         f"{tla}:21 defines projected commit progress transition helper "
+        "RbcReady, but transition helper resolution cycles at RbcReady; "
+        "projected commit progress transition helper wrappers must be "
+        "acyclic and resolve to inspectable transition operators",
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        "aliases Interleaving!RbcReady, but fairness action alias resolution "
+        f"cycles at {target}:4 RbcReady; projected commit progress fairness "
+        "action aliases must be acyclic and resolve to inspectable "
+        "transition definitions",
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_action_alias_multi_hop_cycle(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiFairActionAliasCycleHopTarget.tla"
+    inner = tmp_path / "SumeragiFairActionAliasCycleHopInner.tla"
+    leaf = tmp_path / "SumeragiFairActionAliasCycleHopLeaf.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFairActionAliasCycleHopTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiFairActionAliasCycleHopInner",
+                "RbcReady == Inner!Start",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFairActionAliasCycleHopInner ----",
+                "VARIABLES vars",
+                "Leaf == INSTANCE SumeragiFairActionAliasCycleHopLeaf",
+                "Start == Leaf!Branch",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    leaf.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFairActionAliasCycleHopLeaf ----",
+                "VARIABLES vars",
+                "Back == INSTANCE SumeragiFairActionAliasCycleHopTarget",
+                "Branch == Back!RbcReady",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateActionAliasCycleHop.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiFairActionAliasCycleHopTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:4 defines projected commit progress transition helper "
         "RbcReady, but transition helper resolution cycles at RbcReady; "
         "projected commit progress transition helper wrappers must be "
         "acyclic and resolve to inspectable transition operators",
@@ -20879,6 +29484,200 @@ def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_boo
     ]
 
 
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_helper_reference_multi_hop_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    conjunct_target = tmp_path / "SumeragiAliasTargetHelperReferenceMultiHop.tla"
+    conjunct_target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiAliasTargetHelperReferenceMultiHop ----",
+                "VARIABLES vars",
+                "RbcReady == UNCHANGED vars /\\ WrappedRbcChunk",
+                "WrappedRbcChunk == HiddenRbcChunk",
+                "HiddenRbcChunk == ParameterizedHelper /\\ OpaqueHelper",
+                "ParameterizedHelper(peer) == UNCHANGED vars",
+                "OpaqueHelper ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    conjunct_tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateAliasTargetHelperReferenceMultiHop.tla"
+    )
+    conjunct_tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiAliasTargetHelperReferenceMultiHop"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(conjunct_tla) == [
+        f"{conjunct_tla}:3 defines ProjectedCommitProgressFairness, but "
+        "references WF_vars action RbcReady at line 8 whose definition at "
+        f"line 21 aliases Interleaving!RbcReady, but target {conjunct_target}:"
+        f"3 reaches helper ParameterizedHelper at {conjunct_target}:6, but "
+        "helper has arity 1; projected commit progress fairness action "
+        "aliases must resolve helper references to defined zero-arity helper "
+        "definitions",
+        f"{conjunct_tla}:3 defines ProjectedCommitProgressFairness, but "
+        "references WF_vars action RbcReady at line 8 whose definition at "
+        f"line 21 aliases Interleaving!RbcReady, but target {conjunct_target}:"
+        f"3 reaches helper OpaqueHelper at {conjunct_target}:7, but helper "
+        "is not an inspectable single-expression definition; projected "
+        "commit progress fairness action aliases must resolve helper "
+        "references to inspectable helper definitions",
+    ]
+
+    boolean_target = (
+        tmp_path / "SumeragiAliasTargetBooleanHelperReferenceMultiHop.tla"
+    )
+    boolean_target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiAliasTargetBooleanHelperReferenceMultiHop ----",
+                "VARIABLES vars",
+                "RbcReady == UNCHANGED vars \\/ WrappedRbcChunk",
+                "WrappedRbcChunk == FALSE \\/ HiddenRbcChunk",
+                "HiddenRbcChunk == ParameterizedHelper \\/ OpaqueHelper",
+                "ParameterizedHelper(peer) == UNCHANGED vars",
+                "OpaqueHelper ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    boolean_tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateAliasTargetBooleanHelperReferenceMultiHop.tla"
+    )
+    boolean_tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiAliasTargetBooleanHelperReferenceMultiHop"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(boolean_tla) == [
+        f"{boolean_tla}:3 defines ProjectedCommitProgressFairness, but "
+        "references WF_vars action RbcReady at line 8 whose definition at "
+        f"line 21 aliases Interleaving!RbcReady, but target {boolean_target}:"
+        f"3 reaches helper OpaqueHelper at {boolean_target}:7, but helper "
+        "is not an inspectable single-expression definition; projected "
+        "commit progress fairness action aliases must resolve helper "
+        "references to inspectable helper definitions",
+        f"{boolean_tla}:3 defines ProjectedCommitProgressFairness, but "
+        "references WF_vars action RbcReady at line 8 whose definition at "
+        f"line 21 aliases Interleaving!RbcReady, but target {boolean_target}:"
+        f"3 reaches helper ParameterizedHelper at {boolean_target}:6, but "
+        "helper has arity 1; projected commit progress fairness action "
+        "aliases must resolve helper references to defined zero-arity helper "
+        "definitions",
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_helper_wrapper_and_action_multi_hop_composed_fair_actions(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    wrapper_target = tmp_path / "SumeragiAliasTargetHelperWrapperMultiHop.tla"
+    wrapper_target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiAliasTargetHelperWrapperMultiHop ----",
+                "VARIABLES vars",
+                "RbcReady == UNCHANGED vars /\\ WrappedRbcChunk",
+                "WrappedRbcChunk == HiddenRbcChunk",
+                "HiddenRbcChunk == TailRbcChunk",
+                "TailRbcChunk == FALSE \\/ RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    wrapper_tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateAliasTargetHelperWrapperMultiHop.tla"
+    )
+    wrapper_tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiAliasTargetHelperWrapperMultiHop"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(wrapper_tla) == [
+        f"{wrapper_tla}:3 defines ProjectedCommitProgressFairness, but "
+        "references WF_vars action RbcReady at line 8 whose definition at "
+        f"line 21 aliases Interleaving!RbcReady, but target {wrapper_target}:"
+        "3 reaches fair action(s) RbcChunk through static helper wrapper(s); "
+        "projected commit progress fairness action aliases must not resolve "
+        "through helper wrappers that compose other fair actions"
+    ]
+
+    action_target = tmp_path / "SumeragiAliasTargetHelperActionMultiHop.tla"
+    action_target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiAliasTargetHelperActionMultiHop ----",
+                "VARIABLES vars",
+                "RbcReady == UNCHANGED vars /\\ WrappedRbcChunk",
+                "WrappedRbcChunk == UNCHANGED vars /\\ HiddenRbcChunk",
+                "HiddenRbcChunk == FALSE \\/ TailRbcChunk",
+                "TailRbcChunk == RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    action_tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateAliasTargetHelperActionMultiHop.tla"
+    )
+    action_tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiAliasTargetHelperActionMultiHop"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(action_tla) == [
+        f"{action_tla}:3 defines ProjectedCommitProgressFairness, but "
+        "references WF_vars action RbcReady at line 8 whose definition at "
+        f"line 21 aliases Interleaving!RbcReady, but target {action_target}:"
+        "3 reaches fair action(s) RbcChunk through action helper(s); "
+        "projected commit progress fairness action aliases must not resolve "
+        "through helper actions that compose other fair actions"
+    ]
+
+
 def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_action_helper_fair_action_composition(
     tmp_path: Path,
 ) -> None:
@@ -21209,6 +30008,67 @@ def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_hel
     ]
 
 
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_helper_alias_multi_hop_module_alias_cycle(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiAliasTargetHelperAliasCycleHopTarget.tla"
+    inner = tmp_path / "SumeragiAliasTargetHelperAliasCycleHopInner.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiAliasTargetHelperAliasCycleHopTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiAliasTargetHelperAliasCycleHopInner",
+                "RbcReady == UNCHANGED vars /\\ WrappedRbcChunk",
+                "WrappedRbcChunk == Start",
+                "Start == Inner!Branch",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiAliasTargetHelperAliasCycleHopInner ----",
+                "VARIABLES vars",
+                "Back == INSTANCE SumeragiAliasTargetHelperAliasCycleHopTarget",
+                "Branch == LocalBranch",
+                "LocalBranch == Back!Start",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateAliasTargetHelperAliasCycleHop.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiAliasTargetHelperAliasCycleHopTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        "aliases Interleaving!RbcReady, but target "
+        f"{target}:4 reaches helper Start at {target}:6, but fairness "
+        "action alias helper alias resolution cycles at Start; projected "
+        "commit progress fairness action aliases must resolve through "
+        "acyclic helper aliases"
+    ]
+
+
 def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_boolean_helper_alias_cycle(
     tmp_path: Path,
 ) -> None:
@@ -21474,6 +30334,81 @@ def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_hel
         "WF_vars action RbcReady at line 8 whose definition at line 21 "
         "aliases Interleaving!RbcReady, but target "
         f"{target}:4 reaches helper OpaqueHelper at {leaf}:5, but helper "
+        "is not an inspectable single-expression definition; projected "
+        "commit progress fairness action aliases must resolve helper-alias "
+        "helper references to inspectable helper definitions",
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_helper_alias_multi_hop_recursive_helper_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = (
+        tmp_path
+        / "SumeragiAliasTargetHelperAliasMultiHopInvalidHelperInner.tla"
+    )
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiAliasTargetHelperAliasMultiHopInvalidHelperInner ----",
+                "VARIABLES vars",
+                "Branch == LocalBranch",
+                "LocalBranch == ParameterizedHelper /\\ OpaqueHelper",
+                "ParameterizedHelper(peer) == UNCHANGED vars",
+                "OpaqueHelper ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = (
+        tmp_path
+        / "SumeragiAliasTargetHelperAliasMultiHopInvalidHelperTarget.tla"
+    )
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiAliasTargetHelperAliasMultiHopInvalidHelperTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiAliasTargetHelperAliasMultiHopInvalidHelperInner",
+                "RbcReady == UNCHANGED vars /\\ WrappedRbcChunk",
+                "WrappedRbcChunk == Start",
+                "Start == Inner!Branch",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateAliasTargetHelperAliasMultiHopInvalidHelperReferences.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiAliasTargetHelperAliasMultiHopInvalidHelperTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        "aliases Interleaving!RbcReady, but target "
+        f"{target}:4 reaches helper ParameterizedHelper at {inner}:5, but "
+        "helper has arity 1; projected commit progress fairness action "
+        "aliases must resolve helper-alias helper references to defined "
+        "zero-arity helper definitions",
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        "aliases Interleaving!RbcReady, but target "
+        f"{target}:4 reaches helper OpaqueHelper at {inner}:6, but helper "
         "is not an inspectable single-expression definition; projected "
         "commit progress fairness action aliases must resolve helper-alias "
         "helper references to inspectable helper definitions",
@@ -22297,6 +31232,215 @@ def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_mod
     ]
 
 
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_module_alias_conjunct_multi_hop_recursive_helper_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def projection_for(target_name: str) -> Path:
+        tla = (
+            tmp_path
+            / f"SumeragiByzantineCommitProjectionGateActionAliasModuleAliasConjunctMultiHop{target_name}.tla"
+        )
+        tla.write_text(
+            projected_commit_progress_spec_contract_text(
+                module,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                action_definition_overrides={
+                    "RbcReady": "RbcReady == Interleaving!RbcReady",
+                },
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def write_imported_target(target_name: str, inner_name: str) -> Path:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    f"Inner == INSTANCE {inner_name}",
+                    "RbcReady == UNCHANGED vars /\\ Inner!Start",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return target
+
+    def write_inner_without_leaf_instance(inner_name: str) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    "Start == LocalBranch",
+                    "LocalBranch == Leaf!Action",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_inner_with_leaf_instance(inner_name: str, leaf_name: str) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    f"Leaf == INSTANCE {leaf_name}",
+                    "Start == LocalBranch",
+                    "LocalBranch == Leaf!Action",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_leaf(leaf_name: str, body: str) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    body,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    def write_cyclic_leaf(leaf_name: str) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    "Action == HiddenAction",
+                    "HiddenAction == Action",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    def write_chain_without_leaf_instance(suffix: str) -> tuple[Path, Path, Path]:
+        target_name = f"SumeragiActionAliasModuleAliasConjunctMultiHop{suffix}Target"
+        inner_name = f"SumeragiActionAliasModuleAliasConjunctMultiHop{suffix}Inner"
+        target = write_imported_target(target_name, inner_name)
+        inner = write_inner_without_leaf_instance(inner_name)
+        return projection_for(target_name), target, inner
+
+    def write_chain_with_leaf(suffix: str, body: str) -> tuple[Path, Path, Path, Path]:
+        target_name = f"SumeragiActionAliasModuleAliasConjunctMultiHop{suffix}Target"
+        inner_name = f"SumeragiActionAliasModuleAliasConjunctMultiHop{suffix}Inner"
+        leaf_name = f"SumeragiActionAliasModuleAliasConjunctMultiHop{suffix}Leaf"
+        target = write_imported_target(target_name, inner_name)
+        inner = write_inner_with_leaf_instance(inner_name, leaf_name)
+        leaf = write_leaf(leaf_name, body)
+        return projection_for(target_name), target, inner, leaf
+
+    def write_chain_with_cyclic_leaf(suffix: str) -> tuple[Path, Path, Path]:
+        target_name = f"SumeragiActionAliasModuleAliasConjunctMultiHop{suffix}Target"
+        inner_name = f"SumeragiActionAliasModuleAliasConjunctMultiHop{suffix}Inner"
+        leaf_name = f"SumeragiActionAliasModuleAliasConjunctMultiHop{suffix}Leaf"
+        target = write_imported_target(target_name, inner_name)
+        write_inner_with_leaf_instance(inner_name, leaf_name)
+        leaf = write_cyclic_leaf(leaf_name)
+        return projection_for(target_name), target, leaf
+
+    tla, target, inner = write_chain_without_leaf_instance("NoInstance")
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:4 uses "
+        "module-alias conjunct Inner!Start, but helper LocalBranch at "
+        f"{inner}:4 aliases Leaf!Action without a named INSTANCE alias Leaf; "
+        "projected commit progress fairness action aliases must resolve "
+        "module-alias conjuncts through named local INSTANCE declarations"
+    ]
+
+    target_name = "SumeragiActionAliasModuleAliasConjunctMultiHopMissingTarget"
+    inner_name = "SumeragiActionAliasModuleAliasConjunctMultiHopMissingInner"
+    leaf_name = "SumeragiActionAliasModuleAliasConjunctMultiHopMissingLeaf"
+    target = write_imported_target(target_name, inner_name)
+    inner = write_inner_with_leaf_instance(inner_name, leaf_name)
+    missing = tmp_path / f"{leaf_name}.tla"
+    tla = projection_for(target_name)
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:4 uses "
+        "module-alias conjunct Inner!Start, but helper LocalBranch at "
+        f"{inner}:5 aliases Leaf!Action, but target module {missing} does "
+        "not exist; projected commit progress fairness action aliases must "
+        "resolve module-alias conjuncts to local action modules"
+    ]
+
+    tla, target, inner, leaf = write_chain_with_leaf(
+        "Undefined",
+        "Other == UNCHANGED vars",
+    )
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:4 uses "
+        "module-alias conjunct Inner!Start, but helper LocalBranch at "
+        f"{inner}:5 aliases Leaf!Action, but target {leaf} does not define "
+        "Action; projected commit progress fairness action aliases must "
+        "resolve module-alias conjuncts to defined zero-arity actions"
+    ]
+
+    tla, target, inner, leaf = write_chain_with_leaf(
+        "Parameterized",
+        "Action(value) == UNCHANGED vars",
+    )
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:4 uses "
+        "module-alias conjunct Inner!Start, but helper LocalBranch at "
+        f"{inner}:5 aliases Leaf!Action, but target {leaf}:3 has arity 1; "
+        "projected commit progress fairness action aliases must resolve "
+        "module-alias conjuncts to defined zero-arity actions"
+    ]
+
+    tla, target, _inner, leaf = write_chain_with_leaf(
+        "Noninspectable",
+        "Action ==",
+    )
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:4 uses "
+        f"module-alias conjunct Inner!Start, but helper Action at {leaf}:3 "
+        "is not an inspectable single-expression definition; projected "
+        "commit progress fairness action aliases must resolve module-alias "
+        "conjuncts to inspectable action definitions"
+    ]
+
+    tla, target, leaf = write_chain_with_cyclic_leaf("Cycle")
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:4 uses "
+        "module-alias conjunct Inner!Start, but module-alias conjunct "
+        f"resolution cycles at {leaf}:3 Action; projected commit progress "
+        "fairness action aliases must resolve through acyclic module-alias "
+        "conjuncts"
+    ]
+
+
 def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_module_alias_conjunct_cycle(
     tmp_path: Path,
 ) -> None:
@@ -22680,6 +31824,217 @@ def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_mod
     ]
 
 
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_module_alias_boolean_multi_hop_recursive_helper_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def projection_for(target_name: str) -> Path:
+        tla = (
+            tmp_path
+            / f"SumeragiByzantineCommitProjectionGateActionAliasModuleAliasBooleanMultiHop{target_name}.tla"
+        )
+        tla.write_text(
+            projected_commit_progress_spec_contract_text(
+                module,
+                preamble_lines=[f"Interleaving == INSTANCE {target_name}"],
+                action_definition_overrides={
+                    "RbcReady": "RbcReady == Interleaving!RbcReady",
+                },
+            ),
+            encoding="utf-8",
+        )
+        return tla
+
+    def write_imported_target(target_name: str, inner_name: str) -> Path:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    f"Inner == INSTANCE {inner_name}",
+                    "RbcReady == UNCHANGED vars \\/ Inner!Start",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return target
+
+    def write_inner_without_leaf_instance(inner_name: str) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    "Start == LocalBranch",
+                    "LocalBranch == Leaf!Action",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_inner_with_leaf_instance(inner_name: str, leaf_name: str) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    f"Leaf == INSTANCE {leaf_name}",
+                    "Start == LocalBranch",
+                    "LocalBranch == Leaf!Action",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_leaf(leaf_name: str, body: str) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    body,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    def write_cyclic_leaf(leaf_name: str) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    "Action == HiddenAction",
+                    "HiddenAction == Action",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    def write_chain_without_leaf_instance(suffix: str) -> tuple[Path, Path, Path]:
+        target_name = f"SumeragiActionAliasModuleAliasBooleanMultiHop{suffix}Target"
+        inner_name = f"SumeragiActionAliasModuleAliasBooleanMultiHop{suffix}Inner"
+        target = write_imported_target(target_name, inner_name)
+        inner = write_inner_without_leaf_instance(inner_name)
+        return projection_for(target_name), target, inner
+
+    def write_chain_with_leaf(suffix: str, body: str) -> tuple[Path, Path, Path, Path]:
+        target_name = f"SumeragiActionAliasModuleAliasBooleanMultiHop{suffix}Target"
+        inner_name = f"SumeragiActionAliasModuleAliasBooleanMultiHop{suffix}Inner"
+        leaf_name = f"SumeragiActionAliasModuleAliasBooleanMultiHop{suffix}Leaf"
+        target = write_imported_target(target_name, inner_name)
+        inner = write_inner_with_leaf_instance(inner_name, leaf_name)
+        leaf = write_leaf(leaf_name, body)
+        return projection_for(target_name), target, inner, leaf
+
+    def write_chain_with_cyclic_leaf(suffix: str) -> tuple[Path, Path, Path]:
+        target_name = f"SumeragiActionAliasModuleAliasBooleanMultiHop{suffix}Target"
+        inner_name = f"SumeragiActionAliasModuleAliasBooleanMultiHop{suffix}Inner"
+        leaf_name = f"SumeragiActionAliasModuleAliasBooleanMultiHop{suffix}Leaf"
+        target = write_imported_target(target_name, inner_name)
+        write_inner_with_leaf_instance(inner_name, leaf_name)
+        leaf = write_cyclic_leaf(leaf_name)
+        return projection_for(target_name), target, leaf
+
+    tla, target, inner = write_chain_without_leaf_instance("NoInstance")
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:4 uses "
+        "module-alias boolean operand Inner!Start, but helper LocalBranch "
+        f"at {inner}:4 aliases Leaf!Action without a named INSTANCE alias "
+        "Leaf; projected commit progress fairness action aliases must "
+        "resolve module-alias boolean operands through named local INSTANCE "
+        "declarations"
+    ]
+
+    target_name = "SumeragiActionAliasModuleAliasBooleanMultiHopMissingTarget"
+    inner_name = "SumeragiActionAliasModuleAliasBooleanMultiHopMissingInner"
+    leaf_name = "SumeragiActionAliasModuleAliasBooleanMultiHopMissingLeaf"
+    target = write_imported_target(target_name, inner_name)
+    inner = write_inner_with_leaf_instance(inner_name, leaf_name)
+    missing = tmp_path / f"{leaf_name}.tla"
+    tla = projection_for(target_name)
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:4 uses "
+        "module-alias boolean operand Inner!Start, but helper LocalBranch "
+        f"at {inner}:5 aliases Leaf!Action, but target module {missing} "
+        "does not exist; projected commit progress fairness action aliases "
+        "must resolve module-alias boolean operands to local action modules"
+    ]
+
+    tla, target, inner, leaf = write_chain_with_leaf(
+        "Undefined",
+        "Other == UNCHANGED vars",
+    )
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:4 uses "
+        "module-alias boolean operand Inner!Start, but helper LocalBranch "
+        f"at {inner}:5 aliases Leaf!Action, but target {leaf} does not "
+        "define Action; projected commit progress fairness action aliases "
+        "must resolve module-alias boolean operands to defined zero-arity "
+        "actions"
+    ]
+
+    tla, target, inner, leaf = write_chain_with_leaf(
+        "Parameterized",
+        "Action(value) == UNCHANGED vars",
+    )
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:4 uses "
+        "module-alias boolean operand Inner!Start, but helper LocalBranch "
+        f"at {inner}:5 aliases Leaf!Action, but target {leaf}:3 has "
+        "arity 1; projected commit progress fairness action aliases must "
+        "resolve module-alias boolean operands to defined zero-arity actions"
+    ]
+
+    tla, target, _inner, leaf = write_chain_with_leaf(
+        "Noninspectable",
+        "Action ==",
+    )
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:4 uses "
+        "module-alias boolean operand Inner!Start, but helper Action at "
+        f"{leaf}:3 is not an inspectable single-expression definition; "
+        "projected commit progress fairness action aliases must resolve "
+        "module-alias boolean operands to inspectable action definitions"
+    ]
+
+    tla, target, leaf = write_chain_with_cyclic_leaf("Cycle")
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:4 uses "
+        "module-alias boolean operand Inner!Start, but module-alias boolean "
+        f"operand resolution cycles at {leaf}:3 Action; projected commit "
+        "progress fairness action aliases must resolve through acyclic "
+        "module-alias boolean operands"
+    ]
+
+
 def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_module_alias_boolean_cycle(
     tmp_path: Path,
 ) -> None:
@@ -22736,6 +32091,137 @@ def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_mod
         f"but module-alias boolean operand resolution cycles at {leaf}:4 "
         "HiddenRbcChunk; projected commit progress fairness action aliases "
         "must resolve through acyclic module-alias boolean operands"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_module_alias_conjunct_and_boolean_multi_hop_cycles(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    conjunct_target = (
+        tmp_path / "SumeragiAliasTargetModuleAliasConjunctCycleHopTarget.tla"
+    )
+    conjunct_inner = (
+        tmp_path / "SumeragiAliasTargetModuleAliasConjunctCycleHopInner.tla"
+    )
+    conjunct_target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiAliasTargetModuleAliasConjunctCycleHopTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiAliasTargetModuleAliasConjunctCycleHopInner",
+                "RbcReady == UNCHANGED vars /\\ Inner!Start",
+                "Start == Inner!Branch",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    conjunct_inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiAliasTargetModuleAliasConjunctCycleHopInner ----",
+                "VARIABLES vars",
+                "Back == INSTANCE SumeragiAliasTargetModuleAliasConjunctCycleHopTarget",
+                "Start == LocalBranch",
+                "LocalBranch == Back!Start",
+                "Branch == LocalBranch",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    conjunct_tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateAliasTargetModuleAliasConjunctCycleHop.tla"
+    )
+    conjunct_tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiAliasTargetModuleAliasConjunctCycleHopTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(
+        conjunct_tla
+    ) == [
+        f"{conjunct_tla}:3 defines ProjectedCommitProgressFairness, but "
+        "references WF_vars action RbcReady at line 8 whose definition at "
+        "line 21 aliases Interleaving!RbcReady, but target "
+        f"{conjunct_target}:4 uses module-alias conjunct Inner!Start, but "
+        "module-alias conjunct resolution cycles at "
+        f"{conjunct_inner}:5 LocalBranch; projected commit progress fairness "
+        "action aliases must resolve through acyclic module-alias conjuncts"
+    ]
+
+    boolean_target = (
+        tmp_path / "SumeragiAliasTargetModuleAliasBooleanCycleHopTarget.tla"
+    )
+    boolean_inner = (
+        tmp_path / "SumeragiAliasTargetModuleAliasBooleanCycleHopInner.tla"
+    )
+    boolean_target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiAliasTargetModuleAliasBooleanCycleHopTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiAliasTargetModuleAliasBooleanCycleHopInner",
+                "RbcReady == UNCHANGED vars \\/ Inner!Start",
+                "Start == FALSE \\/ Inner!Branch",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    boolean_inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiAliasTargetModuleAliasBooleanCycleHopInner ----",
+                "VARIABLES vars",
+                "Back == INSTANCE SumeragiAliasTargetModuleAliasBooleanCycleHopTarget",
+                "Start == FALSE \\/ LocalBranch",
+                "LocalBranch == Back!Start",
+                "Branch == FALSE \\/ LocalBranch",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    boolean_tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateAliasTargetModuleAliasBooleanCycleHop.tla"
+    )
+    boolean_tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiAliasTargetModuleAliasBooleanCycleHopTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(
+        boolean_tla
+    ) == [
+        f"{boolean_tla}:3 defines ProjectedCommitProgressFairness, but "
+        "references WF_vars action RbcReady at line 8 whose definition at "
+        "line 21 aliases Interleaving!RbcReady, but target "
+        f"{boolean_target}:4 uses module-alias boolean operand Inner!Start, "
+        "but module-alias boolean operand resolution cycles at "
+        f"{boolean_inner}:5 LocalBranch; projected commit progress fairness "
+        "action aliases must resolve through acyclic module-alias boolean "
+        "operands"
     ]
 
 
@@ -23038,6 +32524,62 @@ def test_projected_commit_progress_spec_contract_errors_rejects_action_alias_non
     ]
 
 
+def test_projected_commit_progress_spec_contract_errors_rejects_action_alias_onward_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiFairActionAliasOnwardInner.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFairActionAliasOnwardInner ----",
+                "VARIABLES vars",
+                "RbcReady == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiFairActionAliasOnwardTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFairActionAliasOnwardTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiFairActionAliasOnwardInner",
+                "RbcReady == Inner!RbcReady",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateFairActionAliasOnwardTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiFairActionAliasOnwardTarget",
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:4 is not "
+        "action-shaped; projected commit progress fairness action aliases "
+        "must resolve to transition definitions that mention next-state "
+        "updates or UNCHANGED"
+    ]
+
+
 def test_projected_commit_progress_spec_contract_errors_rejects_temporal_action_aliases(
     tmp_path: Path,
 ) -> None:
@@ -23148,6 +32690,84 @@ def test_projected_commit_progress_spec_contract_errors_rejects_unreachable_fair
         "Next, but [][Next]_vars cannot reach fair action(s) RbcReady; "
         "projected commit progress fairness actions must be reachable from "
         "the checked transition closure"
+    ]
+
+
+def test_progress_transition_fairness_alignment_errors_rejects_non_static_closure(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiProgressTransitionNonStaticClosure.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiProgressTransitionNonStaticClosure ----",
+                "VARIABLES vars",
+                "Next == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.progress_transition_fairness_alignment_errors(
+        tla,
+        "<>Next",
+        (),
+        "projected commit progress",
+    ) == [
+        "projected commit progress transition closure <>Next must have static "
+        "[][Next]_vars shape"
+    ]
+
+
+def test_progress_transition_fairness_alignment_errors_rejects_missing_or_parameterized_next(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    missing = tmp_path / "SumeragiProgressTransitionMissingNext.tla"
+    missing.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiProgressTransitionMissingNext ----",
+                "VARIABLES vars",
+                "Other == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    parameterized = tmp_path / "SumeragiProgressTransitionParameterizedNext.tla"
+    parameterized.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiProgressTransitionParameterizedNext ----",
+                "VARIABLES vars",
+                "Next(value) == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.progress_transition_fairness_alignment_errors(
+        missing,
+        "[][Next]_vars",
+        (),
+        "projected commit progress",
+    ) == [
+        f"{missing} does not define projected commit progress transition "
+        "operator Next used by [][Next]_vars"
+    ]
+    assert module.progress_transition_fairness_alignment_errors(
+        parameterized,
+        "[][Next]_vars",
+        (),
+        "projected commit progress",
+    ) == [
+        f"{parameterized}:3 defines projected commit progress transition "
+        "operator Next with arity 1; projected commit progress transition "
+        "operators must be zero-arity"
     ]
 
 
@@ -23456,6 +33076,96 @@ def test_source_commit_progress_spec_contract_errors_rejects_raw_spec_fairness(
     ]
 
 
+def test_source_and_top_level_commit_progress_spec_contract_errors_reject_compound_raw_spec_fairness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[2]
+    source = tmp_path / "SumeragiDirectCommitInterleavingGateCompoundRawFairness.tla"
+    source.write_text(
+        commit_progress_spec_contract_text(
+            spec_operator=source_spec,
+            fairness_operator=source_fairness,
+            next_closure=source_next_closure,
+            fairness_actions=source_actions,
+            spec_lines=[
+                f"{source_spec} ==",
+                "  /\\ Init",
+                f"  /\\ {source_next_closure}",
+                f"  /\\ {source_fairness}",
+                "  /\\ WF_vars(HonestPropose /\\ PrepareVote)",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+    top = tmp_path / "SumeragiCompoundRawFairness.tla"
+    top.write_text(
+        commit_progress_spec_contract_text(
+            spec_operator=top_spec,
+            fairness_operator=top_fairness,
+            next_closure=top_next_closure,
+            fairness_actions=top_actions,
+            spec_lines=[
+                f"{top_spec} ==",
+                "  /\\ Init",
+                f"  /\\ {top_next_closure}",
+                f"  /\\ {top_fairness}",
+                "  /\\ WF_vars(HonestPropose /\\ HonestPrepareVote)",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.source_commit_progress_spec_contract_errors(
+        (
+            (
+                source,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+        )
+    ) == [
+        f"{source}:10 defines {source_spec}, but must compose "
+        f"{source_fairness} instead of raw WF_vars fairness clauses at "
+        "line 13: HonestPropose /\\ PrepareVote"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                top,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{top}:12 defines {top_spec}, but must compose {top_fairness} "
+        "instead of raw WF_vars fairness clauses at line 15: "
+        "HonestPropose /\\ HonestPrepareVote"
+    ]
+
+
 def test_source_commit_progress_spec_contract_errors_rejects_missing_next_closure(
     tmp_path: Path,
 ) -> None:
@@ -23491,6 +33201,295 @@ def test_source_commit_progress_spec_contract_errors_rejects_missing_next_closur
     assert errors == [
         f"{tla}:5 defines {spec_operator}, but must keep exactly one direct "
         f"{next_closure} transition closure, found 0"
+    ]
+
+
+def test_source_and_top_level_commit_progress_spec_contract_errors_reject_missing_or_parameterized_fairness_operator(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def progress_text(
+        *,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+        fairness_lines: list[str],
+    ) -> str:
+        return "\n".join(
+            [
+                f"{spec_operator} ==",
+                "  /\\ Init",
+                f"  /\\ {next_closure}",
+                f"  /\\ {fairness_operator}",
+                "",
+                *fairness_lines,
+                "",
+                *fairness_action_definition_lines(fairness_actions),
+                "",
+                *next_operator_definition_lines(
+                    next_operator_from_closure(next_closure),
+                    fairness_actions,
+                ),
+                "",
+                "Init == TRUE",
+            ]
+        )
+
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+    source = tmp_path / "SumeragiDirectDeliveredFirstCorridorGateMissingFairness.tla"
+    source.write_text(
+        progress_text(
+            spec_operator=source_spec,
+            fairness_operator=source_fairness,
+            next_closure=source_next_closure,
+            fairness_actions=source_actions,
+            fairness_lines=[],
+        ),
+        encoding="utf-8",
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+    top = tmp_path / "SumeragiParameterizedFairness.tla"
+    top.write_text(
+        progress_text(
+            spec_operator=top_spec,
+            fairness_operator=top_fairness,
+            next_closure=top_next_closure,
+            fairness_actions=top_actions,
+            fairness_lines=[
+                f"{top_fairness}(view) ==",
+                *(f"  /\\ WF_vars({action})" for action in top_actions),
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.source_commit_progress_spec_contract_errors(
+        (
+            (
+                source,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+        )
+    ) == [
+        f"{source} does not define {source_root_kind} fairness {source_fairness}"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                top,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{top}:6 defines {top_root_kind} fairness {top_fairness} with "
+        f"arity 1; {top_root_kind} fairness operators must be zero-arity"
+    ]
+
+
+def test_source_and_top_level_commit_progress_spec_contract_errors_reject_hidden_or_extra_spec_conjuncts(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+    source = tmp_path / "SumeragiDirectDeliveredFirstCorridorGateHiddenNext.tla"
+    source.write_text(
+        commit_progress_spec_contract_text(
+            spec_operator=source_spec,
+            fairness_operator=source_fairness,
+            next_closure=source_next_closure,
+            fairness_actions=source_actions,
+            spec_lines=[
+                f"{source_spec} ==",
+                "  /\\ Init",
+                f"  /\\ ({source_next_closure} \\/ TRUE)",
+                f"  /\\ {source_fairness}",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+    top = tmp_path / "SumeragiExtraSpecConjuncts.tla"
+    top.write_text(
+        commit_progress_spec_contract_text(
+            spec_operator=top_spec,
+            fairness_operator=top_fairness,
+            next_closure=top_next_closure,
+            fairness_actions=top_actions,
+            spec_lines=[
+                f"{top_spec} ==",
+                "  /\\ Init",
+                f"  /\\ {top_next_closure}",
+                "  /\\ ([] HiddenTopProgress)",
+                "  /\\ TRUE",
+                f"  /\\ {top_fairness}",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.source_commit_progress_spec_contract_errors(
+        (
+            (
+                source,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+        )
+    ) == [
+        f"{source}:5 defines {source_spec}, but must keep exactly one direct "
+        f"{source_next_closure} transition closure, found 0",
+        f"{source}:5 defines {source_spec}, but contains unexpected direct "
+        f"progress-spec conjunct(s) {source_next_closure} \\/ TRUE; "
+        f"{source_root_kind} specs must compose only Init, the direct "
+        f"{source_next_closure} transition closure, and {source_fairness}",
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                top,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{top}:12 defines {top_spec}, but contains unexpected direct "
+        "progress-spec conjunct(s) [] HiddenTopProgress, TRUE; "
+        f"{top_root_kind} specs must compose only Init, the direct "
+        f"{top_next_closure} transition closure, and {top_fairness}"
+    ]
+
+
+def test_source_and_top_level_commit_progress_spec_contract_errors_reject_duplicate_next_closures(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+    source = tmp_path / "SumeragiDirectDeliveredFirstCorridorGateDuplicateNext.tla"
+    source.write_text(
+        commit_progress_spec_contract_text(
+            spec_operator=source_spec,
+            fairness_operator=source_fairness,
+            next_closure=source_next_closure,
+            fairness_actions=source_actions,
+            spec_lines=[
+                f"{source_spec} ==",
+                "  /\\ Init",
+                f"  /\\ {source_next_closure}",
+                f"  /\\ {source_next_closure}",
+                f"  /\\ {source_fairness}",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+    top = tmp_path / "SumeragiDuplicateNext.tla"
+    top.write_text(
+        commit_progress_spec_contract_text(
+            spec_operator=top_spec,
+            fairness_operator=top_fairness,
+            next_closure=top_next_closure,
+            fairness_actions=top_actions,
+            spec_lines=[
+                f"{top_spec} ==",
+                "  /\\ Init",
+                f"  /\\ {top_next_closure}",
+                f"  /\\ {top_next_closure}",
+                f"  /\\ {top_fairness}",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.source_commit_progress_spec_contract_errors(
+        (
+            (
+                source,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+        )
+    ) == [
+        f"{source}:5 defines {source_spec}, but must keep exactly one direct "
+        f"{source_next_closure} transition closure, found 2"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                top,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{top}:12 defines {top_spec}, but must keep exactly one direct "
+        f"{top_next_closure} transition closure, found 2"
     ]
 
 
@@ -23581,6 +33580,48 @@ def test_source_commit_progress_spec_contract_errors_rejects_duplicate_expected_
     ]
 
 
+def test_source_commit_progress_spec_contract_errors_rejects_duplicate_contract_inventory(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    (
+        module_path,
+        spec_operator,
+        fairness_operator,
+        next_closure,
+        fairness_actions,
+        root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+    tla = tmp_path / module_path.name
+    tla.write_text(
+        commit_progress_spec_contract_text(
+            spec_operator=spec_operator,
+            fairness_operator=fairness_operator,
+            next_closure=next_closure,
+            fairness_actions=fairness_actions,
+        ),
+        encoding="utf-8",
+    )
+    contract = (
+        tla,
+        spec_operator,
+        fairness_operator,
+        next_closure,
+        fairness_actions,
+        root_kind,
+    )
+
+    errors = module.source_commit_progress_spec_contract_errors(
+        (contract, contract)
+    )
+
+    assert errors == [
+        "source commit progress spec contract inventory repeats "
+        f"{tla}::{spec_operator}; each source commit progress spec contract "
+        "must be counted once"
+    ]
+
+
 def test_top_level_commit_spec_contract_errors_accepts_named_fairness(
     tmp_path: Path,
 ) -> None:
@@ -23619,6 +33660,46 @@ def test_top_level_commit_spec_contract_errors_accepts_named_fairness(
         )
 
     assert module.top_level_commit_spec_contract_errors(tuple(contracts)) == []
+
+
+def test_top_level_commit_spec_contract_errors_rejects_duplicate_contract_inventory(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    (
+        module_path,
+        spec_operator,
+        fairness_operator,
+        next_closure,
+        fairness_actions,
+        root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+    tla = tmp_path / module_path.name
+    tla.write_text(
+        commit_progress_spec_contract_text(
+            spec_operator=spec_operator,
+            fairness_operator=fairness_operator,
+            next_closure=next_closure,
+            fairness_actions=fairness_actions,
+        ),
+        encoding="utf-8",
+    )
+    contract = (
+        tla,
+        spec_operator,
+        fairness_operator,
+        next_closure,
+        fairness_actions,
+        root_kind,
+    )
+
+    errors = module.top_level_commit_spec_contract_errors((contract, contract))
+
+    assert errors == [
+        "top-level commit spec contract inventory repeats "
+        f"{tla}::{spec_operator}; each top-level commit spec contract must "
+        "be counted once"
+    ]
 
 
 def test_top_level_commit_spec_contract_errors_rejects_raw_spec_fairness(
@@ -23796,6 +33877,120 @@ def test_progress_finality_property_contract_errors_rejects_drift(
     ]
 
 
+def test_progress_finality_property_contract_errors_rejects_missing_and_parameterized_definitions(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cases = (
+        (
+            "missing_property",
+            [
+                "ProjectedCommitFinalityStack ==",
+                "  /\\ committed",
+                "  /\\ ProjectedFinalityCertificateStackPresent",
+            ],
+            lambda tla: [
+                f"{tla} does not define projected commit progress finality "
+                "property EventualProjectedCommitFinalityStack"
+            ],
+        ),
+        (
+            "parameterized_property",
+            [
+                "EventualProjectedCommitFinalityStack(view) == <>ProjectedCommitFinalityStack",
+                "",
+                "ProjectedCommitFinalityStack ==",
+                "  /\\ committed",
+                "  /\\ ProjectedFinalityCertificateStackPresent",
+            ],
+            lambda tla: [
+                f"{tla}:1 defines EventualProjectedCommitFinalityStack with "
+                "arity 1; projected commit progress finality properties must "
+                "be zero-arity"
+            ],
+        ),
+        (
+            "missing_stack",
+            [
+                "EventualProjectedCommitFinalityStack == <>ProjectedCommitFinalityStack",
+            ],
+            lambda tla: [
+                f"{tla} does not define projected commit progress finality "
+                "stack ProjectedCommitFinalityStack"
+            ],
+        ),
+        (
+            "parameterized_stack",
+            [
+                "EventualProjectedCommitFinalityStack == <>ProjectedCommitFinalityStack",
+                "",
+                "ProjectedCommitFinalityStack(view) == committed",
+            ],
+            lambda tla: [
+                f"{tla}:3 defines ProjectedCommitFinalityStack with arity 1; "
+                "projected commit progress finality stacks must be zero-arity"
+            ],
+        ),
+    )
+
+    for suffix, lines, expected_errors in cases:
+        tla = tmp_path / f"SumeragiByzantineCommitProjectionGate_{suffix}.tla"
+        tla.write_text("\n".join(lines), encoding="utf-8")
+
+        assert module.progress_finality_property_contract_errors(
+            (
+                (
+                    tla,
+                    "EventualProjectedCommitFinalityStack",
+                    "ProjectedCommitFinalityStack",
+                    (
+                        "committed",
+                        "ProjectedFinalityCertificateStackPresent",
+                    ),
+                    "projected commit progress finality",
+                ),
+            )
+        ) == expected_errors(tla)
+
+
+def test_progress_finality_property_contract_errors_rejects_duplicate_contract_inventory(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGate.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "EventualProjectedCommitFinalityStack == <>ProjectedCommitFinalityStack",
+                "",
+                "ProjectedCommitFinalityStack ==",
+                "  /\\ committed",
+                "  /\\ ProjectedFinalityCertificateStackPresent",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    contract = (
+        tla,
+        "EventualProjectedCommitFinalityStack",
+        "ProjectedCommitFinalityStack",
+        (
+            "committed",
+            "ProjectedFinalityCertificateStackPresent",
+        ),
+        "projected commit progress finality",
+    )
+
+    assert module.progress_finality_property_contract_errors(
+        (contract, contract)
+    ) == [
+        "progress finality property contract inventory repeats "
+        f"{tla}::EventualProjectedCommitFinalityStack -> "
+        "ProjectedCommitFinalityStack; each progress finality property "
+        "contract must be counted once"
+    ]
+
+
 def test_progress_finality_property_contract_errors_rejects_duplicate_stack_contract(
     tmp_path: Path,
 ) -> None:
@@ -23836,16 +34031,61 @@ def test_progress_finality_property_contract_errors_rejects_duplicate_stack_cont
     ]
 
 
+def test_progress_finality_property_contract_errors_rejects_duplicate_stack_definition_conjuncts(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGate.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "EventualProjectedCommitFinalityStack == <>ProjectedCommitFinalityStack",
+                "",
+                "ProjectedCommitFinalityStack ==",
+                "  /\\ committed",
+                "  /\\ committed",
+                "  /\\ ProjectedFinalityCertificateStackPresent",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.progress_finality_property_contract_errors(
+        (
+            (
+                tla,
+                "EventualProjectedCommitFinalityStack",
+                "ProjectedCommitFinalityStack",
+                (
+                    "committed",
+                    "ProjectedFinalityCertificateStackPresent",
+                ),
+                "projected commit progress finality",
+            ),
+        )
+    ) == [
+        f"{tla}:4 defines ProjectedCommitFinalityStack, but repeats finality "
+        "evidence conjunct(s) committed; each projected commit progress "
+        "finality finality-stack obligation must be counted once"
+    ]
+
+
 def direct_delivered_first_contract_text(
     module,
     *,
     omit: tuple[str, str] | None = None,
+    overrides: dict[str, list[str]] | None = None,
 ) -> str:
     lines: list[str] = []
+    overrides = overrides or {}
     for (
         operator,
         conjuncts,
     ) in module.SUMERAGI_DIRECT_DELIVERED_FIRST_GATE_CONJUNCT_CONTRACTS.items():
+        override = overrides.get(operator)
+        if override is not None:
+            lines.extend(override)
+            continue
         lines.append(f"{operator} ==")
         for conjunct in conjuncts:
             if omit == (operator, conjunct):
@@ -23910,16 +34150,127 @@ def test_direct_delivered_first_gate_conjunct_contract_errors_rejects_exactness_
     ) in errors[0]
 
 
+def test_direct_delivered_first_gate_conjunct_contract_errors_rejects_aggregate_shape_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    operator = "DirectDeliveredFirstProgressSafetyEnvelope"
+    cases = (
+        (
+            "missing_operator",
+            [],
+            "does not define direct delivered-first progress safety aggregate "
+            f"{operator}",
+        ),
+        (
+            "parameterized_operator",
+            [
+                f"{operator}(view) ==",
+                "  /\\ TypeInvariant",
+                "  /\\ DirectDeliveredFirstCorridorExactness",
+            ],
+            f"defines direct delivered-first progress safety aggregate {operator} "
+            "with arity 1; direct delivered-first progress safety operators "
+            "must be zero-arity operators",
+        ),
+        (
+            "non_named_conjunct",
+            [
+                f"{operator} ==",
+                "  /\\ TypeInvariant",
+                "  /\\ DirectDeliveredFirstCorridorExactness",
+                "  /\\ TRUE",
+            ],
+            f"defines {operator}, but contains direct non-named conjunct TRUE; "
+            "keep direct delivered-first progress safety operators on the "
+            "documented conjunct contract",
+        ),
+        (
+            "duplicate_conjunct",
+            [
+                f"{operator} ==",
+                "  /\\ TypeInvariant",
+                "  /\\ DirectDeliveredFirstCorridorExactness",
+                "  /\\ DirectDeliveredFirstCorridorExactness",
+            ],
+            f"defines {operator}, but repeats direct conjunct(s) "
+            "DirectDeliveredFirstCorridorExactness; each direct "
+            "delivered-first progress safety obligation must be counted once",
+        ),
+        (
+            "unexpected_conjunct",
+            [
+                f"{operator} ==",
+                "  /\\ TypeInvariant",
+                "  /\\ DirectDeliveredFirstCorridorExactness",
+                "  /\\ UnexpectedDeliveredFirstWitness",
+            ],
+            f"defines {operator}, but contains unexpected direct conjunct(s) "
+            "UnexpectedDeliveredFirstWitness; keep direct delivered-first "
+            "progress safety operators on the documented conjunct contract",
+        ),
+    )
+
+    for suffix, override, expected_error in cases:
+        tla = tmp_path / f"SumeragiDirectDeliveredFirstCorridorGate_{suffix}.tla"
+        tla.write_text(
+            direct_delivered_first_contract_text(
+                module,
+                overrides={operator: override},
+            ),
+            encoding="utf-8",
+        )
+
+        errors = module.direct_delivered_first_gate_conjunct_contract_errors(tla)
+
+        assert len(errors) == 1
+        assert expected_error in errors[0]
+
+
+def test_direct_delivered_first_gate_conjunct_contract_errors_rejects_duplicate_expected_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDirectDeliveredFirstCorridorGate.tla"
+    tla.write_text(direct_delivered_first_contract_text(module), encoding="utf-8")
+    contracts = copied_contracts(
+        module.SUMERAGI_DIRECT_DELIVERED_FIRST_GATE_CONJUNCT_CONTRACTS
+    )
+    duplicate = "DirectDeliveredFirstCorridorExactness"
+    contracts["DirectDeliveredFirstProgressSafetyEnvelope"] = (
+        *contracts["DirectDeliveredFirstProgressSafetyEnvelope"],
+        duplicate,
+    )
+
+    errors = module.direct_delivered_first_gate_conjunct_contract_errors(
+        tla,
+        contracts=contracts,
+    )
+
+    assert errors == [
+        "direct delivered-first progress safety aggregate "
+        "DirectDeliveredFirstProgressSafetyEnvelope conjunct contract repeats "
+        f"conjunct(s) {duplicate}; each direct delivered-first progress "
+        "safety obligation must be counted once"
+    ]
+
+
 def direct_vote_first_contract_text(
     module,
     *,
     omit: tuple[str, str] | None = None,
+    overrides: dict[str, list[str]] | None = None,
 ) -> str:
     lines: list[str] = []
+    overrides = overrides or {}
     for (
         operator,
         conjuncts,
     ) in module.SUMERAGI_DIRECT_VOTE_FIRST_GATE_CONJUNCT_CONTRACTS.items():
+        override = overrides.get(operator)
+        if override is not None:
+            lines.extend(override)
+            continue
         lines.append(f"{operator} ==")
         for conjunct in conjuncts:
             if omit == (operator, conjunct):
@@ -23984,16 +34335,127 @@ def test_direct_vote_first_gate_conjunct_contract_errors_rejects_exactness_drift
     ) in errors[0]
 
 
+def test_direct_vote_first_gate_conjunct_contract_errors_rejects_aggregate_shape_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    operator = "DirectVoteFirstProgressSafetyEnvelope"
+    cases = (
+        (
+            "missing_operator",
+            [],
+            "does not define direct vote-first progress safety aggregate "
+            f"{operator}",
+        ),
+        (
+            "parameterized_operator",
+            [
+                f"{operator}(view) ==",
+                "  /\\ TypeInvariant",
+                "  /\\ DirectVoteFirstCorridorExactness",
+            ],
+            f"defines direct vote-first progress safety aggregate {operator} "
+            "with arity 1; direct vote-first progress safety operators must "
+            "be zero-arity operators",
+        ),
+        (
+            "non_named_conjunct",
+            [
+                f"{operator} ==",
+                "  /\\ TypeInvariant",
+                "  /\\ DirectVoteFirstCorridorExactness",
+                "  /\\ TRUE",
+            ],
+            f"defines {operator}, but contains direct non-named conjunct TRUE; "
+            "keep direct vote-first progress safety operators on the "
+            "documented conjunct contract",
+        ),
+        (
+            "duplicate_conjunct",
+            [
+                f"{operator} ==",
+                "  /\\ TypeInvariant",
+                "  /\\ DirectVoteFirstCorridorExactness",
+                "  /\\ DirectVoteFirstCorridorExactness",
+            ],
+            f"defines {operator}, but repeats direct conjunct(s) "
+            "DirectVoteFirstCorridorExactness; each direct vote-first progress "
+            "safety obligation must be counted once",
+        ),
+        (
+            "unexpected_conjunct",
+            [
+                f"{operator} ==",
+                "  /\\ TypeInvariant",
+                "  /\\ DirectVoteFirstCorridorExactness",
+                "  /\\ UnexpectedVoteFirstWitness",
+            ],
+            f"defines {operator}, but contains unexpected direct conjunct(s) "
+            "UnexpectedVoteFirstWitness; keep direct vote-first progress "
+            "safety operators on the documented conjunct contract",
+        ),
+    )
+
+    for suffix, override, expected_error in cases:
+        tla = tmp_path / f"SumeragiDirectVoteFirstCorridorGate_{suffix}.tla"
+        tla.write_text(
+            direct_vote_first_contract_text(
+                module,
+                overrides={operator: override},
+            ),
+            encoding="utf-8",
+        )
+
+        errors = module.direct_vote_first_gate_conjunct_contract_errors(tla)
+
+        assert len(errors) == 1
+        assert expected_error in errors[0]
+
+
+def test_direct_vote_first_gate_conjunct_contract_errors_rejects_duplicate_expected_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDirectVoteFirstCorridorGate.tla"
+    tla.write_text(direct_vote_first_contract_text(module), encoding="utf-8")
+    contracts = copied_contracts(
+        module.SUMERAGI_DIRECT_VOTE_FIRST_GATE_CONJUNCT_CONTRACTS
+    )
+    duplicate = "DirectVoteFirstCorridorExactness"
+    contracts["DirectVoteFirstProgressSafetyEnvelope"] = (
+        *contracts["DirectVoteFirstProgressSafetyEnvelope"],
+        duplicate,
+    )
+
+    errors = module.direct_vote_first_gate_conjunct_contract_errors(
+        tla,
+        contracts=contracts,
+    )
+
+    assert errors == [
+        "direct vote-first progress safety aggregate "
+        "DirectVoteFirstProgressSafetyEnvelope conjunct contract repeats "
+        f"conjunct(s) {duplicate}; each direct vote-first progress safety "
+        "obligation must be counted once"
+    ]
+
+
 def direct_interleaving_contract_text(
     module,
     *,
     omit: tuple[str, str] | None = None,
+    overrides: dict[str, list[str]] | None = None,
 ) -> str:
     lines: list[str] = []
+    overrides = overrides or {}
     for (
         operator,
         conjuncts,
     ) in module.SUMERAGI_DIRECT_INTERLEAVING_GATE_CONJUNCT_CONTRACTS.items():
+        override = overrides.get(operator)
+        if override is not None:
+            lines.extend(override)
+            continue
         lines.append(f"{operator} ==")
         for conjunct in conjuncts:
             if omit == (operator, conjunct):
@@ -24058,16 +34520,127 @@ def test_direct_interleaving_gate_conjunct_contract_errors_rejects_exactness_dri
     ) in errors[0]
 
 
+def test_direct_interleaving_gate_conjunct_contract_errors_rejects_aggregate_shape_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    operator = "DirectCommitProgressSafetyEnvelope"
+    cases = (
+        (
+            "missing_operator",
+            [],
+            "does not define direct interleaving progress safety aggregate "
+            f"{operator}",
+        ),
+        (
+            "parameterized_operator",
+            [
+                f"{operator}(view) ==",
+                "  /\\ TypeInvariant",
+                "  /\\ DirectCommitInterleavingExactness",
+            ],
+            f"defines direct interleaving progress safety aggregate {operator} "
+            "with arity 1; direct interleaving progress safety operators must "
+            "be zero-arity operators",
+        ),
+        (
+            "non_named_conjunct",
+            [
+                f"{operator} ==",
+                "  /\\ TypeInvariant",
+                "  /\\ DirectCommitInterleavingExactness",
+                "  /\\ TRUE",
+            ],
+            f"defines {operator}, but contains direct non-named conjunct TRUE; "
+            "keep direct interleaving progress safety operators on the "
+            "documented conjunct contract",
+        ),
+        (
+            "duplicate_conjunct",
+            [
+                f"{operator} ==",
+                "  /\\ TypeInvariant",
+                "  /\\ DirectCommitInterleavingExactness",
+                "  /\\ DirectCommitInterleavingExactness",
+            ],
+            f"defines {operator}, but repeats direct conjunct(s) "
+            "DirectCommitInterleavingExactness; each direct interleaving "
+            "progress safety obligation must be counted once",
+        ),
+        (
+            "unexpected_conjunct",
+            [
+                f"{operator} ==",
+                "  /\\ TypeInvariant",
+                "  /\\ DirectCommitInterleavingExactness",
+                "  /\\ UnexpectedDirectInterleavingWitness",
+            ],
+            f"defines {operator}, but contains unexpected direct conjunct(s) "
+            "UnexpectedDirectInterleavingWitness; keep direct interleaving "
+            "progress safety operators on the documented conjunct contract",
+        ),
+    )
+
+    for suffix, override, expected_error in cases:
+        tla = tmp_path / f"SumeragiDirectCommitInterleavingGate_{suffix}.tla"
+        tla.write_text(
+            direct_interleaving_contract_text(
+                module,
+                overrides={operator: override},
+            ),
+            encoding="utf-8",
+        )
+
+        errors = module.direct_interleaving_gate_conjunct_contract_errors(tla)
+
+        assert len(errors) == 1
+        assert expected_error in errors[0]
+
+
+def test_direct_interleaving_gate_conjunct_contract_errors_rejects_duplicate_expected_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDirectCommitInterleavingGate.tla"
+    tla.write_text(direct_interleaving_contract_text(module), encoding="utf-8")
+    contracts = copied_contracts(
+        module.SUMERAGI_DIRECT_INTERLEAVING_GATE_CONJUNCT_CONTRACTS
+    )
+    duplicate = "DirectCommitInterleavingExactness"
+    contracts["DirectCommitProgressSafetyEnvelope"] = (
+        *contracts["DirectCommitProgressSafetyEnvelope"],
+        duplicate,
+    )
+
+    errors = module.direct_interleaving_gate_conjunct_contract_errors(
+        tla,
+        contracts=contracts,
+    )
+
+    assert errors == [
+        "direct interleaving progress safety aggregate "
+        "DirectCommitProgressSafetyEnvelope conjunct contract repeats "
+        f"conjunct(s) {duplicate}; each direct interleaving progress safety "
+        "obligation must be counted once"
+    ]
+
+
 def byzantine_interleaving_contract_text(
     module,
     *,
     omit: tuple[str, str] | None = None,
+    overrides: dict[str, list[str]] | None = None,
 ) -> str:
     lines: list[str] = []
+    overrides = overrides or {}
     for (
         operator,
         conjuncts,
     ) in module.SUMERAGI_BYZANTINE_INTERLEAVING_GATE_CONJUNCT_CONTRACTS.items():
+        override = overrides.get(operator)
+        if override is not None:
+            lines.extend(override)
+            continue
         lines.append(f"{operator} ==")
         for conjunct in conjuncts:
             if omit == (operator, conjunct):
@@ -24132,11 +34705,141 @@ def test_byzantine_interleaving_gate_conjunct_contract_errors_rejects_exactness_
     ) in errors[0]
 
 
+def test_byzantine_interleaving_gate_conjunct_contract_errors_rejects_aggregate_shape_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    operator = "ByzantineCommitProgressSafetyEnvelope"
+    cases = (
+        (
+            "missing_operator",
+            [],
+            "does not define Byzantine interleaving progress safety aggregate "
+            f"{operator}",
+        ),
+        (
+            "parameterized_operator",
+            [
+                f"{operator}(view) ==",
+                "  /\\ TypeInvariant",
+                "  /\\ ByzantineCommitInterleavingExactness",
+            ],
+            f"defines Byzantine interleaving progress safety aggregate {operator} "
+            "with arity 1; Byzantine interleaving progress safety operators "
+            "must be zero-arity operators",
+        ),
+        (
+            "non_named_conjunct",
+            [
+                f"{operator} ==",
+                "  /\\ TypeInvariant",
+                "  /\\ ByzantineCommitInterleavingExactness",
+                "  /\\ TRUE",
+            ],
+            f"defines {operator}, but contains direct non-named conjunct TRUE; "
+            "keep Byzantine interleaving progress safety operators on the "
+            "documented conjunct contract",
+        ),
+        (
+            "duplicate_conjunct",
+            [
+                f"{operator} ==",
+                "  /\\ TypeInvariant",
+                "  /\\ ByzantineCommitInterleavingExactness",
+                "  /\\ ByzantineCommitInterleavingExactness",
+            ],
+            f"defines {operator}, but repeats direct conjunct(s) "
+            "ByzantineCommitInterleavingExactness; each Byzantine interleaving "
+            "progress safety obligation must be counted once",
+        ),
+        (
+            "unexpected_conjunct",
+            [
+                f"{operator} ==",
+                "  /\\ TypeInvariant",
+                "  /\\ ByzantineCommitInterleavingExactness",
+                "  /\\ UnexpectedByzantineInterleavingWitness",
+            ],
+            f"defines {operator}, but contains unexpected direct conjunct(s) "
+            "UnexpectedByzantineInterleavingWitness; keep Byzantine "
+            "interleaving progress safety operators on the documented "
+            "conjunct contract",
+        ),
+    )
+
+    for suffix, override, expected_error in cases:
+        tla = tmp_path / f"SumeragiByzantineCommitInterleavingGate_{suffix}.tla"
+        tla.write_text(
+            byzantine_interleaving_contract_text(
+                module,
+                overrides={operator: override},
+            ),
+            encoding="utf-8",
+        )
+
+        errors = module.byzantine_interleaving_gate_conjunct_contract_errors(tla)
+
+        assert len(errors) == 1
+        assert expected_error in errors[0]
+
+
+def test_byzantine_interleaving_gate_conjunct_contract_errors_rejects_duplicate_expected_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitInterleavingGate.tla"
+    tla.write_text(byzantine_interleaving_contract_text(module), encoding="utf-8")
+    contracts = copied_contracts(
+        module.SUMERAGI_BYZANTINE_INTERLEAVING_GATE_CONJUNCT_CONTRACTS
+    )
+    duplicate = "ByzantineCommitInterleavingExactness"
+    contracts["ByzantineCommitProgressSafetyEnvelope"] = (
+        *contracts["ByzantineCommitProgressSafetyEnvelope"],
+        duplicate,
+    )
+
+    errors = module.byzantine_interleaving_gate_conjunct_contract_errors(
+        tla,
+        contracts=contracts,
+    )
+
+    assert errors == [
+        "Byzantine interleaving progress safety aggregate "
+        "ByzantineCommitProgressSafetyEnvelope conjunct contract repeats "
+        f"conjunct(s) {duplicate}; each Byzantine interleaving progress safety "
+        "obligation must be counted once"
+    ]
+
+
 def test_byzantine_interleaving_exactness_alignment_errors_accepts_direct_core(
 ) -> None:
     module = load_coverage_module()
 
     assert module.byzantine_interleaving_exactness_alignment_errors() == []
+
+
+def test_byzantine_interleaving_exactness_alignment_errors_rejects_missing_contract(
+) -> None:
+    module = load_coverage_module()
+    direct_contracts = copied_contracts(
+        module.SUMERAGI_DIRECT_INTERLEAVING_GATE_CONJUNCT_CONTRACTS
+    )
+    byzantine_contracts = copied_contracts(
+        module.SUMERAGI_BYZANTINE_INTERLEAVING_GATE_CONJUNCT_CONTRACTS
+    )
+    del direct_contracts["DirectCommitInterleavingExactness"]
+    del byzantine_contracts["ByzantineCommitInterleavingExactness"]
+
+    errors = module.byzantine_interleaving_exactness_alignment_errors(
+        direct_contracts=direct_contracts,
+        byzantine_contracts=byzantine_contracts,
+    )
+
+    assert errors == [
+        "Byzantine interleaving exactness alignment references missing "
+        "contract(s) DirectCommitInterleavingExactness, "
+        "ByzantineCommitInterleavingExactness"
+    ]
 
 
 def test_byzantine_interleaving_exactness_alignment_errors_rejects_missing_core(
@@ -24209,6 +34912,52 @@ def test_byzantine_interleaving_exactness_alignment_errors_rejects_duplicate_act
     ]
 
 
+def test_byzantine_interleaving_exactness_alignment_errors_rejects_duplicate_byzantine_only_actual(
+) -> None:
+    module = load_coverage_module()
+    byzantine_contracts = copied_contracts(
+        module.SUMERAGI_BYZANTINE_INTERLEAVING_GATE_CONJUNCT_CONTRACTS
+    )
+    duplicate = "ProposedRoundInitializesRbc"
+    byzantine_contracts["ByzantineCommitInterleavingExactness"] = (
+        *byzantine_contracts["ByzantineCommitInterleavingExactness"],
+        duplicate,
+    )
+
+    errors = module.byzantine_interleaving_exactness_alignment_errors(
+        byzantine_contracts=byzantine_contracts,
+    )
+
+    assert errors == [
+        "Byzantine interleaving actual ByzantineCommitInterleavingExactness "
+        f"conjunct contract repeats conjunct(s) {duplicate}; each Byzantine "
+        "interleaving exactness obligation must be counted once"
+    ]
+
+
+def test_byzantine_interleaving_exactness_alignment_errors_rejects_duplicate_expected(
+) -> None:
+    module = load_coverage_module()
+    direct_contracts = copied_contracts(
+        module.SUMERAGI_DIRECT_INTERLEAVING_GATE_CONJUNCT_CONTRACTS
+    )
+    duplicate = "BufferedVotesWaitForDelivery"
+    direct_contracts["DirectCommitInterleavingExactness"] = (
+        *direct_contracts["DirectCommitInterleavingExactness"],
+        duplicate,
+    )
+
+    errors = module.byzantine_interleaving_exactness_alignment_errors(
+        direct_contracts=direct_contracts,
+    )
+
+    assert errors == [
+        "Byzantine interleaving expected ByzantineCommitInterleavingExactness "
+        f"conjunct contract repeats conjunct(s) {duplicate}; each Byzantine "
+        "interleaving exactness obligation must be counted once"
+    ]
+
+
 def projection_gate_contract_text(
     module,
     *,
@@ -24271,6 +35020,107 @@ def test_projection_gate_conjunct_contract_errors_rejects_missing_conjunct(
     ) in errors[0]
 
 
+def test_projection_gate_conjunct_contract_errors_rejects_unguarded_aggregate_shape_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    operator = "ProjectedByzantineDeliveredFirstTopCorrectnessEnvelope"
+    cases = (
+        (
+            "missing_operator",
+            [],
+            f"does not define projection gate aggregate {operator}",
+        ),
+        (
+            "parameterized_operator",
+            [
+                f"{operator}(view) ==",
+                "  /\\ TypeInvariant",
+                "  /\\ ProjectedByzantineDeliveredFirstTopExactness",
+            ],
+            f"defines projection gate aggregate {operator} with arity 1; "
+            "projection gate aggregate operators must be zero-arity operators",
+        ),
+        (
+            "non_named_conjunct",
+            [
+                f"{operator} ==",
+                "  /\\ TypeInvariant",
+                "  /\\ ProjectedByzantineDeliveredFirstTopExactness",
+                "  /\\ TRUE",
+            ],
+            f"defines {operator}, but contains direct non-named conjunct TRUE; "
+            "keep projection gate aggregate proof operators on the documented "
+            "conjunct contract",
+        ),
+        (
+            "duplicate_conjunct",
+            [
+                f"{operator} ==",
+                "  /\\ TypeInvariant",
+                "  /\\ ProjectedByzantineDeliveredFirstTopExactness",
+                "  /\\ ProjectedByzantineDeliveredFirstTopExactness",
+            ],
+            f"defines {operator}, but repeats direct conjunct(s) "
+            "ProjectedByzantineDeliveredFirstTopExactness; each projection "
+            "gate aggregate obligation must be counted once",
+        ),
+        (
+            "unexpected_conjunct",
+            [
+                f"{operator} ==",
+                "  /\\ TypeInvariant",
+                "  /\\ ProjectedByzantineDeliveredFirstTopExactness",
+                "  /\\ UnexpectedProjectionTopWitness",
+            ],
+            f"defines {operator}, but contains unexpected direct conjunct(s) "
+            "UnexpectedProjectionTopWitness; keep projection gate aggregate "
+            "proof operators on the documented conjunct contract",
+        ),
+    )
+
+    for suffix, override, expected_error in cases:
+        tla = tmp_path / f"SumeragiByzantineCommitProjectionGate_{suffix}.tla"
+        tla.write_text(
+            projection_gate_contract_text(
+                module,
+                overrides={operator: override},
+            ),
+            encoding="utf-8",
+        )
+
+        errors = module.projection_gate_conjunct_contract_errors(tla)
+
+        assert len(errors) == 1
+        assert expected_error in errors[0]
+
+
+def test_projection_gate_conjunct_contract_errors_rejects_duplicate_expected_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGate.tla"
+    tla.write_text(projection_gate_contract_text(module), encoding="utf-8")
+    contracts = copied_contracts(module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS)
+    duplicate = "ProjectedByzantineDeliveredFirstTopExactness"
+    contracts["ProjectedByzantineDeliveredFirstTopCorrectnessEnvelope"] = (
+        *contracts["ProjectedByzantineDeliveredFirstTopCorrectnessEnvelope"],
+        duplicate,
+    )
+
+    errors = module.projection_gate_conjunct_contract_errors(
+        tla,
+        contracts=contracts,
+    )
+
+    assert errors == [
+        "projection gate aggregate "
+        "ProjectedByzantineDeliveredFirstTopCorrectnessEnvelope conjunct "
+        f"contract repeats conjunct(s) {duplicate}; each projection gate "
+        "aggregate obligation must be counted once"
+    ]
+
+
 def test_projection_gate_conjunct_contract_errors_rejects_dropped_implication(
     tmp_path: Path,
 ) -> None:
@@ -24299,6 +35149,69 @@ def test_projection_gate_conjunct_contract_errors_rejects_dropped_implication(
         "defines ProjectionBridgeMatchesInterleavingCore, but it must keep a "
         "top-level implication guarded by ProjectedByzantineDirectTopExactness"
     ) in errors[0]
+
+
+def test_projection_gate_conjunct_contract_errors_rejects_wrong_implication_antecedent(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGate.tla"
+    conjuncts = module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS[
+        "ProjectionBridgeMatchesInterleavingCore"
+    ]
+    tla.write_text(
+        projection_gate_contract_text(
+            module,
+            overrides={
+                "ProjectionBridgeMatchesInterleavingCore": [
+                    "ProjectionBridgeMatchesInterleavingCore ==",
+                    "  ProjectedByzantineVoteFirstTopExactness =>",
+                    *(f"    /\\ {conjunct}" for conjunct in conjuncts),
+                ]
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.projection_gate_conjunct_contract_errors(tla)
+
+    assert len(errors) == 1
+    assert (
+        "defines ProjectionBridgeMatchesInterleavingCore, but its implication "
+        "antecedent is ProjectedByzantineVoteFirstTopExactness; expected "
+        "ProjectedByzantineDirectTopExactness"
+    ) in errors[0]
+
+
+def test_projection_gate_conjunct_contract_errors_rejects_duplicate_implication_inventory(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGate.tla"
+    tla.write_text(projection_gate_contract_text(module), encoding="utf-8")
+
+    errors = module.implication_antecedent_contract_errors(
+        tla,
+        (
+            (
+                "ProjectionBridgeMatchesInterleavingCore",
+                "ProjectedByzantineDirectTopExactness",
+            ),
+            (
+                "ProjectionBridgeMatchesInterleavingCore",
+                "ProjectedByzantineVoteFirstTopExactness",
+            ),
+        ),
+        "projection gate implication antecedent contract",
+    )
+
+    assert errors == [
+        "projection gate implication antecedent contract inventory repeats "
+        "ProjectionBridgeMatchesInterleavingCore; first expected "
+        "ProjectedByzantineDirectTopExactness, then "
+        "ProjectedByzantineVoteFirstTopExactness; each implication antecedent "
+        "contract must be counted once"
+    ]
 
 
 def test_mutation_cfg_name_errors_accepts_matching_cfg_fragments() -> None:

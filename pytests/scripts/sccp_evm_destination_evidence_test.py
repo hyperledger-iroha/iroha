@@ -150,6 +150,62 @@ class HostileEvmDestinationString(str):
         raise AssertionError("secret-token EVM destination string encode ran")
 
 
+class HostileEvmDestinationBytes(bytes):
+    """Bytes subclass that EVM destination parsers must reject before hooks."""
+
+    def __new__(cls, value):
+        return bytes.__new__(cls, value)
+
+    def __bytes__(self):
+        raise AssertionError("secret-token EVM destination bytes coerced")
+
+    def __repr__(self):
+        raise AssertionError("secret-token EVM destination bytes repr'd")
+
+    def __str__(self):
+        raise AssertionError("secret-token EVM destination bytes stringified")
+
+    def __len__(self):
+        raise AssertionError("secret-token EVM destination bytes length read")
+
+    def __iter__(self):
+        raise AssertionError("secret-token EVM destination bytes iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token EVM destination bytes indexed")
+
+    def hex(self):
+        raise AssertionError("secret-token EVM destination bytes hex encoded")
+
+
+class HostileEvmDestinationBytearray(bytearray):
+    """Bytearray subclass that EVM destination parsers must reject before hooks."""
+
+    def __init__(self, value):
+        super().__init__(value)
+
+    def __bytes__(self):
+        raise AssertionError("secret-token EVM destination bytearray coerced")
+
+    def __repr__(self):
+        raise AssertionError("secret-token EVM destination bytearray repr'd")
+
+    def __str__(self):
+        raise AssertionError("secret-token EVM destination bytearray stringified")
+
+    def __len__(self):
+        raise AssertionError("secret-token EVM destination bytearray length read")
+
+    def __iter__(self):
+        raise AssertionError("secret-token EVM destination bytearray iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token EVM destination bytearray indexed")
+
+    def hex(self):
+        raise AssertionError("secret-token EVM destination bytearray hex encoded")
+
+
 class HostileTomlInt(int):
     def __new__(cls):
         return int.__new__(cls, 1)
@@ -2599,6 +2655,134 @@ def test_evm_destination_exact_runtime_strings_reject_string_subclasses_without_
             assert exc.__cause__ is None
         else:
             raise AssertionError("EVM destination JSON accepted hostile runtime text")
+
+
+def test_evm_destination_byte_helpers_reject_subclasses_without_hooks():
+    module = load_evidence_module()
+    fixed_hash = b"\x11" * 32
+    verifier_runtime = b"\x60\x01"
+    bridge_runtime = b"\x60\x02"
+    verifier_hash = module.runtime_bytecode_hash(verifier_runtime)
+    bridge_hash = module.runtime_bytecode_hash(bridge_runtime)
+
+    assert (
+        module._require_fixed_bytes(
+            bytearray(fixed_hash),
+            label="verifier_key_hash",
+            byte_length=32,
+        )
+        == fixed_hash
+    )
+    assert module.runtime_bytecode_hash(bytearray(verifier_runtime)) == verifier_hash
+
+    verifier_args = SimpleNamespace(
+        verifier_runtime_bytecode_hex=bytearray(verifier_runtime),
+        verifier_runtime_bytecode_file=None,
+        verifier_code_hash=None,
+    )
+    module.apply_runtime_bytecode_hash(verifier_args)
+    assert verifier_args.verifier_runtime_bytecode_bytes == verifier_runtime
+
+    bridge_args = SimpleNamespace(
+        bridge_runtime_bytecode_hex=bytearray(bridge_runtime),
+        bridge_runtime_bytecode_file=None,
+        bridge_code_hash=None,
+    )
+    module.apply_bridge_runtime_bytecode_hash(bridge_args)
+    assert bridge_args.bridge_runtime_bytecode_bytes == bridge_runtime
+
+    metadata_args = SimpleNamespace(
+        bridge_runtime_bytecode_bytes=bytearray(bridge_runtime),
+        bridge_runtime_bytecode_hex_text=None,
+        bridge_code_hash=bridge_hash,
+        verifier_runtime_bytecode_bytes=bytearray(verifier_runtime),
+        verifier_runtime_bytecode_hex_text=None,
+        verifier_code_hash=verifier_hash,
+    )
+    module._require_runtime_bytecode_evidence(metadata_args, output="toml")
+
+    hostile_fixed_values = (
+        HostileEvmDestinationBytes(fixed_hash),
+        HostileEvmDestinationBytearray(fixed_hash),
+    )
+    hostile_runtime_values = (
+        HostileEvmDestinationBytes(verifier_runtime),
+        HostileEvmDestinationBytearray(verifier_runtime),
+    )
+
+    for hostile_fixed in hostile_fixed_values:
+        try:
+            module._require_fixed_bytes(
+                hostile_fixed,
+                label="verifier_key_hash",
+                byte_length=32,
+            )
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == "verifier_key_hash must be 32 bytes"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("EVM destination accepted hostile fixed bytes")
+
+    for hostile_runtime in hostile_runtime_values:
+        for call, expected_message in (
+            (
+                lambda hostile_runtime=hostile_runtime: module.runtime_bytecode_hash(
+                    hostile_runtime
+                ),
+                "runtime bytecode must be bytes",
+            ),
+            (
+                lambda hostile_runtime=hostile_runtime: (
+                    module.apply_runtime_bytecode_hash(
+                        SimpleNamespace(
+                            verifier_runtime_bytecode_hex=hostile_runtime,
+                            verifier_runtime_bytecode_file=None,
+                            verifier_code_hash=None,
+                        )
+                    )
+                ),
+                "runtime bytecode must be bytes",
+            ),
+            (
+                lambda hostile_runtime=hostile_runtime: (
+                    module.apply_bridge_runtime_bytecode_hash(
+                        SimpleNamespace(
+                            bridge_runtime_bytecode_hex=hostile_runtime,
+                            bridge_runtime_bytecode_file=None,
+                            bridge_code_hash=None,
+                        )
+                    )
+                ),
+                "runtime bytecode must be bytes",
+            ),
+            (
+                lambda hostile_runtime=hostile_runtime: (
+                    module._require_runtime_bytecode_evidence(
+                        SimpleNamespace(
+                            bridge_runtime_bytecode_bytes=hostile_runtime,
+                            bridge_runtime_bytecode_hex_text=None,
+                            bridge_code_hash=verifier_hash,
+                            verifier_runtime_bytecode_bytes=verifier_runtime,
+                            verifier_runtime_bytecode_hex_text=None,
+                            verifier_code_hash=verifier_hash,
+                        ),
+                        output="toml",
+                    )
+                ),
+                "--toml requires --bridge-runtime-bytecode-hex",
+            ),
+        ):
+            try:
+                call()
+            except ValueError as exc:
+                rendered = str(exc)
+                assert rendered == expected_message
+                assert "secret-token" not in rendered
+                assert exc.__cause__ is None
+            else:
+                raise AssertionError("EVM destination accepted hostile runtime bytes")
 
 
 def test_evm_toml_runtime_bytecode_reparse_redacts_helper_failures(

@@ -1391,7 +1391,7 @@ def _route_canary_template_hash_errors(
         route_canary_hash = row.get(field)
         if not _is_canonical_bytes32_hex_text(route_canary_hash):
             continue
-        assert isinstance(route_canary_hash, str)
+        assert type(route_canary_hash) is str
         if bytes.fromhex(route_canary_hash[2:]) in template_hashes:
             errors.append(
                 f"{label} {field} must be live evidence, "
@@ -1421,7 +1421,7 @@ def _all_lanes_route_canary_template_hash_errors(
         evidence_hash = route_canary.get(field)
         if not _is_canonical_bytes32_hex_text(evidence_hash):
             continue
-        assert isinstance(evidence_hash, str)
+        assert type(evidence_hash) is str
         if bytes.fromhex(evidence_hash[2:]) in template_hashes:
             errors.append(
                 f"{label} {field} must be live evidence, "
@@ -1454,7 +1454,7 @@ def _all_lanes_template_hash_errors(
         value = row.get(field)
         if not _is_canonical_bytes32_hex_text(value):
             continue
-        assert isinstance(value, str)
+        assert type(value) is str
         if bytes.fromhex(value[2:]) in template_hashes:
             errors.append(
                 f"{label} {field} must be {evidence_label}, "
@@ -1480,7 +1480,7 @@ def _source_adapter_gate_hash_role_fields(
 
     gate_hash = source_gate.get("gate_hash")
     if _is_nonzero_bytes32_hex_text(gate_hash):
-        assert isinstance(gate_hash, str)
+        assert type(gate_hash) is str
         fields.append(("source_adapter_gate_hash", gate_hash))
         seen_hashes.add(gate_hash)
 
@@ -1497,7 +1497,7 @@ def _source_adapter_gate_hash_role_fields(
             continue
         if not _is_nonzero_bytes32_hex_text(audit_hash):
             continue
-        assert isinstance(audit_hash, str)
+        assert type(audit_hash) is str
         if audit_hash in seen_hashes:
             continue
         fields.append((f"source_adapter_gate.audit_hashes.{audit_key}", audit_hash))
@@ -2137,7 +2137,7 @@ def _route_canary_common_semantic_errors(
     source_hashes = lane.get("source_record_hashes")
     source_hashes = (
         _public_mapping_string_view(source_hashes)
-        if isinstance(source_hashes, dict)
+        if type(source_hashes) is dict
         else {}
     )
     errors.extend(
@@ -2270,7 +2270,7 @@ def _route_canary_not_ready_proof_context_semantic_errors(
 
     def require_positive_decimal_string(field: str) -> None:
         value = route_canary.get(field)
-        if field in route_canary and isinstance(value, str):
+        if field in route_canary and type(value) is str:
             if not _is_canonical_decimal_text(value, positive=True):
                 errors.append(
                     f"{canary_label} {field} must be a canonical positive "
@@ -2344,7 +2344,7 @@ def _route_canary_not_ready_hash_role_errors(
     role_fields: list[tuple[str, Any]] = []
 
     source_hashes = lane.get("source_record_hashes")
-    if isinstance(source_hashes, dict):
+    if type(source_hashes) is dict:
         source_hashes = _public_mapping_string_view(source_hashes)
         role_fields.extend(
             (
@@ -2449,7 +2449,7 @@ def _distinct_nonzero_bytes32_field_errors(
     for field, value in fields:
         if not _is_nonzero_bytes32_hex_text(value):
             continue
-        assert isinstance(value, str)
+        assert type(value) is str
         previous_field = seen.get(value)
         if previous_field is not None:
             errors.append(f"{label} {field} must not reuse {previous_field}")
@@ -2524,7 +2524,7 @@ def _route_canary_evm_semantic_errors(
 
     governed_hash_fields: list[tuple[str, Any]] = []
     source_hashes = lane.get("source_record_hashes")
-    if isinstance(source_hashes, dict):
+    if type(source_hashes) is dict:
         source_hashes = _public_mapping_string_view(source_hashes)
         governed_hash_fields.extend(
             (
@@ -2667,7 +2667,7 @@ def _route_canary_tron_semantic_errors(
 
     governed_hash_fields: list[tuple[str, Any]] = []
     source_hashes = lane.get("source_record_hashes")
-    if isinstance(source_hashes, dict):
+    if type(source_hashes) is dict:
         source_hashes = _public_mapping_string_view(source_hashes)
         governed_hash_fields.extend(
             (
@@ -2819,7 +2819,7 @@ def _route_canary_ton_semantic_errors(
 
     governed_hash_fields: list[tuple[str, Any]] = []
     source_hashes = lane.get("source_record_hashes")
-    if isinstance(source_hashes, dict):
+    if type(source_hashes) is dict:
         source_hashes = _public_mapping_string_view(source_hashes)
         governed_hash_fields.extend(
             (
@@ -2876,14 +2876,14 @@ def _all_lanes_route_canary_cross_lane_bundle_errors(
             ):
                 value = source_hashes.get(field)
                 if _is_nonzero_bytes32_hex_text(value):
-                    assert isinstance(value, str)
+                    assert type(value) is str
                     governed_hashes.setdefault(value, (lane_label, field))
         destination_binding = lane.get("destination_binding")
         if type(destination_binding) is dict:
             destination_binding = _public_mapping_string_view(destination_binding)
             value = destination_binding.get("destination_binding_hash")
             if _is_nonzero_bytes32_hex_text(value):
-                assert isinstance(value, str)
+                assert type(value) is str
                 governed_hashes.setdefault(
                     value,
                     (lane_label, "destination_binding_hash"),
@@ -2893,7 +2893,7 @@ def _all_lanes_route_canary_cross_lane_bundle_errors(
             route_allowlist = _public_mapping_string_view(route_allowlist)
             value = route_allowlist.get("route_allowlist_hash")
             if _is_nonzero_bytes32_hex_text(value):
-                assert isinstance(value, str)
+                assert type(value) is str
                 governed_hashes.setdefault(value, (lane_label, "route_allowlist_hash"))
             route_canary = route_allowlist.get("route_canary")
             if type(route_canary) is dict:
@@ -2906,14 +2906,14 @@ def _all_lanes_route_canary_cross_lane_bundle_errors(
                         continue
                     canary_value = route_canary.get(field)
                     if _is_nonzero_bytes32_hex_text(canary_value):
-                        assert isinstance(canary_value, str)
+                        assert type(canary_value) is str
                         governed_hashes.setdefault(
                             canary_value,
                             (lane_label, f"route_canary.{field}"),
                         )
         for field, value in _source_adapter_gate_hash_role_fields(lane_label, lane):
             if _is_nonzero_bytes32_hex_text(value):
-                assert isinstance(value, str)
+                assert type(value) is str
                 governed_hashes.setdefault(value, (lane_label, field))
 
     errors: list[str] = []
@@ -2939,7 +2939,7 @@ def _all_lanes_route_canary_cross_lane_bundle_errors(
             canary_hash = route_canary.get(field)
             if not _is_nonzero_bytes32_hex_text(canary_hash):
                 continue
-            assert isinstance(canary_hash, str)
+            assert type(canary_hash) is str
             if field == "evidence_hash":
                 previous_canary_label = seen_canaries.get(canary_hash)
                 if previous_canary_label is not None:
@@ -4867,7 +4867,7 @@ def _release_checklist_bundle_errors(
     for index, item in enumerate(items):
         item_base_label = f"{label}.items[{index}]"
         item_payload = _require_report_mapping(item, item_base_label, errors)
-        if not isinstance(item, dict):
+        if type(item) is not dict:
             continue
         item_id = _public_mapping_get_string_key(item_payload, "id")
         item_id_error = _checklist_item_id_error(item_id, item_base_label)
@@ -6594,7 +6594,7 @@ def _native_evm_prover_binding_bundle_errors(
             f"{label}.native_evm_prover_bundle cannot be recomputed without bundle directory"
         ]
     evidence = report.get("evidence")
-    if not isinstance(evidence, dict):
+    if type(evidence) is not dict:
         evidence = {}
     try:
         expected_summary = _verify_module()._expected_native_evm_prover_bundle_status(
@@ -6677,7 +6677,7 @@ def _corridor_phase_transcript_bundle_errors(
         ]
     phases = corridor.get("phases")
     evidence_artifacts = corridor.get("evidence_artifacts")
-    if not isinstance(phases, dict) or not isinstance(evidence_artifacts, dict):
+    if type(phases) is not dict or type(evidence_artifacts) is not dict:
         return []
     phases = _public_mapping_string_view(phases)
     known_phases = _corridor_phase_names()
@@ -8013,7 +8013,7 @@ def _release_report_bundle_errors(
                 if phase_error is not None:
                     continue
                 artifact = evidence_artifacts.get(phase)
-                if not isinstance(artifact, dict):
+                if type(artifact) is not dict:
                     errors.append(
                         f"{label}.corridor phase {phase} has no hashed evidence artifact"
                     )
@@ -8064,7 +8064,7 @@ def _release_report_bundle_errors(
         f"{label}.native_evm_prover_bundle",
     )
     errors.extend(native_summary_errors)
-    if isinstance(native_summary, dict):
+    if type(native_summary) is dict:
         errors.extend(
             _native_evm_prover_binding_bundle_errors(
                 native_summary,
@@ -8079,7 +8079,7 @@ def _release_report_bundle_errors(
         errors,
     )
     source_inventory_label = f"{label}.source_inventory"
-    if isinstance(payload.get("source_inventory"), dict):
+    if type(payload.get("source_inventory")) is dict:
         known_source_inventory_gates = _source_inventory_known_gates()
         present_source_inventory_gates = {
             gate
@@ -8099,7 +8099,7 @@ def _release_report_bundle_errors(
             inventory = source_inventory[gate]
             inventory_label = f"{source_inventory_label}[{gate!r}]"
             inventory_payload = _require_report_mapping(inventory, inventory_label, errors)
-            if not isinstance(inventory, dict):
+            if type(inventory) is not dict:
                 continue
             errors.extend(
                 _unknown_public_field_errors(

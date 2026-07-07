@@ -1077,12 +1077,14 @@ if len(test_definition_sections) != 1:
 
 for element in unit_tests:
     element_has_expected_assembly = False
+    element_assembly_references = []
     for attribute_name in ("codeBase", "storage"):
         attribute_value = element.attrib.get(attribute_name)
         if attribute_value:
             assembly_problem = trx_assembly_reference_problem(attribute_value)
             if assembly_problem:
                 fail(assembly_problem)
+            element_assembly_references.append(attribute_value)
         if attribute_value and is_trusted_assembly_reference(attribute_value):
             element_has_expected_assembly = True
             has_expected_assembly = True
@@ -1134,12 +1136,14 @@ for element in unit_tests:
             execution_id_to_test_id[execution_id] = test_id
         if child_name == "TestMethod":
             method_has_expected_assembly = element_has_expected_assembly
+            method_assembly_references = list(element_assembly_references)
             for attribute_name in ("codeBase", "storage"):
                 attribute_value = child.attrib.get(attribute_name)
                 if attribute_value:
                     assembly_problem = trx_assembly_reference_problem(attribute_value)
                     if assembly_problem:
                         fail(assembly_problem)
+                    method_assembly_references.append(attribute_value)
                 if attribute_value and is_trusted_assembly_reference(attribute_value):
                     method_has_expected_assembly = True
                     has_expected_assembly = True
@@ -1168,6 +1172,13 @@ for element in unit_tests:
             if method_has_expected_assembly and has_sccp_test_name_token(
                 method_result_name
             ):
+                if any(
+                    not is_trusted_assembly_reference(value)
+                    for value in method_assembly_references
+                ):
+                    fail(
+                        "requires SCCP TRX definitions to reference only Hyperledger.Iroha.Sdk.Tests.dll assembly paths"
+                    )
                 definition_sccp_method_names.add(method_result_name)
     if definition_sccp_method_names:
         if test_id:

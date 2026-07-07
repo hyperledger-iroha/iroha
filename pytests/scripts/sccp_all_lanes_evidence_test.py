@@ -2703,6 +2703,32 @@ def test_all_lanes_minimal_toml_parser_redacts_json_exception_causes():
         module.tomllib = original_tomllib
 
 
+def test_all_lanes_minimal_toml_rejects_array_subclasses_without_hooks():
+    module = load_evidence_module()
+    original_tomllib = module.tomllib
+    original_json_loads = module.json.loads
+    module.tomllib = None
+    module.json.loads = lambda _text: HostileAllLanesReportList(["secret-token"])
+    try:
+        try:
+            module._load_toml(
+                "[[zk.sccp_route_allowlists]]\nallowed_domains = [\"1\"]\n",
+                label="operator evidence",
+            )
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == (
+                "operator evidence:2: only string arrays are supported"
+            )
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("minimal TOML loader accepted array subclass")
+    finally:
+        module.json.loads = original_json_loads
+        module.tomllib = original_tomllib
+
+
 def test_all_lanes_metadata_comment_redacts_json_exception_causes():
     module = load_evidence_module()
 
@@ -3299,6 +3325,33 @@ def test_all_lanes_evidence_rejects_boolean_integer_aliases():
     assert "domain 1 (eth): immutable_verifier_ready must be True" in blockers
     assert "domain 1 (eth): anchors_ready must be True" in blockers
     assert "domain 1 (eth): routes_allowlisted must be True" in blockers
+
+
+def test_all_lanes_evidence_rejects_placeholder_material_aliases():
+    module = load_evidence_module()
+    placeholder_material_aliases = (
+        True,
+        "false",
+        "",
+        None,
+        [],
+        {},
+        HostileAllLanesPresenceScalar(),
+    )
+
+    for alias in placeholder_material_aliases:
+        records = complete_bundle(module)
+        records["sccp_source_verifier_materials"][0][
+            "placeholder_material"
+        ] = alias
+
+        summary = module.validate_evidence_bundle(records)
+
+        blockers = "\n".join(summary["blockers"])
+        assert summary["production_ready"] is False
+        assert "domain 1 (eth): placeholder_material must be False" in blockers
+        assert "secret-token" not in blockers
+        assert "__str__" not in blockers
 
 
 def test_all_lanes_evidence_rejects_unknown_record_fields():
@@ -6080,6 +6133,69 @@ def test_all_lanes_rejects_hostile_tron_route_canary_scalars_without_stringifyin
         assert "TRON route canary" in rendered
 
 
+def test_all_lanes_rejects_route_canary_actual_boolean_aliases():
+    module = load_evidence_module()
+    cases = (
+        (
+            module.SCCP_DOMAIN_ETH,
+            "evm_route_canary_used_message_proof",
+            "_comment_evm_route_canary_used_message_proof",
+            "EVM route canary usedMessageProofs must be boolean",
+        ),
+        (
+            module.SCCP_DOMAIN_ETH,
+            "evm_route_canary_receipt_block_finalized",
+            "_comment_evm_route_canary_receipt_block_finalized",
+            "EVM route canary receipt block finalized must be boolean",
+        ),
+        (
+            module.SCCP_DOMAIN_TRON,
+            "tron_route_canary_used_message_proof",
+            "_comment_tron_route_canary_used_message_proof",
+            "TRON route canary usedMessageProofs must be boolean",
+        ),
+        (
+            module.SCCP_DOMAIN_TRON,
+            "tron_route_canary_raw_data_owner_matches_transaction",
+            "_comment_tron_route_canary_raw_data_owner_matches_transaction",
+            "TRON route canary raw_data owner binding must be boolean",
+        ),
+        (
+            module.SCCP_DOMAIN_TRON,
+            "tron_route_canary_signature_recovers_to_owner",
+            "_comment_tron_route_canary_signature_recovers_to_owner",
+            "TRON route canary signature recovery must be boolean",
+        ),
+    )
+    aliases = ("true", "false", 1, HostileRouteCanaryScalar())
+
+    for domain, field, comment_field, expected in cases:
+        index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(domain)
+        for alias in aliases:
+            records = copy.deepcopy(complete_bundle(module))
+            route = records["sccp_route_allowlists"][index]
+            route[field] = alias
+
+            summary = module.validate_evidence_bundle(records)
+
+            blockers = "\n".join(summary["blockers"])
+            assert summary["production_ready"] is False, (field, alias)
+            assert expected in blockers, (field, alias)
+            assert "secret-token" not in blockers
+
+        records = copy.deepcopy(complete_bundle(module))
+        route = records["sccp_route_allowlists"][index]
+        route[field] = "true"
+        route.pop(comment_field)
+
+        summary = module.validate_evidence_bundle(records)
+
+        blockers = "\n".join(summary["blockers"])
+        assert summary["production_ready"] is False, field
+        assert expected in blockers, field
+        assert "secret-token" not in blockers
+
+
 def test_all_lanes_accepts_direct_tron_full_toml_with_audited_metadata(tmp_path):
     module = load_evidence_module()
     records = complete_bundle(module)
@@ -7392,6 +7508,54 @@ def test_all_lanes_rejects_mutable_solana_live_metadata():
     assert "Solana verifier program owner metadata must be the BPF upgradeable loader" in blockers
     assert "Solana ProgramData owner metadata must be the BPF upgradeable loader" in blockers
     assert "Solana verifier program immutable metadata must be true" in blockers
+
+
+def test_all_lanes_rejects_solana_program_immutable_bool_aliases():
+    module = load_evidence_module()
+    sol_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(module.SCCP_DOMAIN_SOL)
+
+    cases = (
+        ("actual_string_false", "false", "false"),
+        ("actual_string_true", "true", "true"),
+        ("actual_hostile_string_subclass", HostileSolanaLiveComment(), "false"),
+        ("comment_noncanonical_false", False, "false "),
+        ("comment_upper_true", True, "TRUE"),
+    )
+    for case_name, actual, comment in cases:
+        records = copy.deepcopy(complete_bundle(module))
+        solana_destination = records["sccp_destination_rollouts"][sol_index]
+        solana_destination["solana_program_immutable"] = actual
+        solana_destination["_comment_solana_program_immutable"] = comment
+
+        summary = module.validate_evidence_bundle(records)
+
+        blockers = "\n".join(summary["blockers"])
+        assert summary["production_ready"] is False, case_name
+        assert (
+            "Solana program immutable field must match _comment_solana_program_immutable comment"
+            in blockers
+        ), case_name
+        assert "secret-token" not in blockers
+
+
+def test_all_lanes_rejects_solana_route_canary_immutable_comment_aliases():
+    module = load_evidence_module()
+    sol_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(module.SCCP_DOMAIN_SOL)
+
+    for value in ("false", "FALSE", " false", "true ", "maybe"):
+        records = copy.deepcopy(complete_bundle(module))
+        solana_destination = records["sccp_destination_rollouts"][sol_index]
+        solana_destination["_comment_solana_program_immutable"] = value
+
+        summary = module.validate_evidence_bundle(records)
+
+        blockers = "\n".join(summary["blockers"])
+        assert summary["production_ready"] is False, value
+        assert (
+            "Solana route canary immutable program flag must be true" in blockers
+        ), value
+        assert "Solana route canary live program metadata is invalid" not in blockers
+        assert "secret-token" not in blockers
 
 
 def test_all_lanes_rejects_stale_solana_programdata_context_slot():
@@ -16113,6 +16277,17 @@ def test_all_lanes_release_checklist_rejects_malformed_route_canary_summary():
 
     assert checklist["ready"] is False
     assert "domain 1 (eth): route canary summary is malformed" in blockers
+
+    lane["route_allowlist"]["route_canary"] = HostileAllLanesReportSection(
+        {"status": "passed"}
+    )
+    checklist = module._release_checklist([lane], [])
+    items = {item["id"]: item for item in checklist["items"]}
+    blockers = "\n".join(items["live_route_canary_evidence"]["blockers"])
+
+    assert checklist["ready"] is False
+    assert "domain 1 (eth): route canary summary is malformed" in blockers
+    assert "secret-token" not in blockers
 
 
 def test_all_lanes_release_checklist_requires_bound_route_hashes():

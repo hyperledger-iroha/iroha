@@ -3523,7 +3523,7 @@ def _public_cryptographic_source_adapter_gate_template_hash_errors(
         return []
     errors: list[str] = []
     if _is_nonzero_hex32(gate_hash):
-        assert isinstance(gate_hash, str)
+        assert type(gate_hash) is str
         if bytes.fromhex(gate_hash[2:]) in template_hashes:
             # Source-inventory marker: source_adapter_gate_hash must be deployed gate evidence, not built-in template material
             errors.append(
@@ -3538,7 +3538,7 @@ def _public_cryptographic_source_adapter_gate_template_hash_errors(
         audit_hash = audit_hashes.get(audit_field)
         if not _is_nonzero_hex32(audit_hash):
             continue
-        assert isinstance(audit_hash, str)
+        assert type(audit_hash) is str
         if bytes.fromhex(audit_hash[2:]) in template_hashes:
             # Source-inventory marker: source_adapter_gate_audit_hashes must be deployed audit evidence, not built-in template material
             errors.append(
@@ -3573,7 +3573,7 @@ def _public_cryptographic_source_record_template_hash_errors(
         value = row.get(field)
         if not _is_nonzero_hex32(value):
             continue
-        assert isinstance(value, str)
+        assert type(value) is str
         if bytes.fromhex(value[2:]) not in template_hashes:
             continue
         # Source-inventory marker: source-record hashes must be deployed evidence, not built-in template material
@@ -3630,7 +3630,7 @@ def _public_cryptographic_route_canary_template_hash_errors(
         value = row.get(field)
         if not _is_nonzero_hex32(value):
             continue
-        assert isinstance(value, str)
+        assert type(value) is str
         if bytes.fromhex(value[2:]) not in template_hashes:
             continue
         # Source-inventory marker: route-canary transcript hashes must be live evidence, not built-in template material
@@ -6926,7 +6926,7 @@ def _phase_block_forbidden_output_marker(phase: str, phase_block: str) -> str | 
 
 
 def _phase_transcript_artifact_path(artifact: Any) -> tuple[Path | None, list[str]]:
-    if not isinstance(artifact, dict):
+    if type(artifact) is not dict:
         return None, ["evidence artifact cannot be checked: malformed artifact row"]
     artifact_path = artifact.get("path")
     if type(artifact_path) is not str or not artifact_path:
@@ -7551,7 +7551,7 @@ def _number_repeated_native_evm_validation_blocker_diagnostics(
 
 
 def _native_evm_validation_blockers(value: Any, label: str) -> list[str]:
-    if not isinstance(value, list):
+    if type(value) is not list:
         return [f"{label} must be a list of non-empty canonical strings"]
     blockers: list[str] = []
     seen: set[str] = set()
@@ -7644,7 +7644,7 @@ def _public_blocker_text_issue(item: Any) -> str | None:
 def _public_blocker_list_duplicate_errors(value: Any, label: str) -> list[str]:
     """Return bounded blockers when a public blocker list repeats values."""
 
-    if not isinstance(value, list):
+    if type(value) is not list:
         return []
     seen: set[str] = set()
     duplicate_keys_reported: set[str] = set()
@@ -8055,7 +8055,7 @@ def _active_launch_route_canary_template_hash_blockers(
         value = canary.get(field)
         if not _is_nonzero_hex32(value):
             continue
-        assert isinstance(value, str)
+        assert type(value) is str
         if bytes.fromhex(value[2:]) in template_hashes:
             # Source-inventory marker: route canary hashes must be live evidence, not built-in template material
             blockers.append(
@@ -8322,7 +8322,7 @@ def _active_launch_destination_binding_template_hash_blockers(
     ):
         if not _is_nonzero_hex32(value):
             continue
-        assert isinstance(value, str)
+        assert type(value) is str
         if bytes.fromhex(value[2:]) in template_hashes:
             # Source-inventory marker: destination binding hashes must be destination binding evidence, not built-in template material
             blockers.append(
@@ -8348,7 +8348,7 @@ def _active_launch_source_adapter_gate_template_hash_blockers(
         return []
     blockers: list[str] = []
     if _is_nonzero_hex32(gate_hash):
-        assert isinstance(gate_hash, str)
+        assert type(gate_hash) is str
         if bytes.fromhex(gate_hash[2:]) in template_hashes:
             blockers.append(
                 f"{lane_label}: active {ACTIVE_LAUNCH_DISPLAY} source adapter gate hash must be deployed gate evidence, not built-in template material"
@@ -8359,7 +8359,7 @@ def _active_launch_source_adapter_gate_template_hash_blockers(
             "evm_source_gate_hash",
         )
         if _is_nonzero_hex32(audit_hash):
-            assert isinstance(audit_hash, str)
+            assert type(audit_hash) is str
             if bytes.fromhex(audit_hash[2:]) in template_hashes:
                 blockers.append(
                     f"{lane_label}: active {ACTIVE_LAUNCH_DISPLAY} source adapter gate audit hashes evm_source_gate_hash must be deployed audit evidence, not built-in template material"
@@ -8395,7 +8395,7 @@ def _active_launch_source_record_template_hash_blockers(
         value = source_hashes.get(field)
         if not _is_nonzero_hex32(value):
             continue
-        assert isinstance(value, str)
+        assert type(value) is str
         if bytes.fromhex(value[2:]) in template_hashes:
             # Source-inventory marker: governed deployment source verifier material hash must be deployed evidence, not built-in template material
             # Source-inventory marker: governed deployment source adapter engine deployment hash must be deployed evidence, not built-in template material
@@ -8643,7 +8643,7 @@ def _active_launch_route_allowlist_template_hash_blockers(
     ):
         if not _is_nonzero_hex32(value):
             continue
-        assert isinstance(value, str)
+        assert type(value) is str
         if bytes.fromhex(value[2:]) in template_hashes:
             # Source-inventory marker: route allowlist hashes must be route binding evidence, not built-in template material
             blockers.append(
@@ -11222,7 +11222,7 @@ def _render_markdown(report: Any, *, max_blockers_per_lane: int) -> str:
             f"- {ACTIVE_LAUNCH_DISPLAY} source and destination EVM live reads must report {ACTIVE_LAUNCH_EVM_CHAIN_ID_EVIDENCE} and be pinned to the `finalized` block tag in both the all-lanes summary and readiness cryptographic-evidence table.",
             f"- {ACTIVE_LAUNCH_DISPLAY} route-canary transaction metadata must include a canonical non-zero transaction hash, finalized receipt block number/hash, receipts root, message id, and `{ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE}` evidence source before launch readiness can pass.",
             "- Governed live deployment evidence for immutable destination verifiers and source-chain verifier engines; offline placeholder or template-derived hashes keep the report blocked. Required source-verifier evidence by lane: Ethereum recursive source-adapter verifier deployment and remaining beacon light-client update/state branches are not complete for the SCCP inbound path; BSC recursive source-adapter verifier deployment is not complete for the SCCP inbound path; Solana audited Tower replay, full-bank AccountsDB lattice, bank/fork-choice, and source-adapter verifier deployment evidence is not complete for the SCCP inbound path; TON governed full-light-client verifier deployment, canary, and source-adapter deployment evidence are not complete for the SCCP inbound path; TRON transaction-Merkle source-call verifier deployment is not complete for the SCCP inbound path.",
-            "- Windows `.NET 8.0.x` SCCP SDK phase evidence must include the full C# SCCP test run filtered by `FullyQualifiedName~Sccp`, canonical-case rejection coverage for proof-request, message-bundle, source-proof, and optional Groth16 artifact hash fields, including uppercase byte aliases and `0X` public-input, statement, bundle/source-proof, proof-artifact, and proving-key hashes, the `SCCP .NET SDK version:` marker emitted after `dotnet --version`, phase commands in `dotnet --version`, `dotnet --info`, `cargo build -p connect_norito_bridge`, `dotnet restore`, then strict `dotnet test` order, no restore/build diagnostics such as `error NU*`/`CS*`/`MSB*`/`NETSDK*`/`CA*`, non-zero `Error(s)` counts, `Failed to restore`, or restore/build failed markers, exact host markers `SCCP .NET SDK OS: Windows`, `SCCP .NET SDK RID: win-{x64,x86,arm64,arm}`, and `SCCP .NET SDK Architecture: {x64,x86,arm64,arm}` emitted after `dotnet --info`, exact native bridge markers `connect_norito_bridge native bridge: ...connect_norito_bridge.dll` and `connect_norito_bridge native bridge sha256: <64 lowercase hex>` emitted after `cargo build -p connect_norito_bridge`, `dotnet restore Hyperledger.Iroha.Sdk.sln` before the strict `dotnet test` command, that strict `dotnet test` command carrying `--artifacts-path <bridge-target>/dotnet-artifacts`, `-p:ProduceReferenceAssembly=false`, and `--nologo`, a non-zero passed VSTest summary, the strict `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` marker, and `SCCP .NET SDK TRX bytes: <positive integer>` marker each emitted exactly once after the strict `dotnet test` command, with the summary from `Hyperledger.Iroha.Sdk.Tests.dll (net8.0)` reporting `Failed: 0`, `Skipped: 0`, `Total == Passed`, and a canonical ordered numeric unit duration with non-repeated descending units, and with a positive TRX byte count plus a TRX marker that full-matches the direct C# test project `TestResults/sccp-dotnet-sdk.trx` path, and with direct VSTest-shaped TRX XML that is rooted at `TestRun`, contains exactly one `Results` section and exactly one `TestDefinitions` section, keeps `Results` and `TestDefinitions` sections directly under `TestRun`, uses one consistent XML namespace for VSTest elements, either no XML namespace or the VSTest 2010 XML namespace, keeps `UnitTestResult` rows directly under `Results`, keeps `UnitTest` definitions directly under `TestDefinitions`, keeps `TestMethod` and `Execution` definitions directly under `UnitTest`, requires every `UnitTestResult` row to be a leaf element, requires every `UnitTest` definition to contain only direct `Execution` and `TestMethod` children, requires every `TestMethod` definition to be a leaf element, requires every `Execution` definition to be a leaf element, requires each `UnitTest` definition to contain exactly one direct `TestMethod`, requires every `TestMethod` definition to carry `className` and `name`, requires canonical TRX present `UnitTest` definition name values, requires canonical TRX `TestMethod className` and `TestMethod name` values, requires TRX `TestMethod className` values to use the `Hyperledger.Iroha.Sdk.Tests` namespace, requires present `UnitTest` definition names to match their `TestMethod` exactly or by suffix, requires each `UnitTest` definition to contain at most one direct `Execution`, names `Hyperledger.Iroha.Sdk.Tests.dll`, requires canonical TRX assembly `codeBase`/`storage` path values without empty-component, padded/control-bearing, URI-like, drive-relative, percent-encoded, URI-delimiter, traversal, XML-delimiter, or suffixed or nested `.dll` aliases, is at most 16777216 bytes, contains no DTD or entity declarations including NUL-interleaved UTF-16 DTD/entity declarations, requires every `UnitTest` definition to carry an `id` and every present `Execution` definition to carry an `id`, uses canonical, alphanumeric-ending, empty-component-free, unique TRX `UnitTest` and `Execution` ids, requires each present `UnitTestResult` `testId` value and each present `UnitTestResult` `executionId` value to be canonical, alphanumeric-ending, empty-component-free, and unique, and requires unique `UnitTestResult` `testId`/`executionId` bindings, requires every `UnitTestResult` `testName` value to be present, canonical, and unique, contains exactly the VSTest passed-test count of `UnitTestResult` rows, contains only `UnitTestResult` rows bound by `testId` or `executionId` to `Hyperledger.Iroha.Sdk.Tests.dll` SCCP test definitions whose actual `TestMethod className.name` pair contains an exact `Sccp...` test token with at least one suffix character, whose `TestMethod className` uses the `Hyperledger.Iroha.Sdk.Tests` namespace, whose present `UnitTest` definition name matches that `TestMethod` exactly or by suffix, and whose SCCP method token shares that expected assembly evidence on the same `TestMethod` or its parent `UnitTest`, when both TRX identifiers are present, `testId` and `executionId` must bind the same SCCP test definition, each `UnitTestResult` `testName` must match the bound SCCP test definition name and carry an exact `Sccp...` token with at least one suffix character, SCCP TRX test definition/result names used for binding must be unpadded, ASCII-only, empty-component-free, whitespace-free, control-character-free, and free of XML/path/URI delimiters, quotes, backticks, pipes, slashes, colons, semicolons, hashes, percent signs, question marks, and ampersands, and must not rely on a bare `Sccp` namespace/class segment, contains at least one passed SCCP `UnitTestResult`, contains no failed, skipped, timed-out, or aborted SCCP `UnitTestResult`, TRX `UnitTestResult` outcome values must be present and literal `Passed`, missing, lowercase, padded, control-bearing, or otherwise aliased outcomes remain forged evidence, requires every present `UnitTestResult` `isExecuted` flag to be `true`, Present TRX `UnitTestResult` `isExecuted` flags must be unpadded literal lowercase `true`, and truthy numeric, padded, control-bearing, or case-variant aliases remain forged evidence. Canonical `.NET` SCCP marker lines must use a single literal space after the colon; VSTest summary label/value and number/unit separators must be present, padding must use ordinary spaces only, tab/control-whitespace separators remain forged evidence, and Accepted VSTest success summaries must match raw canonical text before ANSI/control/format stripping. Traced restore/test `PATH` prefixes must start with the printed `connect_norito_bridge.dll` directory and must not contain empty path-list segments. Named or traversal subdirectories before or after `TestResults` remain forged evidence and cannot satisfy release readiness. Windows backslash or drive-qualified TRX marker paths remain forged evidence too.",
+            "- Windows `.NET 8.0.x` SCCP SDK phase evidence must include the full C# SCCP test run filtered by `FullyQualifiedName~Sccp`, canonical-case rejection coverage for proof-request, message-bundle, source-proof, and optional Groth16 artifact hash fields, including uppercase byte aliases and `0X` public-input, statement, bundle/source-proof, proof-artifact, and proving-key hashes, the `SCCP .NET SDK version:` marker emitted after `dotnet --version`, phase commands in `dotnet --version`, `dotnet --info`, `cargo build -p connect_norito_bridge`, `dotnet restore`, then strict `dotnet test` order, no restore/build diagnostics such as `error NU*`/`CS*`/`MSB*`/`NETSDK*`/`CA*`, non-zero `Error(s)` counts, `Failed to restore`, or restore/build failed markers, exact host markers `SCCP .NET SDK OS: Windows`, `SCCP .NET SDK RID: win-{x64,x86,arm64,arm}`, and `SCCP .NET SDK Architecture: {x64,x86,arm64,arm}` emitted after `dotnet --info`, exact native bridge markers `connect_norito_bridge native bridge: ...connect_norito_bridge.dll` and `connect_norito_bridge native bridge sha256: <64 lowercase hex>` emitted after `cargo build -p connect_norito_bridge`, `dotnet restore Hyperledger.Iroha.Sdk.sln` before the strict `dotnet test` command, that strict `dotnet test` command carrying `--artifacts-path <bridge-target>/dotnet-artifacts`, `-p:ProduceReferenceAssembly=false`, and `--nologo`, a non-zero passed VSTest summary, the strict `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` marker, and `SCCP .NET SDK TRX bytes: <positive integer>` marker each emitted exactly once after the strict `dotnet test` command, with the summary from `Hyperledger.Iroha.Sdk.Tests.dll (net8.0)` reporting `Failed: 0`, `Skipped: 0`, `Total == Passed`, and a canonical ordered numeric unit duration with non-repeated descending units, and with a positive TRX byte count plus a TRX marker that full-matches the direct C# test project `TestResults/sccp-dotnet-sdk.trx` path, and with direct VSTest-shaped TRX XML that is rooted at `TestRun`, contains exactly one `Results` section and exactly one `TestDefinitions` section, keeps `Results` and `TestDefinitions` sections directly under `TestRun`, uses one consistent XML namespace for VSTest elements, either no XML namespace or the VSTest 2010 XML namespace, keeps `UnitTestResult` rows directly under `Results`, keeps `UnitTest` definitions directly under `TestDefinitions`, keeps `TestMethod` and `Execution` definitions directly under `UnitTest`, requires every `UnitTestResult` row to be a leaf element, requires every `UnitTest` definition to contain only direct `Execution` and `TestMethod` children, requires every `TestMethod` definition to be a leaf element, requires every `Execution` definition to be a leaf element, requires each `UnitTest` definition to contain exactly one direct `TestMethod`, requires every `TestMethod` definition to carry `className` and `name`, requires canonical TRX present `UnitTest` definition name values, requires canonical TRX `TestMethod className` and `TestMethod name` values, requires TRX `TestMethod className` values to use the `Hyperledger.Iroha.Sdk.Tests` namespace, requires present `UnitTest` definition names to match their `TestMethod` exactly or by suffix, requires each `UnitTest` definition to contain at most one direct `Execution`, names `Hyperledger.Iroha.Sdk.Tests.dll`, requires canonical TRX assembly `codeBase`/`storage` path values without empty-component, padded/control-bearing, URI-like, drive-relative, percent-encoded, URI-delimiter, traversal, XML-delimiter, or suffixed or nested `.dll` aliases, is at most 16777216 bytes, contains no DTD or entity declarations including NUL-interleaved UTF-16 DTD/entity declarations, requires every `UnitTest` definition to carry an `id` and every present `Execution` definition to carry an `id`, uses canonical, alphanumeric-ending, empty-component-free, unique TRX `UnitTest` and `Execution` ids, requires each present `UnitTestResult` `testId` value and each present `UnitTestResult` `executionId` value to be canonical, alphanumeric-ending, empty-component-free, and unique, and requires unique `UnitTestResult` `testId`/`executionId` bindings, requires every `UnitTestResult` `testName` value to be present, canonical, and unique, contains exactly the VSTest passed-test count of `UnitTestResult` rows, contains only `UnitTestResult` rows bound by `testId` or `executionId` to `Hyperledger.Iroha.Sdk.Tests.dll` SCCP test definitions whose actual `TestMethod className.name` pair contains an exact `Sccp...` test token with at least one suffix character, whose `TestMethod className` uses the `Hyperledger.Iroha.Sdk.Tests` namespace, whose present `UnitTest` definition name matches that `TestMethod` exactly or by suffix, and whose SCCP method token shares that expected assembly evidence on the same `TestMethod` or its parent `UnitTest` while every present SCCP `codeBase`/`storage` assembly reference on that `TestMethod` and parent `UnitTest` points to `Hyperledger.Iroha.Sdk.Tests.dll`, when both TRX identifiers are present, `testId` and `executionId` must bind the same SCCP test definition, each `UnitTestResult` `testName` must match the bound SCCP test definition name and carry an exact `Sccp...` token with at least one suffix character, SCCP TRX test definition/result names used for binding must be unpadded, ASCII-only, empty-component-free, whitespace-free, control-character-free, and free of XML/path/URI delimiters, quotes, backticks, pipes, slashes, colons, semicolons, hashes, percent signs, question marks, and ampersands, and must not rely on a bare `Sccp` namespace/class segment, contains at least one passed SCCP `UnitTestResult`, contains no failed, skipped, timed-out, or aborted SCCP `UnitTestResult`, TRX `UnitTestResult` outcome values must be present and literal `Passed`, missing, lowercase, padded, control-bearing, or otherwise aliased outcomes remain forged evidence, requires every present `UnitTestResult` `isExecuted` flag to be `true`, Present TRX `UnitTestResult` `isExecuted` flags must be unpadded literal lowercase `true`, and truthy numeric, padded, control-bearing, or case-variant aliases remain forged evidence. Canonical `.NET` SCCP marker lines must use a single literal space after the colon; VSTest summary label/value and number/unit separators must be present, padding must use ordinary spaces only, tab/control-whitespace separators remain forged evidence, and Accepted VSTest success summaries must match raw canonical text before ANSI/control/format stripping. Traced restore/test `PATH` prefixes must start with the printed `connect_norito_bridge.dll` directory and must not contain empty path-list segments. Named or traversal subdirectories before or after `TestResults` remain forged evidence and cannot satisfy release readiness. Windows backslash or drive-qualified TRX marker paths remain forged evidence too.",
             "- Accepted VSTest success summaries must match raw canonical text before ANSI/control/format stripping; normalization is only used to classify malformed summary-shaped lines.",
             "- TRX `UnitTestResult` outcome values must be present and literal `Passed`; missing, lowercase, padded, control-bearing, or otherwise aliased outcomes remain forged evidence.",
             "- Present TRX `UnitTestResult` `isExecuted` flags must be unpadded literal lowercase `true`; truthy numeric, padded, control-bearing, or case-variant aliases remain forged evidence.",
@@ -11243,25 +11243,26 @@ def _render_markdown(report: Any, *, max_blockers_per_lane: int) -> str:
             "- SCCP Ethereum inbound adversarial source inventory must pin public SDK regressions for failed receipts, source-event drift, hash-only proof bypasses, immutable evidence snapshots, oversized proof bytes, finality mismatches, sync-committee quorum checks, and wrong-domain receipt transcripts before inbound source proofs can be accepted.",
             "- SCCP BSC inbound adversarial source inventory must pin public SDK regressions for hash-only proof bypasses, receipt-proof metadata binding, source-event digest drift, malformed source logs, missing source-event validation, settlement payload/route alias rejection, and EVM-style recoverable-signature recovery-id enforcement before BSC inbound source proofs can be accepted.",
             "- SCCP TON inbound adversarial source inventory must pin JavaScript TON settlement payload/route alias rejection and TON source-event digest binding before TON inbound source proofs can be accepted.",
-            "- SCCP TRON inbound adversarial source inventory must pin runtime duplicate source-event log rejection plus runtime and Python/JavaScript/Kotlin/Java/Swift SDK legacy recoverable-signature recovery-id alias rejection before TRON transaction-info receipts can satisfy inbound source-proof admission.",
+            "- SCCP TRON inbound adversarial source inventory must pin runtime witness schedule/seal, source-event block/header/transaction/log, destination/source metadata, route-canary transcript, canonical-shape, secret-redaction, and Python/JavaScript/Kotlin/Java/Swift SDK legacy recoverable-signature recovery-id alias regressions before TRON transaction-info receipts can satisfy inbound source-proof admission.",
             "- SCCP BSC route-config canonical-manifest source inventory must pin canonical JSON string, raw publish HTTP-error preservation, public-DNS BSC RPC, Torii, CLI/runtime traversal-safe browser-module URL rejection, browser-prover sidecar/reference duplicate-or-malformed-alias rejection, retired route-manifest, browser-prover sidecar, deployment-evidence, live-evidence, offline full-TOML evidence, and TAIRA burn-record contract alias rejection, accessor-backed scalar alias suppression, handoff-placeholder, lowercase bytes32, lowercase EVM address, and retired generic network alias rejection before governed TAIRA XOR overlays can satisfy production readiness.",
             "- SCCP BSC route-manifest CLI source inventory must pin command option allowlists, redacted unknown-command/unknown-option/positional/duplicate diagnostics, explicit valued-option requirements for deploy/evidence inputs, exact boolean parsing, exact `testnet`/`mainnet` BSC network selectors with retired `--network`/environment aliases rejected, removed allow-unready preflight, and module-guarded CLI tests before governed TAIRA BSC XOR helper artifacts can satisfy production readiness.",
             "- SCCP TRON route-config canonical-manifest source inventory must pin canonical JSON string, retired-alias and duplicate-alias rejection, accessor-backed alias suppression, handoff-placeholder, lowercase bytes32, canonical Base58 address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
+            "- SCCP TRON route-manifest CLI source inventory must pin per-command allowlists, redacted unknown-command/unknown-option/positional/duplicate diagnostics, explicit valued-option requirements, canonical `taira_tron_xor:<network>` confirmation, retired `--confirm-testnet` rejection, removed allow-unready preflight, and module-guarded CLI tests before governed TAIRA TRON XOR helper artifacts can satisfy production readiness.",
             "- SCCP Solana route-manifest CLI source inventory must pin canonical-only exact boolean `production_ready` ingestion with retired top-level route-manifest alias rejection, exact string/integer/hash scalar ingestion, duplicate-alias rejection, false-manifest rejection, browser-prover public-DNS HTTPS/loopback/package-relative module URL validation, browser-prover export and route-binding validation, explicit non-padded CLI valued-option requirements, exact deploy/evidence option preflights, duplicate/unknown/positional CLI rejection without echoing names or values, fixed public Solana RPC/Torii URL defaults with environment URL aliases ignored, public-DNS HTTPS-or-loopback Solana RPC URLs, proposal mode allowlisting, public-DNS HTTPS-or-loopback Torii URLs, route/proposal output path collision rejection, symlink-safe output replacement, module-guarded CLI tests, and no-output/no-network/no-spawn-on-rejection behavior before governed TAIRA Solana XOR route-manifest artifacts can satisfy production readiness.",
             "- SCCP TON route-manifest CLI source inventory must pin redacted duplicate-option rejection, explicit option-value requirements, valued-help rejection, exact burn-record VK names, non-empty input/output path preflight, unknown-command and unknown-option rejection, redacted unexpected positional arguments, exact publish booleans, submit-only option rejection, gas metadata preflight before manifest reads, canonical I105 authorities, submit metadata preflight before private-key lookup, bounded private-key env names, public-DNS HTTPS-or-loopback Torii URLs, top-level and post-deploy public DNS explorer plus traversal-safe browser-module URL validation, output path collision rejection, retired TRON-named public manifest alias rejection, and exact string-only nanoTON decimal manifest ingestion before governed TAIRA TON XOR route-manifest artifacts can satisfy production readiness.",
             "- SCCP TRON runtime route-manifest source inventory must pin the TRON runtime route-manifest parser, mainnet metadata checks, dynamic destination-binding recomputation, post-deploy anchor rejection, and malformed/non-empty post-deploy blocker-list rejection before runtime config evidence can satisfy production readiness.",
-            "- SCCP all-lanes route-canary scalar source inventory must pin canonical status/evidence-source schema blockers before all-lanes release-checklist route-canary readiness can pass.",
+            "- SCCP all-lanes route-canary scalar source inventory must pin canonical status/evidence-source schema blockers, raw route-canary actual-boolean exactness, and Solana immutable boolean/comment plus route-canary immutable-comment exactness before all-lanes release-checklist route-canary readiness can pass.",
             "- SCCP all-lanes evidence-root schema source inventory must pin malformed evidence root, unknown section, non-string section-key, not-ready nested schema, hash/flag-coherence, and route-canary proof-context/hash-role/common/truth-semantic blockers before all-lanes evidence can satisfy production readiness.",
             "- SCCP all-lanes governed blocker schema source inventory must pin destination-rollout and route-allowlist blocker container rejection before governed evidence can satisfy production readiness.",
-            "- SCCP all-lanes release-checklist exact-boolean source inventory must pin exact checklist-item aggregation, record-presence gates, CLI production-ready exits, source-adapter gate hash/audit replay rejection, route-canary hash replay rejection, and upstream route-canary hash replay rejection before all-lanes evidence can satisfy production readiness.",
+            "- SCCP all-lanes release-checklist exact-boolean source inventory must pin exact checklist-item aggregation, record-presence gates, CLI production-ready exits, source-material `placeholder_material` exact-boolean rejection, source-adapter gate hash/audit replay rejection, route-canary hash replay rejection, and upstream route-canary hash replay rejection before all-lanes evidence can satisfy production readiness.",
             "- SCCP active-launch checklist schema source inventory must pin the active launch checklist ready value, malformed release-checklist roots, malformed lane metadata, and verifier recomputation before production readiness can pass.",
             "- SCCP route allowlist canary summary source inventory must pin optional canary-summary exactness, route-hash binding, and hash role-separation regressions before route profiles can be published as production evidence.",
             "- SCCP release manifest readiness-flags source inventory must pin exact boolean manifest generation, malformed readiness-root suppression, verifier boolean rejection, manifest/report equality checks, and all-lanes readiness recomputation before published bundle readiness can pass.",
             "- SCCP release manifest artifact-set/order source inventory must pin required artifact paths, manifest-root exclusion, unmanifested artifact/directory rejection, report-referenced artifact closure, malformed public artifact field-name classification, and canonical attachment order before published bundle readiness can pass.",
             "- SCCP release public blocker-list schema source inventory must pin canonical non-empty blocker strings, no surrounding whitespace, duplicate rejection, ready-surface empty-blocker checks, and invalid-marker rendering before published bundle readiness can pass.",
-            "- SCCP release public scalar-text schema source inventory must pin canonical non-empty scalar text, encoded sensitive-name and decoded Markdown-unsafe scalar rejection, fixed release-checklist item-id classification, public object-key classification for release-checklist titles, corridor phase keys, cryptographic-evidence chain/source labels, user-prover submission rows, all-lanes chain labels, all-lanes unknown object/audit keys, destination-binding keys, route-canary status/source fields, lane CLI homoglyph-secret redaction markers, and redacted destination/Solana JSON-RPC/ProgramData/TON BoC/TRON route-canary scalar diagnostics before published bundle readiness can pass.",
+            "- SCCP release public scalar-text schema source inventory must pin canonical non-empty scalar text, encoded sensitive-name and decoded Markdown-unsafe scalar rejection, fixed release-checklist item-id classification, public object-key classification for release-checklist titles, corridor phase keys, cryptographic-evidence chain/source labels, user-prover submission rows, all-lanes chain labels, all-lanes unknown object/audit keys, destination-binding keys, route-canary status/source fields, lane CLI homoglyph-secret redaction markers, concrete helper transport-redaction sentinels, top-level release CLI placeholder-aware redaction, and redacted destination/Solana JSON-RPC/ProgramData/TON BoC/TRON route-canary scalar diagnostics before published bundle readiness can pass.",
             "- SCCP release-notes attachment invariants source inventory must pin canonical single top-level title/status block, Markdown short-indented heading recognition, Setext heading rejection, no unexpected section headings, exact manifest handoff/root-exclusion block, canonical single artifact table scaffold/shape and position, self-row exclusion, release-note artifact-row suppression, contiguous exact ordered row-set binding, canonical blocker-section visibility, no noncanonical trailing content, and canonical attachment drift rejection before public bundle readiness can pass.",
-            "- SCCP readiness Markdown invariants source inventory must pin verifier-owned public Markdown sections, canonical top-level title/status block, Markdown short-indented heading recognition, Setext heading rejection, exact public section-heading spelling, no unexpected public section headings, repeated public section headings, noncanonical required-section order, canonical Required Release Evidence bullet spelling, top-level readiness status fail-closed rendering, evidence-input path/bytes/hash visibility, evidence-input row suppression, production-corridor phase/status visibility, production-corridor artifact/hash visibility, production-corridor row suppression, checklist gate/status visibility, checklist blocker-cell visibility, release-checklist row suppression, cryptographic row live-EVM visibility, cryptographic row core-hash visibility, cryptographic row route-canary visibility, cryptographic row route-canary source whitespace suppression, cryptographic row renderer-visible field diagnostics, cryptographic-evidence root suppression, lane-readiness status visibility, lane-readiness blocker-cell visibility, lane-readiness root suppression, source-inventory gate/status visibility, source-inventory blocker-cell visibility, user-prover validation-status visibility, user-prover blocker-cell visibility, user-prover helper/phase row visibility, user-prover root suppression, native-prover validation-status visibility, native-prover blocker-cell visibility, native-prover artifact/hash row visibility, native-prover support-artifact row visibility, source-inventory blocker visibility, invalid-marker rendering, malformed source-inventory gate-name, source-inventory row suppression, report-artifact path, and cryptographic-evidence row-domain/audit-key suppression, native-prover row suppression, and canonical Markdown drift rejection before public bundle readiness can pass.",
+            "- SCCP readiness Markdown invariants source inventory must pin verifier-owned public Markdown sections, canonical top-level title/status block, Markdown short-indented heading recognition, Setext heading rejection, exact public section-heading spelling, no unexpected public section headings, repeated public section headings, noncanonical required-section order, canonical Required Release Evidence bullet spelling, internal tab/control-whitespace Required Release Evidence bullet rejection, Unicode separator/format Required Release Evidence bullet rejection, canonical Blocking Items bullet spelling, Unicode separator/format Blocking Items bullet rejection, table-cell blocker exact rendering, governed live-verifier required-evidence line binding, top-level readiness status fail-closed rendering, evidence-input path/bytes/hash visibility, evidence-input row suppression, production-corridor phase/status visibility, production-corridor artifact/hash visibility, production-corridor row suppression, checklist gate/status visibility, checklist blocker-cell visibility, release-checklist row suppression, cryptographic row live-EVM visibility, cryptographic row core-hash visibility, cryptographic row route-canary visibility, cryptographic row route-canary source whitespace suppression, cryptographic row renderer-visible field diagnostics, cryptographic-evidence root suppression, lane-readiness status visibility, lane-readiness blocker-cell visibility, lane-readiness root suppression, source-inventory gate/status visibility, source-inventory blocker-cell visibility, user-prover validation-status visibility, user-prover blocker-cell visibility, user-prover helper/phase row visibility, user-prover root suppression, native-prover validation-status visibility, native-prover blocker-cell visibility, native-prover artifact/hash row visibility, native-prover support-artifact row visibility, source-inventory blocker visibility, invalid-marker rendering, malformed source-inventory gate-name, source-inventory row suppression, report-artifact path, and cryptographic-evidence row-domain/audit-key suppression, native-prover row suppression, and canonical Markdown drift rejection before public bundle readiness can pass.",
             "- SCCP transparent OpenVerify summary source inventory must pin schema/verifier-key manifest binding, canonical six-column public-input decoding, and malformed-column adversarial coverage before proof metadata can be published.",
             "- SCCP Ethereum outbound pre-callback source inventory must pin public SDK regressions that reject foreign-lane outbound requests, forged destination bindings, missing or partial proof-artifact hashes, zero proof-artifact hashes, and callback-visible proof material before outbound prover callbacks can run.",
             "- SCCP Ethereum outbound provider-validation source inventory must pin public SDK and facade guards that validate app-supplied Ethereum mainnet execution providers before outbound submitter callbacks can run.",
@@ -11308,7 +11309,7 @@ def _render_markdown(report: Any, *, max_blockers_per_lane: int) -> str:
             "- SCCP release public cryptographic-evidence binding source inventory must pin production-domain inventory, row-key and audit-key classification, lane-field binding, canonical row recomputation, Markdown row-domain/audit-key suppression, and active route-canary binding rejection before published bundle readiness can pass.",
             "- SCCP release public submission-surface binding source inventory must pin lane/backend inventory, per-SDK helper inventory, verifier-owned surface recomputation, and corridor-phase binding before published bundle readiness can pass.",
             "- SCCP retired network-surface source inventory must pin the launch-scope no-support note and active-tree scan so retired runtime-network integrations cannot re-enter release evidence silently.",
-            "- SCCP unready transparent-proof source inventory must pin the removed runtime/config surface, keep the exact reviewed `allow_unready` manifest/source-proof and Torii route/proof bypass call-site counts effective only under `cfg(test)`, keep `test-fixtures` out of production SCCP dependencies and release/corridor Rust commands, reject case-variant, split-token, and source-escaped environment override names, reject reintroduced runtime config fields, and require BSC/TRON route configs to reject the removed `--allow-unready` option while stripping stale merged config keys.",
+            "- SCCP unready transparent-proof source inventory must pin the removed runtime/config surface, keep the `allow_unready` manifest and source-proof bypasses effective only under `cfg(test)`, keep Torii route/proof `allow_unready` bypasses effective only under `cfg(test)`, keep the exact reviewed `allow_unready` manifest/source-proof and Torii route/proof bypass call-site counts effective only under `cfg(test)`, keep `test-fixtures` out of production SCCP dependencies and release/corridor Rust commands, reject Cargo feature aliases, case-variant, split-token, and source-escaped environment override names, reject reintroduced runtime config fields, and require BSC/TRON route configs to reject the removed `--allow-unready` option while stripping stale merged config keys.",
             "- SCCP TRON deploy operator boolean source inventory must pin malformed operator-boolean, public-DNS endpoint rejection, and canonical deployer-secret network metadata before TRON deploy helper evidence can satisfy production readiness.",
             "- Public release notes must attach this report and the all-lanes JSON summary before production activation.",
         ]
@@ -11438,6 +11439,64 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 )
 
 
+def _cli_redacted_placeholder_end(text: str, start: int) -> int | None:
+    if text.startswith("<path>", start):
+        return start + len("<path>")
+
+    prefix = "<invalid "
+    if not text.startswith(prefix, start):
+        return None
+
+    end = text.find(">", start + len(prefix))
+    if end < 0:
+        return None
+
+    label = text[start + len(prefix) : end]
+    if not label:
+        return None
+    if all(
+        character.isascii() and (character.isalnum() or character in "._- ")
+        for character in label
+    ):
+        return end + 1
+    return None
+
+
+def _cli_error_safety_scan_text(text: str) -> str:
+    scan_text = text
+    for character in MARKDOWN_UNSAFE_PATH_CHARACTERS:
+        scan_text = scan_text.replace(
+            f"Markdown-unsafe character {repr(character)}",
+            "Markdown-unsafe character",
+        )
+    scan_text = scan_text.replace(" -> ", " to ")
+
+    sanitized: list[str] = []
+    index = 0
+    while index < len(scan_text):
+        if scan_text[index] == "`":
+            placeholder_end = _cli_redacted_placeholder_end(scan_text, index + 1)
+            if (
+                placeholder_end is not None
+                and placeholder_end < len(scan_text)
+                and scan_text[placeholder_end] == "`"
+            ):
+                sanitized.append("redacted")
+                index = placeholder_end + 1
+                continue
+
+        placeholder_end = _cli_redacted_placeholder_end(scan_text, index)
+        if placeholder_end is not None:
+            sanitized.append("redacted")
+            index = placeholder_end
+            continue
+
+        sanitized.append(scan_text[index])
+        index += 1
+
+    return "".join(sanitized)
+
+
 def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
     if isinstance(exc, SystemExit):
         return fallback
@@ -11451,14 +11510,7 @@ def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
         return fallback
     if not text.isascii():
         return fallback
-    markdown_scan_text = text
-    for character in MARKDOWN_UNSAFE_PATH_CHARACTERS:
-        markdown_scan_text = markdown_scan_text.replace(
-            f"Markdown-unsafe character {repr(character)}",
-            "Markdown-unsafe character",
-        )
-    markdown_scan_text = markdown_scan_text.replace("<path>", "path")
-    markdown_scan_text = markdown_scan_text.replace(" -> ", " to ")
+    markdown_scan_text = _cli_error_safety_scan_text(text)
     if _decoded_public_blocker_text_issue(markdown_scan_text) is not None:
         return fallback
     normalized_text = _decoded_public_blocker_text(text).casefold()
@@ -11472,7 +11524,7 @@ def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
 def _canonical_public_report_blockers(
     value: Any,
 ) -> tuple[list[str], list[str]]:
-    if not isinstance(value, list):
+    if type(value) is not list:
         return [], [
             "readiness report blockers must be a list of non-empty canonical strings"
         ]
@@ -11507,7 +11559,7 @@ def _readiness_report_unknown_field_blocker(field: Any) -> str:
 def _public_input_path_duplicate_errors(value: Any) -> list[str]:
     """Return duplicate-path blockers from inspectable public input paths."""
 
-    if not isinstance(value, list):
+    if type(value) is not list:
         return []
     seen_paths: set[str] = set()
     errors: list[str] = []
@@ -11641,13 +11693,13 @@ def _public_release_checklist_errors(value: Any) -> list[str]:
 def _public_input_artifact_duplicate_path_errors(value: Any) -> list[str]:
     """Return duplicate-path blockers from inspectable public input artifacts."""
 
-    if not isinstance(value, list):
+    if type(value) is not list:
         return []
     seen_paths: set[str] = set()
     duplicate_path_count = 0
     errors: list[str] = []
     for artifact in value:
-        if not isinstance(artifact, dict):
+        if type(artifact) is not dict:
             continue
         artifact_path = _public_mapping_get_string_key(artifact, "path")
         if not _native_evm_markdown_path_is_safe(artifact_path):
@@ -11681,7 +11733,7 @@ def _public_input_provenance_mismatch_errors(
 ) -> list[str]:
     """Return redacted input/artifact mismatch blockers from inspectable paths."""
 
-    if not isinstance(inputs, list) or not isinstance(input_artifacts, list):
+    if type(inputs) is not list or type(input_artifacts) is not list:
         return []
     input_paths = [
         path
@@ -11690,7 +11742,7 @@ def _public_input_provenance_mismatch_errors(
     ]
     artifact_paths: list[str] = []
     for artifact in input_artifacts:
-        if not isinstance(artifact, dict):
+        if type(artifact) is not dict:
             continue
         path = _public_report_input_path_for_salvage(
             _public_mapping_get_string_key(artifact, "path")
@@ -11708,7 +11760,7 @@ def _public_input_provenance_mismatch_errors(
 def _public_input_artifact_errors(value: Any) -> list[str]:
     """Return bounded blockers for malformed public input artifact rows."""
 
-    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+    if type(value) is not list or not all(type(item) is dict for item in value):
         return ["readiness report input_artifacts must be a list of objects"]
 
     errors: list[str] = []
@@ -11757,7 +11809,7 @@ def _corridor_uses_shared_full_run_artifact(
 ) -> bool:
     """Return whether every passed phase is bound to one shared transcript."""
 
-    if not isinstance(evidence_artifacts, dict) or not isinstance(phases, dict):
+    if type(evidence_artifacts) is not dict or type(phases) is not dict:
         return False
     passed_phases = [
         phase for phase in known_phases if phases.get(phase) == "passed"
@@ -11770,7 +11822,7 @@ def _corridor_uses_shared_full_run_artifact(
     shared_artifact: tuple[str, int, str] | None = None
     for phase in passed_phases:
         artifact = evidence_artifacts.get(phase)
-        if not isinstance(artifact, dict):
+        if type(artifact) is not dict:
             return False
         artifact_path = _public_mapping_get_string_key(artifact, "path")
         artifact_bytes = _public_mapping_get_string_key(artifact, "bytes")
@@ -11798,7 +11850,7 @@ def _public_corridor_evidence_artifact_duplicate_path_errors(
 ) -> list[str]:
     """Return duplicate-path blockers from inspectable corridor artifacts."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return []
     if known_phases is not None and _corridor_uses_shared_full_run_artifact(
         value,
@@ -11810,7 +11862,7 @@ def _public_corridor_evidence_artifact_duplicate_path_errors(
     duplicate_path_count = 0
     errors: list[str] = []
     for artifact in value.values():
-        if not isinstance(artifact, dict):
+        if type(artifact) is not dict:
             continue
         artifact_path = _public_mapping_get_string_key(artifact, "path")
         if not _native_evm_markdown_path_is_safe(artifact_path):
@@ -11829,7 +11881,7 @@ def _public_corridor_evidence_artifact_duplicate_path_errors(
 def _public_corridor_errors(value: Any) -> list[str]:
     """Return bounded blockers for malformed public corridor summaries."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return ["readiness report corridor must be an object"]
 
     errors: list[str] = []
@@ -11853,7 +11905,7 @@ def _public_corridor_errors(value: Any) -> list[str]:
         errors.append("readiness report corridor require_phase_evidence must be boolean")
 
     blockers = _public_mapping_get_string_key(value, "blockers")
-    if not isinstance(blockers, list):
+    if type(blockers) is not list:
         errors.append(
             "readiness report corridor blockers must be a list of non-empty "
             "canonical strings"
@@ -11887,7 +11939,7 @@ def _public_corridor_errors(value: Any) -> list[str]:
 
     phases = _public_mapping_get_string_key(value, "phases")
     known_phases: list[str] = []
-    if not isinstance(phases, dict):
+    if type(phases) is not dict:
         errors.append("readiness report corridor phases must be an object")
     else:
         try:
@@ -11929,7 +11981,7 @@ def _public_corridor_errors(value: Any) -> list[str]:
                 )
 
     evidence_artifacts = _public_mapping_get_string_key(value, "evidence_artifacts")
-    if not isinstance(evidence_artifacts, dict):
+    if type(evidence_artifacts) is not dict:
         errors.append("readiness report corridor evidence_artifacts must be an object")
     else:
         known_phase_set = set(known_phases)
@@ -11975,8 +12027,8 @@ def _public_corridor_errors(value: Any) -> list[str]:
     if (
         production_ready is True
         and require_phase_evidence is True
-        and isinstance(phases, dict)
-        and isinstance(evidence_artifacts, dict)
+        and type(phases) is dict
+        and type(evidence_artifacts) is dict
     ):
         for phase in known_phases:
             if phases.get(phase) == "passed" and phase not in evidence_artifacts:
@@ -12384,7 +12436,7 @@ def _public_native_evm_prover_bundle_errors(value: Any) -> list[str]:
 def _public_embedded_evidence_errors(value: Any) -> list[str]:
     """Return blockers for non-canonical embedded all-lanes public evidence."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return ["readiness report evidence must be an object"]
 
     try:
@@ -12522,8 +12574,8 @@ def _source_inventory_required_public_gates() -> frozenset[str]:
 
     verifier = _load_release_bundle_verify_helpers()
     gates = getattr(verifier, "SOURCE_INVENTORY_REQUIRED_GATES")
-    if not isinstance(gates, (set, frozenset)) or not all(
-        isinstance(gate, str) for gate in gates
+    if type(gates) not in (set, frozenset) or not all(
+        type(gate) is str for gate in gates
     ):
         raise RuntimeError("release-bundle verifier source-inventory gates are invalid")
     return frozenset(gates)
@@ -12532,7 +12584,7 @@ def _source_inventory_required_public_gates() -> frozenset[str]:
 def _public_source_inventory_errors(value: Any) -> list[str]:
     """Return bounded blockers for malformed public source-inventory rows."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return ["readiness report source_inventory must be an object"]
 
     errors: list[str] = []
@@ -12573,7 +12625,7 @@ def _public_source_inventory_errors(value: Any) -> list[str]:
         if gate_error is not None:
             errors.append(gate_error)
         inventory_label = f"readiness report source_inventory[{index}]"
-        if not isinstance(inventory, dict):
+        if type(inventory) is not dict:
             errors.append(f"{inventory_label} must be an object")
             continue
         for field in _public_unknown_mapping_fields(
@@ -12606,7 +12658,7 @@ def _public_source_inventory_errors(value: Any) -> list[str]:
             "validation_blockers",
         )
         if _public_mapping_has_string_key(inventory, "validation_blockers"):
-            if not isinstance(validation_blockers, list):
+            if type(validation_blockers) is not list:
                 errors.append(
                     f"{inventory_label} validation_blockers must be a list of "
                     "non-empty canonical strings"
@@ -13659,7 +13711,7 @@ def _public_cryptographic_source_adapter_gate_hash_role_errors(
     for field, value in fields:
         if not _is_nonzero_hex32(value):
             continue
-        assert isinstance(value, str)
+        assert type(value) is str
         prior_field = seen.get(value)
         if prior_field is not None:
             errors.append(
@@ -13683,7 +13735,7 @@ def _public_cryptographic_route_canary_hash_role_errors(
         value = row.get(field)
         if not _is_nonzero_hex32(value):
             continue
-        assert isinstance(value, str)
+        assert type(value) is str
         prior_field = seen.get(value)
         if prior_field is not None:
             errors.append(
@@ -13731,12 +13783,12 @@ def _public_report_payload(report: Any) -> dict[str, Any]:
         "source_inventory": "readiness report source_inventory must be an object",
     }
     for field, message in object_root_messages.items():
-        if field in report and not isinstance(report.get(field), dict):
+        if field in report and type(report.get(field)) is not dict:
             root_errors[field] = message
     inputs = report.get("inputs")
     public_input_paths: list[str] | None = None
     if "inputs" in report:
-        if not isinstance(inputs, list) or not all(
+        if type(inputs) is not list or not all(
             type(item) is str
             and item
             and _public_blocker_text_issue(item) is None
@@ -13762,11 +13814,11 @@ def _public_report_payload(report: Any) -> dict[str, Any]:
 
     input_artifacts = report.get("input_artifacts")
     if "input_artifacts" in report:
-        if not isinstance(input_artifacts, list):
+        if type(input_artifacts) is not list:
             root_errors["input_artifacts"] = (
                 "readiness report input_artifacts must be a list of objects"
             )
-        elif not all(isinstance(item, dict) for item in input_artifacts):
+        elif not all(type(item) is dict for item in input_artifacts):
             blockers.extend(
                 _public_input_artifact_duplicate_path_errors(input_artifacts)
             )
@@ -13790,11 +13842,11 @@ def _public_report_payload(report: Any) -> dict[str, Any]:
         value = report.get(field)
         if field not in report:
             continue
-        if not isinstance(value, list):
+        if type(value) is not list:
             root_errors[field] = message
             continue
-        if not all(isinstance(item, dict) for item in value):
-            if any(isinstance(item, dict) for item in value):
+        if not all(type(item) is dict for item in value):
+            if any(type(item) is dict for item in value):
                 if field == "cryptographic_evidence":
                     blockers.extend(
                         _public_cryptographic_evidence_duplicate_domain_errors(value)
@@ -13839,7 +13891,7 @@ def _public_report_payload(report: Any) -> dict[str, Any]:
         public_input_paths is not None
         and "input_artifacts" in report
         and "input_artifacts" not in root_errors
-        and isinstance(input_artifacts, list)
+        and type(input_artifacts) is list
     ):
         artifact_paths = [artifact.get("path") for artifact in input_artifacts]
         if artifact_paths != public_input_paths:

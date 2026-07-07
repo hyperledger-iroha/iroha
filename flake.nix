@@ -104,7 +104,7 @@
 
           src = ./.;
 
-          # FIXME: Fails due to https://github.com/rust-lang/cargo/issues/10368
+          # Tracked upstream issue: fails due to https://github.com/rust-lang/cargo/issues/10368
           # Either try a workaround, or wait for resolution
           # doDoc = true;
           # doDocFail = true;

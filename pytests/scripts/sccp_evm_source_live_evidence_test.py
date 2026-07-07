@@ -155,6 +155,66 @@ class HostileSourceLiveString(str):
         raise AssertionError("secret-token EVM source live exact string encoded")
 
 
+class HostileSourceLiveBytes(bytes):
+    """Bytes subclass that source-live helpers must reject before hooks."""
+
+    def __new__(cls, value):
+        return bytes.__new__(cls, value)
+
+    def __bytes__(self):
+        raise AssertionError("secret-token EVM source live bytes coerced")
+
+    def __repr__(self):
+        raise AssertionError("secret-token EVM source live bytes repr'd")
+
+    def __len__(self):
+        raise AssertionError("secret-token EVM source live bytes length read")
+
+    def __iter__(self):
+        raise AssertionError("secret-token EVM source live bytes iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token EVM source live bytes indexed")
+
+
+class HostileSourceLiveBytearray(bytearray):
+    """Bytearray subclass that source-live helpers must reject before hooks."""
+
+    def __init__(self, value):
+        super().__init__(value)
+
+    def __bytes__(self):
+        raise AssertionError("secret-token EVM source live bytearray coerced")
+
+    def __repr__(self):
+        raise AssertionError("secret-token EVM source live bytearray repr'd")
+
+    def __len__(self):
+        raise AssertionError("secret-token EVM source live bytearray length read")
+
+    def __iter__(self):
+        raise AssertionError("secret-token EVM source live bytearray iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token EVM source live bytearray indexed")
+
+
+class HostileSourceLiveDict(dict):
+    """Dict subclass that source-live helpers must reject before hooks."""
+
+    def get(self, _key, _default=None):
+        raise AssertionError("secret-token EVM source live dict get ran")
+
+    def __contains__(self, _key):
+        raise AssertionError("secret-token EVM source live dict contains ran")
+
+    def __iter__(self):
+        raise AssertionError("secret-token EVM source live dict iterated")
+
+    def __repr__(self):
+        raise AssertionError("secret-token EVM source live dict repr'd")
+
+
 class OversizedResponse:
     def __enter__(self):
         return self
@@ -1005,6 +1065,133 @@ def test_evm_source_live_exact_string_parsers_reject_string_subclasses_without_h
             raise AssertionError(
                 "string-subclass EVM source-live parser value was accepted"
             )
+
+
+def test_evm_source_live_container_and_bytes_boundaries_reject_subclasses_without_hooks(
+    monkeypatch,
+):
+    module = load_live_module()
+    raw32 = bytes.fromhex("11" * 32)
+    runtime = bytes.fromhex("6001600255")
+
+    assert (
+        module._source_arg_bytes(
+            SimpleNamespace(component_hash=bytearray(raw32)),
+            "component_hash",
+            label="component hash",
+            byte_length=32,
+        )
+        == raw32
+    )
+    assert (
+        module._optional_namespace_bytes32_arg(
+            SimpleNamespace(expected_hash=bytearray(raw32)),
+            "expected_hash",
+        )
+        == raw32
+    )
+    assert (
+        module._source_arg_runtime_bytes(
+            SimpleNamespace(source_bridge_runtime_bytecode_hex=bytearray(runtime))
+        )
+        == runtime
+    )
+
+    def fixed_opener(_request, timeout=1.0):
+        del timeout
+        return RawResponse(b"{}")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            module.json,
+            "loads",
+            lambda *_args, **_kwargs: HostileSourceLiveDict(
+                {"jsonrpc": "2.0", "id": 1, "result": "0x1"}
+            ),
+        )
+        try:
+            module._json_rpc(
+                "https://ethereum.example",
+                "eth_chainId",
+                [],
+                opener=fixed_opener,
+                timeout=1.0,
+            )
+        except RuntimeError as exc:
+            rendered = str(exc)
+            assert rendered == "JSON-RPC eth_chainId returned a non-object response"
+            assert "secret-token" not in rendered
+        else:
+            raise AssertionError("EVM source JSON-RPC accepted hostile envelope root")
+
+    hostile_byte_values = (
+        HostileSourceLiveBytes(raw32),
+        HostileSourceLiveBytearray(raw32),
+    )
+    for hostile in hostile_byte_values:
+        for call, expected_message in (
+            (
+                lambda hostile=hostile: module._source_arg_bytes(
+                    SimpleNamespace(component_hash=hostile),
+                    "component_hash",
+                    label="component hash",
+                    byte_length=32,
+                ),
+                "component hash must be bytes",
+            ),
+            (
+                lambda hostile=hostile: module._optional_namespace_bytes32_arg(
+                    SimpleNamespace(expected_hash=hostile),
+                    "expected_hash",
+                ),
+                "--expected-hash must be bytes",
+            ),
+            (
+                lambda hostile=hostile: module._source_arg_runtime_bytes(
+                    SimpleNamespace(source_bridge_runtime_bytecode_hex=hostile)
+                ),
+                "source bridge runtime bytecode argument must be bytes",
+            ),
+        ):
+            try:
+                call()
+            except ValueError as exc:
+                rendered = str(exc)
+                assert rendered == expected_message
+                assert "secret-token" not in rendered
+                assert exc.__cause__ is None
+            else:
+                raise AssertionError("EVM source-live accepted hostile bytes")
+
+    hostile_source_bridge = HostileSourceLiveDict({"domain": module.SCCP_DOMAIN_ETH})
+    hostile_source_records = HostileSourceLiveDict({})
+    try:
+        module._validate_source_summary(
+            {
+                "source_bridge": hostile_source_bridge,
+                "source_records": hostile_source_records,
+            }
+        )
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "source bridge evidence is required"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+    else:
+        raise AssertionError("EVM source summary accepted hostile source bridge")
+
+    module._validate_copied_source_summary_metadata(
+        {
+            "source_bridge": hostile_source_bridge,
+            "source_records": hostile_source_records,
+        }
+    )
+    assert module._toml_prerequisites(
+        {
+            "source_bridge": hostile_source_bridge,
+            "source_records": hostile_source_records,
+        }
+    ) == ["source bridge evidence"]
 
 
 def test_evm_source_live_receipt_ready_predicate_redacts_imported_address_parser_failures(

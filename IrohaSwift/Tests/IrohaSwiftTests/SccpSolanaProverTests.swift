@@ -314,6 +314,7 @@ final class SccpSolanaProverTests: XCTestCase {
             guard case let .invalidPublicInputs(field) = error as? TronSccpProverError else {
                 return XCTFail("expected TRON invalid-public-inputs error")
             }
+            XCTAssertTrue(field.contains("routeCanaryTranscriptHashes"))
             XCTAssertTrue(field.contains("finalityHeight") || field.contains("transactionId"))
         }
     }

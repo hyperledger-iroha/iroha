@@ -1275,9 +1275,9 @@ fn audited_sol_source_adapter_engine_deployment(
     deployment: &iroha_sccp::SccpSourceAdapterEngineDeploymentV1,
 ) -> iroha_sccp::SccpSourceAdapterEngineDeploymentV1 {
     let mut audited_deployment = deployment.clone();
-    audited_deployment.solana_tower_replay_verifier_hash = [0xbb; 32];
-    audited_deployment.solana_full_accountsdb_lattice_verifier_hash = [0xcc; 32];
-    audited_deployment.solana_bank_fork_choice_verifier_hash = [0xdd; 32];
+    audited_deployment.solana_tower_replay_verifier_hash = [0xb7; 32];
+    audited_deployment.solana_full_accountsdb_lattice_verifier_hash = [0xc8; 32];
+    audited_deployment.solana_bank_fork_choice_verifier_hash = [0xd9; 32];
     audited_deployment
 }
 
@@ -2257,20 +2257,18 @@ fn make_sccp_sol_to_sora_message_bridge_proof_with_material_and_deployment(
 
     let artifact = if let (Some(material), Some(deployment)) = (source_material, source_deployment)
     {
-        iroha_sccp::build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready(
+        iroha_sccp::test_fixtures::transparent_proof_from_bundle_with_source_verifier_material_and_deployment_fixture(
             &bundle,
             material,
             deployment,
-            true,
         )
     } else if let Some(material) = source_material {
-        iroha_sccp::build_nexus_sccp_message_transparent_proof_with_source_verifier_material_allow_unready(
+        iroha_sccp::test_fixtures::transparent_proof_from_bundle_with_source_verifier_material_fixture(
             &bundle,
             material,
-            true,
         )
     } else {
-        iroha_sccp::build_nexus_sccp_message_transparent_proof_allow_unready(&bundle, true)
+        iroha_sccp::test_fixtures::transparent_proof_from_bundle_fixture(&bundle)
     }
     .expect("build SOL SCCP transparent proof");
     let manifest_hash = iroha_sccp::sccp_bridge_manifest_hash_for_seed(&artifact.manifest_seed);
@@ -2544,11 +2542,10 @@ fn make_sccp_bsc_to_sora_message_bridge_proof_with_material_and_deployment(
         nonce, material, deployment,
     );
     let artifact =
-        iroha_sccp::build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready(
+        iroha_sccp::test_fixtures::transparent_proof_from_bundle_with_source_verifier_material_and_deployment_fixture(
             &bundle,
             material,
             deployment,
-            true,
         )
         .expect("build BSC local admission transparent proof");
     assert_eq!(

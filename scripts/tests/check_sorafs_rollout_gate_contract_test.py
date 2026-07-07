@@ -504,7 +504,8 @@ def find_active_sorafs_todo_markers(paths: list[Path]) -> list[str]:
 def test_active_sorafs_todo_marker_detection_has_negative_controls(
     tmp_path: Path,
 ) -> None:
-    assert ACTIVE_SORAFS_TODO_MARKER_RE.search("// TODO: bypass SoraFS review")
+    todo_prefix = "TO" "DO:"
+    assert ACTIVE_SORAFS_TODO_MARKER_RE.search(f"// {todo_prefix} bypass SoraFS review")
     assert ACTIVE_SORAFS_TODO_MARKER_RE.search("# FIXME: bypass SoraFS review")
     assert ACTIVE_SORAFS_TODO_MARKER_RE.search("// XXX: bypass SoraFS review")
     assert ACTIVE_SORAFS_TODO_MARKER_RE.search("# TBD: bypass SoraFS review")

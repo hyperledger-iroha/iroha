@@ -9508,6 +9508,18 @@ mod sccp_message_backend_tests {
                 "job builder must not call SCCP boolean unready helper `{forbidden}`"
             );
         }
+        let torii_gate_marker = concat!(
+            "let allow_unready = ",
+            "sccp_allow_unready_torii_route_bypass_enabled(allow_unready);"
+        );
+        assert!(
+            !artifact_body.contains(torii_gate_marker),
+            "artifact builder must not bypass configured source-lane readiness"
+        );
+        assert!(
+            !job_body.contains(torii_gate_marker),
+            "job builder must not bypass configured source-lane readiness"
+        );
     }
 
     #[derive(Debug)]
@@ -10187,12 +10199,6 @@ mod sccp_message_backend_tests {
             },
             bundle,
         }
-    }
-
-    fn sample_ton_artifact_with_open_verify_envelope() -> NexusSccpMessageTransparentProofV1 {
-        let artifact = sample_ton_artifact_with_proof_bytes(vec![0xAA, 0xBB]);
-        iroha_sccp::build_nexus_sccp_message_transparent_proof_allow_unready(&artifact.bundle, true)
-            .expect("canonical TON OpenVerify transparent artifact")
     }
 
     fn sample_ton_job() -> SccpCounterpartyProofJobV1 {
@@ -12055,7 +12061,7 @@ mod sccp_message_backend_tests {
     }
 
     #[test]
-    fn tron_destination_query_builds_binding_and_preserves_external_proof_bytes() {
+    fn tron_destination_query_validates_binding_and_keeps_strict_artifacts_disabled() {
         let bundle = sample_tron_message_bundle(46);
         let public_inputs = sccp_message_transparent_public_inputs(&bundle).expect("public inputs");
         let proof_bytes = sample_groth16_proof_bytes(&public_inputs, iroha_sccp::SCCP_DOMAIN_SORA);
@@ -12156,15 +12162,11 @@ mod sccp_message_backend_tests {
             true,
             None,
         )
-        .expect("TRON artifact build")
-        .expect("TRON artifact");
-        let iroha_sccp::SccpPlatformSubmissionPayloadV1::TronContractCall(payload) =
-            artifact.submission_package.platform_payload
-        else {
-            panic!("expected TRON contract call payload");
-        };
-        assert_eq!(payload.destination_binding, binding);
-        assert_eq!(payload.proof_bytes, proof_bytes);
+        .expect("strict disabled TRON artifact build result");
+        assert!(
+            artifact.is_none(),
+            "strict production builders must not package disabled TRON artifacts"
+        );
     }
 
     #[test]
@@ -12348,7 +12350,7 @@ mod sccp_message_backend_tests {
     }
 
     #[test]
-    fn destination_binding_query_respects_ton_lane_launch_policy() {
+    fn destination_binding_query_respects_active_lane_launch_policy() {
         let bundle = sample_tron_message_bundle(49);
         let mut fields = SccpEvmDestinationQuery {
             network_id_hex: Some(format!("0x{}", "71".repeat(32))),
@@ -12407,7 +12409,8 @@ mod sccp_message_backend_tests {
         )
         .expect_err("TRON destination bindings must wait for their lane launch");
         assert!(conversion_message(&err).is_some_and(|message| {
-            message.contains("SCCP TON mainnet lane launch policy") && message.contains("domain 5")
+            message.contains("SCCP Ethereum mainnet lane launch policy")
+                && message.contains("domain 5")
         }));
 
         let err = validate_sccp_destination_binding_matches_configured_launch_policy(
@@ -12419,7 +12422,8 @@ mod sccp_message_backend_tests {
             "validated strict-disabled destination bindings must still wait for lane launch",
         );
         assert!(conversion_message(&err).is_some_and(|message| {
-            message.contains("SCCP TON mainnet lane launch policy") && message.contains("domain 5")
+            message.contains("SCCP Ethereum mainnet lane launch policy")
+                && message.contains("domain 5")
         }));
     }
 
@@ -13466,42 +13470,20 @@ mod sccp_message_backend_tests {
     }
 
     #[test]
-    fn sccp_artifact_json_value_includes_open_verify_summary() {
-        let artifact = sample_ton_artifact_with_open_verify_envelope();
-        let expected_summary =
-            summarize_sccp_message_transparent_open_verify_proof_from_artifact(&artifact)
-                .expect("artifact summary");
+    fn sccp_artifact_json_value_omits_open_verify_summary_for_disabled_lane() {
+        let artifact = sample_ton_artifact_with_proof_bytes(vec![0xAA, 0xBB]);
         let json = sccp_artifact_json_value(&artifact).expect("artifact json");
         let object = json.as_object().expect("artifact json object");
-        let summary = object
-            .get("proof_envelope_summary")
-            .and_then(Value::as_object)
-            .expect("proof envelope summary");
-        let expected_vk_hash = hex::encode(expected_summary.vk_hash);
 
-        assert_eq!(
-            summary.get("backend").and_then(Value::as_str),
-            Some("stark")
-        );
-        assert_eq!(
-            summary.get("circuit_id").and_then(Value::as_str),
-            Some("sccp-message-transparent-v1")
-        );
-        assert_eq!(
-            summary.get("vk_hash").and_then(Value::as_str),
-            Some(expected_vk_hash.as_str())
-        );
-        assert_eq!(
-            summary
-                .get("public_input_column_count")
-                .and_then(Value::as_u64),
-            Some(u64::from(expected_summary.public_input_column_count))
+        assert!(
+            !object.contains_key("proof_envelope_summary"),
+            "disabled OpenVerify destination artifacts must not expose production proof summaries"
         );
     }
 
     #[test]
     fn sccp_artifact_json_value_omits_open_verify_summary_for_metadata_drift() {
-        let mut artifact = sample_ton_artifact_with_open_verify_envelope();
+        let mut artifact = sample_ton_artifact_with_proof_bytes(vec![0xAA, 0xBB]);
         artifact.submission_package.envelope_bytes.push(0x00);
 
         let json = sccp_artifact_json_value(&artifact).expect("artifact json");

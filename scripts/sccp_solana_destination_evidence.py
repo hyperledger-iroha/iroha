@@ -237,7 +237,7 @@ def _require_fixed_bytes(
     if type(nonzero) is not bool:
         raise ValueError("Solana destination fixed bytes nonzero must be a boolean")
 
-    if not isinstance(value, (bytes, bytearray)):
+    if type(value) not in (bytes, bytearray):
         raise ValueError(f"{label} must be {byte_length} bytes")
     raw = bytes(value)
     if len(raw) != byte_length:
@@ -348,7 +348,7 @@ def _prefixed_blake2b(prefix: bytes, payload: bytes) -> bytes:
 def solana_verifier_program_code_hash(program_bytes: bytes) -> bytes:
     """Compute the deployed Solana verifier program code hash used in evidence."""
 
-    if not isinstance(program_bytes, (bytes, bytearray)):
+    if type(program_bytes) not in (bytes, bytearray):
         raise ValueError("Solana verifier program bytes must be bytes")
     raw = bytes(program_bytes)
     if not raw or not any(raw):
@@ -532,7 +532,7 @@ def _require_positive_u64(value: int, *, label: str) -> int:
 
 
 def _require_byte_string(value: bytes, *, label: str) -> bytes:
-    if not isinstance(value, (bytes, bytearray)):
+    if type(value) not in (bytes, bytearray):
         raise ValueError(f"{label} must be bytes")
     raw = bytes(value)
     if not raw:

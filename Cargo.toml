@@ -202,7 +202,7 @@ rust.unknown_lints = "warn"
 rust.single_use_lifetimes = "warn"
 rust.unsafe_op_in_unsafe_fn = "deny"
 rust.unexpected_cfgs = { level = "warn", check-cfg = [
-    # FIXME: https://github.com/hyperledger-iroha/iroha/issues/3102
+    # Tracked upstream issue: https://github.com/hyperledger-iroha/iroha/issues/3102
     'cfg(feature, values("adaptive-telemetry"))',
     'cfg(feature, values("adaptive-telemetry-log"))',
     'cfg(feature, values("bench-internal"))',

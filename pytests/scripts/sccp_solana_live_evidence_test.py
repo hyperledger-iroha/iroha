@@ -1827,6 +1827,164 @@ def test_solana_live_exact_string_parsers_reject_string_subclasses_without_hooks
             raise AssertionError(f"string-subclass Solana live {field} was accepted")
 
 
+def test_solana_live_container_and_bytes_boundaries_reject_subclasses_without_hooks(
+    monkeypatch,
+):
+    module = load_live_module()
+
+    class HostileSolanaLiveDict(dict):
+        def __contains__(self, key):
+            raise AssertionError("secret-token Solana live dict contains ran")
+
+        def __getitem__(self, key):
+            raise AssertionError("secret-token Solana live dict getitem ran")
+
+        def __iter__(self):
+            raise AssertionError("secret-token Solana live dict iter ran")
+
+        def get(self, key, default=None):
+            raise AssertionError("secret-token Solana live dict get ran")
+
+        def items(self):
+            raise AssertionError("secret-token Solana live dict items ran")
+
+        def __repr__(self):
+            return "secret-token-hostile-solana-live-dict"
+
+    class HostileSolanaLiveList(list):
+        def __len__(self):
+            raise AssertionError("secret-token Solana live list len ran")
+
+        def __getitem__(self, key):
+            raise AssertionError("secret-token Solana live list getitem ran")
+
+        def __iter__(self):
+            raise AssertionError("secret-token Solana live list iter ran")
+
+        def __repr__(self):
+            return "secret-token-hostile-solana-live-list"
+
+    class HostileSolanaLiveBytes(bytes):
+        def __new__(cls, value):
+            return bytes.__new__(cls, value)
+
+        def __bytes__(self):
+            raise AssertionError("secret-token Solana live bytes conversion ran")
+
+        def __repr__(self):
+            return "secret-token-hostile-solana-live-bytes"
+
+    def expect_error(call, exception_type, expected_message):
+        try:
+            call()
+        except exception_type as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError(
+                f"hostile Solana live value was accepted: {expected_message}"
+            )
+
+    expect_error(
+        lambda: module._positive_context_slot(
+            {"context": HostileSolanaLiveDict({"slot": 1})},
+            method="getAccountInfo",
+        ),
+        RuntimeError,
+        "getAccountInfo returned no context slot",
+    )
+    expect_error(
+        lambda: module._account_data(
+            {
+                "data": HostileSolanaLiveList(
+                    [base64.b64encode(b"program").decode("ascii"), "base64"]
+                )
+            },
+            label="Solana Program",
+        ),
+        RuntimeError,
+        "Solana Program account data must use base64 encoding",
+    )
+    expect_error(
+        lambda: module._validate_live_evidence(HostileSolanaLiveDict()),
+        ValueError,
+        "Solana live evidence must be an object",
+    )
+    expect_error(
+        lambda: module._encode_solana_base58(HostileSolanaLiveBytes(b"\x11" * 32)),
+        ValueError,
+        "Solana public key bytes must be bytes",
+    )
+    expect_error(
+        lambda: module._optional_live_bytes32_arg(
+            SimpleNamespace(value=HostileSolanaLiveBytes(b"\x11" * 32)),
+            "value",
+            label="optional Solana hash",
+        ),
+        ValueError,
+        "optional Solana hash must be bytes",
+    )
+
+    monkeypatch.setattr(
+        module,
+        "_json_rpc",
+        lambda *_args, **_kwargs: HostileSolanaLiveDict(
+            {"context": {"slot": 1}, "value": {}}
+        ),
+    )
+    expect_error(
+        lambda: module._account_info(
+            "https://solana.example.invalid",
+            _default_program_id(module),
+            commitment="finalized",
+            opener=lambda *_args, **_kwargs: None,
+            timeout=3.0,
+        ),
+        RuntimeError,
+        "getAccountInfo returned a non-object result",
+    )
+
+    monkeypatch.setattr(
+        module,
+        "_json_rpc",
+        lambda *_args, **_kwargs: {
+            "context": {"slot": 1},
+            "value": HostileSolanaLiveDict({"data": []}),
+        },
+    )
+    expect_error(
+        lambda: module._account_info(
+            "https://solana.example.invalid",
+            _default_program_id(module),
+            commitment="finalized",
+            opener=lambda *_args, **_kwargs: None,
+            timeout=3.0,
+        ),
+        RuntimeError,
+        "getAccountInfo value must be an object",
+    )
+
+    program_id = module._encode_solana_base58(bytes.fromhex("33" * 32))
+    programdata_address = module._encode_solana_base58(bytes.fromhex("11" * 32))
+    program_bytes = bytes.fromhex("7f454c460102030405")
+    code_hash = module.evidence.solana_verifier_program_code_hash(program_bytes)
+    live = _live_record(
+        module,
+        program_id=program_id,
+        programdata_address=programdata_address,
+        program_bytes=program_bytes,
+    )
+    args = _live_args(module, code_hash=code_hash, programdata_address=programdata_address)
+    summary = module._summary(args, live)
+    summary["route_canary"] = HostileSolanaLiveDict({"evidence_hash": "0x" + "44" * 32})
+
+    offline_args = module._offline_args_from_summary(args, live, summary)
+
+    assert "--route-canary-evidence-hash" not in offline_args
+
+
 def test_solana_live_cli_parsers_reject_non_string_values_without_stringification():
     module = load_live_module()
 

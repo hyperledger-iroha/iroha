@@ -5,8 +5,8 @@ use std::io::{self, Read};
 use iroha_sccp::{
     NexusSccpMessageProofV1, SCCP_DOMAIN_SORA, SccpSourceAdapterEngineDeploymentV1,
     SccpSourceAdapterProofV1, SccpSourceVerifierMaterialV1,
-    build_nexus_sccp_message_transparent_proof_with_source_verifier_material_allow_unready,
-    build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready,
+    build_nexus_sccp_message_transparent_proof_with_source_verifier_material,
+    build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment,
     decode_nexus_bridge_finality_proof, decode_sccp_source_chain_proof_envelope,
     decode_sccp_source_consensus_proof, sccp_evm_family_mainnet_source_verifier_material_v1,
     sccp_message_source_domain, sccp_message_target_domain, sccp_message_transparent_public_inputs,
@@ -220,11 +220,10 @@ fn main() {
                 .is_some()
             );
             let artifact =
-                build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready(
+                build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment(
                     &bundle,
                     &material,
                     &deployment,
-                    true,
                 );
             println!("debug.artifact.material_deployment={}", artifact.is_some());
             if let Some(artifact) = artifact {
@@ -434,10 +433,8 @@ fn main() {
                     .is_some()
                 );
                 let artifact =
-                    build_nexus_sccp_message_transparent_proof_with_source_verifier_material_allow_unready(
-                        &bundle,
-                        &material,
-                        true,
+                    build_nexus_sccp_message_transparent_proof_with_source_verifier_material(
+                        &bundle, &material,
                     );
                 println!("artifact.material={}", artifact.is_some());
                 if let Some(artifact) = artifact {

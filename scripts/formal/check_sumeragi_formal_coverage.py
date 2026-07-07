@@ -1767,16 +1767,51 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "source progress specs compose their named fairness aggregates",
     "top-level Sumeragi specs compose their named fairness aggregates",
     "Progress spec bodies must compose only Init, their direct transition closure, and their named fairness aggregate",
+    "Source and top-level progress spec bodies must reject hidden or extra direct conjuncts",
+    "Source and top-level progress specs must reject duplicate direct transition closures",
+    "Source and top-level progress specs must reject compound raw WF_vars fairness clauses",
     "Progress specs must resolve Init as a defined zero-arity operator",
     "Progress Init operators must stay initial-state predicates",
     "Progress Init local aliases must resolve to initial-state predicates",
+    "Progress Init local aliases must resolve to defined zero-arity initial-state predicates",
+    "Progress Init local aliases must resolve to inspectable initial-state predicates",
+    "Progress Init local aliases must inherit recursive resolution for onward local aliases",
     "Progress Init aliases must be acyclic",
     "Progress Init aliases must resolve through named local INSTANCE declarations",
+    "Progress Init aliases must inherit recursive resolution for onward aliases inside imported Init targets",
+    "Progress Init aliases must inherit helper target guards inside imported Init targets",
+    "Progress Init aliases must inherit helper acyclicity inside imported Init targets",
+    "Progress Init aliases must inherit module-alias helper target guards inside imported Init targets",
+    "Progress Init aliases must inherit module-alias helper acyclicity inside imported Init targets",
+    "Progress Init aliases must inherit recursive module-alias helper resolution inside imported Init targets",
+    "Progress Init aliases must inherit nested helper guards behind imported module-alias helpers",
+    "Progress Init aliases must inherit nested helper alias resolution behind imported module-alias helpers",
+    "Progress Init aliases must inherit nested module-alias helper guards behind imported module-alias helpers",
+    "Progress Init aliases must inherit nested module-alias helper onward resolution behind imported module-alias helpers",
+    "Progress Init aliases must inherit nested module-alias target helper guards behind imported module-alias helpers",
+    "Progress Init aliases must inherit nested module-alias target helper alias resolution behind imported module-alias helpers",
+    "Progress Init aliases must inherit nested module-alias target helper alias onward resolution behind imported module-alias helpers",
+    "Progress Init aliases must inherit nested module-alias target helper alias onward target helper guards behind imported module-alias helpers",
+    "Progress Init aliases must inherit nested module-alias target helper alias onward target helper alias resolution behind imported module-alias helpers",
+    "Progress Init aliases must inherit nested module-alias target helper alias onward target helper alias onward resolution behind imported module-alias helpers",
+    "Progress Init aliases must inherit multi-hop recursive helper guards behind imported module-alias chains",
     "Progress Init aliases must resolve to local modules with defined zero-arity initial-state predicates",
     "Progress Init aliases must resolve to inspectable initial-state predicates",
     "Progress Init helper conjuncts must resolve to initial-state predicates",
+    "Progress Init helpers must be acyclic",
+    "Progress Init helper conjuncts must inherit recursive resolution for onward aliases inside named helper operands",
+    "Progress Init boolean helper operands must resolve to initial-state predicates",
+    "Progress Init boolean helper operands must resolve to defined zero-arity initial-state predicates",
+    "Progress Init boolean helper operands must resolve to inspectable initial-state predicates",
+    "Progress Init boolean helper operands must inherit recursive resolution for onward aliases inside named helper operands",
     "Progress Init module-alias helper operands must resolve to initial-state predicates",
+    "Progress Init module-alias helpers must be acyclic",
     "Progress Init module-alias helper operands must resolve through named local INSTANCE declarations",
+    "Progress Init module-alias boolean helper operands must resolve through named local INSTANCE declarations",
+    "Progress Init module-alias helper operands must inherit recursive resolution for onward aliases inside imported helper targets",
+    "Progress Init module-alias boolean helper operands must inherit recursive resolution for onward aliases inside imported helper targets",
+    "Progress Init module-alias boolean helper operands must resolve to local modules with defined zero-arity initial-state predicates",
+    "Progress Init module-alias boolean helper operands must resolve to inspectable initial-state predicates",
     "Progress Init module-alias helper operands must resolve to local modules with defined zero-arity initial-state predicates",
     "Progress Init module-alias helper operands must resolve to inspectable initial-state predicates",
     "Progress transition disjuncts must resolve to named action-shaped operators",
@@ -1797,32 +1832,45 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Progress transition identity-gated helper wrappers must be acyclic",
     "Progress transition helper cycle diagnostics must precede nested aggregate expansion",
     "Progress transition module-alias helper wrappers must resolve through named local INSTANCE declarations",
+    "Progress transition module-alias helper wrappers must inherit helper-wrapper resolution for onward aliases inside imported helper targets",
+    "Progress transition module-alias helper wrappers must inherit multi-hop recursive helper guards behind imported module-alias chains",
     "Progress transition module-alias helper wrappers must resolve to defined zero-arity transition operators",
     "Progress transition module-alias helper wrappers must resolve to inspectable transition operators",
     "Progress transition identity-gated module-alias helper wrappers must be acyclic",
     "Progress transition identity-gated module-alias helper wrappers must resolve through named local INSTANCE declarations",
+    "Progress transition identity-gated module-alias helper wrappers must inherit helper-wrapper resolution for onward aliases inside imported helper targets",
+    "Progress transition identity-gated module-alias helper wrappers must inherit multi-hop recursive helper guards behind imported module-alias chains",
     "Progress transition identity-gated module-alias helper wrappers must resolve to defined zero-arity transition operators",
     "Progress transition identity-gated module-alias helper wrappers must resolve to inspectable transition operators",
     "Progress transition module-alias disjuncts must be acyclic",
+    "Progress transition module-alias disjuncts must inherit multi-hop recursive helper guards behind imported module-alias chains",
     "Progress transition module-alias disjuncts must resolve through named local INSTANCE declarations",
     "Progress transition module-alias disjuncts must resolve to defined zero-arity transition operators",
     "Progress transition module-alias disjuncts must resolve to inspectable transition operators",
     "Progress transition identity-gated module-alias disjuncts must be acyclic",
+    "Progress transition identity-gated module-alias disjuncts must inherit multi-hop recursive helper guards behind imported module-alias chains",
     "Progress fairness action definitions must be action-shaped transition definitions",
     "Progress fairness action definitions must not contain fairness or temporal operators",
     "Progress fairness action definitions must not compose other fair actions",
     "Progress fairness action definitions must not hide other fair actions in boolean structure",
     "Progress fairness action helper references must resolve to defined zero-arity helper definitions",
     "Progress fairness action helper references must resolve to inspectable helper definitions",
+    "Progress fairness action helper references must inherit multi-hop recursive local-helper guards",
     "Progress fairness action helper wrappers must not hide composed fair actions",
+    "Progress fairness action helper wrappers must inherit multi-hop local-helper composed-action guards",
     "Progress fairness action helper wrappers must be acyclic",
+    "Progress fairness action helper wrappers must inherit multi-hop local-helper cycle guards",
     "Progress fairness action helper wrappers must inspect boolean operands",
     "Progress fairness action helper actions must not hide composed fair actions",
+    "Progress fairness action helper actions must inherit multi-hop local-helper composed-action guards",
     "Progress fairness action helper actions must be acyclic",
+    "Progress fairness action helper actions must inherit multi-hop local-helper cycle guards",
     "Progress fairness action helper actions must inspect boolean operands",
     "Progress fairness action helper aliases must not hide composed fair actions",
     "Progress fairness action helper aliases must be acyclic",
+    "Progress fairness action helper aliases must inherit multi-hop module-alias cycle guards behind imported helper targets",
     "Progress fairness action helper aliases must inspect boolean operands",
+    "Progress fairness action helper aliases must inherit multi-hop recursive helper guards behind imported module-alias chains",
     "Progress fairness action helper aliases must resolve through named local INSTANCE declarations",
     "Progress fairness action helper aliases must resolve to local action modules",
     "Progress fairness action helper aliases must resolve to defined zero-arity actions",
@@ -1830,12 +1878,14 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Progress fairness action helper aliases must resolve imported helper references to inspectable helper definitions",
     "Progress fairness action module-alias conjuncts must not hide composed fair actions",
     "Progress fairness action module-alias conjuncts must be acyclic",
+    "Progress fairness action module-alias conjuncts must inherit multi-hop recursive helper guards behind imported module-alias chains",
     "Progress fairness action module-alias conjuncts must resolve through named local INSTANCE declarations",
     "Progress fairness action module-alias conjuncts must resolve to local action modules",
     "Progress fairness action module-alias conjuncts must resolve to defined zero-arity actions",
     "Progress fairness action module-alias conjuncts must resolve to inspectable action definitions",
     "Progress fairness action module-alias boolean operands must not hide composed fair actions",
     "Progress fairness action module-alias boolean operands must be acyclic",
+    "Progress fairness action module-alias boolean operands must inherit multi-hop recursive helper guards behind imported module-alias chains",
     "Progress fairness action module-alias boolean operands must resolve through named local INSTANCE declarations",
     "Progress fairness action module-alias boolean operands must resolve to local action modules",
     "Progress fairness action module-alias boolean operands must resolve to defined zero-arity actions",
@@ -1845,42 +1895,108 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Progress fairness action aliases must not resolve to definitions that compose other fair actions",
     "Progress fairness action aliases must not resolve to definitions that hide other fair actions in boolean structure",
     "Progress fairness action aliases must not resolve through helper wrappers that compose other fair actions",
+    "Progress fairness action aliases must inherit helper-wrapper multi-hop local-helper composed-action guards inside imported action targets",
     "Progress fairness action aliases must resolve helper references to defined zero-arity helper definitions",
     "Progress fairness action aliases must resolve helper references to inspectable helper definitions",
+    "Progress fairness action aliases must inherit helper-reference multi-hop recursive local-helper guards inside imported action targets",
     "Progress fairness action aliases must resolve through acyclic helper wrappers",
     "Progress fairness action aliases must not resolve through helper actions that compose other fair actions",
+    "Progress fairness action aliases must inherit helper-action multi-hop local-helper composed-action guards inside imported action targets",
     "Progress fairness action aliases must resolve through acyclic helper actions",
     "Progress fairness action aliases must not resolve through helper aliases that compose other fair actions",
     "Progress fairness action aliases must resolve through acyclic helper aliases",
+    "Progress fairness action aliases must inherit helper-alias multi-hop module-alias cycle guards inside imported action targets",
     "Progress fairness action aliases must resolve helper aliases through named local INSTANCE declarations",
     "Progress fairness action aliases must resolve helper aliases to local action modules",
     "Progress fairness action aliases must resolve helper aliases to defined zero-arity actions",
     "Progress fairness action aliases must resolve helper-alias helper references to defined zero-arity helper definitions",
     "Progress fairness action aliases must resolve helper-alias helper references to inspectable helper definitions",
+    "Progress fairness action aliases must inherit helper-alias multi-hop recursive helper guards inside imported action targets",
     "Progress fairness action aliases must not resolve through module-alias conjuncts that compose other fair actions",
     "Progress fairness action aliases must resolve through acyclic module-alias conjuncts",
+    "Progress fairness action aliases must inherit module-alias conjunct multi-hop cycle guards behind imported module-alias chains",
     "Progress fairness action aliases must resolve module-alias conjuncts through named local INSTANCE declarations",
     "Progress fairness action aliases must resolve module-alias conjuncts to local action modules",
     "Progress fairness action aliases must resolve module-alias conjuncts to defined zero-arity actions",
     "Progress fairness action aliases must resolve module-alias conjuncts to inspectable action definitions",
+    "Progress fairness action aliases must inherit module-alias conjunct multi-hop recursive helper guards behind imported module-alias chains",
     "Progress fairness action aliases must not resolve through module-alias boolean operands that compose other fair actions",
     "Progress fairness action aliases must resolve through acyclic module-alias boolean operands",
+    "Progress fairness action aliases must inherit module-alias boolean operand multi-hop cycle guards behind imported module-alias chains",
     "Progress fairness action aliases must resolve module-alias boolean operands through named local INSTANCE declarations",
     "Progress fairness action aliases must resolve module-alias boolean operands to local action modules",
     "Progress fairness action aliases must resolve module-alias boolean operands to defined zero-arity actions",
     "Progress fairness action aliases must resolve module-alias boolean operands to inspectable action definitions",
+    "Progress fairness action aliases must inherit module-alias boolean operand multi-hop recursive helper guards behind imported module-alias chains",
     "Progress fairness action aliases must resolve through named local INSTANCE declarations",
     "Progress fairness action aliases must resolve to local action modules",
     "Progress fairness action aliases must resolve to defined zero-arity actions",
     "Progress fairness action aliases must resolve to inspectable actions",
+    "Progress fairness action aliases must inherit multi-hop module-alias cycle guards behind imported action targets",
+    "Progress fairness action aliases must not resolve through onward action aliases inside imported action targets",
     "Progress fairness action aliases must resolve to action definitions without fairness clauses",
     "Progress fairness action aliases must resolve to transition definitions without fairness or temporal operators",
     "Progress fairness action aliases must resolve to transition definitions that mention next-state updates or UNCHANGED",
+    "Progress transition closures must keep static [][Next]_vars shape",
+    "Progress transition operators must be defined zero-arity operators",
     "Progress fairness actions must be reachable from the checked transition closure",
+    "Source commit progress spec contract inventories must stay duplicate-free",
+    "Top-level commit spec contract inventories must stay duplicate-free",
+    "Progress finality property contract inventories must stay duplicate-free",
+    "Progress finality properties must be defined zero-arity operators",
+    "Progress finality stacks must be defined zero-arity operators",
     "Progress finality properties must be direct <>FinalityStack obligations",
     "Progress finality stacks must retain committed/finality evidence conjuncts",
     "Progress finality stack conjunct contracts must stay duplicate-free",
+    "Progress finality stack definitions must stay duplicate-free",
     "Progress finality stacks must stay on the documented finality evidence conjunct contract",
+    "Top-level Byzantine direct-commit aggregate definitions must reject missing, literal, and unreviewed obligations",
+    "Top-level Byzantine direct-commit aggregate operators must be defined zero-arity aggregates",
+    "Top-level Byzantine direct-commit aggregate conjuncts must stay named, duplicate-free, and documented",
+    "Top-level Byzantine direct-commit expected aggregate conjuncts must stay duplicate-free",
+    "Top-level Byzantine direct-commit implication aggregates must keep their documented top-level antecedents",
+    "Top-level Byzantine direct-commit implication antecedent contracts must stay duplicate-free",
+    "Direct delivered-first progress safety operators must be defined zero-arity aggregates",
+    "Direct delivered-first progress safety aggregate conjuncts must stay named, duplicate-free, and documented",
+    "Direct delivered-first progress safety expected aggregate conjuncts must stay duplicate-free",
+    "Direct vote-first progress safety operators must be defined zero-arity aggregates",
+    "Direct vote-first progress safety aggregate conjuncts must stay named, duplicate-free, and documented",
+    "Direct vote-first progress safety expected aggregate conjuncts must stay duplicate-free",
+    "Direct interleaving progress safety operators must be defined zero-arity aggregates",
+    "Direct interleaving progress safety aggregate conjuncts must stay named, duplicate-free, and documented",
+    "Direct interleaving progress safety expected aggregate conjuncts must stay duplicate-free",
+    "Byzantine interleaving progress safety operators must be defined zero-arity aggregates",
+    "Byzantine interleaving progress safety aggregate conjuncts must stay named, duplicate-free, and documented",
+    "Byzantine interleaving progress safety expected aggregate conjuncts must stay duplicate-free",
+    "Projection gate aggregate operators must be defined zero-arity aggregates",
+    "Projection gate unguarded aggregate conjuncts must stay named, duplicate-free, and documented",
+    "Projection gate expected aggregate conjuncts must stay duplicate-free",
+    "Projection gate implication aggregates must keep their documented top-level antecedents",
+    "Projection gate implication antecedent contracts must stay duplicate-free",
+    "Projection bridge interleaving alignment rows must reference existing bridge contracts",
+    "Projection bridge interleaving expected obligations must stay duplicate-free",
+    "Projection bridge interleaving actual obligations must stay duplicate-free",
+    "Projection bridge core/source alignment rows must reference existing source and bridge contracts",
+    "Projection bridge core/source expected obligations must stay duplicate-free",
+    "Projection bridge core/source actual obligations must stay duplicate-free",
+    "Projected commit progress expected obligations must stay duplicate-free",
+    "Projected commit progress actual obligations must stay duplicate-free",
+    "Source progress safety expected obligations must stay duplicate-free",
+    "Source progress safety actual obligations must stay duplicate-free",
+    "Source progress safety alignment rows must reference existing envelope contracts",
+    "Byzantine interleaving exactness alignment rows must reference existing direct and Byzantine contracts",
+    "Byzantine interleaving expected exactness obligations must stay duplicate-free",
+    "Byzantine interleaving actual exactness obligations must stay duplicate-free",
+    "Byzantine top corridor expected obligations must stay duplicate-free",
+    "Byzantine top corridor actual obligations must stay duplicate-free",
+    "Byzantine top corridor alignment rows must reference existing exactness contracts",
+    "Byzantine top/projection source obligations must stay duplicate-free",
+    "Byzantine top/projection expected obligations must stay duplicate-free",
+    "Byzantine top/projection actual obligations must stay duplicate-free",
+    "Byzantine top/projection alignment rows must reference existing top and projected contracts",
+    "Byzantine top/projection implication rows must map through the operator alignment inventory",
+    "Projected commit progress alignment rows must reference existing bridge contracts",
+    "Projected commit progress alignment rows must reference existing progress envelope contracts",
     "temporal CFGs bind their documented behavior operators",
     "TLC runner constraint injections stay on documented singleton-or-empty families",
     "TLC singleton constraint-family diagnostics must stay line-aware",
@@ -2366,6 +2482,8 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Static fairness action contract inventories must stay duplicate-free",
     "Progress specs must keep exactly one direct transition-closure conjunct",
     "`WF_vars` fairness operands must stay named zero-arity operators",
+    "Progress fairness aggregate operators must be defined zero-arity operators",
+    "Source and top-level progress fairness aggregate roots must stay present and zero-arity",
     "Progress fairness aggregates must contain only direct WF_vars(Action) clauses",
     "Progress fairness WF_vars actions must resolve to defined zero-arity operators",
     "Progress fairness WF_vars diagnostics must stay line-aware",
@@ -9277,15 +9395,23 @@ def implication_antecedent_contract_errors(
 
 def byzantine_top_conjunct_contract_errors(
     module_path: Path = SPEC_DIR / "Sumeragi.tla",
+    contracts: dict[
+        str,
+        tuple[str, ...],
+    ] = SUMERAGI_BYZANTINE_TOP_CONJUNCT_CONTRACTS,
+    implication_contracts: dict[str, str] | tuple[tuple[str, str], ...] = (
+        SUMERAGI_BYZANTINE_TOP_IMPLICATION_CONTRACT_ROWS
+    ),
 ) -> list[str]:
     """Return errors for top-level Byzantine corridor aggregate proof drift."""
 
+    implication_operators = frozenset(
+        operator for operator, _ in implication_contract_items(implication_contracts)
+    )
     errors = consensus_core_root_conjunct_contract_errors(
         module_path,
-        SUMERAGI_BYZANTINE_TOP_CONJUNCT_CONTRACTS,
-        allow_non_named_conjunct_operators=frozenset(
-            SUMERAGI_BYZANTINE_TOP_IMPLICATION_CONTRACTS
-        ),
+        contracts,
+        allow_non_named_conjunct_operators=implication_operators,
         root_kind="top-level Byzantine direct-commit aggregate",
         zero_arity_requirement=(
             "top-level Byzantine direct-commit aggregate operators must be "
@@ -9303,7 +9429,7 @@ def byzantine_top_conjunct_contract_errors(
     errors.extend(
         implication_antecedent_contract_errors(
             module_path,
-            SUMERAGI_BYZANTINE_TOP_IMPLICATION_CONTRACT_ROWS,
+            implication_contracts,
             "Byzantine top implication antecedent contract",
         )
     )
@@ -11480,6 +11606,199 @@ def fairness_action_module_alias_operand_resolution_errors(
 
     errors: list[str] = []
 
+    def collect_operator(
+        root_label: str,
+        operand_kind: str,
+        requirement_label: str,
+        current_path: Path,
+        operator: str,
+        current_seen: frozenset[tuple[Path, str]],
+        from_module_alias: bool,
+    ) -> None:
+        key = (current_path, operator)
+        if key in current_seen:
+            return
+        signature = tla_operator_signatures(current_path).get(operator)
+        if signature is None:
+            return
+        helper_line, helper_arity = signature
+        if helper_arity != 0:
+            if from_module_alias:
+                errors.append(
+                    f"{display_path(module_path)}:{fairness_line} defines "
+                    f"{fairness_operator}, but references WF_vars action "
+                    f"{action} at {line_number_context(action_reference_lines)} "
+                    f"whose definition at line {action_line} uses "
+                    f"{operand_kind} {root_label}, but helper {operator} at "
+                    f"{display_path(current_path)}:{helper_line} has arity "
+                    f"{helper_arity}; {root_kind} fairness action "
+                    f"{requirement_label} must resolve to defined "
+                    "zero-arity actions"
+                )
+            return
+        definition = tla_single_expression_operator_definitions(current_path).get(
+            operator
+        )
+        if definition is None:
+            if from_module_alias:
+                errors.append(
+                    f"{display_path(module_path)}:{fairness_line} defines "
+                    f"{fairness_operator}, but references WF_vars action "
+                    f"{action} at {line_number_context(action_reference_lines)} "
+                    f"whose definition at line {action_line} uses "
+                    f"{operand_kind} {root_label}, but helper {operator} at "
+                    f"{display_path(current_path)}:{helper_line} is not an "
+                    "inspectable single-expression definition; "
+                    f"{root_kind} fairness action {requirement_label} must "
+                    "resolve to inspectable action definitions"
+                )
+            return
+
+        helper_line, helper_body = definition
+        if tla_expression_mentions_fairness_or_temporal_marker(helper_body):
+            return
+        next_seen = current_seen | frozenset({key})
+
+        direct_alias = tla_module_operator_alias(helper_body)
+        if direct_alias is not None:
+            collect_alias(
+                root_label,
+                operand_kind,
+                requirement_label,
+                current_path,
+                operator,
+                helper_line,
+                direct_alias,
+                next_seen,
+            )
+            return
+
+        nested_aliases = (
+            tla_module_operator_conjunct_aliases(helper_body)
+            + tla_module_operator_boolean_aliases(helper_body)
+        )
+        seen_aliases: set[tuple[str, str]] = set()
+        for alias in nested_aliases:
+            if alias in seen_aliases:
+                continue
+            seen_aliases.add(alias)
+            collect_alias(
+                root_label,
+                operand_kind,
+                requirement_label,
+                current_path,
+                operator,
+                helper_line,
+                alias,
+                next_seen,
+            )
+
+        nested_references = (
+            tla_zero_arity_conjunct_references(helper_body)
+            + tla_zero_arity_boolean_references(helper_body)
+        )
+        seen_references: set[str] = set()
+        for nested_reference in nested_references:
+            if nested_reference in seen_references:
+                continue
+            seen_references.add(nested_reference)
+            collect_operator(
+                root_label,
+                operand_kind,
+                requirement_label,
+                current_path,
+                nested_reference,
+                next_seen,
+                from_module_alias,
+            )
+
+    def collect_alias(
+        root_label: str,
+        operand_kind: str,
+        requirement_label: str,
+        current_path: Path,
+        helper_name: str,
+        helper_line: int,
+        alias: tuple[str, str],
+        current_seen: frozenset[tuple[Path, str]],
+    ) -> None:
+        alias_name, target_operator = alias
+        target_label = f"{alias_name}!{target_operator}"
+        instance = tla_instance_alias_modules(current_path).get(alias_name)
+        if instance is None:
+            errors.append(
+                f"{display_path(module_path)}:{fairness_line} defines "
+                f"{fairness_operator}, but references WF_vars action "
+                f"{action} at {line_number_context(action_reference_lines)} "
+                f"whose definition at line {action_line} uses {operand_kind} "
+                f"{root_label}, but helper {helper_name} at "
+                f"{display_path(current_path)}:{helper_line} aliases "
+                f"{target_label} without a named INSTANCE alias "
+                f"{alias_name}; {root_kind} fairness action "
+                f"{requirement_label} must resolve through named local "
+                "INSTANCE declarations"
+            )
+            return
+
+        _alias_line, target_module = instance
+        target_path = current_path.with_name(f"{target_module}.tla")
+        if not target_path.exists():
+            errors.append(
+                f"{display_path(module_path)}:{fairness_line} defines "
+                f"{fairness_operator}, but references WF_vars action "
+                f"{action} at {line_number_context(action_reference_lines)} "
+                f"whose definition at line {action_line} uses {operand_kind} "
+                f"{root_label}, but helper {helper_name} at "
+                f"{display_path(current_path)}:{helper_line} aliases "
+                f"{target_label}, but target module "
+                f"{display_path(target_path)} does not exist; {root_kind} "
+                f"fairness action {requirement_label} must resolve to local "
+                "action modules"
+            )
+            return
+
+        target_signature = tla_operator_signatures(target_path).get(target_operator)
+        if target_signature is None:
+            errors.append(
+                f"{display_path(module_path)}:{fairness_line} defines "
+                f"{fairness_operator}, but references WF_vars action "
+                f"{action} at {line_number_context(action_reference_lines)} "
+                f"whose definition at line {action_line} uses {operand_kind} "
+                f"{root_label}, but helper {helper_name} at "
+                f"{display_path(current_path)}:{helper_line} aliases "
+                f"{target_label}, but target {display_path(target_path)} "
+                f"does not define {target_operator}; {root_kind} fairness "
+                f"action {requirement_label} must resolve to defined "
+                "zero-arity actions"
+            )
+            return
+
+        target_line, target_arity = target_signature
+        if target_arity != 0:
+            errors.append(
+                f"{display_path(module_path)}:{fairness_line} defines "
+                f"{fairness_operator}, but references WF_vars action "
+                f"{action} at {line_number_context(action_reference_lines)} "
+                f"whose definition at line {action_line} uses {operand_kind} "
+                f"{root_label}, but helper {helper_name} at "
+                f"{display_path(current_path)}:{helper_line} aliases "
+                f"{target_label}, but target {display_path(target_path)}:"
+                f"{target_line} has arity {target_arity}; {root_kind} "
+                f"fairness action {requirement_label} must resolve to "
+                "defined zero-arity actions"
+            )
+            return
+
+        collect_operator(
+            root_label,
+            operand_kind,
+            requirement_label,
+            target_path,
+            target_operator,
+            current_seen,
+            True,
+        )
+
     def extend_for_aliases(
         aliases: list[tuple[str, str]],
         operand_kind: str,
@@ -11566,6 +11885,17 @@ def fairness_action_module_alias_operand_resolution_errors(
                     f"fairness action {requirement_label} must resolve to "
                     "inspectable action definitions"
                 )
+                continue
+
+            collect_operator(
+                target_label,
+                operand_kind,
+                requirement_label,
+                target_path,
+                operator_name,
+                frozenset(),
+                False,
+            )
 
     extend_for_aliases(
         tla_module_operator_conjunct_aliases(action_body),
@@ -12194,6 +12524,210 @@ def fairness_action_alias_target_module_alias_operand_resolution_errors(
 
     errors: list[str] = []
 
+    def collect_operator(
+        root_label: str,
+        operand_kind: str,
+        requirement_label: str,
+        current_path: Path,
+        operator: str,
+        current_seen: frozenset[tuple[Path, str]],
+        from_module_alias: bool,
+    ) -> None:
+        key = (current_path, operator)
+        if key in current_seen:
+            return
+        signature = tla_operator_signatures(current_path).get(operator)
+        if signature is None:
+            return
+        helper_line, helper_arity = signature
+        if helper_arity != 0:
+            if from_module_alias:
+                errors.append(
+                    f"{display_path(module_path)}:{fairness_line} defines "
+                    f"{fairness_operator}, but references WF_vars action "
+                    f"{action} at {line_number_context(action_reference_lines)} "
+                    f"whose definition at line {action_line} aliases "
+                    f"{alias_label}, but target {display_path(target_path)}:"
+                    f"{target_line} uses {operand_kind} {root_label}, but "
+                    f"helper {operator} at {display_path(current_path)}:"
+                    f"{helper_line} has arity {helper_arity}; {root_kind} "
+                    f"fairness action aliases must resolve {requirement_label} "
+                    "to defined zero-arity actions"
+                )
+            return
+        definition = tla_single_expression_operator_definitions(current_path).get(
+            operator
+        )
+        if definition is None:
+            if from_module_alias:
+                errors.append(
+                    f"{display_path(module_path)}:{fairness_line} defines "
+                    f"{fairness_operator}, but references WF_vars action "
+                    f"{action} at {line_number_context(action_reference_lines)} "
+                    f"whose definition at line {action_line} aliases "
+                    f"{alias_label}, but target {display_path(target_path)}:"
+                    f"{target_line} uses {operand_kind} {root_label}, but "
+                    f"helper {operator} at {display_path(current_path)}:"
+                    f"{helper_line} is not an inspectable single-expression "
+                    f"definition; {root_kind} fairness action aliases must "
+                    f"resolve {requirement_label} to inspectable action "
+                    "definitions"
+                )
+            return
+
+        helper_line, helper_body = definition
+        if tla_expression_mentions_fairness_or_temporal_marker(helper_body):
+            return
+        next_seen = current_seen | frozenset({key})
+
+        direct_alias = tla_module_operator_alias(helper_body)
+        if direct_alias is not None:
+            collect_alias(
+                root_label,
+                operand_kind,
+                requirement_label,
+                current_path,
+                operator,
+                helper_line,
+                direct_alias,
+                next_seen,
+            )
+            return
+
+        nested_aliases = (
+            tla_module_operator_conjunct_aliases(helper_body)
+            + tla_module_operator_boolean_aliases(helper_body)
+        )
+        seen_aliases: set[tuple[str, str]] = set()
+        for alias in nested_aliases:
+            if alias in seen_aliases:
+                continue
+            seen_aliases.add(alias)
+            collect_alias(
+                root_label,
+                operand_kind,
+                requirement_label,
+                current_path,
+                operator,
+                helper_line,
+                alias,
+                next_seen,
+            )
+
+        nested_references = (
+            tla_zero_arity_conjunct_references(helper_body)
+            + tla_zero_arity_boolean_references(helper_body)
+        )
+        seen_references: set[str] = set()
+        for nested_reference in nested_references:
+            if nested_reference in seen_references:
+                continue
+            seen_references.add(nested_reference)
+            collect_operator(
+                root_label,
+                operand_kind,
+                requirement_label,
+                current_path,
+                nested_reference,
+                next_seen,
+                from_module_alias,
+            )
+
+    def collect_alias(
+        root_label: str,
+        operand_kind: str,
+        requirement_label: str,
+        current_path: Path,
+        helper_name: str,
+        helper_line: int,
+        alias: tuple[str, str],
+        current_seen: frozenset[tuple[Path, str]],
+    ) -> None:
+        alias_name, target_operator = alias
+        helper_alias_label = f"{alias_name}!{target_operator}"
+        instance = tla_instance_alias_modules(current_path).get(alias_name)
+        if instance is None:
+            errors.append(
+                f"{display_path(module_path)}:{fairness_line} defines "
+                f"{fairness_operator}, but references WF_vars action "
+                f"{action} at {line_number_context(action_reference_lines)} "
+                f"whose definition at line {action_line} aliases "
+                f"{alias_label}, but target {display_path(target_path)}:"
+                f"{target_line} uses {operand_kind} {root_label}, but helper "
+                f"{helper_name} at {display_path(current_path)}:{helper_line} "
+                f"aliases {helper_alias_label} without a named INSTANCE "
+                f"alias {alias_name}; {root_kind} fairness action aliases "
+                f"must resolve {requirement_label} through named local "
+                "INSTANCE declarations"
+            )
+            return
+
+        _alias_line, helper_target_module = instance
+        helper_target_path = current_path.with_name(f"{helper_target_module}.tla")
+        if not helper_target_path.exists():
+            errors.append(
+                f"{display_path(module_path)}:{fairness_line} defines "
+                f"{fairness_operator}, but references WF_vars action "
+                f"{action} at {line_number_context(action_reference_lines)} "
+                f"whose definition at line {action_line} aliases "
+                f"{alias_label}, but target {display_path(target_path)}:"
+                f"{target_line} uses {operand_kind} {root_label}, but helper "
+                f"{helper_name} at {display_path(current_path)}:{helper_line} "
+                f"aliases {helper_alias_label}, but target module "
+                f"{display_path(helper_target_path)} does not exist; "
+                f"{root_kind} fairness action aliases must resolve "
+                f"{requirement_label} to local action modules"
+            )
+            return
+
+        target_signature = tla_operator_signatures(helper_target_path).get(
+            target_operator
+        )
+        if target_signature is None:
+            errors.append(
+                f"{display_path(module_path)}:{fairness_line} defines "
+                f"{fairness_operator}, but references WF_vars action "
+                f"{action} at {line_number_context(action_reference_lines)} "
+                f"whose definition at line {action_line} aliases "
+                f"{alias_label}, but target {display_path(target_path)}:"
+                f"{target_line} uses {operand_kind} {root_label}, but helper "
+                f"{helper_name} at {display_path(current_path)}:{helper_line} "
+                f"aliases {helper_alias_label}, but target "
+                f"{display_path(helper_target_path)} does not define "
+                f"{target_operator}; {root_kind} fairness action aliases "
+                f"must resolve {requirement_label} to defined zero-arity "
+                "actions"
+            )
+            return
+
+        helper_target_line, helper_target_arity = target_signature
+        if helper_target_arity != 0:
+            errors.append(
+                f"{display_path(module_path)}:{fairness_line} defines "
+                f"{fairness_operator}, but references WF_vars action "
+                f"{action} at {line_number_context(action_reference_lines)} "
+                f"whose definition at line {action_line} aliases "
+                f"{alias_label}, but target {display_path(target_path)}:"
+                f"{target_line} uses {operand_kind} {root_label}, but helper "
+                f"{helper_name} at {display_path(current_path)}:{helper_line} "
+                f"aliases {helper_alias_label}, but target "
+                f"{display_path(helper_target_path)}:{helper_target_line} "
+                f"has arity {helper_target_arity}; {root_kind} fairness "
+                f"action aliases must resolve {requirement_label} to "
+                "defined zero-arity actions"
+            )
+            return
+
+        collect_operator(
+            root_label,
+            operand_kind,
+            requirement_label,
+            helper_target_path,
+            target_operator,
+            current_seen,
+            True,
+        )
+
     def extend_for_aliases(
         aliases: list[tuple[str, str]],
         operand_kind: str,
@@ -12288,6 +12822,17 @@ def fairness_action_alias_target_module_alias_operand_resolution_errors(
                     f"{root_kind} fairness action aliases must resolve "
                     f"{requirement_label} to inspectable action definitions"
                 )
+                continue
+
+            collect_operator(
+                operand_label,
+                operand_kind,
+                requirement_label,
+                operand_path,
+                operator_name,
+                frozenset(),
+                False,
+            )
 
     extend_for_aliases(
         tla_module_operator_conjunct_aliases(target_body),
@@ -14935,6 +15480,7 @@ def source_commit_progress_spec_contract_errors(
     """Return errors if source progress spec/fairness wiring drifts."""
 
     errors: list[str] = []
+    seen_contracts: set[tuple[Path, str]] = set()
     for (
         module_path,
         spec_operator,
@@ -14943,6 +15489,15 @@ def source_commit_progress_spec_contract_errors(
         expected_fairness_actions,
         root_kind,
     ) in contracts:
+        contract_key = (module_path, spec_operator)
+        if contract_key in seen_contracts:
+            errors.append(
+                "source commit progress spec contract inventory repeats "
+                f"{display_path(module_path)}::{spec_operator}; each source "
+                "commit progress spec contract must be counted once"
+            )
+            continue
+        seen_contracts.add(contract_key)
         errors.extend(
             commit_progress_spec_contract_errors(
                 module_path,
@@ -14965,6 +15520,7 @@ def top_level_commit_spec_contract_errors(
     """Return errors if top-level Sumeragi spec/fairness wiring drifts."""
 
     errors: list[str] = []
+    seen_contracts: set[tuple[Path, str]] = set()
     for (
         module_path,
         spec_operator,
@@ -14973,6 +15529,15 @@ def top_level_commit_spec_contract_errors(
         expected_fairness_actions,
         root_kind,
     ) in contracts:
+        contract_key = (module_path, spec_operator)
+        if contract_key in seen_contracts:
+            errors.append(
+                "top-level commit spec contract inventory repeats "
+                f"{display_path(module_path)}::{spec_operator}; each "
+                "top-level commit spec contract must be counted once"
+            )
+            continue
+        seen_contracts.add(contract_key)
         errors.extend(
             commit_progress_spec_contract_errors(
                 module_path,
@@ -14995,6 +15560,7 @@ def progress_finality_property_contract_errors(
     """Return errors if progress finality eventualities drift."""
 
     errors: list[str] = []
+    seen_contracts: set[tuple[Path, str, str]] = set()
     for (
         module_path,
         eventual_operator,
@@ -15002,6 +15568,16 @@ def progress_finality_property_contract_errors(
         required_stack_conjuncts,
         root_kind,
     ) in contracts:
+        contract_key = (module_path, eventual_operator, stack_operator)
+        if contract_key in seen_contracts:
+            errors.append(
+                "progress finality property contract inventory repeats "
+                f"{display_path(module_path)}::{eventual_operator} -> "
+                f"{stack_operator}; each progress finality property contract "
+                "must be counted once"
+            )
+            continue
+        seen_contracts.add(contract_key)
         if not module_path.exists():
             continue
         definitions = tla_single_expression_operator_definitions(module_path)
@@ -15108,12 +15684,16 @@ def progress_finality_property_contract_errors(
 
 def direct_delivered_first_gate_conjunct_contract_errors(
     module_path: Path = SPEC_DIR / "SumeragiDirectDeliveredFirstCorridorGate.tla",
+    contracts: dict[
+        str,
+        tuple[str, ...],
+    ] = SUMERAGI_DIRECT_DELIVERED_FIRST_GATE_CONJUNCT_CONTRACTS,
 ) -> list[str]:
     """Return errors for delivered-first progress-safety drift."""
 
     return consensus_core_root_conjunct_contract_errors(
         module_path,
-        SUMERAGI_DIRECT_DELIVERED_FIRST_GATE_CONJUNCT_CONTRACTS,
+        contracts,
         root_kind="direct delivered-first progress safety aggregate",
         zero_arity_requirement=(
             "direct delivered-first progress safety operators must be "
@@ -15132,12 +15712,16 @@ def direct_delivered_first_gate_conjunct_contract_errors(
 
 def direct_vote_first_gate_conjunct_contract_errors(
     module_path: Path = SPEC_DIR / "SumeragiDirectVoteFirstCorridorGate.tla",
+    contracts: dict[
+        str,
+        tuple[str, ...],
+    ] = SUMERAGI_DIRECT_VOTE_FIRST_GATE_CONJUNCT_CONTRACTS,
 ) -> list[str]:
     """Return errors for vote-first progress-safety drift."""
 
     return consensus_core_root_conjunct_contract_errors(
         module_path,
-        SUMERAGI_DIRECT_VOTE_FIRST_GATE_CONJUNCT_CONTRACTS,
+        contracts,
         root_kind="direct vote-first progress safety aggregate",
         zero_arity_requirement=(
             "direct vote-first progress safety operators must be "
@@ -15156,12 +15740,16 @@ def direct_vote_first_gate_conjunct_contract_errors(
 
 def byzantine_interleaving_gate_conjunct_contract_errors(
     module_path: Path = SPEC_DIR / "SumeragiByzantineCommitInterleavingGate.tla",
+    contracts: dict[
+        str,
+        tuple[str, ...],
+    ] = SUMERAGI_BYZANTINE_INTERLEAVING_GATE_CONJUNCT_CONTRACTS,
 ) -> list[str]:
     """Return errors for Byzantine interleaving progress-safety drift."""
 
     return consensus_core_root_conjunct_contract_errors(
         module_path,
-        SUMERAGI_BYZANTINE_INTERLEAVING_GATE_CONJUNCT_CONTRACTS,
+        contracts,
         root_kind="Byzantine interleaving progress safety aggregate",
         zero_arity_requirement=(
             "Byzantine interleaving progress safety operators must be "
@@ -15180,12 +15768,16 @@ def byzantine_interleaving_gate_conjunct_contract_errors(
 
 def direct_interleaving_gate_conjunct_contract_errors(
     module_path: Path = SPEC_DIR / "SumeragiDirectCommitInterleavingGate.tla",
+    contracts: dict[
+        str,
+        tuple[str, ...],
+    ] = SUMERAGI_DIRECT_INTERLEAVING_GATE_CONJUNCT_CONTRACTS,
 ) -> list[str]:
     """Return errors for direct interleaving progress-safety drift."""
 
     return consensus_core_root_conjunct_contract_errors(
         module_path,
-        SUMERAGI_DIRECT_INTERLEAVING_GATE_CONJUNCT_CONTRACTS,
+        contracts,
         root_kind="direct interleaving progress safety aggregate",
         zero_arity_requirement=(
             "direct interleaving progress safety operators must be "
@@ -15204,12 +15796,16 @@ def direct_interleaving_gate_conjunct_contract_errors(
 
 def projection_gate_conjunct_contract_errors(
     module_path: Path = SPEC_DIR / "SumeragiByzantineCommitProjectionGate.tla",
+    contracts: dict[
+        str,
+        tuple[str, ...],
+    ] = SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS,
 ) -> list[str]:
     """Return errors for Byzantine projection gate aggregate proof drift."""
 
     errors = consensus_core_root_conjunct_contract_errors(
         module_path,
-        SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS,
+        contracts,
         allow_non_named_conjunct_operators=frozenset(
             SUMERAGI_PROJECTION_GATE_IMPLICATION_CONTRACTS
         ),

@@ -103,6 +103,85 @@ class HostileReceiptString(str):
         raise AssertionError("secret-token receipt exact string isdecimal ran")
 
 
+class HostileReceiptBytes(bytes):
+    """Bytes subclass that receipt proof helpers must reject before hooks."""
+
+    def __new__(cls, value):
+        return bytes.__new__(cls, value)
+
+    def __bytes__(self):
+        raise AssertionError("secret-token receipt bytes coerced")
+
+    def __repr__(self):
+        raise AssertionError("secret-token receipt bytes repr'd")
+
+    def __len__(self):
+        raise AssertionError("secret-token receipt bytes length read")
+
+    def __iter__(self):
+        raise AssertionError("secret-token receipt bytes iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token receipt bytes indexed")
+
+
+class HostileReceiptBytearray(bytearray):
+    """Bytearray subclass that receipt proof helpers must reject before hooks."""
+
+    def __init__(self, value):
+        super().__init__(value)
+
+    def __bytes__(self):
+        raise AssertionError("secret-token receipt bytearray coerced")
+
+    def __repr__(self):
+        raise AssertionError("secret-token receipt bytearray repr'd")
+
+    def __len__(self):
+        raise AssertionError("secret-token receipt bytearray length read")
+
+    def __iter__(self):
+        raise AssertionError("secret-token receipt bytearray iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token receipt bytearray indexed")
+
+
+class HostileReceiptDict(dict):
+    """Dict subclass that receipt proof helpers must reject before hooks."""
+
+    def get(self, _key, _default=None):
+        raise AssertionError("secret-token receipt dict get ran")
+
+    def __contains__(self, _key):
+        raise AssertionError("secret-token receipt dict contains ran")
+
+    def __iter__(self):
+        raise AssertionError("secret-token receipt dict iterated")
+
+    def __repr__(self):
+        raise AssertionError("secret-token receipt dict repr'd")
+
+
+class HostileReceiptList(list):
+    """List subclass that receipt proof helpers must reject before hooks."""
+
+    def __bool__(self):
+        raise AssertionError("secret-token receipt list bool ran")
+
+    def __len__(self):
+        raise AssertionError("secret-token receipt list length read")
+
+    def __iter__(self):
+        raise AssertionError("secret-token receipt list iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token receipt list indexed")
+
+    def __repr__(self):
+        raise AssertionError("secret-token receipt list repr'd")
+
+
 def test_receipt_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_module()
 
@@ -366,6 +445,145 @@ def test_receipt_sequence_parsers_reject_string_subclasses_without_iteration():
             assert "secret-token" not in rendered
         else:
             raise AssertionError("string-subclass receipt sequence was accepted")
+
+
+def test_receipt_container_and_bytes_boundaries_reject_subclasses_without_hooks(
+    monkeypatch,
+):
+    module = load_module()
+    transaction_hash = bytes.fromhex("11" * 32)
+    source_bridge_address = bytes.fromhex("33" * 20)
+    valid_receipts = block_receipts(module)
+
+    assert module.rlp_encode(bytearray(b"\x01")) == b"\x01"
+    assert (
+        module._require_direct_bytes_arg(
+            bytearray(transaction_hash),
+            label="transaction_hash",
+            byte_length=32,
+        )
+        == transaction_hash
+    )
+
+    def fixed_opener(_request, timeout=15.0):
+        del timeout
+        return FakeRawResponse("{}")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            module.json,
+            "loads",
+            lambda *_args, **_kwargs: HostileReceiptDict(
+                {"jsonrpc": "2.0", "id": 1, "result": "0x1"}
+            ),
+        )
+        try:
+            module._json_rpc(
+                "https://rpc.example",
+                "eth_chainId",
+                [],
+                opener=fixed_opener,
+                timeout=15.0,
+            )
+        except RuntimeError as exc:
+            rendered = str(exc)
+            assert rendered == "JSON-RPC eth_chainId returned a non-object response"
+            assert "secret-token" not in rendered
+        else:
+            raise AssertionError("receipt JSON-RPC accepted hostile envelope root")
+
+    cases = (
+        (
+            lambda: module.rlp_encode(HostileReceiptBytes(b"\x01")),
+            TypeError,
+            "RLP value must be bytes or a sequence",
+        ),
+        (
+            lambda: module.rlp_encode(HostileReceiptBytearray(b"\x01")),
+            TypeError,
+            "RLP value must be bytes or a sequence",
+        ),
+        (
+            lambda: module._require_direct_bytes_arg(
+                HostileReceiptBytes(transaction_hash),
+                label="transaction_hash",
+                byte_length=32,
+            ),
+            ValueError,
+            "transaction_hash must be bytes",
+        ),
+        (
+            lambda: module._require_direct_bytes_arg(
+                HostileReceiptBytearray(transaction_hash),
+                label="transaction_hash",
+                byte_length=32,
+            ),
+            ValueError,
+            "transaction_hash must be bytes",
+        ),
+        (
+            lambda: module._receipt_logs(
+                {"logs": HostileReceiptList(source_log(module))}
+            ),
+            RuntimeError,
+            "receipt.logs must be a list",
+        ),
+        (
+            lambda: module._receipt_logs({"logs": [HostileReceiptDict({})]}),
+            RuntimeError,
+            "receipt.logs[0] must be an object",
+        ),
+        (
+            lambda: module._source_event_digest_from_receipt(
+                {"logs": HostileReceiptList(source_log(module))},
+                source_bridge_address=source_bridge_address,
+                transaction_hash=transaction_hash,
+                block_hash=bytes.fromhex("aa" * 32),
+                block_number=0x1234,
+            ),
+            RuntimeError,
+            "receipt.logs is required for SCCP source event validation",
+        ),
+        (
+            lambda: module._source_event_digest_from_receipt(
+                {"logs": [HostileReceiptDict({})]},
+                source_bridge_address=source_bridge_address,
+                transaction_hash=transaction_hash,
+                block_hash=bytes.fromhex("aa" * 32),
+                block_number=0x1234,
+            ),
+            RuntimeError,
+            "receipt.logs[0] must be an object",
+        ),
+        (
+            lambda: module.build_receipt_trie_proof_from_receipts(
+                HostileReceiptList(valid_receipts),
+                transaction_index=0,
+            ),
+            ValueError,
+            "block receipts must contain "
+            f"1..{module.EVM_RECEIPT_PROOF_MAX_BLOCK_RECEIPTS} entries",
+        ),
+        (
+            lambda: module.build_receipt_trie_proof_from_receipts(
+                [HostileReceiptDict(valid_receipts[0])],
+                transaction_index=0,
+            ),
+            TypeError,
+            "block receipts[0] must be an object",
+        ),
+    )
+
+    for call, exception_type, expected_message in cases:
+        try:
+            call()
+        except exception_type as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("receipt proof accepted hostile container or bytes")
 
 
 def test_receipt_domain_parser_rejects_retired_aliases_without_stringifying():

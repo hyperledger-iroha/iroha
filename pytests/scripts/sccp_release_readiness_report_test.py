@@ -2684,6 +2684,45 @@ def test_release_readiness_source_inventory_emits_all_strict_required_gates(
     assert len(readiness["source_inventory"]) == len(required_gates)
 
 
+def test_release_readiness_source_inventory_required_gates_reject_subclasses_without_hooks(
+    monkeypatch,
+) -> None:
+    """Strict source-inventory gate metadata must reject container/scalar subclasses."""
+
+    report = load_report_module()
+
+    class HostileGateSet(set):
+        def __iter__(self):
+            raise AssertionError("secret-token hostile source gate set iter")
+
+        def __repr__(self):
+            return "secret-token-hostile-source-gate-set"
+
+    class FakeVerifier:
+        SOURCE_INVENTORY_REQUIRED_GATES: object = frozenset()
+
+    for gates in (
+        HostileGateSet({"proof_request_bundle_gate"}),
+        {HostileReportFieldName("proof_request_bundle_gate")},
+    ):
+        FakeVerifier.SOURCE_INVENTORY_REQUIRED_GATES = gates
+        monkeypatch.setattr(
+            report,
+            "_load_release_bundle_verify_helpers",
+            lambda: FakeVerifier,
+        )
+
+        with pytest.raises(RuntimeError) as error:
+            report._source_inventory_required_public_gates()
+
+        rendered = str(error.value)
+        assert rendered == "release-bundle verifier source-inventory gates are invalid"
+        assert "secret-token" not in rendered
+        assert "hostile" not in rendered
+        assert "__iter__" not in rendered
+        assert "__str__" not in rendered
+
+
 def test_release_readiness_submission_surfaces_match_supported_launch_scope() -> None:
     """Public submission surfaces must match the supported SCCP launch lanes."""
 
@@ -6066,6 +6105,10 @@ def test_release_readiness_report_guards_sccp_source_material_role_validation_ga
         ),
         (
             "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "def test_all_lanes_minimal_toml_rejects_array_subclasses_without_hooks",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
             "for exception_type in (\n        module.argparse.ArgumentTypeError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ):",
         ),
         (
@@ -6934,8 +6977,8 @@ def test_release_readiness_report_guards_unready_transparent_proof_config_gate_i
     assert any(
         "SCCP unready transparent-proof removed-surface source inventory" in error
         and str(sparse_torii_route_gates) in error
-        and "cfg-gates 7 Torii allow_unready route/proof call sites" in error
-        and "expected exactly 8" in error
+        and "cfg-gates 5 Torii allow_unready route/proof call sites" in error
+        and "expected exactly 6" in error
         for error in errors
     )
     extra_torii_route_gates = (
@@ -6961,8 +7004,8 @@ def test_release_readiness_report_guards_unready_transparent_proof_config_gate_i
     assert any(
         "SCCP unready transparent-proof removed-surface source inventory" in error
         and str(extra_torii_route_gates) in error
-        and "cfg-gates 9 Torii allow_unready route/proof call sites" in error
-        and "expected exactly 8" in error
+        and "cfg-gates 7 Torii allow_unready route/proof call sites" in error
+        and "expected exactly 6" in error
         for error in errors
     )
 
@@ -7161,6 +7204,63 @@ def test_release_readiness_report_guards_unready_transparent_proof_config_gate_i
             "SCCP unready transparent-proof removed-surface source inventory" in error
             and str(forbidden_multiline_cargo_source) in error
             and "enables iroha_sccp test-fixtures outside approved dev-dependencies"
+            in error
+            for error in errors
+        )
+
+    for name, source in (
+        (
+            "direct-feature-alias",
+            "[dependencies]\n"
+            'iroha_sccp = { path = "../iroha_sccp" }\n'
+            "\n"
+            "[features]\n"
+            'release = ["iroha_sccp/test-fixtures"]\n',
+        ),
+        (
+            "dependency-package-alias-feature",
+            "[dependencies]\n"
+            'sccp_proofs = { package = "iroha_sccp", path = "../iroha_sccp" }\n'
+            "\n"
+            "[features]\n"
+            'release = ["sccp_proofs/test-fixtures"]\n',
+        ),
+        (
+            "escaped-direct-feature-alias",
+            "[dependencies]\n"
+            'iroha_sccp = { path = "../iroha_sccp" }\n'
+            "\n"
+            "[features]\n"
+            'release = ["iroha_sccp/test\\u002dfixtures"]\n',
+        ),
+        (
+            "wide-multiline-feature-alias",
+            "[dependencies]\n"
+            'iroha_sccp = { path = "../iroha_sccp" }\n'
+            "\n"
+            "[features]\n"
+            "release = [\n"
+            + "".join(f"  # feature filler {index}\n" for index in range(20))
+            + '  "iroha_sccp/test-fixtures",\n'
+            "]\n",
+        ),
+    ):
+        forbidden_feature_cargo_source = tmp_path / f"{name}-Cargo.toml"
+        forbidden_feature_cargo_source.write_text(source, encoding="utf-8")
+        errors = report._sccp_unready_transparent_proof_config_gate_inventory_errors(
+            (),
+            (),
+            (),
+            (),
+            (forbidden_feature_cargo_source,),
+            (),
+        )
+
+        # Source-inventory marker: readiness unready transparent proof gate rejects Cargo feature aliases for iroha_sccp test-fixtures
+        assert any(
+            "SCCP unready transparent-proof removed-surface source inventory" in error
+            and str(forbidden_feature_cargo_source) in error
+            and "through Cargo feature alias outside approved dev-dependencies"
             in error
             for error in errors
         )
@@ -9101,6 +9201,13 @@ def test_release_readiness_report_guards_release_corridor_phase_transcript_gate_
         "trailing-empty",
         "interior-empty",
         "semicolon-empty",
+        "GRADLE_OPTS=-Dorg.gradle.jvmargs=-Xmx6g",
+        "-Dkotlin.daemon.jvmargs=-Xmx6g",
+        "-Dkotlin.daemon.jvm.options=-Xmx6g",
+        'env["GRADLE_OPTS"] = "-Dorg.gradle.jvmargs=-Xmx3g -Dcustom.flag=true"',
+        "GRADLE_OPTS=-Dorg.gradle.jvmargs=-Xmx3g\\\\ -Dcustom.flag=true",
+        '"-Dkotlin.daemon.jvmargs=-Xmx6g" not in completed.stdout',
+        "--log-dir requires a directory.",
         "exactly one canonical SDK version line",
         "exactly one OS Name and one OS Platform",
         "dotnet_info_field_value",
@@ -9123,6 +9230,10 @@ def test_release_readiness_report_guards_release_corridor_phase_transcript_gate_
         "raw_match = SUMMARY_RE.fullmatch(normalized)",
         "normalized_match = (",
         "elif normalized_match is not None:",
+        "method_assembly_references = list(element_assembly_references)",
+        "requires SCCP TRX definitions to reference only Hyperledger.Iroha.Sdk.Tests.dll assembly paths",
+        "assembly-conflicting-method-codebase",
+        "assembly-conflicting-unit-storage",
         "canonical-plus-failed-summary",
         "canonical-plus-ansi-failed-summary",
         "ansi-decorated-success-summary",
@@ -10227,6 +10338,94 @@ def test_release_readiness_markdown_string_list_helpers_reject_list_subclasses_w
         )
         == "`<invalid blockers>`"
     )
+
+
+def test_release_readiness_public_blocker_helpers_reject_list_subclasses_without_leaking() -> None:
+    """Public blocker helpers must not iterate copied list subclasses."""
+
+    class HostilePublicBlockerList(list):
+        def __iter__(self):
+            raise AssertionError("secret-token public blocker list iteration")
+
+        def __len__(self):
+            raise AssertionError("secret-token public blocker list length")
+
+        def __bool__(self):
+            raise AssertionError("secret-token public blocker list truthiness")
+
+        def __repr__(self):
+            return "secret-token-public-blocker-list"
+
+    report = load_report_module()
+    hostile_list = HostilePublicBlockerList(["secret-token-public-blocker"])
+
+    assert (
+        report._public_blocker_list_duplicate_errors(
+            hostile_list,
+            "readiness report blockers",
+        )
+        == []
+    )
+    assert (
+        report._public_blocker_list_duplicate_error(
+            hostile_list,
+            "readiness report blockers",
+        )
+        is None
+    )
+    assert report._native_evm_validation_blockers(
+        hostile_list,
+        "native EVM prover validation_blockers",
+    ) == ["native EVM prover validation_blockers must be a list of non-empty canonical strings"]
+
+    public_blockers, blocker_errors = report._canonical_public_report_blockers(
+        hostile_list
+    )
+    assert public_blockers == []
+    assert blocker_errors == [
+        "readiness report blockers must be a list of non-empty canonical strings"
+    ]
+
+
+def test_release_readiness_public_report_rejects_hostile_copied_containers_without_leaking() -> None:
+    """Public report validation must reject container subclasses before hooks."""
+
+    report = load_report_module()
+    hostile_list = HostileReadinessReportList(["secret-token-public-list"])
+    hostile_section = HostileReadinessReportSection()
+
+    public_report = report._public_report_payload(
+        {
+            "production_ready": True,
+            "blockers": hostile_list,
+            "inputs": hostile_list,
+            "input_artifacts": hostile_list,
+            "cryptographic_evidence": hostile_list,
+            "user_prover_submission_surfaces": hostile_list,
+            "evidence": hostile_section,
+            "release_checklist": hostile_section,
+            "corridor": hostile_section,
+            "source_inventory": hostile_section,
+            "native_evm_prover_bundle": hostile_section,
+        }
+    )
+    blockers = "\n".join(public_report["blockers"])
+
+    assert public_report["production_ready"] is False
+    assert "readiness report blockers must be a list of non-empty canonical strings" in blockers
+    assert "readiness report inputs must be a list of canonical strings" in blockers
+    assert "readiness report input_artifacts must be a list of objects" in blockers
+    assert "readiness report cryptographic_evidence must be a list of objects" in blockers
+    assert (
+        "readiness report user_prover_submission_surfaces must be a list of objects"
+        in blockers
+    )
+    assert "readiness report evidence must be an object" in blockers
+    assert "readiness report release_checklist must be an object" in blockers
+    assert "readiness report corridor must be an object" in blockers
+    assert "readiness report source_inventory must be an object" in blockers
+    assert "readiness report native_evm_prover_bundle must be an object" in blockers
+    assert "secret-token" not in blockers
 
 
 def test_release_readiness_markdown_release_checklist_containers_reject_subclasses_without_leaking() -> None:
@@ -17537,7 +17736,9 @@ def test_release_readiness_report_markdown_names_direct_dotnet_trx_evidence_path
         "namespace, whose present `UnitTest` definition name matches that "
         "`TestMethod` exactly or by suffix, and whose SCCP method token shares "
         "that expected assembly evidence on the same `TestMethod` or its "
-        "parent `UnitTest`"
+        "parent `UnitTest` while every present SCCP `codeBase`/`storage` "
+        "assembly reference on that `TestMethod` and parent `UnitTest` "
+        "points to `Hyperledger.Iroha.Sdk.Tests.dll`"
         in markdown
     )
     assert (
@@ -17704,6 +17905,50 @@ def test_release_readiness_report_markdown_pins_live_verifier_blockers(
         ) in errors
 
 
+def test_release_readiness_report_markdown_requires_governed_live_verifier_blockers_on_one_line(
+    tmp_path: Path,
+) -> None:
+    """Generated live verifier blockers must remain on the governed evidence line."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+    markdown = report._render_markdown(readiness, max_blockers_per_lane=4)
+    governed_line = next(
+        line
+        for line in markdown.splitlines()
+        if line.startswith(
+            verifier.READINESS_MARKDOWN_GOVERNED_LIVE_EVIDENCE_LINE_PREFIX
+        )
+    )
+    lane_blocker = verifier.READINESS_MARKDOWN_GOVERNED_LIVE_EVIDENCE_LINE_MARKERS[-1]
+
+    weakened_line = governed_line.replace(
+        lane_blocker,
+        "source verifier deployment is pending",
+    )
+    weakened = markdown.replace(
+        governed_line,
+        f"{weakened_line}\n- Supplemental source-verifier evidence: {lane_blocker}",
+        1,
+    )
+
+    assert lane_blocker in weakened
+    errors = verifier._readiness_markdown_invariant_errors(readiness, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        f"release evidence marker: {lane_blocker}"
+    ) in errors
+
+
 def test_release_readiness_report_required_evidence_items_are_unique(
     tmp_path: Path,
 ) -> None:
@@ -17757,6 +18002,24 @@ def test_release_readiness_report_required_evidence_items_are_unique(
     assert "noncanonical required-section order" in required_evidence
     assert "canonical Required Release Evidence bullet spelling" in required_evidence
     assert (
+        "internal tab/control-whitespace Required Release Evidence bullet rejection"
+        in required_evidence
+    )
+    assert (
+        "Unicode separator/format Required Release Evidence bullet rejection"
+        in required_evidence
+    )
+    assert "canonical Blocking Items bullet spelling" in required_evidence
+    assert (
+        "Unicode separator/format Blocking Items bullet rejection"
+        in required_evidence
+    )
+    assert "table-cell blocker exact rendering" in required_evidence
+    assert (
+        "governed live-verifier required-evidence line binding"
+        in required_evidence
+    )
+    assert (
         "not-ready nested schema, hash/flag-coherence, and route-canary "
         "proof-context/hash-role/common/truth-semantic blockers"
     ) in required_evidence
@@ -17773,6 +18036,179 @@ def test_release_readiness_report_required_evidence_items_are_unique(
         "must bind the same SCCP test definition"
         in required_evidence
     )
+
+
+def test_release_readiness_report_markdown_rejects_internal_tab_required_evidence_duplicates(
+    tmp_path: Path,
+) -> None:
+    """Verifier invariants must reject Required Evidence tab-alias duplicates."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    markdown = report._render_markdown(readiness, max_blockers_per_lane=4)
+    required_evidence = markdown.split("## Required Release Evidence\n", 1)[1]
+    first_item = next(
+        line for line in required_evidence.splitlines() if line.startswith("- ")
+    )
+    tabbed_item = first_item.replace("passing `bash", "passing\t`bash", 1)
+    assert tabbed_item != first_item
+    tampered = markdown.replace(first_item, f"{first_item}\n{tabbed_item}", 1)
+
+    errors = verifier._readiness_markdown_invariant_errors(readiness, tampered)
+
+    assert (
+        "readiness report Markdown Required Release Evidence section contains "
+        "duplicate release evidence item"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section has "
+        "noncanonical release evidence bullet"
+    ) in errors
+
+
+def test_release_readiness_report_markdown_rejects_unicode_spacing_required_evidence_duplicates(
+    tmp_path: Path,
+) -> None:
+    """Verifier invariants must reject hidden Unicode Required Evidence aliases."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    markdown = report._render_markdown(readiness, max_blockers_per_lane=4)
+    required_evidence = markdown.split("## Required Release Evidence\n", 1)[1]
+    first_item = next(
+        line for line in required_evidence.splitlines() if line.startswith("- ")
+    )
+    unicode_spacing_items = [
+        first_item.replace("passing `bash", "passing\u00a0`bash", 1),
+        first_item.replace("passing `bash", "passing \u200b`bash", 1),
+    ]
+
+    for unicode_spacing_item in unicode_spacing_items:
+        assert unicode_spacing_item != first_item
+        tampered = markdown.replace(
+            first_item,
+            f"{first_item}\n{unicode_spacing_item}",
+            1,
+        )
+
+        errors = verifier._readiness_markdown_invariant_errors(readiness, tampered)
+
+        assert (
+            "readiness report Markdown Required Release Evidence section contains "
+            "duplicate release evidence item"
+        ) in errors
+        assert (
+            "readiness report Markdown Required Release Evidence section has "
+            "noncanonical release evidence bullet"
+        ) in errors
+
+
+def test_release_readiness_report_markdown_rejects_unicode_spacing_blocking_item_duplicates(
+    tmp_path: Path,
+) -> None:
+    """Verifier invariants must reject hidden Unicode Blocking Items aliases."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+    readiness["production_ready"] = False
+    readiness["blockers"] = ["operator hold"]
+
+    markdown = report._render_markdown(readiness, max_blockers_per_lane=4)
+    blocker_line = "- operator hold"
+    assert blocker_line in markdown
+    unicode_spacing_items = [
+        "- operator\u00a0hold",
+        "- operator \u200bhold",
+    ]
+
+    for unicode_spacing_item in unicode_spacing_items:
+        tampered = markdown.replace(
+            blocker_line,
+            f"{blocker_line}\n{unicode_spacing_item}",
+            1,
+        )
+
+        errors = verifier._readiness_markdown_invariant_errors(readiness, tampered)
+
+        assert (
+            "readiness report Markdown Blocking Items section contains "
+            "duplicate blocker"
+        ) in errors
+        assert (
+            "readiness report Markdown Blocking Items section has "
+            "noncanonical blocker bullet"
+        ) in errors
+
+
+def test_release_readiness_report_markdown_rejects_unicode_spacing_table_cell_blocker_duplicates(
+    tmp_path: Path,
+) -> None:
+    """Verifier invariants must reject hidden Unicode table-cell aliases."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+    checklist_item = readiness["release_checklist"]["items"][0]
+    blocker = "release checklist blocker unique"
+    checklist_item["blockers"] = [blocker]
+
+    markdown = report._render_markdown(readiness, max_blockers_per_lane=4)
+    assert f"| `{checklist_item['id']}` | ready | {blocker} |" in markdown
+    unicode_spacing_cells = [
+        f"{blocker}<br>release checklist\u00a0blocker unique",
+        f"{blocker}<br>release checklist \u200bblocker unique",
+    ]
+
+    for unicode_spacing_cell in unicode_spacing_cells:
+        tampered = markdown.replace(
+            f"| `{checklist_item['id']}` | ready | {blocker} |",
+            f"| `{checklist_item['id']}` | ready | {unicode_spacing_cell} |",
+            1,
+        )
+
+        errors = verifier._readiness_markdown_invariant_errors(readiness, tampered)
+
+        assert (
+            "readiness report Markdown Release Checklist section missing "
+            f"blockers for gate {checklist_item['id']}: {blocker}"
+        ) in errors
 
 
 def test_release_readiness_report_markdown_rejects_malformed_top_level_status(
@@ -19274,6 +19710,29 @@ def test_release_readiness_cli_error_detail_rejects_decoded_unsafe_messages() ->
         )
         == "SORA -> eth route canary mismatch"
     )
+    placeholder_detail = (
+        "readiness report row uses `<invalid path>` for a malformed artifact"
+    )
+    assert (
+        report._cli_error_detail(RuntimeError(placeholder_detail), fallback=fallback)
+        == placeholder_detail
+    )
+    bare_placeholder_detail = (
+        "readiness report row uses <invalid public evidence> for a malformed artifact"
+    )
+    assert (
+        report._cli_error_detail(
+            RuntimeError(bare_placeholder_detail),
+            fallback=fallback,
+        )
+        == bare_placeholder_detail
+    )
+    for detail in (
+        "readiness report row uses `<invalid private_key>` for a malformed artifact",
+        "readiness report row uses `<invalid path|note>` for a malformed artifact",
+        "readiness report row uses <invalid path%7Cnote> for a malformed artifact",
+    ):
+        assert report._cli_error_detail(RuntimeError(detail), fallback=fallback) == fallback
     assert (
         report._cli_error_detail(
             RuntimeError(deep_percent_encoded_text("operator api key detail")),
@@ -40631,12 +41090,8 @@ def test_release_readiness_unready_guidance_describes_removed_surface() -> None:
 
     assert required in markdown
     assert (
-        "keep the `allow_unready` manifest and source-proof bypasses "
-        "effective only under "
-        "`cfg(test)`"
-    ) in markdown
-    assert (
-        "keep Torii route/proof `allow_unready` bypasses effective only under "
+        "keep the exact reviewed `allow_unready` manifest/source-proof and "
+        "Torii route/proof bypass call-site counts effective only under "
         "`cfg(test)`"
     ) in markdown
     assert (

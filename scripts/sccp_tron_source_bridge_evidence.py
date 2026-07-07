@@ -495,8 +495,8 @@ def _require_fixed_bytes(
     if type(nonzero) is not bool:
         raise ValueError("TRON source bridge fixed bytes nonzero must be a boolean")
 
-    if not isinstance(value, (bytes, bytearray)):
-        raise ValueError(f"{label} must be {byte_length} bytes")
+    if type(value) not in (bytes, bytearray):
+        raise ValueError(f"{label} must be bytes")
     raw = bytes(value)
     if len(raw) != byte_length:
         raise ValueError(f"{label} must be {byte_length} bytes")
@@ -656,6 +656,12 @@ def apply_source_adapter_verifier_vk_hash(args: argparse.Namespace) -> None:
         target_domain=args.target_domain,
     )
     supplied_hash = getattr(args, "adapter_verifier_vk_hash", None)
+    if supplied_hash is not None:
+        supplied_hash = _require_fixed_bytes(
+            supplied_hash,
+            label="adapter_verifier_vk_hash",
+            byte_length=32,
+        )
     if supplied_hash is not None and supplied_hash != expected_hash:
         raise ValueError(
             "--adapter-verifier-vk-hash does not match the canonical "
@@ -1170,6 +1176,11 @@ def _require_live_source_component_hashes(args: argparse.Namespace) -> None:
         supplied = getattr(args, field, None)
         if supplied is None:
             continue
+        supplied = _require_fixed_bytes(
+            supplied,
+            label=field,
+            byte_length=32,
+        )
         if supplied == template_hash:
             label = field.replace("_", " ")
             raise ValueError(
@@ -1189,6 +1200,11 @@ def _require_live_source_component_hashes(args: argparse.Namespace) -> None:
         supplied_hash = getattr(args, field, None)
         if supplied_hash is None:
             continue
+        supplied_hash = _require_fixed_bytes(
+            supplied_hash,
+            label=field,
+            byte_length=32,
+        )
         match = sccp_source_template_hash_match(
             supplied_hash,
             local_template_hashes=template_hashes,
@@ -1227,6 +1243,7 @@ def _require_source_role_hash_separation(
     for field, value in role_hashes:
         if value is None:
             continue
+        value = _require_fixed_bytes(value, label=field, byte_length=32)
         previous_field = seen.get(value)
         if previous_field is not None:
             raise ValueError(
@@ -1239,6 +1256,9 @@ def _require_source_role_hash_separation(
 def runtime_bytecode_hash(runtime_bytecode: bytes) -> bytes:
     """Compute the deployed TVM/EVM runtime bytecode hash used in SCCP evidence."""
 
+    if type(runtime_bytecode) not in (bytes, bytearray):
+        raise ValueError("runtime bytecode must be bytes")
+    runtime_bytecode = bytes(runtime_bytecode)
     if not runtime_bytecode or not any(runtime_bytecode):
         raise ValueError("runtime bytecode must not be empty or all zero")
     return _keccak_256(runtime_bytecode)
@@ -1602,7 +1622,7 @@ def _require_route_canary_transcript_hashes_distinct(values: dict[str, object]) 
     seen: dict[bytes, str] = {}
     for field in _ROUTE_CANARY_TRANSCRIPT_HASH_FIELDS:
         value = values[field]
-        if not isinstance(value, (bytes, bytearray)):
+        if type(value) not in (bytes, bytearray):
             continue
         raw = bytes(value)
         if not any(raw):
@@ -2168,18 +2188,16 @@ def _required_full_toml_args() -> tuple[str, ...]:
 
 def _missing_full_toml_runtime_preimages(args: argparse.Namespace) -> list[str]:
     missing: list[str] = []
-    if not isinstance(
+    if type(
         getattr(args, "source_bridge_runtime_bytecode_hex_text", None),
-        str,
-    ):
+    ) is not str:
         missing.append(
             "--source-bridge-runtime-bytecode-hex or "
             "--source-bridge-runtime-bytecode-file"
         )
-    if not isinstance(
+    if type(
         getattr(args, "destination_verifier_runtime_bytecode_hex_text", None),
-        str,
-    ):
+    ) is not str:
         missing.append(
             "--destination-verifier-runtime-bytecode-hex or "
             "--destination-verifier-runtime-bytecode-file"

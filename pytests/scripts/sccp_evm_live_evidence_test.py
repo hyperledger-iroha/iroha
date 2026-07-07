@@ -122,6 +122,85 @@ class HostileEvmLiveString(str):
         raise AssertionError("secret-token EVM live exact string encoded")
 
 
+class HostileEvmLiveBytes(bytes):
+    """Bytes subclass that EVM live helpers must reject before hooks."""
+
+    def __new__(cls, value):
+        return bytes.__new__(cls, value)
+
+    def __bytes__(self):
+        raise AssertionError("secret-token EVM live bytes coerced")
+
+    def __repr__(self):
+        raise AssertionError("secret-token EVM live bytes repr'd")
+
+    def __len__(self):
+        raise AssertionError("secret-token EVM live bytes length read")
+
+    def __iter__(self):
+        raise AssertionError("secret-token EVM live bytes iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token EVM live bytes indexed")
+
+
+class HostileEvmLiveBytearray(bytearray):
+    """Bytearray subclass that EVM live helpers must reject before hooks."""
+
+    def __init__(self, value):
+        super().__init__(value)
+
+    def __bytes__(self):
+        raise AssertionError("secret-token EVM live bytearray coerced")
+
+    def __repr__(self):
+        raise AssertionError("secret-token EVM live bytearray repr'd")
+
+    def __len__(self):
+        raise AssertionError("secret-token EVM live bytearray length read")
+
+    def __iter__(self):
+        raise AssertionError("secret-token EVM live bytearray iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token EVM live bytearray indexed")
+
+
+class HostileEvmLiveDict(dict):
+    """Dict subclass that EVM live helpers must reject before hooks."""
+
+    def get(self, _key, _default=None):
+        raise AssertionError("secret-token EVM live dict get ran")
+
+    def __contains__(self, _key):
+        raise AssertionError("secret-token EVM live dict contains ran")
+
+    def __iter__(self):
+        raise AssertionError("secret-token EVM live dict iterated")
+
+    def __repr__(self):
+        raise AssertionError("secret-token EVM live dict repr'd")
+
+
+class HostileEvmLiveList(list):
+    """List subclass that EVM live helpers must reject before hooks."""
+
+    def __bool__(self):
+        raise AssertionError("secret-token EVM live list bool ran")
+
+    def __len__(self):
+        raise AssertionError("secret-token EVM live list length read")
+
+    def __iter__(self):
+        raise AssertionError("secret-token EVM live list iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token EVM live list indexed")
+
+    def __repr__(self):
+        raise AssertionError("secret-token EVM live list repr'd")
+
+
 class OversizedResponse:
     def __enter__(self):
         return self
@@ -418,8 +497,8 @@ def fake_opener_for(
     route_canary_statement_hash = bytes.fromhex("77" * 32)
     route_canary_payload_hash = bytes.fromhex("88" * 32)
     route_canary_finality_height = abi_word_u32(123)
-    route_canary_finality_block_hash = bytes.fromhex("99" * 32)
-    route_canary_receipt_block_hash = "0x" + "aa" * 32
+    route_canary_finality_block_hash = bytes.fromhex("9a" * 32)
+    route_canary_receipt_block_hash = "0x" + "ad" * 32
     route_canary_receipt_block_number = (
         route_canary_receipt_block_number or "0x1234"
     )
@@ -3105,6 +3184,115 @@ def test_evm_live_exact_string_parsers_reject_string_subclasses_without_hooks():
         }
     )
     assert "--route-allowlist-hash" in prerequisites
+
+
+def test_evm_live_container_and_bytes_boundaries_reject_subclasses_without_hooks(
+    monkeypatch,
+):
+    module = load_live_module()
+    raw32 = bytes.fromhex("11" * 32)
+
+    assert (
+        module._optional_namespace_bytes32_arg(
+            SimpleNamespace(expected_hash=bytearray(raw32)),
+            "expected_hash",
+        )
+        == raw32
+    )
+
+    def fixed_opener(_request, timeout=1.0):
+        del timeout
+        return RawResponse(b"{}")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            module.json,
+            "loads",
+            lambda *_args, **_kwargs: HostileEvmLiveDict(
+                {"jsonrpc": "2.0", "id": 1, "result": "0x1"}
+            ),
+        )
+        try:
+            module._json_rpc(
+                "https://ethereum.example",
+                "eth_chainId",
+                [],
+                opener=fixed_opener,
+                timeout=1.0,
+            )
+        except RuntimeError as exc:
+            rendered = str(exc)
+            assert rendered == "JSON-RPC eth_chainId returned a non-object response"
+            assert "secret-token" not in rendered
+        else:
+            raise AssertionError("EVM live JSON-RPC accepted hostile envelope root")
+
+    for hostile in (
+        HostileEvmLiveBytes(raw32),
+        HostileEvmLiveBytearray(raw32),
+    ):
+        try:
+            module._optional_namespace_bytes32_arg(
+                SimpleNamespace(expected_hash=hostile),
+                "expected_hash",
+            )
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == "--expected-hash must be bytes"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("EVM live accepted hostile namespace bytes")
+
+    event_summary = module._route_canary_message_proof_event_summary(
+        {
+            "address": "0x" + "22" * 20,
+            "topics": HostileEvmLiveList(["0x" + "11" * 32]),
+        },
+        expected_log_index=0,
+        transaction_hash=bytes.fromhex("33" * 32),
+        expected_block_hash=bytes.fromhex("44" * 32),
+        expected_block_number=1,
+        route_allowlist_hash=bytes.fromhex("55" * 32),
+        bridge_address=bytes.fromhex("22" * 20),
+        expected_source_domain=1,
+        expected_target_domain=0,
+        expected_destination_binding_hash=bytes.fromhex("66" * 32),
+        expected_verifier_backend_hash=bytes.fromhex("77" * 32),
+        expected_proof_family_hash=bytes.fromhex("88" * 32),
+        expected_network_id=bytes.fromhex("99" * 32),
+    )
+    assert event_summary is None
+
+    hostile_destination = HostileEvmLiveDict({"domain": module.evidence.SCCP_DOMAIN_ETH})
+    try:
+        module._validate_destination_summary({"destination_bridge": hostile_destination})
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "destination bridge evidence is required"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+    else:
+        raise AssertionError("EVM live accepted hostile destination summary")
+
+    assert (
+        module._route_canary_transaction_verified(
+            {
+                "route_canary": HostileEvmLiveDict({}),
+                "route_canary_transaction": HostileEvmLiveDict({}),
+            }
+        )
+        is False
+    )
+    module._validate_copied_route_summary_metadata(
+        {
+            "source_record_hashes": HostileEvmLiveDict({}),
+            "route_canary": HostileEvmLiveDict({}),
+        }
+    )
+    assert module._full_toml_prerequisites(
+        {"destination_bridge": hostile_destination}
+    ) == ["destination bridge evidence"]
 
 
 def test_evm_live_namespace_args_reject_non_bytes_without_stringifying():

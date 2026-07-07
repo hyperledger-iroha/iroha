@@ -33,6 +33,20 @@ class HostileTemplateBytes(bytes):
         raise AssertionError("secret-token source template hash was iterated")
 
 
+class HostileTemplateTuple(tuple):
+    def __new__(cls, values):
+        return tuple.__new__(cls, values)
+
+    def __len__(self):
+        raise AssertionError("secret-token source template tuple length was read")
+
+    def __iter__(self):
+        raise AssertionError("secret-token source template tuple was iterated")
+
+    def __getitem__(self, index):
+        raise AssertionError("secret-token source template tuple was indexed")
+
+
 class HostileTemplateHashProbe:
     def __eq__(self, other):
         raise AssertionError("secret-token source template hash probe was compared")
@@ -256,6 +270,25 @@ def test_source_template_hashes_reject_bytes_subclasses_without_hooks():
         )
         is None
     )
+
+
+def test_source_template_hashes_reject_tuple_subclasses_without_hooks():
+    helper = load_script("sccp_source_template_hashes")
+    hostile_entry = HostileTemplateTuple(("ETH", "source_trust_anchor_hash", b"\x01" * 32))
+    hostile_match = HostileTemplateTuple(("ETH", "source_trust_anchor_hash"))
+
+    errors = helper.sccp_active_source_template_component_hash_errors((hostile_entry,))
+    assert "entry 0 must be a lane, field, hash tuple" in errors
+    assert "secret-token" not in "; ".join(errors)
+
+    try:
+        helper.sccp_source_template_hash_human_label(hostile_match)
+    except TypeError as exc:
+        rendered = str(exc)
+        assert rendered == "source template match must be a lane, field tuple"
+        assert "secret-token" not in rendered
+    else:
+        raise AssertionError("source template human label accepted hostile tuple")
 
 
 def test_source_template_hash_match_labels_local_and_foreign_templates():

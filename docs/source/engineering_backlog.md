@@ -1,6 +1,6 @@
 # Engineering Backlog (Detailed Open Work)
 
-Last updated: 2026-07-06
+Last updated: 2026-07-07
 
 The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
 history lives in [`../../status.md`](../../status.md). This file should only
@@ -149,7 +149,9 @@ live-evidence constructors.
 Torii SCCP proof-artifact and proof-job generation now calls the strict SCCP
 builder APIs directly instead of the boolean `_allow_unready` builder surface,
 and public boolean SCCP unready builders, verifiers, recovery helpers, and the
-diagnostic manifest gate are fixture-only rather than normal-build APIs.
+diagnostic manifest gate are test-only rather than normal-build or
+fixture-feature APIs; `test-fixtures` exposes named constructors without a
+boolean bypass parameter.
 Checked
 source-adapter
 statement/context encoding now also rejects zero transcript/evidence hashes,
@@ -1427,8 +1429,13 @@ verifier rejects public Markdown if the marker is removed.
 		strict verifier rejects duplicated release-evidence bullets before public
 		Markdown can satisfy the invariant checks. Whitespace-normalized duplicate
 	bullets and noncanonical Required Release Evidence bullet spelling, including
-	short indentation, extra separator spaces, alternate bullet markers, and
-	trailing spaces, must remain category-only verifier failures.
+	short indentation, extra separator spaces, alternate bullet markers, trailing
+	spaces, and internal tab/control-whitespace or Unicode separator/format
+	duplicate aliases, must remain
+	category-only verifier failures.
+	The top-level Blocking Items Markdown list now shares those canonical bullet
+	and hidden-spacing duplicate rules, so copied public blocker lists cannot
+	preserve a blocker marker while adding visually aliased duplicate bullets.
 	Generated Required Release Evidence now also compares source-inventory marker
 	counts and rendered labels against the generated source-inventory gate set, so
 	new release gates cannot be added without public Markdown invariant coverage.

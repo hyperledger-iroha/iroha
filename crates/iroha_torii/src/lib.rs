@@ -228,7 +228,7 @@ use iroha_config::{
 use iroha_core::telemetry::Telemetry;
 use iroha_core::{
     EventsSender,
-    alias::{AliasError, AliasMetricKind, AliasService},
+    alias::{AliasAttester, AliasError, AliasMetricKind, AliasService},
     kiso::{Error as KisoError, KisoHandle},
     kura::Kura,
     prelude::*,
@@ -516,12 +516,13 @@ fn sorafs_gateway_fixture_telemetry() -> GatewayFixtureTelemetry {
 
 fn alias_service_from_iso_config(
     config: &iroha_config::parameters::actual::IsoBridge,
+    attester: AliasAttester,
 ) -> Option<Arc<AliasService>> {
     if !config.enabled {
         return None;
     }
 
-    let service = AliasService::new();
+    let service = AliasService::new(attester);
     let mut inserted = 0usize;
 
     for (index, alias_cfg) in config.account_aliases.iter().enumerate() {
@@ -40982,7 +40983,10 @@ impl Torii {
         let iso_bridge_runtime = Iso20022BridgeRuntime::from_config(&config.iso_bridge)
             .unwrap_or_else(|err| panic!("invalid ISO 20022 bridge configuration: {err:?}"))
             .map(Arc::new);
-        let alias_service = alias_service_from_iso_config(&config.iso_bridge);
+        let alias_service = alias_service_from_iso_config(
+            &config.iso_bridge,
+            AliasAttester::new(da_receipt_signer.clone()),
+        );
         let fee_policy = match (
             config.api_fee_asset_id.clone(),
             config.api_fee_amount,
@@ -45596,8 +45600,6 @@ pub(crate) mod tests_runtime_handlers {
                     .expect("iso bridge config for tests should be valid")
             })
             .map(Arc::new);
-        let alias_service = iso.as_ref().and_then(alias_service_from_iso_config);
-
         let deploy_rate_limiter = match deploy_limit {
             Some((rate, burst)) => limits::RateLimiter::new(Some(rate), Some(burst)),
             None => limits::RateLimiter::new(None, None),
@@ -45613,6 +45615,9 @@ pub(crate) mod tests_runtime_handlers {
             Algorithm::Secp256k1,
             "derive Torii DA receipt fixture signer",
         );
+        let alias_service = iso.as_ref().and_then(|cfg| {
+            alias_service_from_iso_config(cfg, AliasAttester::new(da_receipt_signer.clone()))
+        });
         let da_receipt_log = Arc::new(da::DaReceiptLog::in_memory(
             Arc::clone(&da_replay_store),
             da_receipt_signer.public_key().clone(),
@@ -66003,7 +66008,10 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_service_rejects_non_account_target_as_conflict() {
-        let service = AliasService::new();
+        let service = AliasService::new(AliasAttester::new(
+            KeyPair::try_from_seed(vec![0x8c; 32], Algorithm::Ed25519)
+                .expect("derive alias resolve custom-target attester fixture key"),
+        ));
         let owner = checked_torii_test_account_id(
             0x8a,
             "derive alias resolve custom-target owner fixture key",
@@ -66034,7 +66042,10 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_index_service_rejects_non_account_target_as_conflict() {
-        let service = AliasService::new();
+        let service = AliasService::new(AliasAttester::new(
+            KeyPair::try_from_seed(vec![0x8d; 32], Algorithm::Ed25519)
+                .expect("derive alias resolve index custom-target attester fixture key"),
+        ));
         let owner = checked_torii_test_account_id(
             0x8b,
             "derive alias resolve index custom-target owner fixture key",

@@ -45,7 +45,7 @@ ivm/                         # → Cargo workspace root (a single Rust library c
 Note on Kotodama bytecode target: Kotodama smart contracts compile to IVM bytecode (`.to`) for execution by this virtual machine. They do not target “risc5”/RISC‑V as a standalone ISA. Earlier RISC‑V‑like encodings (e.g., 0x33/0x13 formats) are rejected by the VM loader and interpreter; they now exist only in regression tests that prove the trap path. Kotodama and the reference tooling emit IVM’s native wide helpers exclusively. Observable behavior and outputs are defined by IVM, not raw RISC‑V.
 For the latest architecture ideas including deterministic parallel execution and zero-knowledge capabilities, see [docs/architecture_spec.md](docs/architecture_spec.md).
 
-## Status and TODOs
+## Status
 
 - Implemented:
   - 256 general-purpose registers with privacy tags and Merkle commitments (current implementation; the encoding leaves headroom for future expansion).
@@ -55,7 +55,7 @@ For the latest architecture ideas including deterministic parallel execution and
   - Vector helpers with runtime SIMD detection (SSE/AVX/NEON) and scalar fallback; SHA-256 compression accelerated via Apple Metal when available.
   - AES, SHA-3, Poseidon helpers and BN254 utilities on CPU; Ed25519 and ECDSA verification; optional ML-DSA (Dilithium) behind the `ml-dsa` feature.
   - Deterministic parallel scheduler with conflict-aware grouping; optional HTM fast path on x86_64 (feature `htm`).
-  - Mock Halo2 circuits and ZK trace logging for prototyping (see `halo2.rs`, `zk.rs`).
+  - Halo2 constraint gadgets exercised by circuit tests, OpenVerify IPA/Pasta proof-envelope verification in the host, and ZK trace logging (see `halo2.rs`, `zk.rs`, and `zk_verify.rs`).
 
 ### Gated test suites
 
@@ -67,7 +67,7 @@ For the latest architecture ideas including deterministic parallel execution and
 
 ### Zero-knowledge backend
 
-`ivm` links the Halo2-backed verifiers from `iroha_zkp_halo2` in every build (feature `halo2`, enabled by default). The mock routines remain only for targeted unit tests behind flags such as `ivm_zk_tests`; end users no longer need to toggle anything to exercise the true prover circuits.
+`ivm` links the Halo2-backed verifiers from `iroha_zkp_halo2` in every build (feature `halo2`, enabled by default). Runtime proof checks go through OpenVerify IPA/Pasta envelopes; `MockProver` is limited to targeted circuit-gadget tests behind flags such as `ivm_zk_tests`. End users do not need a feature toggle to exercise the production verifier path.
 
 Notes
 - Real proving is not performed on consensus paths; the host verifies proofs only. Any future proving flows should run off‑chain or outside consensus‑critical logic.
@@ -102,7 +102,7 @@ High-level smart contract language targeting IVM bytecode:
  - **Apple Metal (feature: `metal`, macOS-only):** When enabled and a compatible device is present, Metal kernels accelerate vector ops (`vadd*`, `vand`, `vxor`, `vor`, `vrot32`) and SHA‑256 compression. The code is not compiled on non-macOS targets and falls back to CPU/SIMD when Metal is unavailable or disabled.
  - **CUDA (feature: `cuda`):** Optional PTX kernels with a `build.rs` that compiles or falls back to bundled PTX, failing the CUDA build if no real PTX exists. If not enabled or runtime hardware is unavailable, CPU fallbacks are used.
 - **Zero-Knowledge Support:** When a program specifies a non-zero `max_cycles` limit, execution traces are padded to that length and assertion failures do not immediately abort. Per-cycle Merkle roots of registers and memory are logged so proofs can verify each step without reconstructing the entire state. The default padding limit has been increased to **131,072 cycles** so more complex programs can be proven.
-- **Execution Proof Circuits:** Recorded traces are checked by mock circuits implemented in Rust as a stand‑in for future Halo2 circuits. Future milestone: replace the mocks with real Halo2 circuits once the prover pipeline is available.
+- **ZK Trace And Circuit Checks:** ZK mode records trace commitments for bounded executions. Halo2 gadget tests validate arithmetic, crypto, memory, and assertion constraints with `MockProver`, while runtime host proof verification uses OpenVerify IPA/Pasta envelopes from `iroha_zkp_halo2`. Consensus paths verify envelopes only; proof generation remains off-chain.
 - **Program Hashing:** When a program is loaded the VM computes a SHA-256 hash of the code. It can be obtained via `IVM::code_hash()` and supplied as a public input so verifiers agree on the exact contract that was executed.
 - **Turing Complete & Gas-Limited:** Branching, jumping and memory operations allow any algorithm to be expressed. A contract must also supply a gas budget, ensuring execution halts deterministically.
 - **Optimised for Financial Operations:** Fast 64-bit arithmetic and register access keep asset calculations efficient, suitable for high-throughput ledgers.

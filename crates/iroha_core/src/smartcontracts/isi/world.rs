@@ -8824,17 +8824,16 @@ pub mod isi {
         destination_rollout: &iroha_sccp::SccpDestinationRolloutV1,
         route_allowlist: &iroha_sccp::SccpRouteAllowlistReadinessV1,
     ) -> Result<(), Error> {
-        let Some((_, launch_policy_label, _)) = configured_sccp_single_lane_launch_policy_v1()
+        let Some((launch_domain, launch_policy_label, launch_source_label)) =
+            configured_sccp_single_lane_launch_policy_v1()
         else {
             return validate_configured_sccp_all_lanes_launch_ready(zk_config);
         };
-        let launch_policy_label =
-            match configured_sccp_single_lane_launch_policy_v1().map(|(domain, _, _)| domain) {
-                Some(launch_domain) if domain != launch_domain => {
-                    "on-chain SCCP lane activation policy"
-                }
-                _ => launch_policy_label,
-            };
+        if domain != launch_domain {
+            return Err(invalid_bridge_proof(format!(
+                "{launch_policy_label} only admits {launch_source_label} source proofs before domain {domain} is enabled"
+            )));
+        }
 
         let readiness =
             iroha_sccp::sccp_lane_production_readiness_with_deployment_materials_for_domain(

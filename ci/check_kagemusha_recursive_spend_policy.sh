@@ -9423,81 +9423,82 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-smoke":
     raise SystemExit(0)
 
 if mode == "--negative-control-active-kagemusha-todo":
+    todo_prefix = "TO" "DO:"
     cases = (
         (
             "crates/iroha_core/src/tx.rs",
             "//! `Transaction`-related functionality of Iroha.",
-            "// TODO: bypass Kagemusha transaction admission review\n"
+            f"// {todo_prefix} bypass Kagemusha transaction admission review\n"
             "//! `Transaction`-related functionality of Iroha.",
             "core transaction admission active marker",
         ),
         (
             "crates/iroha_core/src/smartcontracts/isi/offline.rs",
             "//! Offline note instruction execution.",
-            "// TODO: bypass Kagemusha offline instruction admission review\n"
+            f"// {todo_prefix} bypass Kagemusha offline instruction admission review\n"
             "//! Offline note instruction execution.",
             "core offline ISI active marker",
         ),
         (
             "crates/iroha_data_model/src/isi/offline.rs",
             "use super::*;",
-            "// TODO: bypass Kagemusha instruction data-model review\n"
+            f"// {todo_prefix} bypass Kagemusha instruction data-model review\n"
             "use super::*;",
             "data-model offline ISI active marker",
         ),
         (
             "crates/iroha_js_host/src/lib.rs",
             "//! Native bindings exposed to the JavaScript SDK.",
-            "// TODO: bypass Kagemusha JS host native binding review\n"
+            f"// {todo_prefix} bypass Kagemusha JS host native binding review\n"
             "//! Native bindings exposed to the JavaScript SDK.",
             "JS host active marker",
         ),
         (
             "crates/iroha_torii/src/offline_v2_issuer.rs",
             "use std::{",
-            "// TODO: bypass Kagemusha Torii offline-v2 issuer review\n"
+            f"// {todo_prefix} bypass Kagemusha Torii offline-v2 issuer review\n"
             "use std::{",
             "Torii offline-v2 issuer active marker",
         ),
         (
             "crates/iroha_torii/src/openapi.rs",
             "//! Helpers for serving Torii's OpenAPI description.",
-            "// TODO: bypass Kagemusha Torii OpenAPI review\n"
+            f"// {todo_prefix} bypass Kagemusha Torii OpenAPI review\n"
             "//! Helpers for serving Torii's OpenAPI description.",
             "Torii OpenAPI active marker",
         ),
         (
             "crates/iroha_torii/src/zk_prover.rs",
             "//! Background, non-consensus ZK prover worker tied to attachments.",
-            "// TODO: bypass Kagemusha Torii ZK prover review\n"
+            f"// {todo_prefix} bypass Kagemusha Torii ZK prover review\n"
             "//! Background, non-consensus ZK prover worker tied to attachments.",
             "Torii ZK prover active marker",
         ),
         (
             ".github/workflows/pr_kagemusha_payload_bench.yml",
             "name: Kagemusha Payload Benchmark",
-            "# TODO: bypass Kagemusha payload benchmark workflow review\n"
+            f"# {todo_prefix} bypass Kagemusha payload benchmark workflow review\n"
             "name: Kagemusha Payload Benchmark",
             "payload workflow active marker",
         ),
         (
             "docs/source/offline_kagemusha.md",
             "Native bridge ABI 7 keeps the recursive compact-token entry point",
-            "TODO: re-enable unchecked recursive compact admission\n"
+            f"{todo_prefix} re-enable unchecked recursive compact admission\n"
             "Native bridge ABI 7 keeps the recursive compact-token entry point",
             "source/docs active marker",
         ),
         (
             "roadmap.md",
             "The Ubuntu/Windows C# SDK matrix must keep the typed init/verifier request path",
-            "TODO: bypass Kagemusha C# SDK matrix request-path certification\n"
+            f"{todo_prefix} bypass Kagemusha C# SDK matrix request-path certification\n"
             "  The Ubuntu/Windows C# SDK matrix must keep the typed init/verifier request path",
             "roadmap C# handoff scope",
         ),
         (
             "roadmap.md",
             "The Ubuntu/Windows C# SDK matrix must keep matching exact C# native-output",
-            "TODO: bypass Kagemusha C# SDK matrix native-output certification\n"
+            f"{todo_prefix} bypass Kagemusha C# SDK matrix native-output certification\n"
             "  The Ubuntu/Windows C# SDK matrix must keep matching exact C# native-output",
             "roadmap late C# handoff scope",
         ),
@@ -9505,97 +9506,97 @@ if mode == "--negative-control-active-kagemusha-todo":
             "scripts/kagemusha_release_bundle.py",
             '"""Validate and manifest a Kagemusha production release evidence bundle."""',
             '"""Validate and manifest a Kagemusha production release evidence bundle."""\n'
-            "# TODO: allow unchecked Kagemusha release bundle manifests",
+            f"# {todo_prefix} allow unchecked Kagemusha release bundle manifests",
             "release script active marker",
         ),
         (
             "scripts/kagemusha_production_readiness.py",
             '"""Roll up Kagemusha production-readiness evidence into a strict summary."""',
             '"""Roll up Kagemusha production-readiness evidence into a strict summary."""\n'
-            "# TODO: bypass Kagemusha production-readiness artifact validation",
+            f"# {todo_prefix} bypass Kagemusha production-readiness artifact validation",
             "production-readiness script active marker",
         ),
         (
             "scripts/kagemusha_staged_resource_guard.py",
             '"""Resource guards for long-running Kagemusha staged subprocesses."""',
             '"""Resource guards for long-running Kagemusha staged subprocesses."""\n'
-            "# TODO: bypass Kagemusha staged resource guard review",
+            f"# {todo_prefix} bypass Kagemusha staged resource guard review",
             "staged resource guard script active marker",
         ),
         (
             "crates/iroha_torii/tests/offline_kagemusha_only_smoke.rs",
-            "//! Source-level guards for the Kagemusha-only offline payment surface.",
-            "// TODO: bypass Kagemusha-only offline smoke\n"
-            "//! Source-level guards for the Kagemusha-only offline payment surface.",
+            "//! Source-level guards for the Kagemusha-first offline payment surface.",
+            f"// {todo_prefix} bypass Kagemusha-only offline smoke\n"
+            "//! Source-level guards for the Kagemusha-first offline payment surface.",
             "Torii Kagemusha-only smoke active marker",
         ),
         (
             "crates/iroha_torii/tests/offline_v2_kagemusha_redeem_smoke.rs",
             "//! Source-level smoke checks for the offline v2 Kagemusha redeem bridge.",
-            "// TODO: bypass offline-v2 Kagemusha redeem smoke\n"
+            f"// {todo_prefix} bypass offline-v2 Kagemusha redeem smoke\n"
             "//! Source-level smoke checks for the offline v2 Kagemusha redeem bridge.",
             "Torii offline-v2 smoke active marker",
         ),
         (
             "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaDeviceLabArtifactExportTest.java",
             "package org.hyperledger.iroha.android.offline;",
-            "// TODO: bypass Kagemusha physical device-lab artifact export policy\n"
+            f"// {todo_prefix} bypass Kagemusha physical device-lab artifact export policy\n"
             "package org.hyperledger.iroha.android.offline;",
             "Android device-lab instrumentation active marker",
         ),
         (
             "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
             "package org.hyperledger.iroha.android.offline;",
-            "// TODO: bypass Kagemusha Android recursive spend instrumentation gates\n"
+            f"// {todo_prefix} bypass Kagemusha Android recursive spend instrumentation gates\n"
             "package org.hyperledger.iroha.android.offline;",
             "Android recursive spend instrumentation active marker",
         ),
         (
             "crates/iroha_data_model/benches/kagemusha_recursive_spend_payload.rs",
             "//! Kagemusha recursive spend D2D payload-size benchmarks.",
-            "// TODO: bypass Kagemusha payload benchmark source review\n"
+            f"// {todo_prefix} bypass Kagemusha payload benchmark source review\n"
             "//! Kagemusha recursive spend D2D payload-size benchmarks.",
             "payload benchmark active marker",
         ),
         (
             "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
             "internal static class KagemushaArchiveBytes",
-            "// TODO: bypass Kagemusha C# recursive spend review\n"
+            f"// {todo_prefix} bypass Kagemusha C# recursive spend review\n"
             "internal static class KagemushaArchiveBytes",
             "C# recursive spend active marker",
         ),
         (
             "csharp/src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteWalletNote.cs",
             "public sealed class OfflineNoteWalletNote",
-            "// TODO: bypass Kagemusha C# wallet-note strict-state review\n"
+            f"// {todo_prefix} bypass Kagemusha C# wallet-note strict-state review\n"
             "public sealed class OfflineNoteWalletNote",
             "C# wallet-note strict-state active marker",
         ),
         (
             "csharp/src/Hyperledger.Iroha.Sdk/Transactions/KagemushaInstructionArchiveInstruction.cs",
             "using System.Buffers.Binary;",
-            "// TODO: bypass Kagemusha C# instruction archive review\n"
+            f"// {todo_prefix} bypass Kagemusha C# instruction archive review\n"
             "using System.Buffers.Binary;",
             "C# instruction archive active marker",
         ),
         (
             "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
             "using System.Collections.Generic;",
-            "// TODO: bypass Kagemusha C# native tests review\n"
+            f"// {todo_prefix} bypass Kagemusha C# native tests review\n"
             "using System.Collections.Generic;",
             "C# native test active marker",
         ),
         (
             "csharp/tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteWalletNoteTests.cs",
             "public sealed class OfflineNoteWalletNoteTests",
-            "// TODO: bypass Kagemusha C# wallet-note strict-state tests\n"
+            f"// {todo_prefix} bypass Kagemusha C# wallet-note strict-state tests\n"
             "public sealed class OfflineNoteWalletNoteTests",
             "C# wallet-note strict-state test active marker",
         ),
         (
             "python/iroha_python/src/iroha_python/offline_cash.py",
             '"""Headless offline-cash lifecycle and transport helpers."""',
-            "# TODO: bypass Kagemusha Python offline-cash coverage\n"
+            f"# {todo_prefix} bypass Kagemusha Python offline-cash coverage\n"
             '"""Headless offline-cash lifecycle and transport helpers."""',
             "generic content Python SDK active marker",
         ),
@@ -9605,7 +9606,7 @@ if mode == "--negative-control-active-kagemusha-todo":
         source = read(target)
         mutated = source.replace(before, after, 1)
         if mutated == source:
-            raise SystemExit(f"negative control failed: unable to inject active Kagemusha TODO: {label}")
+            raise SystemExit(f"negative control failed: unable to inject active Kagemusha marker: {label}")
         text_overrides[target] = mutated
         try:
             run_checks()

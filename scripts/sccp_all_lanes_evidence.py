@@ -1967,7 +1967,7 @@ def _parse_minimal_toml_value(value: str, *, label: str, line_number: int) -> An
             parsed = json.loads(text)
         except json.JSONDecodeError:
             raise ValueError(f"{label}:{line_number}: invalid array") from None
-        if not isinstance(parsed, list) or not all(
+        if type(parsed) is not list or not all(
             type(item) is str for item in parsed
         ):
             raise ValueError(f"{label}:{line_number}: only string arrays are supported")
@@ -3556,9 +3556,9 @@ def _source_adapter_gate_summary(
         ),
     ]
     route_canary_summary = route_allowlist_summary.get("route_canary")
-    if isinstance(route_canary_summary, dict) or route_record is not None:
+    if type(route_canary_summary) is dict or route_record is not None:
         route_canary_summary_map = (
-            route_canary_summary if isinstance(route_canary_summary, dict) else {}
+            route_canary_summary if type(route_canary_summary) is dict else {}
         )
         # Source-inventory marker: source_adapter_gate hash role audit_hashes.evm_source_gate_hash must not reuse route_canary.message_id
         # Source-inventory marker: source_adapter_gate hash role audit_hashes.evm_source_gate_hash must not reuse route_canary.call_data_sha256
@@ -4470,10 +4470,14 @@ def _check_solana_live_programdata_evidence(record: dict[str, Any]) -> list[str]
         comment = record.get(comment_key)
         if actual is None or comment is None:
             return
-        if type(comment) is not str:
+        if (
+            type(actual) is not bool
+            or type(comment) is not str
+            or comment not in {"true", "false"}
+        ):
             errors.append(f"{label} field must match {comment_key} comment")
             return
-        if (actual is True) != (comment == "true"):
+        if actual != (comment == "true"):
             errors.append(f"{label} field must match {comment_key} comment")
 
     def exact_comment_value(field: str) -> str | None:
@@ -5099,7 +5103,14 @@ def _check_route_canary_bool_comment_matches_record(
 ) -> None:
     value = record.get(field)
     comment = record.get(comment_field)
-    if _route_canary_scalar_absent(value) or _route_canary_scalar_absent(comment):
+    if _route_canary_scalar_absent(value):
+        return
+
+    if type(value) is not bool:
+        errors.append(f"{label} must be boolean")
+        return
+
+    if _route_canary_scalar_absent(comment):
         return
 
     parsed = _route_canary_used_message_proof_value(value)
@@ -5899,6 +5910,13 @@ def _check_tron_route_canary_transaction_evidence(
         "tron_route_canary_raw_data_owner_matches_transaction",
         "_comment_tron_route_canary_raw_data_owner_matches_transaction",
         label="TRON route canary raw_data owner binding",
+    )
+    _check_route_canary_bool_comment_matches_record(
+        errors,
+        record,
+        "tron_route_canary_signature_recovers_to_owner",
+        "_comment_tron_route_canary_signature_recovers_to_owner",
+        label="TRON route canary signature recovery",
     )
     transaction_id = _exact_hex_bytes(
         _first_record_value(
@@ -6722,6 +6740,8 @@ def _check_solana_route_canary_live_program_evidence(
         "_comment_solana_program_immutable",
         "Solana route canary immutable program flag",
     )
+    if program_immutable_text is not None and program_immutable_text != "true":
+        errors.append("Solana route canary immutable program flag must be true")
     programdata_address = exact_string(
         "_comment_solana_programdata_address",
         "Solana route canary ProgramData address",
@@ -6760,6 +6780,7 @@ def _check_solana_route_canary_live_program_evidence(
     assert program_owner is not None
     assert programdata_owner is not None
     assert program_immutable_text is not None
+    assert program_immutable_text == "true"
     assert programdata_address is not None
 
     try:
@@ -6773,7 +6794,7 @@ def _check_solana_route_canary_live_program_evidence(
             rpc_commitment=rpc_commitment,
             program_owner=program_owner,
             programdata_owner=programdata_owner,
-            program_immutable=(program_immutable_text == "true"),
+            program_immutable=True,
             program_account_data=program_account_data,
             programdata_address=programdata_address,
             programdata_slot=programdata_slot,
@@ -7539,6 +7560,10 @@ def _source_adapter_gate_release_metadata_blockers(
         )
 
     if type(audit_hashes) is not dict:
+        if audit_hashes is None:
+            blockers.append(
+                f"{lane_label}: source adapter gate audit hashes must not be empty when required"
+            )
         blockers.append(
             f"{lane_label}: source adapter gate audit hashes must be an object when required"
         )
