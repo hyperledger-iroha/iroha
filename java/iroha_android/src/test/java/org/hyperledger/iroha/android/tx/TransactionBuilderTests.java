@@ -237,8 +237,8 @@ public final class TransactionBuilderTests {
             "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV1")
         : "Redeem request wire-name constant must be canonical";
     assert KagemushaInstructionArchives.RECURSIVE_TOP_UP_REQUEST_WIRE_NAME.equals(
-            "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1")
-        : "Top-up request wire-name must be the recursive spend init request";
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpRequestV1")
+        : "Top-up request wire-name must be the recursive spend top-up request";
 
     final byte[] redeemArchive =
         kagemushaArchive(KagemushaInstructionArchives.InstructionType.REDEEM_RECURSIVE);
@@ -267,7 +267,7 @@ public final class TransactionBuilderTests {
         : "Recursive redeem transaction archive bytes must be defensively copied";
 
     final byte[] topUpArchive =
-        kagemushaArchive(KagemushaInstructionArchives.InstructionType.TRANSFER);
+        kagemushaArchive(KagemushaInstructionArchives.InstructionType.TOP_UP_RECURSIVE);
     final byte[] expectedTopUpArchive = Arrays.copyOf(topUpArchive, topUpArchive.length);
     final TransactionPayload topUpPayload =
         KagemushaInstructionArchives.topUpTransactionPayload(
@@ -284,8 +284,8 @@ public final class TransactionBuilderTests {
         (InstructionBox.WirePayload) topUpPayload.executable().instructions().get(0).payload();
     assert topUpWire
         .wireName()
-        .equals("iroha_data_model::isi::offline::KagemushaTransfer")
-        : "Top-up instruction wire name must be transfer";
+        .equals("iroha_data_model::isi::offline::TopUpKagemushaRecursive")
+        : "Top-up instruction wire name must be top-up recursive";
     assert Arrays.equals(expectedTopUpArchive, topUpWire.payloadBytes())
         : "Top-up archive bytes must be preserved";
     topUpArchive[0] = (byte) 0x7D;
@@ -356,7 +356,7 @@ public final class TransactionBuilderTests {
         "authority must not contain surrounding whitespace");
     assertIllegalArgumentMessage(
         () ->
-            KagemushaInstructionArchives.topUpTransactionPayloadFromInitRequest(
+            KagemushaInstructionArchives.topUpTransactionPayloadFromRequest(
                 new byte[0],
                 " 00000042",
                 authority,
@@ -367,7 +367,7 @@ public final class TransactionBuilderTests {
         "chainId must not contain surrounding whitespace");
     assertIllegalArgumentMessage(
         () ->
-            KagemushaInstructionArchives.topUpTransactionPayloadFromInitRequest(
+            KagemushaInstructionArchives.topUpTransactionPayloadFromRequest(
                 new byte[0],
                 "00000042",
                 " " + authority,
@@ -386,8 +386,8 @@ public final class TransactionBuilderTests {
         () -> KagemushaInstructionArchives.recursiveRedeemInstructionBoxFromRequest(new byte[0]),
         "empty redeem request archive must be rejected");
     assertThrows(
-        () -> KagemushaInstructionArchives.topUpInstructionBoxFromInitRequest(new byte[0]),
-        "empty top-up init request archive must be rejected");
+        () -> KagemushaInstructionArchives.topUpInstructionBoxFromRequest(new byte[0]),
+        "empty top-up request archive must be rejected");
     assertThrows(
         () ->
             KagemushaInstructionArchives.recursiveRedeemTransactionPayloadFromRequest(
@@ -401,7 +401,7 @@ public final class TransactionBuilderTests {
         "empty redeem request transaction archive must be rejected");
     assertThrows(
         () ->
-            KagemushaInstructionArchives.topUpTransactionPayloadFromInitRequest(
+            KagemushaInstructionArchives.topUpTransactionPayloadFromRequest(
                 new byte[0],
                 "00000042",
                 TestAccountIds.ed25519Authority(0x2C),
@@ -409,7 +409,7 @@ public final class TransactionBuilderTests {
                 3_500L,
                 17,
                 Map.of("mode", "kagemusha-topup")),
-        "empty top-up init request transaction archive must be rejected");
+        "empty top-up request transaction archive must be rejected");
     assertThrows(
         () -> KagemushaInstructionArchives.recursiveRedeemInstructionBox(new byte[] {0}),
         "malformed archive must be rejected");

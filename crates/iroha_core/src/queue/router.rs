@@ -24,7 +24,7 @@ use iroha_data_model::{
         musubi::{
             AssertMusubiReleaseExists, PublishMusubiRelease, SetMusubiShortAlias, YankMusubiRelease,
         },
-        offline::KagemushaTransfer,
+        offline::{KagemushaTransfer, TopUpKagemushaRecursive},
         settlement::{DvpIsi, PvpIsi, SettlementInstructionBox},
         smart_contract_code::{
             ActivateContractInstance, DeactivateContractInstance, RegisterSmartContractBytes,
@@ -3057,6 +3057,9 @@ fn multisig_propose_transaction_dataspace_target_with_world<W: WorldReadOnly>(
 }
 
 fn offline_note_asset_definition_target(any: &dyn std::any::Any) -> Option<&AssetDefinitionId> {
+    if let Some(topup) = any.downcast_ref::<TopUpKagemushaRecursive>() {
+        return Some(topup.asset.definition());
+    }
     if let Some(transfer) = any.downcast_ref::<KagemushaTransfer>() {
         return Some(&transfer.asset);
     }

@@ -1,10 +1,11 @@
 use super::*;
 use crate::{
-    asset::AssetDefinitionId,
+    asset::{AssetDefinitionId, AssetId},
     offline::{
-        KagemushaRecursiveSpendBundleV1, KagemushaRecursiveSpendLineageWitnessV1,
-        OfflineDeviceAttestationPolicy, OfflineDeviceAttestationRegistration,
-        OfflineNoteAuditBundle, OfflineNoteIssue, OfflineNoteRedeem,
+        KagemushaRecursiveSpendBundleV1, KagemushaRecursiveSpendInitRequestV1,
+        KagemushaRecursiveSpendLineageWitnessV1, OfflineDeviceAttestationPolicy,
+        OfflineDeviceAttestationRegistration, OfflineNoteAuditBundle, OfflineNoteIssue,
+        OfflineNoteRedeem,
     },
     proof::ProofAttachment,
 };
@@ -72,6 +73,23 @@ isi! {
 }
 
 isi! {
+    /// Charge an online balance and create the first recursive Kagemusha offline state.
+    ///
+    /// This is the only chain-facing online-to-offline top-up surface. The
+    /// embedded init request is validated and lowered on-chain to the first
+    /// Kagemusha shielded transfer, while the public asset amount is reserved
+    /// into Offline escrow in the same transaction.
+    pub struct TopUpKagemushaRecursive {
+        /// Public asset balance charged for the top-up.
+        pub asset: AssetId,
+        /// Positive amount reserved into Offline escrow.
+        pub amount: Numeric,
+        /// First-hop recursive Kagemusha spend init request.
+        pub init_request: KagemushaRecursiveSpendInitRequestV1,
+    }
+}
+
+isi! {
     /// Redeem recursive Kagemusha offline cash into an online public balance.
     ///
     /// This instruction is submitted by the final offline holder. It verifies the
@@ -116,6 +134,7 @@ impl crate::seal::Instruction for IssueOfflineNote {}
 impl crate::seal::Instruction for RedeemOfflineNote {}
 impl crate::seal::Instruction for AuditOfflineNote {}
 impl crate::seal::Instruction for KagemushaTransfer {}
+impl crate::seal::Instruction for TopUpKagemushaRecursive {}
 impl crate::seal::Instruction for RedeemKagemushaRecursive {}
 impl crate::seal::Instruction for RegisterOfflineDeviceAttestation {}
 impl crate::seal::Instruction for SetOfflineDeviceAttestationPolicy {}
@@ -160,6 +179,22 @@ impl KagemushaTransfer {
             outputs,
             proof,
             root_hint,
+        }
+    }
+}
+
+impl TopUpKagemushaRecursive {
+    /// Construct a recursive Kagemusha top-up instruction.
+    #[must_use]
+    pub fn new(
+        asset: AssetId,
+        amount: Numeric,
+        init_request: KagemushaRecursiveSpendInitRequestV1,
+    ) -> Self {
+        Self {
+            asset,
+            amount,
+            init_request,
         }
     }
 }
@@ -288,6 +323,41 @@ impl_decode_one_offline_field!(RedeemOfflineNote {
 impl_decode_one_offline_field!(AuditOfflineNote {
     audit: OfflineNoteAuditBundle
 });
+
+impl<'a> norito::core::DecodeFromSlice<'a> for TopUpKagemushaRecursive {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = offline_decode_flags();
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let asset = super::decode_aos_canonical_field::<AssetId>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let amount = super::decode_aos_canonical_field::<Numeric>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let init_request = super::decode_aos_canonical_field::<KagemushaRecursiveSpendInitRequestV1>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((
+            Self {
+                asset,
+                amount,
+                init_request,
+            },
+            offset,
+        ))
+    }
+}
 
 impl<'a> norito::core::DecodeFromSlice<'a> for RedeemKagemushaRecursive {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
@@ -435,6 +505,8 @@ mod tests {
         asset::{AssetDefinitionId, AssetId},
         domain::DomainId,
         offline::{
+            KagemushaRecursiveSpendInitRequestV1, KagemushaSpendableNoteDescriptorV1,
+            KagemushaVerifiedFoldBundle, KagemushaVerifiedFoldRecordBundle,
             OfflineAndroidAppAttestationPolicy, OfflineDeviceAttestationTrustedRoot,
             OfflineIosAppAttestationPolicy, OfflineNoteAuditOutputClaim, OfflineNoteIssuedClaim,
             OfflineNoteKeyCertificate, OfflineNoteRecursiveProof,
@@ -597,6 +669,40 @@ mod tests {
         )
     }
 
+    fn kagemusha_init_request() -> KagemushaRecursiveSpendInitRequestV1 {
+        let account_id = account();
+        KagemushaRecursiveSpendInitRequestV1 {
+            record_bundle: KagemushaVerifiedFoldRecordBundle {
+                bundle: KagemushaVerifiedFoldBundle {
+                    chain_id: "kagemusha-recursive-topup-test-chain"
+                        .parse()
+                        .expect("chain id"),
+                    asset: asset_id(&account_id).definition().clone(),
+                    steps: Vec::new(),
+                },
+                verifier_records: Vec::new(),
+            },
+            pallas_open_envelopes_archive: vec![0x01, 0x02, 0x03],
+            current_note: KagemushaSpendableNoteDescriptorV1 {
+                note_commitment: [0x44; 32],
+                spend_nullifier: [0x55; 32],
+                amount: Numeric::new(10, 0),
+            },
+            lineage_verifier_key: None,
+            lineage_proving_key_archive: None,
+            block_height: Some(7),
+        }
+    }
+
+    fn top_up_kagemusha_recursive() -> TopUpKagemushaRecursive {
+        let account_id = account();
+        TopUpKagemushaRecursive::new(
+            asset_id(&account_id),
+            Numeric::new(10, 0),
+            kagemusha_init_request(),
+        )
+    }
+
     fn assert_slice_roundtrip<T>(value: T)
     where
         T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
@@ -683,6 +789,7 @@ mod tests {
         assert_slice_roundtrip(RedeemOfflineNote::new(redemption()));
         assert_slice_roundtrip(AuditOfflineNote::new(audit()));
         assert_slice_roundtrip(kagemusha_transfer());
+        assert_slice_roundtrip(top_up_kagemusha_recursive());
         assert_slice_roundtrip(RegisterOfflineDeviceAttestation::new(
             attestation_registration(),
         ));
@@ -696,6 +803,7 @@ mod tests {
             .register_slice::<RedeemOfflineNote>()
             .register_slice::<AuditOfflineNote>()
             .register_slice::<KagemushaTransfer>()
+            .register_slice::<TopUpKagemushaRecursive>()
             .register_slice::<RegisterOfflineDeviceAttestation>()
             .register_slice::<SetOfflineDeviceAttestationPolicy>();
 
@@ -703,6 +811,7 @@ mod tests {
         assert_registry_decodes(&registry, RedeemOfflineNote::new(redemption()));
         assert_registry_decodes(&registry, AuditOfflineNote::new(audit()));
         assert_registry_decodes(&registry, kagemusha_transfer());
+        assert_registry_decodes(&registry, top_up_kagemusha_recursive());
         assert_registry_decodes(
             &registry,
             RegisterOfflineDeviceAttestation::new(attestation_registration()),

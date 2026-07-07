@@ -8,8 +8,10 @@ fn torii_legacy_offline_payment_handlers_are_retired() {
     assert!(OFFLINE_ISSUER_SOURCE.contains("OFFLINE_NOTE_ISSUE_RETIRED"));
     assert!(OFFLINE_V2_ISSUER_SOURCE.contains("OFFLINE_V2_REDEEM_RETIRED"));
 
-    assert!(OFFLINE_V2_ISSUER_SOURCE.contains("IssueOfflineNote::new"));
-    assert!(OFFLINE_V2_ISSUER_SOURCE.contains("issued_note_commitment"));
+    assert!(OFFLINE_V2_ISSUER_SOURCE.contains("OFFLINE_V2_ISSUE_RETIRED"));
+    assert!(OFFLINE_V2_ISSUER_SOURCE.contains("handle_kagemusha_topup"));
+    assert!(OFFLINE_V2_ISSUER_SOURCE.contains("TopUpKagemushaRecursive::new"));
+    assert!(OFFLINE_V2_ISSUER_SOURCE.contains("topup_request_norito_base64"));
     assert!(OFFLINE_V2_ISSUER_SOURCE.contains("accepted_audit_receipt_ids"));
     assert!(OFFLINE_V2_ISSUER_SOURCE.contains("accepted_receipt_ids"));
 
@@ -21,6 +23,7 @@ fn torii_legacy_offline_payment_handlers_are_retired() {
     }
 
     for retired_symbol in [
+        "IssueOfflineNote::new",
         "IssueOfflineNoteV2",
         "RedeemOfflineNoteV2",
         "AuditOfflineNoteV2",

@@ -15340,19 +15340,12 @@ export interface KagemushaRecursiveTopUpTransactionBaseInput {
 
 export type KagemushaRecursiveTopUpArchiveInput =
   | {
-      initRequestArchive: BinaryLike;
-      init_request_archive?: never;
-      requestArchive?: never;
+      topUpRequestArchive: BinaryLike;
+      top_up_request_archive?: never;
     }
   | {
-      initRequestArchive?: never;
-      init_request_archive: BinaryLike;
-      requestArchive?: never;
-    }
-  | {
-      initRequestArchive?: never;
-      init_request_archive?: never;
-      requestArchive: BinaryLike;
+      topUpRequestArchive?: never;
+      top_up_request_archive: BinaryLike;
     };
 
 export type KagemushaRecursiveTopUpTransactionInput =
@@ -20079,6 +20072,18 @@ export interface KagemushaRecursiveSpendRedeemRequestInput {
   readonly blockHeight?: number | bigint | string | null;
   readonly block_height?: number | bigint | string | null;
 }
+export interface KagemushaRecursiveSpendTopUpRequestInput {
+  readonly assetId?: string;
+  readonly asset_id?: string;
+  readonly asset?: string;
+  readonly accountId?: string;
+  readonly account_id?: string;
+  readonly assetDefinitionId?: string;
+  readonly asset_definition_id?: string;
+  readonly amount: NumericLike;
+  readonly initRequestArchive?: BinaryLike;
+  readonly init_request_archive?: BinaryLike;
+}
 export interface KagemushaRecursiveSpendVerifyResult {
   readonly valid: boolean;
   readonly hopCount: number;
@@ -20121,6 +20126,9 @@ export function buildKagemushaRecursiveSpendVerifierRecordRef(
 export function encodeKagemushaRecursiveSpendInitRequest(
   request: KagemushaRecursiveSpendInitRequestInput,
 ): Buffer;
+export function encodeKagemushaRecursiveSpendTopUpRequest(
+  request: KagemushaRecursiveSpendTopUpRequestInput,
+): Buffer;
 export function encodeKagemushaRecursiveSpendAppendRequest(
   request: KagemushaRecursiveSpendAppendRequestInput,
 ): Buffer;
@@ -20140,7 +20148,7 @@ export function kagemushaRecursiveSpendInitTyped(
   request: KagemushaRecursiveSpendInitRequestInput,
 ): Buffer;
 export function kagemushaRecursiveSpendTopUpTyped(
-  request: KagemushaRecursiveSpendInitRequestInput,
+  request: KagemushaRecursiveSpendTopUpRequestInput,
 ): Buffer;
 export function kagemushaRecursiveSpendAppendTyped(
   request: KagemushaRecursiveSpendAppendRequestInput,

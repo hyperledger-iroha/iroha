@@ -1,11 +1,20 @@
 # Roadmap
 
-Last updated: 2026-07-05
+Last updated: 2026-07-07
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
 [`docs/source/engineering_backlog.md`](./docs/source/engineering_backlog.md),
 and completed history lives in [`status.md`](./status.md).
+
+Kagemusha online-to-offline top-up now has a first-class
+`KagemushaRecursiveSpendTopUpRequestV1` producer path, a chain-side
+`TopUpKagemushaRecursive` instruction, and Torii
+`/v1/offline/v2/kagemusha/topup` submission that accepts only client-produced
+top-up request archives. Raw init-request top-up helpers and compatibility
+aliases are retired for the first release. Remaining launch work should focus
+on end-to-end operator/mobile rollout validation rather than reviving the
+retired Offline V2 `/notes/issue` construction path.
 
 ## SCCP Launch Scope
 

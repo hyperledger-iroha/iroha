@@ -21,7 +21,7 @@ use iroha_data_model::{
         RevokeBox, SetAssetKeyValue, SetKeyValueBox, SetParameter, TransferAssetBatch, TransferBox,
         UnregisterBox, Upgrade,
         mint_burn::BurnBox,
-        offline::{AuditOfflineNote, IssueOfflineNote, RedeemOfflineNote},
+        offline::{AuditOfflineNote, IssueOfflineNote, RedeemOfflineNote, TopUpKagemushaRecursive},
         runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
         zk::{Shield, Unshield, ZkTransfer},
     },
@@ -699,6 +699,7 @@ pub(crate) enum ExplorerInstructionKind {
     ZkTransfer,
     Unshield,
     IssueOfflineNote,
+    TopUpKagemushaRecursive,
     RedeemOfflineNote,
     AuditOfflineNote,
     Custom,
@@ -724,6 +725,7 @@ impl ExplorerInstructionKind {
             Self::ZkTransfer => "ZkTransfer",
             Self::Unshield => "Unshield",
             Self::IssueOfflineNote => "IssueOfflineNote",
+            Self::TopUpKagemushaRecursive => "TopUpKagemushaRecursive",
             Self::RedeemOfflineNote => "RedeemOfflineNote",
             Self::AuditOfflineNote => "AuditOfflineNote",
             Self::Custom => "Custom",
@@ -753,6 +755,9 @@ impl std::str::FromStr for ExplorerInstructionKind {
             "zktransfer" | "zk_transfer" => Ok(Self::ZkTransfer),
             "unshield" => Ok(Self::Unshield),
             "issueofflinenote" | "issue_offline_note" => Ok(Self::IssueOfflineNote),
+            "topupkagemusharecursive" | "top_up_kagemusha_recursive" => {
+                Ok(Self::TopUpKagemushaRecursive)
+            }
             "redeemofflinenote" | "redeem_offline_note" => Ok(Self::RedeemOfflineNote),
             "auditofflinenote" | "audit_offline_note" => Ok(Self::AuditOfflineNote),
             "custom" => Ok(Self::Custom),
@@ -869,6 +874,8 @@ pub(crate) fn instruction_kind(instruction: &InstructionBox) -> ExplorerInstruct
                 ExplorerInstructionKind::Unshield
             } else if any.downcast_ref::<IssueOfflineNote>().is_some() {
                 ExplorerInstructionKind::IssueOfflineNote
+            } else if any.downcast_ref::<TopUpKagemushaRecursive>().is_some() {
+                ExplorerInstructionKind::TopUpKagemushaRecursive
             } else if any.downcast_ref::<RedeemOfflineNote>().is_some() {
                 ExplorerInstructionKind::RedeemOfflineNote
             } else if any.downcast_ref::<AuditOfflineNote>().is_some() {
@@ -994,6 +1001,7 @@ fn structured_instruction_payload(
         ExplorerInstructionKind::ZkTransfer => zk_payload(instruction, "ZkTransfer"),
         ExplorerInstructionKind::Unshield => zk_payload(instruction, "Unshield"),
         ExplorerInstructionKind::IssueOfflineNote => issue_offline_note_payload(instruction),
+        ExplorerInstructionKind::TopUpKagemushaRecursive => topup_kagemusha_payload(instruction),
         ExplorerInstructionKind::RedeemOfflineNote => redeem_offline_note_payload(instruction),
         ExplorerInstructionKind::AuditOfflineNote => audit_offline_note_payload(instruction),
         ExplorerInstructionKind::Custom => custom_payload(instruction),
@@ -1197,6 +1205,46 @@ fn issue_offline_note_payload(instruction: &InstructionBox) -> Option<Value> {
     );
     Some(instruction_variant_value(
         "IssueOfflineNote",
+        Value::Object(value),
+    ))
+}
+
+fn topup_kagemusha_payload(instruction: &InstructionBox) -> Option<Value> {
+    let isi = instruction
+        .as_any()
+        .downcast_ref::<TopUpKagemushaRecursive>()?;
+    let mut value = Map::new();
+    value.insert(
+        "asset".to_string(),
+        json::to_value(&isi.asset).unwrap_or(Value::Null),
+    );
+    value.insert("amount".to_string(), Value::String(isi.amount.to_string()));
+    value.insert(
+        "input_nullifier_count".to_string(),
+        Value::Number(
+            (isi.init_request
+                .record_bundle
+                .bundle
+                .steps
+                .first()
+                .map_or(0, |step| step.input_nullifiers.len()) as u64)
+                .into(),
+        ),
+    );
+    value.insert(
+        "output_commitment_count".to_string(),
+        Value::Number(
+            (isi.init_request
+                .record_bundle
+                .bundle
+                .steps
+                .first()
+                .map_or(0, |step| step.output_commitments.len()) as u64)
+                .into(),
+        ),
+    );
+    Some(instruction_variant_value(
+        "TopUpKagemushaRecursive",
         Value::Object(value),
     ))
 }

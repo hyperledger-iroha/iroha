@@ -9057,6 +9057,50 @@ fn sccp_message_lane_disabled_message(
     })
 }
 
+fn verified_taira_tron_xor_diagnostic_source_bundle_allows_static_disabled_manifest(
+    bundle: &NexusSccpMessageProofV1,
+    destination_binding: Option<&iroha_sccp::SccpDestinationBindingV1>,
+    proof_bytes: Option<&[u8]>,
+    configured_source_lane: Option<&SccpConfiguredSourceLaneV1>,
+    fallback_source_material: Option<&iroha_sccp::SccpSourceVerifierMaterialV1>,
+    taira_diagnostic_local_admission: bool,
+) -> bool {
+    configured_source_lane.is_none()
+        && (fallback_source_material.is_some() || taira_diagnostic_local_admission)
+        && destination_binding.is_none()
+        && proof_bytes.is_none()
+        && iroha_sccp::sccp_taira_tron_xor_diagnostic_message_bundle_structure(bundle)
+}
+
+fn sccp_taira_tron_xor_diagnostic_local_admission_enabled_for_chain(
+    chain_id: &iroha_data_model::ChainId,
+) -> bool {
+    chain_id.as_str() == iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1
+}
+
+fn sccp_message_lane_disabled_message_for_material_request(
+    bundle: &NexusSccpMessageProofV1,
+    target: &str,
+    allow_unready: bool,
+    destination_binding: Option<&iroha_sccp::SccpDestinationBindingV1>,
+    proof_bytes: Option<&[u8]>,
+    configured_source_lane: Option<&SccpConfiguredSourceLaneV1>,
+    fallback_source_material: Option<&iroha_sccp::SccpSourceVerifierMaterialV1>,
+    taira_diagnostic_local_admission: bool,
+) -> Option<String> {
+    if verified_taira_tron_xor_diagnostic_source_bundle_allows_static_disabled_manifest(
+        bundle,
+        destination_binding,
+        proof_bytes,
+        configured_source_lane,
+        fallback_source_material,
+        taira_diagnostic_local_admission,
+    ) {
+        return None;
+    }
+    sccp_message_lane_disabled_message(bundle, target, allow_unready, configured_source_lane)
+}
+
 fn sccp_signer_has_secp256k1_public_key(signer: &KeyPair) -> bool {
     matches!(
         signer.public_key().try_algorithm(),
@@ -9250,6 +9294,38 @@ fn sccp_message_artifact_for_destination_material(
     })
 }
 
+fn sccp_message_artifact_for_material_request(
+    bundle: &NexusSccpMessageProofV1,
+    signer: &KeyPair,
+    destination_binding: Option<&iroha_sccp::SccpDestinationBindingV1>,
+    proof_bytes: Option<&[u8]>,
+    allow_unready: bool,
+    configured_source_lane: Option<&SccpConfiguredSourceLaneV1>,
+    fallback_source_material: Option<&iroha_sccp::SccpSourceVerifierMaterialV1>,
+    taira_diagnostic_local_admission: bool,
+) -> Result<Option<NexusSccpMessageTransparentProofV1>> {
+    if fallback_source_material.is_none()
+        && verified_taira_tron_xor_diagnostic_source_bundle_allows_static_disabled_manifest(
+            bundle,
+            destination_binding,
+            proof_bytes,
+            configured_source_lane,
+            fallback_source_material,
+            taira_diagnostic_local_admission,
+        )
+    {
+        return Ok(iroha_sccp::build_sccp_taira_tron_xor_diagnostic_transparent_proof(bundle));
+    }
+    sccp_message_artifact_for_destination_material(
+        bundle,
+        signer,
+        destination_binding,
+        proof_bytes,
+        allow_unready,
+        configured_source_lane,
+    )
+}
+
 fn sccp_message_proof_job_for_destination_material(
     bundle: &NexusSccpMessageProofV1,
     signer: &KeyPair,
@@ -9372,10 +9448,20 @@ fn bridge_proof_from_sccp_message_bundle(
     proof_bytes: Option<&[u8]>,
     allow_unready: bool,
     configured_source_lane: Option<&SccpConfiguredSourceLaneV1>,
+    taira_diagnostic_local_admission: bool,
 ) -> Result<iroha_data_model::bridge::BridgeProof> {
     let allow_unready = sccp_allow_unready_torii_route_bypass_enabled(allow_unready);
     require_sccp_message_supported_launch_scope(bundle, "transparent proof consumption")?;
     let fallback_source_material = sccp_default_source_material_for_verified_bundle(bundle);
+    let taira_diagnostic_request =
+        verified_taira_tron_xor_diagnostic_source_bundle_allows_static_disabled_manifest(
+            bundle,
+            destination_binding,
+            proof_bytes,
+            configured_source_lane,
+            fallback_source_material.as_ref(),
+            taira_diagnostic_local_admission,
+        );
     let bundle_structure_is_valid = if let Some(configured_source_lane) = configured_source_lane {
         // Configured lanes are deployment-bound; do not downgrade them to material-only verification.
         verify_message_bundle_structure_with_source_verifier_material_and_deployment(
@@ -9385,6 +9471,8 @@ fn bridge_proof_from_sccp_message_bundle(
         )
     } else if let Some(material) = fallback_source_material.as_ref() {
         verify_message_bundle_structure_with_source_verifier_material(bundle, material)
+    } else if taira_diagnostic_request {
+        true
     } else {
         verify_message_bundle_structure(bundle)
     };
@@ -9393,11 +9481,15 @@ fn bridge_proof_from_sccp_message_bundle(
             bundle,
         )));
     }
-    if let Some(message) = sccp_message_lane_disabled_message(
+    if let Some(message) = sccp_message_lane_disabled_message_for_material_request(
         bundle,
         "transparent proof consumption",
         allow_unready,
+        destination_binding,
+        proof_bytes,
         configured_source_lane,
+        fallback_source_material.as_ref(),
+        taira_diagnostic_local_admission,
     ) {
         return Err(conversion_error(message));
     }
@@ -9426,6 +9518,8 @@ fn bridge_proof_from_sccp_message_bundle(
         )
     } else if let Some(material) = fallback_source_material.as_ref() {
         sccp_message_transparent_public_inputs_with_source_verifier_material(bundle, material)
+    } else if taira_diagnostic_request {
+        iroha_sccp::sccp_taira_tron_xor_diagnostic_message_public_inputs(bundle)
     } else {
         sccp_message_transparent_public_inputs(bundle)
     }
@@ -9433,13 +9527,15 @@ fn bridge_proof_from_sccp_message_bundle(
         conversion_error("SCCP message bundle public inputs could not be derived".to_owned())
     })?;
     let (backend, manifest_hash, _) = sccp_message_backend_descriptor(&bundle.payload)?;
-    let artifact = sccp_message_artifact_for_destination_material(
+    let artifact = sccp_message_artifact_for_material_request(
         bundle,
         signer,
         destination_binding,
         proof_bytes,
         allow_unready,
         configured_source_lane,
+        fallback_source_material.as_ref(),
+        taira_diagnostic_local_admission,
     )?
     .ok_or_else(|| {
         conversion_error(sccp_message_proof_build_error_message(
@@ -14151,8 +14247,9 @@ mod sccp_message_backend_tests {
             Algorithm::Secp256k1,
             "derive Torii routing non-SORA finality fixture key",
         );
-        let err = bridge_proof_from_sccp_message_bundle(&bundle, &signer, None, None, true, None)
-            .expect_err("raw Nexus finality must not satisfy a non-SORA source proof");
+        let err =
+            bridge_proof_from_sccp_message_bundle(&bundle, &signer, None, None, true, None, false)
+                .expect_err("raw Nexus finality must not satisfy a non-SORA source proof");
         assert!(conversion_message(&err).is_some_and(|message| {
             message.contains("source-chain proof envelope")
                 && message.contains("not Nexus finality")
@@ -14192,6 +14289,7 @@ mod sccp_message_backend_tests {
                 None,
                 allow_unready,
                 None,
+                false,
             )
             .expect_err("diagnostic proof generation must remain blocked");
             assert!(conversion_message(&err).is_some_and(|message| {
@@ -14199,6 +14297,39 @@ mod sccp_message_backend_tests {
                     || message.contains("failed structural verification")
             }));
         }
+    }
+
+    #[test]
+    fn bridge_proof_from_sccp_message_bundle_accepts_verified_taira_tron_xor_diagnostic_source_bundle()
+     {
+        let bundle = iroha_sccp::test_fixtures::sample_taira_tron_xor_diagnostic_transfer_bundle(
+            51,
+            17,
+            b"alice@universal".to_vec(),
+        )
+        .expect("structural TAIRA/TRON XOR diagnostic source bundle");
+
+        let signer = checked_routing_fixture_keypair(
+            b"iroha:torii:routing:test:verified-taira-tron-xor-diagnostic".to_vec(),
+            Algorithm::Secp256k1,
+            "derive Torii routing verified diagnostic TRON fixture key",
+        );
+        let bridge_proof =
+            bridge_proof_from_sccp_message_bundle(&bundle, &signer, None, None, false, None, true)
+                .expect("verified source-envelope diagnostic should build a bridge proof");
+        assert_eq!(
+            bridge_proof.range.start_height,
+            bridge_proof.range.end_height
+        );
+        let iroha_data_model::bridge::BridgeProofPayload::TransparentZk(transparent) =
+            bridge_proof.payload
+        else {
+            panic!("diagnostic message proof should be transparent");
+        };
+        let artifact = decode_nexus_sccp_message_transparent_proof(&transparent.proof.bytes)
+            .expect("transparent artifact should decode");
+        assert_eq!(artifact.bundle, bundle);
+        assert_eq!(artifact.counterparty_domain, iroha_sccp::SCCP_DOMAIN_TRON);
     }
 
     #[test]
@@ -14404,6 +14535,7 @@ mod sccp_message_backend_tests {
             None,
             false,
             Some(&configured_source_lane),
+            false,
         )
         .expect_err("configured source lane must still require a valid source-chain proof");
         assert!(conversion_message(&err).is_some_and(|message| {
@@ -14421,8 +14553,9 @@ mod sccp_message_backend_tests {
             Algorithm::Secp256k1,
             "derive Torii routing EVM attestor fixture key",
         );
-        let err = bridge_proof_from_sccp_message_bundle(&bundle, &signer, None, None, false, None)
-            .expect_err("disabled lane should reject bridge proof generation");
+        let err =
+            bridge_proof_from_sccp_message_bundle(&bundle, &signer, None, None, false, None, false)
+                .expect_err("disabled lane should reject bridge proof generation");
         assert!(conversion_message(&err).is_some_and(|message| message.contains("is disabled")));
     }
 }
@@ -15167,22 +15300,31 @@ pub async fn handle_v1_sccp_message_proof_artifact(
     )?;
     let configured_source_lane =
         sccp_configured_source_lane_for_bundle_with_policy(state, &bundle, allow_unready)?;
-    if let Some(message) = sccp_message_lane_disabled_message(
+    let fallback_source_material = sccp_default_source_material_for_verified_bundle(&bundle);
+    let taira_diagnostic_local_admission =
+        sccp_taira_tron_xor_diagnostic_local_admission_enabled_for_chain(state.chain_id_ref());
+    if let Some(message) = sccp_message_lane_disabled_message_for_material_request(
         &bundle,
         "proof artifact generation",
         allow_unready,
+        destination_material.destination_binding.as_ref(),
+        destination_material.proof_bytes.as_deref(),
         configured_source_lane.as_ref(),
+        fallback_source_material.as_ref(),
+        taira_diagnostic_local_admission,
     ) {
         return Err(sccp_bad_request(message));
     }
     require_sccp_sora_message_nexus_finality_for_production(&bundle, allow_unready)?;
-    let artifact = sccp_message_artifact_for_destination_material(
+    let artifact = sccp_message_artifact_for_material_request(
         &bundle,
         signer,
         destination_material.destination_binding.as_ref(),
         destination_material.proof_bytes.as_deref(),
         allow_unready,
         configured_source_lane.as_ref(),
+        fallback_source_material.as_ref(),
+        taira_diagnostic_local_admission,
     )?
     .ok_or_else(|| {
         sccp_internal_error(sccp_message_proof_build_error_message(
@@ -22013,6 +22155,9 @@ pub async fn handle_post_bridge_proof_submit(
                         destination_material.proof_bytes.as_deref(),
                         allow_unready,
                         configured_source_lane.as_ref(),
+                        sccp_taira_tron_xor_diagnostic_local_admission_enabled_for_chain(
+                            chain_id.as_ref(),
+                        ),
                     )?,
                     counterparty_domain,
                     counterparty_chain.to_owned(),
@@ -22239,6 +22384,7 @@ pub async fn handle_post_bridge_message_submit(
         destination_material.proof_bytes.as_deref(),
         allow_unready,
         configured_source_lane.as_ref(),
+        sccp_taira_tron_xor_diagnostic_local_admission_enabled_for_chain(chain_id.as_ref()),
     )?;
     let range_start_height = bridge_proof.range.start_height;
     let range_end_height = bridge_proof.range.end_height;

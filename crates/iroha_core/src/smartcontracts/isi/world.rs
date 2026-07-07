@@ -8956,6 +8956,9 @@ pub mod isi {
                 &route_allowlist,
             )?;
         }
+        let taira_diagnostic_local_admission = state_transaction.chain_id.as_str()
+            == iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1
+            && iroha_sccp::verify_sccp_taira_tron_xor_diagnostic_transparent_proof(artifact);
         let artifact_structure_is_valid = if let (Some(material), Some(deployment)) = (
             configured_source_material.as_ref(),
             configured_source_deployment.as_ref(),
@@ -8969,6 +8972,8 @@ pub mod isi {
                 material,
                 deployment,
             )
+        } else if taira_diagnostic_local_admission {
+            true
         } else {
             iroha_sccp::verify_nexus_sccp_message_transparent_proof_structure(artifact)
                 && iroha_sccp::verify_message_bundle_structure(&artifact.bundle)
@@ -8987,6 +8992,9 @@ pub mod isi {
                 })?;
             validate_sccp_finality_against_state(&finality, state_transaction)
         } else {
+            if taira_diagnostic_local_admission {
+                return Ok(());
+            }
             if let (Some(material), Some(deployment)) = (
                 configured_source_material.as_ref(),
                 configured_source_deployment.as_ref(),

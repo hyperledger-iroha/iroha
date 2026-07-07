@@ -25,6 +25,7 @@ use iroha_data_model::{
         offline::{
             AuditOfflineNote, IssueOfflineNote, KagemushaTransfer, RedeemKagemushaRecursive,
             RedeemOfflineNote, RegisterOfflineDeviceAttestation, SetOfflineDeviceAttestationPolicy,
+            TopUpKagemushaRecursive,
         },
     },
     name::Name,
@@ -2812,6 +2813,14 @@ pub mod isi {
         issuer: &AccountId,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<Hash, Error> {
+        ensure_offline_note_certificate_authorized_by_any(certificate, &[issuer], state_transaction)
+    }
+
+    fn ensure_offline_note_certificate_authorized_by_any(
+        certificate: &OfflineNoteKeyCertificate,
+        issuers: &[&AccountId],
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<Hash, Error> {
         let certificate_payload_hash = certificate.payload_hash().map_err(|err| {
             labeled_invariant(
                 "invalid_issuer_cert",
@@ -2829,8 +2838,22 @@ pub mod isi {
             return Ok(certificate_payload_hash);
         }
 
-        ensure_offline_note_certificate_signature(certificate, issuer)?;
-        Ok(certificate_payload_hash)
+        let mut first_error = None;
+        for issuer in issuers {
+            match ensure_offline_note_certificate_signature(certificate, issuer) {
+                Ok(()) => return Ok(certificate_payload_hash),
+                Err(err) if first_error.is_none() => first_error = Some(err),
+                Err(_) => {}
+            }
+        }
+        if let Some(err) = first_error {
+            return Err(err);
+        }
+        Err(labeled_invariant(
+            "invalid_issuer_cert",
+            "offline key certificate has no issuer candidates",
+        )
+        .into())
     }
 
     fn validate_offline_attestation_recent_block(
@@ -4607,7 +4630,7 @@ pub mod isi {
     impl Execute for AuditOfflineNote {
         fn execute(
             self,
-            _authority: &AccountId,
+            authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let audit = self.audit;
@@ -4691,9 +4714,9 @@ pub mod isi {
                     )
                     .into());
                 }
-                ensure_offline_note_certificate_authorized(
+                ensure_offline_note_certificate_authorized_by_any(
                     &output_claim.key_certificate,
-                    &output_claim.key_certificate.account_id,
+                    &[&output_claim.key_certificate.account_id, authority],
                     state_transaction,
                 )?;
                 let spec = state_transaction.numeric_spec_for(output_claim.asset.definition())?;
@@ -5051,7 +5074,118 @@ pub mod isi {
         }
     }
 
+    fn validate_kagemusha_transfer_instruction(
+        transfer: &KagemushaTransfer,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        if !state_transaction.settlement.offline.kagemusha_enabled {
+            return Err(labeled_invariant(
+                "kagemusha_disabled",
+                "Kagemusha offline-offline settlement is disabled by configuration",
+            )
+            .into());
+        }
+        if transfer.inputs.is_empty()
+            || transfer.inputs.len() > 2
+            || transfer.outputs.is_empty()
+            || transfer.outputs.len() > 2
+        {
+            return Err(labeled_invariant(
+                "invalid_proof",
+                "Kagemusha transfers require 1 to 2 input nullifiers and 1 to 2 output commitments",
+            )
+            .into());
+        }
+        ensure_non_zero_bytes32(
+            &transfer.inputs,
+            "invalid_proof",
+            "Kagemusha transfer input nullifiers must be non-zero",
+        )?;
+        ensure_non_zero_bytes32(
+            &transfer.outputs,
+            "invalid_proof",
+            "Kagemusha transfer output commitments must be non-zero",
+        )?;
+        ensure_unique_bytes32(
+            &transfer.inputs,
+            "duplicate_nullifier",
+            "Kagemusha transfer input nullifiers must be unique",
+        )?;
+        ensure_unique_bytes32(
+            &transfer.outputs,
+            "duplicate_output",
+            "Kagemusha transfer output commitments must be unique",
+        )?;
+        ensure_disjoint_bytes32(
+            &transfer.inputs,
+            &transfer.outputs,
+            "proof_binding",
+            "Kagemusha transfer output commitments must be disjoint from input nullifiers",
+        )?;
+        ensure_kagemusha_transparent_attachment(&transfer.proof)?;
+        ensure_kagemusha_transfer_verifier_binding(
+            &transfer.asset,
+            &transfer.proof,
+            transfer.root_hint,
+            state_transaction,
+        )
+    }
+
+    fn execute_kagemusha_transfer_instruction(
+        transfer: KagemushaTransfer,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        validate_kagemusha_transfer_instruction(&transfer, state_transaction)?;
+        let transfer = iroha_data_model::isi::zk::ZkTransfer::new(
+            transfer.asset,
+            transfer.inputs,
+            transfer.outputs,
+            transfer.proof,
+            transfer.root_hint,
+        );
+        transfer.execute(authority, state_transaction)
+    }
+
+    fn kagemusha_transfer_from_init_request(
+        init_request: &iroha_data_model::offline::KagemushaRecursiveSpendInitRequestV1,
+    ) -> Result<KagemushaTransfer, Error> {
+        init_request
+            .validate_public_binding()
+            .map_err(|err| labeled_invariant("invalid_recursive_topup", err.to_string()))?;
+        if init_request.record_bundle.bundle.steps.len() != 1 {
+            return Err(labeled_invariant(
+                "invalid_recursive_topup",
+                "recursive Kagemusha top-up init request must contain exactly one checked hop",
+            )
+            .into());
+        }
+        let step = init_request
+            .record_bundle
+            .bundle
+            .steps
+            .first()
+            .ok_or_else(|| labeled_invariant("invalid_recursive_topup", "missing first hop"))?;
+        Ok(KagemushaTransfer::new(
+            init_request.record_bundle.bundle.asset.clone(),
+            step.input_nullifiers.clone(),
+            step.output_commitments.clone(),
+            step.attachment.clone(),
+            Some(step.root_before),
+        ))
+    }
+
     impl Execute for KagemushaTransfer {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            execute_kagemusha_transfer_instruction(self, authority, state_transaction)
+        }
+    }
+
+    impl Execute for TopUpKagemushaRecursive {
         fn execute(
             self,
             authority: &AccountId,
@@ -5060,62 +5194,46 @@ pub mod isi {
             if !state_transaction.settlement.offline.kagemusha_enabled {
                 return Err(labeled_invariant(
                     "kagemusha_disabled",
-                    "Kagemusha offline-offline settlement is disabled by configuration",
+                    "Kagemusha recursive top-up is disabled by configuration",
                 )
                 .into());
             }
-            if self.inputs.is_empty()
-                || self.inputs.len() > 2
-                || self.outputs.is_empty()
-                || self.outputs.len() > 2
-            {
+            ensure_can_issue_offline_note(authority, state_transaction)?;
+            if self.amount <= Numeric::zero() {
                 return Err(labeled_invariant(
-                    "invalid_proof",
-                    "Kagemusha transfers require 1 to 2 input nullifiers and 1 to 2 output commitments",
+                    "invalid_amount",
+                    "recursive Kagemusha top-up amount must be positive",
                 )
                 .into());
             }
-            ensure_non_zero_bytes32(
-                &self.inputs,
-                "invalid_proof",
-                "Kagemusha transfer input nullifiers must be non-zero",
-            )?;
-            ensure_non_zero_bytes32(
-                &self.outputs,
-                "invalid_proof",
-                "Kagemusha transfer output commitments must be non-zero",
-            )?;
-            ensure_unique_bytes32(
-                &self.inputs,
-                "duplicate_nullifier",
-                "Kagemusha transfer input nullifiers must be unique",
-            )?;
-            ensure_unique_bytes32(
-                &self.outputs,
-                "duplicate_output",
-                "Kagemusha transfer output commitments must be unique",
-            )?;
-            ensure_disjoint_bytes32(
-                &self.inputs,
-                &self.outputs,
-                "proof_binding",
-                "Kagemusha transfer output commitments must be disjoint from input nullifiers",
-            )?;
-            ensure_kagemusha_transparent_attachment(&self.proof)?;
-            ensure_kagemusha_transfer_verifier_binding(
-                &self.asset,
-                &self.proof,
-                self.root_hint,
-                state_transaction,
-            )?;
-            let transfer = iroha_data_model::isi::zk::ZkTransfer::new(
-                self.asset,
-                self.inputs,
-                self.outputs,
-                self.proof,
-                self.root_hint,
-            );
-            transfer.execute(authority, state_transaction)
+            if self.asset.definition() != &self.init_request.record_bundle.bundle.asset {
+                return Err(labeled_invariant(
+                    "asset_mismatch",
+                    "recursive Kagemusha top-up asset does not match the init request",
+                )
+                .into());
+            }
+            if self.amount != self.init_request.current_note.amount {
+                return Err(labeled_invariant(
+                    "amount_mismatch",
+                    "recursive Kagemusha top-up amount does not match the spendable note descriptor",
+                )
+                .into());
+            }
+            if self.init_request.record_bundle.bundle.chain_id != *state_transaction.chain_id() {
+                return Err(labeled_invariant(
+                    "wrong_chain",
+                    "recursive Kagemusha top-up chain id does not match this chain",
+                )
+                .into());
+            }
+
+            let spec = state_transaction.numeric_spec_for(self.asset.definition())?;
+            assert_numeric_spec_with(&self.amount, spec)?;
+            let transfer = kagemusha_transfer_from_init_request(&self.init_request)?;
+            validate_kagemusha_transfer_instruction(&transfer, state_transaction)?;
+            reserve_offline_note_escrow(state_transaction, &self.asset, &self.amount)?;
+            execute_kagemusha_transfer_instruction(transfer, authority, state_transaction)
         }
     }
 
