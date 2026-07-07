@@ -10,7 +10,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { test } from "node:test";
 import {
   BSC_FULL_SCCP_CIRCUIT_PROFILE,
@@ -1438,6 +1438,25 @@ test("materialize rejects copied input collisions with fixed outputs before writ
         ]),
       /BSC Groth16 verifier key output must not be the same path as --r1cs/u,
     );
+    await assert.rejects(
+      () =>
+        main([
+          "materialize",
+          "--bsc-network",
+          "testnet",
+          "--circuit-profile",
+          BSC_SIGNAL_BINDING_CIRCUIT_PROFILE,
+          "--r1cs",
+          join(root, "safe.r1cs"),
+          "--zkey",
+          join(linkedOutDir, "testnet-bsc-groth16-material.manifest.json"),
+          "--snarkjs-verifier-key",
+          verifierKeyPath,
+          "--out-dir",
+          outDir,
+        ]),
+      /BSC Groth16 material manifest output must not be the same path as --zkey/u,
+    );
     for (const [pathName, text] of files) {
       assert.equal(await readFile(pathName, "utf8"), text);
     }
@@ -1606,6 +1625,22 @@ test("generate rejects output path collisions before writing artifacts", async (
         generateBscGroth16Material({
           "bsc-network": "testnet",
           ptau: r1csCollision,
+          "out-dir": outDir,
+        }),
+      /BSC Groth16 R1CS output must not be the same path as --ptau/u,
+    );
+    assert.equal(await readFile(r1csCollision, "utf8"), r1csSentinel);
+
+    const linkedOutDir = join(root, "linked-generate-out");
+    await symlink(outDir, linkedOutDir);
+    await assert.rejects(
+      () =>
+        generateBscGroth16Material({
+          "bsc-network": "testnet",
+          ptau: join(
+            linkedOutDir,
+            `${BSC_SIGNAL_BINDING_CIRCUIT_PROFILE}.r1cs`,
+          ),
           "out-dir": outDir,
         }),
       /BSC Groth16 R1CS output must not be the same path as --ptau/u,
@@ -1816,6 +1851,21 @@ test("toolchain-fingerprint rejects transcript output path collisions before rea
           transcriptPath,
           "--out",
           transcriptPath,
+        ]),
+      /--out must not be the same path as --transcript/u,
+    );
+    assert.equal(await readFile(transcriptPath, "utf8"), transcriptBytes);
+
+    const linkedInputRoot = join(root, "linked-toolchain-inputs");
+    await symlink(root, linkedInputRoot);
+    await assert.rejects(
+      () =>
+        main([
+          "toolchain-fingerprint",
+          "--transcript",
+          transcriptPath,
+          "--out",
+          join(linkedInputRoot, "reproducible-build-transcript.json"),
         ]),
       /--out must not be the same path as --transcript/u,
     );
@@ -4250,6 +4300,33 @@ test("attestation-request rejects output path collisions before reading artifact
         assert.equal(await readFile(file.path, "utf8"), file.bytes);
       }
     }
+
+    const linkedInputRoot = join(root, "linked-attestation-inputs");
+    await symlink(root, linkedInputRoot);
+    const linkedCases = [
+      {
+        out: join(linkedInputRoot, "candidate-manifest.json"),
+        pattern: /--out must not be the same path as --manifest/u,
+      },
+      {
+        out: join(linkedInputRoot, "semantic-review-evidence.json"),
+        pattern: /--out must not be the same path as --semantic-review-evidence/u,
+      },
+      {
+        out: join(linkedInputRoot, "circuit-security-audit-evidence.json"),
+        pattern:
+          /--out must not be the same path as --circuit-security-audit-evidence/u,
+      },
+    ];
+    for (const testCase of linkedCases) {
+      await assert.rejects(
+        () => main([...baseArgs, "--out", testCase.out]),
+        testCase.pattern,
+      );
+      for (const file of Object.values(sentinelFiles)) {
+        assert.equal(await readFile(file.path, "utf8"), file.bytes);
+      }
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -4490,6 +4567,17 @@ test("template writers reject generated output path collisions before replacing 
         ]),
       /trusted setup transcript template must not be the same path as --r1cs/u,
     );
+    const linkedTranscriptDir = join(root, "linked-transcript-outputs");
+    await symlink(transcriptDir, linkedTranscriptDir);
+    await assert.rejects(
+      () =>
+        main([
+          ...transcriptBaseArgs,
+          "--r1cs",
+          join(linkedTranscriptDir, "trusted-setup-transcript.json"),
+        ]),
+      /trusted setup transcript template must not be the same path as --r1cs/u,
+    );
     await assert.rejects(
       () =>
         main([
@@ -4537,6 +4625,23 @@ test("template writers reject generated output path collisions before replacing 
           "evidence-template",
           "--manifest",
           manifestCollisionPath,
+          "--out-dir",
+          evidenceDir,
+          "--overwrite",
+          "true",
+        ]),
+      /semantic review report template must not be the same path as --manifest/u,
+    );
+    assert.equal(await readFile(manifestCollisionPath, "utf8"), manifestText);
+
+    const linkedEvidenceDir = join(root, "linked-evidence-outputs");
+    await symlink(evidenceDir, linkedEvidenceDir);
+    await assert.rejects(
+      () =>
+        main([
+          "evidence-template",
+          "--manifest",
+          join(linkedEvidenceDir, "semantic-review-report.md"),
           "--out-dir",
           evidenceDir,
           "--overwrite",
@@ -5011,6 +5116,37 @@ test("handoff-bundle rejects output path collisions before reading artifacts", a
     ];
 
     for (const testCase of cases) {
+      await assert.rejects(
+        () => main([...baseArgs, "--out", testCase.out]),
+        testCase.pattern,
+      );
+      for (const file of Object.values(sentinelFiles)) {
+        assert.equal(await readFile(file.path, "utf8"), file.bytes);
+      }
+    }
+
+    const linkedInputRoot = join(root, "linked-handoff-inputs");
+    await symlink(root, linkedInputRoot);
+    const linkedCases = [
+      {
+        out: join(linkedInputRoot, "material-manifest.json"),
+        pattern: /--out must not be the same path as --manifest/u,
+      },
+      {
+        out: join(linkedInputRoot, "transcript-template-package.json"),
+        pattern:
+          /--out must not be the same path as --transcript-template-package/u,
+      },
+      {
+        out: join(linkedInputRoot, "evidence-template-package.json"),
+        pattern: /--out must not be the same path as --evidence-template-package/u,
+      },
+      {
+        out: join(linkedInputRoot, "attestation-request.json"),
+        pattern: /--out must not be the same path as --request/u,
+      },
+    ];
+    for (const testCase of linkedCases) {
       await assert.rejects(
         () => main([...baseArgs, "--out", testCase.out]),
         testCase.pattern,
@@ -6719,6 +6855,7 @@ test("sign-attestation refuses mismatched fingerprints, non-Ed25519 keys, and ke
     const { result } = await writeAttestationRequestCandidate(root);
     const requestPath = join(root, "request.json");
     const privateKeyPath = await writePrivateKeyPem(join(root, "semantic-key.pem"));
+    const privateKeyText = await readFile(privateKeyPath, "utf8");
     const wrongKeyPath = join(root, "rsa-key.pem");
     const { privateKey: rsaPrivateKey } = generateKeyPairSync("rsa", {
       modulusLength: 2048,
@@ -6767,9 +6904,24 @@ test("sign-attestation refuses mismatched fingerprints, non-Ed25519 keys, and ke
           role: "semantic",
           "private-key-pem": privateKeyPath,
           out: privateKeyPath,
-        }),
-      /output must not overwrite the private key file/u,
+      }),
+      /--out must not be the same path as --private-key-pem/u,
     );
+    assert.equal(await readFile(privateKeyPath, "utf8"), privateKeyText);
+
+    const linkedInputRoot = join(root, "linked-signing-inputs");
+    await symlink(root, linkedInputRoot);
+    await assert.rejects(
+      () =>
+        signBscGroth16AttestationRole({
+          request: requestPath,
+          role: "semantic",
+          "private-key-pem": privateKeyPath,
+          out: join(linkedInputRoot, "semantic-key.pem"),
+        }),
+      /--out must not be the same path as --private-key-pem/u,
+    );
+    assert.equal(await readFile(privateKeyPath, "utf8"), privateKeyText);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -7589,6 +7741,36 @@ test("proof-self-test rejects output path collisions before parsing artifacts or
       }
     }
 
+    const linkedInputRoot = join(root, "linked-proof-inputs");
+    await symlink(root, linkedInputRoot);
+    for (const testCase of [
+      {
+        out: join(linkedInputRoot, "material-manifest.json"),
+        pattern: /--out must not be the same path as --manifest/u,
+      },
+      {
+        out: join(linkedInputRoot, "witness.wasm"),
+        pattern: /--out must not be the same path as --witness-wasm/u,
+      },
+    ]) {
+      await assert.rejects(
+        () =>
+          main([
+            "proof-self-test",
+            "--manifest",
+            sentinelFiles.manifest.path,
+            "--witness-wasm",
+            sentinelFiles.witnessWasm.path,
+            "--out",
+            testCase.out,
+          ]),
+        testCase.pattern,
+      );
+      for (const file of Object.values(sentinelFiles)) {
+        assert.equal(await readFile(file.path, "utf8"), file.bytes);
+      }
+    }
+
     const candidateRoot = join(root, "candidate");
     const candidate = await writePreflightCandidate(candidateRoot);
     const witnessWasm = join(
@@ -7638,6 +7820,26 @@ test("proof-self-test rejects output path collisions before parsing artifacts or
             witnessWasm,
             "--out",
             testCase.out,
+          ]),
+        new RegExp(`--out must not be the same path as ${testCase.label}`, "u"),
+      );
+      assert.deepEqual(await readFile(testCase.out), artifactBytes.get(testCase.out));
+    }
+
+    const linkedCandidateRoot = join(root, "linked-proof-candidate");
+    await symlink(candidateRoot, linkedCandidateRoot);
+    for (const testCase of artifactCases) {
+      const aliasedOut = join(linkedCandidateRoot, relative(candidateRoot, testCase.out));
+      await assert.rejects(
+        () =>
+          main([
+            "proof-self-test",
+            "--manifest",
+            candidate.manifest,
+            "--witness-wasm",
+            witnessWasm,
+            "--out",
+            aliasedOut,
           ]),
         new RegExp(`--out must not be the same path as ${testCase.label}`, "u"),
       );
@@ -7817,7 +8019,7 @@ test("proof-self-test rejects production-ready manifests with encoded sensitive 
     const candidate = await writePreflightCandidate(root, {
       manifest: {
         productionReady: true,
-        productionBlockers: ["private&#45;key-groth16-blocker"],
+        productionBlockers: ["private&#32;&#32;key-groth16-blocker"],
       },
     });
 
@@ -7841,7 +8043,7 @@ test("proof-self-test rejects production-ready manifests with encoded sensitive 
       caught.message,
       /material manifest productionBlockers\[0\] contains sensitive name/u,
     );
-    assert.doesNotMatch(caught.message, /private&#45;key-groth16-blocker/u);
+    assert.doesNotMatch(caught.message, /private&#32;&#32;key-groth16-blocker/u);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -7851,7 +8053,7 @@ test("proof-self-test rejects production-ready manifests with encoded duplicate 
   const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-proof-duplicate-blockers-"));
   try {
     const blocker = "safe duplicated Groth16 blocker";
-    const encodedBlocker = "safe%20duplicated%20Groth16%20blocker";
+    const encodedBlocker = "safe%20%20duplicated%20Groth16%20%20blocker";
     const candidate = await writePreflightCandidate(root, {
       manifest: {
         productionReady: true,
@@ -8275,6 +8477,42 @@ test("finalize-attestations rejects out-dir collisions before reading signed inp
     ];
 
     for (const testCase of cases) {
+      await assert.rejects(
+        () => main([...baseArgs, "--out-dir", testCase.outDir]),
+        testCase.pattern,
+      );
+      for (const file of Object.values(sentinelFiles)) {
+        assert.equal(await readFile(file.path, "utf8"), file.bytes);
+      }
+    }
+
+    const linkedInputRoot = join(root, "linked-finalize-inputs");
+    await symlink(root, linkedInputRoot);
+    const linkedCases = [
+      {
+        outDir: join(linkedInputRoot, "request.json"),
+        pattern: /--out-dir must not be the same path as --request/u,
+      },
+      {
+        outDir: join(linkedInputRoot, "semantic-attestation.json"),
+        pattern: /--out-dir must not be the same path as --semantic-attestation/u,
+      },
+      {
+        outDir: join(linkedInputRoot, "security-attestation.json"),
+        pattern:
+          /--out-dir must not be the same path as --circuit-security-attestation/u,
+      },
+      {
+        outDir: join(linkedInputRoot, "setup-attestation.json"),
+        pattern: /--out-dir must not be the same path as --trusted-setup-attestation/u,
+      },
+      {
+        outDir: join(linkedInputRoot, "reproducible-attestation.json"),
+        pattern:
+          /--out-dir must not be the same path as --reproducible-build-attestation/u,
+      },
+    ];
+    for (const testCase of linkedCases) {
       await assert.rejects(
         () => main([...baseArgs, "--out-dir", testCase.outDir]),
         testCase.pattern,
@@ -9670,7 +9908,7 @@ test("preflight rejects proof self-test reports with encoded sensitive manifest 
     ]);
     const report = JSON.parse(await readFile(proofSelfTestPath, "utf8"));
     report.manifest.productionReady = false;
-    report.manifest.productionBlockers = ["secret%2dtoken-proof-report-blocker"];
+    report.manifest.productionBlockers = ["private&#32;&#32;key-proof-report-blocker"];
     await writeJson(proofSelfTestPath, report);
 
     const result = await preflightBscGroth16Material({
@@ -9687,7 +9925,7 @@ test("preflight rejects proof self-test reports with encoded sensitive manifest 
     );
     assert.doesNotMatch(
       result.problems.join("\n"),
-      /secret%2dtoken-proof-report-blocker/u,
+      /private&#32;&#32;key-proof-report-blocker/u,
     );
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -9718,7 +9956,7 @@ test("preflight rejects proof self-test reports with encoded duplicate manifest 
       proofSelfTestPath,
     ]);
     const blocker = "safe duplicated proof report blocker";
-    const encodedBlocker = "safe%20duplicated%20proof%20report%20blocker";
+    const encodedBlocker = "safe%20%20duplicated%20proof%20%20report%20blocker";
     const report = JSON.parse(await readFile(proofSelfTestPath, "utf8"));
     report.manifest.productionReady = false;
     report.manifest.productionBlockers = [blocker, encodedBlocker];

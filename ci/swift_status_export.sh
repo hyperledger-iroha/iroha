@@ -27,8 +27,8 @@ copy_feed_artifact() {
   echo "[swift-status] exported feed copy to ${dest}"
 
   if [[ -f "${source}.sha256" ]]; then
-    cp "${source}.sha256" "${dest}.sha256"
-    echo "[swift-status] exported feed checksum copy to ${dest}.sha256"
+    write_checksum_sidecar "${dest}"
+    echo "[swift-status] exported feed checksum sidecar to ${dest}.sha256"
   fi
 
   if [[ -n "${meta_key}" ]]; then

@@ -137,3 +137,42 @@ SCCP all evidence helper subclass inventory closure was completed on
 SCCP Required Release Evidence Unicode-spacing hardening was completed on
 2026-07-07.
 SCCP Blocking Items Unicode-spacing hardening was completed on 2026-07-07.
+SCCP table-cell blocker exactness hardening was completed on 2026-07-07.
+SCCP public blocker internal-space duplicate hardening was completed on
+2026-07-07.
+SCCP helper sensitive-marker internal-space redaction was completed on
+2026-07-07.
+SCCP JS public-blocker repeated-space hardening was completed on 2026-07-07.
+SCCP Required Evidence JS blocker wording was completed on 2026-07-07.
+SCCP BSC route-manifest symlink-parent collision pin was completed on
+2026-07-07.
+SCCP JS public-blocker current-tree reconciliation was completed on
+2026-07-07.
+SCCP BSC publish symlink-parent collision pin was completed on 2026-07-07.
+SCCP Solana route output/temp symlink collision pin was completed on
+2026-07-07.
+SCCP BSC/TRON deploy and transaction symlink-parent collision pin was completed
+on 2026-07-07.
+SCCP BSC native-prover bundle symlink-parent collision pin was completed on
+2026-07-07.
+SCCP BSC Groth16 attestation/handoff symlink-parent collision pin was completed
+on 2026-07-07.
+SCCP BSC Groth16 signing private-key collision hardening was completed on
+2026-07-07.
+SCCP BSC Groth16 finalization symlink-parent collision pin was completed on
+2026-07-07.
+SCCP BSC Groth16 toolchain/proof symlink-parent collision pin was completed on
+2026-07-07.
+SCCP BSC Groth16 template writer symlink-parent collision pin was completed on
+2026-07-07.
+SCCP BSC Groth16 generate/materialize symlink-parent collision pin was completed
+on 2026-07-07.
+SCCP BSC source-proof, public validator-set, and shared JS integer writer guards
+were completed on 2026-07-07.
+SCCP Python/Kotlin/Java integer writer guards were completed and locally
+validated with a temporary JDK 21 on 2026-07-07.
+SCCP Swift BSC validator-set aggregate guards were completed on 2026-07-07.
+SCCP .NET BSC validator-set payload parity was completed and locally validated
+with a temporary .NET SDK on 2026-07-07.
+SCCP .NET BSC commit-seal signer/quorum parity was completed and locally
+validated with a temporary .NET SDK on 2026-07-07.

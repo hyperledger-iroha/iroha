@@ -137,15 +137,20 @@ const SCCP_SOLANA_ROUTE_CANARY_LIVE_PROGRAM_LABEL_V1: &[u8] =
 const SCCP_LOCAL_ADMISSION_ENVELOPE_ENCODING_V1: &str = "norito:sccp-local-admission:v1";
 const SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1: &str = "local_admission";
 const SCCP_LOCAL_ADMISSION_ENTRYPOINT_V1: &str = "SubmitBridgeProof";
+#[cfg(any(test, feature = "test-fixtures"))]
 const SCCP_TAIRA_TRON_XOR_DIAGNOSTIC_ENVELOPE_ENCODING_V1: &str =
     "norito:sccp-taira-tron-xor-diagnostic:v1";
+#[cfg(any(test, feature = "test-fixtures"))]
 const SCCP_TAIRA_TRON_XOR_DIAGNOSTIC_SUBMISSION_KIND_V1: &str = "diagnostic_local_admission";
 const SCCP_TAIRA_TRON_XOR_DIAGNOSTIC_FINALITY_PREFIX_V1: &[u8] =
     b"sccp:taira-tron-xor:nile-diagnostic-finality:v1";
+#[cfg(any(test, feature = "test-fixtures"))]
 const SCCP_TAIRA_TRON_XOR_DIAGNOSTIC_PROOF_PREFIX_V1: &[u8] =
     b"sccp:taira-tron-xor:nile-diagnostic-proof:v1";
+#[cfg(any(test, feature = "test-fixtures"))]
 const SCCP_TAIRA_TRON_XOR_DIAGNOSTIC_SOURCE_MATERIAL_PREFIX_V1: &[u8] =
     b"sccp:taira-tron-xor:nile-diagnostic-source-material:v1";
+#[cfg(any(test, feature = "test-fixtures"))]
 const SCCP_TAIRA_TRON_XOR_DIAGNOSTIC_SOURCE_DEPLOYMENT_PREFIX_V1: &[u8] =
     b"sccp:taira-tron-xor:nile-diagnostic-source-deployment:v1";
 /// Solana mainnet-beta destination anchor id required for SCCP verifier rollout.
@@ -8558,11 +8563,11 @@ fn sccp_manifest_matches_domain_production_backend(manifest: &SccpProofManifestV
 }
 
 fn sccp_allow_unready_transparent_proof_bypass_enabled(allow_unready: bool) -> bool {
-    allow_unready && cfg!(any(test, feature = "test-fixtures"))
+    allow_unready && cfg!(test)
 }
 
 fn sccp_allow_unready_source_proof_bypass_enabled(allow_unready: bool) -> bool {
-    allow_unready && cfg!(any(test, feature = "test-fixtures"))
+    allow_unready && cfg!(test)
 }
 
 fn sccp_manifest_allows_transparent_proofs_internal(
@@ -20711,6 +20716,7 @@ pub fn sccp_taira_tron_xor_diagnostic_message_public_inputs(
     })
 }
 
+#[cfg(any(test, feature = "test-fixtures"))]
 fn sccp_taira_tron_xor_diagnostic_statement_hash(
     bundle: &NexusSccpMessageProofV1,
     manifest: &SccpProofManifestV1,
@@ -20724,6 +20730,7 @@ fn sccp_taira_tron_xor_diagnostic_statement_hash(
     ))
 }
 
+#[cfg(any(test, feature = "test-fixtures"))]
 fn sccp_taira_tron_xor_diagnostic_proof_bytes(
     bundle: &NexusSccpMessageProofV1,
     statement_hash: H256,
@@ -20749,6 +20756,7 @@ fn sccp_taira_tron_xor_diagnostic_proof_bytes(
     Some(proof_bytes)
 }
 
+#[cfg(any(test, feature = "test-fixtures"))]
 fn sccp_taira_tron_xor_diagnostic_submission_package(
     manifest: &SccpProofManifestV1,
     bundle: &NexusSccpMessageProofV1,
@@ -20794,7 +20802,9 @@ fn sccp_taira_tron_xor_diagnostic_submission_package(
 /// Build an adversarial TAIRA-testnet diagnostic proof fixture for TRON Nile -> TAIRA XOR messages.
 ///
 /// The returned artifact is only valid for the TAIRA testnet diagnostic route.
-/// Production non-SORA source lanes must use governed source-adapter material.
+/// This is intentionally available only to tests and fixture consumers; production non-SORA source
+/// lanes must use governed source-adapter material.
+#[cfg(any(test, feature = "test-fixtures"))]
 pub fn build_sccp_taira_tron_xor_diagnostic_transparent_proof(
     bundle: &NexusSccpMessageProofV1,
 ) -> Option<NexusSccpMessageTransparentProofV1> {
@@ -20833,6 +20843,7 @@ pub fn build_sccp_taira_tron_xor_diagnostic_transparent_proof(
 }
 
 /// Verify the adversarial TAIRA-testnet diagnostic proof fixture for the TRON Nile XOR route.
+#[cfg(any(test, feature = "test-fixtures"))]
 pub fn verify_sccp_taira_tron_xor_diagnostic_transparent_proof(
     artifact: &NexusSccpMessageTransparentProofV1,
 ) -> bool {

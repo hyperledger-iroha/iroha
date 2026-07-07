@@ -557,6 +557,19 @@ def test_package_public_surface_excludes_removed_legacy_lane() -> None:
         assert removed_lane_token not in source.lower()
 
 
+def test_sccp_integer_writers_reject_overflows_before_canonical_encoding() -> None:
+    with pytest.raises(ValueError, match="u8 value must fit u8"):
+        sccp_module._write_u8(1 << 8)
+    with pytest.raises(ValueError, match="u16 value must fit u16"):
+        sccp_module._write_u16_le(1 << 16)
+    with pytest.raises(ValueError, match="u32 value must fit u32"):
+        sccp_module._write_u32_le(1 << 32)
+    with pytest.raises(ValueError, match="i32 value must fit i32"):
+        sccp_module._write_i32_le(1 << 31)
+    with pytest.raises(ValueError, match="u64 value must fit u64"):
+        sccp_module._write_u64_le(1 << 64)
+
+
 def assert_immutable_fastpq_proof_request(
     request: Mapping[str, Any],
     byte_fields: tuple[str, ...],
@@ -5580,6 +5593,14 @@ def test_derives_all_source_proof_hashes_from_canonical_witness_material() -> No
         canonical_bsc_validator_set_payload_bytes(
             {"validator_addresses": ["0x" + "11" * 20], "validator_powers": ["0"]}
         )
+    u64_overflow_decimal = str(1 << 64)
+    with pytest.raises(ValueError, match="validatorPowers\\[0\\] must be a u64"):
+        canonical_bsc_validator_set_payload_bytes(
+            {
+                "validator_addresses": ["0x" + "11" * 20],
+                "validator_powers": [u64_overflow_decimal],
+            }
+        )
 
     commit_message = {
         "validator_epoch": "2",
@@ -5649,6 +5670,8 @@ def test_derives_all_source_proof_hashes_from_canonical_witness_material() -> No
         canonical_bsc_commit_seal_bytes(
             {**commit_seal, "validatorSetHash": BSC_COMMIT_VALIDATOR_SET_HASH}
         )
+    with pytest.raises(ValueError, match="totalPower must be a u64"):
+        canonical_bsc_commit_seal_bytes({**commit_seal, "total_power": u64_overflow_decimal})
 
     storage_value = "0x02"
     storage_value_hash = bsc_validator_set_storage_value_hash(storage_value)

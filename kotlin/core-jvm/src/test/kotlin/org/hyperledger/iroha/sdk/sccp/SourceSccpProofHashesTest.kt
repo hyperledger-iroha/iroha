@@ -715,6 +715,7 @@ class SourceSccpProofHashesTest {
                 validatorPowers = listOf("1", "2"),
             ),
         )
+        val u64OverflowDecimal = "18446744073709551616"
         assertEquals(
             "0x3ef5ecfb6dc4f5fc9e970cc18cd72164495c827e96f77851813973a286f5c762",
             SccpSourceProofs.bscValidatorSetHashFromPayload(validatorPayload),
@@ -829,6 +830,13 @@ class SourceSccpProofHashesTest {
             assertFailsWith<IllegalArgumentException> {
                 SccpSourceProofs.canonicalBscCommitSealBytes(bscCommitSeal.copy(validatorSetHash = "aa".repeat(32)))
             }.message!!.contains("validatorSetHash"),
+        )
+        assertTrue(
+            assertFailsWith<IllegalArgumentException> {
+                SccpSourceProofs.canonicalBscCommitSealBytes(
+                    bscCommitSeal.copy(totalPower = u64OverflowDecimal),
+                )
+            }.message!!.contains("totalPower must fit u64"),
         )
         val storageValue = hexBytes("02")
         val storageValueHash = SccpSourceProofs.bscValidatorSetStorageValueHash(storageValue)
@@ -1028,6 +1036,14 @@ class SourceSccpProofHashesTest {
                 validatorPowers = listOf("0"),
             )
         }
+        assertTrue(
+            assertFailsWith<IllegalArgumentException> {
+                SccpSourceProofs.canonicalBscValidatorSetPayloadBytes(
+                    validatorAddresses = listOf("11".repeat(20)),
+                    validatorPowers = listOf(u64OverflowDecimal),
+                )
+            }.message!!.contains("validatorPowers[0] must fit u64"),
+        )
         assertFailsWith<IllegalArgumentException> {
             SccpSourceProofs.canonicalBscValidatorSetPayloadBytes(
                 validatorAddresses = (1..256).map { it.toString(16).padStart(40, '0') },

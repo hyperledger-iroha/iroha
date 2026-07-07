@@ -3165,12 +3165,19 @@ function decodedPublicBlockerTextIssue(value) {
 
 function sensitivePublicBlockerText(value) {
   return DEPLOYMENT_ARTIFACT_SECRET_KEY_PATTERN.test(
-    decodedPublicBlockerText(value),
+    normalizedDecodedPublicBlockerText(value),
   );
 }
 
+function normalizedDecodedPublicBlockerText(value) {
+  return decodedPublicBlockerText(value)
+    .split(" ")
+    .filter((part) => part.length > 0)
+    .join(" ");
+}
+
 function canonicalPublicBlockerKey(value) {
-  return decodedPublicBlockerText(value).toLowerCase();
+  return normalizedDecodedPublicBlockerText(value).toLowerCase();
 }
 
 function postDeployLiveEvidenceProductionBlockers(record) {

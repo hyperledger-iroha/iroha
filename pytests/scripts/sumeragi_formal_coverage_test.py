@@ -33166,6 +33166,6993 @@ def test_source_and_top_level_commit_progress_spec_contract_errors_reject_compou
     ]
 
 
+def test_source_and_top_level_commit_progress_spec_contract_errors_reject_missing_or_parameterized_init(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+    source = tmp_path / "SumeragiDirectDeliveredFirstCorridorGateMissingInit.tla"
+    source.write_text(
+        commit_progress_spec_contract_text(
+            spec_operator=source_spec,
+            fairness_operator=source_fairness,
+            next_closure=source_next_closure,
+            fairness_actions=source_actions,
+            init_lines=[],
+        ),
+        encoding="utf-8",
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+    top = tmp_path / "SumeragiParameterizedInit.tla"
+    top.write_text(
+        commit_progress_spec_contract_text(
+            spec_operator=top_spec,
+            fairness_operator=top_fairness,
+            next_closure=top_next_closure,
+            fairness_actions=top_actions,
+            init_lines=["Init(value) == TRUE"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.source_commit_progress_spec_contract_errors(
+        (
+            (
+                source,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+        )
+    ) == [
+        f"{source} does not define {source_root_kind} init operator Init"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                top,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{top}:35 defines {top_root_kind} init operator Init with arity 1; "
+        f"{top_root_kind} init operators must be zero-arity"
+    ]
+
+
+def test_source_and_top_level_commit_progress_spec_contract_errors_reject_action_or_temporal_init(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+    source = tmp_path / "SumeragiDirectDeliveredFirstCorridorGateActionInit.tla"
+    source.write_text(
+        commit_progress_spec_contract_text(
+            spec_operator=source_spec,
+            fairness_operator=source_fairness,
+            next_closure=source_next_closure,
+            fairness_actions=source_actions,
+            init_lines=["Init == UNCHANGED vars"],
+        ),
+        encoding="utf-8",
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+    top = tmp_path / "SumeragiTemporalInit.tla"
+    top.write_text(
+        commit_progress_spec_contract_text(
+            spec_operator=top_spec,
+            fairness_operator=top_fairness,
+            next_closure=top_next_closure,
+            fairness_actions=top_actions,
+            init_lines=["Init == <>committed"],
+        ),
+        encoding="utf-8",
+    )
+
+    source_requirement = (
+        f"{source_root_kind} init operators must be initial-state predicates "
+        "without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or <> temporal "
+        "markers"
+    )
+    top_requirement = (
+        f"{top_root_kind} init operators must be initial-state predicates "
+        "without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or <> temporal "
+        "markers"
+    )
+    assert module.source_commit_progress_spec_contract_errors(
+        (
+            (
+                source,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+        )
+    ) == [
+        f"{source}:14 defines {source_root_kind} init operator Init, but its "
+        f"body is not an initial-state predicate; {source_requirement}"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                top,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{top}:35 defines {top_root_kind} init operator Init, but its body "
+        f"is not an initial-state predicate; {top_requirement}"
+    ]
+
+
+def test_source_and_top_level_commit_progress_spec_contract_errors_reject_noninspectable_init(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+    source = tmp_path / "SumeragiDirectDeliveredFirstCorridorGateEmptyInit.tla"
+    source.write_text(
+        commit_progress_spec_contract_text(
+            spec_operator=source_spec,
+            fairness_operator=source_fairness,
+            next_closure=source_next_closure,
+            fairness_actions=source_actions,
+            init_lines=["Init =="],
+        ),
+        encoding="utf-8",
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+    top = tmp_path / "SumeragiEmptyInit.tla"
+    top.write_text(
+        commit_progress_spec_contract_text(
+            spec_operator=top_spec,
+            fairness_operator=top_fairness,
+            next_closure=top_next_closure,
+            fairness_actions=top_actions,
+            init_lines=["Init =="],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.source_commit_progress_spec_contract_errors(
+        (
+            (
+                source,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+        )
+    ) == [
+        f"{source}:14 defines {source_root_kind} init operator Init, but its "
+        "body is not an inspectable single-expression definition; "
+        f"{source_root_kind} init operators must be inspectable "
+        "initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                top,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{top}:35 defines {top_root_kind} init operator Init, but its body "
+        "is not an inspectable single-expression definition; "
+        f"{top_root_kind} init operators must be inspectable "
+        "initial-state predicates"
+    ]
+
+
+def test_source_and_top_level_commit_progress_spec_contract_errors_reject_local_action_or_temporal_init_alias(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+    source = tmp_path / "SumeragiDirectDeliveredFirstCorridorGateActionInitAlias.tla"
+    source.write_text(
+        "\n".join(
+            [
+                "HiddenInit == UNCHANGED vars",
+                "",
+                *commit_progress_spec_contract_text(
+                    spec_operator=source_spec,
+                    fairness_operator=source_fairness,
+                    next_closure=source_next_closure,
+                    fairness_actions=source_actions,
+                    init_lines=["Init == HiddenInit"],
+                ).splitlines(),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+    top = tmp_path / "SumeragiTemporalInitAlias.tla"
+    top.write_text(
+        "\n".join(
+            [
+                "HiddenInit == <>committed",
+                "",
+                *commit_progress_spec_contract_text(
+                    spec_operator=top_spec,
+                    fairness_operator=top_fairness,
+                    next_closure=top_next_closure,
+                    fairness_actions=top_actions,
+                    init_lines=["Init == HiddenInit"],
+                ).splitlines(),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    source_requirement = (
+        f"{source_root_kind} init operators must be initial-state predicates "
+        "without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or <> temporal "
+        "markers"
+    )
+    top_requirement = (
+        f"{top_root_kind} init operators must be initial-state predicates "
+        "without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or <> temporal "
+        "markers"
+    )
+    assert module.source_commit_progress_spec_contract_errors(
+        (
+            (
+                source,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+        )
+    ) == [
+        f"{source}:16 defines {source_root_kind} init operator Init as "
+        f"HiddenInit, but target {source}:1 is not an initial-state "
+        f"predicate; {source_requirement}"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                top,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{top}:37 defines {top_root_kind} init operator Init as HiddenInit, "
+        f"but target {top}:1 is not an initial-state predicate; "
+        f"{top_requirement}"
+    ]
+
+
+def test_source_and_top_level_commit_progress_spec_contract_errors_reject_local_init_alias_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+    source = tmp_path / "SumeragiDirectDeliveredFirstCorridorGateUndefinedInitAlias.tla"
+    source.write_text(
+        commit_progress_spec_contract_text(
+            spec_operator=source_spec,
+            fairness_operator=source_fairness,
+            next_closure=source_next_closure,
+            fairness_actions=source_actions,
+            init_lines=["Init == HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+    parameterized = tmp_path / "SumeragiParameterizedInitAlias.tla"
+    noninspectable = tmp_path / "SumeragiNoninspectableInitAlias.tla"
+    parameterized.write_text(
+        "\n".join(
+            [
+                "HiddenInit(value) == TRUE",
+                "",
+                *commit_progress_spec_contract_text(
+                    spec_operator=top_spec,
+                    fairness_operator=top_fairness,
+                    next_closure=top_next_closure,
+                    fairness_actions=top_actions,
+                    init_lines=["Init == HiddenInit"],
+                ).splitlines(),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    noninspectable.write_text(
+        "\n".join(
+            [
+                "HiddenInit ==",
+                "",
+                *commit_progress_spec_contract_text(
+                    spec_operator=top_spec,
+                    fairness_operator=top_fairness,
+                    next_closure=top_next_closure,
+                    fairness_actions=top_actions,
+                    init_lines=["Init == HiddenInit"],
+                ).splitlines(),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.source_commit_progress_spec_contract_errors(
+        (
+            (
+                source,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+        )
+    ) == [
+        f"{source}:14 defines {source_root_kind} init operator Init as "
+        f"HiddenInit, but target {source} does not define HiddenInit; "
+        f"{source_root_kind} init aliases must resolve to defined zero-arity "
+        "initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                parameterized,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{parameterized}:37 defines {top_root_kind} init operator Init as "
+        f"HiddenInit, but target {parameterized}:1 has arity 1; "
+        f"{top_root_kind} init aliases must resolve to defined zero-arity "
+        "initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                noninspectable,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{noninspectable}:37 defines {top_root_kind} init operator Init as "
+        f"HiddenInit, but target {noninspectable}:1 is not an inspectable "
+        f"single-expression definition; {top_root_kind} init aliases must "
+        "resolve to inspectable initial-state predicates"
+    ]
+
+
+def test_source_and_top_level_commit_progress_spec_contract_errors_reject_local_init_alias_onward_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+    source = (
+        tmp_path
+        / "SumeragiDirectDeliveredFirstCorridorGateLocalOnwardActionInitAlias.tla"
+    )
+    source.write_text(
+        "\n".join(
+            [
+                "HiddenInit == OtherInit",
+                "OtherInit == UNCHANGED vars",
+                "",
+                *commit_progress_spec_contract_text(
+                    spec_operator=source_spec,
+                    fairness_operator=source_fairness,
+                    next_closure=source_next_closure,
+                    fairness_actions=source_actions,
+                    init_lines=["Init == HiddenInit"],
+                ).splitlines(),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+    parameterized = tmp_path / "SumeragiLocalOnwardParameterizedInitAlias.tla"
+    noninspectable = tmp_path / "SumeragiLocalOnwardNoninspectableInitAlias.tla"
+    parameterized.write_text(
+        "\n".join(
+            [
+                "HiddenInit == OtherInit",
+                "OtherInit(value) == TRUE",
+                "",
+                *commit_progress_spec_contract_text(
+                    spec_operator=top_spec,
+                    fairness_operator=top_fairness,
+                    next_closure=top_next_closure,
+                    fairness_actions=top_actions,
+                    init_lines=["Init == HiddenInit"],
+                ).splitlines(),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    noninspectable.write_text(
+        "\n".join(
+            [
+                "HiddenInit == OtherInit",
+                "OtherInit ==",
+                "",
+                *commit_progress_spec_contract_text(
+                    spec_operator=top_spec,
+                    fairness_operator=top_fairness,
+                    next_closure=top_next_closure,
+                    fairness_actions=top_actions,
+                    init_lines=["Init == HiddenInit"],
+                ).splitlines(),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    source_requirement = (
+        f"{source_root_kind} init operators must be initial-state predicates "
+        "without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or <> temporal "
+        "markers"
+    )
+    assert module.source_commit_progress_spec_contract_errors(
+        (
+            (
+                source,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+        )
+    ) == [
+        f"{source}:1 defines {source_root_kind} init operator HiddenInit as "
+        f"OtherInit, but target {source}:2 is not an initial-state predicate; "
+        f"{source_requirement}"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                parameterized,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{parameterized}:1 defines {top_root_kind} init operator HiddenInit "
+        f"as OtherInit, but target {parameterized}:2 has arity 1; "
+        f"{top_root_kind} init aliases must resolve to defined zero-arity "
+        "initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                noninspectable,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{noninspectable}:1 defines {top_root_kind} init operator "
+        f"HiddenInit as OtherInit, but target {noninspectable}:2 is not an "
+        f"inspectable single-expression definition; {top_root_kind} init "
+        "aliases must resolve to inspectable initial-state predicates"
+    ]
+
+
+def test_source_and_top_level_commit_progress_spec_contract_errors_reject_cyclic_init_aliases(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+    source = tmp_path / "SumeragiDirectDeliveredFirstCorridorGateCyclicInitAlias.tla"
+    source.write_text(
+        commit_progress_spec_contract_text(
+            spec_operator=source_spec,
+            fairness_operator=source_fairness,
+            next_closure=source_next_closure,
+            fairness_actions=source_actions,
+            init_lines=["Init == Init"],
+        ),
+        encoding="utf-8",
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+    top = tmp_path / "SumeragiLocalOnwardCyclicInitAlias.tla"
+    top.write_text(
+        "\n".join(
+            [
+                "HiddenInit == OtherInit",
+                "OtherInit == HiddenInit",
+                "",
+                *commit_progress_spec_contract_text(
+                    spec_operator=top_spec,
+                    fairness_operator=top_fairness,
+                    next_closure=top_next_closure,
+                    fairness_actions=top_actions,
+                    init_lines=["Init == HiddenInit"],
+                ).splitlines(),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.source_commit_progress_spec_contract_errors(
+        (
+            (
+                source,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+        )
+    ) == [
+        f"{source}:14 defines {source_root_kind} init operator Init, but "
+        f"init alias resolution cycles at Init; {source_root_kind} init "
+        "aliases must be acyclic and resolve to inspectable initial-state "
+        "predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                top,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{top}:1 defines {top_root_kind} init operator HiddenInit, but init "
+        f"alias resolution cycles at HiddenInit; {top_root_kind} init aliases "
+        "must be acyclic and resolve to inspectable initial-state predicates"
+    ]
+
+
+def test_source_and_top_level_commit_progress_spec_contract_errors_reject_imported_init_alias_without_instance(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+    source = (
+        tmp_path
+        / "SumeragiDirectDeliveredFirstCorridorGateMissingInitInstanceAlias.tla"
+    )
+    source.write_text(
+        commit_progress_spec_contract_text(
+            spec_operator=source_spec,
+            fairness_operator=source_fairness,
+            next_closure=source_next_closure,
+            fairness_actions=source_actions,
+            init_lines=["Init == Missing!Init"],
+        ),
+        encoding="utf-8",
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+    top = tmp_path / "SumeragiMissingInitInstanceAlias.tla"
+    top.write_text(
+        commit_progress_spec_contract_text(
+            spec_operator=top_spec,
+            fairness_operator=top_fairness,
+            next_closure=top_next_closure,
+            fairness_actions=top_actions,
+            init_lines=["Init == Missing!Init"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.source_commit_progress_spec_contract_errors(
+        (
+            (
+                source,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+        )
+    ) == [
+        f"{source}:14 defines {source_root_kind} init operator Init, but "
+        f"aliases Missing!Init without a named INSTANCE alias Missing; "
+        f"{source_root_kind} init aliases must resolve through named local "
+        "INSTANCE declarations"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                top,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{top}:35 defines {top_root_kind} init operator Init, but aliases "
+        f"Missing!Init without a named INSTANCE alias Missing; {top_root_kind} "
+        "init aliases must resolve through named local INSTANCE declarations"
+    ]
+
+
+def test_source_and_top_level_commit_progress_spec_contract_errors_reject_imported_init_alias_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+    missing_target = tmp_path / "SumeragiSourceInitAliasMissingTarget.tla"
+    source = (
+        tmp_path
+        / "SumeragiDirectDeliveredFirstCorridorGateImportedMissingInitAliasTarget.tla"
+    )
+    source.write_text(
+        "\n".join(
+            [
+                "Interleaving == INSTANCE SumeragiSourceInitAliasMissingTarget",
+                "",
+                *commit_progress_spec_contract_text(
+                    spec_operator=source_spec,
+                    fairness_operator=source_fairness,
+                    next_closure=source_next_closure,
+                    fairness_actions=source_actions,
+                    init_lines=["Init == Interleaving!Init"],
+                ).splitlines(),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+    undefined_target = tmp_path / "SumeragiTopInitAliasUndefinedTarget.tla"
+    undefined_target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTopInitAliasUndefinedTarget ----",
+                "VARIABLES vars",
+                "Other == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    parameterized_target = tmp_path / "SumeragiTopInitAliasParameterizedTarget.tla"
+    parameterized_target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTopInitAliasParameterizedTarget ----",
+                "VARIABLES vars",
+                "Init(value) == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    noninspectable_target = tmp_path / "SumeragiTopInitAliasNoninspectableTarget.tla"
+    noninspectable_target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTopInitAliasNoninspectableTarget ----",
+                "VARIABLES vars",
+                "Init ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    undefined = tmp_path / "SumeragiImportedUndefinedInitAliasTarget.tla"
+    undefined.write_text(
+        "\n".join(
+            [
+                "Interleaving == INSTANCE SumeragiTopInitAliasUndefinedTarget",
+                "",
+                *commit_progress_spec_contract_text(
+                    spec_operator=top_spec,
+                    fairness_operator=top_fairness,
+                    next_closure=top_next_closure,
+                    fairness_actions=top_actions,
+                    init_lines=["Init == Interleaving!Init"],
+                ).splitlines(),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    parameterized = tmp_path / "SumeragiImportedParameterizedInitAliasTarget.tla"
+    parameterized.write_text(
+        "\n".join(
+            [
+                "Interleaving == INSTANCE SumeragiTopInitAliasParameterizedTarget",
+                "",
+                *commit_progress_spec_contract_text(
+                    spec_operator=top_spec,
+                    fairness_operator=top_fairness,
+                    next_closure=top_next_closure,
+                    fairness_actions=top_actions,
+                    init_lines=["Init == Interleaving!Init"],
+                ).splitlines(),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    noninspectable = tmp_path / "SumeragiImportedNoninspectableInitAliasTarget.tla"
+    noninspectable.write_text(
+        "\n".join(
+            [
+                "Interleaving == INSTANCE SumeragiTopInitAliasNoninspectableTarget",
+                "",
+                *commit_progress_spec_contract_text(
+                    spec_operator=top_spec,
+                    fairness_operator=top_fairness,
+                    next_closure=top_next_closure,
+                    fairness_actions=top_actions,
+                    init_lines=["Init == Interleaving!Init"],
+                ).splitlines(),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.source_commit_progress_spec_contract_errors(
+        (
+            (
+                source,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+        )
+    ) == [
+        f"{source}:16 defines {source_root_kind} init operator Init as "
+        f"Interleaving!Init, but target module {missing_target} does not "
+        f"exist; {source_root_kind} init aliases must resolve to local modules"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                undefined,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{undefined}:37 defines {top_root_kind} init operator Init as "
+        f"Interleaving!Init, but target {undefined_target} does not define "
+        f"Init; {top_root_kind} init aliases must resolve to defined "
+        "zero-arity initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                parameterized,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{parameterized}:37 defines {top_root_kind} init operator Init as "
+        f"Interleaving!Init, but target {parameterized_target}:3 has arity 1; "
+        f"{top_root_kind} init aliases must resolve to defined zero-arity "
+        "initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                noninspectable,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{noninspectable}:37 defines {top_root_kind} init operator Init as "
+        f"Interleaving!Init, but target {noninspectable_target}:3 is not an "
+        f"inspectable single-expression definition; {top_root_kind} init "
+        "aliases must resolve to inspectable initial-state predicates"
+    ]
+
+
+def test_source_and_top_level_commit_progress_spec_contract_errors_reject_imported_init_alias_onward_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+    source_target = tmp_path / "SumeragiSourceImportedInitOnwardActionTarget.tla"
+    source_target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiSourceImportedInitOnwardActionTarget ----",
+                "VARIABLES vars",
+                "Init == HiddenInit",
+                "HiddenInit == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    source = (
+        tmp_path
+        / "SumeragiDirectDeliveredFirstCorridorGateImportedOnwardActionInitAlias.tla"
+    )
+    source.write_text(
+        "\n".join(
+            [
+                "Interleaving == INSTANCE SumeragiSourceImportedInitOnwardActionTarget",
+                "",
+                *commit_progress_spec_contract_text(
+                    spec_operator=source_spec,
+                    fairness_operator=source_fairness,
+                    next_closure=source_next_closure,
+                    fairness_actions=source_actions,
+                    init_lines=["Init == Interleaving!Init"],
+                ).splitlines(),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+    undefined_target = tmp_path / "SumeragiTopImportedInitOnwardUndefinedTarget.tla"
+    undefined_target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTopImportedInitOnwardUndefinedTarget ----",
+                "VARIABLES vars",
+                "Init == HiddenInit",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    parameterized_target = (
+        tmp_path / "SumeragiTopImportedInitOnwardParameterizedTarget.tla"
+    )
+    parameterized_target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTopImportedInitOnwardParameterizedTarget ----",
+                "VARIABLES vars",
+                "Init == HiddenInit",
+                "HiddenInit(value) == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    noninspectable_target = (
+        tmp_path / "SumeragiTopImportedInitOnwardNoninspectableTarget.tla"
+    )
+    noninspectable_target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTopImportedInitOnwardNoninspectableTarget ----",
+                "VARIABLES vars",
+                "Init == HiddenInit",
+                "HiddenInit ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    undefined = tmp_path / "SumeragiImportedOnwardUndefinedInitAlias.tla"
+    undefined.write_text(
+        "\n".join(
+            [
+                "Interleaving == INSTANCE SumeragiTopImportedInitOnwardUndefinedTarget",
+                "",
+                *commit_progress_spec_contract_text(
+                    spec_operator=top_spec,
+                    fairness_operator=top_fairness,
+                    next_closure=top_next_closure,
+                    fairness_actions=top_actions,
+                    init_lines=["Init == Interleaving!Init"],
+                ).splitlines(),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    parameterized = tmp_path / "SumeragiImportedOnwardParameterizedInitAlias.tla"
+    parameterized.write_text(
+        "\n".join(
+            [
+                "Interleaving == INSTANCE SumeragiTopImportedInitOnwardParameterizedTarget",
+                "",
+                *commit_progress_spec_contract_text(
+                    spec_operator=top_spec,
+                    fairness_operator=top_fairness,
+                    next_closure=top_next_closure,
+                    fairness_actions=top_actions,
+                    init_lines=["Init == Interleaving!Init"],
+                ).splitlines(),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    noninspectable = tmp_path / "SumeragiImportedOnwardNoninspectableInitAlias.tla"
+    noninspectable.write_text(
+        "\n".join(
+            [
+                "Interleaving == INSTANCE SumeragiTopImportedInitOnwardNoninspectableTarget",
+                "",
+                *commit_progress_spec_contract_text(
+                    spec_operator=top_spec,
+                    fairness_operator=top_fairness,
+                    next_closure=top_next_closure,
+                    fairness_actions=top_actions,
+                    init_lines=["Init == Interleaving!Init"],
+                ).splitlines(),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    source_requirement = (
+        f"{source_root_kind} init operators must be initial-state predicates "
+        "without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or <> temporal "
+        "markers"
+    )
+    assert module.source_commit_progress_spec_contract_errors(
+        (
+            (
+                source,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+        )
+    ) == [
+        f"{source_target}:3 defines {source_root_kind} init operator Init as "
+        f"HiddenInit, but target {source_target}:4 is not an initial-state "
+        f"predicate; {source_requirement}"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                undefined,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{undefined_target}:3 defines {top_root_kind} init operator Init as "
+        f"HiddenInit, but target {undefined_target} does not define "
+        f"HiddenInit; {top_root_kind} init aliases must resolve to defined "
+        "zero-arity initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                parameterized,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{parameterized_target}:3 defines {top_root_kind} init operator Init "
+        f"as HiddenInit, but target {parameterized_target}:4 has arity 1; "
+        f"{top_root_kind} init aliases must resolve to defined zero-arity "
+        "initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                noninspectable,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{noninspectable_target}:3 defines {top_root_kind} init operator "
+        f"Init as HiddenInit, but target {noninspectable_target}:4 is not an "
+        f"inspectable single-expression definition; {top_root_kind} init "
+        "aliases must resolve to inspectable initial-state predicates"
+    ]
+
+def test_source_and_top_level_commit_progress_spec_contract_errors_reject_init_helper_conjunct_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+    source = tmp_path / "SumeragiDirectDeliveredFirstCorridorGateHelperConjunct.tla"
+    source.write_text(
+        commit_progress_spec_contract_text(
+            spec_operator=source_spec,
+            fairness_operator=source_fairness,
+            next_closure=source_next_closure,
+            fairness_actions=source_actions,
+            init_lines=[
+                "GoodInit == vars = vars",
+                "HiddenInit == UNCHANGED vars",
+                "Init == GoodInit /\\ HiddenInit",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+    top = tmp_path / "SumeragiHelperConjunct.tla"
+    top.write_text(
+        commit_progress_spec_contract_text(
+            spec_operator=top_spec,
+            fairness_operator=top_fairness,
+            next_closure=top_next_closure,
+            fairness_actions=top_actions,
+            init_lines=[
+                "GoodInit == vars = vars",
+                "HiddenInit == UNCHANGED vars",
+                "Init == GoodInit /\\ HiddenInit",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    source_requirement = (
+        f"{source_root_kind} init operators must be initial-state predicates "
+        "without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or <> temporal "
+        "markers"
+    )
+    top_requirement = (
+        f"{top_root_kind} init operators must be initial-state predicates "
+        "without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or <> temporal "
+        "markers"
+    )
+    assert module.source_commit_progress_spec_contract_errors(
+        (
+            (
+                source,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+        )
+    ) == [
+        f"{source}:16 defines {source_root_kind} init operator Init, but "
+        f"helper HiddenInit at {source}:15 is not an initial-state predicate; "
+        f"{source_requirement}"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                top,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{top}:37 defines {top_root_kind} init operator Init, but helper "
+        f"HiddenInit at {top}:36 is not an initial-state predicate; "
+        f"{top_requirement}"
+    ]
+
+
+def test_source_and_top_level_commit_progress_spec_contract_errors_reject_imported_init_alias_helper_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+    source_target = tmp_path / "SumeragiSourceImportedInitHelperActionTarget.tla"
+    source_target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiSourceImportedInitHelperActionTarget ----",
+                "VARIABLES vars",
+                "GoodInit == vars = vars",
+                "Init == GoodInit /\\ HiddenInit",
+                "HiddenInit == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    source = (
+        tmp_path
+        / "SumeragiDirectDeliveredFirstCorridorGateImportedHelperActionInitAlias.tla"
+    )
+    source.write_text(
+        "\n".join(
+            [
+                "Interleaving == INSTANCE SumeragiSourceImportedInitHelperActionTarget",
+                "",
+                *commit_progress_spec_contract_text(
+                    spec_operator=source_spec,
+                    fairness_operator=source_fairness,
+                    next_closure=source_next_closure,
+                    fairness_actions=source_actions,
+                    init_lines=["Init == Interleaving!Init"],
+                ).splitlines(),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+    parameterized_target = tmp_path / "SumeragiTopImportedInitHelperParameterizedTarget.tla"
+    parameterized_target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTopImportedInitHelperParameterizedTarget ----",
+                "VARIABLES vars",
+                "GoodInit == vars = vars",
+                "Init == GoodInit /\\ HiddenInit",
+                "HiddenInit(value) == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    noninspectable_target = tmp_path / "SumeragiTopImportedInitHelperNoninspectableTarget.tla"
+    noninspectable_target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTopImportedInitHelperNoninspectableTarget ----",
+                "VARIABLES vars",
+                "GoodInit == vars = vars",
+                "Init == GoodInit \\/ HiddenInit",
+                "HiddenInit ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    parameterized = tmp_path / "SumeragiImportedHelperParameterizedInitAlias.tla"
+    parameterized.write_text(
+        "\n".join(
+            [
+                "Interleaving == INSTANCE SumeragiTopImportedInitHelperParameterizedTarget",
+                "",
+                *commit_progress_spec_contract_text(
+                    spec_operator=top_spec,
+                    fairness_operator=top_fairness,
+                    next_closure=top_next_closure,
+                    fairness_actions=top_actions,
+                    init_lines=["Init == Interleaving!Init"],
+                ).splitlines(),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    noninspectable = tmp_path / "SumeragiImportedHelperNoninspectableInitAlias.tla"
+    noninspectable.write_text(
+        "\n".join(
+            [
+                "Interleaving == INSTANCE SumeragiTopImportedInitHelperNoninspectableTarget",
+                "",
+                *commit_progress_spec_contract_text(
+                    spec_operator=top_spec,
+                    fairness_operator=top_fairness,
+                    next_closure=top_next_closure,
+                    fairness_actions=top_actions,
+                    init_lines=["Init == Interleaving!Init"],
+                ).splitlines(),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    source_requirement = (
+        f"{source_root_kind} init operators must be initial-state predicates "
+        "without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or <> temporal "
+        "markers"
+    )
+    assert module.source_commit_progress_spec_contract_errors(
+        (
+            (
+                source,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+        )
+    ) == [
+        f"{source_target}:4 defines {source_root_kind} init operator Init, "
+        f"but helper HiddenInit at {source_target}:5 is not an initial-state "
+        f"predicate; {source_requirement}"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                parameterized,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{parameterized_target}:4 defines {top_root_kind} init operator "
+        f"Init, but helper HiddenInit at {parameterized_target}:5 has arity "
+        f"1; {top_root_kind} init helpers must resolve to defined zero-arity "
+        "initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                noninspectable,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{noninspectable_target}:4 defines {top_root_kind} init operator "
+        f"Init, but helper HiddenInit at {noninspectable_target}:5 is not an "
+        f"inspectable single-expression definition; {top_root_kind} init "
+        "helpers must resolve to inspectable initial-state predicates"
+    ]
+
+
+def test_source_and_top_level_commit_progress_spec_contract_errors_reject_imported_init_alias_helper_cycles(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+    source_target = tmp_path / "SumeragiSourceImportedInitHelperCycleTarget.tla"
+    source_target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiSourceImportedInitHelperCycleTarget ----",
+                "VARIABLES vars",
+                "GoodInit == vars = vars",
+                "Init == GoodInit /\\ HiddenInit",
+                "HiddenInit == GoodInit /\\ HiddenInit",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    source = (
+        tmp_path
+        / "SumeragiDirectDeliveredFirstCorridorGateImportedHelperCycleInitAlias.tla"
+    )
+    source.write_text(
+        "\n".join(
+            [
+                "Interleaving == INSTANCE SumeragiSourceImportedInitHelperCycleTarget",
+                "",
+                *commit_progress_spec_contract_text(
+                    spec_operator=source_spec,
+                    fairness_operator=source_fairness,
+                    next_closure=source_next_closure,
+                    fairness_actions=source_actions,
+                    init_lines=["Init == Interleaving!Init"],
+                ).splitlines(),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+    top_target = tmp_path / "SumeragiTopImportedInitBooleanHelperCycleTarget.tla"
+    top_target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTopImportedInitBooleanHelperCycleTarget ----",
+                "VARIABLES vars",
+                "GoodInit == vars = vars",
+                "Init == GoodInit \\/ HiddenInit",
+                "HiddenInit == GoodInit \\/ HiddenInit",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    top = tmp_path / "SumeragiImportedBooleanHelperCycleInitAlias.tla"
+    top.write_text(
+        "\n".join(
+            [
+                "Interleaving == INSTANCE SumeragiTopImportedInitBooleanHelperCycleTarget",
+                "",
+                *commit_progress_spec_contract_text(
+                    spec_operator=top_spec,
+                    fairness_operator=top_fairness,
+                    next_closure=top_next_closure,
+                    fairness_actions=top_actions,
+                    init_lines=["Init == Interleaving!Init"],
+                ).splitlines(),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.source_commit_progress_spec_contract_errors(
+        (
+            (
+                source,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+        )
+    ) == [
+        f"{source_target}:5 defines {source_root_kind} init operator "
+        "HiddenInit, but init helper resolution cycles at HiddenInit; "
+        f"{source_root_kind} init helpers must be acyclic and resolve to "
+        "inspectable initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                top,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{top_target}:5 defines {top_root_kind} init operator HiddenInit, "
+        "but init helper resolution cycles at HiddenInit; "
+        f"{top_root_kind} init helpers must be acyclic and resolve to "
+        "inspectable initial-state predicates"
+    ]
+
+
+def test_source_and_top_level_commit_progress_spec_contract_errors_reject_imported_init_alias_module_helper_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def progress_with_import(
+        *,
+        target_name: str,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+    ) -> str:
+        return "\n".join(
+            [
+                f"Interleaving == INSTANCE {target_name}",
+                "",
+                *commit_progress_spec_contract_text(
+                    spec_operator=spec_operator,
+                    fairness_operator=fairness_operator,
+                    next_closure=next_closure,
+                    fairness_actions=fairness_actions,
+                    init_lines=["Init == Interleaving!Init"],
+                ).splitlines(),
+            ]
+        )
+
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+    source_target_name = "SumeragiSourceImportedInitModuleHelperWithoutInstanceTarget"
+    source_target = tmp_path / f"{source_target_name}.tla"
+    source_target.write_text(
+        "\n".join(
+            [
+                f"---- MODULE {source_target_name} ----",
+                "VARIABLES vars",
+                "GoodInit == vars = vars",
+                "Init == GoodInit /\\ Inner!HiddenInit",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    source = (
+        tmp_path
+        / "SumeragiDirectDeliveredFirstCorridorGateImportedModuleHelperNoInstance.tla"
+    )
+    source.write_text(
+        progress_with_import(
+            target_name=source_target_name,
+            spec_operator=source_spec,
+            fairness_operator=source_fairness,
+            next_closure=source_next_closure,
+            fairness_actions=source_actions,
+        ),
+        encoding="utf-8",
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+
+    def write_top_target(
+        target_name: str,
+        inner_name: str,
+        connective: str,
+    ) -> Path:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    f"Inner == INSTANCE {inner_name}",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} Inner!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return target
+
+    def write_inner(inner_name: str, body: str) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    body,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    missing_target_name = "SumeragiTopImportedInitModuleHelperMissingTarget"
+    missing_inner_name = "SumeragiTopImportedInitModuleHelperMissingInner"
+    missing_target = write_top_target(missing_target_name, missing_inner_name, "/\\")
+    missing_inner = tmp_path / f"{missing_inner_name}.tla"
+    missing = tmp_path / "SumeragiImportedModuleHelperMissingTarget.tla"
+    missing.write_text(
+        progress_with_import(
+            target_name=missing_target_name,
+            spec_operator=top_spec,
+            fairness_operator=top_fairness,
+            next_closure=top_next_closure,
+            fairness_actions=top_actions,
+        ),
+        encoding="utf-8",
+    )
+
+    action_target_name = "SumeragiTopImportedInitModuleHelperActionTarget"
+    action_inner_name = "SumeragiTopImportedInitModuleHelperActionInner"
+    action_target = write_top_target(action_target_name, action_inner_name, "/\\")
+    action_inner = write_inner(action_inner_name, "HiddenInit == UNCHANGED vars")
+    action = tmp_path / "SumeragiImportedModuleHelperActionTarget.tla"
+    action.write_text(
+        progress_with_import(
+            target_name=action_target_name,
+            spec_operator=top_spec,
+            fairness_operator=top_fairness,
+            next_closure=top_next_closure,
+            fairness_actions=top_actions,
+        ),
+        encoding="utf-8",
+    )
+
+    parameterized_target_name = "SumeragiTopImportedInitModuleHelperParameterizedTarget"
+    parameterized_inner_name = "SumeragiTopImportedInitModuleHelperParameterizedInner"
+    parameterized_target = write_top_target(
+        parameterized_target_name,
+        parameterized_inner_name,
+        "/\\",
+    )
+    parameterized_inner = write_inner(
+        parameterized_inner_name,
+        "HiddenInit(value) == TRUE",
+    )
+    parameterized = tmp_path / "SumeragiImportedModuleHelperParameterizedTarget.tla"
+    parameterized.write_text(
+        progress_with_import(
+            target_name=parameterized_target_name,
+            spec_operator=top_spec,
+            fairness_operator=top_fairness,
+            next_closure=top_next_closure,
+            fairness_actions=top_actions,
+        ),
+        encoding="utf-8",
+    )
+
+    noninspectable_target_name = "SumeragiTopImportedInitModuleHelperNoninspectableTarget"
+    noninspectable_inner_name = "SumeragiTopImportedInitModuleHelperNoninspectableInner"
+    noninspectable_target = write_top_target(
+        noninspectable_target_name,
+        noninspectable_inner_name,
+        "\\/",
+    )
+    noninspectable_inner = write_inner(noninspectable_inner_name, "HiddenInit ==")
+    noninspectable = tmp_path / "SumeragiImportedModuleHelperNoninspectableTarget.tla"
+    noninspectable.write_text(
+        progress_with_import(
+            target_name=noninspectable_target_name,
+            spec_operator=top_spec,
+            fairness_operator=top_fairness,
+            next_closure=top_next_closure,
+            fairness_actions=top_actions,
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.source_commit_progress_spec_contract_errors(
+        (
+            (
+                source,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+        )
+    ) == [
+        f"{source_target}:4 defines {source_root_kind} init operator Init, "
+        "but module helper Inner!HiddenInit has no named INSTANCE alias "
+        f"Inner; {source_root_kind} init module-alias helpers must resolve "
+        "through named local INSTANCE declarations"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                missing,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{missing_target}:5 defines {top_root_kind} init operator Init, but "
+        f"module helper Inner!HiddenInit targets missing module {missing_inner}; "
+        f"{top_root_kind} init module-alias helpers must resolve to local modules"
+    ]
+
+    top_shape_requirement = (
+        f"{top_root_kind} init operators must be initial-state predicates "
+        "without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or <> temporal "
+        "markers"
+    )
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                action,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{action_target}:5 defines {top_root_kind} init operator Init, but "
+        f"module helper Inner!HiddenInit target {action_inner}:3 is not an "
+        f"initial-state predicate; {top_shape_requirement}"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                parameterized,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{parameterized_target}:5 defines {top_root_kind} init operator "
+        f"Init, but module helper Inner!HiddenInit target "
+        f"{parameterized_inner}:3 has arity 1; {top_root_kind} init "
+        "module-alias helpers must resolve to defined zero-arity "
+        "initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                noninspectable,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{noninspectable_target}:5 defines {top_root_kind} init operator "
+        f"Init, but module helper Inner!HiddenInit target "
+        f"{noninspectable_inner}:3 is not an inspectable "
+        f"single-expression definition; {top_root_kind} init module-alias "
+        "helpers must resolve to inspectable initial-state predicates"
+    ]
+
+
+def test_source_and_top_level_commit_progress_spec_contract_errors_reject_imported_init_alias_module_helper_cycles(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def progress_with_import(
+        *,
+        target_name: str,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+    ) -> str:
+        return "\n".join(
+            [
+                f"Interleaving == INSTANCE {target_name}",
+                "",
+                *commit_progress_spec_contract_text(
+                    spec_operator=spec_operator,
+                    fairness_operator=fairness_operator,
+                    next_closure=next_closure,
+                    fairness_actions=fairness_actions,
+                    init_lines=["Init == Interleaving!Init"],
+                ).splitlines(),
+            ]
+        )
+
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+    source_target_name = "SumeragiSourceImportedInitModuleHelperCycleTarget"
+    source_target = tmp_path / f"{source_target_name}.tla"
+    source_target.write_text(
+        "\n".join(
+            [
+                f"---- MODULE {source_target_name} ----",
+                "VARIABLES vars",
+                f"Self == INSTANCE {source_target_name}",
+                "GoodInit == vars = vars",
+                "Init == GoodInit /\\ Self!Init",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    source = (
+        tmp_path
+        / "SumeragiDirectDeliveredFirstCorridorGateImportedModuleHelperCycle.tla"
+    )
+    source.write_text(
+        progress_with_import(
+            target_name=source_target_name,
+            spec_operator=source_spec,
+            fairness_operator=source_fairness,
+            next_closure=source_next_closure,
+            fairness_actions=source_actions,
+        ),
+        encoding="utf-8",
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+    top_target_name = "SumeragiTopImportedInitBooleanModuleHelperCycleTarget"
+    top_target = tmp_path / f"{top_target_name}.tla"
+    top_target.write_text(
+        "\n".join(
+            [
+                f"---- MODULE {top_target_name} ----",
+                "VARIABLES vars",
+                f"Self == INSTANCE {top_target_name}",
+                "GoodInit == vars = vars",
+                "Init == GoodInit \\/ Self!Init",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    top = tmp_path / "SumeragiImportedBooleanModuleHelperCycle.tla"
+    top.write_text(
+        progress_with_import(
+            target_name=top_target_name,
+            spec_operator=top_spec,
+            fairness_operator=top_fairness,
+            next_closure=top_next_closure,
+            fairness_actions=top_actions,
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.source_commit_progress_spec_contract_errors(
+        (
+            (
+                source,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+        )
+    ) == [
+        f"{source_target}:5 defines {source_root_kind} init operator Init, "
+        f"but module helper Self!Init cycles at Init; {source_root_kind} init "
+        "module-alias helpers must be acyclic and resolve to inspectable "
+        "initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                top,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{top_target}:5 defines {top_root_kind} init operator Init, but "
+        f"module helper Self!Init cycles at Init; {top_root_kind} init "
+        "module-alias helpers must be acyclic and resolve to inspectable "
+        "initial-state predicates"
+    ]
+
+
+def test_source_and_top_level_commit_progress_spec_contract_errors_reject_imported_init_alias_module_helper_onward_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def progress_with_import(
+        *,
+        target_name: str,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+    ) -> str:
+        return "\n".join(
+            [
+                f"Interleaving == INSTANCE {target_name}",
+                "",
+                *commit_progress_spec_contract_text(
+                    spec_operator=spec_operator,
+                    fairness_operator=fairness_operator,
+                    next_closure=next_closure,
+                    fairness_actions=fairness_actions,
+                    init_lines=["Init == Interleaving!Init"],
+                ).splitlines(),
+            ]
+        )
+
+    def write_imported_target(
+        target_name: str,
+        inner_name: str,
+        connective: str,
+    ) -> Path:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    f"Inner == INSTANCE {inner_name}",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} Inner!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return target
+
+    def write_inner(inner_name: str, leaf_name: str) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    f"Leaf == INSTANCE {leaf_name}",
+                    "HiddenInit == Leaf!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_leaf(leaf_name: str, body: str) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    body,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    def write_cyclic_leaf(leaf_name: str) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    "Init == HiddenInit",
+                    "HiddenInit == Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+    source_target_name = "SumeragiSourceImportedInitModuleHelperOnwardActionTarget"
+    source_inner_name = "SumeragiSourceImportedInitModuleHelperOnwardActionInner"
+    source_leaf_name = "SumeragiSourceImportedInitModuleHelperOnwardActionLeaf"
+    write_imported_target(source_target_name, source_inner_name, "/\\")
+    source_inner = write_inner(source_inner_name, source_leaf_name)
+    source_leaf = write_leaf(source_leaf_name, "Init == UNCHANGED vars")
+    source = tmp_path / "SumeragiDirectDeliveredFirstCorridorGateImportedModuleHelperOnwardAction.tla"
+    source.write_text(
+        progress_with_import(
+            target_name=source_target_name,
+            spec_operator=source_spec,
+            fairness_operator=source_fairness,
+            next_closure=source_next_closure,
+            fairness_actions=source_actions,
+        ),
+        encoding="utf-8",
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+
+    def write_top_wrapper(filename: str, target_name: str) -> Path:
+        top = tmp_path / filename
+        top.write_text(
+            progress_with_import(
+                target_name=target_name,
+                spec_operator=top_spec,
+                fairness_operator=top_fairness,
+                next_closure=top_next_closure,
+                fairness_actions=top_actions,
+            ),
+            encoding="utf-8",
+        )
+        return top
+
+    missing_target_name = "SumeragiTopImportedInitModuleHelperOnwardMissingTarget"
+    missing_inner_name = "SumeragiTopImportedInitModuleHelperOnwardMissingInner"
+    missing_leaf_name = "SumeragiTopImportedInitModuleHelperOnwardMissingLeaf"
+    write_imported_target(missing_target_name, missing_inner_name, "\\/")
+    missing_inner = write_inner(missing_inner_name, missing_leaf_name)
+    missing_leaf = tmp_path / f"{missing_leaf_name}.tla"
+    missing = write_top_wrapper(
+        "SumeragiImportedModuleHelperOnwardMissing.tla",
+        missing_target_name,
+    )
+
+    undefined_target_name = "SumeragiTopImportedInitModuleHelperOnwardUndefinedTarget"
+    undefined_inner_name = "SumeragiTopImportedInitModuleHelperOnwardUndefinedInner"
+    undefined_leaf_name = "SumeragiTopImportedInitModuleHelperOnwardUndefinedLeaf"
+    write_imported_target(undefined_target_name, undefined_inner_name, "\\/")
+    undefined_inner = write_inner(undefined_inner_name, undefined_leaf_name)
+    undefined_leaf = write_leaf(undefined_leaf_name, "Other == TRUE")
+    undefined = write_top_wrapper(
+        "SumeragiImportedModuleHelperOnwardUndefined.tla",
+        undefined_target_name,
+    )
+
+    parameterized_target_name = (
+        "SumeragiTopImportedInitModuleHelperOnwardParameterizedTarget"
+    )
+    parameterized_inner_name = (
+        "SumeragiTopImportedInitModuleHelperOnwardParameterizedInner"
+    )
+    parameterized_leaf_name = (
+        "SumeragiTopImportedInitModuleHelperOnwardParameterizedLeaf"
+    )
+    write_imported_target(parameterized_target_name, parameterized_inner_name, "\\/")
+    parameterized_inner = write_inner(parameterized_inner_name, parameterized_leaf_name)
+    parameterized_leaf = write_leaf(parameterized_leaf_name, "Init(value) == TRUE")
+    parameterized = write_top_wrapper(
+        "SumeragiImportedModuleHelperOnwardParameterized.tla",
+        parameterized_target_name,
+    )
+
+    noninspectable_target_name = (
+        "SumeragiTopImportedInitModuleHelperOnwardNoninspectableTarget"
+    )
+    noninspectable_inner_name = (
+        "SumeragiTopImportedInitModuleHelperOnwardNoninspectableInner"
+    )
+    noninspectable_leaf_name = (
+        "SumeragiTopImportedInitModuleHelperOnwardNoninspectableLeaf"
+    )
+    write_imported_target(
+        noninspectable_target_name,
+        noninspectable_inner_name,
+        "\\/",
+    )
+    noninspectable_inner = write_inner(
+        noninspectable_inner_name,
+        noninspectable_leaf_name,
+    )
+    noninspectable_leaf = write_leaf(noninspectable_leaf_name, "Init ==")
+    noninspectable = write_top_wrapper(
+        "SumeragiImportedModuleHelperOnwardNoninspectable.tla",
+        noninspectable_target_name,
+    )
+
+    cycle_target_name = "SumeragiTopImportedInitModuleHelperOnwardCycleTarget"
+    cycle_inner_name = "SumeragiTopImportedInitModuleHelperOnwardCycleInner"
+    cycle_leaf_name = "SumeragiTopImportedInitModuleHelperOnwardCycleLeaf"
+    write_imported_target(cycle_target_name, cycle_inner_name, "\\/")
+    write_inner(cycle_inner_name, cycle_leaf_name)
+    cycle_leaf = write_cyclic_leaf(cycle_leaf_name)
+    cycle = write_top_wrapper(
+        "SumeragiImportedModuleHelperOnwardCycle.tla",
+        cycle_target_name,
+    )
+
+    source_shape_requirement = (
+        f"{source_root_kind} init operators must be initial-state predicates "
+        "without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or <> temporal "
+        "markers"
+    )
+    assert module.source_commit_progress_spec_contract_errors(
+        (
+            (
+                source,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+        )
+    ) == [
+        f"{source_inner}:4 defines {source_root_kind} init operator "
+        f"HiddenInit as Leaf!Init, but target {source_leaf}:3 is not an "
+        f"initial-state predicate; {source_shape_requirement}"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                missing,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{missing_inner}:4 defines {top_root_kind} init operator HiddenInit "
+        f"as Leaf!Init, but target module {missing_leaf} does not exist; "
+        f"{top_root_kind} init aliases must resolve to local modules"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                undefined,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{undefined_inner}:4 defines {top_root_kind} init operator "
+        f"HiddenInit as Leaf!Init, but target {undefined_leaf} does not "
+        f"define Init; {top_root_kind} init aliases must resolve to defined "
+        "zero-arity initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                parameterized,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{parameterized_inner}:4 defines {top_root_kind} init operator "
+        f"HiddenInit as Leaf!Init, but target {parameterized_leaf}:3 has "
+        f"arity 1; {top_root_kind} init aliases must resolve to defined "
+        "zero-arity initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                noninspectable,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{noninspectable_inner}:4 defines {top_root_kind} init operator "
+        f"HiddenInit as Leaf!Init, but target {noninspectable_leaf}:3 is "
+        "not an inspectable single-expression definition; "
+        f"{top_root_kind} init aliases must resolve to inspectable "
+        "initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                cycle,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{cycle_leaf}:3 defines {top_root_kind} init operator Init, but "
+        f"init alias resolution cycles at Init; {top_root_kind} init aliases "
+        "must be acyclic and resolve to inspectable initial-state predicates"
+    ]
+
+
+def test_source_and_top_level_commit_progress_spec_contract_errors_reject_imported_init_alias_nested_helper_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def progress_with_import(
+        *,
+        target_name: str,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+    ) -> str:
+        return "\n".join(
+            [
+                f"Interleaving == INSTANCE {target_name}",
+                "",
+                *commit_progress_spec_contract_text(
+                    spec_operator=spec_operator,
+                    fairness_operator=fairness_operator,
+                    next_closure=next_closure,
+                    fairness_actions=fairness_actions,
+                    init_lines=["Init == Interleaving!Init"],
+                ).splitlines(),
+            ]
+        )
+
+    def write_imported_target(
+        target_name: str,
+        inner_name: str,
+        connective: str,
+    ) -> Path:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    f"Inner == INSTANCE {inner_name}",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} Inner!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return target
+
+    def write_inner(inner_name: str, helper_body: str, connective: str) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} LocalInit",
+                    helper_body,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+    source_target_name = "SumeragiSourceImportedInitNestedHelperActionTarget"
+    source_inner_name = "SumeragiSourceImportedInitNestedHelperActionInner"
+    write_imported_target(source_target_name, source_inner_name, "/\\")
+    source_inner = write_inner(
+        source_inner_name,
+        "LocalInit == UNCHANGED vars",
+        "/\\",
+    )
+    source = (
+        tmp_path
+        / "SumeragiDirectDeliveredFirstCorridorGateImportedNestedHelperAction.tla"
+    )
+    source.write_text(
+        progress_with_import(
+            target_name=source_target_name,
+            spec_operator=source_spec,
+            fairness_operator=source_fairness,
+            next_closure=source_next_closure,
+            fairness_actions=source_actions,
+        ),
+        encoding="utf-8",
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+
+    def write_top_wrapper(filename: str, target_name: str) -> Path:
+        top = tmp_path / filename
+        top.write_text(
+            progress_with_import(
+                target_name=target_name,
+                spec_operator=top_spec,
+                fairness_operator=top_fairness,
+                next_closure=top_next_closure,
+                fairness_actions=top_actions,
+            ),
+            encoding="utf-8",
+        )
+        return top
+
+    parameterized_target_name = (
+        "SumeragiTopImportedInitNestedHelperParameterizedTarget"
+    )
+    parameterized_inner_name = (
+        "SumeragiTopImportedInitNestedHelperParameterizedInner"
+    )
+    write_imported_target(parameterized_target_name, parameterized_inner_name, "\\/")
+    parameterized_inner = write_inner(
+        parameterized_inner_name,
+        "LocalInit(value) == TRUE",
+        "\\/",
+    )
+    parameterized = write_top_wrapper(
+        "SumeragiImportedNestedHelperParameterized.tla",
+        parameterized_target_name,
+    )
+
+    noninspectable_target_name = (
+        "SumeragiTopImportedInitNestedHelperNoninspectableTarget"
+    )
+    noninspectable_inner_name = (
+        "SumeragiTopImportedInitNestedHelperNoninspectableInner"
+    )
+    write_imported_target(noninspectable_target_name, noninspectable_inner_name, "\\/")
+    noninspectable_inner = write_inner(
+        noninspectable_inner_name,
+        "LocalInit ==",
+        "\\/",
+    )
+    noninspectable = write_top_wrapper(
+        "SumeragiImportedNestedHelperNoninspectable.tla",
+        noninspectable_target_name,
+    )
+
+    cycle_target_name = "SumeragiTopImportedInitNestedHelperCycleTarget"
+    cycle_inner_name = "SumeragiTopImportedInitNestedHelperCycleInner"
+    write_imported_target(cycle_target_name, cycle_inner_name, "\\/")
+    cycle_inner = write_inner(
+        cycle_inner_name,
+        "LocalInit == GoodInit \\/ LocalInit",
+        "\\/",
+    )
+    cycle = write_top_wrapper(
+        "SumeragiImportedNestedHelperCycle.tla",
+        cycle_target_name,
+    )
+
+    source_shape_requirement = (
+        f"{source_root_kind} init operators must be initial-state predicates "
+        "without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or <> temporal "
+        "markers"
+    )
+    assert module.source_commit_progress_spec_contract_errors(
+        (
+            (
+                source,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+        )
+    ) == [
+        f"{source_inner}:4 defines {source_root_kind} init operator "
+        f"HiddenInit, but helper LocalInit at {source_inner}:5 is not an "
+        f"initial-state predicate; {source_shape_requirement}"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                parameterized,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{parameterized_inner}:4 defines {top_root_kind} init operator "
+        f"HiddenInit, but helper LocalInit at {parameterized_inner}:5 has "
+        f"arity 1; {top_root_kind} init helpers must resolve to defined "
+        "zero-arity initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                noninspectable,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{noninspectable_inner}:4 defines {top_root_kind} init operator "
+        f"HiddenInit, but helper LocalInit at {noninspectable_inner}:5 is "
+        "not an inspectable single-expression definition; "
+        f"{top_root_kind} init helpers must resolve to inspectable "
+        "initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                cycle,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{cycle_inner}:5 defines {top_root_kind} init operator LocalInit, "
+        f"but init helper resolution cycles at LocalInit; {top_root_kind} "
+        "init helpers must be acyclic and resolve to inspectable "
+        "initial-state predicates"
+    ]
+
+
+def test_source_and_top_level_commit_progress_spec_contract_errors_reject_imported_init_alias_nested_helper_onward_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def progress_with_import(
+        *,
+        target_name: str,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+    ) -> str:
+        return "\n".join(
+            [
+                f"Interleaving == INSTANCE {target_name}",
+                "",
+                *commit_progress_spec_contract_text(
+                    spec_operator=spec_operator,
+                    fairness_operator=fairness_operator,
+                    next_closure=next_closure,
+                    fairness_actions=fairness_actions,
+                    init_lines=["Init == Interleaving!Init"],
+                ).splitlines(),
+            ]
+        )
+
+    def write_imported_target(
+        target_name: str,
+        inner_name: str,
+        connective: str,
+    ) -> Path:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    f"Inner == INSTANCE {inner_name}",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} Inner!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return target
+
+    def write_inner_without_leaf_instance(
+        inner_name: str,
+        connective: str,
+    ) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} LocalInit",
+                    "LocalInit == Leaf!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_inner_with_leaf_instance(
+        inner_name: str,
+        leaf_name: str,
+        connective: str,
+    ) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    f"Leaf == INSTANCE {leaf_name}",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} LocalInit",
+                    "LocalInit == Leaf!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_leaf(leaf_name: str, body: str) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    body,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    def write_cyclic_leaf(leaf_name: str) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    "Init == HiddenInit",
+                    "HiddenInit == Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+
+    source_no_instance_target_name = (
+        "SumeragiSourceImportedInitNestedHelperAliasNoInstanceTarget"
+    )
+    source_no_instance_inner_name = (
+        "SumeragiSourceImportedInitNestedHelperAliasNoInstanceInner"
+    )
+    write_imported_target(
+        source_no_instance_target_name,
+        source_no_instance_inner_name,
+        "/\\",
+    )
+    source_no_instance_inner = write_inner_without_leaf_instance(
+        source_no_instance_inner_name,
+        "/\\",
+    )
+    source_no_instance = tmp_path / (
+        "SumeragiDirectDeliveredFirstCorridorGateImportedNestedHelperAliasNoInstance.tla"
+    )
+    source_no_instance.write_text(
+        progress_with_import(
+            target_name=source_no_instance_target_name,
+            spec_operator=source_spec,
+            fairness_operator=source_fairness,
+            next_closure=source_next_closure,
+            fairness_actions=source_actions,
+        ),
+        encoding="utf-8",
+    )
+
+    source_action_target_name = (
+        "SumeragiSourceImportedInitNestedHelperAliasActionTarget"
+    )
+    source_action_inner_name = (
+        "SumeragiSourceImportedInitNestedHelperAliasActionInner"
+    )
+    source_action_leaf_name = "SumeragiSourceImportedInitNestedHelperAliasActionLeaf"
+    write_imported_target(source_action_target_name, source_action_inner_name, "/\\")
+    source_action_inner = write_inner_with_leaf_instance(
+        source_action_inner_name,
+        source_action_leaf_name,
+        "/\\",
+    )
+    source_action_leaf = write_leaf(source_action_leaf_name, "Init == UNCHANGED vars")
+    source_action = tmp_path / (
+        "SumeragiDirectDeliveredFirstCorridorGateImportedNestedHelperAliasAction.tla"
+    )
+    source_action.write_text(
+        progress_with_import(
+            target_name=source_action_target_name,
+            spec_operator=source_spec,
+            fairness_operator=source_fairness,
+            next_closure=source_next_closure,
+            fairness_actions=source_actions,
+        ),
+        encoding="utf-8",
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+
+    def write_top_wrapper(filename: str, target_name: str) -> Path:
+        top = tmp_path / filename
+        top.write_text(
+            progress_with_import(
+                target_name=target_name,
+                spec_operator=top_spec,
+                fairness_operator=top_fairness,
+                next_closure=top_next_closure,
+                fairness_actions=top_actions,
+            ),
+            encoding="utf-8",
+        )
+        return top
+
+    missing_target_name = "SumeragiTopImportedInitNestedHelperAliasMissingTarget"
+    missing_inner_name = "SumeragiTopImportedInitNestedHelperAliasMissingInner"
+    missing_leaf_name = "SumeragiTopImportedInitNestedHelperAliasMissingLeaf"
+    write_imported_target(missing_target_name, missing_inner_name, "\\/")
+    missing_inner = write_inner_with_leaf_instance(
+        missing_inner_name,
+        missing_leaf_name,
+        "\\/",
+    )
+    missing_leaf = tmp_path / f"{missing_leaf_name}.tla"
+    missing = write_top_wrapper(
+        "SumeragiImportedNestedHelperAliasMissing.tla",
+        missing_target_name,
+    )
+
+    undefined_target_name = "SumeragiTopImportedInitNestedHelperAliasUndefinedTarget"
+    undefined_inner_name = "SumeragiTopImportedInitNestedHelperAliasUndefinedInner"
+    undefined_leaf_name = "SumeragiTopImportedInitNestedHelperAliasUndefinedLeaf"
+    write_imported_target(undefined_target_name, undefined_inner_name, "\\/")
+    undefined_inner = write_inner_with_leaf_instance(
+        undefined_inner_name,
+        undefined_leaf_name,
+        "\\/",
+    )
+    undefined_leaf = write_leaf(undefined_leaf_name, "Other == TRUE")
+    undefined = write_top_wrapper(
+        "SumeragiImportedNestedHelperAliasUndefined.tla",
+        undefined_target_name,
+    )
+
+    parameterized_target_name = (
+        "SumeragiTopImportedInitNestedHelperAliasParameterizedTarget"
+    )
+    parameterized_inner_name = (
+        "SumeragiTopImportedInitNestedHelperAliasParameterizedInner"
+    )
+    parameterized_leaf_name = (
+        "SumeragiTopImportedInitNestedHelperAliasParameterizedLeaf"
+    )
+    write_imported_target(parameterized_target_name, parameterized_inner_name, "\\/")
+    parameterized_inner = write_inner_with_leaf_instance(
+        parameterized_inner_name,
+        parameterized_leaf_name,
+        "\\/",
+    )
+    parameterized_leaf = write_leaf(parameterized_leaf_name, "Init(value) == TRUE")
+    parameterized = write_top_wrapper(
+        "SumeragiImportedNestedHelperAliasParameterized.tla",
+        parameterized_target_name,
+    )
+
+    noninspectable_target_name = (
+        "SumeragiTopImportedInitNestedHelperAliasNoninspectableTarget"
+    )
+    noninspectable_inner_name = (
+        "SumeragiTopImportedInitNestedHelperAliasNoninspectableInner"
+    )
+    noninspectable_leaf_name = (
+        "SumeragiTopImportedInitNestedHelperAliasNoninspectableLeaf"
+    )
+    write_imported_target(
+        noninspectable_target_name,
+        noninspectable_inner_name,
+        "\\/",
+    )
+    noninspectable_inner = write_inner_with_leaf_instance(
+        noninspectable_inner_name,
+        noninspectable_leaf_name,
+        "\\/",
+    )
+    noninspectable_leaf = write_leaf(noninspectable_leaf_name, "Init ==")
+    noninspectable = write_top_wrapper(
+        "SumeragiImportedNestedHelperAliasNoninspectable.tla",
+        noninspectable_target_name,
+    )
+
+    cycle_target_name = "SumeragiTopImportedInitNestedHelperAliasCycleTarget"
+    cycle_inner_name = "SumeragiTopImportedInitNestedHelperAliasCycleInner"
+    cycle_leaf_name = "SumeragiTopImportedInitNestedHelperAliasCycleLeaf"
+    write_imported_target(cycle_target_name, cycle_inner_name, "\\/")
+    write_inner_with_leaf_instance(cycle_inner_name, cycle_leaf_name, "\\/")
+    cycle_leaf = write_cyclic_leaf(cycle_leaf_name)
+    cycle = write_top_wrapper(
+        "SumeragiImportedNestedHelperAliasCycle.tla",
+        cycle_target_name,
+    )
+
+    source_shape_requirement = (
+        f"{source_root_kind} init operators must be initial-state predicates "
+        "without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or <> temporal "
+        "markers"
+    )
+    assert module.source_commit_progress_spec_contract_errors(
+        (
+            (
+                source_no_instance,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+            (
+                source_action,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+        )
+    ) == [
+        f"{source_no_instance_inner}:5 defines {source_root_kind} init "
+        "operator LocalInit, but aliases Leaf!Init without a named INSTANCE "
+        f"alias Leaf; {source_root_kind} init aliases must resolve through "
+        "named local INSTANCE declarations",
+        f"{source_action_inner}:6 defines {source_root_kind} init operator "
+        f"LocalInit as Leaf!Init, but target {source_action_leaf}:3 is not "
+        f"an initial-state predicate; {source_shape_requirement}",
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                missing,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{missing_inner}:6 defines {top_root_kind} init operator LocalInit "
+        f"as Leaf!Init, but target module {missing_leaf} does not exist; "
+        f"{top_root_kind} init aliases must resolve to local modules"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                undefined,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{undefined_inner}:6 defines {top_root_kind} init operator "
+        f"LocalInit as Leaf!Init, but target {undefined_leaf} does not "
+        f"define Init; {top_root_kind} init aliases must resolve to defined "
+        "zero-arity initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                parameterized,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{parameterized_inner}:6 defines {top_root_kind} init operator "
+        f"LocalInit as Leaf!Init, but target {parameterized_leaf}:3 has "
+        f"arity 1; {top_root_kind} init aliases must resolve to defined "
+        "zero-arity initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                noninspectable,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{noninspectable_inner}:6 defines {top_root_kind} init operator "
+        f"LocalInit as Leaf!Init, but target {noninspectable_leaf}:3 is "
+        "not an inspectable single-expression definition; "
+        f"{top_root_kind} init aliases must resolve to inspectable "
+        "initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                cycle,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{cycle_leaf}:3 defines {top_root_kind} init operator Init, but "
+        f"init alias resolution cycles at Init; {top_root_kind} init aliases "
+        "must be acyclic and resolve to inspectable initial-state predicates"
+    ]
+
+
+def test_source_and_top_level_commit_progress_spec_contract_errors_reject_imported_init_alias_nested_module_helper_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def progress_with_import(
+        *,
+        target_name: str,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+    ) -> str:
+        return "\n".join(
+            [
+                f"Interleaving == INSTANCE {target_name}",
+                "",
+                *commit_progress_spec_contract_text(
+                    spec_operator=spec_operator,
+                    fairness_operator=fairness_operator,
+                    next_closure=next_closure,
+                    fairness_actions=fairness_actions,
+                    init_lines=["Init == Interleaving!Init"],
+                ).splitlines(),
+            ]
+        )
+
+    def write_imported_target(
+        target_name: str,
+        inner_name: str,
+        connective: str,
+    ) -> Path:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    f"Inner == INSTANCE {inner_name}",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} Inner!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return target
+
+    def write_inner_without_leaf_instance(
+        inner_name: str,
+        connective: str,
+    ) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} Leaf!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_inner_with_leaf_instance(
+        inner_name: str,
+        leaf_name: str,
+        connective: str,
+    ) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    f"Leaf == INSTANCE {leaf_name}",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} Leaf!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_cyclic_inner(inner_name: str, connective: str) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    f"Leaf == INSTANCE {inner_name}",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} Leaf!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_leaf(leaf_name: str, body: str) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    body,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+
+    source_no_instance_target_name = (
+        "SumeragiSourceImportedInitNestedModuleHelperNoInstanceTarget"
+    )
+    source_no_instance_inner_name = (
+        "SumeragiSourceImportedInitNestedModuleHelperNoInstanceInner"
+    )
+    write_imported_target(
+        source_no_instance_target_name,
+        source_no_instance_inner_name,
+        "/\\",
+    )
+    source_no_instance_inner = write_inner_without_leaf_instance(
+        source_no_instance_inner_name,
+        "/\\",
+    )
+    source_no_instance = tmp_path / (
+        "SumeragiDirectDeliveredFirstCorridorGateImportedNestedModuleHelperNoInstance.tla"
+    )
+    source_no_instance.write_text(
+        progress_with_import(
+            target_name=source_no_instance_target_name,
+            spec_operator=source_spec,
+            fairness_operator=source_fairness,
+            next_closure=source_next_closure,
+            fairness_actions=source_actions,
+        ),
+        encoding="utf-8",
+    )
+
+    source_action_target_name = (
+        "SumeragiSourceImportedInitNestedModuleHelperActionTarget"
+    )
+    source_action_inner_name = (
+        "SumeragiSourceImportedInitNestedModuleHelperActionInner"
+    )
+    source_action_leaf_name = "SumeragiSourceImportedInitNestedModuleHelperActionLeaf"
+    write_imported_target(source_action_target_name, source_action_inner_name, "/\\")
+    source_action_inner = write_inner_with_leaf_instance(
+        source_action_inner_name,
+        source_action_leaf_name,
+        "/\\",
+    )
+    source_action_leaf = write_leaf(source_action_leaf_name, "Init == UNCHANGED vars")
+    source_action = tmp_path / (
+        "SumeragiDirectDeliveredFirstCorridorGateImportedNestedModuleHelperAction.tla"
+    )
+    source_action.write_text(
+        progress_with_import(
+            target_name=source_action_target_name,
+            spec_operator=source_spec,
+            fairness_operator=source_fairness,
+            next_closure=source_next_closure,
+            fairness_actions=source_actions,
+        ),
+        encoding="utf-8",
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+
+    def write_top_wrapper(filename: str, target_name: str) -> Path:
+        top = tmp_path / filename
+        top.write_text(
+            progress_with_import(
+                target_name=target_name,
+                spec_operator=top_spec,
+                fairness_operator=top_fairness,
+                next_closure=top_next_closure,
+                fairness_actions=top_actions,
+            ),
+            encoding="utf-8",
+        )
+        return top
+
+    missing_target_name = "SumeragiTopImportedInitNestedModuleHelperMissingTarget"
+    missing_inner_name = "SumeragiTopImportedInitNestedModuleHelperMissingInner"
+    missing_leaf_name = "SumeragiTopImportedInitNestedModuleHelperMissingLeaf"
+    write_imported_target(missing_target_name, missing_inner_name, "\\/")
+    missing_inner = write_inner_with_leaf_instance(
+        missing_inner_name,
+        missing_leaf_name,
+        "\\/",
+    )
+    missing_leaf = tmp_path / f"{missing_leaf_name}.tla"
+    missing = write_top_wrapper(
+        "SumeragiImportedNestedModuleHelperMissing.tla",
+        missing_target_name,
+    )
+
+    undefined_target_name = "SumeragiTopImportedInitNestedModuleHelperUndefinedTarget"
+    undefined_inner_name = "SumeragiTopImportedInitNestedModuleHelperUndefinedInner"
+    undefined_leaf_name = "SumeragiTopImportedInitNestedModuleHelperUndefinedLeaf"
+    write_imported_target(undefined_target_name, undefined_inner_name, "\\/")
+    undefined_inner = write_inner_with_leaf_instance(
+        undefined_inner_name,
+        undefined_leaf_name,
+        "\\/",
+    )
+    undefined_leaf = write_leaf(undefined_leaf_name, "Other == TRUE")
+    undefined = write_top_wrapper(
+        "SumeragiImportedNestedModuleHelperUndefined.tla",
+        undefined_target_name,
+    )
+
+    parameterized_target_name = (
+        "SumeragiTopImportedInitNestedModuleHelperParameterizedTarget"
+    )
+    parameterized_inner_name = (
+        "SumeragiTopImportedInitNestedModuleHelperParameterizedInner"
+    )
+    parameterized_leaf_name = (
+        "SumeragiTopImportedInitNestedModuleHelperParameterizedLeaf"
+    )
+    write_imported_target(parameterized_target_name, parameterized_inner_name, "\\/")
+    parameterized_inner = write_inner_with_leaf_instance(
+        parameterized_inner_name,
+        parameterized_leaf_name,
+        "\\/",
+    )
+    parameterized_leaf = write_leaf(parameterized_leaf_name, "Init(value) == TRUE")
+    parameterized = write_top_wrapper(
+        "SumeragiImportedNestedModuleHelperParameterized.tla",
+        parameterized_target_name,
+    )
+
+    noninspectable_target_name = (
+        "SumeragiTopImportedInitNestedModuleHelperNoninspectableTarget"
+    )
+    noninspectable_inner_name = (
+        "SumeragiTopImportedInitNestedModuleHelperNoninspectableInner"
+    )
+    noninspectable_leaf_name = (
+        "SumeragiTopImportedInitNestedModuleHelperNoninspectableLeaf"
+    )
+    write_imported_target(
+        noninspectable_target_name,
+        noninspectable_inner_name,
+        "\\/",
+    )
+    noninspectable_inner = write_inner_with_leaf_instance(
+        noninspectable_inner_name,
+        noninspectable_leaf_name,
+        "\\/",
+    )
+    noninspectable_leaf = write_leaf(noninspectable_leaf_name, "Init ==")
+    noninspectable = write_top_wrapper(
+        "SumeragiImportedNestedModuleHelperNoninspectable.tla",
+        noninspectable_target_name,
+    )
+
+    cycle_target_name = "SumeragiTopImportedInitNestedModuleHelperCycleTarget"
+    cycle_inner_name = "SumeragiTopImportedInitNestedModuleHelperCycleInner"
+    write_imported_target(cycle_target_name, cycle_inner_name, "\\/")
+    cycle_inner = write_cyclic_inner(cycle_inner_name, "\\/")
+    cycle = write_top_wrapper(
+        "SumeragiImportedNestedModuleHelperCycle.tla",
+        cycle_target_name,
+    )
+
+    source_shape_requirement = (
+        f"{source_root_kind} init operators must be initial-state predicates "
+        "without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or <> temporal "
+        "markers"
+    )
+    assert module.source_commit_progress_spec_contract_errors(
+        (
+            (
+                source_no_instance,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+            (
+                source_action,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+        )
+    ) == [
+        f"{source_no_instance_inner}:4 defines {source_root_kind} init "
+        "operator HiddenInit, but module helper Leaf!Init has no named "
+        f"INSTANCE alias Leaf; {source_root_kind} init module-alias helpers "
+        "must resolve through named local INSTANCE declarations",
+        f"{source_action_inner}:5 defines {source_root_kind} init operator "
+        f"HiddenInit, but module helper Leaf!Init target "
+        f"{source_action_leaf}:3 is not an initial-state predicate; "
+        f"{source_shape_requirement}",
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                missing,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{missing_inner}:5 defines {top_root_kind} init operator "
+        f"HiddenInit, but module helper Leaf!Init targets missing module "
+        f"{missing_leaf}; {top_root_kind} init module-alias helpers must "
+        "resolve to local modules"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                undefined,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{undefined_inner}:5 defines {top_root_kind} init operator "
+        f"HiddenInit, but module helper Leaf!Init target {undefined_leaf} "
+        f"does not define Init; {top_root_kind} init module-alias helpers "
+        "must resolve to defined zero-arity initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                parameterized,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{parameterized_inner}:5 defines {top_root_kind} init operator "
+        f"HiddenInit, but module helper Leaf!Init target "
+        f"{parameterized_leaf}:3 has arity 1; {top_root_kind} init "
+        "module-alias helpers must resolve to defined zero-arity "
+        "initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                noninspectable,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{noninspectable_inner}:5 defines {top_root_kind} init operator "
+        f"HiddenInit, but module helper Leaf!Init target "
+        f"{noninspectable_leaf}:3 is not an inspectable "
+        f"single-expression definition; {top_root_kind} init module-alias "
+        "helpers must resolve to inspectable initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                cycle,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{cycle_inner}:5 defines {top_root_kind} init operator HiddenInit, "
+        "but module helper Leaf!HiddenInit cycles at HiddenInit; "
+        f"{top_root_kind} init module-alias helpers must be acyclic and "
+        "resolve to inspectable initial-state predicates"
+    ]
+
+
+def test_source_and_top_level_commit_progress_spec_contract_errors_reject_imported_init_alias_nested_module_helper_onward_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def progress_with_import(
+        *,
+        target_name: str,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+    ) -> str:
+        return "\n".join(
+            [
+                f"Interleaving == INSTANCE {target_name}",
+                "",
+                *commit_progress_spec_contract_text(
+                    spec_operator=spec_operator,
+                    fairness_operator=fairness_operator,
+                    next_closure=next_closure,
+                    fairness_actions=fairness_actions,
+                    init_lines=["Init == Interleaving!Init"],
+                ).splitlines(),
+            ]
+        )
+
+    def write_imported_target(
+        target_name: str,
+        inner_name: str,
+        connective: str,
+    ) -> Path:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    f"Inner == INSTANCE {inner_name}",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} Inner!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return target
+
+    def write_inner(inner_name: str, leaf_name: str, connective: str) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    f"Leaf == INSTANCE {leaf_name}",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} Leaf!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_leaf_without_branch_instance(leaf_name: str) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    "HiddenInit == Branch!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    def write_leaf_with_branch_instance(leaf_name: str, branch_name: str) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    f"Branch == INSTANCE {branch_name}",
+                    "HiddenInit == Branch!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    def write_branch(branch_name: str, body: str) -> Path:
+        branch = tmp_path / f"{branch_name}.tla"
+        branch.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {branch_name} ----",
+                    "VARIABLES vars",
+                    body,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return branch
+
+    def write_cyclic_branch(branch_name: str) -> Path:
+        branch = tmp_path / f"{branch_name}.tla"
+        branch.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {branch_name} ----",
+                    "VARIABLES vars",
+                    "Init == HiddenInit",
+                    "HiddenInit == Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return branch
+
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+
+    source_no_instance_target_name = (
+        "SumeragiSourceImportedInitNestedModuleHelperOnwardNoInstanceTarget"
+    )
+    source_no_instance_inner_name = (
+        "SumeragiSourceImportedInitNestedModuleHelperOnwardNoInstanceInner"
+    )
+    source_no_instance_leaf_name = (
+        "SumeragiSourceImportedInitNestedModuleHelperOnwardNoInstanceLeaf"
+    )
+    write_imported_target(
+        source_no_instance_target_name,
+        source_no_instance_inner_name,
+        "/\\",
+    )
+    write_inner(
+        source_no_instance_inner_name,
+        source_no_instance_leaf_name,
+        "/\\",
+    )
+    source_no_instance_leaf = write_leaf_without_branch_instance(
+        source_no_instance_leaf_name
+    )
+    source_no_instance = tmp_path / (
+        "SumeragiDirectDeliveredFirstCorridorGateImportedNestedModuleHelperOnwardNoInstance.tla"
+    )
+    source_no_instance.write_text(
+        progress_with_import(
+            target_name=source_no_instance_target_name,
+            spec_operator=source_spec,
+            fairness_operator=source_fairness,
+            next_closure=source_next_closure,
+            fairness_actions=source_actions,
+        ),
+        encoding="utf-8",
+    )
+
+    source_action_target_name = (
+        "SumeragiSourceImportedInitNestedModuleHelperOnwardActionTarget"
+    )
+    source_action_inner_name = (
+        "SumeragiSourceImportedInitNestedModuleHelperOnwardActionInner"
+    )
+    source_action_leaf_name = (
+        "SumeragiSourceImportedInitNestedModuleHelperOnwardActionLeaf"
+    )
+    source_action_branch_name = (
+        "SumeragiSourceImportedInitNestedModuleHelperOnwardActionBranch"
+    )
+    write_imported_target(source_action_target_name, source_action_inner_name, "/\\")
+    write_inner(source_action_inner_name, source_action_leaf_name, "/\\")
+    source_action_leaf = write_leaf_with_branch_instance(
+        source_action_leaf_name,
+        source_action_branch_name,
+    )
+    source_action_branch = write_branch(
+        source_action_branch_name,
+        "Init == UNCHANGED vars",
+    )
+    source_action = tmp_path / (
+        "SumeragiDirectDeliveredFirstCorridorGateImportedNestedModuleHelperOnwardAction.tla"
+    )
+    source_action.write_text(
+        progress_with_import(
+            target_name=source_action_target_name,
+            spec_operator=source_spec,
+            fairness_operator=source_fairness,
+            next_closure=source_next_closure,
+            fairness_actions=source_actions,
+        ),
+        encoding="utf-8",
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+
+    def write_top_wrapper(filename: str, target_name: str) -> Path:
+        top = tmp_path / filename
+        top.write_text(
+            progress_with_import(
+                target_name=target_name,
+                spec_operator=top_spec,
+                fairness_operator=top_fairness,
+                next_closure=top_next_closure,
+                fairness_actions=top_actions,
+            ),
+            encoding="utf-8",
+        )
+        return top
+
+    missing_target_name = "SumeragiTopImportedInitNestedModuleOnwardMissingTarget"
+    missing_inner_name = "SumeragiTopImportedInitNestedModuleOnwardMissingInner"
+    missing_leaf_name = "SumeragiTopImportedInitNestedModuleOnwardMissingLeaf"
+    missing_branch_name = "SumeragiTopImportedInitNestedModuleOnwardMissingBranch"
+    write_imported_target(missing_target_name, missing_inner_name, "\\/")
+    write_inner(missing_inner_name, missing_leaf_name, "\\/")
+    missing_leaf = write_leaf_with_branch_instance(
+        missing_leaf_name,
+        missing_branch_name,
+    )
+    missing_branch = tmp_path / f"{missing_branch_name}.tla"
+    missing = write_top_wrapper(
+        "SumeragiImportedNestedModuleHelperOnwardMissing.tla",
+        missing_target_name,
+    )
+
+    undefined_target_name = "SumeragiTopImportedInitNestedModuleOnwardUndefinedTarget"
+    undefined_inner_name = "SumeragiTopImportedInitNestedModuleOnwardUndefinedInner"
+    undefined_leaf_name = "SumeragiTopImportedInitNestedModuleOnwardUndefinedLeaf"
+    undefined_branch_name = "SumeragiTopImportedInitNestedModuleOnwardUndefinedBranch"
+    write_imported_target(undefined_target_name, undefined_inner_name, "\\/")
+    write_inner(undefined_inner_name, undefined_leaf_name, "\\/")
+    undefined_leaf = write_leaf_with_branch_instance(
+        undefined_leaf_name,
+        undefined_branch_name,
+    )
+    undefined_branch = write_branch(undefined_branch_name, "Other == TRUE")
+    undefined = write_top_wrapper(
+        "SumeragiImportedNestedModuleHelperOnwardUndefined.tla",
+        undefined_target_name,
+    )
+
+    parameterized_target_name = (
+        "SumeragiTopImportedInitNestedModuleOnwardParameterizedTarget"
+    )
+    parameterized_inner_name = (
+        "SumeragiTopImportedInitNestedModuleOnwardParameterizedInner"
+    )
+    parameterized_leaf_name = (
+        "SumeragiTopImportedInitNestedModuleOnwardParameterizedLeaf"
+    )
+    parameterized_branch_name = (
+        "SumeragiTopImportedInitNestedModuleOnwardParameterizedBranch"
+    )
+    write_imported_target(parameterized_target_name, parameterized_inner_name, "\\/")
+    write_inner(parameterized_inner_name, parameterized_leaf_name, "\\/")
+    parameterized_leaf = write_leaf_with_branch_instance(
+        parameterized_leaf_name,
+        parameterized_branch_name,
+    )
+    parameterized_branch = write_branch(
+        parameterized_branch_name,
+        "Init(value) == TRUE",
+    )
+    parameterized = write_top_wrapper(
+        "SumeragiImportedNestedModuleHelperOnwardParameterized.tla",
+        parameterized_target_name,
+    )
+
+    noninspectable_target_name = (
+        "SumeragiTopImportedInitNestedModuleOnwardNoninspectableTarget"
+    )
+    noninspectable_inner_name = (
+        "SumeragiTopImportedInitNestedModuleOnwardNoninspectableInner"
+    )
+    noninspectable_leaf_name = (
+        "SumeragiTopImportedInitNestedModuleOnwardNoninspectableLeaf"
+    )
+    noninspectable_branch_name = (
+        "SumeragiTopImportedInitNestedModuleOnwardNoninspectableBranch"
+    )
+    write_imported_target(
+        noninspectable_target_name,
+        noninspectable_inner_name,
+        "\\/",
+    )
+    write_inner(noninspectable_inner_name, noninspectable_leaf_name, "\\/")
+    noninspectable_leaf = write_leaf_with_branch_instance(
+        noninspectable_leaf_name,
+        noninspectable_branch_name,
+    )
+    noninspectable_branch = write_branch(noninspectable_branch_name, "Init ==")
+    noninspectable = write_top_wrapper(
+        "SumeragiImportedNestedModuleHelperOnwardNoninspectable.tla",
+        noninspectable_target_name,
+    )
+
+    cycle_target_name = "SumeragiTopImportedInitNestedModuleOnwardCycleTarget"
+    cycle_inner_name = "SumeragiTopImportedInitNestedModuleOnwardCycleInner"
+    cycle_leaf_name = "SumeragiTopImportedInitNestedModuleOnwardCycleLeaf"
+    cycle_branch_name = "SumeragiTopImportedInitNestedModuleOnwardCycleBranch"
+    write_imported_target(cycle_target_name, cycle_inner_name, "\\/")
+    write_inner(cycle_inner_name, cycle_leaf_name, "\\/")
+    write_leaf_with_branch_instance(cycle_leaf_name, cycle_branch_name)
+    cycle_branch = write_cyclic_branch(cycle_branch_name)
+    cycle = write_top_wrapper(
+        "SumeragiImportedNestedModuleHelperOnwardCycle.tla",
+        cycle_target_name,
+    )
+
+    source_shape_requirement = (
+        f"{source_root_kind} init operators must be initial-state predicates "
+        "without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or <> temporal "
+        "markers"
+    )
+    assert module.source_commit_progress_spec_contract_errors(
+        (
+            (
+                source_no_instance,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+            (
+                source_action,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+        )
+    ) == [
+        f"{source_no_instance_leaf}:3 defines {source_root_kind} init "
+        "operator HiddenInit, but aliases Branch!Init without a named "
+        f"INSTANCE alias Branch; {source_root_kind} init aliases must "
+        "resolve through named local INSTANCE declarations",
+        f"{source_action_leaf}:4 defines {source_root_kind} init operator "
+        f"HiddenInit as Branch!Init, but target {source_action_branch}:3 is "
+        f"not an initial-state predicate; {source_shape_requirement}",
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                missing,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{missing_leaf}:4 defines {top_root_kind} init operator HiddenInit "
+        f"as Branch!Init, but target module {missing_branch} does not exist; "
+        f"{top_root_kind} init aliases must resolve to local modules"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                undefined,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{undefined_leaf}:4 defines {top_root_kind} init operator "
+        f"HiddenInit as Branch!Init, but target {undefined_branch} does "
+        f"not define Init; {top_root_kind} init aliases must resolve to "
+        "defined zero-arity initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                parameterized,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{parameterized_leaf}:4 defines {top_root_kind} init operator "
+        f"HiddenInit as Branch!Init, but target {parameterized_branch}:3 "
+        f"has arity 1; {top_root_kind} init aliases must resolve to "
+        "defined zero-arity initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                noninspectable,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{noninspectable_leaf}:4 defines {top_root_kind} init operator "
+        f"HiddenInit as Branch!Init, but target {noninspectable_branch}:3 "
+        "is not an inspectable single-expression definition; "
+        f"{top_root_kind} init aliases must resolve to inspectable "
+        "initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                cycle,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{cycle_branch}:3 defines {top_root_kind} init operator Init, but "
+        f"init alias resolution cycles at Init; {top_root_kind} init aliases "
+        "must be acyclic and resolve to inspectable initial-state predicates"
+    ]
+
+
+def test_source_and_top_level_commit_progress_spec_contract_errors_reject_imported_init_alias_nested_module_target_helper_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def progress_with_import(
+        *,
+        target_name: str,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+    ) -> str:
+        return "\n".join(
+            [
+                f"Interleaving == INSTANCE {target_name}",
+                "",
+                *commit_progress_spec_contract_text(
+                    spec_operator=spec_operator,
+                    fairness_operator=fairness_operator,
+                    next_closure=next_closure,
+                    fairness_actions=fairness_actions,
+                    init_lines=["Init == Interleaving!Init"],
+                ).splitlines(),
+            ]
+        )
+
+    def write_imported_target(
+        target_name: str,
+        inner_name: str,
+        connective: str,
+    ) -> Path:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    f"Inner == INSTANCE {inner_name}",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} Inner!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return target
+
+    def write_inner(inner_name: str, leaf_name: str, connective: str) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    f"Leaf == INSTANCE {leaf_name}",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} Leaf!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_leaf(
+        leaf_name: str,
+        helper_body: str,
+        connective: str,
+    ) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} LocalInit",
+                    helper_body,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+    source_target_name = "SumeragiSourceImportedInitNestedModuleTargetHelperActionTarget"
+    source_inner_name = "SumeragiSourceImportedInitNestedModuleTargetHelperActionInner"
+    source_leaf_name = "SumeragiSourceImportedInitNestedModuleTargetHelperActionLeaf"
+    write_imported_target(source_target_name, source_inner_name, "/\\")
+    write_inner(source_inner_name, source_leaf_name, "/\\")
+    source_leaf = write_leaf(
+        source_leaf_name,
+        "LocalInit == UNCHANGED vars",
+        "/\\",
+    )
+    source = tmp_path / (
+        "SumeragiDirectDeliveredFirstCorridorGateImportedNestedModuleTargetHelperAction.tla"
+    )
+    source.write_text(
+        progress_with_import(
+            target_name=source_target_name,
+            spec_operator=source_spec,
+            fairness_operator=source_fairness,
+            next_closure=source_next_closure,
+            fairness_actions=source_actions,
+        ),
+        encoding="utf-8",
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+
+    def write_top_wrapper(filename: str, target_name: str) -> Path:
+        top = tmp_path / filename
+        top.write_text(
+            progress_with_import(
+                target_name=target_name,
+                spec_operator=top_spec,
+                fairness_operator=top_fairness,
+                next_closure=top_next_closure,
+                fairness_actions=top_actions,
+            ),
+            encoding="utf-8",
+        )
+        return top
+
+    parameterized_target_name = (
+        "SumeragiTopImportedInitNestedModuleTargetHelperParameterizedTarget"
+    )
+    parameterized_inner_name = (
+        "SumeragiTopImportedInitNestedModuleTargetHelperParameterizedInner"
+    )
+    parameterized_leaf_name = (
+        "SumeragiTopImportedInitNestedModuleTargetHelperParameterizedLeaf"
+    )
+    write_imported_target(parameterized_target_name, parameterized_inner_name, "\\/")
+    write_inner(parameterized_inner_name, parameterized_leaf_name, "\\/")
+    parameterized_leaf = write_leaf(
+        parameterized_leaf_name,
+        "LocalInit(value) == TRUE",
+        "\\/",
+    )
+    parameterized = write_top_wrapper(
+        "SumeragiImportedNestedModuleTargetHelperParameterized.tla",
+        parameterized_target_name,
+    )
+
+    noninspectable_target_name = (
+        "SumeragiTopImportedInitNestedModuleTargetHelperNoninspectableTarget"
+    )
+    noninspectable_inner_name = (
+        "SumeragiTopImportedInitNestedModuleTargetHelperNoninspectableInner"
+    )
+    noninspectable_leaf_name = (
+        "SumeragiTopImportedInitNestedModuleTargetHelperNoninspectableLeaf"
+    )
+    write_imported_target(
+        noninspectable_target_name,
+        noninspectable_inner_name,
+        "\\/",
+    )
+    write_inner(noninspectable_inner_name, noninspectable_leaf_name, "\\/")
+    noninspectable_leaf = write_leaf(noninspectable_leaf_name, "LocalInit ==", "\\/")
+    noninspectable = write_top_wrapper(
+        "SumeragiImportedNestedModuleTargetHelperNoninspectable.tla",
+        noninspectable_target_name,
+    )
+
+    cycle_target_name = "SumeragiTopImportedInitNestedModuleTargetHelperCycleTarget"
+    cycle_inner_name = "SumeragiTopImportedInitNestedModuleTargetHelperCycleInner"
+    cycle_leaf_name = "SumeragiTopImportedInitNestedModuleTargetHelperCycleLeaf"
+    write_imported_target(cycle_target_name, cycle_inner_name, "\\/")
+    write_inner(cycle_inner_name, cycle_leaf_name, "\\/")
+    cycle_leaf = write_leaf(
+        cycle_leaf_name,
+        "LocalInit == GoodInit \\/ LocalInit",
+        "\\/",
+    )
+    cycle = write_top_wrapper(
+        "SumeragiImportedNestedModuleTargetHelperCycle.tla",
+        cycle_target_name,
+    )
+
+    source_shape_requirement = (
+        f"{source_root_kind} init operators must be initial-state predicates "
+        "without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or <> temporal "
+        "markers"
+    )
+    assert module.source_commit_progress_spec_contract_errors(
+        (
+            (
+                source,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+        )
+    ) == [
+        f"{source_leaf}:4 defines {source_root_kind} init operator "
+        f"HiddenInit, but helper LocalInit at {source_leaf}:5 is not an "
+        f"initial-state predicate; {source_shape_requirement}"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                parameterized,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{parameterized_leaf}:4 defines {top_root_kind} init operator "
+        f"HiddenInit, but helper LocalInit at {parameterized_leaf}:5 has "
+        f"arity 1; {top_root_kind} init helpers must resolve to defined "
+        "zero-arity initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                noninspectable,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{noninspectable_leaf}:4 defines {top_root_kind} init operator "
+        f"HiddenInit, but helper LocalInit at {noninspectable_leaf}:5 is "
+        "not an inspectable single-expression definition; "
+        f"{top_root_kind} init helpers must resolve to inspectable "
+        "initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                cycle,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{cycle_leaf}:5 defines {top_root_kind} init operator LocalInit, "
+        f"but init helper resolution cycles at LocalInit; {top_root_kind} "
+        "init helpers must be acyclic and resolve to inspectable "
+        "initial-state predicates"
+    ]
+
+
+def test_source_and_top_level_commit_progress_spec_contract_errors_reject_imported_init_alias_nested_module_target_helper_alias_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def progress_with_import(
+        *,
+        target_name: str,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+    ) -> str:
+        return "\n".join(
+            [
+                f"Interleaving == INSTANCE {target_name}",
+                "",
+                *commit_progress_spec_contract_text(
+                    spec_operator=spec_operator,
+                    fairness_operator=fairness_operator,
+                    next_closure=next_closure,
+                    fairness_actions=fairness_actions,
+                    init_lines=["Init == Interleaving!Init"],
+                ).splitlines(),
+            ]
+        )
+
+    def write_imported_target(
+        target_name: str,
+        inner_name: str,
+        connective: str,
+    ) -> Path:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    f"Inner == INSTANCE {inner_name}",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} Inner!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return target
+
+    def write_inner(inner_name: str, leaf_name: str, connective: str) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    f"Leaf == INSTANCE {leaf_name}",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} Leaf!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_leaf_without_branch_instance(
+        leaf_name: str,
+        connective: str,
+    ) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} LocalInit",
+                    "LocalInit == Branch!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    def write_leaf_with_branch_instance(
+        leaf_name: str,
+        branch_name: str,
+        connective: str,
+    ) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    f"Branch == INSTANCE {branch_name}",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} LocalInit",
+                    "LocalInit == Branch!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    def write_branch(branch_name: str, body: str) -> Path:
+        branch = tmp_path / f"{branch_name}.tla"
+        branch.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {branch_name} ----",
+                    "VARIABLES vars",
+                    body,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return branch
+
+    def write_cyclic_branch(branch_name: str) -> Path:
+        branch = tmp_path / f"{branch_name}.tla"
+        branch.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {branch_name} ----",
+                    "VARIABLES vars",
+                    "Init == HiddenInit",
+                    "HiddenInit == Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return branch
+
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+
+    source_no_instance_target_name = (
+        "SumeragiSourceImportedInitNestedModuleTargetHelperAliasNoInstanceTarget"
+    )
+    source_no_instance_inner_name = (
+        "SumeragiSourceImportedInitNestedModuleTargetHelperAliasNoInstanceInner"
+    )
+    source_no_instance_leaf_name = (
+        "SumeragiSourceImportedInitNestedModuleTargetHelperAliasNoInstanceLeaf"
+    )
+    write_imported_target(
+        source_no_instance_target_name,
+        source_no_instance_inner_name,
+        "/\\",
+    )
+    write_inner(source_no_instance_inner_name, source_no_instance_leaf_name, "/\\")
+    source_no_instance_leaf = write_leaf_without_branch_instance(
+        source_no_instance_leaf_name,
+        "/\\",
+    )
+    source_no_instance = tmp_path / (
+        "SumeragiDirectDeliveredFirstCorridorGateImportedNestedModuleTargetHelperAliasNoInstance.tla"
+    )
+    source_no_instance.write_text(
+        progress_with_import(
+            target_name=source_no_instance_target_name,
+            spec_operator=source_spec,
+            fairness_operator=source_fairness,
+            next_closure=source_next_closure,
+            fairness_actions=source_actions,
+        ),
+        encoding="utf-8",
+    )
+
+    source_action_target_name = (
+        "SumeragiSourceImportedInitNestedModuleTargetHelperAliasActionTarget"
+    )
+    source_action_inner_name = (
+        "SumeragiSourceImportedInitNestedModuleTargetHelperAliasActionInner"
+    )
+    source_action_leaf_name = (
+        "SumeragiSourceImportedInitNestedModuleTargetHelperAliasActionLeaf"
+    )
+    source_action_branch_name = (
+        "SumeragiSourceImportedInitNestedModuleTargetHelperAliasActionBranch"
+    )
+    write_imported_target(source_action_target_name, source_action_inner_name, "/\\")
+    write_inner(source_action_inner_name, source_action_leaf_name, "/\\")
+    source_action_leaf = write_leaf_with_branch_instance(
+        source_action_leaf_name,
+        source_action_branch_name,
+        "/\\",
+    )
+    source_action_branch = write_branch(
+        source_action_branch_name,
+        "Init == UNCHANGED vars",
+    )
+    source_action = tmp_path / (
+        "SumeragiDirectDeliveredFirstCorridorGateImportedNestedModuleTargetHelperAliasAction.tla"
+    )
+    source_action.write_text(
+        progress_with_import(
+            target_name=source_action_target_name,
+            spec_operator=source_spec,
+            fairness_operator=source_fairness,
+            next_closure=source_next_closure,
+            fairness_actions=source_actions,
+        ),
+        encoding="utf-8",
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+
+    def write_top_wrapper(filename: str, target_name: str) -> Path:
+        top = tmp_path / filename
+        top.write_text(
+            progress_with_import(
+                target_name=target_name,
+                spec_operator=top_spec,
+                fairness_operator=top_fairness,
+                next_closure=top_next_closure,
+                fairness_actions=top_actions,
+            ),
+            encoding="utf-8",
+        )
+        return top
+
+    missing_target_name = "SumeragiTopImportedInitNestedTargetHelperAliasMissingTarget"
+    missing_inner_name = "SumeragiTopImportedInitNestedTargetHelperAliasMissingInner"
+    missing_leaf_name = "SumeragiTopImportedInitNestedTargetHelperAliasMissingLeaf"
+    missing_branch_name = "SumeragiTopImportedInitNestedTargetHelperAliasMissingBranch"
+    write_imported_target(missing_target_name, missing_inner_name, "\\/")
+    write_inner(missing_inner_name, missing_leaf_name, "\\/")
+    missing_leaf = write_leaf_with_branch_instance(
+        missing_leaf_name,
+        missing_branch_name,
+        "\\/",
+    )
+    missing_branch = tmp_path / f"{missing_branch_name}.tla"
+    missing = write_top_wrapper(
+        "SumeragiImportedNestedTargetHelperAliasMissing.tla",
+        missing_target_name,
+    )
+
+    undefined_target_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasUndefinedTarget"
+    )
+    undefined_inner_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasUndefinedInner"
+    )
+    undefined_leaf_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasUndefinedLeaf"
+    )
+    undefined_branch_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasUndefinedBranch"
+    )
+    write_imported_target(undefined_target_name, undefined_inner_name, "\\/")
+    write_inner(undefined_inner_name, undefined_leaf_name, "\\/")
+    undefined_leaf = write_leaf_with_branch_instance(
+        undefined_leaf_name,
+        undefined_branch_name,
+        "\\/",
+    )
+    undefined_branch = write_branch(undefined_branch_name, "Other == TRUE")
+    undefined = write_top_wrapper(
+        "SumeragiImportedNestedTargetHelperAliasUndefined.tla",
+        undefined_target_name,
+    )
+
+    parameterized_target_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasParameterizedTarget"
+    )
+    parameterized_inner_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasParameterizedInner"
+    )
+    parameterized_leaf_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasParameterizedLeaf"
+    )
+    parameterized_branch_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasParameterizedBranch"
+    )
+    write_imported_target(parameterized_target_name, parameterized_inner_name, "\\/")
+    write_inner(parameterized_inner_name, parameterized_leaf_name, "\\/")
+    parameterized_leaf = write_leaf_with_branch_instance(
+        parameterized_leaf_name,
+        parameterized_branch_name,
+        "\\/",
+    )
+    parameterized_branch = write_branch(
+        parameterized_branch_name,
+        "Init(value) == TRUE",
+    )
+    parameterized = write_top_wrapper(
+        "SumeragiImportedNestedTargetHelperAliasParameterized.tla",
+        parameterized_target_name,
+    )
+
+    noninspectable_target_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasNoninspectableTarget"
+    )
+    noninspectable_inner_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasNoninspectableInner"
+    )
+    noninspectable_leaf_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasNoninspectableLeaf"
+    )
+    noninspectable_branch_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasNoninspectableBranch"
+    )
+    write_imported_target(
+        noninspectable_target_name,
+        noninspectable_inner_name,
+        "\\/",
+    )
+    write_inner(noninspectable_inner_name, noninspectable_leaf_name, "\\/")
+    noninspectable_leaf = write_leaf_with_branch_instance(
+        noninspectable_leaf_name,
+        noninspectable_branch_name,
+        "\\/",
+    )
+    noninspectable_branch = write_branch(noninspectable_branch_name, "Init ==")
+    noninspectable = write_top_wrapper(
+        "SumeragiImportedNestedTargetHelperAliasNoninspectable.tla",
+        noninspectable_target_name,
+    )
+
+    cycle_target_name = "SumeragiTopImportedInitNestedTargetHelperAliasCycleTarget"
+    cycle_inner_name = "SumeragiTopImportedInitNestedTargetHelperAliasCycleInner"
+    cycle_leaf_name = "SumeragiTopImportedInitNestedTargetHelperAliasCycleLeaf"
+    cycle_branch_name = "SumeragiTopImportedInitNestedTargetHelperAliasCycleBranch"
+    write_imported_target(cycle_target_name, cycle_inner_name, "\\/")
+    write_inner(cycle_inner_name, cycle_leaf_name, "\\/")
+    write_leaf_with_branch_instance(cycle_leaf_name, cycle_branch_name, "\\/")
+    cycle_branch = write_cyclic_branch(cycle_branch_name)
+    cycle = write_top_wrapper(
+        "SumeragiImportedNestedTargetHelperAliasCycle.tla",
+        cycle_target_name,
+    )
+
+    source_shape_requirement = (
+        f"{source_root_kind} init operators must be initial-state predicates "
+        "without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or <> temporal "
+        "markers"
+    )
+    assert module.source_commit_progress_spec_contract_errors(
+        (
+            (
+                source_no_instance,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+            (
+                source_action,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+        )
+    ) == [
+        f"{source_no_instance_leaf}:5 defines {source_root_kind} init "
+        "operator LocalInit, but aliases Branch!Init without a named "
+        f"INSTANCE alias Branch; {source_root_kind} init aliases must "
+        "resolve through named local INSTANCE declarations",
+        f"{source_action_leaf}:6 defines {source_root_kind} init operator "
+        f"LocalInit as Branch!Init, but target {source_action_branch}:3 is "
+        f"not an initial-state predicate; {source_shape_requirement}",
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                missing,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{missing_leaf}:6 defines {top_root_kind} init operator LocalInit "
+        f"as Branch!Init, but target module {missing_branch} does not exist; "
+        f"{top_root_kind} init aliases must resolve to local modules"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                undefined,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{undefined_leaf}:6 defines {top_root_kind} init operator "
+        f"LocalInit as Branch!Init, but target {undefined_branch} does "
+        f"not define Init; {top_root_kind} init aliases must resolve to "
+        "defined zero-arity initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                parameterized,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{parameterized_leaf}:6 defines {top_root_kind} init operator "
+        f"LocalInit as Branch!Init, but target {parameterized_branch}:3 "
+        f"has arity 1; {top_root_kind} init aliases must resolve to "
+        "defined zero-arity initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                noninspectable,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{noninspectable_leaf}:6 defines {top_root_kind} init operator "
+        f"LocalInit as Branch!Init, but target {noninspectable_branch}:3 "
+        "is not an inspectable single-expression definition; "
+        f"{top_root_kind} init aliases must resolve to inspectable "
+        "initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                cycle,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{cycle_branch}:3 defines {top_root_kind} init operator Init, but "
+        f"init alias resolution cycles at Init; {top_root_kind} init aliases "
+        "must be acyclic and resolve to inspectable initial-state predicates"
+    ]
+
+
+def test_source_and_top_level_commit_progress_spec_contract_errors_reject_imported_init_alias_nested_module_target_helper_alias_onward_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def progress_with_import(
+        *,
+        target_name: str,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+    ) -> str:
+        return "\n".join(
+            [
+                f"Interleaving == INSTANCE {target_name}",
+                "",
+                *commit_progress_spec_contract_text(
+                    spec_operator=spec_operator,
+                    fairness_operator=fairness_operator,
+                    next_closure=next_closure,
+                    fairness_actions=fairness_actions,
+                    init_lines=["Init == Interleaving!Init"],
+                ).splitlines(),
+            ]
+        )
+
+    def write_imported_target(
+        target_name: str,
+        inner_name: str,
+        connective: str,
+    ) -> Path:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    f"Inner == INSTANCE {inner_name}",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} Inner!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return target
+
+    def write_inner(inner_name: str, leaf_name: str, connective: str) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    f"Leaf == INSTANCE {leaf_name}",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} Leaf!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_leaf(
+        leaf_name: str,
+        branch_name: str,
+        connective: str,
+    ) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    f"Branch == INSTANCE {branch_name}",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} LocalInit",
+                    "LocalInit == Branch!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    def write_branch_without_twig_instance(branch_name: str) -> Path:
+        branch = tmp_path / f"{branch_name}.tla"
+        branch.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {branch_name} ----",
+                    "VARIABLES vars",
+                    "Init == Twig!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return branch
+
+    def write_branch_with_twig_instance(branch_name: str, twig_name: str) -> Path:
+        branch = tmp_path / f"{branch_name}.tla"
+        branch.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {branch_name} ----",
+                    "VARIABLES vars",
+                    f"Twig == INSTANCE {twig_name}",
+                    "Init == Twig!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return branch
+
+    def write_twig(twig_name: str, body: str) -> Path:
+        twig = tmp_path / f"{twig_name}.tla"
+        twig.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {twig_name} ----",
+                    "VARIABLES vars",
+                    body,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return twig
+
+    def write_cyclic_twig(twig_name: str) -> Path:
+        twig = tmp_path / f"{twig_name}.tla"
+        twig.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {twig_name} ----",
+                    "VARIABLES vars",
+                    "Init == HiddenInit",
+                    "HiddenInit == Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return twig
+
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+
+    source_no_instance_target_name = (
+        "SumeragiSourceImportedInitNestedModuleTargetHelperAliasOnwardNoInstanceTarget"
+    )
+    source_no_instance_inner_name = (
+        "SumeragiSourceImportedInitNestedModuleTargetHelperAliasOnwardNoInstanceInner"
+    )
+    source_no_instance_leaf_name = (
+        "SumeragiSourceImportedInitNestedModuleTargetHelperAliasOnwardNoInstanceLeaf"
+    )
+    source_no_instance_branch_name = (
+        "SumeragiSourceImportedInitNestedModuleTargetHelperAliasOnwardNoInstanceBranch"
+    )
+    write_imported_target(
+        source_no_instance_target_name,
+        source_no_instance_inner_name,
+        "/\\",
+    )
+    write_inner(source_no_instance_inner_name, source_no_instance_leaf_name, "/\\")
+    write_leaf(source_no_instance_leaf_name, source_no_instance_branch_name, "/\\")
+    source_no_instance_branch = write_branch_without_twig_instance(
+        source_no_instance_branch_name
+    )
+    source_no_instance = tmp_path / (
+        "SumeragiDirectDeliveredFirstCorridorGateImportedNestedTargetHelperAliasOnwardNoInstance.tla"
+    )
+    source_no_instance.write_text(
+        progress_with_import(
+            target_name=source_no_instance_target_name,
+            spec_operator=source_spec,
+            fairness_operator=source_fairness,
+            next_closure=source_next_closure,
+            fairness_actions=source_actions,
+        ),
+        encoding="utf-8",
+    )
+
+    source_action_target_name = (
+        "SumeragiSourceImportedInitNestedModuleTargetHelperAliasOnwardActionTarget"
+    )
+    source_action_inner_name = (
+        "SumeragiSourceImportedInitNestedModuleTargetHelperAliasOnwardActionInner"
+    )
+    source_action_leaf_name = (
+        "SumeragiSourceImportedInitNestedModuleTargetHelperAliasOnwardActionLeaf"
+    )
+    source_action_branch_name = (
+        "SumeragiSourceImportedInitNestedModuleTargetHelperAliasOnwardActionBranch"
+    )
+    source_action_twig_name = (
+        "SumeragiSourceImportedInitNestedModuleTargetHelperAliasOnwardActionTwig"
+    )
+    write_imported_target(source_action_target_name, source_action_inner_name, "/\\")
+    write_inner(source_action_inner_name, source_action_leaf_name, "/\\")
+    write_leaf(source_action_leaf_name, source_action_branch_name, "/\\")
+    source_action_branch = write_branch_with_twig_instance(
+        source_action_branch_name,
+        source_action_twig_name,
+    )
+    source_action_twig = write_twig(
+        source_action_twig_name,
+        "Init == UNCHANGED vars",
+    )
+    source_action = tmp_path / (
+        "SumeragiDirectDeliveredFirstCorridorGateImportedNestedTargetHelperAliasOnwardAction.tla"
+    )
+    source_action.write_text(
+        progress_with_import(
+            target_name=source_action_target_name,
+            spec_operator=source_spec,
+            fairness_operator=source_fairness,
+            next_closure=source_next_closure,
+            fairness_actions=source_actions,
+        ),
+        encoding="utf-8",
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+
+    def write_top_wrapper(filename: str, target_name: str) -> Path:
+        top = tmp_path / filename
+        top.write_text(
+            progress_with_import(
+                target_name=target_name,
+                spec_operator=top_spec,
+                fairness_operator=top_fairness,
+                next_closure=top_next_closure,
+                fairness_actions=top_actions,
+            ),
+            encoding="utf-8",
+        )
+        return top
+
+    missing_target_name = "SumeragiTopImportedInitNestedTargetHelperAliasOnwardMissingTarget"
+    missing_inner_name = "SumeragiTopImportedInitNestedTargetHelperAliasOnwardMissingInner"
+    missing_leaf_name = "SumeragiTopImportedInitNestedTargetHelperAliasOnwardMissingLeaf"
+    missing_branch_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardMissingBranch"
+    )
+    missing_twig_name = "SumeragiTopImportedInitNestedTargetHelperAliasOnwardMissingTwig"
+    write_imported_target(missing_target_name, missing_inner_name, "\\/")
+    write_inner(missing_inner_name, missing_leaf_name, "\\/")
+    write_leaf(missing_leaf_name, missing_branch_name, "\\/")
+    missing_branch = write_branch_with_twig_instance(
+        missing_branch_name,
+        missing_twig_name,
+    )
+    missing_twig = tmp_path / f"{missing_twig_name}.tla"
+    missing = write_top_wrapper(
+        "SumeragiImportedNestedTargetHelperAliasOnwardMissing.tla",
+        missing_target_name,
+    )
+
+    undefined_target_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardUndefinedTarget"
+    )
+    undefined_inner_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardUndefinedInner"
+    )
+    undefined_leaf_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardUndefinedLeaf"
+    )
+    undefined_branch_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardUndefinedBranch"
+    )
+    undefined_twig_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardUndefinedTwig"
+    )
+    write_imported_target(undefined_target_name, undefined_inner_name, "\\/")
+    write_inner(undefined_inner_name, undefined_leaf_name, "\\/")
+    write_leaf(undefined_leaf_name, undefined_branch_name, "\\/")
+    undefined_branch = write_branch_with_twig_instance(
+        undefined_branch_name,
+        undefined_twig_name,
+    )
+    undefined_twig = write_twig(undefined_twig_name, "Other == TRUE")
+    undefined = write_top_wrapper(
+        "SumeragiImportedNestedTargetHelperAliasOnwardUndefined.tla",
+        undefined_target_name,
+    )
+
+    parameterized_target_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardParameterizedTarget"
+    )
+    parameterized_inner_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardParameterizedInner"
+    )
+    parameterized_leaf_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardParameterizedLeaf"
+    )
+    parameterized_branch_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardParameterizedBranch"
+    )
+    parameterized_twig_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardParameterizedTwig"
+    )
+    write_imported_target(parameterized_target_name, parameterized_inner_name, "\\/")
+    write_inner(parameterized_inner_name, parameterized_leaf_name, "\\/")
+    write_leaf(parameterized_leaf_name, parameterized_branch_name, "\\/")
+    parameterized_branch = write_branch_with_twig_instance(
+        parameterized_branch_name,
+        parameterized_twig_name,
+    )
+    parameterized_twig = write_twig(parameterized_twig_name, "Init(value) == TRUE")
+    parameterized = write_top_wrapper(
+        "SumeragiImportedNestedTargetHelperAliasOnwardParameterized.tla",
+        parameterized_target_name,
+    )
+
+    noninspectable_target_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardNoninspectableTarget"
+    )
+    noninspectable_inner_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardNoninspectableInner"
+    )
+    noninspectable_leaf_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardNoninspectableLeaf"
+    )
+    noninspectable_branch_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardNoninspectableBranch"
+    )
+    noninspectable_twig_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardNoninspectableTwig"
+    )
+    write_imported_target(
+        noninspectable_target_name,
+        noninspectable_inner_name,
+        "\\/",
+    )
+    write_inner(noninspectable_inner_name, noninspectable_leaf_name, "\\/")
+    write_leaf(noninspectable_leaf_name, noninspectable_branch_name, "\\/")
+    noninspectable_branch = write_branch_with_twig_instance(
+        noninspectable_branch_name,
+        noninspectable_twig_name,
+    )
+    noninspectable_twig = write_twig(noninspectable_twig_name, "Init ==")
+    noninspectable = write_top_wrapper(
+        "SumeragiImportedNestedTargetHelperAliasOnwardNoninspectable.tla",
+        noninspectable_target_name,
+    )
+
+    cycle_target_name = "SumeragiTopImportedInitNestedTargetHelperAliasOnwardCycleTarget"
+    cycle_inner_name = "SumeragiTopImportedInitNestedTargetHelperAliasOnwardCycleInner"
+    cycle_leaf_name = "SumeragiTopImportedInitNestedTargetHelperAliasOnwardCycleLeaf"
+    cycle_branch_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardCycleBranch"
+    )
+    cycle_twig_name = "SumeragiTopImportedInitNestedTargetHelperAliasOnwardCycleTwig"
+    write_imported_target(cycle_target_name, cycle_inner_name, "\\/")
+    write_inner(cycle_inner_name, cycle_leaf_name, "\\/")
+    write_leaf(cycle_leaf_name, cycle_branch_name, "\\/")
+    write_branch_with_twig_instance(cycle_branch_name, cycle_twig_name)
+    cycle_twig = write_cyclic_twig(cycle_twig_name)
+    cycle = write_top_wrapper(
+        "SumeragiImportedNestedTargetHelperAliasOnwardCycle.tla",
+        cycle_target_name,
+    )
+
+    source_shape_requirement = (
+        f"{source_root_kind} init operators must be initial-state predicates "
+        "without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or <> temporal "
+        "markers"
+    )
+    assert module.source_commit_progress_spec_contract_errors(
+        (
+            (
+                source_no_instance,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+            (
+                source_action,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+        )
+    ) == [
+        f"{source_no_instance_branch}:3 defines {source_root_kind} init "
+        "operator Init, but aliases Twig!Init without a named INSTANCE alias "
+        f"Twig; {source_root_kind} init aliases must resolve through named "
+        "local INSTANCE declarations",
+        f"{source_action_branch}:4 defines {source_root_kind} init operator "
+        f"Init as Twig!Init, but target {source_action_twig}:3 is not an "
+        f"initial-state predicate; {source_shape_requirement}",
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                missing,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{missing_branch}:4 defines {top_root_kind} init operator Init as "
+        f"Twig!Init, but target module {missing_twig} does not exist; "
+        f"{top_root_kind} init aliases must resolve to local modules"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                undefined,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{undefined_branch}:4 defines {top_root_kind} init operator Init as "
+        f"Twig!Init, but target {undefined_twig} does not define Init; "
+        f"{top_root_kind} init aliases must resolve to defined zero-arity "
+        "initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                parameterized,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{parameterized_branch}:4 defines {top_root_kind} init operator "
+        f"Init as Twig!Init, but target {parameterized_twig}:3 has arity 1; "
+        f"{top_root_kind} init aliases must resolve to defined zero-arity "
+        "initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                noninspectable,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{noninspectable_branch}:4 defines {top_root_kind} init operator "
+        f"Init as Twig!Init, but target {noninspectable_twig}:3 is not an "
+        "inspectable single-expression definition; "
+        f"{top_root_kind} init aliases must resolve to inspectable "
+        "initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                cycle,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{cycle_twig}:3 defines {top_root_kind} init operator Init, but "
+        f"init alias resolution cycles at Init; {top_root_kind} init aliases "
+        "must be acyclic and resolve to inspectable initial-state predicates"
+    ]
+
+
+def test_source_and_top_level_commit_progress_spec_contract_errors_reject_imported_init_alias_nested_module_target_helper_alias_onward_target_helper_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def progress_with_import(
+        *,
+        target_name: str,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+    ) -> str:
+        return "\n".join(
+            [
+                f"Interleaving == INSTANCE {target_name}",
+                "",
+                *commit_progress_spec_contract_text(
+                    spec_operator=spec_operator,
+                    fairness_operator=fairness_operator,
+                    next_closure=next_closure,
+                    fairness_actions=fairness_actions,
+                    init_lines=["Init == Interleaving!Init"],
+                ).splitlines(),
+            ]
+        )
+
+    def write_imported_target(
+        target_name: str,
+        inner_name: str,
+        connective: str,
+    ) -> Path:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    f"Inner == INSTANCE {inner_name}",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} Inner!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return target
+
+    def write_inner(inner_name: str, leaf_name: str, connective: str) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    f"Leaf == INSTANCE {leaf_name}",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} Leaf!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_leaf(
+        leaf_name: str,
+        branch_name: str,
+        connective: str,
+    ) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    f"Branch == INSTANCE {branch_name}",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} LocalInit",
+                    "LocalInit == Branch!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    def write_branch(branch_name: str, twig_name: str) -> Path:
+        branch = tmp_path / f"{branch_name}.tla"
+        branch.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {branch_name} ----",
+                    "VARIABLES vars",
+                    f"Twig == INSTANCE {twig_name}",
+                    "Init == Twig!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return branch
+
+    def write_twig(
+        twig_name: str,
+        helper_body: str,
+        connective: str,
+    ) -> Path:
+        twig = tmp_path / f"{twig_name}.tla"
+        twig.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {twig_name} ----",
+                    "VARIABLES vars",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} TailInit",
+                    helper_body,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return twig
+
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+
+    source_action_target_name = (
+        "SumeragiSourceImportedInitNestedModuleTargetHelperAliasOnwardTargetHelperActionTarget"
+    )
+    source_action_inner_name = (
+        "SumeragiSourceImportedInitNestedModuleTargetHelperAliasOnwardTargetHelperActionInner"
+    )
+    source_action_leaf_name = (
+        "SumeragiSourceImportedInitNestedModuleTargetHelperAliasOnwardTargetHelperActionLeaf"
+    )
+    source_action_branch_name = (
+        "SumeragiSourceImportedInitNestedModuleTargetHelperAliasOnwardTargetHelperActionBranch"
+    )
+    source_action_twig_name = (
+        "SumeragiSourceImportedInitNestedModuleTargetHelperAliasOnwardTargetHelperActionTwig"
+    )
+    write_imported_target(source_action_target_name, source_action_inner_name, "/\\")
+    write_inner(source_action_inner_name, source_action_leaf_name, "/\\")
+    write_leaf(source_action_leaf_name, source_action_branch_name, "/\\")
+    write_branch(source_action_branch_name, source_action_twig_name)
+    source_action_twig = write_twig(
+        source_action_twig_name,
+        "TailInit == UNCHANGED vars",
+        "/\\",
+    )
+    source_action = tmp_path / (
+        "SumeragiDirectDeliveredFirstCorridorGateImportedNestedTargetHelperAliasOnwardTargetHelperAction.tla"
+    )
+    source_action.write_text(
+        progress_with_import(
+            target_name=source_action_target_name,
+            spec_operator=source_spec,
+            fairness_operator=source_fairness,
+            next_closure=source_next_closure,
+            fairness_actions=source_actions,
+        ),
+        encoding="utf-8",
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+
+    def write_top_wrapper(filename: str, target_name: str) -> Path:
+        top = tmp_path / filename
+        top.write_text(
+            progress_with_import(
+                target_name=target_name,
+                spec_operator=top_spec,
+                fairness_operator=top_fairness,
+                next_closure=top_next_closure,
+                fairness_actions=top_actions,
+            ),
+            encoding="utf-8",
+        )
+        return top
+
+    parameterized_target_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperParameterizedTarget"
+    )
+    parameterized_inner_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperParameterizedInner"
+    )
+    parameterized_leaf_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperParameterizedLeaf"
+    )
+    parameterized_branch_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperParameterizedBranch"
+    )
+    parameterized_twig_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperParameterizedTwig"
+    )
+    write_imported_target(parameterized_target_name, parameterized_inner_name, "\\/")
+    write_inner(parameterized_inner_name, parameterized_leaf_name, "\\/")
+    write_leaf(parameterized_leaf_name, parameterized_branch_name, "\\/")
+    write_branch(parameterized_branch_name, parameterized_twig_name)
+    parameterized_twig = write_twig(
+        parameterized_twig_name,
+        "TailInit(value) == TRUE",
+        "\\/",
+    )
+    parameterized = write_top_wrapper(
+        "SumeragiImportedNestedTargetHelperAliasOnwardTargetHelperParameterized.tla",
+        parameterized_target_name,
+    )
+
+    noninspectable_target_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperNoninspectableTarget"
+    )
+    noninspectable_inner_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperNoninspectableInner"
+    )
+    noninspectable_leaf_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperNoninspectableLeaf"
+    )
+    noninspectable_branch_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperNoninspectableBranch"
+    )
+    noninspectable_twig_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperNoninspectableTwig"
+    )
+    write_imported_target(noninspectable_target_name, noninspectable_inner_name, "\\/")
+    write_inner(noninspectable_inner_name, noninspectable_leaf_name, "\\/")
+    write_leaf(noninspectable_leaf_name, noninspectable_branch_name, "\\/")
+    write_branch(noninspectable_branch_name, noninspectable_twig_name)
+    noninspectable_twig = write_twig(
+        noninspectable_twig_name,
+        "TailInit ==",
+        "\\/",
+    )
+    noninspectable = write_top_wrapper(
+        "SumeragiImportedNestedTargetHelperAliasOnwardTargetHelperNoninspectable.tla",
+        noninspectable_target_name,
+    )
+
+    cycle_target_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperCycleTarget"
+    )
+    cycle_inner_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperCycleInner"
+    )
+    cycle_leaf_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperCycleLeaf"
+    )
+    cycle_branch_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperCycleBranch"
+    )
+    cycle_twig_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperCycleTwig"
+    )
+    write_imported_target(cycle_target_name, cycle_inner_name, "\\/")
+    write_inner(cycle_inner_name, cycle_leaf_name, "\\/")
+    write_leaf(cycle_leaf_name, cycle_branch_name, "\\/")
+    write_branch(cycle_branch_name, cycle_twig_name)
+    cycle_twig = write_twig(
+        cycle_twig_name,
+        "TailInit == GoodInit \\/ TailInit",
+        "\\/",
+    )
+    cycle = write_top_wrapper(
+        "SumeragiImportedNestedTargetHelperAliasOnwardTargetHelperCycle.tla",
+        cycle_target_name,
+    )
+
+    source_shape_requirement = (
+        f"{source_root_kind} init operators must be initial-state predicates "
+        "without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or <> temporal "
+        "markers"
+    )
+    assert module.source_commit_progress_spec_contract_errors(
+        (
+            (
+                source_action,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+        )
+    ) == [
+        f"{source_action_twig}:4 defines {source_root_kind} init operator "
+        f"Init, but helper TailInit at {source_action_twig}:5 is not an "
+        f"initial-state predicate; {source_shape_requirement}"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                parameterized,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{parameterized_twig}:4 defines {top_root_kind} init operator "
+        f"Init, but helper TailInit at {parameterized_twig}:5 has arity 1; "
+        f"{top_root_kind} init helpers must resolve to defined zero-arity "
+        "initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                noninspectable,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{noninspectable_twig}:4 defines {top_root_kind} init operator "
+        f"Init, but helper TailInit at {noninspectable_twig}:5 is not an "
+        "inspectable single-expression definition; "
+        f"{top_root_kind} init helpers must resolve to inspectable "
+        "initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                cycle,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{cycle_twig}:5 defines {top_root_kind} init operator TailInit, "
+        f"but init helper resolution cycles at TailInit; {top_root_kind} "
+        "init helpers must be acyclic and resolve to inspectable "
+        "initial-state predicates"
+    ]
+
+
+def test_source_and_top_level_commit_progress_spec_contract_errors_reject_imported_init_alias_nested_module_target_helper_alias_onward_target_helper_alias_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def progress_with_import(
+        *,
+        target_name: str,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+    ) -> str:
+        return "\n".join(
+            [
+                f"Interleaving == INSTANCE {target_name}",
+                "",
+                *commit_progress_spec_contract_text(
+                    spec_operator=spec_operator,
+                    fairness_operator=fairness_operator,
+                    next_closure=next_closure,
+                    fairness_actions=fairness_actions,
+                    init_lines=["Init == Interleaving!Init"],
+                ).splitlines(),
+            ]
+        )
+
+    def write_imported_target(
+        target_name: str,
+        inner_name: str,
+        connective: str,
+    ) -> Path:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    f"Inner == INSTANCE {inner_name}",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} Inner!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return target
+
+    def write_inner(inner_name: str, leaf_name: str, connective: str) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    f"Leaf == INSTANCE {leaf_name}",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} Leaf!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_leaf(
+        leaf_name: str,
+        branch_name: str,
+        connective: str,
+    ) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    f"Branch == INSTANCE {branch_name}",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} LocalInit",
+                    "LocalInit == Branch!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    def write_branch(branch_name: str, twig_name: str) -> Path:
+        branch = tmp_path / f"{branch_name}.tla"
+        branch.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {branch_name} ----",
+                    "VARIABLES vars",
+                    f"Twig == INSTANCE {twig_name}",
+                    "Init == Twig!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return branch
+
+    def write_twig_without_sprout_instance(
+        twig_name: str,
+        connective: str,
+    ) -> Path:
+        twig = tmp_path / f"{twig_name}.tla"
+        twig.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {twig_name} ----",
+                    "VARIABLES vars",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} TailInit",
+                    "TailInit == Sprout!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return twig
+
+    def write_twig_with_sprout_instance(
+        twig_name: str,
+        sprout_name: str,
+        connective: str,
+    ) -> Path:
+        twig = tmp_path / f"{twig_name}.tla"
+        twig.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {twig_name} ----",
+                    "VARIABLES vars",
+                    f"Sprout == INSTANCE {sprout_name}",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} TailInit",
+                    "TailInit == Sprout!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return twig
+
+    def write_sprout(sprout_name: str, body: str) -> Path:
+        sprout = tmp_path / f"{sprout_name}.tla"
+        sprout.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {sprout_name} ----",
+                    "VARIABLES vars",
+                    body,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return sprout
+
+    def write_cyclic_sprout(sprout_name: str) -> Path:
+        sprout = tmp_path / f"{sprout_name}.tla"
+        sprout.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {sprout_name} ----",
+                    "VARIABLES vars",
+                    "Init == HiddenInit",
+                    "HiddenInit == Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return sprout
+
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+
+    source_no_instance_target_name = (
+        "SumeragiSourceImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasNoInstanceTarget"
+    )
+    source_no_instance_inner_name = (
+        "SumeragiSourceImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasNoInstanceInner"
+    )
+    source_no_instance_leaf_name = (
+        "SumeragiSourceImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasNoInstanceLeaf"
+    )
+    source_no_instance_branch_name = (
+        "SumeragiSourceImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasNoInstanceBranch"
+    )
+    source_no_instance_twig_name = (
+        "SumeragiSourceImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasNoInstanceTwig"
+    )
+    write_imported_target(
+        source_no_instance_target_name,
+        source_no_instance_inner_name,
+        "/\\",
+    )
+    write_inner(source_no_instance_inner_name, source_no_instance_leaf_name, "/\\")
+    write_leaf(source_no_instance_leaf_name, source_no_instance_branch_name, "/\\")
+    write_branch(source_no_instance_branch_name, source_no_instance_twig_name)
+    source_no_instance_twig = write_twig_without_sprout_instance(
+        source_no_instance_twig_name,
+        "/\\",
+    )
+    source_no_instance = tmp_path / (
+        "SumeragiDirectDeliveredFirstCorridorGateImportedNestedTargetHelperAliasOnwardTargetHelperAliasNoInstance.tla"
+    )
+    source_no_instance.write_text(
+        progress_with_import(
+            target_name=source_no_instance_target_name,
+            spec_operator=source_spec,
+            fairness_operator=source_fairness,
+            next_closure=source_next_closure,
+            fairness_actions=source_actions,
+        ),
+        encoding="utf-8",
+    )
+
+    source_action_target_name = (
+        "SumeragiSourceImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasActionTarget"
+    )
+    source_action_inner_name = (
+        "SumeragiSourceImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasActionInner"
+    )
+    source_action_leaf_name = (
+        "SumeragiSourceImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasActionLeaf"
+    )
+    source_action_branch_name = (
+        "SumeragiSourceImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasActionBranch"
+    )
+    source_action_twig_name = (
+        "SumeragiSourceImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasActionTwig"
+    )
+    source_action_sprout_name = (
+        "SumeragiSourceImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasActionSprout"
+    )
+    write_imported_target(source_action_target_name, source_action_inner_name, "/\\")
+    write_inner(source_action_inner_name, source_action_leaf_name, "/\\")
+    write_leaf(source_action_leaf_name, source_action_branch_name, "/\\")
+    write_branch(source_action_branch_name, source_action_twig_name)
+    source_action_twig = write_twig_with_sprout_instance(
+        source_action_twig_name,
+        source_action_sprout_name,
+        "/\\",
+    )
+    source_action_sprout = write_sprout(
+        source_action_sprout_name,
+        "Init == UNCHANGED vars",
+    )
+    source_action = tmp_path / (
+        "SumeragiDirectDeliveredFirstCorridorGateImportedNestedTargetHelperAliasOnwardTargetHelperAliasAction.tla"
+    )
+    source_action.write_text(
+        progress_with_import(
+            target_name=source_action_target_name,
+            spec_operator=source_spec,
+            fairness_operator=source_fairness,
+            next_closure=source_next_closure,
+            fairness_actions=source_actions,
+        ),
+        encoding="utf-8",
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+
+    def write_top_wrapper(filename: str, target_name: str) -> Path:
+        top = tmp_path / filename
+        top.write_text(
+            progress_with_import(
+                target_name=target_name,
+                spec_operator=top_spec,
+                fairness_operator=top_fairness,
+                next_closure=top_next_closure,
+                fairness_actions=top_actions,
+            ),
+            encoding="utf-8",
+        )
+        return top
+
+    missing_target_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasMissingTarget"
+    )
+    missing_inner_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasMissingInner"
+    )
+    missing_leaf_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasMissingLeaf"
+    )
+    missing_branch_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasMissingBranch"
+    )
+    missing_twig_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasMissingTwig"
+    )
+    missing_sprout_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasMissingSprout"
+    )
+    write_imported_target(missing_target_name, missing_inner_name, "\\/")
+    write_inner(missing_inner_name, missing_leaf_name, "\\/")
+    write_leaf(missing_leaf_name, missing_branch_name, "\\/")
+    write_branch(missing_branch_name, missing_twig_name)
+    missing_twig = write_twig_with_sprout_instance(
+        missing_twig_name,
+        missing_sprout_name,
+        "\\/",
+    )
+    missing_sprout = tmp_path / f"{missing_sprout_name}.tla"
+    missing = write_top_wrapper(
+        "SumeragiImportedNestedTargetHelperAliasOnwardTargetHelperAliasMissing.tla",
+        missing_target_name,
+    )
+
+    undefined_target_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasUndefinedTarget"
+    )
+    undefined_inner_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasUndefinedInner"
+    )
+    undefined_leaf_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasUndefinedLeaf"
+    )
+    undefined_branch_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasUndefinedBranch"
+    )
+    undefined_twig_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasUndefinedTwig"
+    )
+    undefined_sprout_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasUndefinedSprout"
+    )
+    write_imported_target(undefined_target_name, undefined_inner_name, "\\/")
+    write_inner(undefined_inner_name, undefined_leaf_name, "\\/")
+    write_leaf(undefined_leaf_name, undefined_branch_name, "\\/")
+    write_branch(undefined_branch_name, undefined_twig_name)
+    undefined_twig = write_twig_with_sprout_instance(
+        undefined_twig_name,
+        undefined_sprout_name,
+        "\\/",
+    )
+    undefined_sprout = write_sprout(undefined_sprout_name, "Other == TRUE")
+    undefined = write_top_wrapper(
+        "SumeragiImportedNestedTargetHelperAliasOnwardTargetHelperAliasUndefined.tla",
+        undefined_target_name,
+    )
+
+    parameterized_target_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasParameterizedTarget"
+    )
+    parameterized_inner_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasParameterizedInner"
+    )
+    parameterized_leaf_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasParameterizedLeaf"
+    )
+    parameterized_branch_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasParameterizedBranch"
+    )
+    parameterized_twig_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasParameterizedTwig"
+    )
+    parameterized_sprout_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasParameterizedSprout"
+    )
+    write_imported_target(parameterized_target_name, parameterized_inner_name, "\\/")
+    write_inner(parameterized_inner_name, parameterized_leaf_name, "\\/")
+    write_leaf(parameterized_leaf_name, parameterized_branch_name, "\\/")
+    write_branch(parameterized_branch_name, parameterized_twig_name)
+    parameterized_twig = write_twig_with_sprout_instance(
+        parameterized_twig_name,
+        parameterized_sprout_name,
+        "\\/",
+    )
+    parameterized_sprout = write_sprout(
+        parameterized_sprout_name,
+        "Init(value) == TRUE",
+    )
+    parameterized = write_top_wrapper(
+        "SumeragiImportedNestedTargetHelperAliasOnwardTargetHelperAliasParameterized.tla",
+        parameterized_target_name,
+    )
+
+    noninspectable_target_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasNoninspectableTarget"
+    )
+    noninspectable_inner_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasNoninspectableInner"
+    )
+    noninspectable_leaf_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasNoninspectableLeaf"
+    )
+    noninspectable_branch_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasNoninspectableBranch"
+    )
+    noninspectable_twig_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasNoninspectableTwig"
+    )
+    noninspectable_sprout_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasNoninspectableSprout"
+    )
+    write_imported_target(noninspectable_target_name, noninspectable_inner_name, "\\/")
+    write_inner(noninspectable_inner_name, noninspectable_leaf_name, "\\/")
+    write_leaf(noninspectable_leaf_name, noninspectable_branch_name, "\\/")
+    write_branch(noninspectable_branch_name, noninspectable_twig_name)
+    noninspectable_twig = write_twig_with_sprout_instance(
+        noninspectable_twig_name,
+        noninspectable_sprout_name,
+        "\\/",
+    )
+    noninspectable_sprout = write_sprout(
+        noninspectable_sprout_name,
+        "Init ==",
+    )
+    noninspectable = write_top_wrapper(
+        "SumeragiImportedNestedTargetHelperAliasOnwardTargetHelperAliasNoninspectable.tla",
+        noninspectable_target_name,
+    )
+
+    cycle_target_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasCycleTarget"
+    )
+    cycle_inner_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasCycleInner"
+    )
+    cycle_leaf_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasCycleLeaf"
+    )
+    cycle_branch_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasCycleBranch"
+    )
+    cycle_twig_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasCycleTwig"
+    )
+    cycle_sprout_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasCycleSprout"
+    )
+    write_imported_target(cycle_target_name, cycle_inner_name, "\\/")
+    write_inner(cycle_inner_name, cycle_leaf_name, "\\/")
+    write_leaf(cycle_leaf_name, cycle_branch_name, "\\/")
+    write_branch(cycle_branch_name, cycle_twig_name)
+    write_twig_with_sprout_instance(cycle_twig_name, cycle_sprout_name, "\\/")
+    cycle_sprout = write_cyclic_sprout(cycle_sprout_name)
+    cycle = write_top_wrapper(
+        "SumeragiImportedNestedTargetHelperAliasOnwardTargetHelperAliasCycle.tla",
+        cycle_target_name,
+    )
+
+    source_shape_requirement = (
+        f"{source_root_kind} init operators must be initial-state predicates "
+        "without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or <> temporal "
+        "markers"
+    )
+    assert module.source_commit_progress_spec_contract_errors(
+        (
+            (
+                source_no_instance,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+            (
+                source_action,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+        )
+    ) == [
+        f"{source_no_instance_twig}:5 defines {source_root_kind} init "
+        "operator TailInit, but aliases Sprout!Init without a named INSTANCE "
+        f"alias Sprout; {source_root_kind} init aliases must resolve through "
+        "named local INSTANCE declarations",
+        f"{source_action_twig}:6 defines {source_root_kind} init operator "
+        f"TailInit as Sprout!Init, but target {source_action_sprout}:3 is "
+        f"not an initial-state predicate; {source_shape_requirement}",
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                missing,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{missing_twig}:6 defines {top_root_kind} init operator TailInit "
+        f"as Sprout!Init, but target module {missing_sprout} does not exist; "
+        f"{top_root_kind} init aliases must resolve to local modules"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                undefined,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{undefined_twig}:6 defines {top_root_kind} init operator TailInit "
+        f"as Sprout!Init, but target {undefined_sprout} does not define Init; "
+        f"{top_root_kind} init aliases must resolve to defined zero-arity "
+        "initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                parameterized,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{parameterized_twig}:6 defines {top_root_kind} init operator "
+        f"TailInit as Sprout!Init, but target {parameterized_sprout}:3 has "
+        f"arity 1; {top_root_kind} init aliases must resolve to defined "
+        "zero-arity initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                noninspectable,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{noninspectable_twig}:6 defines {top_root_kind} init operator "
+        f"TailInit as Sprout!Init, but target {noninspectable_sprout}:3 is "
+        "not an inspectable single-expression definition; "
+        f"{top_root_kind} init aliases must resolve to inspectable "
+        "initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                cycle,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{cycle_sprout}:3 defines {top_root_kind} init operator Init, but "
+        f"init alias resolution cycles at Init; {top_root_kind} init aliases "
+        "must be acyclic and resolve to inspectable initial-state predicates"
+    ]
+
+
+def test_source_and_top_level_commit_progress_spec_contract_errors_reject_imported_init_alias_nested_module_target_helper_alias_onward_target_helper_alias_onward_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def progress_with_import(
+        *,
+        target_name: str,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+    ) -> str:
+        return "\n".join(
+            [
+                f"Interleaving == INSTANCE {target_name}",
+                "",
+                *commit_progress_spec_contract_text(
+                    spec_operator=spec_operator,
+                    fairness_operator=fairness_operator,
+                    next_closure=next_closure,
+                    fairness_actions=fairness_actions,
+                    init_lines=["Init == Interleaving!Init"],
+                ).splitlines(),
+            ]
+        )
+
+    def write_imported_target(
+        target_name: str,
+        inner_name: str,
+        connective: str,
+    ) -> Path:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    f"Inner == INSTANCE {inner_name}",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} Inner!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return target
+
+    def write_inner(inner_name: str, leaf_name: str, connective: str) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    f"Leaf == INSTANCE {leaf_name}",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} Leaf!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_leaf(
+        leaf_name: str,
+        branch_name: str,
+        connective: str,
+    ) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    f"Branch == INSTANCE {branch_name}",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} LocalInit",
+                    "LocalInit == Branch!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    def write_branch(branch_name: str, twig_name: str) -> Path:
+        branch = tmp_path / f"{branch_name}.tla"
+        branch.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {branch_name} ----",
+                    "VARIABLES vars",
+                    f"Twig == INSTANCE {twig_name}",
+                    "Init == Twig!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return branch
+
+    def write_twig(twig_name: str, sprout_name: str, connective: str) -> Path:
+        twig = tmp_path / f"{twig_name}.tla"
+        twig.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {twig_name} ----",
+                    "VARIABLES vars",
+                    f"Sprout == INSTANCE {sprout_name}",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} TailInit",
+                    "TailInit == Sprout!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return twig
+
+    def write_sprout_without_bud_instance(sprout_name: str) -> Path:
+        sprout = tmp_path / f"{sprout_name}.tla"
+        sprout.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {sprout_name} ----",
+                    "VARIABLES vars",
+                    "Init == Bud!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return sprout
+
+    def write_sprout_with_bud_instance(sprout_name: str, bud_name: str) -> Path:
+        sprout = tmp_path / f"{sprout_name}.tla"
+        sprout.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {sprout_name} ----",
+                    "VARIABLES vars",
+                    f"Bud == INSTANCE {bud_name}",
+                    "Init == Bud!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return sprout
+
+    def write_bud(bud_name: str, body: str) -> Path:
+        bud = tmp_path / f"{bud_name}.tla"
+        bud.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {bud_name} ----",
+                    "VARIABLES vars",
+                    body,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return bud
+
+    def write_cyclic_bud(bud_name: str) -> Path:
+        bud = tmp_path / f"{bud_name}.tla"
+        bud.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {bud_name} ----",
+                    "VARIABLES vars",
+                    "Init == HiddenInit",
+                    "HiddenInit == Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return bud
+
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+
+    source_no_instance_target_name = (
+        "SumeragiSourceImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardNoInstanceTarget"
+    )
+    source_no_instance_inner_name = (
+        "SumeragiSourceImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardNoInstanceInner"
+    )
+    source_no_instance_leaf_name = (
+        "SumeragiSourceImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardNoInstanceLeaf"
+    )
+    source_no_instance_branch_name = (
+        "SumeragiSourceImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardNoInstanceBranch"
+    )
+    source_no_instance_twig_name = (
+        "SumeragiSourceImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardNoInstanceTwig"
+    )
+    source_no_instance_sprout_name = (
+        "SumeragiSourceImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardNoInstanceSprout"
+    )
+    write_imported_target(
+        source_no_instance_target_name,
+        source_no_instance_inner_name,
+        "/\\",
+    )
+    write_inner(source_no_instance_inner_name, source_no_instance_leaf_name, "/\\")
+    write_leaf(source_no_instance_leaf_name, source_no_instance_branch_name, "/\\")
+    write_branch(source_no_instance_branch_name, source_no_instance_twig_name)
+    write_twig(
+        source_no_instance_twig_name,
+        source_no_instance_sprout_name,
+        "/\\",
+    )
+    source_no_instance_sprout = write_sprout_without_bud_instance(
+        source_no_instance_sprout_name
+    )
+    source_no_instance = tmp_path / (
+        "SumeragiDirectDeliveredFirstCorridorGateImportedNestedTargetHelperAliasOnwardTargetHelperAliasOnwardNoInstance.tla"
+    )
+    source_no_instance.write_text(
+        progress_with_import(
+            target_name=source_no_instance_target_name,
+            spec_operator=source_spec,
+            fairness_operator=source_fairness,
+            next_closure=source_next_closure,
+            fairness_actions=source_actions,
+        ),
+        encoding="utf-8",
+    )
+
+    source_action_target_name = (
+        "SumeragiSourceImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardActionTarget"
+    )
+    source_action_inner_name = (
+        "SumeragiSourceImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardActionInner"
+    )
+    source_action_leaf_name = (
+        "SumeragiSourceImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardActionLeaf"
+    )
+    source_action_branch_name = (
+        "SumeragiSourceImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardActionBranch"
+    )
+    source_action_twig_name = (
+        "SumeragiSourceImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardActionTwig"
+    )
+    source_action_sprout_name = (
+        "SumeragiSourceImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardActionSprout"
+    )
+    source_action_bud_name = (
+        "SumeragiSourceImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardActionBud"
+    )
+    write_imported_target(source_action_target_name, source_action_inner_name, "/\\")
+    write_inner(source_action_inner_name, source_action_leaf_name, "/\\")
+    write_leaf(source_action_leaf_name, source_action_branch_name, "/\\")
+    write_branch(source_action_branch_name, source_action_twig_name)
+    write_twig(source_action_twig_name, source_action_sprout_name, "/\\")
+    source_action_sprout = write_sprout_with_bud_instance(
+        source_action_sprout_name,
+        source_action_bud_name,
+    )
+    source_action_bud = write_bud(source_action_bud_name, "Init == UNCHANGED vars")
+    source_action = tmp_path / (
+        "SumeragiDirectDeliveredFirstCorridorGateImportedNestedTargetHelperAliasOnwardTargetHelperAliasOnwardAction.tla"
+    )
+    source_action.write_text(
+        progress_with_import(
+            target_name=source_action_target_name,
+            spec_operator=source_spec,
+            fairness_operator=source_fairness,
+            next_closure=source_next_closure,
+            fairness_actions=source_actions,
+        ),
+        encoding="utf-8",
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+
+    def write_top_wrapper(filename: str, target_name: str) -> Path:
+        top = tmp_path / filename
+        top.write_text(
+            progress_with_import(
+                target_name=target_name,
+                spec_operator=top_spec,
+                fairness_operator=top_fairness,
+                next_closure=top_next_closure,
+                fairness_actions=top_actions,
+            ),
+            encoding="utf-8",
+        )
+        return top
+
+    missing_target_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardMissingTarget"
+    )
+    missing_inner_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardMissingInner"
+    )
+    missing_leaf_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardMissingLeaf"
+    )
+    missing_branch_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardMissingBranch"
+    )
+    missing_twig_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardMissingTwig"
+    )
+    missing_sprout_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardMissingSprout"
+    )
+    missing_bud_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardMissingBud"
+    )
+    write_imported_target(missing_target_name, missing_inner_name, "\\/")
+    write_inner(missing_inner_name, missing_leaf_name, "\\/")
+    write_leaf(missing_leaf_name, missing_branch_name, "\\/")
+    write_branch(missing_branch_name, missing_twig_name)
+    write_twig(missing_twig_name, missing_sprout_name, "\\/")
+    missing_sprout = write_sprout_with_bud_instance(
+        missing_sprout_name,
+        missing_bud_name,
+    )
+    missing_bud = tmp_path / f"{missing_bud_name}.tla"
+    missing = write_top_wrapper(
+        "SumeragiImportedNestedTargetHelperAliasOnwardTargetHelperAliasOnwardMissing.tla",
+        missing_target_name,
+    )
+
+    undefined_target_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardUndefinedTarget"
+    )
+    undefined_inner_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardUndefinedInner"
+    )
+    undefined_leaf_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardUndefinedLeaf"
+    )
+    undefined_branch_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardUndefinedBranch"
+    )
+    undefined_twig_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardUndefinedTwig"
+    )
+    undefined_sprout_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardUndefinedSprout"
+    )
+    undefined_bud_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardUndefinedBud"
+    )
+    write_imported_target(undefined_target_name, undefined_inner_name, "\\/")
+    write_inner(undefined_inner_name, undefined_leaf_name, "\\/")
+    write_leaf(undefined_leaf_name, undefined_branch_name, "\\/")
+    write_branch(undefined_branch_name, undefined_twig_name)
+    write_twig(undefined_twig_name, undefined_sprout_name, "\\/")
+    undefined_sprout = write_sprout_with_bud_instance(
+        undefined_sprout_name,
+        undefined_bud_name,
+    )
+    undefined_bud = write_bud(undefined_bud_name, "Other == TRUE")
+    undefined = write_top_wrapper(
+        "SumeragiImportedNestedTargetHelperAliasOnwardTargetHelperAliasOnwardUndefined.tla",
+        undefined_target_name,
+    )
+
+    parameterized_target_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardParameterizedTarget"
+    )
+    parameterized_inner_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardParameterizedInner"
+    )
+    parameterized_leaf_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardParameterizedLeaf"
+    )
+    parameterized_branch_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardParameterizedBranch"
+    )
+    parameterized_twig_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardParameterizedTwig"
+    )
+    parameterized_sprout_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardParameterizedSprout"
+    )
+    parameterized_bud_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardParameterizedBud"
+    )
+    write_imported_target(parameterized_target_name, parameterized_inner_name, "\\/")
+    write_inner(parameterized_inner_name, parameterized_leaf_name, "\\/")
+    write_leaf(parameterized_leaf_name, parameterized_branch_name, "\\/")
+    write_branch(parameterized_branch_name, parameterized_twig_name)
+    write_twig(parameterized_twig_name, parameterized_sprout_name, "\\/")
+    parameterized_sprout = write_sprout_with_bud_instance(
+        parameterized_sprout_name,
+        parameterized_bud_name,
+    )
+    parameterized_bud = write_bud(
+        parameterized_bud_name,
+        "Init(value) == TRUE",
+    )
+    parameterized = write_top_wrapper(
+        "SumeragiImportedNestedTargetHelperAliasOnwardTargetHelperAliasOnwardParameterized.tla",
+        parameterized_target_name,
+    )
+
+    noninspectable_target_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardNoninspectableTarget"
+    )
+    noninspectable_inner_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardNoninspectableInner"
+    )
+    noninspectable_leaf_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardNoninspectableLeaf"
+    )
+    noninspectable_branch_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardNoninspectableBranch"
+    )
+    noninspectable_twig_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardNoninspectableTwig"
+    )
+    noninspectable_sprout_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardNoninspectableSprout"
+    )
+    noninspectable_bud_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardNoninspectableBud"
+    )
+    write_imported_target(noninspectable_target_name, noninspectable_inner_name, "\\/")
+    write_inner(noninspectable_inner_name, noninspectable_leaf_name, "\\/")
+    write_leaf(noninspectable_leaf_name, noninspectable_branch_name, "\\/")
+    write_branch(noninspectable_branch_name, noninspectable_twig_name)
+    write_twig(noninspectable_twig_name, noninspectable_sprout_name, "\\/")
+    noninspectable_sprout = write_sprout_with_bud_instance(
+        noninspectable_sprout_name,
+        noninspectable_bud_name,
+    )
+    noninspectable_bud = write_bud(noninspectable_bud_name, "Init ==")
+    noninspectable = write_top_wrapper(
+        "SumeragiImportedNestedTargetHelperAliasOnwardTargetHelperAliasOnwardNoninspectable.tla",
+        noninspectable_target_name,
+    )
+
+    cycle_target_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardCycleTarget"
+    )
+    cycle_inner_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardCycleInner"
+    )
+    cycle_leaf_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardCycleLeaf"
+    )
+    cycle_branch_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardCycleBranch"
+    )
+    cycle_twig_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardCycleTwig"
+    )
+    cycle_sprout_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardCycleSprout"
+    )
+    cycle_bud_name = (
+        "SumeragiTopImportedInitNestedTargetHelperAliasOnwardTargetHelperAliasOnwardCycleBud"
+    )
+    write_imported_target(cycle_target_name, cycle_inner_name, "\\/")
+    write_inner(cycle_inner_name, cycle_leaf_name, "\\/")
+    write_leaf(cycle_leaf_name, cycle_branch_name, "\\/")
+    write_branch(cycle_branch_name, cycle_twig_name)
+    write_twig(cycle_twig_name, cycle_sprout_name, "\\/")
+    write_sprout_with_bud_instance(cycle_sprout_name, cycle_bud_name)
+    cycle_bud = write_cyclic_bud(cycle_bud_name)
+    cycle = write_top_wrapper(
+        "SumeragiImportedNestedTargetHelperAliasOnwardTargetHelperAliasOnwardCycle.tla",
+        cycle_target_name,
+    )
+
+    source_shape_requirement = (
+        f"{source_root_kind} init operators must be initial-state predicates "
+        "without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or <> temporal "
+        "markers"
+    )
+    assert module.source_commit_progress_spec_contract_errors(
+        (
+            (
+                source_no_instance,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+            (
+                source_action,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+        )
+    ) == [
+        f"{source_no_instance_sprout}:3 defines {source_root_kind} init "
+        "operator Init, but aliases Bud!Init without a named INSTANCE alias "
+        f"Bud; {source_root_kind} init aliases must resolve through named "
+        "local INSTANCE declarations",
+        f"{source_action_sprout}:4 defines {source_root_kind} init operator "
+        f"Init as Bud!Init, but target {source_action_bud}:3 is not an "
+        f"initial-state predicate; {source_shape_requirement}",
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                missing,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{missing_sprout}:4 defines {top_root_kind} init operator Init as "
+        f"Bud!Init, but target module {missing_bud} does not exist; "
+        f"{top_root_kind} init aliases must resolve to local modules"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                undefined,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{undefined_sprout}:4 defines {top_root_kind} init operator Init "
+        f"as Bud!Init, but target {undefined_bud} does not define Init; "
+        f"{top_root_kind} init aliases must resolve to defined zero-arity "
+        "initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                parameterized,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{parameterized_sprout}:4 defines {top_root_kind} init operator "
+        f"Init as Bud!Init, but target {parameterized_bud}:3 has arity 1; "
+        f"{top_root_kind} init aliases must resolve to defined zero-arity "
+        "initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                noninspectable,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{noninspectable_sprout}:4 defines {top_root_kind} init operator "
+        f"Init as Bud!Init, but target {noninspectable_bud}:3 is not an "
+        "inspectable single-expression definition; "
+        f"{top_root_kind} init aliases must resolve to inspectable "
+        "initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                cycle,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{cycle_bud}:3 defines {top_root_kind} init operator Init, but "
+        f"init alias resolution cycles at Init; {top_root_kind} init aliases "
+        "must be acyclic and resolve to inspectable initial-state predicates"
+    ]
+
+
+def test_source_and_top_level_commit_progress_spec_contract_errors_reject_imported_init_alias_module_alias_helper_multi_hop_recursive_helper_bad_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    def progress_with_import(
+        *,
+        target_name: str,
+        spec_operator: str,
+        fairness_operator: str,
+        next_closure: str,
+        fairness_actions: tuple[str, ...],
+    ) -> str:
+        return "\n".join(
+            [
+                f"Interleaving == INSTANCE {target_name}",
+                "",
+                *commit_progress_spec_contract_text(
+                    spec_operator=spec_operator,
+                    fairness_operator=fairness_operator,
+                    next_closure=next_closure,
+                    fairness_actions=fairness_actions,
+                    init_lines=["Init == Interleaving!Init"],
+                ).splitlines(),
+            ]
+        )
+
+    def write_imported_target(
+        target_name: str,
+        inner_name: str,
+        connective: str,
+    ) -> Path:
+        target = tmp_path / f"{target_name}.tla"
+        target.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {target_name} ----",
+                    "VARIABLES vars",
+                    f"Inner == INSTANCE {inner_name}",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} Inner!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return target
+
+    def write_inner(inner_name: str, leaf_name: str, connective: str) -> Path:
+        inner = tmp_path / f"{inner_name}.tla"
+        inner.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {inner_name} ----",
+                    "VARIABLES vars",
+                    f"Leaf == INSTANCE {leaf_name}",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} Leaf!HiddenInit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return inner
+
+    def write_leaf(
+        leaf_name: str,
+        branch_name: str,
+        connective: str,
+    ) -> Path:
+        leaf = tmp_path / f"{leaf_name}.tla"
+        leaf.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {leaf_name} ----",
+                    "VARIABLES vars",
+                    f"Branch == INSTANCE {branch_name}",
+                    "GoodInit == vars = vars",
+                    f"HiddenInit == GoodInit {connective} LocalInit",
+                    "LocalInit == Branch!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return leaf
+
+    def write_branch(branch_name: str, twig_name: str) -> Path:
+        branch = tmp_path / f"{branch_name}.tla"
+        branch.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {branch_name} ----",
+                    "VARIABLES vars",
+                    f"Twig == INSTANCE {twig_name}",
+                    "Init == Twig!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return branch
+
+    def write_twig(twig_name: str, sprout_name: str, connective: str) -> Path:
+        twig = tmp_path / f"{twig_name}.tla"
+        twig.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {twig_name} ----",
+                    "VARIABLES vars",
+                    f"Sprout == INSTANCE {sprout_name}",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} TailInit",
+                    "TailInit == Sprout!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return twig
+
+    def write_sprout(sprout_name: str, bud_name: str) -> Path:
+        sprout = tmp_path / f"{sprout_name}.tla"
+        sprout.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {sprout_name} ----",
+                    "VARIABLES vars",
+                    f"Bud == INSTANCE {bud_name}",
+                    "Init == Bud!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return sprout
+
+    def write_bud(bud_name: str, seed_name: str) -> Path:
+        bud = tmp_path / f"{bud_name}.tla"
+        bud.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {bud_name} ----",
+                    "VARIABLES vars",
+                    f"Seed == INSTANCE {seed_name}",
+                    "Init == Seed!Init",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return bud
+
+    def write_seed(
+        seed_name: str,
+        helper_body: str,
+        connective: str,
+    ) -> Path:
+        seed = tmp_path / f"{seed_name}.tla"
+        seed.write_text(
+            "\n".join(
+                [
+                    f"---- MODULE {seed_name} ----",
+                    "VARIABLES vars",
+                    "GoodInit == vars = vars",
+                    f"Init == GoodInit {connective} HiddenInit",
+                    helper_body,
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return seed
+
+    def write_chain(
+        prefix: str,
+        suffix: str,
+        connective: str,
+        helper_body: str,
+    ) -> tuple[str, Path]:
+        target_name = f"{prefix}MultiHop{suffix}Target"
+        inner_name = f"{prefix}MultiHop{suffix}Inner"
+        leaf_name = f"{prefix}MultiHop{suffix}Leaf"
+        branch_name = f"{prefix}MultiHop{suffix}Branch"
+        twig_name = f"{prefix}MultiHop{suffix}Twig"
+        sprout_name = f"{prefix}MultiHop{suffix}Sprout"
+        bud_name = f"{prefix}MultiHop{suffix}Bud"
+        seed_name = f"{prefix}MultiHop{suffix}Seed"
+        write_imported_target(target_name, inner_name, connective)
+        write_inner(inner_name, leaf_name, connective)
+        write_leaf(leaf_name, branch_name, connective)
+        write_branch(branch_name, twig_name)
+        write_twig(twig_name, sprout_name, connective)
+        write_sprout(sprout_name, bud_name)
+        write_bud(bud_name, seed_name)
+        seed = write_seed(seed_name, helper_body, connective)
+        return target_name, seed
+
+    (
+        _source_module_path,
+        source_spec,
+        source_fairness,
+        source_next_closure,
+        source_actions,
+        source_root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+
+    source_action_target_name, source_action_seed = write_chain(
+        "SumeragiSourceImportedInitModuleAliasHelper",
+        "Action",
+        "/\\",
+        "HiddenInit == UNCHANGED vars",
+    )
+    source_action = tmp_path / (
+        "SumeragiDirectDeliveredFirstCorridorGateImportedModuleAliasHelperMultiHopAction.tla"
+    )
+    source_action.write_text(
+        progress_with_import(
+            target_name=source_action_target_name,
+            spec_operator=source_spec,
+            fairness_operator=source_fairness,
+            next_closure=source_next_closure,
+            fairness_actions=source_actions,
+        ),
+        encoding="utf-8",
+    )
+
+    (
+        _top_module_path,
+        top_spec,
+        top_fairness,
+        top_next_closure,
+        top_actions,
+        top_root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+
+    def write_top_wrapper(filename: str, target_name: str) -> Path:
+        top = tmp_path / filename
+        top.write_text(
+            progress_with_import(
+                target_name=target_name,
+                spec_operator=top_spec,
+                fairness_operator=top_fairness,
+                next_closure=top_next_closure,
+                fairness_actions=top_actions,
+            ),
+            encoding="utf-8",
+        )
+        return top
+
+    parameterized_target_name, parameterized_seed = write_chain(
+        "SumeragiTopImportedInitModuleAliasHelper",
+        "Parameterized",
+        "\\/",
+        "HiddenInit(value) == TRUE",
+    )
+    parameterized = write_top_wrapper(
+        "SumeragiImportedModuleAliasHelperMultiHopParameterized.tla",
+        parameterized_target_name,
+    )
+
+    noninspectable_target_name, noninspectable_seed = write_chain(
+        "SumeragiTopImportedInitModuleAliasHelper",
+        "Noninspectable",
+        "\\/",
+        "HiddenInit ==",
+    )
+    noninspectable = write_top_wrapper(
+        "SumeragiImportedModuleAliasHelperMultiHopNoninspectable.tla",
+        noninspectable_target_name,
+    )
+
+    cycle_target_name, cycle_seed = write_chain(
+        "SumeragiTopImportedInitModuleAliasHelper",
+        "Cycle",
+        "\\/",
+        "HiddenInit == GoodInit \\/ HiddenInit",
+    )
+    cycle = write_top_wrapper(
+        "SumeragiImportedModuleAliasHelperMultiHopCycle.tla",
+        cycle_target_name,
+    )
+
+    source_shape_requirement = (
+        f"{source_root_kind} init operators must be initial-state predicates "
+        "without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or <> temporal "
+        "markers"
+    )
+    assert module.source_commit_progress_spec_contract_errors(
+        (
+            (
+                source_action,
+                source_spec,
+                source_fairness,
+                source_next_closure,
+                source_actions,
+                source_root_kind,
+            ),
+        )
+    ) == [
+        f"{source_action_seed}:4 defines {source_root_kind} init operator "
+        f"Init, but helper HiddenInit at {source_action_seed}:5 is not an "
+        f"initial-state predicate; {source_shape_requirement}"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                parameterized,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{parameterized_seed}:4 defines {top_root_kind} init operator Init, "
+        f"but helper HiddenInit at {parameterized_seed}:5 has arity 1; "
+        f"{top_root_kind} init helpers must resolve to defined zero-arity "
+        "initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                noninspectable,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{noninspectable_seed}:4 defines {top_root_kind} init operator "
+        f"Init, but helper HiddenInit at {noninspectable_seed}:5 is not an "
+        "inspectable single-expression definition; "
+        f"{top_root_kind} init helpers must resolve to inspectable "
+        "initial-state predicates"
+    ]
+    assert module.top_level_commit_spec_contract_errors(
+        (
+            (
+                cycle,
+                top_spec,
+                top_fairness,
+                top_next_closure,
+                top_actions,
+                top_root_kind,
+            ),
+        )
+    ) == [
+        f"{cycle_seed}:5 defines {top_root_kind} init operator HiddenInit, "
+        f"but init helper resolution cycles at HiddenInit; {top_root_kind} "
+        "init helpers must be acyclic and resolve to inspectable "
+        "initial-state predicates"
+    ]
+
+
 def test_source_commit_progress_spec_contract_errors_rejects_missing_next_closure(
     tmp_path: Path,
 ) -> None:

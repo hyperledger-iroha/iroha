@@ -5287,6 +5287,7 @@ object SccpSourceProofs {
     }
 
     private fun writeU64Le(out: ByteArrayOutputStream, value: BigInteger) {
+        require(value >= BigInteger.ZERO && value <= MAX_U64) { "u64 value must fit u64" }
         var working = value
         for (index in 0 until 8) {
             out.write(working.and(BigInteger.valueOf(0xffL)).toInt())
@@ -5295,6 +5296,7 @@ object SccpSourceProofs {
     }
 
     private fun writeU64Be(out: ByteArrayOutputStream, value: BigInteger) {
+        require(value >= BigInteger.ZERO && value <= MAX_U64) { "u64 value must fit u64" }
         for (index in 7 downTo 0) {
             out.write(value.shiftRight(index * 8).and(BigInteger.valueOf(0xffL)).toInt())
         }

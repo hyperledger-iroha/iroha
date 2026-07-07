@@ -1381,6 +1381,9 @@ public final class EvmSccpProver {
   }
 
   private static byte[] abiWordU64(final BigInteger value) {
+    if (value.signum() < 0 || value.compareTo(MAX_U64) > 0) {
+      throw new IllegalArgumentException("u64 value must fit u64");
+    }
     BigInteger working = value;
     final byte[] out = new byte[32];
     for (int index = 31; index >= 24; index--) {
@@ -1461,6 +1464,9 @@ public final class EvmSccpProver {
   }
 
   private static void writeU64Le(final ByteArrayOutputStream out, final BigInteger value) {
+    if (value.signum() < 0 || value.compareTo(MAX_U64) > 0) {
+      throw new IllegalArgumentException("u64 value must fit u64");
+    }
     BigInteger working = value;
     for (int i = 0; i < 8; i++) {
       out.write(working.and(BigInteger.valueOf(0xffL)).intValue());

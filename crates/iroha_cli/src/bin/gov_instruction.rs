@@ -183,15 +183,6 @@ enum Command {
         #[arg(long)]
         route_id: String,
     },
-    /// Build a local TAIRA/TRON XOR diagnostic SCCP message bundle for release smoke tests.
-    BuildTairaTronXorDiagnosticMessageBundle {
-        #[arg(long)]
-        nonce: u64,
-        #[arg(long)]
-        amount: u128,
-        #[arg(long)]
-        recipient: String,
-    },
     /// Publish an on-chain SCCP route manifest from a route upsert JSON artifact.
     PublishSccpRouteManifest {
         #[arg(long)]
@@ -219,27 +210,6 @@ fn print_tx_stdin_json(bytes: &[u8]) {
 fn print_json_value(value: &norito::json::Value) -> Result<()> {
     println!("{}", norito::json::to_string(value)?);
     Ok(())
-}
-
-fn h256_hex(value: &[u8; 32]) -> String {
-    hex::encode(value)
-}
-
-fn h256_0x_hex(value: &[u8; 32]) -> String {
-    format!("0x{}", h256_hex(value))
-}
-
-fn abi_word_u32_for_groth16(value: u32) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    out[28..32].copy_from_slice(&value.to_be_bytes());
-    out
-}
-
-fn h256_from_hex_literal(value: &str) -> Result<[u8; 32]> {
-    let mut out = [0u8; 32];
-    hex::decode_to_slice(value, &mut out)
-        .map_err(|err| eyre!("invalid embedded hex32 literal: {err}"))?;
-    Ok(out)
 }
 
 fn make_tlv(type_id: u16, payload: &[u8]) -> Result<Vec<u8>> {
@@ -851,166 +821,6 @@ fn build_sccp_transfer_ivm_derive_request(
     print_json_value(&norito::json::Value::Object(output))
 }
 
-fn sample_groth16_proof_bytes_for_public_inputs(
-    public_inputs: &iroha_sccp::SccpMessageTransparentPublicInputsV1,
-) -> Result<Vec<u8>> {
-    let proof = iroha_sccp::SccpEvmGroth16Bn254ProofV1 {
-        version: 1,
-        message_id: public_inputs.message_id,
-        source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-        commitment_root: public_inputs.commitment_root,
-        a: [abi_word_u32_for_groth16(1), abi_word_u32_for_groth16(2)],
-        b: [
-            h256_from_hex_literal(
-                "1800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6ed",
-            )?,
-            h256_from_hex_literal(
-                "198e9393920d483a7260bfb731fb5d25f1aa493335a9e71297e485b7aef312c2",
-            )?,
-            h256_from_hex_literal(
-                "12c85ea5db8c6deb4aab71808dcb408fe3d1e7690c43d37b4ce6cc0166fa7daa",
-            )?,
-            h256_from_hex_literal(
-                "090689d0585ff075ec9e99ad690c3395bc4b313370b38ef355acdadcd122975b",
-            )?,
-        ],
-        c: [abi_word_u32_for_groth16(1), abi_word_u32_for_groth16(2)],
-    };
-    Ok(iroha_sccp::encode_sccp_evm_groth16_bn254_proof_bytes(
-        &proof,
-    ))
-}
-
-fn taira_tron_xor_proof_submit_fields(
-    bundle: &iroha_sccp::NexusSccpMessageProofV1,
-) -> Result<Option<norito::json::Value>> {
-    let Some(manifest) = iroha_sccp::sccp_proof_manifest_for_domain(iroha_sccp::SCCP_DOMAIN_TRON)
-    else {
-        return Ok(None);
-    };
-    let rollout = &manifest.destination_rollout;
-    let (
-        Some(network_id_hex),
-        Some(tron_verifier_address),
-        Some(verifier_code_hash_hex),
-        Some(verifier_key_hash_hex),
-        Some(expected_destination_binding_hash_hex),
-    ) = (
-        rollout.destination_network_id.as_deref(),
-        rollout.verifier_identity.as_deref(),
-        rollout.verifier_code_hash.as_deref(),
-        rollout.verifier_key_hash.as_deref(),
-        rollout.destination_binding_hash.as_deref(),
-    )
-    else {
-        return Ok(None);
-    };
-    let Some(public_inputs) =
-        iroha_sccp::sccp_taira_tron_xor_diagnostic_message_public_inputs(bundle)
-    else {
-        return Ok(None);
-    };
-    let proof_bytes = sample_groth16_proof_bytes_for_public_inputs(&public_inputs)?;
-
-    let mut fields = norito::json::Map::new();
-    fields.insert(
-        "network_id_hex".to_owned(),
-        network_id_hex.to_owned().into(),
-    );
-    fields.insert(
-        "tron_verifier_address".to_owned(),
-        tron_verifier_address.to_owned().into(),
-    );
-    fields.insert(
-        "verifier_code_hash_hex".to_owned(),
-        verifier_code_hash_hex.to_owned().into(),
-    );
-    fields.insert(
-        "verifier_key_hash_hex".to_owned(),
-        verifier_key_hash_hex.to_owned().into(),
-    );
-    fields.insert(
-        "expected_destination_binding_hash_hex".to_owned(),
-        expected_destination_binding_hash_hex.to_owned().into(),
-    );
-    fields.insert(
-        "proof_bytes_hex".to_owned(),
-        format!("0x{}", hex::encode(proof_bytes)).into(),
-    );
-    Ok(Some(norito::json::Value::Object(fields)))
-}
-
-fn build_taira_tron_xor_diagnostic_message_bundle(
-    nonce: u64,
-    amount: u128,
-    recipient: String,
-) -> Result<()> {
-    if amount == 0 {
-        return Err(eyre!("--amount must be positive"));
-    }
-    if recipient.trim().is_empty() {
-        return Err(eyre!("--recipient must be non-empty"));
-    }
-
-    let bundle = iroha_sccp::test_fixtures::sample_taira_tron_xor_diagnostic_transfer_bundle(
-        nonce,
-        amount,
-        recipient.into_bytes(),
-    )
-    .ok_or_else(|| eyre!("failed to build TAIRA/TRON XOR diagnostic bundle"))?;
-    if !iroha_sccp::sccp_taira_tron_xor_diagnostic_message_bundle_structure(&bundle) {
-        return Err(eyre!(
-            "failed to build structurally valid TAIRA/TRON XOR diagnostic bundle"
-        ));
-    }
-    let artifact = iroha_sccp::build_sccp_taira_tron_xor_diagnostic_transparent_proof(&bundle)
-        .ok_or_else(|| eyre!("failed to build TAIRA/TRON XOR diagnostic proof artifact"))?;
-    let proof_submit_fields = taira_tron_xor_proof_submit_fields(&bundle)?;
-
-    let mut selected_recent_item = norito::json::Map::new();
-    selected_recent_item.insert("kind".to_owned(), "transfer".into());
-    selected_recent_item.insert(
-        "target_domain".to_owned(),
-        iroha_sccp::SCCP_DOMAIN_SORA.into(),
-    );
-    selected_recent_item.insert(
-        "route_id".to_owned(),
-        iroha_sccp::SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1.into(),
-    );
-    selected_recent_item.insert(
-        "message_id_hex".to_owned(),
-        h256_hex(&bundle.commitment.message_id).into(),
-    );
-
-    let mut output = norito::json::Map::new();
-    output.insert(
-        "message_id".to_owned(),
-        h256_hex(&bundle.commitment.message_id).into(),
-    );
-    output.insert(
-        "route".to_owned(),
-        iroha_sccp::SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1.into(),
-    );
-    output.insert(
-        "commitment_root".to_owned(),
-        h256_0x_hex(&bundle.commitment_root).into(),
-    );
-    output.insert("bundle".to_owned(), norito::json::to_value(&bundle)?);
-    output.insert(
-        "proof_artifact".to_owned(),
-        norito::json::to_value(&artifact)?,
-    );
-    output.insert(
-        "proof_submit_fields".to_owned(),
-        proof_submit_fields.unwrap_or(norito::json::Value::Null),
-    );
-    output.insert(
-        "selected_recent_item".to_owned(),
-        norito::json::Value::Object(selected_recent_item),
-    );
-    print_json_value(&norito::json::Value::Object(output))
-}
-
 #[allow(clippy::too_many_arguments)]
 fn record_sccp_transfer_payload_bytes(
     source_domain: u32,
@@ -1217,11 +1027,6 @@ fn main() -> Result<()> {
             route_id_codec,
             route_id,
         )?,
-        Command::BuildTairaTronXorDiagnosticMessageBundle {
-            nonce,
-            amount,
-            recipient,
-        } => build_taira_tron_xor_diagnostic_message_bundle(nonce, amount, recipient)?,
         Command::PublishSccpRouteManifest {
             config,
             manifest,
