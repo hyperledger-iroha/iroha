@@ -138,7 +138,7 @@ def _optional_live_bytes32_arg(
     value = getattr(args, name, None)
     if value is None:
         return None
-    if not isinstance(value, (bytes, bytearray)):
+    if type(value) not in (bytes, bytearray):
         raise ValueError(f"{label} must be bytes")
     raw = bytes(value)
     if len(raw) != 32:
@@ -166,7 +166,7 @@ def _optional_live_solana_program_id_arg(
 
 
 def _encode_solana_base58(raw: bytes) -> str:
-    if not isinstance(raw, (bytes, bytearray)):
+    if type(raw) not in (bytes, bytearray):
         raise ValueError("Solana public key bytes must be bytes")
     value = bytes(raw)
     if len(value) != 32:
@@ -291,7 +291,7 @@ def _json_rpc(
         if str(exc) == "JSON-RPC returned duplicate JSON keys":
             raise RuntimeError(f"JSON-RPC {method} returned duplicate JSON keys") from None
         raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from None
-    if not isinstance(decoded, dict):
+    if type(decoded) is not dict:
         raise RuntimeError(f"JSON-RPC {method} returned a non-object response")
     if decoded.get("jsonrpc") != "2.0":
         raise RuntimeError(f"JSON-RPC {method} returned an invalid protocol version")
@@ -308,7 +308,7 @@ def _json_rpc(
 
 def _positive_context_slot(result: dict[str, Any], *, method: str) -> int:
     context = result.get("context")
-    if not isinstance(context, dict):
+    if type(context) is not dict:
         raise RuntimeError(f"{method} returned no context slot")
     slot = context.get("slot")
     if type(slot) is not int or slot <= 0:
@@ -337,13 +337,13 @@ def _account_info(
         opener=opener,
         timeout=timeout,
     )
-    if not isinstance(result, dict):
+    if type(result) is not dict:
         raise RuntimeError("getAccountInfo returned a non-object result")
     context_slot = _positive_context_slot(result, method="getAccountInfo")
     value = result.get("value")
     if value is None:
         raise RuntimeError(f"Solana account {address} does not exist")
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         raise RuntimeError("getAccountInfo value must be an object")
     return value, context_slot
 
@@ -351,9 +351,9 @@ def _account_info(
 def _account_data(account: dict[str, Any], *, label: str) -> bytes:
     data = account.get("data")
     if (
-        not isinstance(data, list)
+        type(data) is not list
         or len(data) != 2
-        or not isinstance(data[0], str)
+        or type(data[0]) is not str
         or data[1] != "base64"
     ):
         raise RuntimeError(f"{label} account data must use base64 encoding")
@@ -529,7 +529,7 @@ def _live_positive_u64(live: dict[str, Any], field: str, *, label: str) -> int:
 
 def _live_base64_bytes(live: dict[str, Any], field: str, *, label: str) -> bytes:
     value = live.get(field)
-    if not isinstance(value, str) or not value or value != value.strip():
+    if type(value) is not str or not value or value != value.strip():
         raise ValueError(f"{label} must be present") from None
     try:
         raw = base64.b64decode(value, validate=True)
@@ -542,13 +542,13 @@ def _live_base64_bytes(live: dict[str, Any], field: str, *, label: str) -> bytes
 
 def _exact_live_string(live: dict[str, Any], field: str, *, label: str) -> str:
     value = live.get(field)
-    if not isinstance(value, str) or not value or value != value.strip():
+    if type(value) is not str or not value or value != value.strip():
         raise ValueError(f"{label} must be an exact non-empty string") from None
     return value
 
 
 def _validate_live_evidence(live: dict[str, Any]) -> tuple[dict[str, Any], bytes, bytes]:
-    if not isinstance(live, dict):
+    if type(live) is not dict:
         raise ValueError("Solana live evidence must be an object")
 
     commitment = live.get("rpc_commitment")
@@ -591,7 +591,7 @@ def _validate_live_evidence(live: dict[str, Any]) -> tuple[dict[str, Any], bytes
 
     executable_base64 = live.get("programdata_executable_base64")
     if (
-        not isinstance(executable_base64, str)
+        type(executable_base64) is not str
         or not executable_base64
         or executable_base64 != executable_base64.strip()
     ):
@@ -977,7 +977,7 @@ def _offline_args_from_summary(
             ]
         )
         route_canary = summary.get("route_canary")
-        if isinstance(route_canary, dict):
+        if type(route_canary) is dict:
             offline.extend(
                 [
                     "--route-canary-evidence-hash",

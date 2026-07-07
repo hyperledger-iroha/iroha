@@ -11,6 +11,7 @@ const DEFAULT_SOLANA_RPC_URL = "https://api.testnet.solana.com";
 const DEFAULT_TAIRA_TORII_URL = "https://taira.sora.org";
 const SOLANA_TESTNET_CHAIN_ID_HEX = "0x736f6c616e612d746573746e6574";
 const ROUTE_ID = "taira_sol_xor";
+const CONFIRM_NETWORK = `${ROUTE_ID}:solana-testnet`;
 const ASSET_KEY = "xor";
 const SOL_DOMAIN = 3;
 const RETIRED_SOLANA_ROUTE_MANIFEST_ALIASES = Object.freeze([
@@ -53,7 +54,7 @@ const COMMAND_OPTION_ALLOWLISTS = Object.freeze({
     "program-id-keypair",
     "keypair",
     "broadcast",
-    "confirm-testnet",
+    "confirm-network",
     "solana-rpc-url",
     "final",
   ]),
@@ -74,7 +75,7 @@ Commands:
   doctor
     Check Solana CLI, Solana testnet RPC, and TAIRA governance endpoint readiness.
 
-  deploy --program-so PATH --program-id-keypair PATH --keypair PATH --broadcast true --confirm-testnet solana-testnet [--final true]
+  deploy --program-so PATH --program-id-keypair PATH --keypair PATH --broadcast true --confirm-network ${CONFIRM_NETWORK} [--final true]
     Deploy a compiled Solana SCCP program to Solana testnet through the Solana CLI.
 
   evidence --program-id ADDRESS --output PATH
@@ -811,10 +812,10 @@ const deploy = (args) => {
   const final = normalizeOptionalBooleanOption(args, "final");
   if (
     args.broadcast !== "true" ||
-    args["confirm-testnet"] !== "solana-testnet"
+    args["confirm-network"] !== CONFIRM_NETWORK
   ) {
     throw new Error(
-      "deploy requires --broadcast true --confirm-testnet solana-testnet",
+      `deploy requires --broadcast true --confirm-network ${CONFIRM_NETWORK}`,
     );
   }
   const deployArgs = [

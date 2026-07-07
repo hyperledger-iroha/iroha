@@ -125,7 +125,7 @@ def _summary_hex_bytes(
     byte_length: int,
 ) -> bytes:
     value = record.get(field)
-    if not isinstance(value, str):
+    if type(value) is not str:
         raise ValueError(f"{label} must be an exact hex string") from None
     try:
         raw = _parse_hex_bytes(value, label=label, byte_length=byte_length)
@@ -146,7 +146,7 @@ def _summary_address(record: dict[str, Any], field: str, *, label: str) -> bytes
 
 def _summary_exact_string(record: dict[str, Any], field: str, *, label: str) -> str:
     value = record.get(field)
-    if not isinstance(value, str) or not value or value != value.strip():
+    if type(value) is not str or not value or value != value.strip():
         raise ValueError(f"{label} must be an exact non-empty string") from None
     return value
 
@@ -172,7 +172,7 @@ def _summary_exact_positive_u64(
 
 def _summary_runtime_bytes(record: dict[str, Any], field: str, *, label: str) -> bytes:
     value = record.get(field)
-    if not isinstance(value, str) or not value.startswith("0x"):
+    if type(value) is not str or not value.startswith("0x"):
         raise ValueError(f"{label} must be exact 0x-prefixed hex") from None
     if value != value.strip() or any(symbol.isspace() for symbol in value):
         raise ValueError(f"{label} must not contain whitespace") from None
@@ -413,7 +413,7 @@ def _json_rpc(
         if str(exc) == "JSON-RPC returned duplicate JSON keys":
             raise RuntimeError(f"JSON-RPC {method} returned duplicate JSON keys") from None
         raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from None
-    if not isinstance(decoded, dict):
+    if type(decoded) is not dict:
         raise RuntimeError(f"JSON-RPC {method} returned a non-object response")
     if decoded.get("jsonrpc") != "2.0":
         raise RuntimeError(f"JSON-RPC {method} returned an invalid protocol version")
@@ -429,7 +429,7 @@ def _json_rpc(
 
 
 def _rpc_hex_data(result: Any, *, method: str) -> bytes:
-    if not isinstance(result, str):
+    if type(result) is not str:
         raise RuntimeError(f"{method} returned non-string data")
     if result != result.strip():
         raise RuntimeError(f"{method} returned non-canonical hex data")
@@ -449,7 +449,7 @@ def _rpc_hex_data(result: Any, *, method: str) -> bytes:
 
 
 def _rpc_quantity(result: Any, *, method: str) -> int:
-    if not isinstance(result, str) or not result.startswith("0x"):
+    if type(result) is not str or not result.startswith("0x"):
         raise RuntimeError(f"{method} returned non-quantity data")
     if result != result.strip():
         raise RuntimeError(f"{method} returned non-canonical quantity")
@@ -467,7 +467,7 @@ def _parse_exact_hex_blob(value: Any, *, label: str, nonzero: bool = True) -> by
     if type(nonzero) is not bool:
         raise ValueError("EVM live exact hex nonzero must be a boolean")
 
-    if not isinstance(value, str):
+    if type(value) is not str:
         raise RuntimeError(f"{label} must be hex")
     if value != value.strip():
         raise RuntimeError(f"{label} must not contain surrounding whitespace")
@@ -513,7 +513,7 @@ def _optional_namespace_bytes32_arg(
     value = getattr(args, name, None)
     if value is None:
         return None
-    if not isinstance(value, (bytes, bytearray)):
+    if type(value) not in (bytes, bytearray):
         raise ValueError(f"--{name.replace('_', '-')} must be bytes")
     raw = bytes(value)
     if len(raw) != 32:
@@ -1056,9 +1056,9 @@ def _route_canary_message_proof_event_summary(
     except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         return None
     topics = log.get("topics")
-    if not isinstance(topics, list) or not topics:
+    if type(topics) is not list or not topics:
         return None
-    if not all(isinstance(topic, str) for topic in topics):
+    if not all(type(topic) is str for topic in topics):
         return None
     try:
         topic0 = _parse_exact_hex32_blob(
@@ -1444,7 +1444,7 @@ def _collect_route_canary_transaction_evidence(
         opener=opener,
         timeout=timeout,
     )
-    if not isinstance(receipt, dict):
+    if type(receipt) is not dict:
         raise RuntimeError("route-canary transaction receipt was not found")
     receipt_tx_hash = _parse_exact_hex32_blob(
         receipt.get("transactionHash"),
@@ -1504,11 +1504,11 @@ def _collect_route_canary_transaction_evidence(
         label="destination bridge network id",
     )
     logs = receipt.get("logs")
-    if not isinstance(logs, list):
+    if type(logs) is not list:
         raise RuntimeError("route-canary transaction receipt returned no logs list")
     event_summary = None
     for index, log in enumerate(logs):
-        if not isinstance(log, dict):
+        if type(log) is not dict:
             raise RuntimeError(
                 f"route-canary transaction receipt logs[{index}] must be an object"
             )
@@ -1559,7 +1559,7 @@ def _collect_route_canary_transaction_evidence(
         opener=opener,
         timeout=timeout,
     )
-    if not isinstance(transaction, dict):
+    if type(transaction) is not dict:
         raise RuntimeError("route-canary transaction was not found")
     call_summary = _route_canary_transaction_call_summary(
         transaction,
@@ -1690,7 +1690,7 @@ def _route_canary_receipt_block_summary(
     timeout: float,
 ) -> dict[str, Any]:
     receipt_block_number_text = receipt.get("blockNumber")
-    if not isinstance(receipt_block_number_text, str):
+    if type(receipt_block_number_text) is not str:
         raise RuntimeError("route-canary receipt blockNumber must be present")
     receipt_block_number = _rpc_quantity(
         receipt_block_number_text,
@@ -1709,7 +1709,7 @@ def _route_canary_receipt_block_summary(
         opener=opener,
         timeout=timeout,
     )
-    if not isinstance(block, dict):
+    if type(block) is not dict:
         raise RuntimeError("route-canary receipt block was not found")
     block_number = _rpc_quantity(
         block.get("number"),
@@ -1749,7 +1749,7 @@ def _route_canary_finalized_block_summary(
         opener=opener,
         timeout=timeout,
     )
-    if not isinstance(finalized, dict):
+    if type(finalized) is not dict:
         raise RuntimeError("route-canary finalized block was not found")
     finalized_block_number = _rpc_quantity(
         finalized.get("number"),
@@ -1836,7 +1836,7 @@ def _offline_args(summary: dict[str, Any]) -> list[str]:
         )
     route_hash = summary.get("route_allowlist_hash")
     if (
-        isinstance(route_hash, str)
+        type(route_hash) is str
         and destination.get("expected_destination_binding_hash_matches") is True
     ):
         args.extend(
@@ -1852,7 +1852,7 @@ def _offline_args(summary: dict[str, Any]) -> list[str]:
             ]
         )
         source_record_hashes = summary.get("source_record_hashes")
-        if not isinstance(source_record_hashes, dict):
+        if type(source_record_hashes) is not dict:
             raise ValueError("route allowlist TOML requires source record hashes")
         args.extend(
             [
@@ -1875,7 +1875,7 @@ def _offline_args(summary: dict[str, Any]) -> list[str]:
             ]
         )
         route_canary = summary.get("route_canary")
-        if isinstance(route_canary, dict):
+        if type(route_canary) is dict:
             args.extend(
                 [
                     "--route-canary-evidence-hash",
@@ -1889,7 +1889,7 @@ def _offline_args(summary: dict[str, Any]) -> list[str]:
                 ]
             )
         route_canary_transaction = summary.get("route_canary_transaction")
-        if isinstance(route_canary_transaction, dict):
+        if type(route_canary_transaction) is dict:
             args.extend(
                 [
                     "--route-canary-transaction-hash",
@@ -2073,7 +2073,7 @@ def _torii_destination_query_params(summary: dict[str, Any]) -> dict[str, str] |
 
 def _validate_destination_summary(summary: dict[str, Any]) -> None:
     destination = summary.get("destination_bridge")
-    if not isinstance(destination, dict):
+    if type(destination) is not dict:
         raise ValueError("destination bridge evidence is required")
     domain = destination.get("domain")
     if type(domain) is not int or domain not in EXPECTED_RPC_CHAIN_IDS:
@@ -2233,7 +2233,7 @@ def _validate_destination_summary(summary: dict[str, Any]) -> None:
 def _route_canary_transaction_verified(summary: dict[str, Any]) -> bool:
     route_canary = summary.get("route_canary")
     transaction = summary.get("route_canary_transaction")
-    if not isinstance(route_canary, dict) or not isinstance(transaction, dict):
+    if type(route_canary) is not dict or type(transaction) is not dict:
         return False
     return (
         route_canary.get("evidence_source")
@@ -2247,10 +2247,10 @@ def _route_canary_transaction_verified(summary: dict[str, Any]) -> bool:
         and transaction.get("receipt_block_finalized") is True
         and transaction.get("transaction_block_matches") is True
         and type(transaction.get("block_number")) is int
-        and isinstance(transaction.get("block_hash"), str)
+        and type(transaction.get("block_hash")) is str
         and type(transaction.get("transaction_block_number")) is int
-        and isinstance(transaction.get("transaction_block_hash"), str)
-        and isinstance(transaction.get("block_receipts_root"), str)
+        and type(transaction.get("transaction_block_hash")) is str
+        and type(transaction.get("block_receipts_root")) is str
     )
 
 
@@ -2261,7 +2261,7 @@ def _validate_copied_route_summary_metadata(summary: dict[str, Any]) -> None:
     if route_hash is not None:
         _summary_hex32(summary, "route_allowlist_hash", label="route allowlist hash")
     source_record_hashes = summary.get("source_record_hashes")
-    if isinstance(source_record_hashes, dict):
+    if type(source_record_hashes) is dict:
         _summary_hex32(
             source_record_hashes,
             "source_verifier_material_hash",
@@ -2273,7 +2273,7 @@ def _validate_copied_route_summary_metadata(summary: dict[str, Any]) -> None:
             label="source adapter engine deployment hash",
         )
     route_canary = summary.get("route_canary")
-    if isinstance(route_canary, dict):
+    if type(route_canary) is dict:
         _summary_hex32(
             route_canary,
             "evidence_hash",
@@ -2284,7 +2284,7 @@ def _validate_copied_route_summary_metadata(summary: dict[str, Any]) -> None:
 def _full_toml_prerequisites(summary: dict[str, Any]) -> list[str]:
     missing: list[str] = []
     destination = summary.get("destination_bridge")
-    if not isinstance(destination, dict):
+    if type(destination) is not dict:
         return ["destination bridge evidence"]
     destination_domain = destination.get("domain")
     if (
@@ -2301,14 +2301,14 @@ def _full_toml_prerequisites(summary: dict[str, Any]) -> list[str]:
         missing.append("--expected-bridge-code-hash")
     if destination.get("expected_destination_binding_hash_matches") is not True:
         missing.append("--expected-destination-binding-hash")
-    if not isinstance(summary.get("route_allowlist_hash"), str):
+    if type(summary.get("route_allowlist_hash")) is not str:
         missing.append("--route-allowlist-hash")
-    if not isinstance(summary.get("route_canary"), dict):
+    if type(summary.get("route_canary")) is not dict:
         missing.append("--route-canary-evidence-hash")
     if not _route_canary_transaction_verified(summary):
         missing.append("--route-canary-transaction-hash")
     source_record_hashes = summary.get("source_record_hashes")
-    if not isinstance(source_record_hashes, dict):
+    if type(source_record_hashes) is not dict:
         missing.append("source record hashes")
     return missing
 
@@ -2806,7 +2806,7 @@ def collect_live_evidence(
         if route_canary_transaction is not None:
             summary["route_canary_transaction"] = route_canary_transaction
             route_canary = summary.get("route_canary")
-            if isinstance(route_canary, dict):
+            if type(route_canary) is dict:
                 route_canary["transaction"] = route_canary_transaction
         if not _full_toml_prerequisites(summary):
             offline_toml = render_offline_toml(summary)

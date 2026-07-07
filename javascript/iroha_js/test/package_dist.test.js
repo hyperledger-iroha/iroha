@@ -11829,6 +11829,17 @@ test("package dist entrypoint enforces SCCP route-canary role separation", () =>
       solanaSccpRouteCanaryEvidenceHash(distSolanaRouteCanaryGovernedHashReuse),
     /Solana route canary governed hashes/u,
   );
+  const distSolanaRouteCanaryVerifierCodeHashReuse = {
+    ...distSolanaRouteCanaryEvidence,
+    routeAllowlistHash: distSolanaRouteCanaryEvidence.verifierCodeHash,
+  };
+  assert.throws(
+    () =>
+      solanaSccpRouteCanaryEvidenceHash(
+        distSolanaRouteCanaryVerifierCodeHashReuse,
+      ),
+    /Solana route canary governed hashes/u,
+  );
   const distSolanaRouteCanaryAliasReplay = {
     ...distSolanaRouteCanaryEvidence,
     route_allowlist_hash: distSolanaRouteCanaryEvidence.routeAllowlistHash,
@@ -11866,6 +11877,26 @@ test("package dist entrypoint enforces SCCP route-canary role separation", () =>
   };
   assert.throws(
     () => tonSccpRouteCanaryEvidenceHash(distTonRouteCanaryGovernedHashReuse),
+    /TON route canary governed hashes/u,
+  );
+  const distTonRouteCanaryVerifierCodeHashReuse = {
+    ...distTonRouteCanaryEvidence,
+    routeAllowlistHash: distTonRouteCanaryEvidence.verifierCodeHash,
+  };
+  assert.throws(
+    () =>
+      tonSccpRouteCanaryEvidenceHash(
+        distTonRouteCanaryVerifierCodeHashReuse,
+      ),
+    /TON route canary governed hashes/u,
+  );
+  const distTonRouteCanaryLiveAccountHashReuse = {
+    ...distTonRouteCanaryEvidence,
+    accountStateHash: distTonRouteCanaryEvidence.sourceVerifierMaterialHash,
+  };
+  assert.throws(
+    () =>
+      tonSccpRouteCanaryEvidenceHash(distTonRouteCanaryLiveAccountHashReuse),
     /TON route canary governed hashes/u,
   );
 
@@ -11908,6 +11939,26 @@ test("package dist entrypoint enforces SCCP route-canary role separation", () =>
   assert.throws(
     () => tronSccpRouteCanaryEvidenceHash(distTronRouteCanaryGovernedHashReuse),
     /TRON route canary governed hashes/u,
+  );
+  const distTronRouteCanaryGovernedTranscriptHashReuse = {
+    ...distTronRouteCanaryEvidence,
+    payloadHash: distTronRouteCanaryEvidence.routeAllowlistHash,
+  };
+  assert.throws(
+    () =>
+      tronSccpRouteCanaryEvidenceHash(
+        distTronRouteCanaryGovernedTranscriptHashReuse,
+      ),
+    /TRON route canary governed hashes/u,
+  );
+  const distTronRouteCanaryTranscriptHashReuse = {
+    ...distTronRouteCanaryEvidence,
+    finalityHeight: distTronRouteCanaryEvidence.transactionId,
+  };
+  assert.throws(
+    () =>
+      tronSccpRouteCanaryEvidenceHash(distTronRouteCanaryTranscriptHashReuse),
+    /TRON route canary transcript hashes/u,
   );
 });
 

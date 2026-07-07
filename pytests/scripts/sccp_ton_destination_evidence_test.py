@@ -98,6 +98,111 @@ class HostileTomlString(str):
         raise AssertionError("secret-token TON destination TOML string was compared")
 
 
+class HostileTonDestinationString(str):
+    """String subclass that TON destination metadata must reject before hooks."""
+
+    def __new__(cls, value):
+        return str.__new__(cls, value)
+
+    def __str__(self):
+        raise AssertionError("secret-token TON destination string was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token TON destination string was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token TON destination string was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token TON destination string was compared")
+
+    def __iter__(self):
+        raise AssertionError("secret-token TON destination string was iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token TON destination string was indexed")
+
+    def strip(self, *args, **kwargs):
+        raise AssertionError("secret-token TON destination string was stripped")
+
+    def startswith(self, _prefix):
+        raise AssertionError("secret-token TON destination string startswith ran")
+
+    def lower(self):
+        raise AssertionError("secret-token TON destination string lower ran")
+
+    def isascii(self):
+        raise AssertionError("secret-token TON destination string isascii ran")
+
+    def isdecimal(self):
+        raise AssertionError("secret-token TON destination string isdecimal ran")
+
+    def encode(self, *_args, **_kwargs):
+        raise AssertionError("secret-token TON destination string encode ran")
+
+
+class HostileTonDestinationBytes(bytes):
+    """Bytes subclass that TON destination metadata must reject before hooks."""
+
+    def __new__(cls, value):
+        return bytes.__new__(cls, value)
+
+    def __bytes__(self):
+        raise AssertionError("secret-token TON destination bytes coerced")
+
+    def __repr__(self):
+        raise AssertionError("secret-token TON destination bytes repr'd")
+
+    def __str__(self):
+        raise AssertionError("secret-token TON destination bytes stringified")
+
+    def __len__(self):
+        raise AssertionError("secret-token TON destination bytes length read")
+
+    def __iter__(self):
+        raise AssertionError("secret-token TON destination bytes iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token TON destination bytes indexed")
+
+    def startswith(self, _prefix):
+        raise AssertionError("secret-token TON destination bytes startswith ran")
+
+    def hex(self):
+        raise AssertionError("secret-token TON destination bytes hex encoded")
+
+
+class HostileTonDestinationBytearray(bytearray):
+    """Bytearray subclass that TON destination metadata must reject before hooks."""
+
+    def __init__(self, value):
+        super().__init__(value)
+
+    def __bytes__(self):
+        raise AssertionError("secret-token TON destination bytearray coerced")
+
+    def __repr__(self):
+        raise AssertionError("secret-token TON destination bytearray repr'd")
+
+    def __str__(self):
+        raise AssertionError("secret-token TON destination bytearray stringified")
+
+    def __len__(self):
+        raise AssertionError("secret-token TON destination bytearray length read")
+
+    def __iter__(self):
+        raise AssertionError("secret-token TON destination bytearray iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token TON destination bytearray indexed")
+
+    def startswith(self, _prefix):
+        raise AssertionError("secret-token TON destination bytearray startswith ran")
+
+    def hex(self):
+        raise AssertionError("secret-token TON destination bytearray hex encoded")
+
+
 class HostileTomlInt(int):
     def __new__(cls):
         return int.__new__(cls, 1)
@@ -1038,6 +1143,186 @@ def test_ton_destination_rejects_non_string_last_transaction_lt_without_stringif
         )
 
 
+def test_ton_destination_exact_string_metadata_rejects_string_subclasses_without_hooks():
+    module = load_evidence_module()
+    destination_binding_hash = bytes.fromhex(TON_DESTINATION_BINDING_VECTOR)
+    hostile_status = HostileTonDestinationString("active")
+    hostile_boc = HostileTonDestinationString(TON_CODE_BOC_BASE64)
+    args = ton_args(module)
+
+    try:
+        module.ton_route_canary_evidence_hash(
+            route_allowlist_hash=args.route_allowlist_hash,
+            destination_binding_hash=args.expected_destination_binding_hash,
+            source_verifier_material_hash=args.source_verifier_material_hash,
+            source_adapter_engine_deployment_hash=(
+                args.source_adapter_engine_deployment_hash
+            ),
+            verifier_contract_address=args.verifier_contract_address,
+            verifier_code_hash=args.verifier_code_hash,
+            account_status=hostile_status,
+            account_state_hash=args.account_state_hash,
+            last_transaction_lt=args.last_transaction_lt,
+            last_transaction_hash=args.last_transaction_hash,
+            verifier_code_boc_root_hash=args.verifier_code_hash,
+        )
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "account_status must be active"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+    else:
+        raise AssertionError("TON route-canary accepted hostile account status")
+
+    copied_boc_args = SimpleNamespace(
+        verifier_code_hash=bytes.fromhex(TON_CODE_BOC_ROOT_HASH),
+        verifier_code_boc_root_hash=bytes.fromhex(TON_CODE_BOC_ROOT_HASH),
+        verifier_code_boc_hash_matches=True,
+        verifier_code_boc_base64_text=hostile_boc,
+    )
+    try:
+        module._require_code_boc_root_metadata(copied_boc_args, output="toml")
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "--toml has invalid verifier code BoC base64 evidence"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("TON TOML accepted hostile copied code BoC base64")
+
+    status_args = ton_args(module)
+    status_args.account_status = hostile_status
+    try:
+        module._json_summary(status_args, destination_binding_hash, True)
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "account_status must be active"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("TON JSON summary accepted hostile account status")
+
+    summary_boc_args = ton_args(module)
+    summary_boc_args.verifier_code_boc_hex = None
+    summary_boc_args.verifier_code_boc_base64 = None
+    summary_boc_args.verifier_code_boc_file = None
+    summary_boc_args.verifier_code_boc_base64_text = hostile_boc
+    try:
+        module._json_summary(summary_boc_args, destination_binding_hash, True)
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "TON verifier code BoC base64 metadata is inconsistent"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+    else:
+        raise AssertionError("TON JSON summary accepted hostile copied code BoC base64")
+
+
+def test_ton_destination_byte_helpers_reject_subclasses_without_hooks():
+    module = load_evidence_module()
+    fixed_hash = b"\x11" * 32
+    code_boc = bytes.fromhex(TON_CODE_BOC_HEX)
+    code_boc_root_hash = bytes.fromhex(TON_CODE_BOC_ROOT_HASH)
+
+    assert (
+        module._require_fixed_bytes(
+            bytearray(fixed_hash),
+            label="verifier_code_hash",
+            byte_length=32,
+        )
+        == fixed_hash
+    )
+    assert module.ton_boc_single_root_hash(bytearray(code_boc)) == code_boc_root_hash
+
+    exact_bytearray_args = ton_args(module)
+    exact_bytearray_args.verifier_code_boc_hex = bytearray(code_boc)
+    module.apply_verifier_code_boc_hash(exact_bytearray_args)
+    assert exact_bytearray_args.verifier_code_boc_bytes == code_boc
+
+    exact_metadata_args = SimpleNamespace(
+        verifier_code_hash=code_boc_root_hash,
+        verifier_code_boc_root_hash=code_boc_root_hash,
+        verifier_code_boc_hash_matches=True,
+        verifier_code_boc_bytes=bytearray(code_boc),
+        verifier_code_boc_base64_text=None,
+    )
+    module._require_code_boc_root_metadata(exact_metadata_args, output="toml")
+
+    hostile_hash_values = (
+        HostileTonDestinationBytes(fixed_hash),
+        HostileTonDestinationBytearray(fixed_hash),
+    )
+    hostile_boc_values = (
+        HostileTonDestinationBytes(code_boc),
+        HostileTonDestinationBytearray(code_boc),
+    )
+
+    for hostile_hash in hostile_hash_values:
+        try:
+            module._require_fixed_bytes(
+                hostile_hash,
+                label="verifier_code_hash",
+                byte_length=32,
+            )
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == "verifier_code_hash must be 32 bytes"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("TON destination accepted hostile fixed bytes")
+
+    for hostile_boc in hostile_boc_values:
+        for call, expected_message in (
+            (
+                lambda hostile_boc=hostile_boc: module.ton_boc_single_root_hash(
+                    hostile_boc
+                ),
+                "TON code BoC must be bytes",
+            ),
+            (
+                lambda hostile_boc=hostile_boc: module.apply_verifier_code_boc_hash(
+                    SimpleNamespace(
+                        verifier_code_hash=code_boc_root_hash,
+                        verifier_code_boc_root_hash=None,
+                        verifier_code_boc_hex=hostile_boc,
+                        verifier_code_boc_base64=None,
+                        verifier_code_boc_file=None,
+                    )
+                ),
+                "TON code BoC must be bytes",
+            ),
+            (
+                lambda hostile_boc=hostile_boc: (
+                    module._require_code_boc_root_metadata(
+                        SimpleNamespace(
+                            verifier_code_hash=code_boc_root_hash,
+                            verifier_code_boc_root_hash=code_boc_root_hash,
+                            verifier_code_boc_hash_matches=True,
+                            verifier_code_boc_bytes=hostile_boc,
+                            verifier_code_boc_base64_text=None,
+                        ),
+                        output="toml",
+                    )
+                ),
+                "--toml requires verifier code BoC byte evidence "
+                "(use --verifier-code-boc-hex, --verifier-code-boc-base64, "
+                "or --verifier-code-boc-file)",
+            ),
+        ):
+            try:
+                call()
+            except ValueError as exc:
+                rendered = str(exc)
+                assert rendered == expected_message
+                assert "secret-token" not in rendered
+                assert exc.__cause__ is None
+            else:
+                raise AssertionError("TON destination accepted hostile code BoC")
+
+
 def test_ton_destination_toml_renderer_rejects_string_subclasses_without_hooks():
     module = load_evidence_module()
 
@@ -1352,8 +1637,15 @@ def test_ton_route_canary_rejects_live_account_hash_role_reuse():
         ("route_allowlist_hash", "expected_destination_binding_hash"),
         ("route_allowlist_hash", "source_verifier_material_hash"),
         ("route_allowlist_hash", "source_adapter_engine_deployment_hash"),
+        ("route_allowlist_hash", "verifier_code_hash"),
         ("expected_destination_binding_hash", "source_verifier_material_hash"),
         ("expected_destination_binding_hash", "source_adapter_engine_deployment_hash"),
+        ("source_verifier_material_hash", "verifier_code_hash"),
+        ("source_adapter_engine_deployment_hash", "verifier_code_hash"),
+        ("account_state_hash", "source_verifier_material_hash"),
+        ("account_state_hash", "verifier_code_hash"),
+        ("last_transaction_hash", "source_adapter_engine_deployment_hash"),
+        ("last_transaction_hash", "verifier_code_hash"),
     ):
         replay_args = ton_args(module)
         setattr(replay_args, field, getattr(base_args, source_field))

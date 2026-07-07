@@ -778,6 +778,19 @@ test("derives Solana ProgramData route canary evidence hash", () => {
       /Solana route canary governed hashes/,
     );
   }
+  for (const override of [
+    { routeAllowlistHash: evidence.verifierCodeHash },
+    { sourceVerifierMaterialHash: evidence.verifierCodeHash },
+    { sourceAdapterEngineDeploymentHash: evidence.verifierCodeHash },
+  ]) {
+    assert.throws(
+      () =>
+        solanaSccpRouteCanaryEvidenceHash(
+          sampleSolanaRouteCanaryEvidence(override),
+        ),
+      /Solana route canary governed hashes/,
+    );
+  }
 });
 
 test("derives TON live-account route canary evidence hash", () => {
@@ -845,6 +858,22 @@ test("derives TON live-account route canary evidence hash", () => {
     {
       sourceAdapterEngineDeploymentHash: evidence.sourceVerifierMaterialHash,
     },
+  ]) {
+    assert.throws(
+      () =>
+        tonSccpRouteCanaryEvidenceHash(sampleTonRouteCanaryEvidence(override)),
+      /TON route canary governed hashes/,
+    );
+  }
+  for (const override of [
+    { routeAllowlistHash: evidence.verifierCodeHash },
+    { sourceVerifierMaterialHash: evidence.verifierCodeHash },
+    { sourceAdapterEngineDeploymentHash: evidence.verifierCodeHash },
+    { accountStateHash: evidence.sourceVerifierMaterialHash },
+    { accountStateHash: evidence.verifierCodeHash },
+    { lastTransactionHash: evidence.sourceAdapterEngineDeploymentHash },
+    { lastTransactionHash: evidence.verifierCodeHash },
+    { lastTransactionHash: evidence.accountStateHash },
   ]) {
     assert.throws(
       () =>
@@ -956,6 +985,28 @@ test("derives TRON transaction route canary evidence hash", () => {
       /TRON route canary governed hashes/,
     );
   }
+  for (const override of [
+    { payloadHash: evidence.routeAllowlistHash },
+    { payloadHash: evidence.sourceVerifierMaterialHash },
+    { finalityHeight: evidence.sourceAdapterEngineDeploymentHash },
+  ]) {
+    assert.throws(
+      () =>
+        tronSccpRouteCanaryEvidenceHash(
+          sampleTronRouteCanaryEvidence(override),
+        ),
+      /TRON route canary governed hashes/,
+    );
+  }
+  assert.throws(
+    () =>
+      tronSccpRouteCanaryEvidenceHash(
+        sampleTronRouteCanaryEvidence({
+          finalityHeight: evidence.transactionId,
+        }),
+      ),
+    /TRON route canary transcript hashes/,
+  );
 });
 
 const abiWord = (value) => {

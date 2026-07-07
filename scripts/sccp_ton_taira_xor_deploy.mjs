@@ -31,7 +31,7 @@ const DEFAULT_ROUTE_MANIFEST_OUT =
   "artifacts/sccp-ton/testnet-taira-xor-route.manifest.json";
 const DEFAULT_ROUTE_MANIFEST_ISI_OUT =
   "artifacts/sccp-ton/testnet-taira-xor-route.upsert-isi.json";
-const TON_TESTNET_LEGACY_NETWORK = "testnet";
+const TON_TESTNET_NETWORK = "testnet";
 const TON_TESTNET_CHAIN_ID_HEX =
   "0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd";
 const TON_TESTNET_EXPLORER_URL = "https://testnet.tonscan.org";
@@ -48,7 +48,7 @@ const TAIRA_BURN_RECORD_VK_BACKEND = "halo2/ipa";
 const DEFAULT_TAIRA_BURN_RECORD_VK_NAME = "taira_bsc_xor_burn_record_v1";
 const TAIRA_BURN_RECORD_GAS_LIMIT = 2_000_000;
 const RETIRED_TON_ROUTE_MANIFEST_FIELDS = Object.freeze([
-  ["tron_network", "chain"],
+  ["tron_network", "network"],
   ["sccp_tron_source_bridge_address", "source_bridge_address"],
   ["tron_verifier_address", "destination_verifier_address"],
 ]);
@@ -813,6 +813,9 @@ function normalizeTonRouteManifestForPublication(input) {
   if (manifest.counterparty_domain !== TON_COUNTERPARTY_DOMAIN) {
     throw new Error("TON route manifest counterparty_domain must be 4.");
   }
+  if (manifest.network !== TON_TESTNET_NETWORK) {
+    throw new Error("TON route manifest network must be testnet.");
+  }
   if (manifest.chain !== "ton-testnet") {
     throw new Error("TON route manifest chain must be ton-testnet.");
   }
@@ -977,15 +980,7 @@ function normalizeTonRouteManifestForPublication(input) {
 }
 
 function bridgeRouteManifestForInstruction(manifest) {
-  const bridgeManifest = { ...manifest };
-  // The v1 ISI struct still uses legacy field names; public TON manifests do not.
-  bridgeManifest.tron_network = TON_TESTNET_LEGACY_NETWORK;
-  bridgeManifest.sccp_tron_source_bridge_address =
-    manifest.source_bridge_address;
-  bridgeManifest.tron_verifier_address = manifest.destination_verifier_address;
-  delete bridgeManifest.source_bridge_address;
-  delete bridgeManifest.destination_verifier_address;
-  return stableJsonValue(bridgeManifest);
+  return stableJsonValue(manifest);
 }
 
 async function commandRouteManifest(options) {
@@ -1121,6 +1116,7 @@ async function commandRouteManifest(options) {
     version: 1,
     route_id: ROUTE_ID,
     asset_key: ASSET_KEY,
+    network: TON_TESTNET_NETWORK,
     chain: "ton-testnet",
     chain_id_hex: TON_TESTNET_CHAIN_ID_HEX,
     explorer_url: options["explorer-url"] ?? TON_TESTNET_EXPLORER_URL,

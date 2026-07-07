@@ -497,6 +497,11 @@ mod tests {
             .expect("generate checked bridge CLI Ed25519 key fixture")
     }
 
+    fn checked_bridge_cli_seeded_ed25519_key_fixture(seed_byte: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed_byte; 32], Algorithm::Ed25519)
+            .expect("derive checked bridge CLI Ed25519 key fixture")
+    }
+
     #[test]
     fn bridge_cli_fixture_uses_checked_ed25519_key_generation() {
         let key_pair = checked_bridge_cli_ed25519_key_fixture();
@@ -733,7 +738,7 @@ mod tests {
             message_proof_path: "/v1/sccp/artifacts/message/{message_id}".to_owned(),
             message_job_path: "/v1/sccp/jobs/message/{message_id}".to_owned(),
             proof_manifest_path: "/v1/sccp/manifests".to_owned(),
-            legacy_burn_registry_backend: "bridge/sccp/burn-v1".to_owned(),
+            burn_registry_backend: "bridge/sccp/burn-v1".to_owned(),
             proof_submit_path: Some("/v1/bridge/proofs/submit".to_owned()),
             message_submit_path: Some("/v1/bridge/messages".to_owned()),
             production_policy: iroha_sccp::sccp_production_policy_v1(),
@@ -854,15 +859,31 @@ mod tests {
         use iroha_sccp::{
             NexusBridgeFinalityProofV1, NexusCommitQcV1, NexusConsensusPhaseV1,
             NexusSccpMessageProofV1, SccpHubCommitmentV1, SccpHubMessageKind, SccpMerkleProofV1,
-            SccpPayloadV1, TransferPayloadV1,
-            build_nexus_sccp_message_transparent_proof_allow_unready, canonical_sccp_payload_bytes,
+            SccpPayloadV1, TransferPayloadV1, canonical_sccp_payload_bytes,
             merkle_root_from_commitment, payload_hash, sccp_message_id,
         };
+
+        let validator_public_keys = vec![
+            checked_bridge_cli_seeded_ed25519_key_fixture(0x5A)
+                .public_key()
+                .to_string(),
+        ];
+        let validator_set = validator_public_keys
+            .iter()
+            .map(|key| {
+                key.parse::<iroha_crypto::PublicKey>()
+                    .expect("sample validator public key should parse")
+            })
+            .map(PeerId::from)
+            .collect::<Vec<_>>();
+        let validator_set_hash = iroha_crypto::HashOf::<Vec<PeerId>>::new(&validator_set);
+        let mut validator_set_hash_bytes = [0u8; 32];
+        validator_set_hash_bytes.copy_from_slice(validator_set_hash.as_ref().as_ref());
 
         let payload = SccpPayloadV1::Transfer(TransferPayloadV1 {
             version: 1,
             source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            dest_domain: iroha_sccp::SCCP_DOMAIN_TON,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_SOL,
             nonce: 21,
             asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
             asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
@@ -870,28 +891,40 @@ mod tests {
             amount: 77,
             sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             sender: b"nexus:soraswap".to_vec(),
-            recipient_codec: iroha_sccp::SCCP_CODEC_TON_RAW,
-            recipient: b"0:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-                .to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_SOLANA_BASE58,
+            recipient: b"11111111111111111111111111111111".to_vec(),
             route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            route_id: b"nexus:ton:xor".to_vec(),
+            route_id: b"nexus:sol:xor".to_vec(),
         });
         let commitment = SccpHubCommitmentV1 {
             version: 1,
             kind: SccpHubMessageKind::Transfer,
-            target_domain: iroha_sccp::SCCP_DOMAIN_TON,
+            target_domain: iroha_sccp::SCCP_DOMAIN_SOL,
             message_id: sccp_message_id(&payload),
             payload_hash: payload_hash(&canonical_sccp_payload_bytes(&payload)),
         };
         let merkle_proof = SccpMerkleProofV1 { steps: Vec::new() };
         let commitment_root = merkle_root_from_commitment(&commitment, &merkle_proof);
+        let mut block_header = iroha::data_model::block::BlockHeader::new(
+            core::num::NonZeroU64::new(19).expect("non-zero finality height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        block_header.set_sccp_commitment_root(Some(commitment_root));
+        let mut block_hash = [0u8; 32];
+        block_hash.copy_from_slice(block_header.hash().as_ref().as_ref());
+        let block_header_bytes =
+            norito::to_bytes(&block_header).expect("encode finality block header");
         let finality_proof = NexusBridgeFinalityProofV1 {
             version: 1,
             chain_id: iroha_sccp::SCCP_NEXUS_FINALITY_CHAIN_ID_V1.to_owned(),
             height: 19,
-            block_hash: [0x44; 32],
+            block_hash,
             commitment_root,
-            block_header_bytes: vec![0x01, 0x02, 0x03],
+            block_header_bytes,
             commit_qc: NexusCommitQcV1 {
                 version: 1,
                 phase: NexusConsensusPhaseV1::Commit,
@@ -899,14 +932,15 @@ mod tests {
                 view: 1,
                 epoch: 1,
                 mode_tag: "normal".to_owned(),
-                subject_block_hash: [0x44; 32],
+                subject_block_hash: block_hash,
                 parent_state_root: [0u8; 32],
                 post_state_root: [0u8; 32],
                 chain_order_hash: [0u8; 32],
                 rechain_seq: 0,
                 highest_qc: None,
+                validator_set_hash: validator_set_hash_bytes,
                 validator_set_hash_version: 1,
-                validator_public_keys: vec!["validator-1".to_owned()],
+                validator_public_keys,
                 validator_set_pops: vec![vec![0xAA]],
                 signers_bitmap: vec![0x01],
                 bls_aggregate_signature: vec![0xBB],
@@ -920,18 +954,119 @@ mod tests {
             payload,
             finality_proof: norito::to_bytes(&finality_proof).expect("encode finality proof"),
         };
-        build_nexus_sccp_message_transparent_proof_allow_unready(&bundle, true)
-            .expect("message transparent proof artifact")
+        assert!(
+            iroha_sccp::verify_message_bundle_structure(&bundle),
+            "sample SCCP message bundle must satisfy current structure gates"
+        );
+        assert!(
+            iroha_sccp::sccp_message_transparent_public_inputs(&bundle).is_some(),
+            "sample SCCP message bundle must derive transparent public inputs"
+        );
+        assert!(
+            iroha_sccp::build_sccp_message_transparent_open_verify_summary_from_bundle(&bundle)
+                .is_some(),
+            "sample SCCP message bundle must build transparent OpenVerify proof bytes"
+        );
+
+        let manifest = iroha_sccp::sccp_proof_manifest_for_domain(iroha_sccp::SCCP_DOMAIN_SOL)
+            .expect("solana manifest");
+        let public_inputs = iroha_sccp::sccp_message_transparent_public_inputs(&bundle)
+            .expect("sample SCCP message bundle public inputs");
+        let public_inputs_bytes =
+            iroha_sccp::canonical_sccp_message_transparent_public_inputs_bytes(&public_inputs);
+        let bundle_bytes = iroha_sccp::canonical_nexus_sccp_message_bundle_bytes_checked(&bundle)
+            .expect("sample SCCP message bundle bytes");
+        let inner = iroha_sccp::build_sccp_message_transparent_inner_proof_from_bundle(&bundle)
+            .expect("sample SCCP message transparent inner proof");
+        let proof_bytes = vec![0xA5, 0x5A, 0xC3, 0x3C];
+        let destination_binding = manifest.destination_binding.clone();
+        let destination_binding_hash = destination_binding.binding_hash;
+        let proof_context_hash =
+            iroha_sccp::sccp_solana_proof_context_hash(inner.statement_hash, destination_binding_hash);
+        let platform_payload =
+            iroha_sccp::SccpPlatformSubmissionPayloadV1::SolanaProgramInstruction(
+                iroha_sccp::SccpSolanaProgramSubmissionPayloadV1 {
+                    proof_bytes: proof_bytes.clone(),
+                    public_inputs_bytes: public_inputs_bytes.clone(),
+                    bundle_bytes: bundle_bytes.clone(),
+                    destination_binding: destination_binding.clone(),
+                    destination_binding_hash,
+                    statement_hash: inner.statement_hash,
+                    proof_context_hash,
+                },
+            );
+        let arguments = vec![
+            iroha_sccp::SccpSubmissionArgumentValueV1 {
+                key: "proof_bytes".to_owned(),
+                encoding: "raw_bytes".to_owned(),
+                bytes: proof_bytes.clone(),
+            },
+            iroha_sccp::SccpSubmissionArgumentValueV1 {
+                key: "public_inputs".to_owned(),
+                encoding: "raw_bytes".to_owned(),
+                bytes: public_inputs_bytes,
+            },
+            iroha_sccp::SccpSubmissionArgumentValueV1 {
+                key: "bundle_bytes".to_owned(),
+                encoding: "raw_bytes".to_owned(),
+                bytes: bundle_bytes,
+            },
+            iroha_sccp::SccpSubmissionArgumentValueV1 {
+                key: "statement_hash".to_owned(),
+                encoding: "raw_bytes".to_owned(),
+                bytes: inner.statement_hash.to_vec(),
+            },
+            iroha_sccp::SccpSubmissionArgumentValueV1 {
+                key: "destination_binding_hash".to_owned(),
+                encoding: "raw_bytes".to_owned(),
+                bytes: destination_binding_hash.to_vec(),
+            },
+            iroha_sccp::SccpSubmissionArgumentValueV1 {
+                key: "proof_context_hash".to_owned(),
+                encoding: "raw_bytes".to_owned(),
+                bytes: proof_context_hash.to_vec(),
+            },
+        ];
+        let submission_package = iroha_sccp::SccpCounterpartySubmissionPackageV1 {
+            version: 1,
+            proof_family: manifest.proof_family.clone(),
+            verifier_backend: manifest.verifier_backend.clone(),
+            envelope_encoding: manifest.submission_template.encoding.clone(),
+            submission_kind: manifest.submission_template.submission_kind.clone(),
+            verifier_entrypoint: manifest.submission_template.verifier_entrypoint.clone(),
+            platform_payload,
+            arguments,
+            envelope_bytes: b"submit_sccp_message_proof".to_vec(),
+        };
+        iroha_sccp::NexusSccpMessageTransparentProofV1 {
+            version: 1,
+            local_domain: manifest.local_domain,
+            counterparty_domain: manifest.counterparty_domain,
+            security_model: manifest.security_model,
+            anchor_governance: manifest.anchor_governance,
+            destination_binding,
+            proof_family: manifest.proof_family,
+            verifier_backend: manifest.verifier_backend,
+            message_backend: manifest.message_backend,
+            registry_backend: manifest.registry_backend,
+            manifest_seed: manifest.manifest_seed,
+            finality_model: manifest.finality_model,
+            verifier_target: manifest.verifier_target,
+            public_inputs,
+            proof_bytes,
+            submission_package,
+            bundle,
+        }
     }
 
     fn sample_sccp_message_job() -> iroha_sccp::SccpCounterpartyProofJobV1 {
         let artifact = sample_sccp_message_proof_artifact();
-        let manifest = iroha_sccp::sccp_proof_manifest_for_domain(iroha_sccp::SCCP_DOMAIN_TON)
-            .expect("ton manifest");
+        let manifest = iroha_sccp::sccp_proof_manifest_for_domain(iroha_sccp::SCCP_DOMAIN_SOL)
+            .expect("solana manifest");
         iroha_sccp::SccpCounterpartyProofJobV1 {
             version: 1,
-            chain_family: iroha_sccp::SccpTransparentChainFamilyV1::Ton,
-            chain: "ton".to_owned(),
+            chain_family: iroha_sccp::SccpTransparentChainFamilyV1::Solana,
+            chain: "sol".to_owned(),
             local_domain: artifact.local_domain,
             counterparty_domain: artifact.counterparty_domain,
             security_model: artifact.security_model,
@@ -972,10 +1107,10 @@ mod tests {
         format!("{value:064x}")
     }
 
-    fn sample_sccp_groth16_proof_hex() -> String {
+    fn sample_sccp_groth16_proof_hex_for_message_id(message_id_hex: &str) -> String {
         [
             sccp_groth16_abi_word_hex(1),
-            "11".repeat(32),
+            message_id_hex.trim_start_matches("0x").to_ascii_lowercase(),
             sccp_groth16_abi_word_hex(0),
             "33".repeat(32),
             sccp_groth16_abi_word_hex(1),
@@ -988,6 +1123,10 @@ mod tests {
             sccp_groth16_abi_word_hex(2),
         ]
         .concat()
+    }
+
+    fn sample_sccp_groth16_proof_hex() -> String {
+        sample_sccp_groth16_proof_hex_for_message_id(&"11".repeat(32))
     }
 
     #[test]
@@ -1096,7 +1235,7 @@ mod tests {
     }
 
     #[test]
-    fn sccp_artifact_text_command_prints_summary() {
+    fn sccp_artifact_text_command_prints_typed_snapshot_summary() {
         let _guard = mock_http_server_guard();
         let artifact = sample_sccp_message_proof_artifact();
         let message_id_hex = hex::encode(artifact.public_inputs.message_id);
@@ -1119,22 +1258,13 @@ mod tests {
         assert!(rendered.contains("sccp artifact:"));
         assert!(rendered.contains(&message_id_hex));
         assert!(rendered.contains("payload=transfer"));
-        assert!(rendered.contains("chain=ton(4)"));
-        assert!(rendered.contains("verifier_backend=ton-contract-v1"));
+        assert!(rendered.contains("chain=sol(3)"));
+        assert!(rendered.contains("verifier_backend=solana-program-v1"));
         assert!(rendered.contains("finality_height=19"));
-        assert!(rendered.contains("inner_family=Ton"));
+        assert!(rendered.contains("inner_family=Solana"));
         assert!(rendered.contains("inner_payload=transfer"));
-        assert!(rendered.contains("open_verify=stark/sccp-message-transparent-v1"));
-        let open_verify_summary =
-            iroha_sccp::summarize_sccp_message_transparent_open_verify_proof_from_artifact(
-                &artifact,
-            )
-            .expect("open verify summary");
-        assert!(rendered.contains(&format!(
-            "vk_hash={}",
-            hex::encode(open_verify_summary.vk_hash)
-        )));
-        assert!(rendered.contains("package=internal_message/ton_message_body_boc_v1"));
+        assert!(!rendered.contains("open_verify=stark/sccp-message-transparent-v1"));
+        assert!(rendered.contains("package=program_instruction/borsh_instruction_v1"));
     }
 
     #[test]
@@ -1167,7 +1297,7 @@ mod tests {
     }
 
     #[test]
-    fn sccp_job_text_command_prints_summary() {
+    fn sccp_job_text_command_prints_typed_snapshot_summary() {
         let _guard = mock_http_server_guard();
         let job = sample_sccp_message_job();
         let message_id_hex = hex::encode(job.public_inputs.message_id);
@@ -1190,17 +1320,17 @@ mod tests {
         assert!(rendered.contains("sccp job:"));
         assert!(rendered.contains(&message_id_hex));
         assert!(rendered.contains("payload=transfer"));
-        assert!(rendered.contains("chain=ton(4)"));
-        assert!(rendered.contains("verifier_backend=ton-contract-v1"));
+        assert!(rendered.contains("chain=sol(3)"));
+        assert!(rendered.contains("verifier_backend=solana-program-v1"));
         assert!(rendered.contains("projection=transfer"));
         assert!(rendered.contains(
-            "recipient=ton:0:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            "recipient=solana:11111111111111111111111111111111"
         ));
         assert!(rendered.contains(
-            "submit=internal_message/ton_message_body_boc_v1/op::submit_sccp_message_proof args=[message_body_boc]"
+            "submit=program_instruction/borsh_instruction_v1/submit_sccp_message_proof args=[proof_bytes,public_inputs,bundle_bytes,statement_hash,destination_binding_hash,proof_context_hash]"
         ));
         assert!(rendered.contains("open_verify=stark/sccp-message-transparent-v1"));
-        assert!(rendered.contains("package=internal_message/ton_message_body_boc_v1"));
+        assert!(rendered.contains("package=program_instruction/borsh_instruction_v1"));
     }
 
     #[test]
@@ -1212,7 +1342,7 @@ mod tests {
         let verifier_code_hash_hex = "ab".repeat(32);
         let verifier_key_hash_hex = "cd".repeat(32);
         let expected_destination_binding_hash_hex = "ef".repeat(32);
-        let proof_bytes_hex = sample_sccp_groth16_proof_hex();
+        let proof_bytes_hex = sample_sccp_groth16_proof_hex_for_message_id(&message_id_hex);
         let query = format!(
             "network_id_hex={network_id_hex}&verifier_code_hash_hex={verifier_code_hash_hex}&verifier_key_hash_hex={verifier_key_hash_hex}&expected_destination_binding_hash_hex={expected_destination_binding_hash_hex}&tron_verifier_address=TJRabPrwbZy45sbavfcjinPJC18kjpRTv8&proof_bytes_hex={proof_bytes_hex}"
         );

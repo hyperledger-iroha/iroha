@@ -5439,23 +5439,22 @@ as Nexus-origin messages from block-level SCCP records.
     `public_input_word_count = 6`, `groth16_public_signal_count = 9`,
     `message_id`, `source_domain`, `commitment_root`,
     `destination_binding_key`, and `destination_binding_hash`.
-  - the embedded Nexus SCCP message bundle so verifiers can reconstruct the exact statement being proven.
-  - `iroha_sccp` now also exposes a normalized counterparty proof-job projection over that artifact:
-    - `decode_sccp_normalized_codec_value(...)` decodes codec-bearing SCCP fields into typed EVM / Solana / TON / Tron / logical-text values; and
-    - `build_sccp_counterparty_proof_job_from_artifact(...)` /
-      `build_sccp_counterparty_proof_job_from_artifact_allow_unready(...)` /
-      `build_sccp_counterparty_proof_job_from_bundle(...)` produce a
-      prover-oriented job with the normalized payload projection plus the
-      original typed bundle. For production EVM/BSC Groth16 lanes, proof tools
-      must use
-      `build_sccp_counterparty_proof_job_from_bundle_with_evm_groth16_proof_and_destination_binding(...)`
-      or its `_allow_unready` diagnostic variant so the actual Groth16 proof
-      bytes are supplied explicitly and the signer path remains closed. For the
-      TRON Groth16 lane, proof tools must use
-      `build_sccp_counterparty_proof_job_from_bundle_with_tron_groth16_proof(...)`
-      or the destination-binding/`_allow_unready` variants; generic proof-job
-      construction no longer packages native FastPQ bytes as a TVM contract
-      proof.
+	  - the embedded Nexus SCCP message bundle so verifiers can reconstruct the exact statement being proven.
+	  - `iroha_sccp` now also exposes a normalized counterparty proof-job projection over that artifact:
+	    - `decode_sccp_normalized_codec_value(...)` decodes codec-bearing SCCP fields into typed EVM / Solana / TON / Tron / logical-text values; and
+	    - `build_sccp_counterparty_proof_job_from_artifact(...)` /
+	      `build_sccp_counterparty_proof_job_from_bundle(...)` produce a
+	      prover-oriented job with the normalized payload projection plus the
+	      original typed bundle. For production EVM/BSC Groth16 lanes, proof tools
+	      must use
+	      `build_sccp_counterparty_proof_job_from_bundle_with_evm_groth16_proof_and_destination_binding(...)`
+	      so the actual Groth16 proof bytes are supplied explicitly and the signer
+	      path remains closed. Fixture construction for disabled lanes lives under
+	      `iroha_sccp::test_fixtures` and does not expose a boolean bypass API.
+	      For the TRON Groth16 lane, proof tools must use
+	      `build_sccp_counterparty_proof_job_from_bundle_with_tron_groth16_proof(...)`
+	      or the destination-binding variant; generic proof-job construction no
+	      longer packages native FastPQ bytes as a TVM contract proof.
   - client helpers now exist for that route directly:
     - Rust: `iroha::client::Client::get_sccp_message_proof_artifact_json(...)`,
       `get_sccp_message_proof_artifact(...)`, and their `_with_params`

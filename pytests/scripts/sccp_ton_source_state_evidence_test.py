@@ -48,6 +48,74 @@ class HostileExpectedRecordHash:
         raise AssertionError("secret-token TON expected record hash was compared")
 
 
+class HostileTonSourceStateBytes(bytes):
+    """Bytes subclass that source-state evidence must reject before hooks."""
+
+    def __new__(cls, value):
+        return bytes.__new__(cls, value)
+
+    def __bytes__(self):
+        raise AssertionError("secret-token TON source bytes coerced")
+
+    def __repr__(self):
+        raise AssertionError("secret-token TON source bytes repr'd")
+
+    def __str__(self):
+        raise AssertionError("secret-token TON source bytes stringified")
+
+    def __len__(self):
+        raise AssertionError("secret-token TON source bytes length read")
+
+    def __iter__(self):
+        raise AssertionError("secret-token TON source bytes iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token TON source bytes indexed")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token TON source bytes compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token TON source bytes compared")
+
+    def __hash__(self):
+        raise AssertionError("secret-token TON source bytes hashed")
+
+
+class HostileTonSourceStateBytearray(bytearray):
+    """Bytearray subclass that source-state evidence must reject before hooks."""
+
+    def __init__(self, value):
+        super().__init__(value)
+
+    def __bytes__(self):
+        raise AssertionError("secret-token TON source bytearray coerced")
+
+    def __repr__(self):
+        raise AssertionError("secret-token TON source bytearray repr'd")
+
+    def __str__(self):
+        raise AssertionError("secret-token TON source bytearray stringified")
+
+    def __len__(self):
+        raise AssertionError("secret-token TON source bytearray length read")
+
+    def __iter__(self):
+        raise AssertionError("secret-token TON source bytearray iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token TON source bytearray indexed")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token TON source bytearray compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token TON source bytearray compared")
+
+    def __hash__(self):
+        raise AssertionError("secret-token TON source bytearray hashed")
+
+
 class HostileTomlString(str):
     def __new__(cls):
         return str.__new__(cls, "blocked")
@@ -220,6 +288,96 @@ def test_ton_hex_parser_rejects_zero_and_wrong_width():
             raise AssertionError(
                 f"noncanonical TON source-state verifier hash {value!r} "
                 "was accepted"
+            )
+
+
+def test_ton_source_state_fixed_bytes_reject_subclasses_without_hooks():
+    module = load_evidence_module()
+    raw = b"\x44" * 32
+
+    assert (
+        module._require_fixed_bytes(
+            bytearray(raw),
+            label="source_trust_anchor_hash",
+            byte_length=32,
+        )
+        == raw
+    )
+    exact_bytearray_args = ton_args(module)
+    exact_bytearray_args.source_trust_anchor_hash = bytearray(raw)
+    assert type(module.ton_source_verifier_material_record_hash(exact_bytearray_args)) is bytes
+
+    hostile_values = (
+        HostileTonSourceStateBytes(raw),
+        HostileTonSourceStateBytearray(raw),
+    )
+    for hostile in hostile_values:
+        cases = (
+            (
+                lambda hostile=hostile: module._require_fixed_bytes(
+                    hostile,
+                    label="source_trust_anchor_hash",
+                    byte_length=32,
+                ),
+                ValueError,
+                "source_trust_anchor_hash must be bytes",
+            ),
+            (
+                lambda hostile=hostile: module._require_nonzero_fixed_bytes(
+                    hostile,
+                    label="source_trust_anchor_hash",
+                    byte_length=32,
+                ),
+                ValueError,
+                "source_trust_anchor_hash must be bytes",
+            ),
+            (
+                lambda hostile=hostile: module._optional_expected_record_hash(
+                    SimpleNamespace(expected_source_verifier_material_hash=hostile),
+                    "expected_source_verifier_material_hash",
+                    label="--expected-source-verifier-material-hash",
+                ),
+                ValueError,
+                "--expected-source-verifier-material-hash must be bytes",
+            ),
+        )
+        for call, exception_type, expected_message in cases:
+            try:
+                call()
+            except exception_type as exc:
+                rendered = str(exc)
+                assert rendered == expected_message
+                assert "secret-token" not in rendered
+                assert exc.__cause__ is None
+            else:
+                raise AssertionError(
+                    "TON source-state byte subclass value was accepted"
+                )
+
+        material_args = ton_args(module)
+        material_args.source_trust_anchor_hash = hostile
+        try:
+            module.ton_source_verifier_material_record_hash(material_args)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == "source_trust_anchor_hash must be bytes"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("TON source material accepted hostile source hash")
+
+        adapter_args = ton_args(module)
+        adapter_args.adapter_verifier_vk_hash = hostile
+        try:
+            module._require_canonical_adapter_verifier_vk_hash(adapter_args)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == "adapter_verifier_vk_hash must be bytes"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError(
+                "TON source adapter accepted hostile verifier hash"
             )
 
 

@@ -1,10 +1,20 @@
 # Engineering Backlog (Detailed Open Work)
 
-Last updated: 2026-07-04
+Last updated: 2026-07-07
 
 The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
 history lives in [`../../status.md`](../../status.md). This file should only
 track detailed unfinished engineering work.
+
+The 2026-07-05 BFV crypto production-readiness hardening tranche is complete:
+the remaining wrapper-order follow-up is closed, the targeted BFV regressions
+are green, and no new open backlog item was added for that pass.
+
+The torii SCCP route-manifest schema cleanup is also complete: the DTO builder
+and sample fixtures now use the normalized config fields, and the targeted
+torii route-manifest tests pass. The single-deploy contract-manifest
+integration test now also reads the nested receipt field and passes with the
+current Torii response shape.
 
 ## SCCP launch-scope note
 
@@ -99,7 +109,51 @@ outer hash-role aliasing between message ids, payload hashes,
 source-event digests, commitment roots, finality block/header hashes, and
 receipt/message roots before material or OpenVerify checks run, and checked
 source-proof envelope serialization now requires that same base wrapper shape
-before canonical bytes or hashes are emitted. Checked source-adapter
+before canonical bytes or hashes are emitted. TON live-account destination
+rollout readiness and route-canary evidence now also reject replay between the
+account-state hash, last-transaction hash, verifier-code hash, and governed
+route-canary source hashes before a lane can be production-ready. The Python
+operator helper, JavaScript SDK source, package dist, and package-root exports
+now enforce that same TON route-canary hash-role boundary before emitting
+canonical hashes. Solana live ProgramData route-canary evidence now also
+rejects verifier-code hash replay into route allowlist, destination binding,
+source-material, or source-deployment hash roles before canonical evidence bytes
+or hashes are emitted. EVM-family route-canary evidence now also rejects replay
+between governed route/destination/source/deployment hashes and receipt
+transcript hashes before Rust or Python canonical hashes, full-TOML rendering,
+or lane readiness can pass. TRON route-canary evidence now also rejects replay
+between governed route/source/deployment hashes and transaction transcript
+hashes before Rust, Python, JavaScript SDK, package-dist, or package-root
+canonical hashes are emitted. Swift, Kotlin/JVM, and Java Android TRON
+route-canary helpers now mirror that boundary and include finality height in
+transcript distinctness before mobile canonical bytes are emitted. Torii
+configured source-lane
+bypasses now require the configured source verifier material and source-adapter
+deployment to be production-ready for the message bundle's source domain and
+the bundle to target SORA before suppressing static disabled manifests or
+destination-query proof fields; placeholder, mismatched, or non-SORA-target
+configured lanes stay blocked. Runtime SCCP route-manifest config and Torii
+route-manifest DTO output now use only the first-release canonical `network`,
+`source_bridge_address`, and `destination_verifier_address` fields; all
+noncanonical route-config address and proof-artifact aliases are rejected even
+when canonical fields are present and are not emitted in wallet route JSON.
+Torii route-manifest DTOs likewise omit the retired proof-artifact aliases and
+emit only canonical `proof_artifact_hash`.
+SCCP capabilities use only the first-release canonical `burn_registry_backend`
+field; Torii, Rust clients, CLI samples, and JavaScript parsing no longer emit
+or accept the retired `legacy_burn_registry_backend` spelling.
+Public SCCP destination-rollout construction APIs no longer expose legacy
+fail-closed shortcuts without deployment binding or live verifier evidence;
+callers must use the evidence-bearing EVM/TRON binding and Solana/TON
+live-evidence constructors.
+Torii SCCP proof-artifact and proof-job generation now calls the strict SCCP
+builder APIs directly instead of the boolean `_allow_unready` builder surface,
+and public boolean SCCP unready builders, verifiers, recovery helpers, and the
+diagnostic manifest gate are test-only rather than normal-build or
+fixture-feature APIs; `test-fixtures` exposes named constructors without a
+boolean bypass parameter.
+Checked
+source-adapter
 statement/context encoding now also rejects zero transcript/evidence hashes,
 role-hash replays, transcript/evidence aliasing, and source-envelope header
 drift before FastPQ batch construction. Kotlin/JVM and Java Android EVM/TRON
@@ -177,6 +231,14 @@ All-lanes preflight, readiness-report public row checks, release-bundle
 construction, and strict release-bundle verification now consume the same
 active-template denylist for direct and copied source-record, source-gate,
 route-canary, and Solana/TON audit hashes.
+Release-bundle builder and strict verifier source-template helper entry points
+now also require exact builtin dictionaries before copied source-record,
+source-gate audit, route-canary, all-lanes hash-row, or source-record role maps
+can be traversed.
+Release-bundle source-adapter gate semantic checks and strict verifier
+coherence checks now apply the same exact-container rule before traversing
+copied audit hashes, source records, destination bindings, route allowlists,
+nested route canaries, or non-required audit-hash emptiness checks.
 Rust material-only source-adapter readiness now
 pins the same fail-closed boundary across Ethereum, BSC, Solana, TON, and TRON:
 deployed-looking source material can satisfy the material shape check, but it
@@ -357,9 +419,11 @@ same non-zero bytes32 boundary before JSON, TOML, or CLI readiness comparisons.
 Python and JavaScript SDK Solana route-canary transcripts now also reject
 duplicate camelCase and snake_case aliases for governed route hashes, source
 material/deployment hashes, verifier identity, ProgramData address, and
-ProgramData executable bytes before canonical bytes are hashed. The strict
-release-bundle and readiness inventories pin representative exact
-alias-rejection messages for those helpers.
+ProgramData executable bytes before canonical bytes are hashed. JavaScript SDK
+and package-dist route-canary hashing also rejects verifier-code hash replay
+into governed Solana route and source hash roles. The strict release-bundle and
+readiness inventories pin representative exact alias-rejection messages for
+those helpers.
 The JavaScript source-adapter verifier VK helper now also rejects duplicate
 `sourceDomain`/`source_domain` aliases before computing the OpenVerify
 commitment, and the strict release inventory pins the source and dist helper
@@ -769,6 +833,11 @@ user-prover lists at the root list-of-objects blocker when there are no
 inspectable object rows, while mixed malformed lists with object rows still
 surface duplicate and missing domain/lane coverage without echoing copied
 operator text.
+Readiness and strict-verifier public cryptographic-evidence row builders now
+also require exact builtin evidence roots, lane rows, source-record maps,
+destination bindings, route allowlists, route canaries, source gates, and EVM
+metadata before extracting expected public rows, while preserving non-dict audit
+maps for bounded malformed-audit diagnostics.
 Copied source-adapter gates now run the same required/ready/blocker, empty
 not-required material, gate-to-audit, and hash-role semantics for diagnostic
 not-ready lanes before public summaries are rendered. Copied source-record,
@@ -824,6 +893,10 @@ even when the copied active lane is marked not-ready.
 No active EVM live metadata field may disappear from standalone copied summaries
 or pre-render bundle validation even when the copied active lane is marked
 not-ready.
+Readiness and strict-verifier active EVM live metadata blockers now require
+exact builtin metadata maps before reading source/destination RPC chain IDs or
+block tags, so hostile copied metadata subclasses are classified as malformed
+without executing hooks.
 Destination, route-allowlist, and route-canary sibling
 hash bindings must also stay exact when copied lanes are diagnostic and
 not-ready, so true-looking hash-match flags cannot preserve contradictory
@@ -1240,6 +1313,10 @@ Strict all-lanes copied lane-schema validation now uses the same exact string-ke
 traversal for required fields, active-lane selection, and lane-domain consistency,
 so hash-colliding lane keys cannot satisfy required release-readiness fields or
 trigger unsafe public-schema lookups.
+Strict all-lanes lane-schema validation now also requires exact builtin
+containers before traversing copied lane rows, records, source gates, audit
+hashes, EVM metadata, destination bindings, route allowlists, route canaries, or
+cross-lane route-canary scanner inputs.
 Release-bundle, strict verifier, and standalone readiness JSON loaders now pin
 symlinked parent-directory rejection before duplicate-key parsing or public root
 schema checks can consume copied JSON.
@@ -1352,8 +1429,13 @@ verifier rejects public Markdown if the marker is removed.
 		strict verifier rejects duplicated release-evidence bullets before public
 		Markdown can satisfy the invariant checks. Whitespace-normalized duplicate
 	bullets and noncanonical Required Release Evidence bullet spelling, including
-	short indentation, extra separator spaces, alternate bullet markers, and
-	trailing spaces, must remain category-only verifier failures.
+	short indentation, extra separator spaces, alternate bullet markers, trailing
+	spaces, and internal tab/control-whitespace or Unicode separator/format
+	duplicate aliases, must remain
+	category-only verifier failures.
+	The top-level Blocking Items Markdown list now shares those canonical bullet
+	and hidden-spacing duplicate rules, so copied public blocker lists cannot
+	preserve a blocker marker while adding visually aliased duplicate bullets.
 	Generated Required Release Evidence now also compares source-inventory marker
 	counts and rendered labels against the generated source-inventory gate set, so
 	new release gates cannot be added without public Markdown invariant coverage.

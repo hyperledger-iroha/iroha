@@ -1021,6 +1021,36 @@ test("TRON deploy operator booleans reject malformed option values", async () =>
           /--broadcast must be true or false/u,
         );
       }
+
+      await assert.rejects(
+        () =>
+          deployCommand({
+            verifier: join(dir, "missing-verifier.json"),
+            "tron-network": "nile",
+            broadcast: "true",
+          }),
+        /deploy targets TRON nile and requires --confirm-network taira_tron_xor:nile/u,
+      );
+      await assert.rejects(
+        () =>
+          deployCommand({
+            verifier: join(dir, "missing-verifier.json"),
+            "tron-network": "nile",
+            broadcast: "true",
+            "confirm-network": "taira_tron_xor:mainnet",
+          }),
+        /deploy targets TRON nile and requires --confirm-network taira_tron_xor:nile/u,
+      );
+      await assert.rejects(
+        () =>
+          deployCommand({
+            verifier: join(dir, "missing-verifier.json"),
+            "tron-network": "mainnet",
+            broadcast: "true",
+            "confirm-network": "taira_tron_xor:mainnet",
+          }),
+        /deploy targets TRON mainnet and requires --confirm-mainnet taira_tron_xor/u,
+      );
     } finally {
       console.log = originalConsoleLog;
     }
@@ -1635,6 +1665,7 @@ test("route manifest draft binds deployment evidence, verifier material, and TAI
       "production-ready": "true",
       "live-readback-checked": "true",
       "confirm-mainnet": "taira_tron_xor",
+      "confirm-network": "taira_tron_xor:mainnet",
     });
 
     assert.equal(manifest.schema, "iroha-sccp-taira-xor-route-manifest-draft/v1");
@@ -1690,9 +1721,22 @@ test("TRON route-config rejects removed allow-unready option", async () => {
       "production-ready": "true",
       "live-readback-checked": "true",
       "confirm-mainnet": "taira_tron_xor",
+      "confirm-network": "taira_tron_xor:mainnet",
     });
     const toml = buildTairaXorRouteConfigToml(manifest);
     assert.match(toml, /production_ready = true/u);
+    assert.match(toml, /network = "mainnet"/u);
+    assert.match(
+      toml,
+      new RegExp(`source_bridge_address = "${routeAddresses.sourceBridge.base58}"`, "u"),
+    );
+    assert.match(
+      toml,
+      new RegExp(`destination_verifier_address = "${routeAddresses.verifier.base58}"`, "u"),
+    );
+    assert.doesNotMatch(toml, /(^|\n)tron_network =/u);
+    assert.doesNotMatch(toml, /(^|\n)sccp_tron_source_bridge_address =/u);
+    assert.doesNotMatch(toml, /(^|\n)tron_verifier_address =/u);
     assert.doesNotMatch(toml, /sccp_allow_unready_transparent_proofs/u);
     const snakeCaseSettlementToml = buildTairaXorRouteConfigToml({
       ...manifest,
@@ -1746,6 +1790,7 @@ test("TRON route-config rejects any allow-unready option value", async () => {
       "production-ready": "true",
       "live-readback-checked": "true",
       "confirm-mainnet": "taira_tron_xor",
+      "confirm-network": "taira_tron_xor:mainnet",
     });
 
     for (const value of malformedBooleanOptionValues) {
@@ -1786,6 +1831,7 @@ test("TRON route-config CLI rejects removed allow-unready before writing artifac
       "production-ready": "true",
       "live-readback-checked": "true",
       "confirm-mainnet": "taira_tron_xor",
+      "confirm-network": "taira_tron_xor:mainnet",
     });
     await writeJson(manifestPath, manifest, 0o644);
     const malformedCliBooleans = malformedBooleanOptionValues.filter(
@@ -1855,6 +1901,50 @@ test("TRON CLI rejects unknown options without echoing names or values", async (
       return true;
     },
   );
+});
+
+test("TRON deploy and broadcast reject retired testnet confirmation before operator inputs", async () => {
+  const secretConfirm = "secret-token-tron-confirm";
+  const cases = [
+    [
+      "deploy",
+      [
+        "deploy",
+        "--verifier",
+        "secret-token-tron-verifier.json",
+        "--tron-network",
+        "nile",
+        "--broadcast",
+        "true",
+        "--confirm-testnet",
+        secretConfirm,
+      ],
+    ],
+    [
+      "broadcast",
+      [
+        "broadcast",
+        "--transaction",
+        "secret-token-tron-signed.json",
+        "--tron-network",
+        "nile",
+        "--confirm-testnet",
+        secretConfirm,
+      ],
+    ],
+  ];
+
+  for (const [label, args] of cases) {
+    await assert.rejects(
+      () => execFileAsync(process.execPath, [TRON_SCRIPT_PATH, ...args]),
+      (error) => {
+        assert.match(error.stderr, /Unknown option\./u, label);
+        assert.doesNotMatch(error.stderr, /confirm-testnet/u, label);
+        assert.doesNotMatch(error.stderr, new RegExp(secretConfirm, "u"), label);
+        return true;
+      },
+    );
+  }
 });
 
 test("TRON CLI rejects positional arguments without echoing values", async () => {
@@ -1939,6 +2029,7 @@ test("TRON route-config CLI rejects route output path collisions with inputs bef
       "production-ready": "true",
       "live-readback-checked": "true",
       "confirm-mainnet": "taira_tron_xor",
+      "confirm-network": "taira_tron_xor:mainnet",
     });
     const manifestText = `${JSON.stringify(manifest, null, 2)}\n`;
     const baseConfigText = [
@@ -2083,7 +2174,7 @@ test("route manifest draft defaults to disabled and requires production readines
           "production-ready": "true",
           "live-readback-checked": "true",
         }),
-      /confirm-mainnet/u,
+      /confirm-network taira_tron_xor:mainnet/u,
     );
     await assert.rejects(
       () =>
@@ -2091,6 +2182,7 @@ test("route manifest draft defaults to disabled and requires production readines
           ...baseOptions,
           "production-ready": "true",
           "confirm-mainnet": "taira_tron_xor",
+          "confirm-network": "taira_tron_xor:mainnet",
         }),
       /live-readback-checked/u,
     );
@@ -2101,6 +2193,7 @@ test("route manifest draft defaults to disabled and requires production readines
           "production-ready": "true",
           "live-readback-checked": "true",
           "confirm-mainnet": "taira_tron_xor",
+          "confirm-network": "taira_tron_xor:mainnet",
         }),
       /live-evidence/u,
     );
@@ -2313,6 +2406,8 @@ test("TRON route-manifest CLI does not follow predictable temp symlinks", async 
       "true",
       "--live-readback-checked",
       "true",
+      "--confirm-network",
+      "taira_tron_xor:mainnet",
       "--confirm-mainnet",
       "taira_tron_xor",
       "--out",
@@ -2351,6 +2446,7 @@ test("TRON route-config refuses production-ready manifests with disabled reasons
       "production-ready": "true",
       "live-readback-checked": "true",
       "confirm-mainnet": "taira_tron_xor",
+      "confirm-network": "taira_tron_xor:mainnet",
     });
 
     for (const disabledField of ["disabledReason", "disabled_reason"]) {
@@ -2394,6 +2490,7 @@ test("TRON route-config refuses production-ready manifests with handoff placehol
       "production-ready": "true",
       "live-readback-checked": "true",
       "confirm-mainnet": "taira_tron_xor",
+      "confirm-network": "taira_tron_xor:mainnet",
     });
 
     const cases = [
@@ -2498,6 +2595,7 @@ test("TRON route-config permits placeholder-looking tokens in opaque route-manif
       "production-ready": "true",
       "live-readback-checked": "true",
       "confirm-mainnet": "taira_tron_xor",
+      "confirm-network": "taira_tron_xor:mainnet",
     });
     const opaqueArtifactB64 = `${"A".repeat(96)}mock`;
     const opaqueArtifactBytes = Buffer.from(opaqueArtifactB64, "base64");
@@ -2541,6 +2639,7 @@ test("TRON route-config requires post-deploy evidence for production manifests",
       "production-ready": "true",
       "live-readback-checked": "true",
       "confirm-mainnet": "taira_tron_xor",
+      "confirm-network": "taira_tron_xor:mainnet",
     });
 
     assert.throws(
@@ -2594,6 +2693,7 @@ test("TRON route-config rejects duplicate route manifest aliases", async () => {
       "production-ready": "true",
       "live-readback-checked": "true",
       "confirm-mainnet": "taira_tron_xor",
+      "confirm-network": "taira_tron_xor:mainnet",
     });
     const cases = [
       [
@@ -2977,6 +3077,7 @@ test("TRON route-config rejects retired route manifest aliases without echoing v
       "production-ready": "true",
       "live-readback-checked": "true",
       "confirm-mainnet": "taira_tron_xor",
+      "confirm-network": "taira_tron_xor:mainnet",
     });
     const cloneManifest = () => JSON.parse(JSON.stringify(manifest));
     const secret = "secret-token-tron-retired-alias";
@@ -3072,6 +3173,7 @@ test("TRON route-config ignores accessor-backed route manifest aliases", async (
       "production-ready": "true",
       "live-readback-checked": "true",
       "confirm-mainnet": "taira_tron_xor",
+      "confirm-network": "taira_tron_xor:mainnet",
     });
     const cloneManifest = () => JSON.parse(JSON.stringify(manifest));
     const patchedManifest = cloneManifest();
@@ -3199,6 +3301,7 @@ test("TRON route-config rejects malformed or foreign route manifests", async () 
       "production-ready": "true",
       "live-readback-checked": "true",
       "confirm-mainnet": "taira_tron_xor",
+      "confirm-network": "taira_tron_xor:mainnet",
     });
     const cases = [
       [{ version: 2 }, /route manifest version/u],
@@ -3656,7 +3759,7 @@ test("route manifest draft supports Nile evidence but blocks production readines
           ...baseOptions,
           "production-ready": "true",
           "live-readback-checked": "true",
-          "confirm-testnet": "nile",
+          "confirm-network": "taira_tron_xor:nile",
         }),
       /production-ready.*mainnet/u,
     );
@@ -3878,6 +3981,7 @@ test("route manifest draft rejects forged or incomplete live evidence", async ()
             "production-ready": "true",
             "live-readback-checked": "true",
             "confirm-mainnet": "taira_tron_xor",
+            "confirm-network": "taira_tron_xor:mainnet",
           }),
         error,
         name,
@@ -3908,6 +4012,7 @@ test("route manifest draft rejects forged or incomplete live evidence", async ()
         "production-ready": "true",
         "live-readback-checked": "true",
         "confirm-mainnet": "taira_tron_xor",
+        "confirm-network": "taira_tron_xor:mainnet",
       });
     } catch (error) {
       caught = error;
@@ -3943,6 +4048,7 @@ test("route manifest draft rejects forged or incomplete live evidence", async ()
         "production-ready": "true",
         "live-readback-checked": "true",
         "confirm-mainnet": "taira_tron_xor",
+        "confirm-network": "taira_tron_xor:mainnet",
       });
     } catch (error) {
       caught = error;

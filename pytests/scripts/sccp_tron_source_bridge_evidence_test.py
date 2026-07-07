@@ -130,6 +130,117 @@ class HostileTomlString(str):
         raise AssertionError("secret-token TRON source TOML string was compared")
 
 
+class HostileTronSourceString(str):
+    """String subclass that TRON source parsers must reject before hooks."""
+
+    def __new__(cls, value):
+        return str.__new__(cls, value)
+
+    def __str__(self):
+        raise AssertionError("secret-token TRON source string was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token TRON source string was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token TRON source string was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token TRON source string was compared")
+
+    def __iter__(self):
+        raise AssertionError("secret-token TRON source string was iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token TRON source string was indexed")
+
+    def strip(self, *args, **kwargs):
+        raise AssertionError("secret-token TRON source string was stripped")
+
+    def startswith(self, _prefix):
+        raise AssertionError("secret-token TRON source string startswith ran")
+
+    def lower(self):
+        raise AssertionError("secret-token TRON source string lower ran")
+
+    def encode(self, *_args, **_kwargs):
+        raise AssertionError("secret-token TRON source string encode ran")
+
+
+class HostileTronSourceBytes(bytes):
+    """Bytes subclass that TRON source helpers must reject before hooks."""
+
+    def __new__(cls, value):
+        return bytes.__new__(cls, value)
+
+    def __bytes__(self):
+        raise AssertionError("secret-token TRON source bytes coerced")
+
+    def __repr__(self):
+        raise AssertionError("secret-token TRON source bytes repr'd")
+
+    def __str__(self):
+        raise AssertionError("secret-token TRON source bytes stringified")
+
+    def __len__(self):
+        raise AssertionError("secret-token TRON source bytes length read")
+
+    def __iter__(self):
+        raise AssertionError("secret-token TRON source bytes iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token TRON source bytes indexed")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token TRON source bytes compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token TRON source bytes compared")
+
+    def __hash__(self):
+        raise AssertionError("secret-token TRON source bytes hashed")
+
+    def hex(self):
+        raise AssertionError("secret-token TRON source bytes hex encoded")
+
+
+class HostileTronSourceBytearray(bytearray):
+    """Bytearray subclass that TRON source helpers must reject before hooks."""
+
+    def __init__(self, value):
+        super().__init__(value)
+
+    def __bytes__(self):
+        raise AssertionError("secret-token TRON source bytearray coerced")
+
+    def __repr__(self):
+        raise AssertionError("secret-token TRON source bytearray repr'd")
+
+    def __str__(self):
+        raise AssertionError("secret-token TRON source bytearray stringified")
+
+    def __len__(self):
+        raise AssertionError("secret-token TRON source bytearray length read")
+
+    def __iter__(self):
+        raise AssertionError("secret-token TRON source bytearray iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token TRON source bytearray indexed")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token TRON source bytearray compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token TRON source bytearray compared")
+
+    def __hash__(self):
+        raise AssertionError("secret-token TRON source bytearray hashed")
+
+    def hex(self):
+        raise AssertionError("secret-token TRON source bytearray hex encoded")
+
+
 class HostileTomlInt(int):
     def __new__(cls):
         return int.__new__(cls, 1)
@@ -1132,6 +1243,104 @@ def test_tron_source_bridge_direct_parsers_redact_parser_causes(tmp_path):
             raise AssertionError("TRON source bridge parser leaked nested details")
 
 
+def test_tron_source_exact_string_parsers_reject_string_subclasses_without_hooks():
+    module = load_evidence_module()
+    hostile_hex = HostileTronSourceString("0x" + "11" * 32)
+    hostile_runtime = HostileTronSourceString("0x" + TRON_SOURCE_RUNTIME_BYTECODE)
+    hostile_address = HostileTronSourceString(
+        "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8"
+    )
+
+    parser_cases = (
+        (
+            lambda: module._strip_lower_0x_hex(hostile_hex, label="network id"),
+            module.argparse.ArgumentTypeError,
+            "network id must be canonical lowercase 0x hex",
+        ),
+        (
+            lambda: module.parse_hex_bytes(
+                hostile_hex,
+                label="network id",
+                byte_length=32,
+            ),
+            module.argparse.ArgumentTypeError,
+            "network id must be canonical lowercase 0x hex",
+        ),
+        (
+            lambda: module.parse_runtime_bytecode_hex(
+                hostile_runtime,
+                label="source bridge runtime bytecode",
+            ),
+            module.argparse.ArgumentTypeError,
+            "source bridge runtime bytecode must be canonical lowercase 0x hex",
+        ),
+        (
+            lambda: module._require_unpadded_text(
+                hostile_address,
+                label="source bridge address",
+            ),
+            module.argparse.ArgumentTypeError,
+            "source bridge address must not be empty",
+        ),
+        (
+            lambda: module.parse_tron_address(
+                hostile_address,
+                label="source bridge address",
+            ),
+            module.argparse.ArgumentTypeError,
+            "source bridge address must not be empty",
+        ),
+    )
+    for parser, exception_type, expected_message in parser_cases:
+        try:
+            parser()
+        except exception_type as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("TRON source parser accepted hostile string")
+
+    runtime_cases = (
+        (
+            "source bridge runtime bytecode",
+            "source bridge runtime bytecode metadata is inconsistent",
+        ),
+        (
+            "destination verifier runtime bytecode",
+            "destination verifier runtime bytecode metadata is inconsistent",
+        ),
+    )
+    for label, expected_message in runtime_cases:
+        try:
+            module._runtime_summary_text(hostile_runtime, label=label)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("TRON source runtime summary accepted hostile string")
+
+    preimage_args = SimpleNamespace(
+        source_bridge_runtime_bytecode_hex_text=hostile_runtime,
+        destination_verifier_runtime_bytecode_hex_text="0x6002",
+    )
+    try:
+        module._require_full_toml_runtime_preimages(preimage_args)
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == (
+            "--full-toml requires deployed runtime bytecode preimages: "
+            "--source-bridge-runtime-bytecode-hex or --source-bridge-runtime-bytecode-file"
+        )
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+    else:
+        raise AssertionError("TRON full TOML preimages accepted hostile string")
+
+
 def test_tron_source_bridge_direct_parsers_redact_helper_exit_parser_causes(
     monkeypatch,
 ):
@@ -1262,6 +1471,185 @@ def test_tron_source_bridge_helper_controls_reject_non_booleans():
             raise AssertionError(
                 "malformed TRON source bridge fixed-bytes nonzero control accepted"
             )
+
+
+def test_tron_source_bridge_byte_helpers_reject_subclasses_without_hooks():
+    module = load_evidence_module()
+    raw = b"\x44" * 32
+    runtime_bytecode = b"\x60\x01"
+    config_hash = bytes.fromhex(TRON_SOURCE_CONFIG_VECTOR)
+
+    assert (
+        module._require_fixed_bytes(
+            bytearray(raw),
+            label="source_trust_anchor_hash",
+            byte_length=32,
+        )
+        == raw
+    )
+    assert (
+        module.runtime_bytecode_hash(bytearray(runtime_bytecode))
+        == module.runtime_bytecode_hash(runtime_bytecode)
+    )
+
+    exact_bytearray_args = sample_full_toml_args()
+    exact_bytearray_args.source_trust_anchor_hash = bytearray(raw)
+    assert (
+        type(
+            module.tron_source_verifier_material_record_hash(
+                exact_bytearray_args,
+                config_hash,
+            )
+        )
+        is bytes
+    )
+
+    runtime_args = SimpleNamespace(
+        source_bridge_runtime_bytecode_hex=bytearray(runtime_bytecode),
+        source_bridge_runtime_bytecode_file=None,
+        source_bridge_emitter_code_hash=None,
+        destination_verifier_runtime_bytecode_hex=None,
+        destination_verifier_runtime_bytecode_file=None,
+        destination_verifier_code_hash=None,
+    )
+    module.apply_runtime_bytecode_hashes(runtime_args)
+    assert runtime_args.source_bridge_runtime_bytecode_hex_text == "0x6001"
+
+    verifier_args = sample_full_toml_args()
+    verifier_args.adapter_verifier_vk_hash = bytearray(
+        bytes.fromhex(TRON_SOURCE_ADAPTER_VERIFIER_VK_HASH_VECTOR)
+    )
+    module.apply_source_adapter_verifier_vk_hash(verifier_args)
+    assert type(verifier_args.adapter_verifier_vk_hash) is bytes
+
+    hostile_values = (
+        HostileTronSourceBytes(raw),
+        HostileTronSourceBytearray(raw),
+    )
+    for hostile in hostile_values:
+        cases = (
+            (
+                lambda hostile=hostile: module._require_fixed_bytes(
+                    hostile,
+                    label="source_trust_anchor_hash",
+                    byte_length=32,
+                ),
+                "source_trust_anchor_hash must be bytes",
+            ),
+            (
+                lambda hostile=hostile: module._optional_expected_record_hash(
+                    SimpleNamespace(expected_source_verifier_material_hash=hostile),
+                    "expected_source_verifier_material_hash",
+                    label="--expected-source-verifier-material-hash",
+                ),
+                "--expected-source-verifier-material-hash must be bytes",
+            ),
+            (
+                lambda hostile=hostile: module._require_live_source_component_hashes(
+                    SimpleNamespace(source_trust_anchor_hash=hostile)
+                ),
+                "source_trust_anchor_hash must be bytes",
+            ),
+            (
+                lambda hostile=hostile: module._require_source_role_hash_separation(
+                    SimpleNamespace(
+                        source_trust_anchor_hash=hostile,
+                        consensus_verifier_hash=None,
+                        message_inclusion_verifier_hash=None,
+                        finality_policy_hash=None,
+                        source_bridge_emitter_code_hash=None,
+                        network_id=None,
+                        adapter_verifier_vk_hash=None,
+                        deployment_receipt_hash=None,
+                    ),
+                    config_hash,
+                ),
+                "source_trust_anchor_hash must be bytes",
+            ),
+            (
+                lambda hostile=hostile: module.tron_source_verifier_material_record_hash(
+                    SimpleNamespace(
+                        **{
+                            **sample_full_toml_args().__dict__,
+                            "source_trust_anchor_hash": hostile,
+                        }
+                    ),
+                    config_hash,
+                ),
+                "source_trust_anchor_hash must be bytes",
+            ),
+            (
+                lambda hostile=hostile: module.apply_source_adapter_verifier_vk_hash(
+                    SimpleNamespace(
+                        source_domain=5,
+                        target_domain=0,
+                        adapter_verifier_vk_hash=hostile,
+                    )
+                ),
+                "adapter_verifier_vk_hash must be bytes",
+            ),
+        )
+        for call, expected_message in cases:
+            try:
+                call()
+            except ValueError as exc:
+                rendered = str(exc)
+                assert rendered == expected_message
+                assert "secret-token" not in rendered
+                assert exc.__cause__ is None
+            else:
+                raise AssertionError(
+                    "TRON source-bridge byte subclass value was accepted"
+                )
+
+    hostile_runtime_values = (
+        HostileTronSourceBytes(runtime_bytecode),
+        HostileTronSourceBytearray(runtime_bytecode),
+    )
+    for hostile_runtime in hostile_runtime_values:
+        for call in (
+            lambda hostile_runtime=hostile_runtime: module.runtime_bytecode_hash(
+                hostile_runtime
+            ),
+            lambda hostile_runtime=hostile_runtime: module.apply_runtime_bytecode_hashes(
+                SimpleNamespace(
+                    source_bridge_runtime_bytecode_hex=hostile_runtime,
+                    source_bridge_runtime_bytecode_file=None,
+                    source_bridge_emitter_code_hash=None,
+                    destination_verifier_runtime_bytecode_hex=None,
+                    destination_verifier_runtime_bytecode_file=None,
+                    destination_verifier_code_hash=None,
+                )
+            ),
+        ):
+            try:
+                call()
+            except ValueError as exc:
+                rendered = str(exc)
+                assert rendered == "runtime bytecode must be bytes"
+                assert "secret-token" not in rendered
+                assert exc.__cause__ is None
+            else:
+                raise AssertionError("TRON source runtime accepted hostile bytes")
+
+    route_args = sample_full_toml_args()
+    route_args.route_canary_message_id = HostileTronSourceBytes(raw)
+    try:
+        module._route_canary_transaction_values(route_args)
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "route_canary_message_id must be bytes"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+    else:
+        raise AssertionError("TRON route canary accepted hostile message id")
+
+    transcript_values = {
+        field: bytes([index + 1]) * 32
+        for index, field in enumerate(module._ROUTE_CANARY_TRANSCRIPT_HASH_FIELDS)
+    }
+    transcript_values["message_id"] = HostileTronSourceBytes(raw)
+    module._require_route_canary_transcript_hashes_distinct(transcript_values)
 
 
 def test_parse_runtime_bytecode_hex_rejects_padded_inline_text(tmp_path):
@@ -2203,6 +2591,31 @@ def test_full_toml_rendering_rejects_route_canary_transcript_hash_reuse():
             )
 
 
+def test_full_toml_rendering_rejects_route_canary_governed_transcript_hash_reuse():
+    module = load_evidence_module()
+
+    for attr_name, source_attr_name in (
+        ("route_canary_payload_hash", "route_allowlist_hash"),
+        ("route_canary_finality_height", "expected_source_verifier_material_hash"),
+        (
+            "route_canary_signature_sha256",
+            "expected_source_adapter_engine_deployment_hash",
+        ),
+    ):
+        args = sample_full_toml_args()
+        setattr(args, attr_name, getattr(args, source_attr_name))
+
+        try:
+            module.render_full_toml(args, bytes.fromhex(TRON_SOURCE_CONFIG_VECTOR))
+        except ValueError as exc:
+            assert "TRON route canary governed hashes must be distinct" in str(exc)
+        else:
+            raise AssertionError(
+                "full TOML accepted reused TRON route canary governed hash "
+                f"{attr_name}"
+            )
+
+
 def test_route_canary_transaction_hash_requires_production_destination_lane():
     module = load_evidence_module()
 
@@ -2263,6 +2676,11 @@ def test_route_canary_transaction_hash_requires_canonical_binding_material():
             "TRON route canary governed hashes must be distinct",
         ),
         (
+            "route_canary_payload_hash",
+            bytes.fromhex(TRON_ROUTE_ALLOWLIST_HASH_VECTOR),
+            "TRON route canary governed hashes must be distinct",
+        ),
+        (
             "route_allowlist_hash",
             bytes.fromhex("dd" * 32),
             "route_allowlist_hash does not match canonical",
@@ -2274,7 +2692,7 @@ def test_route_canary_transaction_hash_requires_canonical_binding_material():
         ),
         (
             "destination_binding_hash",
-            bytes.fromhex("ee" * 32),
+            bytes.fromhex("e4" * 32),
             "destination_binding_hash does not match canonical destination binding",
         ),
         ("network_id", bytes(32), "network_id must not be zero"),
@@ -2685,7 +3103,7 @@ def test_tron_source_bridge_rejects_hostile_expected_record_hashes_without_hooks
         (
             "expected_config_hash",
             HostileExpectedRecordHash,
-            "--expected-config-hash must be 32 bytes",
+            "--expected-config-hash must be bytes",
         ),
         (
             "expected_config_hash",
@@ -2700,7 +3118,7 @@ def test_tron_source_bridge_rejects_hostile_expected_record_hashes_without_hooks
         (
             "expected_source_verifier_material_hash",
             HostileExpectedRecordHash,
-            "--expected-source-verifier-material-hash must be 32 bytes",
+            "--expected-source-verifier-material-hash must be bytes",
         ),
         (
             "expected_source_verifier_material_hash",
@@ -2715,7 +3133,7 @@ def test_tron_source_bridge_rejects_hostile_expected_record_hashes_without_hooks
         (
             "expected_source_adapter_engine_deployment_hash",
             HostileExpectedRecordHash,
-            "--expected-source-adapter-engine-deployment-hash must be 32 bytes",
+            "--expected-source-adapter-engine-deployment-hash must be bytes",
         ),
         (
             "expected_source_adapter_engine_deployment_hash",
@@ -2730,7 +3148,7 @@ def test_tron_source_bridge_rejects_hostile_expected_record_hashes_without_hooks
         (
             "expected_tron_dpos_source_gate_hash",
             HostileExpectedRecordHash,
-            "--expected-tron-dpos-source-gate-hash must be 32 bytes",
+            "--expected-tron-dpos-source-gate-hash must be bytes",
         ),
         (
             "expected_tron_dpos_source_gate_hash",
@@ -2745,7 +3163,7 @@ def test_tron_source_bridge_rejects_hostile_expected_record_hashes_without_hooks
         (
             "expected_destination_binding_hash",
             HostileExpectedRecordHash,
-            "--expected-destination-binding-hash must be 32 bytes",
+            "--expected-destination-binding-hash must be bytes",
         ),
         (
             "expected_destination_binding_hash",
@@ -2760,7 +3178,7 @@ def test_tron_source_bridge_rejects_hostile_expected_record_hashes_without_hooks
         (
             "route_allowlist_hash",
             HostileExpectedRecordHash,
-            "route_allowlist_hash must be 32 bytes",
+            "route_allowlist_hash must be bytes",
         ),
         (
             "route_allowlist_hash",

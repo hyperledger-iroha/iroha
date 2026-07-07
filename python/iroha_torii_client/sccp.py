@@ -17651,9 +17651,28 @@ def _normalize_tron_sccp_route_canary_evidence(input_value: Any) -> Dict[str, by
             "payloadHash": payload_hash,
             "statementHash": statement_hash,
             "commitmentRoot": commitment_root,
+            "finalityHeight": finality_height,
             "finalityBlockHash": finality_block_hash,
             "signatureSha256": signature_sha256,
         }
+    )
+    _require_sccp_hash_roles_distinct(
+        "TRON route canary governed hashes",
+        {
+            "routeAllowlistHash": route_allowlist_hash,
+            "destinationBindingHash": destination_binding_hash,
+            "sourceVerifierMaterialHash": source_verifier_material_hash,
+            "sourceAdapterEngineDeploymentHash": source_adapter_engine_deployment_hash,
+            "transactionId": transaction_id,
+            "messageId": message_id,
+            "callDataSha256": call_data_sha256,
+            "payloadHash": payload_hash,
+            "statementHash": statement_hash,
+            "commitmentRoot": commitment_root,
+            "finalityHeight": finality_height,
+            "finalityBlockHash": finality_block_hash,
+            "signatureSha256": signature_sha256,
+        },
     )
 
     verifier_address = _tron_base58check_payload(

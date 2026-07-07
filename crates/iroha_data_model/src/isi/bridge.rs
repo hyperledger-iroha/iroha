@@ -39,8 +39,8 @@ pub struct SccpRouteManifest {
     pub route_id: String,
     /// Stable asset key within the route.
     pub asset_key: String,
-    /// Legacy network key retained for route-manifest compatibility.
-    pub tron_network: String,
+    /// Route network key, for example `mainnet`, `testnet`, or `bsc-testnet`.
+    pub network: String,
     /// Canonical counterparty chain key.
     pub chain: String,
     /// Counterparty chain id hex.
@@ -68,9 +68,9 @@ pub struct SccpRouteManifest {
     /// Counterparty `TairaXOR` bridge contract address.
     pub taira_xor_bridge_address: String,
     /// SCCP source bridge contract address.
-    pub sccp_tron_source_bridge_address: String,
+    pub source_bridge_address: String,
     /// Destination verifier contract address.
-    pub tron_verifier_address: String,
+    pub destination_verifier_address: String,
     /// TON verifier internal message value in nanoTON.
     pub ton_finalize_message_value_nano: Option<String>,
     /// Hex-encoded verifier code digest.
@@ -444,7 +444,7 @@ mod tests {
             version: 1,
             route_id: "taira_bsc_xor".to_owned(),
             asset_key: "xor".to_owned(),
-            tron_network: "bsc-testnet".to_owned(),
+            network: "bsc-testnet".to_owned(),
             chain: "bsc-testnet".to_owned(),
             chain_id_hex: "0x61".to_owned(),
             explorer_url: Some("https://testnet.bscscan.com".to_owned()),
@@ -458,9 +458,8 @@ mod tests {
             network_id_hex: hex(0x61),
             taira_xor_token_address: "0x1111111111111111111111111111111111111111".to_owned(),
             taira_xor_bridge_address: "0x2222222222222222222222222222222222222222".to_owned(),
-            sccp_tron_source_bridge_address: "0x3333333333333333333333333333333333333333"
-                .to_owned(),
-            tron_verifier_address: "0x4444444444444444444444444444444444444444".to_owned(),
+            source_bridge_address: "0x3333333333333333333333333333333333333333".to_owned(),
+            destination_verifier_address: "0x4444444444444444444444444444444444444444".to_owned(),
             ton_finalize_message_value_nano: None,
             verifier_code_hash: hex(0x45),
             verifier_key_hash: hex(0x46),

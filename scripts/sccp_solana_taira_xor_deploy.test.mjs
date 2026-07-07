@@ -789,12 +789,56 @@ test("Solana deploy CLI rejects malformed final flag before spawning", async () 
         "deployer-keypair.json",
         "--broadcast",
         "true",
-        "--confirm-testnet",
-        "solana-testnet",
+        "--confirm-network",
+        "taira_sol_xor:solana-testnet",
         "--final",
         "maybe",
       ]),
     /--final must be true or false/u,
+  );
+});
+
+test("Solana deploy CLI requires canonical network confirmation before spawning", async () => {
+  await assert.rejects(
+    () =>
+      main([
+        "deploy",
+        "--program-so",
+        "program.so",
+        "--program-id-keypair",
+        "program-keypair.json",
+        "--keypair",
+        "deployer-keypair.json",
+        "--broadcast",
+        "true",
+      ]),
+    /deploy requires --broadcast true --confirm-network taira_sol_xor:solana-testnet/u,
+  );
+});
+
+test("Solana deploy CLI rejects retired testnet confirmation before spawning", async () => {
+  await assert.rejects(
+    async () => {
+      try {
+        await main([
+          "deploy",
+          "--program-so",
+          "program.so",
+          "--program-id-keypair",
+          "program-keypair.json",
+          "--keypair",
+          "deployer-keypair.json",
+          "--broadcast",
+          "true",
+          "--confirm-testnet",
+          "secret-token-solana-retired-confirmation",
+        ]);
+      } catch (error) {
+        assert.doesNotMatch(error.message, /secret-token-solana-retired/u);
+        throw error;
+      }
+    },
+    /Unknown option/u,
   );
 });
 

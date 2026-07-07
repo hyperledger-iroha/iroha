@@ -41161,13 +41161,19 @@ export function canonicalSolanaSccpRouteCanaryEvidenceBytes(input) {
     ),
     "sourceAdapterEngineDeploymentHash",
   );
+  const evidence = normalizeSolanaDestinationProgramDataEvidence(value);
+  const verifierCodeHash = hexToBytes(
+    evidence.verifierCodeHash,
+    "verifierCodeHash",
+    32,
+  );
   requireSccpHashRolesDistinct("Solana route canary governed hashes", [
     ["routeAllowlistHash", routeAllowlistHash],
     ["destinationBindingHash", destinationBindingHash],
     ["sourceVerifierMaterialHash", sourceVerifierMaterialHash],
     ["sourceAdapterEngineDeploymentHash", sourceAdapterEngineDeploymentHash],
+    ["verifierCodeHash", verifierCodeHash],
   ]);
-  const evidence = normalizeSolanaDestinationProgramDataEvidence(value);
   let out = new Uint8Array();
   out = writeU8(out, 1);
   out = writeU32Le(out, SCCP_DOMAIN_SORA);
@@ -41177,10 +41183,7 @@ export function canonicalSolanaSccpRouteCanaryEvidenceBytes(input) {
   out = concatBytes(out, sourceVerifierMaterialHash);
   out = concatBytes(out, sourceAdapterEngineDeploymentHash);
   out = concatBytes(out, evidence.verifierProgram);
-  out = concatBytes(
-    out,
-    hexToBytes(evidence.verifierCodeHash, "verifierCodeHash", 32),
-  );
+  out = concatBytes(out, verifierCodeHash);
   out = writeBytes(out, textEncoder.encode(evidence.rpcCommitment));
   out = writeBytes(out, textEncoder.encode(evidence.programOwner));
   out = writeBytes(out, textEncoder.encode(evidence.programdataOwner));
@@ -41419,6 +41422,15 @@ export function canonicalTonSccpRouteCanaryEvidenceBytes(input) {
   if (!bytesEqual(verifierCodeBocRootHash, verifierCodeHash)) {
     throw new TypeError("verifierCodeBocRootHash must match verifierCodeHash");
   }
+  requireSccpHashRolesDistinct("TON route canary governed hashes", [
+    ["routeAllowlistHash", routeAllowlistHash],
+    ["destinationBindingHash", destinationBindingHash],
+    ["sourceVerifierMaterialHash", sourceVerifierMaterialHash],
+    ["sourceAdapterEngineDeploymentHash", sourceAdapterEngineDeploymentHash],
+    ["verifierCodeHash", verifierCodeHash],
+    ["accountStateHash", accountStateHash],
+    ["lastTransactionHash", lastTransactionHash],
+  ]);
 
   let out = new Uint8Array();
   out = writeU8(out, 1);
@@ -41879,6 +41891,22 @@ const normalizeTronSccpRouteCanaryEvidence = (input) => {
     ["payloadHash", payloadHash],
     ["statementHash", statementHash],
     ["commitmentRoot", commitmentRoot],
+    ["finalityHeight", finalityHeight],
+    ["finalityBlockHash", finalityBlockHash],
+    ["signatureSha256", signatureSha256],
+  ]);
+  requireSccpHashRolesDistinct("TRON route canary governed hashes", [
+    ["routeAllowlistHash", routeAllowlistHash],
+    ["destinationBindingHash", destinationBindingHash],
+    ["sourceVerifierMaterialHash", sourceVerifierMaterialHash],
+    ["sourceAdapterEngineDeploymentHash", sourceAdapterEngineDeploymentHash],
+    ["transactionId", transactionId],
+    ["messageId", messageId],
+    ["callDataSha256", callDataSha256],
+    ["payloadHash", payloadHash],
+    ["statementHash", statementHash],
+    ["commitmentRoot", commitmentRoot],
+    ["finalityHeight", finalityHeight],
     ["finalityBlockHash", finalityBlockHash],
     ["signatureSha256", signatureSha256],
   ]);

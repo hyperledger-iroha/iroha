@@ -853,12 +853,12 @@ const burnRecordVkRegistryEntry = (overrides = {}) => {
 
 const tairaBurnRecordContract = (overrides = {}) => ({
   schema: "iroha-sccp-taira-xor-burn-record-contract/v1",
-  route_id: "taira_bsc_xor",
-  asset_key: "xor",
-  artifact_b64: BURN_RECORD_B64,
-  artifact_sha256: BURN_RECORD_SHA256,
-  code_hash: HASH_33,
-  vk_ref: {
+  routeId: "taira_bsc_xor",
+  assetKey: "xor",
+  contractArtifactB64: BURN_RECORD_B64,
+  artifactSha256: BURN_RECORD_SHA256,
+  codeHash: HASH_33,
+  vkRef: {
     backend: "halo2/ipa",
     name: "taira_bsc_xor_burn_record_v1",
   },
@@ -867,8 +867,8 @@ const tairaBurnRecordContract = (overrides = {}) => ({
 
 const tairaBurnRecordContractWithBytes = (bytes, overrides = {}) =>
   tairaBurnRecordContract({
-    artifact_b64: Buffer.from(bytes).toString("base64"),
-    artifact_sha256: `0x${createHash("sha256").update(bytes).digest("hex")}`,
+    contractArtifactB64: Buffer.from(bytes).toString("base64"),
+    artifactSha256: `0x${createHash("sha256").update(bytes).digest("hex")}`,
     ...overrides,
   });
 
@@ -3131,8 +3131,8 @@ test("BSC route-manifest command builds production-ready manifests only with bou
     "true",
     "--live-readback-checked",
     "true",
-    "--confirm-testnet",
-    "taira_bsc_xor",
+    "--confirm-network",
+    "taira_bsc_xor:testnet",
     "--out",
     outputPath,
   ];
@@ -3325,8 +3325,8 @@ test("BSC route-manifest command builds production-ready manifests only with bou
         "true",
         "--live-readback-checked",
         "true",
-        "--confirm-testnet",
-        "taira_bsc_xor",
+        "--confirm-network",
+        "taira_bsc_xor:testnet",
         "--out",
         join(dir, "route.raw-hash-only.manifest.json"),
       ]),
@@ -3407,7 +3407,7 @@ test("BSC route-manifest readiness booleans reject malformed option values befor
     "--production-ready",
     "true",
     "--confirm-network",
-    "taira_bsc_xor",
+    "taira_bsc_xor:mainnet",
   ];
   const malformedCliBooleans = malformedBooleanOptionValues.filter(
     (value) => typeof value === "string" && value !== "",
@@ -3450,6 +3450,190 @@ test("BSC route-manifest readiness booleans reject malformed option values befor
       );
       assert.equal(await readFile(out, "utf8"), sentinel);
     }
+  }
+});
+
+test("BSC route-manifest rejects retired browser prover sidecar aliases without echoing values", async () => {
+  const dir = await mkdtemp(
+    join(tmpdir(), "iroha-bsc-route-manifest-browser-retired-"),
+  );
+  const evidencePath = join(dir, "deployment.evidence.json");
+  const contractPath = join(dir, "burn-record.contract.json");
+  const bundlePath = join(dir, "native-prover-bundle.json");
+  const evidence = buildDeploymentEvidence({
+    tokenAddress: BSC_TOKEN_ADDRESS,
+    bridgeAddress: BSC_BRIDGE_ADDRESS,
+    sourceBridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS,
+    verifierAddress: BSC_VERIFIER_ADDRESS,
+    verifierCodeHash: HASH_11,
+    verifierKeyHash: HASH_22,
+    readback: readyReadback(),
+    compiledContractCodeHashes: compiledContractCodeHashes(),
+  });
+  const rollout = routeManifest().destinationRollout;
+  const bundle = nativeProverBundleForRollout(rollout);
+  const nativeEvmProverBundleHash = canonicalBscNativeEvmProverBundleHash(
+    validateBscTestnetNativeEvmProverBundle(bundle, {
+      expectedDestinationBindingHash: bindingHash(),
+    }),
+  );
+  await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+  await writeFile(
+    contractPath,
+    `${JSON.stringify(tairaBurnRecordContract(), null, 2)}\n`,
+  );
+  await writeFile(bundlePath, `${JSON.stringify(bundle, null, 2)}\n`);
+  const baseArgs = [
+    "route-manifest",
+    "--evidence",
+    evidencePath,
+    "--taira-contract",
+    contractPath,
+    "--settlement-asset-definition-id",
+    "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+    "--native-prover-bundle",
+    bundlePath,
+    "--proof-artifact-hash",
+    HASH_44,
+    "--proving-key-hash",
+    HASH_55,
+  ];
+  const sentinel = "secret-token-bsc-retired-browser-sidecar-alias";
+  const secretPattern = /secret-token-bsc-retired-browser-sidecar-alias/u;
+
+  for (const [name, mutate, pattern] of [
+    [
+      "retired route id alias",
+      (manifest) => {
+        delete manifest.routeId;
+        manifest.route_id = sentinel;
+      },
+      /destination browser prover manifest\.routeId must not use retired alias route_id in destination browser prover manifest\.routeId; use routeId/u,
+    ],
+    [
+      "retired asset key alias",
+      (manifest) => {
+        delete manifest.assetKey;
+        manifest.asset_key = sentinel;
+      },
+      /destination browser prover manifest\.assetKey must not use retired alias asset_key in destination browser prover manifest\.assetKey; use assetKey/u,
+    ],
+    [
+      "retired BSC network alias",
+      (manifest) => {
+        delete manifest.bscNetwork;
+        manifest.bsc_network = sentinel;
+      },
+      /destination browser prover manifest\.bscNetwork must not use retired alias bsc_network in destination browser prover manifest\.bscNetwork; use bscNetwork/u,
+    ],
+    [
+      "retired BSC chain id alias",
+      (manifest) => {
+        delete manifest.bscChainIdHex;
+        manifest.bsc_chain_id_hex = sentinel;
+      },
+      /destination browser prover manifest\.bscChainIdHex must not use retired alias bsc_chain_id_hex in destination browser prover manifest\.bscChainIdHex; use bscChainIdHex/u,
+    ],
+    [
+      "retired generic chain id alias",
+      (manifest) => {
+        delete manifest.bscChainIdHex;
+        manifest.chainIdHex = sentinel;
+      },
+      /destination browser prover manifest\.bscChainIdHex must not use retired alias chainIdHex in destination browser prover manifest\.bscChainIdHex; use bscChainIdHex/u,
+    ],
+    [
+      "retired module URL alias",
+      (manifest) => {
+        delete manifest.moduleUrl;
+        manifest.module_url = sentinel;
+      },
+      /destination browser prover manifest\.moduleUrl must not use retired alias module_url in destination browser prover manifest\.moduleUrl; use moduleUrl/u,
+    ],
+    [
+      "retired browser module URL alias",
+      (manifest) => {
+        delete manifest.moduleUrl;
+        manifest.browserModuleUrl = sentinel;
+      },
+      /destination browser prover manifest\.moduleUrl must not use retired alias browserModuleUrl in destination browser prover manifest\.moduleUrl; use moduleUrl/u,
+    ],
+    [
+      "retired module specifier alias",
+      (manifest) => {
+        manifest.module_specifier = sentinel;
+      },
+      /destination browser prover manifest\.moduleSpecifier must not use retired alias module_specifier in destination browser prover manifest; use moduleSpecifier/u,
+    ],
+    [
+      "retired module hash alias",
+      (manifest) => {
+        delete manifest.moduleSha256;
+        manifest.moduleHash = sentinel;
+      },
+      /destination browser prover manifest\.moduleSha256 must not use retired alias moduleHash in destination browser prover manifest\.moduleSha256; use moduleSha256/u,
+    ],
+    [
+      "retired exports alias",
+      (manifest) => {
+        delete manifest.exports;
+        manifest.exportNames = [sentinel];
+      },
+      /destination browser prover manifest\.exports must not use retired alias exportNames in destination browser prover manifest; use exports/u,
+    ],
+    [
+      "retired proof artifact hash alias",
+      (manifest) => {
+        delete manifest.proofArtifactHash;
+        manifest.proof_artifact_hash = sentinel;
+      },
+      /destination browser prover manifest\.proofArtifactHash must not use retired alias proof_artifact_hash in destination browser prover manifest\.proofArtifactHash; use proofArtifactHash/u,
+    ],
+    [
+      "retired proving key hash alias",
+      (manifest) => {
+        delete manifest.provingKeyHash;
+        manifest.proving_key_hash = sentinel;
+      },
+      /destination browser prover manifest\.provingKeyHash must not use retired alias proving_key_hash in destination browser prover manifest\.provingKeyHash; use provingKeyHash/u,
+    ],
+    [
+      "retired native bundle hash alias",
+      (manifest) => {
+        delete manifest.nativeEvmProverBundleHash;
+        manifest.nativeProverBundleHash = sentinel;
+      },
+      /destination browser prover manifest\.nativeEvmProverBundleHash must not use retired alias nativeProverBundleHash in destination browser prover manifest\.nativeEvmProverBundleHash; use nativeEvmProverBundleHash/u,
+    ],
+  ]) {
+    const sidecar = browserProverSidecarManifest({
+      direction: "destination",
+      nativeEvmProverBundleHash,
+      rollout,
+    });
+    mutate(sidecar);
+    const sidecarPath = join(
+      dir,
+      `${name.replaceAll(" ", "-")}.browser-prover.json`,
+    );
+    await writeFile(sidecarPath, `${JSON.stringify(sidecar, null, 2)}\n`);
+    await assert.rejects(
+      () =>
+        main([
+          ...baseArgs,
+          "--destination-browser-prover-manifest",
+          sidecarPath,
+          "--out",
+          join(dir, `${name.replaceAll(" ", "-")}.manifest.json`),
+        ]),
+      (error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        assert.match(message, pattern, name);
+        assert.doesNotMatch(message, secretPattern, name);
+        return true;
+      },
+      name,
+    );
   }
 });
 
@@ -3576,8 +3760,8 @@ test("BSC route-manifest command accepts generated offline full TOML evidence", 
     "true",
     "--live-readback-checked",
     "true",
-    "--confirm-testnet",
-    "taira_bsc_xor",
+    "--confirm-network",
+    "taira_bsc_xor:testnet",
     "--out",
     out,
   ]);
@@ -3624,8 +3808,8 @@ test("BSC route-manifest command accepts generated offline full TOML evidence", 
         "true",
         "--live-readback-checked",
         "true",
-        "--confirm-testnet",
-        "taira_bsc_xor",
+        "--confirm-network",
+        "taira_bsc_xor:testnet",
         "--out",
         join(dir, "route.bad.manifest.json"),
       ]),
@@ -3686,8 +3870,8 @@ test("BSC route-manifest command rejects ambiguous offline full TOML evidence", 
     "true",
     "--live-readback-checked",
     "true",
-    "--confirm-testnet",
-    "taira_bsc_xor",
+    "--confirm-network",
+    "taira_bsc_xor:testnet",
   ];
 
   for (const [name, fullTomlEvidence, pattern] of [
@@ -3700,6 +3884,80 @@ test("BSC route-manifest command rejects ambiguous offline full TOML evidence", 
       "generic network alias",
       withRetiredBscNetworkAlias(offlineFullTomlEvidence()),
       assertRetiredBscNetworkAliasError,
+    ],
+    [
+      "retired route id alias",
+      {
+        ...offlineFullTomlEvidence(),
+        routeId: undefined,
+        route_id: "opaque-bsc-retired-offline-evidence-alias",
+      },
+      (error) => {
+        const message = String(error);
+        assert.match(
+          message,
+          /BSC offline full TOML evidence routeId must not use retired alias route_id in BSC offline full TOML evidence routeId; use routeId/u,
+        );
+        assert.doesNotMatch(message, /opaque-bsc-retired-offline-evidence-alias/u);
+        return true;
+      },
+    ],
+    [
+      "retired BSC network alias",
+      {
+        ...offlineFullTomlEvidence(),
+        bscNetwork: undefined,
+        bsc_network: "testnet",
+      },
+      /BSC offline full TOML evidence network must not use retired alias bsc_network in BSC offline full TOML evidence; use bscNetwork/u,
+    ],
+    [
+      "retired post-deploy evidence container",
+      {
+        ...offlineFullTomlEvidence(),
+        postDeployLiveEvidence: undefined,
+        post_deploy_live_evidence: {
+          fullTomlReady: true,
+          offlineFullTomlSha256: HASH_77,
+        },
+      },
+      /BSC offline full TOML evidence postDeployLiveEvidence must not use retired alias post_deploy_live_evidence in BSC offline full TOML evidence; use postDeployLiveEvidence/u,
+    ],
+    [
+      "retired full TOML readiness alias",
+      {
+        ...offlineFullTomlEvidence(),
+        fullTomlReady: undefined,
+        full_toml_ready: true,
+      },
+      /BSC offline full TOML evidence fullTomlReady must not use retired alias full_toml_ready in BSC offline full TOML evidence; use fullTomlReady/u,
+    ],
+    [
+      "retired route manifest path alias",
+      {
+        ...offlineFullTomlEvidence(),
+        routeManifestPath: undefined,
+        route_manifest_path: "route.manifest.json",
+      },
+      /BSC offline full TOML evidence routeManifestPath must not use retired alias route_manifest_path in BSC offline full TOML evidence routeManifestPath; use routeManifestPath/u,
+    ],
+    [
+      "retired full config path alias",
+      {
+        ...offlineFullTomlEvidence(),
+        fullConfigPath: undefined,
+        full_config_path: "full-config.toml",
+      },
+      /BSC offline full TOML evidence fullConfigPath must not use retired alias full_config_path in BSC offline full TOML evidence fullConfigPath; use fullConfigPath/u,
+    ],
+    [
+      "retired offline full TOML hash alias",
+      {
+        ...offlineFullTomlEvidence(),
+        offlineFullTomlSha256: undefined,
+        offline_full_toml_sha256: HASH_33,
+      },
+      /BSC offline full TOML evidence offlineFullTomlSha256 must not use retired alias offline_full_toml_sha256 in BSC offline full TOML evidence; use offlineFullTomlSha256/u,
     ],
     [
       "noncanonical chain label",
@@ -3892,8 +4150,8 @@ test("BSC route-manifest production readiness rejects missing TOML hash and diag
     "true",
     "--live-readback-checked",
     "true",
-    "--confirm-testnet",
-    "taira_bsc_xor",
+    "--confirm-network",
+    "taira_bsc_xor:testnet",
     "--out",
     join(dir, "bad-route.manifest.json"),
   ];
@@ -3992,8 +4250,8 @@ test("BSC route-manifest production readiness rejects placeholder TAIRA burn-rec
     "true",
     "--live-readback-checked",
     "true",
-    "--confirm-testnet",
-    "taira_bsc_xor",
+    "--confirm-network",
+    "taira_bsc_xor:testnet",
   ];
   const adversarialArtifacts = [
     {
@@ -4124,8 +4382,8 @@ test("BSC route-manifest command rejects duplicate JSON keys in operator inputs"
   await writeFile(
     duplicateContractPath,
     `${JSON.stringify(contract, null, 2).replace(
-      '"artifact_b64":',
-      '"artifact_b64": "unsafe-overwrite",\n  "artifact_b64":',
+      '"contractArtifactB64":',
+      '"contractArtifactB64": "unsafe-overwrite",\n  "contractArtifactB64":',
     )}\n`,
   );
   const baseArgs = [
@@ -4164,6 +4422,145 @@ test("BSC route-manifest command rejects duplicate JSON keys in operator inputs"
       ]),
     /TAIRA burn-record contract is not valid JSON: TAIRA burn-record contract contains a duplicate JSON object key/u,
   );
+});
+
+test("BSC route-manifest rejects retired TAIRA burn-record contract aliases without echoing values", async () => {
+  const dir = await mkdtemp(
+    join(tmpdir(), "iroha-bsc-route-manifest-burn-retired-"),
+  );
+  const evidencePath = join(dir, "deployment.evidence.json");
+  const evidence = buildDeploymentEvidence({
+    tokenAddress: BSC_TOKEN_ADDRESS,
+    bridgeAddress: BSC_BRIDGE_ADDRESS,
+    sourceBridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS,
+    verifierAddress: BSC_VERIFIER_ADDRESS,
+    verifierCodeHash: HASH_11,
+    verifierKeyHash: HASH_22,
+    readback: readyReadback(),
+    compiledContractCodeHashes: compiledContractCodeHashes(),
+  });
+  await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+  const baseArgs = [
+    "route-manifest",
+    "--evidence",
+    evidencePath,
+    "--settlement-asset-definition-id",
+    "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+    "--proof-artifact-hash",
+    HASH_44,
+    "--proving-key-hash",
+    HASH_55,
+  ];
+  const sentinel = "secret-token-bsc-retired-burn-record-contract-alias";
+  const secretPattern = /secret-token-bsc-retired-burn-record-contract-alias/u;
+
+  for (const [name, mutate, pattern] of [
+    [
+      "retired route id alias",
+      (contract) => {
+        delete contract.routeId;
+        contract.route_id = sentinel;
+      },
+      /TAIRA burn-record contract routeId must not use retired alias route_id in TAIRA burn-record contract; use routeId/u,
+    ],
+    [
+      "retired asset key alias",
+      (contract) => {
+        delete contract.assetKey;
+        contract.asset_key = sentinel;
+      },
+      /TAIRA burn-record contract assetKey must not use retired alias asset_key in TAIRA burn-record contract; use assetKey/u,
+    ],
+    [
+      "retired contract artifact alias",
+      (contract) => {
+        delete contract.contractArtifactB64;
+        contract.contract_artifact_b64 = sentinel;
+      },
+      /TAIRA burn-record contract artifact must not use retired alias contract_artifact_b64 in TAIRA burn-record contract artifact; use contractArtifactB64/u,
+    ],
+    [
+      "retired artifactB64 alias",
+      (contract) => {
+        delete contract.contractArtifactB64;
+        contract.artifactB64 = sentinel;
+      },
+      /TAIRA burn-record contract artifact must not use retired alias artifactB64 in TAIRA burn-record contract artifact; use contractArtifactB64/u,
+    ],
+    [
+      "retired artifact_b64 alias",
+      (contract) => {
+        delete contract.contractArtifactB64;
+        contract.artifact_b64 = sentinel;
+      },
+      /TAIRA burn-record contract artifact must not use retired alias artifact_b64 in TAIRA burn-record contract artifact; use contractArtifactB64/u,
+    ],
+    [
+      "retired artifact hash alias",
+      (contract) => {
+        delete contract.artifactSha256;
+        contract.artifact_sha256 = sentinel;
+      },
+      /TAIRA burn-record contract artifactSha256 must not use retired alias artifact_sha256 in TAIRA burn-record contract artifactSha256; use artifactSha256/u,
+    ],
+    [
+      "retired code hash alias",
+      (contract) => {
+        delete contract.codeHash;
+        contract.code_hash = sentinel;
+      },
+      /TAIRA burn-record contract codeHash must not use retired alias code_hash in TAIRA burn-record contract codeHash; use codeHash/u,
+    ],
+    [
+      "retired vk_ref alias",
+      (contract) => {
+        delete contract.vkRef;
+        contract.vk_ref = { backend: sentinel, name: sentinel };
+      },
+      /TAIRA burn-record contract vkRef must not use retired alias vk_ref in TAIRA burn-record contract; use vkRef/u,
+    ],
+    [
+      "retired verifierKeyRef alias",
+      (contract) => {
+        delete contract.vkRef;
+        contract.verifierKeyRef = { backend: sentinel, name: sentinel };
+      },
+      /TAIRA burn-record contract vkRef must not use retired alias verifierKeyRef in TAIRA burn-record contract; use vkRef/u,
+    ],
+    [
+      "retired verifier_key_ref alias",
+      (contract) => {
+        delete contract.vkRef;
+        contract.verifier_key_ref = { backend: sentinel, name: sentinel };
+      },
+      /TAIRA burn-record contract vkRef must not use retired alias verifier_key_ref in TAIRA burn-record contract; use vkRef/u,
+    ],
+  ]) {
+    const contract = tairaBurnRecordContract();
+    mutate(contract);
+    const contractPath = join(
+      dir,
+      `${name.replaceAll(" ", "-")}.contract.json`,
+    );
+    await writeFile(contractPath, `${JSON.stringify(contract, null, 2)}\n`);
+    await assert.rejects(
+      () =>
+        main([
+          ...baseArgs,
+          "--taira-contract",
+          contractPath,
+          "--out",
+          join(dir, `${name.replaceAll(" ", "-")}.manifest.json`),
+        ]),
+      (error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        assert.match(message, pattern, name);
+        assert.doesNotMatch(message, secretPattern, name);
+        return true;
+      },
+      name,
+    );
+  }
 });
 
 test("BSC route-manifest command rejects non-object JSON operator inputs", async () => {
@@ -4443,6 +4840,226 @@ test("BSC route-manifest command rejects duplicate deployment evidence aliases",
   );
 });
 
+test("BSC route-manifest rejects retired deployment evidence aliases without echoing values", async () => {
+  const baseEvidence = buildDeploymentEvidence({
+    tokenAddress: BSC_TOKEN_ADDRESS,
+    bridgeAddress: BSC_BRIDGE_ADDRESS,
+    sourceBridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS,
+    verifierAddress: BSC_VERIFIER_ADDRESS,
+    verifierCodeHash: HASH_11,
+    verifierKeyHash: HASH_22,
+    readback: readyReadback(),
+    compiledContractCodeHashes: compiledContractCodeHashes(),
+  });
+  const baseOptions = {
+    "settlement-asset-definition-id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+    "proof-artifact-hash": HASH_44,
+    "proving-key-hash": HASH_55,
+  };
+  const buildDraft = (evidence) =>
+    buildBscTairaXorRouteManifestDraft({
+      evidence,
+      tairaContract: tairaBurnRecordContract(),
+      options: baseOptions,
+      createdAt: "2026-06-13T00:00:00.000Z",
+    });
+  const sentinel = "opaque-bsc-retired-deployment-alias-value";
+  const bindingKey = bscDestinationBindingKey({
+    verifierAddress: BSC_VERIFIER_ADDRESS,
+    bridgeAddress: BSC_BRIDGE_ADDRESS,
+    verifierCodeHash: HASH_11,
+    verifierKeyHash: HASH_22,
+  });
+  const cases = [
+    {
+      name: "route id",
+      mutate(evidence) {
+        evidence.route_id = sentinel;
+        delete evidence.routeId;
+      },
+      pattern:
+        /BSC deployment evidence routeId must not use retired alias route_id in BSC deployment evidence routeId; use routeId/u,
+    },
+    {
+      name: "BSC network",
+      mutate(evidence) {
+        evidence.bsc_network = "testnet";
+        delete evidence.bscNetwork;
+      },
+      pattern:
+        /BSC deployment evidence bscNetwork must not use retired alias bsc_network in BSC deployment evidence; use bscNetwork/u,
+    },
+    {
+      name: "destination rollout container",
+      mutate(evidence) {
+        evidence.destination_rollout = evidence.destinationRollout;
+        delete evidence.destinationRollout;
+      },
+      pattern:
+        /BSC deployment evidence destinationRollout must not use retired alias destination_rollout in BSC deployment evidence; use destinationRollout/u,
+    },
+    {
+      name: "token address",
+      mutate(evidence) {
+        evidence.bsc_token_address = BSC_TOKEN_ADDRESS;
+        delete evidence.bscTokenAddress;
+      },
+      pattern:
+        /BSC deployment evidence token address must not use retired alias bsc_token_address in BSC deployment evidence; use bscTokenAddress/u,
+    },
+    {
+      name: "rollout verifier key hash",
+      mutate(evidence) {
+        evidence.destinationRollout.verifier_key_hash = HASH_22;
+        delete evidence.destinationRollout.verifierKeyHash;
+      },
+      pattern:
+        /BSC deployment evidence verifierKeyHash must not use retired alias verifier_key_hash in BSC deployment evidence destinationRollout; use verifierKeyHash/u,
+    },
+    {
+      name: "destination binding key",
+      mutate(evidence) {
+        evidence.destinationBinding.destinationBindingKey = bindingKey;
+        delete evidence.destinationBinding.key;
+      },
+      pattern:
+        /BSC deployment evidence destinationBindingKey must not use retired alias destinationBindingKey in BSC deployment evidence destinationBinding; use key/u,
+    },
+    {
+      name: "post-deploy evidence container",
+      mutate(evidence) {
+        evidence.post_deploy_live_evidence = { fullTomlReady: false };
+      },
+      pattern:
+        /BSC deployment evidence postDeployLiveEvidence must not use retired alias post_deploy_live_evidence in BSC deployment evidence; use postDeployLiveEvidence/u,
+    },
+    {
+      name: "compiled code hashes container",
+      mutate(evidence) {
+        evidence.compiled_contract_code_hashes = evidence.compiledContractCodeHashes;
+        delete evidence.compiledContractCodeHashes;
+      },
+      pattern:
+        /BSC deployment evidence compiledContractCodeHashes must not use retired alias compiled_contract_code_hashes in BSC deployment evidence; use compiledContractCodeHashes/u,
+    },
+    {
+      name: "proof artifact hash",
+      mutate(evidence) {
+        evidence.proof_artifact_hash = HASH_44;
+      },
+      pattern:
+        /BSC route proofArtifactHash must not use retired alias proof_artifact_hash in BSC deployment evidence; use proofArtifactHash/u,
+    },
+  ];
+
+  for (const { name, mutate, pattern } of cases) {
+    const evidence = JSON.parse(JSON.stringify(baseEvidence));
+    mutate(evidence);
+    await assert.rejects(
+      () => buildDraft(evidence),
+      (error) => {
+        const message = String(error);
+        assert.match(message, pattern, name);
+        assert.doesNotMatch(message, /opaque-bsc-retired-deployment-alias-value/u);
+        return true;
+      },
+      name,
+    );
+  }
+});
+
+test("BSC route-manifest rejects retired live evidence aliases without echoing values", async () => {
+  const baseEvidence = buildDeploymentEvidence({
+    tokenAddress: BSC_TOKEN_ADDRESS,
+    bridgeAddress: BSC_BRIDGE_ADDRESS,
+    sourceBridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS,
+    verifierAddress: BSC_VERIFIER_ADDRESS,
+    verifierCodeHash: HASH_11,
+    verifierKeyHash: HASH_22,
+    readback: readyReadback(),
+    compiledContractCodeHashes: compiledContractCodeHashes(),
+  });
+  const baseOptions = {
+    "settlement-asset-definition-id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+    "proof-artifact-hash": HASH_44,
+    "proving-key-hash": HASH_55,
+  };
+  const basePostDeploy = routeManifest().postDeployLiveEvidence;
+  const buildDraft = (liveEvidence) =>
+    buildBscTairaXorRouteManifestDraft({
+      evidence: baseEvidence,
+      liveEvidence,
+      tairaContract: tairaBurnRecordContract(),
+      options: baseOptions,
+      createdAt: "2026-06-13T00:00:00.000Z",
+    });
+  const sentinel = "opaque-bsc-retired-live-evidence-alias";
+  const cases = [
+    {
+      name: "post-deploy container",
+      liveEvidence: { post_deploy_live_evidence: basePostDeploy },
+      pattern:
+        /BSC live evidence postDeployLiveEvidence must not use retired alias post_deploy_live_evidence in BSC live evidence; use postDeployLiveEvidence/u,
+    },
+    {
+      name: "full TOML readiness",
+      mutate(postDeploy) {
+        postDeploy.full_toml_ready = false;
+        delete postDeploy.fullTomlReady;
+      },
+      pattern:
+        /postDeployLiveEvidence\.fullTomlReady must not use retired alias full_toml_ready in BSC live evidence postDeployLiveEvidence; use fullTomlReady/u,
+    },
+    {
+      name: "source bridge config hash",
+      mutate(postDeploy) {
+        postDeploy.source_bridge_config_hash = HASH_44;
+        delete postDeploy.sourceBridgeConfigHash;
+      },
+      pattern:
+        /postDeployLiveEvidence\.sourceBridgeConfigHash must not use retired alias source_bridge_config_hash in BSC live evidence postDeployLiveEvidence; use sourceBridgeConfigHash/u,
+    },
+    {
+      name: "source event transaction id",
+      mutate(postDeploy) {
+        postDeploy.source_event_transaction_id = sentinel;
+        delete postDeploy.sourceEventTransactionId;
+      },
+      pattern:
+        /postDeployLiveEvidence\.sourceEventTransactionId must not use retired alias source_event_transaction_id in BSC live evidence postDeployLiveEvidence; use sourceEventTransactionId/u,
+    },
+    {
+      name: "route canary explorer URL",
+      mutate(postDeploy) {
+        postDeploy.route_canary_explorer_url = ROUTE_CANARY_EXPLORER_URL;
+        delete postDeploy.routeCanaryExplorerUrl;
+      },
+      pattern:
+        /postDeployLiveEvidence\.routeCanaryExplorerUrl must not use retired alias route_canary_explorer_url in BSC live evidence postDeployLiveEvidence; use routeCanaryExplorerUrl/u,
+    },
+  ];
+
+  for (const { name, liveEvidence, mutate, pattern } of cases) {
+    const candidate =
+      liveEvidence ?? {
+        postDeployLiveEvidence: JSON.parse(JSON.stringify(basePostDeploy)),
+      };
+    if (mutate) {
+      mutate(candidate.postDeployLiveEvidence);
+    }
+    await assert.rejects(
+      () => buildDraft(candidate),
+      (error) => {
+        const message = String(error);
+        assert.match(message, pattern, name);
+        assert.doesNotMatch(message, /opaque-bsc-retired-live-evidence-alias/u);
+        return true;
+      },
+      name,
+    );
+  }
+});
+
 test("BSC route-manifest rejects retired generic network aliases in input payloads", async () => {
   const baseEvidence = buildDeploymentEvidence({
     tokenAddress: BSC_TOKEN_ADDRESS,
@@ -4535,7 +5152,7 @@ test("BSC route-manifest helper ignores accessor-backed request fields", async (
   };
   for (const key of [
     "production-ready",
-    "confirm-testnet",
+    "confirm-network",
     "live-readback-checked",
     "native-prover-bundle",
   ]) {
@@ -4543,7 +5160,7 @@ test("BSC route-manifest helper ignores accessor-backed request fields", async (
       enumerable: true,
       get() {
         optionReads += 1;
-        return key === "confirm-testnet" ? "taira_bsc_xor" : "true";
+        return key === "confirm-network" ? "taira_bsc_xor:testnet" : "true";
       },
     });
   }
@@ -5150,7 +5767,8 @@ test("BSC route-config writes backend-compatible TOML with BSC deployment eviden
 
   assert.match(toml, /route_id = "taira_bsc_xor"/u);
   assert.match(toml, /asset_key = "xor"/u);
-  assert.match(toml, /tron_network = "bsc-testnet"/u);
+  assert.match(toml, /network = "bsc-testnet"/u);
+  assert.doesNotMatch(toml, /(^|\n)tron_network =/u);
   assert.match(toml, /chain = "bsc-testnet"/u);
   assert.match(toml, /chain_id_hex = "0x61"/u);
   assert.match(toml, /explorer_url = "https:\/\/testnet\.bscscan\.com"/u);
@@ -5169,21 +5787,21 @@ test("BSC route-config writes backend-compatible TOML with BSC deployment eviden
   assert.match(
     toml,
     new RegExp(
-      `sccp_bsc_source_bridge_address = "${BSC_SOURCE_BRIDGE_ADDRESS}"`,
+      `source_bridge_address = "${BSC_SOURCE_BRIDGE_ADDRESS}"`,
       "u",
     ),
   );
-  assert.doesNotMatch(toml, /(^|\n)source_bridge_address =/u);
+  assert.doesNotMatch(toml, /(^|\n)sccp_bsc_source_bridge_address =/u);
   assert.doesNotMatch(toml, /(^|\n)bsc_source_bridge_address =/u);
   assert.doesNotMatch(toml, /(^|\n)sccp_tron_source_bridge_address =/u);
   assert.match(
     toml,
     new RegExp(
-      `sccp_bsc_destination_verifier_address = "${BSC_VERIFIER_ADDRESS}"`,
+      `destination_verifier_address = "${BSC_VERIFIER_ADDRESS}"`,
       "u",
     ),
   );
-  assert.doesNotMatch(toml, /(^|\n)destination_verifier_address =/u);
+  assert.doesNotMatch(toml, /(^|\n)sccp_bsc_destination_verifier_address =/u);
   assert.doesNotMatch(toml, /(^|\n)verifier_address =/u);
   assert.doesNotMatch(toml, /(^|\n)bsc_verifier_address =/u);
   assert.doesNotMatch(toml, /(^|\n)evm_verifier_address =/u);
@@ -7332,6 +7950,98 @@ test("BSC native-prover-bundle validates bound Groth16 material manifests", asyn
       },
     );
 
+    const materialRetiredAliasSecret =
+      "secret-token-bsc-groth16-material-retired-alias";
+    const retiredAliasManifest = nativeGroth16MaterialManifest(fixture);
+    retiredAliasManifest.route_id = materialRetiredAliasSecret;
+    delete retiredAliasManifest.routeId;
+    retiredAliasManifest.public_signal_names = [
+      ...retiredAliasManifest.publicSignalNames,
+    ];
+    delete retiredAliasManifest.publicSignalNames;
+    retiredAliasManifest.production_ready = true;
+    delete retiredAliasManifest.productionReady;
+    retiredAliasManifest.artifacts.powers_of_tau =
+      retiredAliasManifest.artifacts.powersOfTau;
+    delete retiredAliasManifest.artifacts.powersOfTau;
+    retiredAliasManifest.artifacts.provingKey.artifactHash =
+      retiredAliasManifest.artifacts.provingKey.sha256;
+    delete retiredAliasManifest.artifacts.provingKey.sha256;
+    retiredAliasManifest.self_checks = retiredAliasManifest.selfChecks;
+    delete retiredAliasManifest.selfChecks;
+    retiredAliasManifest.self_checks.snarkjs.r1cs_info_source =
+      retiredAliasManifest.self_checks.snarkjs.r1csInfoSource;
+    delete retiredAliasManifest.self_checks.snarkjs.r1csInfoSource;
+    retiredAliasManifest.attestation_trust_policy =
+      retiredAliasManifest.attestationTrustPolicy;
+    delete retiredAliasManifest.attestationTrustPolicy;
+    retiredAliasManifest.attestation_trust_policy.trusted_signer_fingerprints =
+      retiredAliasManifest.attestation_trust_policy.trustedSignerFingerprints;
+    delete retiredAliasManifest.attestation_trust_policy
+      .trustedSignerFingerprints;
+    retiredAliasManifest.attestations.semanticSccpCircuit.signature
+      .signer_fingerprint =
+      retiredAliasManifest.attestations.semanticSccpCircuit.signature
+        .signerFingerprint;
+    delete retiredAliasManifest.attestations.semanticSccpCircuit.signature
+      .signerFingerprint;
+    await writeFile(
+      manifestPath,
+      `${JSON.stringify(retiredAliasManifest, null, 2)}\n`,
+    );
+    await assert.rejects(
+      () =>
+        buildBscNativeEvmProverBundleFromArtifacts({
+          ...fixture.options,
+          "groth16-material-manifest": "groth16-material.json",
+        }),
+      (error) => {
+        const message = String(error);
+        assert.match(
+          message,
+          /Groth16 material manifest routeId must not use retired alias route_id; use routeId/u,
+        );
+        assert.match(
+          message,
+          /Groth16 material manifest publicSignalNames must not use retired alias public_signal_names; use publicSignalNames/u,
+        );
+        assert.match(
+          message,
+          /Groth16 material manifest productionReady must not use retired alias production_ready; use productionReady/u,
+        );
+        assert.match(
+          message,
+          /Groth16 material manifest artifacts powersOfTau must not use retired alias powers_of_tau; use powersOfTau/u,
+        );
+        assert.match(
+          message,
+          /Groth16 material manifest proving key artifact sha256 must not use retired alias artifactHash; use sha256/u,
+        );
+        assert.match(
+          message,
+          /Groth16 material manifest selfChecks must not use retired alias self_checks; use selfChecks/u,
+        );
+        assert.match(
+          message,
+          /Groth16 material manifest selfChecks\.snarkjs r1csInfoSource must not use retired alias r1cs_info_source; use r1csInfoSource/u,
+        );
+        assert.match(
+          message,
+          /Groth16 material manifest attestationTrustPolicy must not use retired alias attestation_trust_policy; use attestationTrustPolicy/u,
+        );
+        assert.match(
+          message,
+          /Groth16 material manifest attestationTrustPolicy trustedSignerFingerprints must not use retired alias trusted_signer_fingerprints; use trustedSignerFingerprints/u,
+        );
+        assert.match(
+          message,
+          /Groth16 material manifest semantic SCCP circuit attestation reference signature signerFingerprint must not use retired alias signer_fingerprint; use signerFingerprint/u,
+        );
+        assert.doesNotMatch(message, /secret-token-bsc-groth16-material-retired-alias/u);
+        return true;
+      },
+    );
+
     await writeFile(
       manifestPath,
       `${JSON.stringify(
@@ -8339,6 +9049,111 @@ test("BSC native-prover-bundle validates bound Groth16 proof self-test reports",
         assert.match(
           message,
           /Groth16 proof self-test report adversarialChecks must not use multiple aliases: adversarialChecks, adversarial_checks/u,
+        );
+        return true;
+      },
+    );
+
+    const proofSelfTestRetiredAliasSecret =
+      "secret-token-bsc-groth16-proof-self-test-retired-alias";
+    const retiredAliasProofSelfTest = JSON.parse(JSON.stringify(baseline));
+    retiredAliasProofSelfTest.route_id = proofSelfTestRetiredAliasSecret;
+    delete retiredAliasProofSelfTest.routeId;
+    retiredAliasProofSelfTest.public_signals =
+      retiredAliasProofSelfTest.publicSignals;
+    delete retiredAliasProofSelfTest.publicSignals;
+    retiredAliasProofSelfTest.manifest.manifestSha256 =
+      retiredAliasProofSelfTest.manifest.sha256;
+    delete retiredAliasProofSelfTest.manifest.sha256;
+    retiredAliasProofSelfTest.manifest.production_ready =
+      retiredAliasProofSelfTest.manifest.productionReady;
+    delete retiredAliasProofSelfTest.manifest.productionReady;
+    retiredAliasProofSelfTest.artifacts.proving_key =
+      retiredAliasProofSelfTest.artifacts.provingKey;
+    delete retiredAliasProofSelfTest.artifacts.provingKey;
+    retiredAliasProofSelfTest.artifacts.r1cs.artifactHash =
+      retiredAliasProofSelfTest.artifacts.r1cs.sha256;
+    delete retiredAliasProofSelfTest.artifacts.r1cs.sha256;
+    retiredAliasProofSelfTest.sample.public_signal_words =
+      retiredAliasProofSelfTest.sample.publicSignalWords;
+    delete retiredAliasProofSelfTest.sample.publicSignalWords;
+    retiredAliasProofSelfTest.sample.input_sha256 =
+      retiredAliasProofSelfTest.sample.inputSha256;
+    delete retiredAliasProofSelfTest.sample.inputSha256;
+    retiredAliasProofSelfTest.adversarial_checks =
+      retiredAliasProofSelfTest.adversarialChecks;
+    delete retiredAliasProofSelfTest.adversarialChecks;
+    retiredAliasProofSelfTest.adversarial_checks.public_signal_mismatch =
+      retiredAliasProofSelfTest.adversarial_checks.publicSignalMismatch;
+    delete retiredAliasProofSelfTest.adversarial_checks.publicSignalMismatch;
+    retiredAliasProofSelfTest.adversarial_checks.non_boolean_value_bit =
+      retiredAliasProofSelfTest.adversarial_checks.nonBooleanValueBit;
+    delete retiredAliasProofSelfTest.adversarial_checks.nonBooleanValueBit;
+    retiredAliasProofSelfTest.adversarial_checks.non_boolean_value_bit.case
+      .signal_name =
+      retiredAliasProofSelfTest.adversarial_checks.non_boolean_value_bit.case
+        .signalName;
+    delete retiredAliasProofSelfTest.adversarial_checks.non_boolean_value_bit.case
+      .signalName;
+    await writeFile(
+      proofSelfTestPath,
+      `${JSON.stringify(retiredAliasProofSelfTest, null, 2)}\n`,
+    );
+    await assert.rejects(
+      () => buildBscNativeEvmProverBundleFromArtifacts(fixture.options),
+      (error) => {
+        const message = String(error);
+        assert.match(
+          message,
+          /Groth16 proof self-test report routeId must not use retired alias route_id; use routeId/u,
+        );
+        assert.match(
+          message,
+          /Groth16 proof self-test report publicSignals must not use retired alias public_signals; use publicSignals/u,
+        );
+        assert.match(
+          message,
+          /Groth16 proof self-test manifest sha256 must not use retired alias manifestSha256; use sha256/u,
+        );
+        assert.match(
+          message,
+          /Groth16 proof self-test manifest productionReady must not use retired alias production_ready; use productionReady/u,
+        );
+        assert.match(
+          message,
+          /Groth16 proof self-test artifacts provingKey must not use retired alias proving_key; use provingKey/u,
+        );
+        assert.match(
+          message,
+          /Groth16 proof self-test R1CS artifact sha256 must not use retired alias artifactHash; use sha256/u,
+        );
+        assert.match(
+          message,
+          /Groth16 proof self-test sample publicSignalWords must not use retired alias public_signal_words; use publicSignalWords/u,
+        );
+        assert.match(
+          message,
+          /Groth16 proof self-test sample inputSha256 must not use retired alias input_sha256; use inputSha256/u,
+        );
+        assert.match(
+          message,
+          /Groth16 proof self-test report adversarialChecks must not use retired alias adversarial_checks; use adversarialChecks/u,
+        );
+        assert.match(
+          message,
+          /Groth16 proof self-test adversarialChecks publicSignalMismatch must not use retired alias public_signal_mismatch; use publicSignalMismatch/u,
+        );
+        assert.match(
+          message,
+          /Groth16 proof self-test adversarialChecks nonBooleanValueBit must not use retired alias non_boolean_value_bit; use nonBooleanValueBit/u,
+        );
+        assert.match(
+          message,
+          /Groth16 proof self-test adversarialChecks\.nonBooleanValueBit\.case signalName must not use retired alias signal_name; use signalName/u,
+        );
+        assert.doesNotMatch(
+          message,
+          /secret-token-bsc-groth16-proof-self-test-retired-alias/u,
         );
         return true;
       },
@@ -10536,14 +11351,14 @@ test("BSC route-config command writes an operator overlay", async () => {
   assert.match(toml, /route_id = "taira_bsc_xor"/u);
   assert.match(
     toml,
-    /sccp_bsc_source_bridge_address = "0x3333333333333333333333333333333333333333"/u,
+    /source_bridge_address = "0x3333333333333333333333333333333333333333"/u,
   );
   assert.match(
     toml,
-    /sccp_bsc_destination_verifier_address = "0x4444444444444444444444444444444444444444"/u,
+    /destination_verifier_address = "0x4444444444444444444444444444444444444444"/u,
   );
-  assert.doesNotMatch(toml, /(^|\n)source_bridge_address =/u);
-  assert.doesNotMatch(toml, /(^|\n)destination_verifier_address =/u);
+  assert.doesNotMatch(toml, /(^|\n)sccp_bsc_source_bridge_address =/u);
+  assert.doesNotMatch(toml, /(^|\n)sccp_bsc_destination_verifier_address =/u);
   assert.doesNotMatch(toml, /(^|\n)tron_verifier_address =/u);
 });
 
@@ -10976,7 +11791,7 @@ test("BSC route-config command rejects oversized base TAIRA configs before mergi
   );
 });
 
-test("BSC deploy command refuses to broadcast without explicit testnet confirmation", async () => {
+test("BSC deploy command refuses to broadcast without canonical testnet confirmation", async () => {
   await assert.rejects(
     () => main(["deploy", "--verifier", "missing-verifier.json"]),
     /broadcast true/u,
@@ -10989,10 +11804,25 @@ test("BSC deploy command refuses to broadcast without explicit testnet confirmat
         "missing-verifier.json",
         "--broadcast",
         "true",
-        "--confirm-testnet",
-        "wrong",
       ]),
-    /confirm-testnet/u,
+    /deploy requires --confirm-network taira_bsc_xor:testnet/u,
+  );
+  await assert.rejects(
+    () =>
+      main([
+        "deploy",
+        "--verifier",
+        "secret-token-missing-verifier.json",
+        "--broadcast",
+        "true",
+        "--confirm-testnet",
+        "secret-token-confirmation",
+      ]),
+    (error) => {
+      assert.match(error.message, /Unknown option\./u);
+      assert.doesNotMatch(error.message, /secret-token/u);
+      return true;
+    },
   );
 });
 
@@ -11011,8 +11841,8 @@ test("BSC deploy command rejects output path collisions before verifier parsing"
           verifierFile,
           "--broadcast",
           "true",
-          "--confirm-testnet",
-          "taira_bsc_xor",
+          "--confirm-network",
+          "taira_bsc_xor:testnet",
           "--out",
           verifierFile,
         ]),
@@ -11072,8 +11902,8 @@ test("BSC deploy command rejects malformed boolean switches before network use",
           verifierFile,
           "--broadcast",
           "true",
-          "--confirm-testnet",
-          "taira_bsc_xor",
+          "--confirm-network",
+          "taira_bsc_xor:testnet",
           "--private-key-env",
           envName,
           "--rpc-url",
@@ -11165,8 +11995,8 @@ test("BSC deploy command rejects removed diagnostic verifier override before ver
           missingVerifier,
           "--broadcast",
           "true",
-          "--confirm-testnet",
-          "taira_bsc_xor",
+          "--confirm-network",
+          "taira_bsc_xor:testnet",
           "--allow-diagnostic-verifier",
           "true",
         ]),
@@ -11206,8 +12036,8 @@ test("BSC deploy command always rejects diagnostic verifier material before sign
           diagnosticVerifierFile,
           "--broadcast",
           "true",
-          "--confirm-testnet",
-          "taira_bsc_xor",
+          "--confirm-network",
+          "taira_bsc_xor:testnet",
       ]),
       (error) => {
         assert.match(
@@ -11246,8 +12076,8 @@ test("BSC deploy command rejects missing signer and unsafe local RPC before netw
           verifierFile,
           "--broadcast",
           "true",
-          "--confirm-testnet",
-          "taira_bsc_xor",
+          "--confirm-network",
+          "taira_bsc_xor:testnet",
           "--private-key-env",
           badEnvName,
         ]),
@@ -11264,8 +12094,8 @@ test("BSC deploy command rejects missing signer and unsafe local RPC before netw
           verifierFile,
           "--broadcast",
           "true",
-          "--confirm-testnet",
-          "taira_bsc_xor",
+          "--confirm-network",
+          "taira_bsc_xor:testnet",
           "--private-key-env",
           envName,
         ]),
@@ -11281,8 +12111,8 @@ test("BSC deploy command rejects missing signer and unsafe local RPC before netw
           verifierFile,
           "--broadcast",
           "true",
-          "--confirm-testnet",
-          "taira_bsc_xor",
+          "--confirm-network",
+          "taira_bsc_xor:testnet",
           "--private-key-env",
           envName,
           "--rpc-url",
@@ -11324,8 +12154,8 @@ test("BSC deploy command refuses smoke-test verifier material before signer or R
         verifierFile,
         "--broadcast",
         "true",
-        "--confirm-testnet",
-        "taira_bsc_xor",
+        "--confirm-network",
+        "taira_bsc_xor:testnet",
       ]),
     /refuses deterministic smoke-test Groth16 fixture/u,
   );
@@ -11349,7 +12179,16 @@ test("BSC deployment helper help documents production network confirmations", as
     /Diagnostic verifier material is refused\s+by deploy; production deployments must use non-diagnostic verifier material/u,
   );
   assert.doesNotMatch(result.help, /--allow-diagnostic-verifier/u);
-  assert.doesNotMatch(result.help, /deploy .*--confirm-testnet/u);
+  assert.doesNotMatch(result.help, /--confirm-testnet/u);
+});
+
+test("BSC local deploy smoke script uses canonical network confirmation", async () => {
+  const smokeScript = await readFile(
+    new URL("./sccp_bsc_taira_xor_deploy_smoke.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(smokeScript, /"--confirm-network",\s+"taira_bsc_xor:testnet"/u);
+  assert.doesNotMatch(smokeScript, /--confirm-testnet/u);
 });
 
 test("BSC deployment helper subcommand help does not touch operator inputs", async () => {
@@ -11573,7 +12412,7 @@ test("BSC production requirements expose network-specific public handoff inputs"
     "--offline-full-toml-evidence artifacts/sccp-bsc/taira-bsc-xor-route.full-taira-config.evidence.json",
     "--production-ready true",
     "--live-readback-checked true",
-    "--confirm-testnet taira_bsc_xor",
+    "--confirm-network taira_bsc_xor:testnet",
     "--out artifacts/sccp-bsc/taira-bsc-xor-route.manifest.json",
   ]) {
     assert.ok(
@@ -11583,6 +12422,7 @@ test("BSC production requirements expose network-specific public handoff inputs"
   }
   assert.doesNotMatch(testnet.commands.deploy, /--confirm-mainnet true/u);
   assert.doesNotMatch(testnet.commands.deploy, /--confirm-testnet/u);
+  assert.doesNotMatch(testnet.commands.routeManifest, /--confirm-testnet/u);
   assert.deepEqual(
     testnet.inputs
       .filter((entry) =>
@@ -11660,7 +12500,7 @@ test("BSC production requirements expose network-specific public handoff inputs"
   assert.match(mainnet.commands.routeManifest, /--confirm-mainnet true/u);
   assert.match(
     mainnet.commands.routeManifest,
-    /--confirm-network taira_bsc_xor/u,
+    /--confirm-network taira_bsc_xor:mainnet/u,
   );
   assert.doesNotMatch(mainnet.commands.routeManifest, /--confirm-testnet/u);
   for (const required of [

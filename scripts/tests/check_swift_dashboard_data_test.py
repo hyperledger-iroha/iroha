@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
+import json
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest import TestCase
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "check_swift_dashboard_data.py"
@@ -56,6 +59,20 @@ def make_ci_payload() -> dict:
     }
 
 
+def write_json(path: Path, payload: dict) -> None:
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def write_sha256_sidecar(path: Path, *, digest: str | None = None, label: str | None = None) -> str:
+    actual = digest or hashlib.sha256(path.read_bytes()).hexdigest()
+    checksum_label = label or path.name
+    path.with_name(path.name + ".sha256").write_text(
+        f"{actual}  {checksum_label}\n",
+        encoding="utf-8",
+    )
+    return actual
+
+
 class CheckSwiftDashboardDataTests(TestCase):
     def test_detect_schema_for_parity_and_ci(self) -> None:
         self.assertEqual(CHECKER.detect_schema(make_parity_payload(), "parity.json"), "parity")
@@ -75,6 +92,66 @@ class CheckSwiftDashboardDataTests(TestCase):
             "connect_metrics_present": True,
         }
         CHECKER.validate_parity(payload, "parity.json")
+
+    def test_validate_generated_at_rejects_missing_timezone_and_future_feeds(self) -> None:
+        payload = make_parity_payload()
+        payload["generated_at"] = "2026-03-15T00:00:00"
+        with self.assertRaises(ValueError):
+            CHECKER.validate_parity(payload, "parity.json")
+
+        future = CHECKER.parse_generated_at("2026-03-16T00:00:00Z", "parity.json")
+        now = CHECKER.parse_generated_at("2026-03-15T00:00:00Z", "now")
+        with self.assertRaises(ValueError):
+            CHECKER.validate_feed_freshness(future, "parity.json", None, now)
+
+    def test_checksum_sidecar_accepts_canonical_sha256_file(self) -> None:
+        with TemporaryDirectory() as tmp:
+            feed = Path(tmp) / "mobile_parity.json"
+            write_json(feed, make_parity_payload())
+            expected = write_sha256_sidecar(feed)
+            self.assertEqual(CHECKER.verify_checksum_sidecar(feed), expected)
+
+    def test_checksum_sidecar_rejects_missing_mismatched_or_mislabelled_files(self) -> None:
+        with TemporaryDirectory() as tmp:
+            feed = Path(tmp) / "mobile_parity.json"
+            write_json(feed, make_parity_payload())
+            with self.assertRaises(ValueError):
+                CHECKER.verify_checksum_sidecar(feed)
+
+            write_sha256_sidecar(feed, digest="0" * 64)
+            with self.assertRaises(ValueError):
+                CHECKER.verify_checksum_sidecar(feed)
+
+            write_sha256_sidecar(feed, label="other.json")
+            with self.assertRaises(ValueError):
+                CHECKER.verify_checksum_sidecar(feed)
+
+    def test_health_output_records_freshness_and_checksum_status(self) -> None:
+        with TemporaryDirectory() as tmp:
+            feed = Path(tmp) / "mobile_ci.json"
+            payload = make_ci_payload()
+            write_json(feed, payload)
+            digest = write_sha256_sidecar(feed)
+            now = CHECKER.parse_generated_at("2026-03-15T00:10:00Z", "now")
+            entry = CHECKER.build_health_entry(
+                path=feed,
+                schema="ci",
+                payload=payload,
+                now=now,
+                max_feed_age_seconds=3600,
+                checksum_verified=True,
+                sha256_hex=digest,
+            )
+            self.assertTrue(entry["fresh"])
+            self.assertTrue(entry["checksum_verified"])
+            self.assertEqual(entry["sha256"], digest)
+            self.assertEqual(entry["age_seconds"], 600)
+
+            health = Path(tmp) / "healthz.json"
+            CHECKER.write_health_output(health, [entry])
+            written = json.loads(health.read_text(encoding="utf-8"))
+            self.assertTrue(written["healthy"])
+            self.assertEqual(written["feeds"][0]["schema"], "ci")
 
     def test_validate_parity_rejects_invalid_telemetry_payloads(self) -> None:
         payload = make_parity_payload()

@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/telemetry/swift_status_feeds.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5048036a667a225e784178dfa077205e78132bb781a98305f492bf3b8c154845
+source_hash: 382806484b00fbc4f2632d8721db3e771a03af9dafa103dfddd8650f55560c4c
 source_last_modified: "2026-01-04T10:50:53.696531+00:00"
 translation_last_reviewed: 2026-01-30
 ---
@@ -29,6 +29,11 @@ reporting workflow.
   Published after each Buildkite run and hourly if no new runs occur.
 - Both feeds must be accessible via HTTPS endpoints (or pre-signed S3 URLs)
   for the CI job to download.
+- Both feeds must publish a sibling SHA-256 checksum sidecar in `sha256sum`
+  format. For example, `mobile_parity.json` must have
+  `mobile_parity.json.sha256` containing the feed digest and, when present, a
+  filename label that matches the JSON basename. The repository sample feeds
+  include tracked sidecars so local dry-runs exercise the same integrity path.
 
 ## Exporter Integration
 
@@ -70,13 +75,35 @@ python3 scripts/swift_status_export.py \
 - To keep downstream lint jobs in sync with the exact data the exporter used,
   set `SWIFT_PARITY_FEED_EXPORT_PATH` / `SWIFT_CI_FEED_EXPORT_PATH`. The CI wrapper
   copies the resolved feeds to those paths (e.g., `artifacts/swift_status/mobile_parity.json`)
-  and uploads them as Buildkite artifacts. Optional
+  along with `.sha256` sidecars and uploads them as Buildkite artifacts. Optional
   `SWIFT_PARITY_FEED_PATH_META_KEY` / `SWIFT_CI_FEED_PATH_META_KEY` entries record the
   final filesystem paths via `buildkite-agent meta-data set`, allowing dependent
   steps to discover the files without hardcoding locations. The `swift-dashboards`
   Buildkite step downloads these artifacts, exports `SWIFT_PARITY_FEED` /
   `SWIFT_CI_FEED`, and runs `ci/check_swift_dashboards.sh`, so `make swift-dashboards`
   always validates the live telemetry feeds instead of the static samples.
+
+### Checksum sidecars
+
+`ci/swift_status_export.sh` validates source feed sidecars before enrichment and
+then writes fresh sidecars for the final job-local feed copies. This catches
+partial uploads from the feed publisher while still allowing the status job to
+append pipeline metadata to the parity feed without mutating the source object.
+
+| Variable | Purpose |
+|----------|---------|
+| `SWIFT_PARITY_FEED_SHA256_URL` / `SWIFT_CI_FEED_SHA256_URL` | Explicit remote sidecar URLs. If omitted for a remote feed without a query string, the wrapper downloads `<feed-url>.sha256`. Query-bearing pre-signed URLs must provide explicit sidecar URLs because the signature usually covers the object path and query. `_FILE` and `_META_KEY` variants are supported. |
+| `SWIFT_PARITY_FEED_SHA256_PATH` / `SWIFT_CI_FEED_SHA256_PATH` | Explicit local sidecar paths when the feed path is local. Legacy `*_CHECKSUM_PATH` aliases are also accepted. |
+| `SWIFT_PARITY_FEED_CHECKSUM_URL` / `SWIFT_CI_FEED_CHECKSUM_URL` | Alias URL variables for pipelines that use “checksum” rather than “sha256” naming. |
+
+Run the same validation locally with:
+
+```bash
+python3 scripts/check_swift_dashboard_data.py \
+  --require-checksum-sidecars \
+  dashboards/data/mobile_parity.sample.json \
+  dashboards/data/mobile_ci.sample.json
+```
 
 ## Prometheus textfile output
 
@@ -203,11 +230,17 @@ overrides so the collector reflects real counts. For local dry-runs, point
 
 - Telemetry exporter should surface scrape metrics (`swift_status_feed_success_total`,
   `swift_status_feed_age_seconds`) so we can alert on stale data.
-- Status exporter job will fail hard when feeds are unreachable; Buildkite will
-  page the Swift program on-call and include the retry log in artifacts.
-
-## Future Work
-
-- Add signed checksum files for both feeds to detect partial uploads.
-- Provide a lightweight `/healthz` endpoint that reports feed freshness for
-  observability dashboards.
+- Status exporter job fails hard when feeds are unreachable, when checksum
+  sidecars are missing or mismatched, or when `SWIFT_STATUS_MAX_FEED_AGE_SECONDS`
+  is set and a feed is stale. Buildkite pages the Swift program on-call and
+  includes the retry or checksum log in artifacts.
+- The validator can write a lightweight health document suitable for publishing
+  as `/healthz`. `ci/swift_status_export.sh` defaults this to
+  `artifacts/swift_status/healthz.json`; override with
+  `SWIFT_STATUS_HEALTH_OUTPUT_PATH` (or `SWIFT_STATUS_HEALTHZ_PATH`) and publish
+  that artifact at the deployment edge. Set
+  `SWIFT_STATUS_DISABLE_HEALTH_OUTPUT=1` to skip writing it in local jobs.
+- Health output contains per-feed `generated_at`, `age_seconds`, `fresh`,
+  `sha256`, and `checksum_verified` fields plus a top-level `healthy` boolean.
+  Use `SWIFT_STATUS_MAX_FEED_AGE_SECONDS` to define the freshness SLO enforced
+  by both CI and `/healthz`.

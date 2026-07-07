@@ -26,6 +26,11 @@ copy_feed_artifact() {
   cp "${source}" "${dest}"
   echo "[swift-status] exported feed copy to ${dest}"
 
+  if [[ -f "${source}.sha256" ]]; then
+    cp "${source}.sha256" "${dest}.sha256"
+    echo "[swift-status] exported feed checksum copy to ${dest}.sha256"
+  fi
+
   if [[ -n "${meta_key}" ]]; then
     if command -v buildkite-agent >/dev/null 2>&1; then
       if ! buildkite-agent meta-data set "${meta_key}" "${dest}"; then
@@ -51,6 +56,46 @@ with urllib.request.urlopen(source) as response:  # nosec: B310 - controlled inp
     data = response.read().decode(charset)
 Path(dest).write_text(data, encoding="utf-8")
 PY
+}
+
+write_checksum_sidecar() {
+  local path="$1"
+  python3 - "${path}" "${path}.sha256" <<'PY'
+import hashlib
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1])
+dest = Path(sys.argv[2])
+digest = hashlib.sha256(source.read_bytes()).hexdigest()
+dest.write_text(f"{digest}  {source.name}\n", encoding="utf-8")
+PY
+}
+
+stage_feed_checksum_sidecar() {
+  local feed_path="$1"
+  local checksum_path="$2"
+  local label="$3"
+
+  if [[ -z "${checksum_path}" ]]; then
+    printf '%s\n' "${feed_path}"
+    return 0
+  fi
+  if [[ ! -f "${checksum_path}" ]]; then
+    echo "[swift-status] checksum sidecar for ${label} feed not found at ${checksum_path}" >&2
+    return 1
+  fi
+  if [[ "${checksum_path}" == "${feed_path}.sha256" ]]; then
+    printf '%s\n' "${feed_path}"
+    return 0
+  fi
+
+  local staged_dir="${tmp_dir}/${label}.source"
+  local staged="${staged_dir}/$(basename "${feed_path}")"
+  mkdir -p "${staged_dir}"
+  cp "${feed_path}" "${staged}"
+  cp "${checksum_path}" "${staged}.sha256"
+  printf '%s\n' "${staged}"
 }
 
 resolve_secret() {
@@ -113,15 +158,31 @@ record_meta() {
 parity_path="${SWIFT_PARITY_FEED_PATH:-}"
 ci_path="${SWIFT_CI_FEED_PATH:-}"
 pipeline_metadata_path="${SWIFT_PIPELINE_METADATA_FEED_PATH:-${SWIFT_PIPELINE_METADATA_FEED:-${SWIFT_PIPELINE_METADATA_PATH:-${SWIFT_PIPELINE_METADATA:-${MOBILE_PARITY_PIPELINE_METADATA:-}}}}}"
+parity_checksum_path="${SWIFT_PARITY_FEED_SHA256_PATH:-${SWIFT_PARITY_FEED_CHECKSUM_PATH:-}}"
+ci_checksum_path="${SWIFT_CI_FEED_SHA256_PATH:-${SWIFT_CI_FEED_CHECKSUM_PATH:-}}"
 
 parity_url=""
 if parity_url_resolved="$(resolve_secret "SWIFT_PARITY_FEED_URL")"; then
   parity_url="${parity_url_resolved}"
 fi
+parity_checksum_url=""
+for candidate in SWIFT_PARITY_FEED_SHA256_URL SWIFT_PARITY_FEED_CHECKSUM_URL; do
+  if parity_checksum_url_resolved="$(resolve_secret "${candidate}")"; then
+    parity_checksum_url="${parity_checksum_url_resolved}"
+    break
+  fi
+done
 ci_url=""
 if ci_url_resolved="$(resolve_secret "SWIFT_CI_FEED_URL")"; then
   ci_url="${ci_url_resolved}"
 fi
+ci_checksum_url=""
+for candidate in SWIFT_CI_FEED_SHA256_URL SWIFT_CI_FEED_CHECKSUM_URL; do
+  if ci_checksum_url_resolved="$(resolve_secret "${candidate}")"; then
+    ci_checksum_url="${ci_checksum_url_resolved}"
+    break
+  fi
+done
 
 pipeline_metadata_url=""
 for candidate in SWIFT_PIPELINE_METADATA_FEED_URL SWIFT_PIPELINE_METADATA_URL; do
@@ -132,20 +193,54 @@ for candidate in SWIFT_PIPELINE_METADATA_FEED_URL SWIFT_PIPELINE_METADATA_URL; d
 done
 
 if [[ -n "${parity_url}" ]]; then
-  parity_path="${tmp_dir}/parity.json"
+  parity_filename="${parity_url%%\?*}"
+  parity_filename="${parity_filename%%#*}"
+  parity_filename="${parity_filename##*/}"
+  if [[ -z "${parity_filename}" ]]; then
+    parity_filename="parity.json"
+  fi
+  parity_path="${tmp_dir}/parity.download/${parity_filename}"
+  mkdir -p "$(dirname "${parity_path}")"
+  if [[ -z "${parity_checksum_url}" && "${parity_url}" == *\?* ]]; then
+    echo "[swift-status] ${parity_url} has a query string; set SWIFT_PARITY_FEED_SHA256_URL for its sidecar" >&2
+    exit 1
+  fi
   download_feed "${parity_url}" "${parity_path}"
+  parity_checksum_path="${parity_path}.sha256"
+  if [[ -z "${parity_checksum_url}" ]]; then
+    parity_checksum_url="${parity_url}.sha256"
+  fi
+  download_feed "${parity_checksum_url}" "${parity_checksum_path}"
 fi
 if [[ -z "${parity_path}" ]]; then
   parity_path="${repo_root}/dashboards/data/mobile_parity.sample.json"
 fi
+parity_path="$(stage_feed_checksum_sidecar "${parity_path}" "${parity_checksum_path}" "parity")"
 
 if [[ -n "${ci_url}" ]]; then
-  ci_path="${tmp_dir}/ci.json"
+  ci_filename="${ci_url%%\?*}"
+  ci_filename="${ci_filename%%#*}"
+  ci_filename="${ci_filename##*/}"
+  if [[ -z "${ci_filename}" ]]; then
+    ci_filename="ci.json"
+  fi
+  ci_path="${tmp_dir}/ci.download/${ci_filename}"
+  mkdir -p "$(dirname "${ci_path}")"
+  if [[ -z "${ci_checksum_url}" && "${ci_url}" == *\?* ]]; then
+    echo "[swift-status] ${ci_url} has a query string; set SWIFT_CI_FEED_SHA256_URL for its sidecar" >&2
+    exit 1
+  fi
   download_feed "${ci_url}" "${ci_path}"
+  ci_checksum_path="${ci_path}.sha256"
+  if [[ -z "${ci_checksum_url}" ]]; then
+    ci_checksum_url="${ci_url}.sha256"
+  fi
+  download_feed "${ci_checksum_url}" "${ci_checksum_path}"
 fi
 if [[ -z "${ci_path}" ]]; then
   ci_path="${repo_root}/dashboards/data/mobile_ci.sample.json"
 fi
+ci_path="$(stage_feed_checksum_sidecar "${ci_path}" "${ci_checksum_path}" "ci")"
 
 if [[ -n "${pipeline_metadata_url}" ]]; then
   pipeline_metadata_path="${tmp_dir}/pipeline_metadata.json"
@@ -167,6 +262,24 @@ pipeline_metadata_export_path="${SWIFT_PIPELINE_METADATA_EXPORT_PATH:-${SWIFT_PI
 parity_export_meta="${SWIFT_PARITY_FEED_PATH_META_KEY:-}"
 ci_export_meta="${SWIFT_CI_FEED_PATH_META_KEY:-}"
 pipeline_metadata_export_meta="${SWIFT_PIPELINE_METADATA_PATH_META_KEY:-${SWIFT_PIPELINE_METADATA_FEED_PATH_META_KEY:-}}"
+health_output_path="${SWIFT_STATUS_HEALTH_OUTPUT_PATH:-${SWIFT_STATUS_HEALTHZ_PATH:-}}"
+health_output_meta="${SWIFT_STATUS_HEALTH_OUTPUT_META_KEY:-${SWIFT_STATUS_HEALTHZ_META_KEY:-}}"
+if [[ -z "${health_output_path}" && -z "${SWIFT_STATUS_DISABLE_HEALTH_OUTPUT:-}" ]]; then
+  health_output_path="${repo_root}/artifacts/swift_status/healthz.json"
+fi
+
+echo "[swift-status] verifying source feed checksum sidecars"
+python3 "${repo_root}/scripts/check_swift_dashboard_data.py" \
+  --require-checksum-sidecars \
+  "${parity_path}" \
+  "${ci_path}"
+
+parity_work_path="${tmp_dir}/parity.status.json"
+ci_work_path="${tmp_dir}/ci.status.json"
+cp "${parity_path}" "${parity_work_path}"
+cp "${ci_path}" "${ci_work_path}"
+parity_path="${parity_work_path}"
+ci_path="${ci_work_path}"
 
 if [[ -n "${SWIFT_TELEMETRY_JSON:-}" ]]; then
   telemetry_args+=(--telemetry-json "${SWIFT_TELEMETRY_JSON}")
@@ -238,11 +351,6 @@ if [[ -n "${pipeline_metadata}" && -f "${pipeline_metadata}" ]]; then
 fi
 
 if (( ${#enrich_args[@]} )); then
-  if [[ "${parity_path}" == "${repo_root}/dashboards/data/mobile_parity.sample.json" ]]; then
-    parity_copy="${tmp_dir}/parity.enriched.json"
-    cp "${parity_path}" "${parity_copy}"
-    parity_path="${parity_copy}"
-  fi
   echo "[swift-status] enriching parity feed metadata"
   python3 "${repo_root}/scripts/swift_enrich_parity_feed.py" \
     --input "${parity_path}" \
@@ -250,13 +358,31 @@ if (( ${#enrich_args[@]} )); then
     "${enrich_args[@]}"
 fi
 
+write_checksum_sidecar "${parity_path}"
+write_checksum_sidecar "${ci_path}"
+
+echo "[swift-status] validating feeds"
+declare -a dashboard_check_args=(--require-checksum-sidecars)
+if [[ -n "${SWIFT_STATUS_MAX_FEED_AGE_SECONDS:-}" ]]; then
+  dashboard_check_args+=(--max-feed-age-seconds "${SWIFT_STATUS_MAX_FEED_AGE_SECONDS}")
+fi
+if [[ -n "${health_output_path}" ]]; then
+  dashboard_check_args+=(--health-output "${health_output_path}")
+fi
+python3 "${repo_root}/scripts/check_swift_dashboard_data.py" \
+  "${dashboard_check_args[@]}" \
+  "${parity_path}" \
+  "${ci_path}"
+python3 "${repo_root}/scripts/check_swift_pipeline_metadata.py" "${pipeline_metadata_path}"
+
+if [[ -n "${health_output_path}" ]]; then
+  echo "[swift-status] wrote feed health output to ${health_output_path}"
+  record_meta "${health_output_meta}" "${health_output_path}" "feed health output"
+fi
+
 copy_feed_artifact "${parity_path}" "${parity_export_path}" "${parity_export_meta}"
 copy_feed_artifact "${ci_path}" "${ci_export_path}" "${ci_export_meta}"
 copy_feed_artifact "${pipeline_metadata_path}" "${pipeline_metadata_export_path}" "${pipeline_metadata_export_meta}"
-
-echo "[swift-status] validating feeds"
-python3 "${repo_root}/scripts/check_swift_dashboard_data.py" "${parity_path}" "${ci_path}"
-python3 "${repo_root}/scripts/check_swift_pipeline_metadata.py" "${pipeline_metadata_path}"
 
 slack_webhook=""
 if slack_webhook_resolved="$(resolve_secret "SWIFT_STATUS_SLACK_WEBHOOK")"; then

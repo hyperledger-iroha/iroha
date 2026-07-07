@@ -348,7 +348,7 @@ def _prefixed_blake2b(prefix: bytes, payload: bytes) -> bytes:
 
 
 def _require_fixed_bytes(value: bytes, *, label: str, byte_length: int) -> bytes:
-    if not isinstance(value, (bytes, bytearray)):
+    if type(value) not in (bytes, bytearray):
         raise ValueError(f"{label} must be bytes")
     raw = bytes(value)
     if len(raw) != byte_length:
@@ -816,7 +816,12 @@ def _require_live_component_hashes(args: argparse.Namespace) -> None:
     template_hashes = _template_component_hashes(bsc_network)
     supported_template_hashes = _supported_template_component_hashes(bsc_network)
     for field, template_hash in template_hashes.items():
-        if getattr(args, field) == template_hash:
+        supplied_hash = _require_fixed_bytes(
+            getattr(args, field),
+            label=field,
+            byte_length=32,
+        )
+        if supplied_hash == template_hash:
             label = field.replace("_", " ")
             raise ValueError(
                 f"BSC production source evidence requires live {label}; "
@@ -826,6 +831,11 @@ def _require_live_component_hashes(args: argparse.Namespace) -> None:
         supplied_hash = getattr(args, field, None)
         if supplied_hash is None:
             continue
+        supplied_hash = _require_fixed_bytes(
+            supplied_hash,
+            label=field,
+            byte_length=32,
+        )
         match = sccp_source_template_hash_match(
             supplied_hash,
             local_template_hashes=supported_template_hashes,
@@ -845,11 +855,16 @@ def _require_canonical_adapter_verifier_vk_hash(args: argparse.Namespace) -> Non
         target_domain=args.target_domain,
         bsc_network=getattr(args, "bsc_network", None),
     )
-    if args.adapter_verifier_vk_hash != expected_hash:
+    adapter_verifier_vk_hash = _require_fixed_bytes(
+        args.adapter_verifier_vk_hash,
+        label="adapter_verifier_vk_hash",
+        byte_length=32,
+    )
+    if adapter_verifier_vk_hash != expected_hash:
         raise ValueError(
             "--adapter-verifier-vk-hash does not match the canonical "
             "BSC source-adapter verifier profile: "
-            f"expected {_hex(expected_hash)}, got {_hex(args.adapter_verifier_vk_hash)}"
+            f"expected {_hex(expected_hash)}, got {_hex(adapter_verifier_vk_hash)}"
         )
 
 
@@ -867,13 +882,14 @@ def _require_source_role_hash_separation(args: argparse.Namespace) -> None:
         value = getattr(args, field, None)
         if value is None:
             continue
-        previous_field = seen.get(value)
+        raw = _require_fixed_bytes(value, label=field, byte_length=32)
+        previous_field = seen.get(raw)
         if previous_field is not None:
             raise ValueError(
                 "BSC source-adapter role hashes must be distinct: "
                 f"{field} matches {previous_field}"
             )
-        seen[value] = field
+        seen[raw] = field
 
 
 def _require_expected_record_hashes(

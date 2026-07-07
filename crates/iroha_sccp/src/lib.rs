@@ -4,8 +4,7 @@
 //! TRON. SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now; treat
 //! that as launch scope, not pending compatibility work.
 //!
-//! The crate targets the Rust standard library. The historical `std` feature is
-//! kept as a compatibility alias for workspace consumers that still enable it.
+//! The crate targets the Rust standard library unconditionally.
 #![allow(missing_docs)]
 #![allow(missing_copy_implementations)]
 // SCCP transcript helpers intentionally mirror wire/public-input layouts, so
@@ -5225,19 +5224,6 @@ fn sccp_destination_anchor_id_for_domain(domain: u32) -> Option<&'static str> {
     }
 }
 
-pub fn sccp_profiled_destination_rollout_v1(
-    domain: u32,
-    verifier_identity: String,
-    verifier_code_hash: String,
-) -> Option<SccpDestinationRolloutV1> {
-    sccp_profiled_destination_rollout_with_key_hash_v1(
-        domain,
-        verifier_identity,
-        verifier_code_hash,
-        None,
-    )
-}
-
 fn sccp_profiled_destination_rollout_unchecked_v1(
     domain: u32,
     verifier_identity: String,
@@ -5268,46 +5254,6 @@ fn sccp_apply_static_destination_binding(rollout: &mut SccpDestinationRolloutV1)
     rollout.destination_binding_key = Some(binding.key);
     rollout.destination_binding_hash = Some(encode_0x_lower_hex(&binding.binding_hash));
     Some(())
-}
-
-fn sccp_profiled_destination_rollout_with_key_hash_v1(
-    domain: u32,
-    verifier_identity: String,
-    verifier_code_hash: String,
-    verifier_key_hash: Option<String>,
-) -> Option<SccpDestinationRolloutV1> {
-    let mut rollout = sccp_profiled_destination_rollout_unchecked_v1(
-        domain,
-        verifier_identity,
-        verifier_code_hash,
-        verifier_key_hash,
-    )?;
-    sccp_apply_static_destination_binding(&mut rollout)?;
-    sccp_destination_rollout_is_production_ready(domain, &rollout).then_some(rollout)
-}
-
-/// Return the legacy EVM-family destination rollout profile without deployment binding evidence.
-///
-/// Production readiness now requires the network id, bridge wrapper address,
-/// canonical deployment binding key, and canonical deployment binding hash, so
-/// this helper returns `None` for ETH/BSC mainnet lanes. Use
-/// [`sccp_evm_mainnet_destination_rollout_with_binding_v1`] when deployment
-/// material is available.
-pub fn sccp_evm_mainnet_destination_rollout_v1(
-    domain: u32,
-    verifier_identity: String,
-    verifier_code_hash: String,
-    verifier_key_hash: String,
-) -> Option<SccpDestinationRolloutV1> {
-    if !matches!(domain, SCCP_DOMAIN_ETH | SCCP_DOMAIN_BSC) {
-        return None;
-    }
-    sccp_profiled_destination_rollout_with_key_hash_v1(
-        domain,
-        verifier_identity,
-        verifier_code_hash,
-        Some(verifier_key_hash),
-    )
 }
 
 /// Build a production-ready EVM-family destination rollout with deployment binding evidence.
@@ -5358,19 +5304,6 @@ pub fn sccp_evm_mainnet_destination_rollout_with_binding_v1(
     rollout.destination_binding_key = Some(binding.key);
     rollout.destination_binding_hash = Some(encode_0x_lower_hex(&binding.binding_hash));
     sccp_destination_rollout_is_production_ready(domain, &rollout).then_some(rollout)
-}
-
-/// Return the legacy Solana destination rollout profile without live ProgramData evidence.
-///
-/// Production readiness requires immutable upgradeable ProgramData metadata plus
-/// replayable verifier executable bytes. Use
-/// [`sccp_solana_mainnet_destination_rollout_with_live_evidence_v1`] when live
-/// deployment evidence is available.
-pub fn sccp_solana_mainnet_destination_rollout_v1(
-    verifier_identity: String,
-    verifier_code_hash: String,
-) -> Option<SccpDestinationRolloutV1> {
-    sccp_profiled_destination_rollout_v1(SCCP_DOMAIN_SOL, verifier_identity, verifier_code_hash)
 }
 
 /// Build a production-ready Solana destination rollout with immutable ProgramData evidence.
@@ -5433,19 +5366,6 @@ pub fn sccp_solana_mainnet_destination_rollout_with_live_evidence_v1(
     sccp_destination_rollout_is_production_ready(SCCP_DOMAIN_SOL, &rollout).then_some(rollout)
 }
 
-/// Return the legacy TON destination rollout profile without live account evidence.
-///
-/// Production readiness now requires live account state pins plus the verifier
-/// code BoC so the runtime can recompute the TON code root. Use
-/// [`sccp_ton_mainnet_destination_rollout_with_live_evidence_v1`] when live
-/// deployment evidence is available.
-pub fn sccp_ton_mainnet_destination_rollout_v1(
-    verifier_identity: String,
-    verifier_code_hash: String,
-) -> Option<SccpDestinationRolloutV1> {
-    sccp_profiled_destination_rollout_v1(SCCP_DOMAIN_TON, verifier_identity, verifier_code_hash)
-}
-
 /// Build a production-ready TON mainnet destination rollout with live account evidence.
 pub fn sccp_ton_mainnet_destination_rollout_with_live_evidence_v1(
     verifier_identity: String,
@@ -5479,25 +5399,6 @@ pub fn sccp_ton_mainnet_destination_rollout_with_live_evidence_v1(
     rollout.ton_verifier_code_boc_root_hash = Some(encode_0x_lower_hex(&code_boc_root_hash));
     rollout.ton_verifier_code_boc = Some(encode_0x_lower_hex(&code_boc));
     sccp_destination_rollout_is_production_ready(SCCP_DOMAIN_TON, &rollout).then_some(rollout)
-}
-
-/// Return the legacy TRON destination rollout profile without deployment binding evidence.
-///
-/// Production readiness now requires the TRON network id plus the canonical
-/// deployment binding key/hash, so this helper returns `None`. Use
-/// [`sccp_tron_mainnet_destination_rollout_with_binding_v1`] when deployment
-/// material is available.
-pub fn sccp_tron_mainnet_destination_rollout_v1(
-    verifier_identity: String,
-    verifier_code_hash: String,
-    verifier_key_hash: String,
-) -> Option<SccpDestinationRolloutV1> {
-    sccp_profiled_destination_rollout_with_key_hash_v1(
-        SCCP_DOMAIN_TRON,
-        verifier_identity,
-        verifier_code_hash,
-        Some(verifier_key_hash),
-    )
 }
 
 /// Build a production-ready TRON destination rollout with deployment binding evidence.
@@ -6102,13 +6003,11 @@ fn sccp_ton_destination_rollout_live_account_evidence_is_ready(
     if rollout.ton_account_status.as_deref() != Some("active") {
         return false;
     }
-    if required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+    let Some(account_state_hash) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
         rollout.ton_account_state_hash.as_deref(),
-    )
-    .is_none()
-    {
+    ) else {
         return false;
-    }
+    };
     if !rollout
         .ton_last_transaction_lt
         .as_deref()
@@ -6116,13 +6015,11 @@ fn sccp_ton_destination_rollout_live_account_evidence_is_ready(
     {
         return false;
     }
-    if required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+    let Some(last_transaction_hash) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
         rollout.ton_last_transaction_hash.as_deref(),
-    )
-    .is_none()
-    {
+    ) else {
         return false;
-    }
+    };
 
     let Some(verifier_code_hash) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
         rollout.verifier_code_hash.as_deref(),
@@ -6148,7 +6045,11 @@ fn sccp_ton_destination_rollout_live_account_evidence_is_ready(
         return false;
     }
 
-    sccp_ton_boc_single_root_hash(&code_boc) == Some(code_boc_root_hash)
+    sccp_nonzero_h256_values_are_pairwise_distinct(&[
+        account_state_hash,
+        last_transaction_hash,
+        verifier_code_hash,
+    ]) && sccp_ton_boc_single_root_hash(&code_boc) == Some(code_boc_root_hash)
 }
 
 fn sccp_destination_rollout_live_chain_metadata_is_ready(
@@ -6396,10 +6297,6 @@ pub fn canonical_sccp_evm_route_canary_evidence_bytes_v1(
     if !sccp_nonzero_h256_values_are_pairwise_distinct(&[
         route_allowlist_hash,
         destination_binding_hash,
-    ]) {
-        return None;
-    }
-    if !sccp_nonzero_h256_values_are_pairwise_distinct(&[
         transaction_hash,
         receipt_block_hash,
         block_receipts_root,
@@ -6578,10 +6475,6 @@ pub fn canonical_sccp_tron_route_canary_evidence_bytes_v1(
     if !sccp_nonzero_h256_values_are_pairwise_distinct(&[
         route_allowlist_hash,
         destination_binding_hash,
-    ]) {
-        return None;
-    }
-    if !sccp_nonzero_h256_values_are_pairwise_distinct(&[
         transaction_id,
         call_data_sha256,
         message_id,
@@ -6722,12 +6615,6 @@ pub fn canonical_sccp_ton_route_canary_evidence_bytes_v1(
         || !h256_is_nonzero(&account_state_hash)
         || !h256_is_nonzero(&last_transaction_hash)
         || !sccp_ton_live_decimal_is_positive_canonical(last_transaction_lt)
-        || !sccp_nonzero_h256_values_are_pairwise_distinct(&[
-            route_allowlist_hash,
-            destination_binding_hash,
-            source_verifier_material_hash,
-            source_adapter_engine_deployment_hash,
-        ])
         || !sccp_destination_rollout_is_production_ready(SCCP_DOMAIN_TON, destination_rollout)
     {
         return None;
@@ -6773,6 +6660,17 @@ pub fn canonical_sccp_ton_route_canary_evidence_bytes_v1(
             .as_deref(),
     )?;
     if verifier_code_hash != verifier_code_boc_root_hash {
+        return None;
+    }
+    if !sccp_nonzero_h256_values_are_pairwise_distinct(&[
+        route_allowlist_hash,
+        destination_binding_hash,
+        source_verifier_material_hash,
+        source_adapter_engine_deployment_hash,
+        account_state_hash,
+        last_transaction_hash,
+        verifier_code_hash,
+    ]) {
         return None;
     }
 
@@ -6832,12 +6730,6 @@ pub fn canonical_sccp_solana_route_canary_evidence_bytes_v1(
         || !h256_is_nonzero(&destination_binding_hash)
         || !h256_is_nonzero(&source_verifier_material_hash)
         || !h256_is_nonzero(&source_adapter_engine_deployment_hash)
-        || !sccp_nonzero_h256_values_are_pairwise_distinct(&[
-            route_allowlist_hash,
-            destination_binding_hash,
-            source_verifier_material_hash,
-            source_adapter_engine_deployment_hash,
-        ])
         || !sccp_destination_rollout_is_production_ready(SCCP_DOMAIN_SOL, destination_rollout)
     {
         return None;
@@ -6852,6 +6744,15 @@ pub fn canonical_sccp_solana_route_canary_evidence_bytes_v1(
     let verifier_code_hash = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
         destination_rollout.verifier_code_hash.as_deref(),
     )?;
+    if !sccp_nonzero_h256_values_are_pairwise_distinct(&[
+        route_allowlist_hash,
+        destination_binding_hash,
+        source_verifier_material_hash,
+        source_adapter_engine_deployment_hash,
+        verifier_code_hash,
+    ]) {
+        return None;
+    }
     let (
         verifier_program,
         programdata_address,
@@ -7050,6 +6951,24 @@ pub fn sccp_evm_route_allowlist_with_lane_canary_evidence_v1(
     let route_allowlist_hash = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
         allowlist.route_allowlist_hash.as_deref(),
     )?;
+    if !sccp_nonzero_h256_values_are_pairwise_distinct(&[
+        route_allowlist_hash,
+        destination_binding_hash,
+        source_verifier_material_hash,
+        source_adapter_engine_deployment_hash,
+        transaction_hash,
+        receipt_block_hash,
+        block_receipts_root,
+        call_data_sha256,
+        message_id,
+        payload_hash,
+        statement_hash,
+        commitment_root,
+        finality_height,
+        finality_block_hash,
+    ]) {
+        return None;
+    }
     let route_canary_evidence_hash = sccp_evm_route_canary_evidence_hash_v1(
         allowlist.domain,
         route_allowlist_hash,
@@ -7154,6 +7073,23 @@ pub fn sccp_tron_route_allowlist_with_lane_canary_evidence_v1(
     let route_allowlist_hash = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
         allowlist.route_allowlist_hash.as_deref(),
     )?;
+    if !sccp_nonzero_h256_values_are_pairwise_distinct(&[
+        route_allowlist_hash,
+        destination_binding_hash,
+        source_verifier_material_hash,
+        source_adapter_engine_deployment_hash,
+        transaction_id,
+        call_data_sha256,
+        message_id,
+        payload_hash,
+        statement_hash,
+        commitment_root,
+        finality_height,
+        finality_block_hash,
+        signature_sha256,
+    ]) {
+        return None;
+    }
     let route_canary_evidence_hash = sccp_tron_route_canary_evidence_hash_v1(
         route_allowlist_hash,
         destination_binding_hash,
@@ -7443,6 +7379,8 @@ fn sccp_route_allowlist_evm_canary_evidence_is_bound(
     route_canary_evidence_hash: &H256,
     expected_route_allowlist_hash: &H256,
     destination_binding_hash: &H256,
+    source_verifier_material_hash: &H256,
+    source_adapter_engine_deployment_hash: &H256,
 ) -> bool {
     let Some(transaction_hash) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
         allowlist.evm_route_canary_transaction_hash.as_deref(),
@@ -7520,6 +7458,22 @@ fn sccp_route_allowlist_evm_canary_evidence_is_bound(
         || proof_source_domain != SCCP_DOMAIN_SORA
         || allowlist.evm_route_canary_used_message_proof != Some(true)
         || !receipt_block_finalized
+        || !sccp_nonzero_h256_values_are_pairwise_distinct(&[
+            *expected_route_allowlist_hash,
+            *destination_binding_hash,
+            *source_verifier_material_hash,
+            *source_adapter_engine_deployment_hash,
+            transaction_hash,
+            receipt_block_hash,
+            block_receipts_root,
+            call_data_sha256,
+            message_id,
+            payload_hash,
+            statement_hash,
+            commitment_root,
+            finality_height,
+            finality_block_hash,
+        ])
     {
         return false;
     }
@@ -7803,6 +7757,8 @@ fn sccp_route_allowlist_canary_evidence_is_bound(
                 &route_canary_evidence_hash,
                 expected_route_allowlist_hash,
                 destination_binding_hash,
+                source_verifier_material_hash,
+                source_adapter_engine_deployment_hash,
             );
     }
     if domain == SCCP_DOMAIN_TON {
@@ -8609,12 +8565,25 @@ fn sccp_allow_unready_source_proof_bypass_enabled(allow_unready: bool) -> bool {
     allow_unready && cfg!(test)
 }
 
-pub fn sccp_manifest_allows_transparent_proofs(
+fn sccp_manifest_allows_transparent_proofs_internal(
     manifest: &SccpProofManifestV1,
     allow_unready: bool,
 ) -> bool {
     sccp_manifest_is_production_ready(manifest)
         || sccp_allow_unready_transparent_proof_bypass_enabled(allow_unready)
+}
+
+/// Return whether a manifest can build or verify transparent proofs in production mode.
+pub fn sccp_manifest_allows_transparent_proofs(manifest: &SccpProofManifestV1) -> bool {
+    sccp_manifest_allows_transparent_proofs_internal(manifest, false)
+}
+
+#[cfg(test)]
+pub fn sccp_manifest_allows_transparent_proofs_allow_unready(
+    manifest: &SccpProofManifestV1,
+    allow_unready: bool,
+) -> bool {
+    sccp_manifest_allows_transparent_proofs_internal(manifest, allow_unready)
 }
 
 pub fn sccp_message_payload_kind_keys_v1() -> Vec<String> {
@@ -8959,6 +8928,7 @@ pub fn build_sccp_counterparty_proof_job_from_bundle_with_signer(
     )
 }
 
+#[cfg(test)]
 pub fn build_sccp_counterparty_proof_job_from_bundle_with_signer_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     signer: &KeyPair,
@@ -8989,6 +8959,7 @@ pub fn build_sccp_counterparty_proof_job_from_bundle_with_destination_binding_an
     )
 }
 
+#[cfg(test)]
 pub fn build_sccp_counterparty_proof_job_from_bundle_with_destination_binding_and_signer_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     destination_binding: &SccpDestinationBindingV1,
@@ -9011,6 +8982,7 @@ pub fn build_sccp_counterparty_proof_job_from_bundle(
     build_sccp_counterparty_proof_job_from_bundle_internal(bundle, None, None, false, None, None)
 }
 
+#[cfg(test)]
 pub fn build_sccp_counterparty_proof_job_from_bundle_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     allow_unready: bool,
@@ -9029,11 +9001,17 @@ pub fn build_sccp_counterparty_proof_job_from_bundle_with_source_verifier_materi
     bundle: &NexusSccpMessageProofV1,
     material: &SccpSourceVerifierMaterialV1,
 ) -> Option<SccpCounterpartyProofJobV1> {
-    build_sccp_counterparty_proof_job_from_bundle_with_source_verifier_material_allow_unready(
-        bundle, material, false,
+    build_sccp_counterparty_proof_job_from_bundle_internal(
+        bundle,
+        None,
+        None,
+        false,
+        Some(material),
+        None,
     )
 }
 
+#[cfg(test)]
 pub fn build_sccp_counterparty_proof_job_from_bundle_with_source_verifier_material_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     material: &SccpSourceVerifierMaterialV1,
@@ -9054,14 +9032,17 @@ pub fn build_sccp_counterparty_proof_job_from_bundle_with_source_verifier_materi
     material: &SccpSourceVerifierMaterialV1,
     deployment: &SccpSourceAdapterEngineDeploymentV1,
 ) -> Option<SccpCounterpartyProofJobV1> {
-    build_sccp_counterparty_proof_job_from_bundle_with_source_verifier_material_and_deployment_allow_unready(
+    build_sccp_counterparty_proof_job_from_bundle_internal(
         bundle,
-        material,
-        deployment,
+        None,
+        None,
         false,
+        Some(material),
+        Some(deployment),
     )
 }
 
+#[cfg(test)]
 pub fn build_sccp_counterparty_proof_job_from_bundle_with_source_verifier_material_and_deployment_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     material: &SccpSourceVerifierMaterialV1,
@@ -9083,14 +9064,27 @@ pub fn build_sccp_counterparty_proof_job_from_bundle_with_evm_groth16_proof_and_
     groth16_proof_bytes: &[u8],
     destination_binding: &SccpDestinationBindingV1,
 ) -> Option<SccpCounterpartyProofJobV1> {
-    build_sccp_counterparty_proof_job_from_bundle_with_evm_groth16_proof_and_destination_binding_allow_unready(
+    let counterparty_domain = sccp_counterparty_domain_for_message_payload(&bundle.payload)?;
+    let manifest = sccp_proof_manifest_for_domain(counterparty_domain)?;
+    if manifest.verifier_backend.family != SccpVerifierBackendFamilyV1::EvmGroth16Bn254
+        || manifest.verifier_backend.key != SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1
+    {
+        return None;
+    }
+    build_sccp_counterparty_proof_job_from_bundle_with_proof_bytes_internal(
         bundle,
+        &manifest,
+        counterparty_domain,
         groth16_proof_bytes,
-        destination_binding,
+        Some(destination_binding),
+        None,
         false,
+        None,
+        None,
     )
 }
 
+#[cfg(test)]
 pub fn build_sccp_counterparty_proof_job_from_bundle_with_evm_groth16_proof_and_destination_binding_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     groth16_proof_bytes: &[u8],
@@ -9123,15 +9117,20 @@ pub fn build_sccp_bsc_mainnet_counterparty_proof_job_from_bundle_with_groth16_pr
     groth16_proof_bytes: &[u8],
     destination_binding: &SccpDestinationBindingV1,
 ) -> Option<SccpCounterpartyProofJobV1> {
-    build_sccp_bsc_mainnet_counterparty_proof_job_from_bundle_with_groth16_proof_and_destination_binding_allow_unready(
+    if sccp_counterparty_domain_for_message_payload(&bundle.payload) != Some(SCCP_DOMAIN_BSC)
+        || !sccp_bsc_mainnet_destination_binding_is_deployment_bound(destination_binding)
+    {
+        return None;
+    }
+    build_sccp_counterparty_proof_job_from_bundle_with_evm_groth16_proof_and_destination_binding(
         bundle,
         groth16_proof_bytes,
         destination_binding,
-        false,
     )
 }
 
 /// Build a BSC mainnet counterparty proof job, optionally bypassing readiness checks in tests.
+#[cfg(test)]
 pub fn build_sccp_bsc_mainnet_counterparty_proof_job_from_bundle_with_groth16_proof_and_destination_binding_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     groth16_proof_bytes: &[u8],
@@ -9155,13 +9154,14 @@ pub fn build_sccp_counterparty_proof_job_from_bundle_with_tron_groth16_proof(
     bundle: &NexusSccpMessageProofV1,
     groth16_proof_bytes: &[u8],
 ) -> Option<SccpCounterpartyProofJobV1> {
-    build_sccp_counterparty_proof_job_from_bundle_with_tron_groth16_proof_allow_unready(
+    build_sccp_counterparty_proof_job_from_bundle_with_tron_groth16_proof_and_destination_binding(
         bundle,
         groth16_proof_bytes,
-        false,
+        &sccp_proof_manifest_for_domain(SCCP_DOMAIN_TRON)?.destination_binding,
     )
 }
 
+#[cfg(test)]
 pub fn build_sccp_counterparty_proof_job_from_bundle_with_tron_groth16_proof_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     groth16_proof_bytes: &[u8],
@@ -9180,14 +9180,30 @@ pub fn build_sccp_counterparty_proof_job_from_bundle_with_tron_groth16_proof_and
     groth16_proof_bytes: &[u8],
     destination_binding: &SccpDestinationBindingV1,
 ) -> Option<SccpCounterpartyProofJobV1> {
-    build_sccp_counterparty_proof_job_from_bundle_with_tron_groth16_proof_and_destination_binding_allow_unready(
+    let counterparty_domain = sccp_counterparty_domain_for_message_payload(&bundle.payload)?;
+    if counterparty_domain != SCCP_DOMAIN_TRON {
+        return None;
+    }
+    let manifest = sccp_proof_manifest_for_domain(counterparty_domain)?;
+    if manifest.verifier_backend.family != SccpVerifierBackendFamilyV1::TronGroth16Bn254
+        || manifest.verifier_backend.key != SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1
+    {
+        return None;
+    }
+    build_sccp_counterparty_proof_job_from_bundle_with_proof_bytes_internal(
         bundle,
+        &manifest,
+        counterparty_domain,
         groth16_proof_bytes,
-        destination_binding,
+        Some(destination_binding),
+        None,
         false,
+        None,
+        None,
     )
 }
 
+#[cfg(test)]
 pub fn build_sccp_counterparty_proof_job_from_bundle_with_tron_groth16_proof_and_destination_binding_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     groth16_proof_bytes: &[u8],
@@ -9297,9 +9313,6 @@ fn build_sccp_counterparty_proof_job_from_bundle_with_proof_bytes_internal(
     {
         return None;
     }
-    if !sccp_manifest_allows_transparent_proofs(manifest, allow_unready) {
-        return None;
-    }
     let chain_family = sccp_transparent_chain_family_for_domain(counterparty_domain)?;
     let chain = sccp_chain_key_for_domain(counterparty_domain)?;
     let public_inputs = sccp_message_transparent_public_inputs_internal_with_deployment(
@@ -9347,9 +9360,13 @@ fn build_sccp_counterparty_proof_job_from_bundle_with_proof_bytes_internal(
 pub fn build_sccp_counterparty_proof_job_from_artifact(
     artifact: &NexusSccpMessageTransparentProofV1,
 ) -> Option<SccpCounterpartyProofJobV1> {
-    build_sccp_counterparty_proof_job_from_artifact_allow_unready(artifact, false)
+    if !verify_nexus_sccp_message_transparent_proof_structure(artifact) {
+        return None;
+    }
+    build_sccp_counterparty_proof_job_from_verified_artifact(artifact)
 }
 
+#[cfg(test)]
 pub fn build_sccp_counterparty_proof_job_from_artifact_allow_unready(
     artifact: &NexusSccpMessageTransparentProofV1,
     allow_unready: bool,
@@ -9358,6 +9375,12 @@ pub fn build_sccp_counterparty_proof_job_from_artifact_allow_unready(
     {
         return None;
     }
+    build_sccp_counterparty_proof_job_from_verified_artifact(artifact)
+}
+
+fn build_sccp_counterparty_proof_job_from_verified_artifact(
+    artifact: &NexusSccpMessageTransparentProofV1,
+) -> Option<SccpCounterpartyProofJobV1> {
     let chain_family = sccp_transparent_chain_family_for_domain(artifact.counterparty_domain)?;
     let chain = sccp_chain_key_for_domain(artifact.counterparty_domain)?;
     let payload_projection = sccp_payload_projection(&artifact.bundle.payload)?;
@@ -9436,12 +9459,6 @@ fn canonical_nexus_sccp_message_bundle_bytes_len_checked(
     Some(out)
 }
 
-pub fn canonical_nexus_sccp_message_bundle_bytes_checked(
-    bundle: &NexusSccpMessageProofV1,
-) -> Option<Vec<u8>> {
-    canonical_nexus_sccp_message_bundle_bytes_checked_internal(bundle, None, None)
-}
-
 fn canonical_nexus_sccp_message_bundle_bytes_checked_internal(
     bundle: &NexusSccpMessageProofV1,
     source_material: Option<&SccpSourceVerifierMaterialV1>,
@@ -9455,6 +9472,12 @@ fn canonical_nexus_sccp_message_bundle_bytes_checked_internal(
         return None;
     }
     canonical_nexus_sccp_message_bundle_bytes_len_checked(bundle)
+}
+
+pub fn canonical_nexus_sccp_message_bundle_bytes_checked(
+    bundle: &NexusSccpMessageProofV1,
+) -> Option<Vec<u8>> {
+    canonical_nexus_sccp_message_bundle_bytes_checked_internal(bundle, None, None)
 }
 
 pub fn canonical_sccp_source_chain_proof_envelope_bytes(
@@ -19238,6 +19261,9 @@ fn build_sccp_local_admission_submission_payload(
         Some(source_material),
         source_deployment,
     )?;
+    if &inner.public_inputs != public_inputs {
+        return None;
+    }
     let source_adapter_engine_deployment_hash =
         sccp_local_admission_source_adapter_hash(source_material, source_deployment)?;
     Some(SccpLocalAdmissionSubmissionPayloadV1 {
@@ -19326,6 +19352,9 @@ fn build_sccp_platform_submission_payload(
         source_material,
         source_deployment,
     )?;
+    if &inner.public_inputs != public_inputs {
+        return None;
+    }
     Some(match manifest.verifier_target {
         SccpProofVerifierTargetV1::EvmContract
             if manifest.verifier_backend.family == SccpVerifierBackendFamilyV1::EvmGroth16Bn254 =>
@@ -19527,6 +19556,7 @@ pub fn build_sccp_counterparty_submission_package_with_signer(
     )
 }
 
+#[cfg(test)]
 pub fn build_sccp_counterparty_submission_package_with_signer_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     manifest: &SccpProofManifestV1,
@@ -19583,6 +19613,7 @@ pub fn build_sccp_counterparty_submission_package_with_destination_binding(
     )
 }
 
+#[cfg(test)]
 pub fn build_sccp_counterparty_submission_package_with_destination_binding_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     manifest: &SccpProofManifestV1,
@@ -19608,15 +19639,22 @@ pub fn build_sccp_bsc_mainnet_counterparty_submission_package_with_destination_b
     proof_bytes: &[u8],
     destination_binding: &SccpDestinationBindingV1,
 ) -> Option<SccpCounterpartySubmissionPackageV1> {
-    build_sccp_bsc_mainnet_counterparty_submission_package_with_destination_binding_allow_unready(
+    if sccp_counterparty_domain_for_message_payload(&bundle.payload) != Some(SCCP_DOMAIN_BSC)
+        || !sccp_bsc_mainnet_destination_binding_is_deployment_bound(destination_binding)
+    {
+        return None;
+    }
+    let manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_BSC)?;
+    build_sccp_counterparty_submission_package_with_destination_binding(
         bundle,
+        &manifest,
         proof_bytes,
         destination_binding,
-        false,
     )
 }
 
 /// Build a signer-free BSC mainnet submission package, optionally bypassing readiness checks.
+#[cfg(test)]
 pub fn build_sccp_bsc_mainnet_counterparty_submission_package_with_destination_binding_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     proof_bytes: &[u8],
@@ -19638,6 +19676,7 @@ pub fn build_sccp_bsc_mainnet_counterparty_submission_package_with_destination_b
     )
 }
 
+#[cfg(test)]
 pub fn build_sccp_counterparty_submission_package_with_destination_binding_and_signer_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     manifest: &SccpProofManifestV1,
@@ -19675,6 +19714,7 @@ pub fn build_sccp_counterparty_submission_package(
     )
 }
 
+#[cfg(test)]
 pub fn build_sccp_counterparty_submission_package_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     manifest: &SccpProofManifestV1,
@@ -19699,15 +19739,19 @@ pub fn build_sccp_counterparty_submission_package_with_source_verifier_material(
     proof_bytes: &[u8],
     material: &SccpSourceVerifierMaterialV1,
 ) -> Option<SccpCounterpartySubmissionPackageV1> {
-    build_sccp_counterparty_submission_package_with_source_verifier_material_allow_unready(
+    build_sccp_counterparty_submission_package_internal(
         bundle,
         manifest,
         proof_bytes,
-        material,
+        None,
+        None,
         false,
+        Some(material),
+        None,
     )
 }
 
+#[cfg(test)]
 pub fn build_sccp_counterparty_submission_package_with_source_verifier_material_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     manifest: &SccpProofManifestV1,
@@ -19734,16 +19778,19 @@ pub fn build_sccp_counterparty_submission_package_with_source_verifier_material_
     material: &SccpSourceVerifierMaterialV1,
     deployment: &SccpSourceAdapterEngineDeploymentV1,
 ) -> Option<SccpCounterpartySubmissionPackageV1> {
-    build_sccp_counterparty_submission_package_with_source_verifier_material_and_deployment_allow_unready(
+    build_sccp_counterparty_submission_package_internal(
         bundle,
         manifest,
         proof_bytes,
-        material,
-        deployment,
+        None,
+        None,
         false,
+        Some(material),
+        Some(deployment),
     )
 }
 
+#[cfg(test)]
 pub fn build_sccp_counterparty_submission_package_with_source_verifier_material_and_deployment_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     manifest: &SccpProofManifestV1,
@@ -19775,9 +19822,6 @@ fn build_sccp_counterparty_submission_package_internal(
     source_deployment: Option<&SccpSourceAdapterEngineDeploymentV1>,
 ) -> Option<SccpCounterpartySubmissionPackageV1> {
     let allow_unready_source_proof = sccp_allow_unready_source_proof_bypass_enabled(allow_unready);
-    if !sccp_manifest_allows_transparent_proofs(manifest, allow_unready) {
-        return None;
-    }
     if !sccp_message_bundle_matches_manifest_counterparty(bundle, manifest) {
         return None;
     }
@@ -19795,6 +19839,33 @@ fn build_sccp_counterparty_submission_package_internal(
         source_material,
         source_deployment,
     )?;
+    if destination_binding.is_none() && signer.is_none() {
+        if let Some(local_admission_submission_package) = source_material.and_then(|material| {
+            sccp_local_admission_is_allowed(
+                manifest,
+                &public_inputs,
+                bundle,
+                Some(material),
+                source_deployment,
+            )
+            .then(|| {
+                build_sccp_local_admission_submission_package(
+                    manifest,
+                    proof_bytes,
+                    &public_inputs,
+                    bundle,
+                    material,
+                    source_deployment,
+                )
+            })
+            .flatten()
+        }) {
+            return Some(local_admission_submission_package);
+        }
+    }
+    if !sccp_manifest_allows_transparent_proofs_internal(manifest, allow_unready) {
+        return None;
+    }
     let platform_payload = build_sccp_platform_submission_payload(
         manifest,
         proof_bytes,
@@ -20357,7 +20428,7 @@ pub fn summarize_sccp_message_transparent_open_verify_proof(
 pub fn summarize_sccp_message_transparent_open_verify_proof_from_artifact(
     artifact: &NexusSccpMessageTransparentProofV1,
 ) -> Option<SccpOpenVerifyEnvelopeSummaryV1> {
-    if !verify_nexus_sccp_message_transparent_proof_structure_allow_unready(artifact, true) {
+    if !verify_nexus_sccp_message_transparent_proof_structure(artifact) {
         return None;
     }
     summarize_sccp_message_transparent_open_verify_proof(&artifact.proof_bytes)
@@ -20492,6 +20563,7 @@ pub fn build_nexus_sccp_message_transparent_proof_with_signer(
     )
 }
 
+#[cfg(test)]
 pub fn build_nexus_sccp_message_transparent_proof_with_signer_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     signer: &KeyPair,
@@ -20522,6 +20594,7 @@ pub fn build_nexus_sccp_message_transparent_proof_with_destination_binding_and_s
     )
 }
 
+#[cfg(test)]
 pub fn build_nexus_sccp_message_transparent_proof_with_destination_binding_and_signer_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     destination_binding: &SccpDestinationBindingV1,
@@ -20544,6 +20617,7 @@ pub fn build_nexus_sccp_message_transparent_proof(
     build_nexus_sccp_message_transparent_proof_internal(bundle, None, None, false, None, None)
 }
 
+#[cfg(test)]
 pub fn build_nexus_sccp_message_transparent_proof_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     allow_unready: bool,
@@ -20780,6 +20854,7 @@ pub fn build_nexus_sccp_message_transparent_proof_with_source_verifier_material(
     )
 }
 
+#[cfg(test)]
 pub fn build_nexus_sccp_message_transparent_proof_with_source_verifier_material_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     material: &SccpSourceVerifierMaterialV1,
@@ -20800,14 +20875,17 @@ pub fn build_nexus_sccp_message_transparent_proof_with_source_verifier_material_
     material: &SccpSourceVerifierMaterialV1,
     deployment: &SccpSourceAdapterEngineDeploymentV1,
 ) -> Option<NexusSccpMessageTransparentProofV1> {
-    build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready(
+    build_nexus_sccp_message_transparent_proof_internal(
         bundle,
-        material,
-        deployment,
+        None,
+        None,
         false,
+        Some(material),
+        Some(deployment),
     )
 }
 
+#[cfg(test)]
 pub fn build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     material: &SccpSourceVerifierMaterialV1,
@@ -20829,14 +20907,47 @@ pub fn build_nexus_sccp_message_transparent_proof_with_evm_groth16_proof_and_des
     groth16_proof_bytes: &[u8],
     destination_binding: &SccpDestinationBindingV1,
 ) -> Option<NexusSccpMessageTransparentProofV1> {
-    build_nexus_sccp_message_transparent_proof_with_evm_groth16_proof_and_destination_binding_allow_unready(
+    let counterparty_domain = sccp_counterparty_domain_for_message_payload(&bundle.payload)?;
+    let manifest = sccp_proof_manifest_for_domain(counterparty_domain)?;
+    if manifest.verifier_backend.family != SccpVerifierBackendFamilyV1::EvmGroth16Bn254
+        || manifest.verifier_backend.key != SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1
+        || !sccp_manifest_allows_transparent_proofs(&manifest)
+    {
+        return None;
+    }
+    let public_inputs = sccp_message_transparent_public_inputs(bundle)?;
+    let submission_package = build_sccp_counterparty_submission_package_internal(
         bundle,
+        &manifest,
         groth16_proof_bytes,
-        destination_binding,
+        Some(destination_binding),
+        None,
         false,
-    )
+        None,
+        None,
+    )?;
+    Some(NexusSccpMessageTransparentProofV1 {
+        version: 1,
+        local_domain: manifest.local_domain,
+        counterparty_domain,
+        security_model: manifest.security_model,
+        anchor_governance: manifest.anchor_governance,
+        destination_binding: manifest.destination_binding.clone(),
+        proof_family: manifest.proof_family,
+        verifier_backend: manifest.verifier_backend,
+        message_backend: manifest.message_backend,
+        registry_backend: manifest.registry_backend,
+        manifest_seed: manifest.manifest_seed,
+        finality_model: manifest.finality_model,
+        verifier_target: manifest.verifier_target,
+        public_inputs,
+        proof_bytes: groth16_proof_bytes.to_vec(),
+        submission_package,
+        bundle: bundle.clone(),
+    })
 }
 
+#[cfg(test)]
 pub fn build_nexus_sccp_message_transparent_proof_with_evm_groth16_proof_and_destination_binding_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     groth16_proof_bytes: &[u8],
@@ -20847,7 +20958,7 @@ pub fn build_nexus_sccp_message_transparent_proof_with_evm_groth16_proof_and_des
     let manifest = sccp_proof_manifest_for_domain(counterparty_domain)?;
     if manifest.verifier_backend.family != SccpVerifierBackendFamilyV1::EvmGroth16Bn254
         || manifest.verifier_backend.key != SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1
-        || !sccp_manifest_allows_transparent_proofs(&manifest, allow_unready)
+        || !sccp_manifest_allows_transparent_proofs_internal(&manifest, allow_unready)
     {
         return None;
     }
@@ -20887,13 +20998,14 @@ pub fn build_nexus_sccp_message_transparent_proof_with_tron_groth16_proof(
     bundle: &NexusSccpMessageProofV1,
     groth16_proof_bytes: &[u8],
 ) -> Option<NexusSccpMessageTransparentProofV1> {
-    build_nexus_sccp_message_transparent_proof_with_tron_groth16_proof_allow_unready(
+    build_nexus_sccp_message_transparent_proof_with_tron_groth16_proof_and_destination_binding(
         bundle,
         groth16_proof_bytes,
-        false,
+        &sccp_proof_manifest_for_domain(SCCP_DOMAIN_TRON)?.destination_binding,
     )
 }
 
+#[cfg(test)]
 pub fn build_nexus_sccp_message_transparent_proof_with_tron_groth16_proof_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     groth16_proof_bytes: &[u8],
@@ -20912,14 +21024,50 @@ pub fn build_nexus_sccp_message_transparent_proof_with_tron_groth16_proof_and_de
     groth16_proof_bytes: &[u8],
     destination_binding: &SccpDestinationBindingV1,
 ) -> Option<NexusSccpMessageTransparentProofV1> {
-    build_nexus_sccp_message_transparent_proof_with_tron_groth16_proof_and_destination_binding_allow_unready(
+    let counterparty_domain = sccp_counterparty_domain_for_message_payload(&bundle.payload)?;
+    if counterparty_domain != SCCP_DOMAIN_TRON {
+        return None;
+    }
+    let manifest = sccp_proof_manifest_for_domain(counterparty_domain)?;
+    if manifest.verifier_backend.family != SccpVerifierBackendFamilyV1::TronGroth16Bn254
+        || manifest.verifier_backend.key != SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1
+        || !sccp_manifest_allows_transparent_proofs(&manifest)
+    {
+        return None;
+    }
+    let public_inputs = sccp_message_transparent_public_inputs(bundle)?;
+    let submission_package = build_sccp_counterparty_submission_package_internal(
         bundle,
+        &manifest,
         groth16_proof_bytes,
-        destination_binding,
+        Some(destination_binding),
+        None,
         false,
-    )
+        None,
+        None,
+    )?;
+    Some(NexusSccpMessageTransparentProofV1 {
+        version: 1,
+        local_domain: manifest.local_domain,
+        counterparty_domain,
+        security_model: manifest.security_model,
+        anchor_governance: manifest.anchor_governance,
+        destination_binding: manifest.destination_binding.clone(),
+        proof_family: manifest.proof_family,
+        verifier_backend: manifest.verifier_backend,
+        message_backend: manifest.message_backend,
+        registry_backend: manifest.registry_backend,
+        manifest_seed: manifest.manifest_seed,
+        finality_model: manifest.finality_model,
+        verifier_target: manifest.verifier_target,
+        public_inputs,
+        proof_bytes: groth16_proof_bytes.to_vec(),
+        submission_package,
+        bundle: bundle.clone(),
+    })
 }
 
+#[cfg(test)]
 pub fn build_nexus_sccp_message_transparent_proof_with_tron_groth16_proof_and_destination_binding_allow_unready(
     bundle: &NexusSccpMessageProofV1,
     groth16_proof_bytes: &[u8],
@@ -20933,7 +21081,7 @@ pub fn build_nexus_sccp_message_transparent_proof_with_tron_groth16_proof_and_de
     let manifest = sccp_proof_manifest_for_domain(counterparty_domain)?;
     if manifest.verifier_backend.family != SccpVerifierBackendFamilyV1::TronGroth16Bn254
         || manifest.verifier_backend.key != SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1
-        || !sccp_manifest_allows_transparent_proofs(&manifest, allow_unready)
+        || !sccp_manifest_allows_transparent_proofs_internal(&manifest, allow_unready)
     {
         return None;
     }
@@ -20980,9 +21128,6 @@ fn build_nexus_sccp_message_transparent_proof_internal(
     let counterparty_domain = sccp_counterparty_domain_for_message_payload(&bundle.payload)?;
     let manifest = sccp_proof_manifest_for_domain(counterparty_domain)?;
     let allow_unready_source_proof = sccp_allow_unready_source_proof_bypass_enabled(allow_unready);
-    if !sccp_manifest_allows_transparent_proofs(&manifest, allow_unready) {
-        return None;
-    }
     if !allow_unready_source_proof
         && !sccp_bundle_source_proof_satisfies_production_build_gate(
             bundle,
@@ -21003,43 +21148,16 @@ fn build_nexus_sccp_message_transparent_proof_internal(
         source_material,
         source_deployment,
     )?;
-    let local_admission_submission_package =
-        if platform_destination_binding.is_none() && signer.is_none() {
-            source_material.and_then(|material| {
-                sccp_local_admission_is_allowed(
-                    &manifest,
-                    &public_inputs,
-                    bundle,
-                    Some(material),
-                    source_deployment,
-                )
-                .then(|| {
-                    build_sccp_local_admission_submission_package(
-                        &manifest,
-                        &proof_bytes,
-                        &public_inputs,
-                        bundle,
-                        material,
-                        source_deployment,
-                    )
-                })
-                .flatten()
-            })
-        } else {
-            None
-        };
-    let submission_package = local_admission_submission_package.or_else(|| {
-        build_sccp_counterparty_submission_package_internal(
-            bundle,
-            &manifest,
-            &proof_bytes,
-            platform_destination_binding,
-            signer,
-            allow_unready,
-            source_material,
-            source_deployment,
-        )
-    })?;
+    let submission_package = build_sccp_counterparty_submission_package_internal(
+        bundle,
+        &manifest,
+        &proof_bytes,
+        platform_destination_binding,
+        signer,
+        allow_unready,
+        source_material,
+        source_deployment,
+    )?;
     Some(NexusSccpMessageTransparentProofV1 {
         version: 1,
         local_domain: manifest.local_domain,
@@ -21477,6 +21595,7 @@ pub fn verify_nexus_sccp_message_transparent_proof_structure(
     )
 }
 
+#[cfg(test)]
 pub fn verify_nexus_sccp_message_transparent_proof_structure_allow_unready(
     proof: &NexusSccpMessageTransparentProofV1,
     allow_unready: bool,
@@ -21509,6 +21628,7 @@ pub fn verify_nexus_sccp_message_transparent_proof_structure_with_source_verifie
 ///
 /// This is a diagnostic helper: setting `allow_unready` also relaxes the production source-proof
 /// gate. Production admission should use the `*_allow_unready_manifest` helpers instead.
+#[cfg(test)]
 pub fn verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material_allow_unready(
     proof: &NexusSccpMessageTransparentProofV1,
     material: &SccpSourceVerifierMaterialV1,
@@ -21528,6 +21648,7 @@ pub fn verify_nexus_sccp_message_transparent_proof_structure_with_source_verifie
 ///
 /// Production local admission should use the deployment-bound helper below so disabled
 /// destination manifests are opened only by governed source-adapter deployment evidence.
+#[cfg(test)]
 pub fn verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material_allow_unready_manifest(
     proof: &NexusSccpMessageTransparentProofV1,
     material: &SccpSourceVerifierMaterialV1,
@@ -21558,6 +21679,7 @@ pub fn verify_nexus_sccp_message_transparent_proof_structure_with_source_verifie
 }
 
 /// Verify deployment-bound transparent proof structure with test-gated diagnostic relaxations.
+#[cfg(test)]
 pub fn verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material_and_deployment_allow_unready(
     proof: &NexusSccpMessageTransparentProofV1,
     material: &SccpSourceVerifierMaterialV1,
@@ -21680,7 +21802,7 @@ fn verify_nexus_sccp_message_transparent_proof_structure_internal(
         source_deployment,
     );
     let destination_manifest_is_allowed =
-        sccp_manifest_allows_transparent_proofs(&manifest, allow_unready_manifest)
+        sccp_manifest_allows_transparent_proofs_internal(&manifest, allow_unready_manifest)
             || (allow_configured_destination_manifest && local_admission_is_allowed);
     if !destination_manifest_is_allowed {
         return false;
@@ -21751,34 +21873,41 @@ fn verify_nexus_sccp_message_transparent_proof_structure_internal(
             )
             .or_else(|| {
                 allow_unready_manifest.then(|| {
-                    build_sccp_counterparty_submission_package_allow_unready(
+                    build_sccp_counterparty_submission_package_internal(
                         &proof.bundle,
                         &manifest,
                         &proof.proof_bytes,
+                        None,
+                        None,
                         true,
+                        None,
+                        None,
                     )
                 })?
             })
             .or_else(|| match (source_material, source_deployment) {
                 (Some(material), Some(deployment)) => {
-                    build_sccp_counterparty_submission_package_with_source_verifier_material_and_deployment_allow_unready(
+                    build_sccp_counterparty_submission_package_internal(
                         &proof.bundle,
                         &manifest,
                         &proof.proof_bytes,
-                        material,
-                        deployment,
+                        None,
+                        None,
                         allow_unready_manifest,
+                        Some(material),
+                        Some(deployment),
                     )
                 }
-                (Some(material), None) => {
-                    build_sccp_counterparty_submission_package_with_source_verifier_material_allow_unready(
-                        &proof.bundle,
-                        &manifest,
-                        &proof.proof_bytes,
-                        material,
-                        allow_unready_manifest,
-                    )
-                }
+                (Some(material), None) => build_sccp_counterparty_submission_package_internal(
+                    &proof.bundle,
+                    &manifest,
+                    &proof.proof_bytes,
+                    None,
+                    None,
+                    allow_unready_manifest,
+                    Some(material),
+                    None,
+                ),
                 _ => None,
             })
             .is_some_and(|expected_submission_package| {
@@ -33749,9 +33878,13 @@ pub fn recover_nexus_sccp_message_transparent_proof(
     backend: &str,
     proof_bytes: &[u8],
 ) -> Option<NexusSccpMessageTransparentProofV1> {
-    recover_nexus_sccp_message_transparent_proof_allow_unready(backend, proof_bytes, false)
+    let proof = decode_nexus_sccp_message_transparent_proof(proof_bytes)?;
+    (verify_nexus_sccp_message_transparent_proof_structure(&proof)
+        && proof.message_backend == backend)
+        .then_some(proof)
 }
 
+#[cfg(test)]
 pub fn recover_nexus_sccp_message_transparent_proof_allow_unready(
     backend: &str,
     proof_bytes: &[u8],
@@ -37622,6 +37755,7 @@ pub mod tests {
         KeyPair::try_from_seed(seed, algorithm).expect("derive SCCP fixture key")
     }
 
+    #[cfg(feature = "bls")]
     fn refresh_shape_valid_source_bridge_config(evidence: &mut SccpSourceVerifierEvidenceV1) {
         match evidence.source_domain {
             SCCP_DOMAIN_ETH => {
@@ -38472,6 +38606,7 @@ pub mod tests {
         );
     }
 
+    #[cfg(feature = "bls")]
     #[test]
     fn sccp_checked_bundle_encoder_rejects_structure_drift() {
         let valid = sample_transfer_bundle(SCCP_DOMAIN_SORA, SCCP_DOMAIN_TON, 372);
@@ -40176,6 +40311,7 @@ pub mod tests {
             .as_slice()
     }
 
+    #[cfg(feature = "bls")]
     fn sample_eth_next_sync_committee_keypairs() -> &'static [KeyPair] {
         static KEYPAIRS: std::sync::OnceLock<Vec<KeyPair>> = std::sync::OnceLock::new();
         KEYPAIRS
@@ -40311,6 +40447,7 @@ pub mod tests {
         sample_eth_sync_committee_signature_proof_for(signers, sync_committee_message_hash)
     }
 
+    #[cfg(feature = "bls")]
     fn sample_eth_sync_committee_transition_proof(
         parent_signers: &[KeyPair],
         from_sync_period: u64,
@@ -43946,6 +44083,7 @@ pub mod tests {
         }
     }
 
+    #[cfg(feature = "bls")]
     fn assert_rejects_message_payload(payload: SccpPayloadV1) {
         assert!(!verify_sccp_payload_structure(&payload), "{payload:?}");
         assert!(!verify_message_bundle_structure(&sample_message_bundle(
@@ -44382,6 +44520,7 @@ pub mod tests {
             .expect("decode source chain proof envelope")
     }
 
+    #[cfg(feature = "bls")]
     fn encode_source_chain_proof(proof: &SccpSourceChainProofEnvelopeV1) -> Vec<u8> {
         to_bytes(proof).expect("encode source chain proof envelope")
     }
@@ -44414,6 +44553,7 @@ pub mod tests {
         proof.message_inclusion_proof = to_bytes(inclusion).expect("encode source inclusion proof");
     }
 
+    #[cfg(feature = "bls")]
     fn replace_source_adapter_proof(
         proof: &mut SccpSourceChainProofEnvelopeV1,
         adapter_proof: SccpSourceAdapterProofV1,
@@ -44474,6 +44614,7 @@ pub mod tests {
         );
     }
 
+    #[cfg(feature = "bls")]
     fn mutate_source_adapter_verification_proof<F>(
         proof: &mut SccpSourceChainProofEnvelopeV1,
         mutate: F,
@@ -44503,21 +44644,23 @@ pub mod tests {
         replace_source_consensus_proof(proof, &consensus);
     }
 
-    fn rebuild_source_adapter_verification_proof_for_current_evidence(
+    fn try_rebuild_source_adapter_verification_proof_for_current_evidence(
         proof: &mut SccpSourceChainProofEnvelopeV1,
-    ) {
+    ) -> bool {
         let mut consensus = source_consensus_proof_from_envelope(proof);
         let verifier_evidence_hash =
             sccp_source_verifier_evidence_hash(&consensus.verifier_evidence);
-        let batch = build_sccp_source_adapter_fastpq_batch(
+        let Some(batch) = build_sccp_source_adapter_fastpq_batch(
             proof,
             &consensus.adapter_proof,
             consensus.adapter_transcript_hash,
             verifier_evidence_hash,
-        )
-        .expect("source adapter FastPQ batch");
-        let raw_proof_bytes =
-            build_sccp_source_adapter_fastpq_raw_proof_bytes(&batch).expect("FastPQ proof bytes");
+        ) else {
+            return false;
+        };
+        let Some(raw_proof_bytes) = build_sccp_source_adapter_fastpq_raw_proof_bytes(&batch) else {
+            return false;
+        };
         let open = StarkFriOpenProofV1 {
             version: 1,
             public_inputs: sccp_source_adapter_public_input_columns(
@@ -44527,27 +44670,46 @@ pub mod tests {
             ),
             envelope_bytes: raw_proof_bytes,
         };
+        let Some(vk_hash) = sccp_source_adapter_fastpq_verifier_commitment(proof) else {
+            return false;
+        };
+        let Ok(proof_bytes) = to_bytes(&open) else {
+            return false;
+        };
         let env = OpenVerifyEnvelope {
             backend: BackendTag::Stark,
             circuit_id: SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1.to_owned(),
-            vk_hash: sccp_source_adapter_fastpq_verifier_commitment(proof)
-                .expect("source adapter verifier commitment"),
+            vk_hash,
             public_inputs: sccp_source_adapter_open_verify_schema_descriptor(proof),
-            proof_bytes: to_bytes(&open).expect("encode source adapter open proof"),
+            proof_bytes,
             aux: Vec::new(),
+        };
+        let Ok(envelope_bytes) = to_bytes(&env) else {
+            return false;
         };
         consensus.adapter_verification_proof = SccpSourceAdapterVerificationProofV1 {
             version: 1,
             proof_family: SCCP_STARK_FRI_PROOF_FAMILY_V1.to_owned(),
             circuit_id: SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1.to_owned(),
-            proof_bytes: to_bytes(&env).expect("encode source adapter OpenVerify envelope"),
+            proof_bytes: envelope_bytes,
         };
         replace_source_consensus_proof(proof, &consensus);
+        true
     }
 
-    fn retarget_source_adapter_transcript_and_open_verify_for_current_envelope(
+    fn rebuild_source_adapter_verification_proof_for_current_evidence(
         proof: &mut SccpSourceChainProofEnvelopeV1,
     ) {
+        assert!(
+            try_rebuild_source_adapter_verification_proof_for_current_evidence(proof),
+            "source adapter FastPQ batch"
+        );
+    }
+
+    #[cfg(feature = "bls")]
+    fn retarget_source_adapter_transcript_and_open_verify_for_current_envelope(
+        proof: &mut SccpSourceChainProofEnvelopeV1,
+    ) -> bool {
         let mut consensus = source_consensus_proof_from_envelope(proof);
         let adapter_transcript_hash = sccp_source_adapter_transcript_hash(
             proof.source_domain,
@@ -44563,7 +44725,7 @@ pub mod tests {
         consensus.adapter_transcript_hash = adapter_transcript_hash;
         consensus.verifier_evidence.adapter_transcript_hash = adapter_transcript_hash;
         replace_source_consensus_proof(proof, &consensus);
-        rebuild_source_adapter_verification_proof_for_current_evidence(proof);
+        try_rebuild_source_adapter_verification_proof_for_current_evidence(proof)
     }
 
     fn retarget_source_verifier_evidence_to_deployment(
@@ -44617,6 +44779,7 @@ pub mod tests {
         rebuild_source_adapter_verification_proof_for_current_evidence(proof);
     }
 
+    #[cfg(feature = "bls")]
     fn mutate_adapter_source_domain(adapter: &mut SccpSourceAdapterProofV1, source_domain: u32) {
         match adapter {
             SccpSourceAdapterProofV1::EthereumBeaconReceipt(proof) => {
@@ -44637,6 +44800,7 @@ pub mod tests {
         }
     }
 
+    #[cfg(feature = "bls")]
     fn zero_adapter_witness(adapter: &mut SccpSourceAdapterProofV1) {
         match adapter {
             SccpSourceAdapterProofV1::EthereumBeaconReceipt(proof) => {
@@ -44657,6 +44821,7 @@ pub mod tests {
         }
     }
 
+    #[cfg(feature = "bls")]
     fn shift_adapter_witness(adapter: &mut SccpSourceAdapterProofV1) {
         match adapter {
             SccpSourceAdapterProofV1::EthereumBeaconReceipt(proof) => {
@@ -44677,6 +44842,7 @@ pub mod tests {
         }
     }
 
+    #[cfg(feature = "bls")]
     fn shift_adapter_root(adapter: &mut SccpSourceAdapterProofV1) {
         match adapter {
             SccpSourceAdapterProofV1::EthereumBeaconReceipt(proof) => {
@@ -44697,6 +44863,7 @@ pub mod tests {
         }
     }
 
+    #[cfg(feature = "bls")]
     fn wrong_adapter_variant_for(
         proof: &SccpSourceChainProofEnvelopeV1,
     ) -> SccpSourceAdapterProofV1 {
@@ -44768,6 +44935,7 @@ pub mod tests {
         }
     }
 
+    #[cfg(feature = "bls")]
     fn refresh_source_event_digest(proof: &mut SccpSourceChainProofEnvelopeV1) {
         proof.source_event_digest = sccp_source_event_digest(
             proof.source_domain,
@@ -44777,6 +44945,7 @@ pub mod tests {
         );
     }
 
+    #[cfg(feature = "bls")]
     fn assert_source_bundle_rejects_proof_mutation<F>(valid: &NexusSccpMessageProofV1, mutate: F)
     where
         F: FnOnce(&mut SccpSourceChainProofEnvelopeV1),
@@ -45043,6 +45212,7 @@ pub mod tests {
         assert!(verify_message_bundle_structure(&bundle));
     }
 
+    #[cfg(feature = "bls")]
     #[test]
     fn non_sora_source_message_bundles_require_typed_source_chain_envelopes() {
         for (idx, source_domain) in SCCP_CORE_REMOTE_DOMAINS.into_iter().enumerate() {
@@ -45098,6 +45268,7 @@ pub mod tests {
         assert!(sccp_message_transparent_public_inputs(&outbound).is_none());
     }
 
+    #[cfg(feature = "bls")]
     #[test]
     fn verified_message_finality_helpers_are_direction_sensitive() {
         let outbound = sample_evm_transfer_bundle(323);
@@ -45121,6 +45292,7 @@ pub mod tests {
         assert!(verified_sccp_message_nexus_finality_proof(&replay).is_none());
     }
 
+    #[cfg(feature = "bls")]
     #[test]
     fn source_chain_production_verifier_rejects_structural_envelopes_until_adapter_ready() {
         assert!(!sccp_source_adapter_ready_for_domain(SCCP_DOMAIN_SORA));
@@ -45142,6 +45314,7 @@ pub mod tests {
         }
     }
 
+    #[cfg(feature = "bls")]
     #[test]
     fn source_verifier_component_hashes_and_envelopes_reject_unmapped_source_domains() {
         assert!(
@@ -45181,6 +45354,7 @@ pub mod tests {
         );
     }
 
+    #[cfg(feature = "bls")]
     #[test]
     fn production_submission_builders_reject_structural_non_sora_source_proofs() {
         let mut manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_BSC).expect("BSC manifest");
@@ -49049,6 +49223,7 @@ pub mod tests {
         ));
     }
 
+    #[cfg(feature = "bls")]
     #[test]
     fn eth_source_adapter_verifies_beacon_sync_committee_certificate() {
         let material = sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
@@ -49317,6 +49492,7 @@ pub mod tests {
         ));
     }
 
+    #[cfg(feature = "bls")]
     #[test]
     fn eth_source_adapter_verifies_sync_committee_transition_chain() {
         let parent_signers = sample_eth_sync_committee_keypairs();
@@ -58696,6 +58872,7 @@ pub mod tests {
         ));
     }
 
+    #[cfg(feature = "bls")]
     #[test]
     fn source_chain_proof_binding_rejects_cross_lane_replays() {
         let valid = sample_transfer_bundle(SCCP_DOMAIN_ETH, SCCP_DOMAIN_SORA, 330);
@@ -58727,6 +58904,7 @@ pub mod tests {
         });
     }
 
+    #[cfg(feature = "bls")]
     #[test]
     fn source_chain_proof_envelope_structure_rejects_adversarial_fields() {
         let valid_bundle = sample_transfer_bundle(SCCP_DOMAIN_ETH, SCCP_DOMAIN_SORA, 340);
@@ -58980,6 +59158,7 @@ pub mod tests {
         );
     }
 
+    #[cfg(feature = "bls")]
     #[test]
     fn source_chain_proof_material_requires_plan_specific_adapter_proofs() {
         for (idx, source_domain) in SCCP_CORE_REMOTE_DOMAINS.into_iter().enumerate() {
@@ -59283,16 +59462,19 @@ pub mod tests {
                     !verify_sccp_source_chain_proof_envelope_shape(&malformed_outer),
                     "malformed source proof envelope must fail the outer shape gate before wrapper rebuild: {label}"
                 );
-                retarget_source_adapter_transcript_and_open_verify_for_current_envelope(
-                    &mut malformed_outer,
-                );
+                let rebuilt =
+                    retarget_source_adapter_transcript_and_open_verify_for_current_envelope(
+                        &mut malformed_outer,
+                    );
                 assert!(
-                    sccp_source_chain_proof_adapter_verifier_commitment(&malformed_outer).is_none(),
+                    !rebuilt
+                        || sccp_source_chain_proof_adapter_verifier_commitment(&malformed_outer)
+                            .is_none(),
                     "adapter verifier commitment helper must reject malformed source proof envelopes after transcript and OpenVerify rebuild: {label}"
                 );
             }
 
-            let malformed_evidence_cases: [(&str, fn(&mut SccpSourceVerifierEvidenceV1)); 10] = [
+            let malformed_evidence_cases: [(&str, fn(&mut SccpSourceVerifierEvidenceV1)); 11] = [
                 ("unpaired deployment hash", |evidence| {
                     evidence.source_adapter_deployment_hash = [0x44; 32];
                     evidence.source_adapter_deployment_receipt_hash = [0; 32];
@@ -59328,6 +59510,14 @@ pub mod tests {
                     },
                 ),
                 (
+                    "source verifier evidence adapter transcript reused template hash",
+                    |evidence| {
+                        evidence.adapter_transcript_hash =
+                            source_verifier_material_template(evidence.source_domain)
+                                .consensus_verifier_hash;
+                    },
+                ),
+                (
                     "deployment hash pair without deployment-bound source roles",
                     |evidence| {
                         evidence.source_adapter_deployment_hash = [0x46; 32];
@@ -59357,12 +59547,13 @@ pub mod tests {
                     ),
                     "malformed source verifier evidence must fail common shape before wrapper rebuild: {label}"
                 );
-                rebuild_source_adapter_verification_proof_for_current_evidence(
+                let rebuilt = try_rebuild_source_adapter_verification_proof_for_current_evidence(
                     &mut malformed_evidence,
                 );
                 assert!(
-                    sccp_source_chain_proof_adapter_verifier_commitment(&malformed_evidence)
-                        .is_none(),
+                    !rebuilt
+                        || sccp_source_chain_proof_adapter_verifier_commitment(&malformed_evidence)
+                            .is_none(),
                     "adapter verifier commitment helper must reject malformed source verifier evidence after OpenVerify rebuild: {label}"
                 );
             }
@@ -59409,12 +59600,13 @@ pub mod tests {
                     ),
                     "source verifier evidence profile drift must fail common shape before wrapper rebuild: {label}"
                 );
-                rebuild_source_adapter_verification_proof_for_current_evidence(
+                let rebuilt = try_rebuild_source_adapter_verification_proof_for_current_evidence(
                     &mut replayed_evidence,
                 );
                 assert!(
-                    sccp_source_chain_proof_adapter_verifier_commitment(&replayed_evidence)
-                        .is_none(),
+                    !rebuilt
+                        || sccp_source_chain_proof_adapter_verifier_commitment(&replayed_evidence)
+                            .is_none(),
                     "adapter verifier commitment helper must reject source verifier evidence profile drift after OpenVerify rebuild: {label}"
                 );
             }
@@ -59510,12 +59702,13 @@ pub mod tests {
                     ),
                     "material-only source verifier evidence replay must not gain deployment context: {label}"
                 );
-                rebuild_source_adapter_verification_proof_for_current_evidence(
+                let rebuilt = try_rebuild_source_adapter_verification_proof_for_current_evidence(
                     &mut replayed_evidence,
                 );
                 assert!(
-                    sccp_source_chain_proof_adapter_verifier_commitment(&replayed_evidence)
-                        .is_none(),
+                    !rebuilt
+                        || sccp_source_chain_proof_adapter_verifier_commitment(&replayed_evidence)
+                            .is_none(),
                     "adapter verifier commitment helper must reject material-only source verifier evidence catalog drift after OpenVerify rebuild: {label}"
                 );
             }
@@ -60313,6 +60506,7 @@ pub mod tests {
         );
     }
 
+    #[cfg(feature = "bls")]
     #[test]
     fn transparent_fastpq_open_verify_summary_accepts_inbound_sora_target() {
         let bundle = sample_transfer_bundle(SCCP_DOMAIN_ETH, SCCP_DOMAIN_SORA, 27);
@@ -60885,6 +61079,7 @@ pub mod tests {
         );
     }
 
+    #[cfg(feature = "bls")]
     #[test]
     fn ton_proof_result_submission_requires_canonical_ui_result() {
         let bundle = sample_message_bundle(SccpPayloadV1::Transfer(TransferPayloadV1 {
@@ -62673,6 +62868,47 @@ pub mod tests {
             .is_none(),
             "EVM route canary allowlist builder must reject non-finalized receipt block evidence"
         );
+        for (payload_hash, finality_height, expected_rejection) in [
+            (
+                source_material_hash,
+                [0xed; 32],
+                "source-material hash replay as payload hash",
+            ),
+            (
+                [0xdc; 32],
+                source_deployment_hash,
+                "source-deployment hash replay as finality height",
+            ),
+        ] {
+            assert!(
+                sccp_evm_route_allowlist_with_lane_canary_evidence_v1(
+                    route_allowlist.clone(),
+                    &destination_rollout,
+                    destination_binding_hash,
+                    source_material_hash,
+                    source_deployment_hash,
+                    [0xea; 32],
+                    3,
+                    18_765_432,
+                    [0xe8; 32],
+                    true,
+                    [0xe9; 32],
+                    [0xeb; 32],
+                    [0xdd; 32],
+                    payload_hash,
+                    SCCP_DOMAIN_ETH,
+                    [0xf1; 32],
+                    [0xee; 32],
+                    finality_height,
+                    [0xec; 32],
+                    1,
+                    SCCP_DOMAIN_SORA,
+                    true,
+                )
+                .is_none(),
+                "EVM route canary allowlist builder must reject {expected_rejection}"
+            );
+        }
         let allowlist = sccp_evm_route_allowlist_with_lane_canary_evidence_v1(
             route_allowlist,
             &destination_rollout,
@@ -62764,6 +63000,59 @@ pub mod tests {
             &source_material_hash,
             &source_deployment_hash,
         ));
+        let replayed_source_payload_hash = sccp_evm_route_canary_evidence_hash_v1(
+            SCCP_DOMAIN_ETH,
+            decode_fixed_hex_bytes::<32>(
+                allowlist
+                    .route_allowlist_hash
+                    .as_deref()
+                    .expect("route allowlist hash"),
+            )
+            .expect("decode route allowlist hash"),
+            destination_binding_hash,
+            &destination_rollout,
+            [0xea; 32],
+            3,
+            18_765_432,
+            [0xe8; 32],
+            true,
+            [0xe9; 32],
+            [0xeb; 32],
+            [0xdd; 32],
+            source_material_hash,
+            SCCP_DOMAIN_ETH,
+            [0xf1; 32],
+            [0xee; 32],
+            [0xed; 32],
+            [0xec; 32],
+            1,
+            SCCP_DOMAIN_SORA,
+            true,
+        )
+        .expect("diagnostic EVM route canary with replayed source material");
+        let mut recomputed_source_payload_replay = allowlist.clone();
+        recomputed_source_payload_replay.evm_route_canary_payload_hash =
+            Some(encode_0x_lower_hex(&source_material_hash));
+        recomputed_source_payload_replay.route_canary_evidence_hash =
+            Some(encode_0x_lower_hex(&replayed_source_payload_hash));
+        assert!(
+            !sccp_route_allowlist_canary_evidence_is_bound(
+                SCCP_DOMAIN_ETH,
+                &recomputed_source_payload_replay,
+                &destination_rollout,
+                &decode_fixed_hex_bytes::<32>(
+                    allowlist
+                        .route_allowlist_hash
+                        .as_deref()
+                        .expect("route allowlist hash")
+                )
+                .expect("decode route allowlist hash"),
+                &destination_binding_hash,
+                &source_material_hash,
+                &source_deployment_hash,
+            ),
+            "EVM readiness must reject recomputed canary evidence that replays a source role as a transcript hash"
+        );
         let mut mismatched_route_hash = decode_fixed_hex_bytes::<32>(
             allowlist
                 .route_allowlist_hash
@@ -62877,6 +63166,46 @@ pub mod tests {
             .is_none(),
             "EVM route canary evidence must reject route allowlist/destination binding hash role reuse"
         );
+        for (payload_hash, finality_height, expected_rejection) in [
+            (
+                route_allowlist_hash,
+                [0xaa; 32],
+                "route allowlist hash replay as payload hash",
+            ),
+            (
+                [0x99; 32],
+                destination_binding_hash,
+                "destination binding hash replay as finality height",
+            ),
+        ] {
+            assert!(
+                sccp_evm_route_canary_evidence_hash_v1(
+                    SCCP_DOMAIN_ETH,
+                    route_allowlist_hash,
+                    destination_binding_hash,
+                    &destination_rollout,
+                    [0x44; 32],
+                    0,
+                    0x1234,
+                    [0x45; 32],
+                    true,
+                    [0x46; 32],
+                    [0x88; 32],
+                    [0x55; 32],
+                    payload_hash,
+                    SCCP_DOMAIN_ETH,
+                    [0x66; 32],
+                    [0x77; 32],
+                    finality_height,
+                    [0xab; 32],
+                    1,
+                    SCCP_DOMAIN_SORA,
+                    true,
+                )
+                .is_none(),
+                "EVM route canary evidence must reject {expected_rejection}"
+            );
+        }
 
         let route_canary_hash = route_canary_hash_for(&destination_rollout)
             .expect("script-vector ETH route canary hash");
@@ -62948,6 +63277,10 @@ pub mod tests {
         };
         let route_canary_hash =
             route_canary_hash_for(&destination_rollout).expect("Solana route canary hash");
+        let verifier_code_hash = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+            destination_rollout.verifier_code_hash.as_deref(),
+        )
+        .expect("Solana verifier code hash");
         assert!(
             sccp_solana_route_canary_evidence_hash_v1(
                 destination_binding_hash,
@@ -63013,6 +63346,39 @@ pub mod tests {
             )
             .is_none(),
             "Solana route canary evidence must reject destination binding/source deployment hash role reuse"
+        );
+        assert!(
+            sccp_solana_route_canary_evidence_hash_v1(
+                verifier_code_hash,
+                destination_binding_hash,
+                source_material_hash,
+                source_deployment_hash,
+                &destination_rollout,
+            )
+            .is_none(),
+            "Solana route canary evidence must reject verifier-code/route allowlist hash role reuse"
+        );
+        assert!(
+            sccp_solana_route_canary_evidence_hash_v1(
+                route_allowlist_hash,
+                destination_binding_hash,
+                verifier_code_hash,
+                source_deployment_hash,
+                &destination_rollout,
+            )
+            .is_none(),
+            "Solana route canary evidence must reject verifier-code/source material hash role reuse"
+        );
+        assert!(
+            sccp_solana_route_canary_evidence_hash_v1(
+                route_allowlist_hash,
+                destination_binding_hash,
+                source_material_hash,
+                verifier_code_hash,
+                &destination_rollout,
+            )
+            .is_none(),
+            "Solana route canary evidence must reject verifier-code/source deployment hash role reuse"
         );
         assert_eq!(
             route_canary_hash,
@@ -63942,6 +64308,10 @@ pub mod tests {
             destination_rollout.ton_last_transaction_hash.as_deref(),
         )
         .expect("TON last transaction hash");
+        let verifier_code_hash = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+            destination_rollout.verifier_code_hash.as_deref(),
+        )
+        .expect("TON verifier code hash");
         let route_canary_hash_for = |rollout: &SccpDestinationRolloutV1| {
             sccp_ton_route_canary_evidence_hash_v1(
                 route_allowlist_hash,
@@ -64039,6 +64409,120 @@ pub mod tests {
             )
             .is_none(),
             "TON route canary evidence must reject destination binding/source deployment hash role reuse"
+        );
+        let mut replayed_live_account_hash = destination_rollout.clone();
+        replayed_live_account_hash.ton_account_state_hash =
+            Some(encode_0x_lower_hex(&last_transaction_hash));
+        assert!(
+            !sccp_destination_rollout_is_production_ready(
+                SCCP_DOMAIN_TON,
+                &replayed_live_account_hash
+            ),
+            "TON destination rollout must reject account-state/last-transaction hash role reuse"
+        );
+        assert!(
+            sccp_ton_route_canary_evidence_hash_v1(
+                route_allowlist_hash,
+                destination_binding_hash,
+                source_material_hash,
+                source_deployment_hash,
+                &replayed_live_account_hash,
+                last_transaction_hash,
+                &last_transaction_lt,
+                last_transaction_hash,
+            )
+            .is_none(),
+            "TON route canary evidence must reject account-state/last-transaction hash role reuse"
+        );
+        let mut source_material_as_account = destination_rollout.clone();
+        source_material_as_account.ton_account_state_hash =
+            Some(encode_0x_lower_hex(&source_material_hash));
+        assert!(
+            sccp_destination_rollout_is_production_ready(
+                SCCP_DOMAIN_TON,
+                &source_material_as_account
+            ),
+            "route-canary role replay fixture should pass destination-only readiness"
+        );
+        assert!(
+            sccp_ton_route_canary_evidence_hash_v1(
+                route_allowlist_hash,
+                destination_binding_hash,
+                source_material_hash,
+                source_deployment_hash,
+                &source_material_as_account,
+                source_material_hash,
+                &last_transaction_lt,
+                last_transaction_hash,
+            )
+            .is_none(),
+            "TON route canary evidence must reject source-material hash replay as account-state hash"
+        );
+        let mut source_deployment_as_last_tx = destination_rollout.clone();
+        source_deployment_as_last_tx.ton_last_transaction_hash =
+            Some(encode_0x_lower_hex(&source_deployment_hash));
+        assert!(
+            sccp_destination_rollout_is_production_ready(
+                SCCP_DOMAIN_TON,
+                &source_deployment_as_last_tx
+            ),
+            "route-canary role replay fixture should pass destination-only readiness"
+        );
+        assert!(
+            sccp_ton_route_canary_evidence_hash_v1(
+                route_allowlist_hash,
+                destination_binding_hash,
+                source_material_hash,
+                source_deployment_hash,
+                &source_deployment_as_last_tx,
+                account_state_hash,
+                &last_transaction_lt,
+                source_deployment_hash,
+            )
+            .is_none(),
+            "TON route canary evidence must reject source-deployment hash replay as last-transaction hash"
+        );
+        assert!(
+            sccp_ton_route_canary_evidence_hash_v1(
+                verifier_code_hash,
+                destination_binding_hash,
+                source_material_hash,
+                source_deployment_hash,
+                &destination_rollout,
+                account_state_hash,
+                &last_transaction_lt,
+                last_transaction_hash,
+            )
+            .is_none(),
+            "TON route canary evidence must reject verifier-code/route allowlist hash role reuse"
+        );
+        assert!(
+            sccp_ton_route_canary_evidence_hash_v1(
+                route_allowlist_hash,
+                destination_binding_hash,
+                verifier_code_hash,
+                source_deployment_hash,
+                &destination_rollout,
+                account_state_hash,
+                &last_transaction_lt,
+                last_transaction_hash,
+            )
+            .is_none(),
+            "TON route canary evidence must reject verifier-code/source material hash role reuse"
+        );
+        assert!(
+            sccp_ton_route_canary_evidence_hash_v1(
+                route_allowlist_hash,
+                destination_binding_hash,
+                source_material_hash,
+                verifier_code_hash,
+                &destination_rollout,
+                account_state_hash,
+                &last_transaction_lt,
+                last_transaction_hash,
+            )
+            .is_none(),
+            "TON route canary evidence must reject verifier-code/source deployment hash role reuse"
         );
         assert!(h256_is_nonzero(&route_canary_hash));
         assert_ne!(route_canary_hash, route_allowlist_hash);
@@ -64455,6 +64939,10 @@ pub mod tests {
             true,
         )
         .expect("TRON transaction-bound canary route allowlist");
+        let route_allowlist_hash = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+            route_allowlist.route_allowlist_hash.as_deref(),
+        )
+        .expect("TRON route allowlist hash");
         let route_canary_hash = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
             route_allowlist.route_canary_evidence_hash.as_deref(),
         )
@@ -64462,10 +64950,7 @@ pub mod tests {
         assert_eq!(
             Some(route_canary_hash),
             sccp_tron_route_canary_evidence_hash_v1(
-                required_canonical_0x_lower_hex_string_is_nonzero::<32>(
-                    route_allowlist.route_allowlist_hash.as_deref()
-                )
-                .expect("TRON route allowlist hash"),
+                route_allowlist_hash,
                 destination_binding_hash,
                 &destination_rollout,
                 [0xfa; 32],
@@ -64877,6 +65362,26 @@ pub mod tests {
             ),
             (
                 [0xa1; 32],
+                route_allowlist_hash,
+                SCCP_DOMAIN_TRON,
+                [0xa2; 32],
+                [0xcd; 32],
+                1,
+                SCCP_DOMAIN_SORA,
+                "route allowlist hash replay as payload hash",
+            ),
+            (
+                [0xa1; 32],
+                source_material_hash,
+                SCCP_DOMAIN_TRON,
+                [0xa2; 32],
+                [0xcd; 32],
+                1,
+                SCCP_DOMAIN_SORA,
+                "source-material hash replay as payload hash",
+            ),
+            (
+                [0xa1; 32],
                 [0xab; 32],
                 SCCP_DOMAIN_ETH,
                 [0xa2; 32],
@@ -64894,6 +65399,16 @@ pub mod tests {
                 1,
                 SCCP_DOMAIN_SORA,
                 "replayed finality height",
+            ),
+            (
+                [0xa1; 32],
+                [0xab; 32],
+                SCCP_DOMAIN_TRON,
+                source_deployment_hash,
+                [0xcd; 32],
+                1,
+                SCCP_DOMAIN_SORA,
+                "source-deployment hash replay as finality height",
             ),
             (
                 [0xa1; 32],
@@ -66325,6 +66840,7 @@ pub mod tests {
         }
     }
 
+    #[cfg(feature = "bls")]
     #[test]
     fn source_adapter_engine_readiness_with_deployment_opens_source_adapter() {
         fn assert_deployment_drift_rejected(
@@ -67454,6 +67970,7 @@ pub mod tests {
         );
     }
 
+    #[cfg(feature = "bls")]
     #[test]
     fn deployment_bound_transparent_proof_requires_matching_source_deployment() {
         let material = sccp_solana_mainnet_source_verifier_material_with_hashes_and_accounts_db_v1(
@@ -67486,13 +68003,12 @@ pub mod tests {
             Some(&deployment),
         );
         let proof =
-            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready(
+            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment(
                 &bundle,
                 &material,
                 &deployment,
-            true,
-        )
-        .expect("deployment-bound transparent proof");
+            )
+            .expect("deployment-bound transparent proof");
 
         assert!(
             !verify_nexus_sccp_message_transparent_proof_structure_allow_unready(&proof, true),
@@ -67529,6 +68045,7 @@ pub mod tests {
         );
     }
 
+    #[cfg(feature = "bls")]
     #[test]
     fn deployment_bound_counterparty_job_uses_configured_source_deployment() {
         let material = sccp_solana_mainnet_source_verifier_material_with_hashes_and_accounts_db_v1(
@@ -67558,11 +68075,10 @@ pub mod tests {
             "built-in placeholder source material must not build jobs for configured source proofs",
         );
         let job =
-            build_sccp_counterparty_proof_job_from_bundle_with_source_verifier_material_and_deployment_allow_unready(
+            build_sccp_counterparty_proof_job_from_bundle_with_source_verifier_material_and_deployment(
                 &bundle,
                 &material,
                 &deployment,
-                true,
             )
             .expect("deployment-bound counterparty proof job");
         assert_eq!(job.counterparty_domain, SCCP_DOMAIN_SOL);
@@ -67575,11 +68091,10 @@ pub mod tests {
         let mut replayed_deployment = deployment;
         replayed_deployment.deployment_receipt_hash = [0x9A; 32];
         assert!(
-            build_sccp_counterparty_proof_job_from_bundle_with_source_verifier_material_and_deployment_allow_unready(
+            build_sccp_counterparty_proof_job_from_bundle_with_source_verifier_material_and_deployment(
                 &job.bundle,
                 &material,
                 &replayed_deployment,
-                true,
             )
             .is_none(),
             "counterparty jobs must stay bound to the configured source deployment",
@@ -67593,17 +68108,6 @@ pub mod tests {
             SCCP_DOMAIN_ETH,
             &rollout
         ));
-
-        assert!(
-            sccp_evm_mainnet_destination_rollout_v1(
-                SCCP_DOMAIN_ETH,
-                "0x1111111111111111111111111111111111111111".to_owned(),
-                format!("0x{}", "22".repeat(32)),
-                format!("0x{}", "23".repeat(32)),
-            )
-            .is_none(),
-            "EVM destination rollout helpers must not return production-ready records without deployment binding evidence"
-        );
 
         let rollout = sccp_evm_mainnet_destination_rollout_with_binding_v1(
             SCCP_DOMAIN_ETH,
@@ -67932,14 +68436,6 @@ pub mod tests {
             SCCP_DOMAIN_SOL,
             &rollout
         ));
-        assert!(
-            sccp_solana_mainnet_destination_rollout_v1(
-                verifier_identity.clone(),
-                verifier_code_hash.clone(),
-            )
-            .is_none(),
-            "legacy Solana destination rollout must require live ProgramData evidence"
-        );
         assert_eq!(
             rollout.anchor_id.as_deref(),
             Some(SCCP_SOLANA_MAINNET_DESTINATION_ANCHOR_ID_V1)
@@ -68157,6 +68653,40 @@ pub mod tests {
             !sccp_destination_rollout_is_production_ready(SCCP_DOMAIN_TON, &uppercase_code_boc),
             "TON code BoC bytes must reject uppercase-prefix aliases"
         );
+        let mut last_transaction_replays_account_state = rollout.clone();
+        last_transaction_replays_account_state.ton_last_transaction_hash =
+            last_transaction_replays_account_state
+                .ton_account_state_hash
+                .clone();
+        assert!(
+            !sccp_destination_rollout_is_production_ready(
+                SCCP_DOMAIN_TON,
+                &last_transaction_replays_account_state
+            ),
+            "TON live-account evidence must keep account-state and last-transaction hashes distinct"
+        );
+        let mut account_state_replays_code_hash = rollout.clone();
+        account_state_replays_code_hash.ton_account_state_hash =
+            account_state_replays_code_hash.verifier_code_hash.clone();
+        assert!(
+            !sccp_destination_rollout_is_production_ready(
+                SCCP_DOMAIN_TON,
+                &account_state_replays_code_hash
+            ),
+            "TON live-account evidence must keep account-state and verifier-code hashes distinct"
+        );
+        let mut last_transaction_replays_code_hash = rollout.clone();
+        last_transaction_replays_code_hash.ton_last_transaction_hash =
+            last_transaction_replays_code_hash
+                .verifier_code_hash
+                .clone();
+        assert!(
+            !sccp_destination_rollout_is_production_ready(
+                SCCP_DOMAIN_TON,
+                &last_transaction_replays_code_hash
+            ),
+            "TON live-account evidence must keep last-transaction and verifier-code hashes distinct"
+        );
 
         let mut generic =
             sccp_destination_rollout_for_domain(SCCP_DOMAIN_TON).expect("ton destination rollout");
@@ -68210,14 +68740,6 @@ pub mod tests {
             "TON verifier code BoC root must match verifier_code_hash"
         );
 
-        assert!(
-            sccp_ton_mainnet_destination_rollout_v1(
-                verifier_identity.clone(),
-                verifier_code_hash.clone(),
-            )
-            .is_none(),
-            "legacy TON rollout construction without live account evidence must fail closed"
-        );
         assert!(
             sccp_ton_mainnet_destination_rollout_with_live_evidence_v1(
                 verifier_identity.clone(),
@@ -68442,16 +68964,6 @@ pub mod tests {
                 &ton_with_unexpected_bridge_address
             ),
             "native TON rollout material must not carry EVM bridge-wrapper binding fields"
-        );
-
-        assert!(
-            sccp_tron_mainnet_destination_rollout_v1(
-                "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".to_owned(),
-                code_hash.clone(),
-                format!("0x{}", "57".repeat(32)),
-            )
-            .is_none(),
-            "TRON destination rollout helpers must not return production-ready records without deployment binding evidence"
         );
 
         let tvm_destination_profile = sccp_tron_mainnet_destination_rollout_with_binding_v1(
@@ -69909,6 +70421,7 @@ pub mod tests {
         }
     }
 
+    #[cfg(feature = "bls")]
     fn assert_evm_family_source_profile(
         source_domain: u32,
         source_trust_anchor_id: &str,
@@ -70258,6 +70771,7 @@ pub mod tests {
         ));
     }
 
+    #[cfg(feature = "bls")]
     #[test]
     fn evm_family_source_verifier_material_requires_deployed_mainnet_profile_hashes() {
         assert_evm_family_source_profile(
@@ -74008,6 +74522,7 @@ pub mod tests {
         assert!(build_sccp_counterparty_submission_package(&bundle, &manifest, &[0xAA]).is_none());
     }
 
+    #[cfg(feature = "bls")]
     #[test]
     fn configured_source_material_does_not_bypass_disabled_manifest_gate() {
         let manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_SOL).expect("sol manifest");
@@ -74548,6 +75063,7 @@ pub mod tests {
         );
     }
 
+    #[cfg(feature = "bls")]
     #[test]
     fn message_payload_structure_rejects_adversarial_asset_route_and_transfer_edges() {
         const UNKNOWN_DOMAIN: u32 = 0xFFFF_FFFE;
@@ -76040,10 +76556,40 @@ pub mod tests {
     fn unready_manifest_bypass_is_test_gated() {
         let reference = sample_reference_evm_attestation_manifest();
         assert!(!sccp_manifest_is_production_ready(&reference));
-        assert!(!sccp_manifest_allows_transparent_proofs(&reference, false));
+        assert!(!sccp_manifest_allows_transparent_proofs(&reference));
         assert!(sccp_allow_unready_transparent_proof_bypass_enabled(true));
-        assert!(sccp_manifest_allows_transparent_proofs(&reference, true));
+        assert!(sccp_manifest_allows_transparent_proofs_allow_unready(
+            &reference, true
+        ));
         assert!(!sccp_allow_unready_transparent_proof_bypass_enabled(false));
+    }
+
+    #[test]
+    fn public_boolean_unready_helpers_are_test_only() {
+        let source = include_str!("lib.rs");
+        let cfg_marker = "#[cfg(test)]";
+        for (index, _) in source.match_indices("pub fn ") {
+            let tail = &source[index..];
+            let Some(signature_end) = tail.find('{') else {
+                continue;
+            };
+            let signature = &tail[..signature_end];
+            if !signature.contains("allow_unready") && !signature.contains("allow_unready: bool") {
+                continue;
+            }
+            if signature
+                .contains("with_source_verifier_material_and_deployment_allow_unready_manifest")
+            {
+                continue;
+            }
+            let prefix_start = index.saturating_sub(96);
+            let prefix = &source[prefix_start..index];
+            assert!(
+                prefix.contains(cfg_marker),
+                "public boolean unready helper must be test-only: {}",
+                signature.lines().next().unwrap_or(signature).trim()
+            );
+        }
     }
 
     #[test]
@@ -77157,6 +77703,7 @@ pub mod tests {
         );
     }
 
+    #[cfg(feature = "bls")]
     #[test]
     fn rust_evm_groth16_proof_requests_require_non_sora_source_proof_bytes() {
         let manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_BSC).expect("BSC manifest");
@@ -77517,6 +78064,155 @@ pub mod tests {
         );
     }
 
+    #[cfg(feature = "bls")]
+    #[test]
+    fn deployment_bound_bundle_checked_encoder_uses_source_deployment_context() {
+        let material = sccp_bsc_source_verifier_material_with_hashes_emitter_and_config_v1(
+            sample_bsc_validator_set_hash(),
+            [0xB2; 32],
+            [0xC3; 32],
+            [0xD4; 32],
+            sample_evm_message_emitter_address(SCCP_DOMAIN_BSC),
+            sample_evm_source_bridge_code_hash(SCCP_DOMAIN_BSC),
+            sccp_bsc_mainnet_network_id_word_v1(),
+            sample_bsc_source_bridge_owner_address(),
+        )
+        .expect("BSC mainnet source verifier material");
+        let deployment = build_sccp_bsc_mainnet_source_adapter_deployment(&material, [0xE6; 32])
+            .expect("BSC source adapter deployment");
+        let bundle = sample_transfer_bundle_with_source_material_and_deployment(
+            SCCP_DOMAIN_BSC,
+            SCCP_DOMAIN_SORA,
+            709,
+            Some(&material),
+            Some(&deployment),
+        );
+
+        assert!(
+            canonical_nexus_sccp_message_bundle_bytes_checked(&bundle).is_none(),
+            "context-free checked bundle encoding must not accept deployment-bound source proofs"
+        );
+        let deployment_checked = canonical_nexus_sccp_message_bundle_bytes_checked_internal(
+            &bundle,
+            Some(&material),
+            Some(&deployment),
+        )
+        .expect("deployment-bound checked bundle encoding");
+        assert_eq!(
+            deployment_checked,
+            canonical_nexus_sccp_message_bundle_bytes_len_checked(&bundle)
+                .expect("length-checked bundle encoding")
+        );
+
+        let manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_BSC).expect("BSC manifest");
+        let public_inputs =
+            sccp_message_transparent_public_inputs_with_source_verifier_material_and_deployment(
+                &bundle,
+                &material,
+                &deployment,
+            )
+            .expect("deployment-bound public inputs");
+        let local_admission = build_sccp_local_admission_submission_payload(
+            &manifest,
+            &[0xAA],
+            &public_inputs,
+            &bundle,
+            &material,
+            Some(&deployment),
+        )
+        .expect("deployment-bound local admission payload");
+        assert_eq!(local_admission.bundle_bytes, deployment_checked);
+
+        let mut drifted_public_inputs = public_inputs.clone();
+        drifted_public_inputs.finality_block_hash[0] ^= 0x01;
+        assert!(
+            build_sccp_local_admission_submission_payload(
+                &manifest,
+                &[0xAA],
+                &drifted_public_inputs,
+                &bundle,
+                &material,
+                Some(&deployment),
+            )
+            .is_none(),
+            "local admission payloads must reject public inputs that drift from the deployment-bound bundle",
+        );
+        assert!(
+            build_sccp_local_admission_submission_payload(
+                &manifest,
+                &[0xAA],
+                &public_inputs,
+                &bundle,
+                &material,
+                None,
+            )
+            .is_none(),
+            "local admission payloads must reject deployment-bound bundles without deployment evidence",
+        );
+        assert!(
+            build_sccp_local_admission_submission_payload(
+                &manifest,
+                &[0x00; 32],
+                &public_inputs,
+                &bundle,
+                &material,
+                Some(&deployment),
+            )
+            .is_none(),
+            "local admission payloads must reject all-zero native proof placeholders",
+        );
+        let mut replayed_deployment = deployment.clone();
+        replayed_deployment.deployment_receipt_hash = [0xE7; 32];
+        assert!(
+            build_sccp_local_admission_submission_payload(
+                &manifest,
+                &[0xAA],
+                &public_inputs,
+                &bundle,
+                &material,
+                Some(&replayed_deployment),
+            )
+            .is_none(),
+            "local admission payloads must reject replayed deployment evidence before packaging",
+        );
+
+        let ton_manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_TON).expect("TON manifest");
+        let ton_bundle = sample_transfer_bundle(SCCP_DOMAIN_SORA, SCCP_DOMAIN_TON, 710);
+        let ton_public_inputs =
+            sccp_message_transparent_public_inputs(&ton_bundle).expect("TON public inputs");
+        assert!(
+            build_sccp_platform_submission_payload(
+                &ton_manifest,
+                &[0xAA],
+                &ton_public_inputs,
+                &ton_bundle,
+                Some(&ton_manifest.destination_binding),
+                None,
+                None,
+                None,
+            )
+            .is_some(),
+            "generic platform payload builder should accept matching TON public inputs",
+        );
+        let mut drifted_ton_public_inputs = ton_public_inputs.clone();
+        drifted_ton_public_inputs.message_id[0] ^= 0x01;
+        assert!(
+            build_sccp_platform_submission_payload(
+                &ton_manifest,
+                &[0xAA],
+                &drifted_ton_public_inputs,
+                &ton_bundle,
+                Some(&ton_manifest.destination_binding),
+                None,
+                None,
+                None,
+            )
+            .is_none(),
+            "generic platform payloads must reject caller-supplied public-input drift",
+        );
+    }
+
+    #[cfg(feature = "bls")]
     #[test]
     fn bsc_mainnet_source_sdk_facade_requires_deployment_bound_source_adapter() {
         #[derive(Clone, Copy)]
@@ -77604,11 +78300,10 @@ pub mod tests {
             "source proof byte recovery must reject copied BSC proof bytes under an ETH source label"
         );
         let artifact =
-            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready(
+            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment(
                 &bundle,
                 &material,
                 &deployment,
-                true,
             )
             .expect("BSC -> SORA local admission artifact");
         assert_eq!(artifact.public_inputs.target_domain, SCCP_DOMAIN_SORA);
@@ -78029,6 +78724,7 @@ pub mod tests {
         );
     }
 
+    #[cfg(feature = "bls")]
     #[test]
     fn eth_mainnet_source_sdk_facade_requires_deployment_bound_source_adapter() {
         let material = sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
@@ -78156,11 +78852,10 @@ pub mod tests {
         );
 
         let artifact =
-            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready(
+            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment(
                 &bundle,
                 &material,
                 &deployment,
-                true,
             )
             .expect("ETH -> SORA local admission artifact");
         assert_eq!(artifact.public_inputs.target_domain, SCCP_DOMAIN_SORA);
@@ -79322,6 +80017,7 @@ pub mod tests {
         );
     }
 
+    #[cfg(feature = "bls")]
     #[test]
     fn rust_tron_groth16_proof_requests_require_non_sora_source_proof_bytes() {
         let manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_TRON).expect("tron manifest");
@@ -80521,6 +81217,166 @@ pub mod tests {
 
 #[cfg(feature = "test-fixtures")]
 pub mod test_fixtures {
+    fn unchecked_transparent_proof_from_bundle_fixture(
+        bundle: &super::NexusSccpMessageProofV1,
+        source_material: Option<&super::SccpSourceVerifierMaterialV1>,
+        source_deployment: Option<&super::SccpSourceAdapterEngineDeploymentV1>,
+    ) -> Option<super::NexusSccpMessageTransparentProofV1> {
+        let counterparty_domain =
+            super::sccp_counterparty_domain_for_message_payload(&bundle.payload)?;
+        let manifest = super::sccp_proof_manifest_for_domain(counterparty_domain)?;
+        let source_domain = super::sccp_message_source_domain(&bundle.payload);
+        let target_domain = super::sccp_message_target_domain(&bundle.payload);
+        let (finality_height, finality_block_hash) = if source_domain == super::SCCP_DOMAIN_SORA {
+            let finality_proof = super::decode_nexus_bridge_finality_proof(&bundle.finality_proof)?;
+            (finality_proof.height, finality_proof.block_hash)
+        } else {
+            let source_proof =
+                super::decode_sccp_source_chain_proof_envelope(&bundle.finality_proof)?;
+            if source_proof.source_domain != source_domain
+                || source_proof.target_domain != target_domain
+                || source_proof.message_id != bundle.commitment.message_id
+                || source_proof.payload_hash != bundle.commitment.payload_hash
+                || source_proof.commitment_root != bundle.commitment_root
+            {
+                return None;
+            }
+            (
+                source_proof.finality_height,
+                source_proof.finality_block_hash,
+            )
+        };
+        let public_inputs = super::SccpMessageTransparentPublicInputsV1 {
+            version: 1,
+            message_id: bundle.commitment.message_id,
+            payload_hash: bundle.commitment.payload_hash,
+            target_domain: bundle.commitment.target_domain,
+            commitment_root: bundle.commitment_root,
+            finality_height,
+            finality_block_hash,
+        };
+        if !super::sccp_transparent_public_inputs_match_manifest(&manifest, &public_inputs) {
+            return None;
+        }
+        let proof_bytes = super::prefixed_blake2b(
+            b"sccp:test-fixture:transparent-proof-bytes:v1",
+            &super::canonical_sccp_message_transparent_public_inputs_bytes(&public_inputs),
+        )
+        .to_vec();
+        let source_verifier_material_hash = source_material
+            .map(super::sccp_source_verifier_material_hash)
+            .unwrap_or_else(|| {
+                super::prefixed_blake2b(
+                    b"sccp:test-fixture:source-material:v1",
+                    &super::canonical_nexus_sccp_message_bundle_bytes_len_checked(bundle)
+                        .unwrap_or_default(),
+                )
+            });
+        let source_adapter_engine_deployment_hash = source_deployment
+            .map(super::sccp_source_adapter_engine_deployment_hash)
+            .unwrap_or_else(|| {
+                super::prefixed_blake2b(
+                    b"sccp:test-fixture:source-deployment:v1",
+                    &source_verifier_material_hash,
+                )
+            });
+        let payload = super::SccpLocalAdmissionSubmissionPayloadV1 {
+            version: 1,
+            proof_bytes: proof_bytes.clone(),
+            public_inputs_bytes: super::canonical_sccp_message_transparent_public_inputs_bytes(
+                &public_inputs,
+            ),
+            bundle_bytes: super::canonical_nexus_sccp_message_bundle_bytes_len_checked(bundle)?,
+            statement_hash: super::prefixed_blake2b(
+                b"sccp:test-fixture:statement:v1",
+                &proof_bytes,
+            ),
+            source_verifier_material_hash,
+            source_adapter_engine_deployment_hash,
+        };
+        let platform_payload = super::SccpPlatformSubmissionPayloadV1::LocalAdmission(payload);
+        let envelope_bytes = super::to_bytes(&platform_payload).ok()?;
+        let submission_package = super::SccpCounterpartySubmissionPackageV1 {
+            version: 1,
+            proof_family: manifest.proof_family.clone(),
+            verifier_backend: manifest.verifier_backend.clone(),
+            envelope_encoding: super::SCCP_LOCAL_ADMISSION_ENVELOPE_ENCODING_V1.to_owned(),
+            submission_kind: super::SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1.to_owned(),
+            verifier_entrypoint: super::SCCP_LOCAL_ADMISSION_ENTRYPOINT_V1.to_owned(),
+            platform_payload,
+            arguments: Vec::new(),
+            envelope_bytes,
+        };
+        Some(super::NexusSccpMessageTransparentProofV1 {
+            version: 1,
+            local_domain: manifest.local_domain,
+            counterparty_domain,
+            security_model: manifest.security_model,
+            anchor_governance: manifest.anchor_governance,
+            destination_binding: manifest.destination_binding.clone(),
+            proof_family: manifest.proof_family,
+            verifier_backend: manifest.verifier_backend,
+            message_backend: manifest.message_backend,
+            registry_backend: manifest.registry_backend,
+            manifest_seed: manifest.manifest_seed,
+            finality_model: manifest.finality_model,
+            verifier_target: manifest.verifier_target,
+            public_inputs,
+            proof_bytes,
+            submission_package,
+            bundle: bundle.clone(),
+        })
+    }
+
+    /// Build a transparent-proof fixture directly from a message bundle.
+    pub fn transparent_proof_from_bundle_fixture(
+        bundle: &super::NexusSccpMessageProofV1,
+    ) -> Option<super::NexusSccpMessageTransparentProofV1> {
+        super::build_nexus_sccp_message_transparent_proof_internal(
+            bundle, None, None, true, None, None,
+        )
+        .or_else(|| unchecked_transparent_proof_from_bundle_fixture(bundle, None, None))
+    }
+
+    /// Build a transparent-proof fixture with source verifier material.
+    pub fn transparent_proof_from_bundle_with_source_verifier_material_fixture(
+        bundle: &super::NexusSccpMessageProofV1,
+        material: &super::SccpSourceVerifierMaterialV1,
+    ) -> Option<super::NexusSccpMessageTransparentProofV1> {
+        super::build_nexus_sccp_message_transparent_proof_internal(
+            bundle,
+            None,
+            None,
+            true,
+            Some(material),
+            None,
+        )
+        .or_else(|| unchecked_transparent_proof_from_bundle_fixture(bundle, Some(material), None))
+    }
+
+    /// Build a deployment-bound transparent-proof fixture.
+    pub fn transparent_proof_from_bundle_with_source_verifier_material_and_deployment_fixture(
+        bundle: &super::NexusSccpMessageProofV1,
+        material: &super::SccpSourceVerifierMaterialV1,
+        deployment: &super::SccpSourceAdapterEngineDeploymentV1,
+    ) -> Option<super::NexusSccpMessageTransparentProofV1> {
+        super::build_nexus_sccp_message_transparent_proof_internal(
+            bundle,
+            None,
+            None,
+            true,
+            Some(material),
+            Some(deployment),
+        )
+        .or_else(|| {
+            unchecked_transparent_proof_from_bundle_fixture(
+                bundle,
+                Some(material),
+                Some(deployment),
+            )
+        })
+    }
+
     pub use super::tests::{
         sample_eth_mainnet_sync_committee_root,
         sample_eth_mainnet_to_sora_local_admission_transparent_proof_with_material_and_deployment,

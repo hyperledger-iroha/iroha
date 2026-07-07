@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/zk_app_api.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2034856d110367bcecc37c1b28645de27168ec70d6c3275466855b466139f271
+source_hash: 56cf7a796b561f5037d6d71ed0b15357f970fd57ce980bb7b99fa17cc1e3da7c
 source_last_modified: "2026-01-22T15:38:30.732382+00:00"
 translation_last_reviewed: 2026-01-30
 ---
@@ -308,10 +308,13 @@ iroha ledger trigger register \
   --path ./on_verified.ko
 ```
 
-## Limitations and Future Work
+## Operational Boundaries
 
-- The prover worker verifies proofs using configured backend verifiers; it does not generate proofs (no proving pipeline).
-- Report retention is controlled by `torii.zk_prover_reports_ttl_secs` and can be managed via the report delete endpoints.
+- The prover worker verifies proofs using configured backend verifiers. Proof
+  generation remains a client/operator responsibility and is intentionally not
+  part of the Torii API surface.
+- Report retention is controlled by `torii.zk_prover_reports_ttl_secs` and can
+  be managed via the report delete endpoints.
 
 ## Governance Endpoints (ZK Ballots)
 
