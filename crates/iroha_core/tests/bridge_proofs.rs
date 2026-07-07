@@ -2722,35 +2722,12 @@ fn make_sccp_tron_to_sora_unverified_message_bridge_proof(nonce: u64) -> BridgeP
 }
 
 fn make_sccp_taira_tron_xor_diagnostic_message_bridge_proof(nonce: u64) -> BridgeProof {
-    let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
-        version: 1,
-        source_domain: iroha_sccp::SCCP_DOMAIN_TRON,
-        dest_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+    let bundle = iroha_sccp::test_fixtures::sample_taira_tron_xor_diagnostic_transfer_bundle(
         nonce,
-        asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-        asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-        asset_id: iroha_sccp::SCCP_TAIRA_XOR_ASSET_KEY_V1.as_bytes().to_vec(),
-        amount: 7,
-        sender_codec: iroha_sccp::SCCP_CODEC_TRON_BASE58CHECK,
-        sender: b"TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".to_vec(),
-        recipient_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-        recipient: b"alice@universal".to_vec(),
-        route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-        route_id: iroha_sccp::SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1
-            .as_bytes()
-            .to_vec(),
-    });
-    let commitment = iroha_sccp::hub_commitment_from_sccp_payload(&payload);
-    let merkle_proof = iroha_sccp::SccpMerkleProofV1 { steps: Vec::new() };
-    let commitment_root = iroha_sccp::merkle_root_from_commitment(&commitment, &merkle_proof);
-    let bundle = iroha_sccp::NexusSccpMessageProofV1 {
-        version: 1,
-        commitment_root,
-        commitment,
-        merkle_proof,
-        payload,
-        finality_proof: b"tron-nile-diagnostic-source-finality".to_vec(),
-    };
+        7,
+        b"alice@universal".to_vec(),
+    )
+    .expect("structural TAIRA/TRON XOR diagnostic bundle");
     let artifact = iroha_sccp::build_sccp_taira_tron_xor_diagnostic_transparent_proof(&bundle)
         .expect("TAIRA/TRON XOR diagnostic artifact");
     BridgeProof {
