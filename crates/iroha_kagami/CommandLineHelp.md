@@ -329,6 +329,7 @@ Generate a genesis configuration and standard-output in JSON format
 
 * `--chain-id <CHAIN_ID>` — Optional explicit chain id (overrides profile default)
 * `--vrf-seed-hex <HEX>` — Optional VRF seed (hex, 32 bytes). Required for `iroha3-taira`/`iroha3-nexus` when NPoS is selected; ignored for permissioned manifests
+* `--xor-asset-definition-id <BASE58>` — Canonical public XOR asset definition id (Base58). Required for `iroha3-nexus` NPoS manifests; `iroha3-taira` defaults to its live XOR id
 * `--executor <PATH>` — Optional path (relative to output) to the executor bytecode file (.to). If omitted, no executor upgrade is included in genesis
 * `--ivm-dir <PATH>` — Relative path from the directory of output file to the directory that contains IVM bytecode libraries
 * `--genesis-public-key <MULTI_HASH>`
@@ -500,7 +501,7 @@ Generate per-client CLI configs from a base client.toml
 
 * `--base-config <PATH>` — Base client config to copy `chain`, `torii_url`, and `basic_auth` from
 * `--out-dir <DIR>` — Output directory for generated client configs (default: <base-config-dir>/clients)
-* `--domain <DOMAIN>` — Fully qualified account domain for generated client configs
+* `--domain <SCOPE>` — Account scope for generated client configs (`dataspace` or `domain.dataspace`)
 
   Default value: `acme.universal`
 * `--seed-prefix <SEED>` — Seed prefix for deterministic key generation (`<prefix>-<name>`)

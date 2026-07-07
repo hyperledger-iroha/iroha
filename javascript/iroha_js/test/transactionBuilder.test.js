@@ -87,6 +87,8 @@ const TEST_KAGEMUSHA_INSTRUCTION_ARCHIVE_WIRE_NAMES = {
   KagemushaTransfer: "iroha_data_model::isi::offline::KagemushaTransfer",
   RedeemKagemushaRecursive:
     "iroha_data_model::isi::offline::RedeemKagemushaRecursive",
+  TopUpKagemushaRecursive:
+    "iroha_data_model::isi::offline::TopUpKagemushaRecursive",
 };
 const TEST_NORITO_CRC64_MASK = 0xffff_ffff_ffff_ffffn;
 const TEST_NORITO_CRC64_REFLECTED_POLY = 0xc96c_5795_d787_0f42n;
@@ -872,12 +874,12 @@ baseTest(
 );
 
 baseTest(
-  "buildKagemushaRecursiveTopUpTransaction derives transfer instruction before signing",
+  "buildKagemushaRecursiveTopUpTransaction derives top-up instruction before signing",
   () => {
     const calls = [];
-    const initRequestArchive = Buffer.from([0x70, 0x71, 0x72]);
-    const transferInstructionArchive = frameKagemushaInstructionArchive(
-      "KagemushaTransfer",
+    const topUpRequestArchive = Buffer.from([0x70, 0x71, 0x72]);
+    const topUpInstructionArchive = frameKagemushaInstructionArchive(
+      "TopUpKagemushaRecursive",
       [0xa1, 0xb2],
     );
     const fakeResult = {
@@ -892,7 +894,7 @@ baseTest(
             type: "topup",
             requestArchive: Buffer.from(requestArchive),
           });
-          return transferInstructionArchive;
+          return topUpInstructionArchive;
         },
         buildTransaction: (
           chainId,
@@ -922,7 +924,7 @@ baseTest(
         const built = buildKagemushaRecursiveTopUpTransaction({
           chainId: "test-chain",
           authority: AUTHORITY_ID_INPUT,
-          initRequestArchive,
+          topUpRequestArchive,
           metadata: { kagemusha: "topup" },
           creationTimeMs: 13,
           ttlMs: 24,
@@ -941,7 +943,7 @@ baseTest(
       calls.map((call) => call.type),
       ["topup", "sign"],
     );
-    assert.deepEqual(calls[0].requestArchive, initRequestArchive);
+    assert.deepEqual(calls[0].requestArchive, topUpRequestArchive);
     assert.equal(calls[1].chainId, "test-chain");
     assert.equal(calls[1].authority, AUTHORITY_ID);
     assert.equal(
@@ -953,8 +955,8 @@ baseTest(
     assert.equal(calls[1].nonce, 8);
     assert.deepEqual(JSON.parse(calls[1].instructions[0]), {
       KagemushaInstructionArchive: {
-        type: "KagemushaTransfer",
-        bytes_base64: transferInstructionArchive.toString("base64"),
+        type: "TopUpKagemushaRecursive",
+        bytes_base64: topUpInstructionArchive.toString("base64"),
       },
     });
 
@@ -977,10 +979,44 @@ baseTest(
               authority: AUTHORITY_ID_INPUT,
               privateKey: PRIVATE_KEY,
             }),
-          /kagemushaRecursiveTopUp\.initRequestArchive must be a Buffer or ArrayBuffer view/u,
+          /kagemushaRecursiveTopUp\.topUpRequestArchive must be a Buffer or ArrayBuffer view/u,
         );
       },
     );
+    assert.equal(signCalls.length, 0);
+
+    for (const legacyArchiveField of [
+      "initRequestArchive",
+      "init_request_archive",
+      "requestArchive",
+      "topupRequestArchive",
+      "topup_request_archive",
+    ]) {
+      withNativeBinding(
+        {
+          kagemushaRecursiveSpendTopUp: () => {
+            throw new Error("native top-up should not be called for obsolete alias");
+          },
+          buildTransaction: () => {
+            signCalls.push("signed");
+            return fakeResult;
+          },
+        },
+        () => {
+          assert.throws(
+            () =>
+              buildKagemushaRecursiveTopUpTransaction({
+                chainId: "test-chain",
+                authority: AUTHORITY_ID_INPUT,
+                [legacyArchiveField]: topUpRequestArchive,
+                privateKey: PRIVATE_KEY,
+              }),
+            /kagemushaRecursiveTopUp\.topUpRequestArchive must be a Buffer or ArrayBuffer view/u,
+            legacyArchiveField,
+          );
+        },
+      );
+    }
     assert.equal(signCalls.length, 0);
 
     withNativeBinding(
@@ -999,7 +1035,7 @@ baseTest(
             buildKagemushaRecursiveTopUpTransaction({
               chainId: "test-chain",
               authority: AUTHORITY_ID_INPUT,
-              initRequestArchive,
+              topUpRequestArchive,
               privateKey: PRIVATE_KEY,
             }),
           /top-up native rejected/u,
@@ -1159,17 +1195,17 @@ baseTest("buildKagemusha transaction helpers copy mutable buffers before native 
     [0x41, 0x42, 0x43],
   );
   const topUpInstructionArchive = frameKagemushaInstructionArchive(
-    "KagemushaTransfer",
+    "TopUpKagemushaRecursive",
     [0x44, 0x45, 0x46],
   );
   const redeemRequestArchive = Buffer.from([0x51, 0x52, 0x53]);
-  const initRequestArchive = Buffer.from([0x54, 0x55, 0x56]);
+  const topUpRequestArchive = Buffer.from([0x54, 0x55, 0x56]);
   const privateKey = Buffer.alloc(32, 0x61);
   const mutableTransferArchive = new Uint8Array(transferArchive);
   const mutableRedeemInstructionArchive = new Uint8Array(redeemInstructionArchive);
   const mutableRedeemRequestArchive = new Uint8Array(redeemRequestArchive);
   const mutableTopUpInstructionArchive = new Uint8Array(topUpInstructionArchive);
-  const mutableInitRequestArchive = new Uint8Array(initRequestArchive);
+  const mutableTopUpRequestArchive = new Uint8Array(topUpRequestArchive);
   const mutablePrivateKey = new Uint8Array(privateKey);
   const fakeResult = {
     signed_transaction: Buffer.from([0x71, 0x72]),
@@ -1233,7 +1269,7 @@ baseTest("buildKagemusha transaction helpers copy mutable buffers before native 
       buildKagemushaRecursiveTopUpTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
-        initRequestArchive: mutableInitRequestArchive,
+        topUpRequestArchive: mutableTopUpRequestArchive,
         privateKey: mutablePrivateKey,
       });
     },
@@ -1243,7 +1279,7 @@ baseTest("buildKagemusha transaction helpers copy mutable buffers before native 
   mutableRedeemInstructionArchive.fill(0xa5);
   mutableRedeemRequestArchive.fill(0xa5);
   mutableTopUpInstructionArchive.fill(0xa5);
-  mutableInitRequestArchive.fill(0xa5);
+  mutableTopUpRequestArchive.fill(0xa5);
   mutablePrivateKey.fill(0xa5);
 
   assert.deepEqual(
@@ -1267,12 +1303,12 @@ baseTest("buildKagemusha transaction helpers copy mutable buffers before native 
     },
   );
   assert.deepEqual(Buffer.from(calls[2].secret), privateKey);
-  assert.deepEqual(Buffer.from(calls[3].requestArchive), initRequestArchive);
+  assert.deepEqual(Buffer.from(calls[3].requestArchive), topUpRequestArchive);
   assert.deepEqual(
     JSON.parse(calls[4].instructions[0]),
     {
       KagemushaInstructionArchive: {
-        type: "KagemushaTransfer",
+        type: "TopUpKagemushaRecursive",
         bytes_base64: topUpInstructionArchive.toString("base64"),
       },
     },

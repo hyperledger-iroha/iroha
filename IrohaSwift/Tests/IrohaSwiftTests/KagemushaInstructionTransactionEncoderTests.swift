@@ -81,6 +81,40 @@ final class KagemushaInstructionTransactionEncoderTests: XCTestCase {
         )
     }
 
+    func testKagemushaRecursiveRequestArchiveEnvelopePreflightDefersSchemaAdmission() throws {
+        let redeemRequest = Self.redeemRequestArchive(payload: Data([0x01]))
+        let topUpRequest = Self.topUpRequestArchive(payload: Data([0x02]))
+        XCTAssertNoThrow(try KagemushaRecursiveRedeemRequestArchive.validateEnvelope(redeemRequest))
+        XCTAssertNoThrow(try KagemushaRecursiveTopUpRequestArchive.validateEnvelope(topUpRequest))
+
+        let wrongRedeemSchema = Self.instructionArchive(type: .redeemRecursive, payload: Data([0x03]))
+        XCTAssertNoThrow(try KagemushaRecursiveRedeemRequestArchive.validateEnvelope(wrongRedeemSchema))
+        XCTAssertThrowsError(
+            try KagemushaRecursiveRedeemRequestArchive.validate(wrongRedeemSchema)
+        ) { error in
+            XCTAssertEqual(error as? KagemushaRecursiveRedeemRequestArchiveError, .unsupportedRequestArchiveType)
+        }
+
+        let wrongTopUpSchema = Self.instructionArchive(type: .transfer, payload: Data([0x04]))
+        XCTAssertNoThrow(try KagemushaRecursiveTopUpRequestArchive.validateEnvelope(wrongTopUpSchema))
+        XCTAssertThrowsError(
+            try KagemushaRecursiveTopUpRequestArchive.validate(wrongTopUpSchema)
+        ) { error in
+            XCTAssertEqual(error as? KagemushaRecursiveTopUpRequestArchiveError, .unsupportedRequestArchiveType)
+        }
+
+        XCTAssertThrowsError(
+            try KagemushaRecursiveRedeemRequestArchive.validateEnvelope(Data())
+        ) { error in
+            XCTAssertEqual(error as? KagemushaRecursiveRedeemRequestArchiveError, .emptyRequestArchive)
+        }
+        XCTAssertThrowsError(
+            try KagemushaRecursiveTopUpRequestArchive.validateEnvelope(Data([0x01, 0x02]))
+        ) { error in
+            XCTAssertEqual(error as? KagemushaRecursiveTopUpRequestArchiveError, .invalidRequestArchive)
+        }
+    }
+
     func testBuildKagemushaRecursiveRedeemTransactionDerivesInstructionBeforeSigning() throws {
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 0x44, count: 32))
         let authority = try Self.canonicalAuthorityLiteral(from: signingKey)
@@ -120,12 +154,12 @@ final class KagemushaInstructionTransactionEncoderTests: XCTestCase {
         XCTAssertEqual(parsed.instructionArchive, instructionArchive)
     }
 
-    func testBuildKagemushaRecursiveTopUpTransactionDerivesTransferBeforeSigning() throws {
+    func testBuildKagemushaRecursiveTopUpTransactionBuildsTopUpInstructionBeforeSigning() throws {
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 0x45, count: 32))
         let authority = try Self.canonicalAuthorityLiteral(from: signingKey)
         let requestArchive = Self.topUpRequestArchive(payload: Data([0x20, 0x21, 0x22]))
         let instructionArchive = Self.instructionArchive(
-            type: .transfer,
+            type: .topUpRecursive,
             payload: Data([0xB0, 0xB1, 0xB2, 0xB3])
         )
         var topUpRequests: [Data] = []
@@ -137,7 +171,7 @@ final class KagemushaInstructionTransactionEncoderTests: XCTestCase {
                 ttlMs: 234,
                 nonce: 10,
                 metadata: ["kagemusha": .string("topup")],
-                initRequestArchive: requestArchive
+                topUpRequestArchive: requestArchive
             ),
             signingKey: signingKey,
             creationTimeMs: 21,
@@ -155,7 +189,7 @@ final class KagemushaInstructionTransactionEncoderTests: XCTestCase {
         XCTAssertEqual(parsed.ttlMs, 234)
         XCTAssertEqual(parsed.nonce, 10)
         XCTAssertEqual(parsed.metadataCount, 1)
-        XCTAssertEqual(parsed.instructionWireName, KagemushaInstructionType.transfer.wireName)
+        XCTAssertEqual(parsed.instructionWireName, KagemushaInstructionType.topUpRecursive.wireName)
         XCTAssertEqual(parsed.instructionArchive, instructionArchive)
     }
 
@@ -215,14 +249,14 @@ final class KagemushaInstructionTransactionEncoderTests: XCTestCase {
         var topUpRequestArchive = Self.topUpRequestArchive(payload: Data([0x61, 0x62, 0x63]))
         let expectedTopUpRequestArchive = topUpRequestArchive
         var nativeTopUpInstructionArchive = Self.instructionArchive(
-            type: .transfer,
+            type: .topUpRecursive,
             payload: Data([0x71, 0x72, 0x73])
         )
         let expectedNativeTopUpInstructionArchive = nativeTopUpInstructionArchive
         let topUpRequest = KagemushaRecursiveTopUpTransactionRequest(
             chainId: "chain",
             authority: authority,
-            initRequestArchive: topUpRequestArchive
+            topUpRequestArchive: topUpRequestArchive
         )
         topUpRequestArchive[0] = 0
         var topUpRequests: [Data] = []
@@ -325,7 +359,7 @@ final class KagemushaInstructionTransactionEncoderTests: XCTestCase {
                 request: KagemushaRecursiveTopUpTransactionRequest(
                     chainId: " chain",
                     authority: authority,
-                    initRequestArchive: Data()
+                    topUpRequestArchive: Data()
                 ),
                 signingKey: signingKey,
                 creationTimeMs: 64,
@@ -343,7 +377,7 @@ final class KagemushaInstructionTransactionEncoderTests: XCTestCase {
                 request: KagemushaRecursiveTopUpTransactionRequest(
                     chainId: "chain",
                     authority: " \(authority) ",
-                    initRequestArchive: Data()
+                    topUpRequestArchive: Data()
                 ),
                 signingKey: signingKey,
                 creationTimeMs: 65,
@@ -526,13 +560,13 @@ final class KagemushaInstructionTransactionEncoderTests: XCTestCase {
                 request: KagemushaRecursiveTopUpTransactionRequest(
                     chainId: "chain",
                     authority: authority,
-                    initRequestArchive: Data()
+                    topUpRequestArchive: Data()
                 ),
                 signingKey: signingKey,
                 creationTimeMs: 31,
                 topUp: { _ in
                     nativeTopUpCalled = true
-                    return Self.instructionArchive(type: .transfer, payload: Data([0x01]))
+                    return Self.instructionArchive(type: .topUpRecursive, payload: Data([0x01]))
                 }
             )
         ) { error in
@@ -546,13 +580,13 @@ final class KagemushaInstructionTransactionEncoderTests: XCTestCase {
                 request: KagemushaRecursiveTopUpTransactionRequest(
                     chainId: "chain",
                     authority: authority,
-                    initRequestArchive: wrongTypeArchive
+                    topUpRequestArchive: wrongTypeArchive
                 ),
                 signingKey: signingKey,
                 creationTimeMs: 31,
                 topUp: { _ in
                     nativeTopUpCalled = true
-                    return Self.instructionArchive(type: .transfer, payload: Data([0x01]))
+                    return Self.instructionArchive(type: .topUpRecursive, payload: Data([0x01]))
                 }
             )
         ) { error in
@@ -625,7 +659,7 @@ final class KagemushaInstructionTransactionEncoderTests: XCTestCase {
                 request: KagemushaRecursiveTopUpTransactionRequest(
                     chainId: "chain",
                     authority: authority,
-                    initRequestArchive: requestArchive
+                    topUpRequestArchive: requestArchive
                 ),
                 signingKey: signingKey,
                 creationTimeMs: 41,
@@ -640,7 +674,7 @@ final class KagemushaInstructionTransactionEncoderTests: XCTestCase {
                 request: KagemushaRecursiveTopUpTransactionRequest(
                     chainId: "chain",
                     authority: authority,
-                    initRequestArchive: requestArchive
+                    topUpRequestArchive: requestArchive
                 ),
                 signingKey: signingKey,
                 creationTimeMs: 41,
@@ -649,7 +683,7 @@ final class KagemushaInstructionTransactionEncoderTests: XCTestCase {
         ) { error in
             XCTAssertEqual(
                 error as? KagemushaInstructionTransactionError,
-                .unexpectedInstructionArchiveType(expected: .transfer, actual: .redeemRecursive)
+                .unexpectedInstructionArchiveType(expected: .topUpRecursive, actual: .redeemRecursive)
             )
         }
 
@@ -658,7 +692,7 @@ final class KagemushaInstructionTransactionEncoderTests: XCTestCase {
                 request: KagemushaRecursiveTopUpTransactionRequest(
                     chainId: "chain",
                     authority: authority,
-                    initRequestArchive: requestArchive
+                    topUpRequestArchive: requestArchive
                 ),
                 signingKey: signingKey,
                 creationTimeMs: 41,

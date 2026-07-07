@@ -6398,6 +6398,26 @@ async fn handler_offline_v2_note_notes_redeem(
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
+async fn handler_offline_v2_kagemusha_topup(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<AxResponse, Error> {
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/offline/v2/kagemusha/topup",
+    )
+    .await?;
+    offline_v2_issuer::handle_kagemusha_topup(app, &method, &uri, &headers, body).await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
 async fn handler_offline_v2_note_audit(
     State(app): State<SharedAppState>,
     method: axum::http::Method,
@@ -39463,6 +39483,10 @@ impl Torii {
                 .route(
                     "/v1/offline/v2/notes/redeem",
                     post(handler_offline_v2_note_notes_redeem),
+                )
+                .route(
+                    "/v1/offline/v2/kagemusha/topup",
+                    post(handler_offline_v2_kagemusha_topup),
                 )
                 .route("/v1/offline/v2/audit", post(handler_offline_v2_note_audit));
             #[cfg(feature = "push")]

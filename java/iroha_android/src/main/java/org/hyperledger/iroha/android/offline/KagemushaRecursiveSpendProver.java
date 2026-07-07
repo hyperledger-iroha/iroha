@@ -32,7 +32,7 @@ public final class KagemushaRecursiveSpendProver {
   public static final int RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1 = 1;
   public static final int RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES = 8 * 1024 * 1024;
   public static final int RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES = 128;
-  public static final int NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;
+  public static final int NATIVE_ARCHIVE_MAX_BYTES = 256 * 1024 * 1024;
   public static final String RECURSIVE_SPEND_ACCUMULATOR_DOMAIN =
       "iroha:kagemusha:v1:recursive-spend-accumulator";
   public static final String RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN =
@@ -660,13 +660,13 @@ public final class KagemushaRecursiveSpendProver {
     return call(
         "top-up",
         requestArchive,
-        KagemushaRecursiveSpendProver::nativeTopUpSpend,
+        KagemushaRecursiveSpendProver::nativeTopUpInstruction,
         TOP_UP_NATIVE_AVAILABLE);
   }
 
   public static byte[] topUpSpend(
-      final KagemushaRecursiveSpendRequestCodecs.InitSpendRequest request) {
-    return topUpSpend(KagemushaRecursiveSpendRequestCodecs.encodeInitRequest(request));
+      final KagemushaRecursiveSpendRequestCodecs.TopUpSpendRequest request) {
+    return topUpSpend(KagemushaRecursiveSpendRequestCodecs.encodeTopUpRequest(request));
   }
 
   public static byte[] appendSpend(final byte[] requestArchive) {
@@ -906,7 +906,7 @@ public final class KagemushaRecursiveSpendProver {
 
   private static boolean probeTopUpNativeSymbol() {
     return expectIllegalArgumentProbe(
-        () -> nativeTopUpSpend(MALFORMED_NATIVE_PROBE_ARCHIVE));
+        () -> nativeTopUpInstruction(MALFORMED_NATIVE_PROBE_ARCHIVE));
   }
 
   static boolean expectIllegalArgumentProbe(final NativeProbe probe) {
@@ -989,7 +989,7 @@ public final class KagemushaRecursiveSpendProver {
 
   private static native byte[] nativeInitSpend(byte[] requestArchive);
 
-  private static native byte[] nativeTopUpSpend(byte[] requestArchive);
+  private static native byte[] nativeTopUpInstruction(byte[] requestArchive);
 
   private static native byte[] nativeAppendSpend(byte[] requestArchive);
 

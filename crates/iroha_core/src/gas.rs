@@ -278,6 +278,26 @@ fn gas_for_recursive_kagemusha_redeem(redeem: &dm_isi::offline::RedeemKagemushaR
     gas
 }
 
+fn gas_for_recursive_kagemusha_topup(topup: &dm_isi::offline::TopUpKagemushaRecursive) -> u64 {
+    let mut gas = topup
+        .init_request
+        .record_bundle
+        .bundle
+        .steps
+        .first()
+        .map_or(0, |step| {
+            gas_for_proof_attachment(
+                &step.attachment,
+                step.input_nullifiers.len(),
+                step.output_commitments.len(),
+            )
+        });
+    let pallas_archive_bytes =
+        u64::try_from(topup.init_request.pallas_open_envelopes_archive.len()).unwrap_or(u64::MAX);
+    gas = gas.saturating_add(zk_gas_per_proof_byte().saturating_mul(pallas_archive_bytes));
+    gas
+}
+
 /// Compute gas for a single instruction using a simple schedule.
 #[allow(clippy::too_many_lines)]
 pub fn meter_instruction(instr: &InstructionBox) -> u64 {
@@ -464,6 +484,9 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
     {
         return 0;
     }
+    if let Some(topup) = any.downcast_ref::<dm_isi::offline::TopUpKagemushaRecursive>() {
+        return gas_for_recursive_kagemusha_topup(topup);
+    }
     if let Some(redeem) = any.downcast_ref::<dm_isi::offline::RedeemKagemushaRecursive>() {
         return gas_for_recursive_kagemusha_redeem(redeem);
     }
@@ -526,6 +549,9 @@ pub fn confidential_gas_cost(instr: &InstructionBox) -> u64 {
         .is_some()
     {
         return 0;
+    }
+    if let Some(topup) = any.downcast_ref::<dm_isi::offline::TopUpKagemushaRecursive>() {
+        return gas_for_recursive_kagemusha_topup(topup);
     }
     if let Some(redeem) = any.downcast_ref::<dm_isi::offline::RedeemKagemushaRecursive>() {
         return gas_for_recursive_kagemusha_redeem(redeem);

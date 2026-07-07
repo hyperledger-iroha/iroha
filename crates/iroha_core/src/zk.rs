@@ -365,6 +365,12 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K: u32 = 8;
 pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K: u32 = 12;
 #[cfg(feature = "zk-halo2-ipa")]
 const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEYGEN_STACK_BYTES: usize = 4 * 1024 * 1024 * 1024;
+#[cfg(feature = "zk-halo2-ipa")]
+const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEYGEN_BYTES_PER_GIB: u128 = 1024 * 1024 * 1024;
+#[cfg(feature = "zk-halo2-ipa")]
+const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEYGEN_DEFAULT_MAX_ESTIMATED_GIB: u128 = 8;
+#[cfg(feature = "zk-halo2-ipa")]
+const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_COLUMNS_PER_SHARED_POINT_ROW_LOWER_BOUND: u128 = 48;
 
 /// Environment switch for developer-only Reserved-lineage key-artifact generation.
 ///
@@ -376,11 +382,384 @@ const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEYGEN_STACK_BYTES: usize = 4 * 1024 * 1
 pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV: &str =
     "IROHA_KAGEMUSHA_ALLOW_RUNTIME_LINEAGE_KEYGEN";
 
+/// Developer artifact-builder guard for Reserved-lineage recursive keygen.
+///
+/// The value is an estimated GiB budget. The default budget is intentionally
+/// workstation-sized; set it to `0` only on a dedicated high-memory artifact
+/// builder to bypass the guard after reviewing the printed circuit shape.
+pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEYGEN_MAX_ESTIMATED_GIB_ENV: &str =
+    "IROHA_KAGEMUSHA_LINEAGE_KEYGEN_MAX_ESTIMATED_GIB";
+
 const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACTS_REQUIRED: &str = "Kagemusha Reserved-lineage proving requires packaged verifier/proving key artifacts; runtime recursive verifier-slice key generation is developer-only and requires an explicit artifact-generation override";
 
 #[cfg(feature = "zk-halo2-ipa")]
 fn kagemusha_recursive_spend_lineage_runtime_keygen_enabled() -> bool {
     std::env::var_os(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV).is_some()
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_spend_lineage_keygen_max_estimated_bytes() -> Result<Option<u128>, String> {
+    match std::env::var(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEYGEN_MAX_ESTIMATED_GIB_ENV) {
+        Ok(value) => kagemusha_recursive_spend_lineage_keygen_max_estimated_bytes_from_gib_value(
+            Some(&value),
+        ),
+        Err(std::env::VarError::NotPresent) => {
+            kagemusha_recursive_spend_lineage_keygen_max_estimated_bytes_from_gib_value(None)
+        }
+        Err(std::env::VarError::NotUnicode(_)) => Err(format!(
+            "{KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEYGEN_MAX_ESTIMATED_GIB_ENV} must be valid UTF-8"
+        )),
+    }
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_spend_lineage_keygen_max_estimated_bytes_from_gib_value(
+    value: Option<&str>,
+) -> Result<Option<u128>, String> {
+    let budget_gib = match value {
+        Some(value) => {
+            let value = value.trim();
+            if value.is_empty() {
+                return Err(format!(
+                    "{KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEYGEN_MAX_ESTIMATED_GIB_ENV} must be a non-negative integer GiB budget or 0 to disable the guard"
+                ));
+            }
+            value.parse::<u128>().map_err(|err| {
+                format!(
+                    "{KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEYGEN_MAX_ESTIMATED_GIB_ENV} must be a non-negative integer GiB budget or 0 to disable the guard: {err}"
+                )
+            })?
+        }
+        None => KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEYGEN_DEFAULT_MAX_ESTIMATED_GIB,
+    };
+    if budget_gib == 0 {
+        return Ok(None);
+    }
+    budget_gib
+        .checked_mul(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEYGEN_BYTES_PER_GIB)
+        .map(Some)
+        .ok_or_else(|| {
+            format!("{KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEYGEN_MAX_ESTIMATED_GIB_ENV} is too large")
+        })
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_spend_lineage_estimated_keygen_bytes(
+    shape: &halo2_backend::CircuitShape,
+    ipa_k: u32,
+) -> u128 {
+    let domain_rows = 1u128.checked_shl(ipa_k).unwrap_or(u128::MAX);
+    let scalar_bytes = 32u128;
+    let configured_columns = (shape.advice_columns as u128)
+        .saturating_add(shape.fixed_columns as u128)
+        .saturating_add(shape.instance_columns as u128)
+        .saturating_add(shape.selectors as u128)
+        .saturating_add((shape.permutation_columns as u128).saturating_mul(2));
+    let vector_bytes = domain_rows
+        .saturating_mul(scalar_bytes)
+        .saturating_mul(configured_columns);
+    let metadata_items = (shape.gates as u128)
+        .saturating_add(shape.advice_queries as u128)
+        .saturating_add(shape.fixed_queries as u128)
+        .saturating_add(shape.instance_queries as u128)
+        .saturating_add(shape.lookups as u128);
+    vector_bytes.saturating_add(metadata_items.saturating_mul(128))
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct KagemushaRecursiveSpendLineagePreconfigureKeygenShape {
+    verifier_count: usize,
+    scalar_mul_terms: usize,
+    fixed_windows: usize,
+    fixed_window_bits: usize,
+    table_rows_per_window: usize,
+    shared_point_table_rows: usize,
+    estimated_advice_columns: u128,
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_spend_lineage_preconfigure_keygen_shape(
+    opening_len: usize,
+    verifier_count: usize,
+) -> Result<KagemushaRecursiveSpendLineagePreconfigureKeygenShape, String> {
+    if verifier_count == 0 {
+        return Err("Kagemusha recursive keygen verifier count must be non-zero".to_owned());
+    }
+    let plan = kagemusha_recursive_fixed_window_table_plan(opening_len)?;
+    let verifier_count_u128 = verifier_count as u128;
+    let estimated_advice_columns = (plan.shared_point_table_rows as u128)
+        .saturating_mul(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_COLUMNS_PER_SHARED_POINT_ROW_LOWER_BOUND)
+        .saturating_mul(verifier_count_u128);
+    Ok(KagemushaRecursiveSpendLineagePreconfigureKeygenShape {
+        verifier_count,
+        scalar_mul_terms: plan.scalar_mul_terms,
+        fixed_windows: plan.fixed_windows,
+        fixed_window_bits: plan.fixed_window_bits,
+        table_rows_per_window: plan.table_rows_per_window,
+        shared_point_table_rows: plan.shared_point_table_rows,
+        estimated_advice_columns,
+    })
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_spend_lineage_preconfigure_estimated_keygen_bytes(
+    shape: &KagemushaRecursiveSpendLineagePreconfigureKeygenShape,
+    ipa_k: u32,
+) -> u128 {
+    let domain_rows = 1u128.checked_shl(ipa_k).unwrap_or(u128::MAX);
+    domain_rows
+        .saturating_mul(32)
+        .saturating_mul(shape.estimated_advice_columns)
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_spend_lineage_format_gib(bytes: u128) -> String {
+    let whole = bytes / KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEYGEN_BYTES_PER_GIB;
+    let fractional = (bytes % KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEYGEN_BYTES_PER_GIB)
+        .saturating_mul(100)
+        / KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEYGEN_BYTES_PER_GIB;
+    format!("{whole}.{fractional:02}")
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_spend_lineage_guard_preconfigure_keygen_shape(
+    profile: &str,
+    circuit_id: &str,
+    opening_len: usize,
+    ipa_k: u32,
+    verifier_count: usize,
+) -> Result<(), String> {
+    let shape =
+        kagemusha_recursive_spend_lineage_preconfigure_keygen_shape(opening_len, verifier_count)?;
+    let estimated_bytes =
+        kagemusha_recursive_spend_lineage_preconfigure_estimated_keygen_bytes(&shape, ipa_k);
+    let max_bytes = kagemusha_recursive_spend_lineage_keygen_max_estimated_bytes()?;
+    let max_gib = max_bytes
+        .map(kagemusha_recursive_spend_lineage_format_gib)
+        .unwrap_or_else(|| "disabled".to_owned());
+    let domain_rows = 1u128.checked_shl(ipa_k).unwrap_or(u128::MAX);
+    eprintln!(
+        "kagemusha recursive {profile} keygen preconfigure-estimate circuit_id={circuit_id} len={opening_len} k={ipa_k} rows={domain_rows} verifier_count={} scalar_mul_terms={} fixed_windows={} fixed_window_bits={} table_rows_per_window={} shared_point_table_rows={} estimated_advice_columns={} estimated_keygen_gib={} max_estimated_keygen_gib={max_gib}",
+        shape.verifier_count,
+        shape.scalar_mul_terms,
+        shape.fixed_windows,
+        shape.fixed_window_bits,
+        shape.table_rows_per_window,
+        shape.shared_point_table_rows,
+        shape.estimated_advice_columns,
+        kagemusha_recursive_spend_lineage_format_gib(estimated_bytes)
+    );
+    if let Some(max_bytes) = max_bytes {
+        if estimated_bytes > max_bytes {
+            return Err(format!(
+                "Kagemusha recursive {profile} keygen preconfigure estimate {} GiB exceeds guard {} GiB for circuit `{circuit_id}` opening length {opening_len}; refusing to configure the current column-heavy verifier-slice layout. Set {KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEYGEN_MAX_ESTIMATED_GIB_ENV}=0 only on a dedicated high-memory artifact builder after reviewing this estimate.",
+                kagemusha_recursive_spend_lineage_format_gib(estimated_bytes),
+                kagemusha_recursive_spend_lineage_format_gib(max_bytes)
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_spend_lineage_guard_keygen_shape(
+    profile: &str,
+    circuit_id: &str,
+    opening_len: usize,
+    ipa_k: u32,
+    shape: halo2_backend::CircuitShape,
+) -> Result<(), String> {
+    let estimated_bytes = kagemusha_recursive_spend_lineage_estimated_keygen_bytes(&shape, ipa_k);
+    let max_bytes = kagemusha_recursive_spend_lineage_keygen_max_estimated_bytes()?;
+    let max_gib = max_bytes
+        .map(kagemusha_recursive_spend_lineage_format_gib)
+        .unwrap_or_else(|| "disabled".to_owned());
+    let domain_rows = 1u128.checked_shl(ipa_k).unwrap_or(u128::MAX);
+    eprintln!(
+        "kagemusha recursive {profile} keygen shape circuit_id={circuit_id} len={opening_len} k={ipa_k} rows={domain_rows} advice_columns={} fixed_columns={} instance_columns={} selectors={} gates={} advice_queries={} fixed_queries={} instance_queries={} permutation_columns={} lookups={} minimum_rows={} estimated_keygen_gib={} max_estimated_keygen_gib={max_gib}",
+        shape.advice_columns,
+        shape.fixed_columns,
+        shape.instance_columns,
+        shape.selectors,
+        shape.gates,
+        shape.advice_queries,
+        shape.fixed_queries,
+        shape.instance_queries,
+        shape.permutation_columns,
+        shape.lookups,
+        shape.minimum_rows,
+        kagemusha_recursive_spend_lineage_format_gib(estimated_bytes)
+    );
+    if let Some(max_bytes) = max_bytes {
+        if estimated_bytes > max_bytes {
+            // TODO: Replace the current column-heavy verifier-slice layout with a
+            // row-oriented circuit so release artifact generation fits workstation
+            // memory and this guard becomes a sanity check instead of a hard stop.
+            return Err(format!(
+                "Kagemusha recursive {profile} keygen estimated memory {} GiB exceeds guard {} GiB for circuit `{circuit_id}` opening length {opening_len}; set {KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEYGEN_MAX_ESTIMATED_GIB_ENV}=0 only on a dedicated high-memory artifact builder to bypass this guard.",
+                kagemusha_recursive_spend_lineage_format_gib(estimated_bytes),
+                kagemusha_recursive_spend_lineage_format_gib(max_bytes)
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(all(test, feature = "zk-halo2-ipa"))]
+mod kagemusha_keygen_guard_tests {
+    use super::*;
+
+    #[test]
+    fn kagemusha_keygen_estimate_scales_with_columns() {
+        let shape = halo2_backend::CircuitShape {
+            advice_columns: 1,
+            fixed_columns: 1,
+            instance_columns: 1,
+            selectors: 1,
+            permutation_columns: 1,
+            gates: 2,
+            advice_queries: 3,
+            fixed_queries: 5,
+            instance_queries: 7,
+            lookups: 11,
+            minimum_rows: 13,
+        };
+        let bytes = kagemusha_recursive_spend_lineage_estimated_keygen_bytes(&shape, 10);
+        let expected_vector_bytes = 1024u128 * 32 * 6;
+        let expected_metadata_bytes = (2u128 + 3 + 5 + 7 + 11) * 128;
+
+        assert_eq!(bytes, expected_vector_bytes + expected_metadata_bytes);
+
+        let wider_shape = halo2_backend::CircuitShape {
+            advice_columns: 2,
+            fixed_columns: 2,
+            instance_columns: 2,
+            selectors: 2,
+            permutation_columns: 2,
+            ..shape
+        };
+        assert!(kagemusha_recursive_spend_lineage_estimated_keygen_bytes(&wider_shape, 10) > bytes);
+    }
+
+    #[test]
+    fn kagemusha_keygen_budget_parser_accepts_default_override_and_disable() {
+        let bytes_per_gib = KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEYGEN_BYTES_PER_GIB;
+
+        assert_eq!(
+            kagemusha_recursive_spend_lineage_keygen_max_estimated_bytes_from_gib_value(None)
+                .expect("default budget parses"),
+            Some(
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEYGEN_DEFAULT_MAX_ESTIMATED_GIB * bytes_per_gib
+            )
+        );
+        assert_eq!(
+            kagemusha_recursive_spend_lineage_keygen_max_estimated_bytes_from_gib_value(Some(
+                " 16 "
+            ))
+            .expect("override budget parses"),
+            Some(16 * bytes_per_gib)
+        );
+        assert_eq!(
+            kagemusha_recursive_spend_lineage_keygen_max_estimated_bytes_from_gib_value(Some("0"))
+                .expect("zero disables guard"),
+            None
+        );
+    }
+
+    #[test]
+    fn kagemusha_keygen_budget_parser_rejects_invalid_values() {
+        for value in ["", "   ", "not-a-number", "-1"] {
+            let err = kagemusha_recursive_spend_lineage_keygen_max_estimated_bytes_from_gib_value(
+                Some(value),
+            )
+            .expect_err("invalid budget must reject");
+            assert!(
+                err.contains("non-negative integer GiB budget"),
+                "unexpected budget error for `{value}`: {err}"
+            );
+        }
+
+        let err = kagemusha_recursive_spend_lineage_keygen_max_estimated_bytes_from_gib_value(
+            Some(&u128::MAX.to_string()),
+        )
+        .expect_err("overflowing budget must reject");
+        assert!(
+            err.contains("too large"),
+            "unexpected overflow error: {err}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_preconfigure_keygen_estimate_uses_fixed_window_plan() {
+        let shape = kagemusha_recursive_spend_lineage_preconfigure_keygen_shape(4, 1)
+            .expect("len4 one-hop preconfigure shape");
+
+        assert_eq!(shape.verifier_count, 1);
+        assert_eq!(shape.scalar_mul_terms, 21);
+        assert_eq!(shape.fixed_windows, KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS);
+        assert_eq!(
+            shape.fixed_window_bits,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS
+        );
+        assert_eq!(shape.table_rows_per_window, 16);
+        assert_eq!(shape.shared_point_table_rows, 21 * 64 * 16);
+        assert_eq!(shape.estimated_advice_columns, 1_032_192);
+
+        let append_shape = kagemusha_recursive_spend_lineage_preconfigure_keygen_shape(4, 2)
+            .expect("len4 append preconfigure shape");
+        assert_eq!(
+            append_shape.estimated_advice_columns,
+            shape.estimated_advice_columns * 2
+        );
+
+        let production_shape = kagemusha_recursive_spend_lineage_preconfigure_keygen_shape(128, 1)
+            .expect("len128 preconfigure shape");
+        assert!(production_shape.estimated_advice_columns > shape.estimated_advice_columns);
+    }
+
+    #[test]
+    fn kagemusha_preconfigure_keygen_estimate_rejects_invalid_profiles() {
+        let err = kagemusha_recursive_spend_lineage_preconfigure_keygen_shape(4, 0)
+            .expect_err("zero verifier count must reject");
+        assert!(
+            err.contains("verifier count"),
+            "unexpected zero-count error: {err}"
+        );
+
+        let err = kagemusha_recursive_spend_lineage_preconfigure_keygen_shape(3, 1)
+            .expect_err("non-power-of-two opening length must reject");
+        assert!(
+            err.contains("power-of-two"),
+            "unexpected non-power-of-two error: {err}"
+        );
+
+        let err = kagemusha_recursive_spend_lineage_preconfigure_keygen_shape(1, 1)
+            .expect_err("below-min opening length must reject");
+        assert!(
+            err.contains("supports opening lengths"),
+            "unexpected below-min error: {err}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_preconfigure_keygen_estimate_scales_with_ipa_k() {
+        let shape = kagemusha_recursive_spend_lineage_preconfigure_keygen_shape(4, 1)
+            .expect("len4 one-hop preconfigure shape");
+        let k8 = kagemusha_recursive_spend_lineage_preconfigure_estimated_keygen_bytes(&shape, 8);
+        let k9 = kagemusha_recursive_spend_lineage_preconfigure_estimated_keygen_bytes(&shape, 9);
+        let k12 = kagemusha_recursive_spend_lineage_preconfigure_estimated_keygen_bytes(
+            &shape,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K,
+        );
+
+        assert_eq!(k9, k8 * 2);
+        assert_eq!(k12, k8 << (KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K - 8));
+        assert!(
+            k12 > KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEYGEN_DEFAULT_MAX_ESTIMATED_GIB
+                * KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEYGEN_BYTES_PER_GIB
+        );
+    }
 }
 /// Maximum encoded proof payload accepted for Kagemusha folded proofs.
 pub const KAGEMUSHA_FOLDED_MAX_PROOF_BYTES: u32 = 8 * 1024 * 1024;
@@ -2398,16 +2777,34 @@ fn derive_halo2_ipa_kagemusha_recursive_one_hop_verifier_slice_proving_key_raw_f
             params.k()
         ));
     }
-    let pk = halo2_backend::keygen_pk2(
-        &params,
-        &pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSliceKeygenShape::<
+    kagemusha_recursive_spend_lineage_guard_preconfigure_keygen_shape(
+        "one-hop proving-key",
+        circuit_id,
+        LEN,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K,
+        1,
+    )?;
+    let shape = halo2_backend::circuit_shape::<
+        pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSliceKeygenShape<
             LEN,
             KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
             KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
-        >::default(),
-        false,
-    )
-    .map_err(|err| format!("failed to derive {context} proving key: {err}"))?;
+        >,
+    >();
+    kagemusha_recursive_spend_lineage_guard_keygen_shape(
+        "one-hop proving-key",
+        circuit_id,
+        LEN,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K,
+        shape,
+    )?;
+    let circuit = pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSliceKeygenShape::<
+        LEN,
+        KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+        KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+    >::default();
+    let pk = halo2_backend::keygen_pk2(&params, &circuit, false)
+        .map_err(|err| format!("failed to derive {context} proving key: {err}"))?;
     ensure_generated_proving_key_vk_matches_box(&pk, vk_box, circuit_id, context)?;
     Ok((
         hash_vk(vk_box),
@@ -2575,16 +2972,34 @@ fn derive_halo2_ipa_kagemusha_recursive_append_verifier_slice_proving_key_raw_fo
             params.k()
         ));
     }
-    let pk = halo2_backend::keygen_pk2(
-        &params,
-        &pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSliceKeygenShape::<
+    kagemusha_recursive_spend_lineage_guard_preconfigure_keygen_shape(
+        "append proving-key",
+        circuit_id,
+        LEN,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K,
+        2,
+    )?;
+    let shape = halo2_backend::circuit_shape::<
+        pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSliceKeygenShape<
             LEN,
             KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
             KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
-        >::default(),
-        false,
-    )
-    .map_err(|err| format!("failed to derive {context} proving key: {err}"))?;
+        >,
+    >();
+    kagemusha_recursive_spend_lineage_guard_keygen_shape(
+        "append proving-key",
+        circuit_id,
+        LEN,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K,
+        shape,
+    )?;
+    let circuit = pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSliceKeygenShape::<
+        LEN,
+        KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+        KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+    >::default();
+    let pk = halo2_backend::keygen_pk2(&params, &circuit, false)
+        .map_err(|err| format!("failed to derive {context} proving key: {err}"))?;
     ensure_generated_proving_key_vk_matches_box(&pk, vk_box, circuit_id, context)?;
     Ok((
         hash_vk(vk_box),
@@ -2720,7 +3135,7 @@ fn build_kagemusha_recursive_spend_lineage_vk_box_on_large_stack<const LEN: usiz
 
 #[cfg(feature = "zk-halo2-ipa")]
 fn build_kagemusha_recursive_spend_lineage_vk_box<const LEN: usize>()
--> Result<VerifyingKeyBox, halo2_backend::Error> {
+-> Result<VerifyingKeyBox, String> {
     build_kagemusha_recursive_one_hop_verifier_slice_vk_box::<LEN>(
         KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
     )
@@ -2748,8 +3163,29 @@ fn build_kagemusha_recursive_compact_payment_token_vk_box_on_large_stack<const L
 #[cfg(feature = "zk-halo2-ipa")]
 fn build_kagemusha_recursive_one_hop_verifier_slice_vk_box<const LEN: usize>(
     circuit_id: &str,
-) -> Result<VerifyingKeyBox, halo2_backend::Error> {
+) -> Result<VerifyingKeyBox, String> {
     let params = pasta_params_new(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K);
+    kagemusha_recursive_spend_lineage_guard_preconfigure_keygen_shape(
+        "one-hop verifier-key",
+        circuit_id,
+        LEN,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K,
+        1,
+    )?;
+    let shape = halo2_backend::circuit_shape::<
+        pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSliceKeygenShape<
+            LEN,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+        >,
+    >();
+    kagemusha_recursive_spend_lineage_guard_keygen_shape(
+        "one-hop verifier-key",
+        circuit_id,
+        LEN,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K,
+        shape,
+    )?;
     let circuit = pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSliceKeygenShape::<
         LEN,
         KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
@@ -2762,7 +3198,9 @@ fn build_kagemusha_recursive_one_hop_verifier_slice_vk_box<const LEN: usize>(
         KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
         KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS
     );
-    let vk = halo2_backend::keygen_vk(&params, &circuit)?;
+    let vk = halo2_backend::keygen_vk(&params, &circuit).map_err(|err| {
+        format!("failed to generate Kagemusha recursive one-hop verifier key: {err}")
+    })?;
     eprintln!(
         "kagemusha recursive one-hop vk keygen done circuit_id={circuit_id} len={LEN} elapsed_ms={}",
         started_at.elapsed().as_millis()
@@ -2799,7 +3237,7 @@ fn build_kagemusha_recursive_spend_lineage_append_vk_box_on_large_stack<const LE
 
 #[cfg(feature = "zk-halo2-ipa")]
 fn build_kagemusha_recursive_spend_lineage_append_vk_box<const LEN: usize>()
--> Result<VerifyingKeyBox, halo2_backend::Error> {
+-> Result<VerifyingKeyBox, String> {
     build_kagemusha_recursive_append_verifier_slice_vk_box::<LEN>(
         KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID,
     )
@@ -2832,8 +3270,29 @@ fn build_kagemusha_recursive_compact_payment_token_append_vk_box_on_large_stack<
 #[cfg(feature = "zk-halo2-ipa")]
 fn build_kagemusha_recursive_append_verifier_slice_vk_box<const LEN: usize>(
     circuit_id: &str,
-) -> Result<VerifyingKeyBox, halo2_backend::Error> {
+) -> Result<VerifyingKeyBox, String> {
     let params = pasta_params_new(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K);
+    kagemusha_recursive_spend_lineage_guard_preconfigure_keygen_shape(
+        "append verifier-key",
+        circuit_id,
+        LEN,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K,
+        2,
+    )?;
+    let shape = halo2_backend::circuit_shape::<
+        pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSliceKeygenShape<
+            LEN,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+        >,
+    >();
+    kagemusha_recursive_spend_lineage_guard_keygen_shape(
+        "append verifier-key",
+        circuit_id,
+        LEN,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K,
+        shape,
+    )?;
     let circuit = pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSliceKeygenShape::<
         LEN,
         KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
@@ -2846,7 +3305,9 @@ fn build_kagemusha_recursive_append_verifier_slice_vk_box<const LEN: usize>(
         KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
         KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS
     );
-    let vk = halo2_backend::keygen_vk(&params, &circuit)?;
+    let vk = halo2_backend::keygen_vk(&params, &circuit).map_err(|err| {
+        format!("failed to generate Kagemusha recursive append verifier key: {err}")
+    })?;
     eprintln!(
         "kagemusha recursive append vk keygen done circuit_id={circuit_id} len={LEN} elapsed_ms={}",
         started_at.elapsed().as_millis()
@@ -4954,6 +5415,8 @@ fn cached_kagemusha_recursive_spend_lineage_proving_key<const LEN: usize>(
     params: &PastaParams,
     parsed_vk: &halo2_backend::VerifyingKey,
     vk_commitment: [u8; 32],
+    circuit_id: &str,
+    context: &str,
 ) -> Result<Arc<halo2_backend::ProvingKey>, String> {
     static CACHE: OnceLock<Mutex<BTreeMap<[u8; 32], Arc<halo2_backend::ProvingKey>>>> =
         OnceLock::new();
@@ -4968,6 +5431,27 @@ fn cached_kagemusha_recursive_spend_lineage_proving_key<const LEN: usize>(
         return Ok(proving_key);
     }
 
+    kagemusha_recursive_spend_lineage_guard_preconfigure_keygen_shape(
+        context,
+        circuit_id,
+        LEN,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K,
+        1,
+    )?;
+    let shape = halo2_backend::circuit_shape::<
+        pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSliceKeygenShape<
+            LEN,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+        >,
+    >();
+    kagemusha_recursive_spend_lineage_guard_keygen_shape(
+        context,
+        circuit_id,
+        LEN,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K,
+        shape,
+    )?;
     let proving_key = halo2_backend::keygen_pk(
         params,
         parsed_vk.clone(),
@@ -4977,9 +5461,7 @@ fn cached_kagemusha_recursive_spend_lineage_proving_key<const LEN: usize>(
             KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
         >::default(),
     )
-    .map_err(|err| {
-        format!("failed to derive Kagemusha recursive spend lineage proving key: {err}")
-    })?;
+    .map_err(|err| format!("failed to derive {context} proving key: {err}"))?;
     let proving_key = Arc::new(proving_key);
     let mut cache = cache
         .lock()
@@ -4995,6 +5477,8 @@ fn cached_kagemusha_recursive_spend_lineage_append_proving_key<const LEN: usize>
     params: &PastaParams,
     parsed_vk: &halo2_backend::VerifyingKey,
     vk_commitment: [u8; 32],
+    circuit_id: &str,
+    context: &str,
 ) -> Result<Arc<halo2_backend::ProvingKey>, String> {
     static CACHE: OnceLock<Mutex<BTreeMap<[u8; 32], Arc<halo2_backend::ProvingKey>>>> =
         OnceLock::new();
@@ -5009,6 +5493,27 @@ fn cached_kagemusha_recursive_spend_lineage_append_proving_key<const LEN: usize>
         return Ok(proving_key);
     }
 
+    kagemusha_recursive_spend_lineage_guard_preconfigure_keygen_shape(
+        context,
+        circuit_id,
+        LEN,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K,
+        2,
+    )?;
+    let shape = halo2_backend::circuit_shape::<
+        pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSliceKeygenShape<
+            LEN,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+        >,
+    >();
+    kagemusha_recursive_spend_lineage_guard_keygen_shape(
+        context,
+        circuit_id,
+        LEN,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K,
+        shape,
+    )?;
     let proving_key = halo2_backend::keygen_pk(
         params,
         parsed_vk.clone(),
@@ -5018,9 +5523,7 @@ fn cached_kagemusha_recursive_spend_lineage_append_proving_key<const LEN: usize>
             KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
         >::default(),
     )
-    .map_err(|err| {
-        format!("failed to derive Kagemusha recursive spend lineage append proving key: {err}")
-    })?;
+    .map_err(|err| format!("failed to derive {context} proving key: {err}"))?;
     let proving_key = Arc::new(proving_key);
     let mut cache = cache
         .lock()
@@ -5871,6 +6374,8 @@ fn prove_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_envelope<const LEN:
             &ipa_params,
             &parsed_vk,
             vk_commitment,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
+            "one-hop runtime proving-key",
         )?
     };
 
@@ -6022,6 +6527,8 @@ fn prove_halo2_ipa_kagemusha_recursive_compact_payment_token_one_hop_envelope<co
             &ipa_params,
             &parsed_vk,
             vk_commitment,
+            KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID,
+            "compact one-hop runtime proving-key",
         )?
     };
 
@@ -6648,6 +7155,8 @@ fn prove_halo2_ipa_kagemusha_recursive_compact_payment_token_append_envelope<con
             &ipa_params,
             &parsed_vk,
             vk_commitment,
+            KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID,
+            "compact append runtime proving-key",
         )?
     };
 
@@ -7014,6 +7523,8 @@ fn prove_halo2_ipa_kagemusha_recursive_spend_lineage_append_envelope<const LEN: 
             &ipa_params,
             &parsed_vk,
             vk_commitment,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID,
+            "append runtime proving-key",
         )?
     };
 
@@ -26170,6 +26681,18 @@ mod kagemusha_non_native_limb_circuit_tests {
             .is_ok()
     }
 
+    fn verify_native_pasta_fp_fixed_window_decomposition_rows<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: pasta_tiny::NativePastaFpFixedWindowDecompositionRows<WINDOWS, WINDOW_BITS>,
+    ) -> bool {
+        MockProver::run(8, &circuit, vec![])
+            .expect("row-oriented native Pasta Fp fixed-window decomposition mock prover")
+            .verify()
+            .is_ok()
+    }
+
     fn native_pasta_fp_ipa_scalar_fold_instances(
         circuit: &pasta_tiny::NativePastaFpIpaScalarFold,
     ) -> Vec<Vec<Scalar>> {
@@ -26673,6 +27196,23 @@ mod kagemusha_non_native_limb_circuit_tests {
             .expect("Vesta affine fixed-window select verifier panicked")
     }
 
+    fn verify_vesta_affine_fixed_window_select_from_table_rows<const WINDOW_BITS: usize>(
+        circuit: pasta_tiny::NonNativeVestaAffineFixedWindowSelectFromTableRows<WINDOW_BITS>,
+    ) -> bool {
+        std::thread::Builder::new()
+            .name("non-native-vesta-affine-fixed-window-select-from-table-rows".to_owned())
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                MockProver::run(8, &circuit, vec![])
+                    .expect("row-oriented non-native Vesta affine fixed-window select mock prover")
+                    .verify()
+                    .is_ok()
+            })
+            .expect("spawn row-oriented Vesta affine fixed-window select verifier")
+            .join()
+            .expect("row-oriented Vesta affine fixed-window select verifier panicked")
+    }
+
     fn vesta_point_instances(
         point: (
             [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
@@ -26711,6 +27251,29 @@ mod kagemusha_non_native_limb_circuit_tests {
             .expect("spawn Vesta affine fixed-window table verifier")
             .join()
             .expect("Vesta affine fixed-window table verifier panicked")
+    }
+
+    fn verify_vesta_affine_fixed_window_table_rows<const WINDOW_BITS: usize>(
+        base: (
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            bool,
+        ),
+        circuit: pasta_tiny::NonNativeVestaAffineFixedWindowTableRows<WINDOW_BITS>,
+    ) -> bool {
+        let instances = vesta_point_instances(base);
+        std::thread::Builder::new()
+            .name("non-native-vesta-affine-fixed-window-table-rows".to_owned())
+            .stack_size(512 * 1024 * 1024)
+            .spawn(move || {
+                MockProver::run(10, &circuit, instances)
+                    .expect("row-oriented non-native Vesta affine fixed-window table mock prover")
+                    .verify()
+                    .is_ok()
+            })
+            .expect("spawn row-oriented Vesta affine fixed-window table verifier")
+            .join()
+            .expect("row-oriented Vesta affine fixed-window table verifier panicked")
     }
 
     fn verify_vesta_affine_fixed_window_table_select<const WINDOW_BITS: usize>(
@@ -29672,6 +30235,48 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    fn kagemusha_native_pasta_fp_fixed_window_decomposition_rows_accepts_three_windows() {
+        let circuit =
+            pasta_tiny::NativePastaFpFixedWindowDecompositionRows::<3, 2>::try_from_scalar(
+                Scalar::from(29),
+            )
+            .expect("valid row-oriented fixed-window scalar decomposition");
+
+        assert_eq!(
+            circuit.decomposition.digits,
+            vec![Scalar::from(1), Scalar::from(3), Scalar::from(1)]
+        );
+        assert!(verify_native_pasta_fp_fixed_window_decomposition_rows(
+            circuit
+        ));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_fixed_window_decomposition_rows_reduces_advice_columns() {
+        let column_heavy = halo2_backend::circuit_shape::<
+            pasta_tiny::NativePastaFpFixedWindowDecomposition<
+                { KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS },
+                { KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS },
+            >,
+        >();
+        let row_oriented = halo2_backend::circuit_shape::<
+            pasta_tiny::NativePastaFpFixedWindowDecompositionRows<
+                { KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS },
+                { KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS },
+            >,
+        >();
+
+        assert!(
+            row_oriented.advice_columns * 4 < column_heavy.advice_columns,
+            "row-oriented scalar decomposition should remove per-window advice columns: row={row_oriented:?} column={column_heavy:?}"
+        );
+        assert!(
+            row_oriented.advice_columns <= 40,
+            "row-oriented scalar decomposition advice columns unexpectedly high: {row_oriented:?}"
+        );
+    }
+
+    #[test]
     fn kagemusha_native_pasta_fp_fixed_window_decomposition_rejects_empty_windows_builder() {
         let err = pasta_tiny::NativePastaFpFixedWindowDecomposition::<0, 2>::try_from_scalar(
             Scalar::from(1),
@@ -29746,6 +30351,88 @@ mod kagemusha_non_native_limb_circuit_tests {
         circuit.digit_bits[0][0] = Scalar::from(2);
 
         assert!(!verify_native_pasta_fp_fixed_window_decomposition(circuit));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_fixed_window_decomposition_rows_rejects_digit_value_tamper() {
+        let mut circuit =
+            pasta_tiny::NativePastaFpFixedWindowDecompositionRows::<3, 2>::try_from_scalar(
+                Scalar::from(29),
+            )
+            .expect("valid row-oriented fixed-window scalar decomposition");
+        circuit.decomposition.digits[0] = Scalar::from(2);
+
+        assert!(!verify_native_pasta_fp_fixed_window_decomposition_rows(
+            circuit
+        ));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_fixed_window_decomposition_rows_rejects_non_boolean_digit_bit() {
+        let mut circuit =
+            pasta_tiny::NativePastaFpFixedWindowDecompositionRows::<3, 2>::try_from_scalar(
+                Scalar::from(29),
+            )
+            .expect("valid row-oriented fixed-window scalar decomposition");
+        circuit.decomposition.digit_bits[0][0] = Scalar::from(2);
+
+        assert!(!verify_native_pasta_fp_fixed_window_decomposition_rows(
+            circuit
+        ));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_fixed_window_decomposition_rows_rejects_digit_bit_substitution() {
+        let mut circuit =
+            pasta_tiny::NativePastaFpFixedWindowDecompositionRows::<3, 2>::try_from_scalar(
+                Scalar::from(29),
+            )
+            .expect("valid row-oriented fixed-window scalar decomposition");
+        circuit.decomposition.digit_bits[1][0] = Scalar::from(0);
+        circuit.decomposition.digits[1] = Scalar::from(2);
+
+        assert!(!verify_native_pasta_fp_fixed_window_decomposition_rows(
+            circuit
+        ));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_fixed_window_decomposition_rows_rejects_scalar_value_substitution()
+    {
+        let mut circuit =
+            pasta_tiny::NativePastaFpFixedWindowDecompositionRows::<3, 2>::try_from_scalar(
+                Scalar::from(29),
+            )
+            .expect("valid row-oriented fixed-window scalar decomposition");
+        circuit.decomposition.scalar = Box::new(pasta_tiny::NativePastaFpScalar::from_scalar(
+            Scalar::from(30),
+        ));
+
+        assert!(!verify_native_pasta_fp_fixed_window_decomposition_rows(
+            circuit
+        ));
+    }
+
+    #[test]
+    fn kagemusha_native_pasta_fp_fixed_window_decomposition_rows_rejects_noncanonical_scalar_alias()
+    {
+        let mut circuit =
+            pasta_tiny::NativePastaFpFixedWindowDecompositionRows::<3, 2>::try_from_scalar(
+                Scalar::from(29),
+            )
+            .expect("valid row-oriented fixed-window scalar decomposition");
+        let mut aliased_scalar = pasta_tiny::PASTA_FP_MODULUS_LIMBS;
+        aliased_scalar[0] = aliased_scalar[0]
+            .checked_add(29)
+            .expect("Pasta Fp modulus low limb has room for test offset");
+        circuit.decomposition.scalar = Box::new(
+            pasta_tiny::NativePastaFpScalar::unchecked_from_limbs(aliased_scalar),
+        );
+        assert_eq!(circuit.decomposition.scalar.value, Scalar::from(29));
+
+        assert!(!verify_native_pasta_fp_fixed_window_decomposition_rows(
+            circuit
+        ));
     }
 
     #[test]
@@ -31150,6 +31837,198 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_select_from_table_rows_accepts_two_bit_digit()
+    {
+        let table = vesta_fixed_window_select_table();
+        let circuit =
+            pasta_tiny::NonNativeVestaAffineFixedWindowSelectFromTableRows::<2>::try_from_table(
+                2,
+                table.clone(),
+                table[2],
+            )
+            .expect("valid row-oriented two-bit Vesta fixed-window selection");
+
+        assert_eq!(circuit.digit_bits, vec![Scalar::from(0), Scalar::from(1)]);
+        assert_eq!(circuit.nodes.len(), 7);
+        assert!(verify_vesta_affine_fixed_window_select_from_table_rows(
+            circuit
+        ));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_select_from_table_rows_reduces_advice_columns()
+     {
+        let column_heavy =
+            halo2_backend::circuit_shape::<pasta_tiny::NonNativeVestaAffineFixedWindowSelect<4>>();
+        let row_oriented = halo2_backend::circuit_shape::<
+            pasta_tiny::NonNativeVestaAffineFixedWindowSelectFromTableRows<4>,
+        >();
+
+        assert!(
+            row_oriented.advice_columns * 4 < column_heavy.advice_columns,
+            "row-oriented selection should remove per-tree-node advice columns: row={row_oriented:?} column={column_heavy:?}"
+        );
+        assert!(
+            row_oriented.advice_columns <= 32,
+            "row-oriented selection advice columns unexpectedly high: {row_oriented:?}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_select_from_table_rows_rejects_large_window_builder()
+     {
+        let table = vesta_fixed_window_select_table();
+        let err =
+            pasta_tiny::NonNativeVestaAffineFixedWindowSelectFromTableRows::<5>::try_from_table(
+                0,
+                table.clone(),
+                table[0],
+            )
+            .err()
+            .expect("builder must reject unsupported row selector width");
+        assert!(err.contains("width"));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_select_from_table_rows_rejects_table_length_builder()
+     {
+        let mut table = vesta_fixed_window_select_table();
+        let selected = table[0];
+        table.pop();
+        let err =
+            pasta_tiny::NonNativeVestaAffineFixedWindowSelectFromTableRows::<2>::try_from_table(
+                0, table, selected,
+            )
+            .err()
+            .expect("builder must reject wrong row selector table length");
+        assert!(err.contains("table length mismatch"));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_select_from_table_rows_rejects_digit_range_builder()
+     {
+        let table = vesta_fixed_window_select_table();
+        let err =
+            pasta_tiny::NonNativeVestaAffineFixedWindowSelectFromTableRows::<2>::try_from_table(
+                4,
+                table.clone(),
+                table[0],
+            )
+            .err()
+            .expect("builder must reject out-of-range row selector digit");
+        assert!(err.contains("out of range"));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_select_from_table_rows_rejects_selected_mismatch_builder()
+     {
+        let table = vesta_fixed_window_select_table();
+        let err =
+            pasta_tiny::NonNativeVestaAffineFixedWindowSelectFromTableRows::<2>::try_from_table(
+                2,
+                table.clone(),
+                table[1],
+            )
+            .err()
+            .expect("builder must reject wrong row selector selected point");
+        assert!(err.contains("selected point mismatch"));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_select_from_table_rows_rejects_digit_bit_tamper()
+     {
+        let table = vesta_fixed_window_select_table();
+        let mut circuit =
+            pasta_tiny::NonNativeVestaAffineFixedWindowSelectFromTableRows::<2>::try_from_table(
+                2,
+                table.clone(),
+                table[2],
+            )
+            .expect("valid row-oriented fixed-window selection");
+        circuit.digit_bits[0] = Scalar::from(1);
+
+        assert!(!verify_vesta_affine_fixed_window_select_from_table_rows(
+            circuit
+        ));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_select_from_table_rows_rejects_non_boolean_digit_bit()
+     {
+        let table = vesta_fixed_window_select_table();
+        let mut circuit =
+            pasta_tiny::NonNativeVestaAffineFixedWindowSelectFromTableRows::<2>::try_from_table(
+                2,
+                table.clone(),
+                table[2],
+            )
+            .expect("valid row-oriented fixed-window selection");
+        circuit.digit_bits[1] = Scalar::from(2);
+
+        assert!(!verify_vesta_affine_fixed_window_select_from_table_rows(
+            circuit
+        ));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_select_from_table_rows_rejects_selected_point_tamper()
+     {
+        let table = vesta_fixed_window_select_table();
+        let mut circuit =
+            pasta_tiny::NonNativeVestaAffineFixedWindowSelectFromTableRows::<2>::try_from_table(
+                2,
+                table.clone(),
+                table[2],
+            )
+            .expect("valid row-oriented fixed-window selection");
+        *circuit.selected = (
+            table[1].0.map(Scalar::from),
+            table[1].1.map(Scalar::from),
+            Scalar::from(u64::from(table[1].2)),
+        );
+
+        assert!(!verify_vesta_affine_fixed_window_select_from_table_rows(
+            circuit
+        ));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_select_from_table_rows_rejects_leaf_table_tamper()
+     {
+        let table = vesta_fixed_window_select_table();
+        let mut circuit =
+            pasta_tiny::NonNativeVestaAffineFixedWindowSelectFromTableRows::<2>::try_from_table(
+                2,
+                table.clone(),
+                table[2],
+            )
+            .expect("valid row-oriented fixed-window selection");
+        circuit.nodes[2].0[0] += Scalar::from(1);
+
+        assert!(!verify_vesta_affine_fixed_window_select_from_table_rows(
+            circuit
+        ));
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_select_from_table_rows_rejects_internal_node_tamper()
+     {
+        let table = vesta_fixed_window_select_table();
+        let mut circuit =
+            pasta_tiny::NonNativeVestaAffineFixedWindowSelectFromTableRows::<2>::try_from_table(
+                2,
+                table.clone(),
+                table[2],
+            )
+            .expect("valid row-oriented fixed-window selection");
+        circuit.nodes[5].0[0] += Scalar::from(1);
+
+        assert!(!verify_vesta_affine_fixed_window_select_from_table_rows(
+            circuit
+        ));
+    }
+
+    #[test]
     #[ignore = "heavy fixed-window table mock prover; covered in the default suite by builder checks and fixed-window select constraints"]
     fn kagemusha_non_native_vesta_affine_fixed_window_table_accepts_two_bit_table() {
         run_vesta_affine_fixed_window_table_test(|| {
@@ -31261,6 +32140,115 @@ mod kagemusha_non_native_limb_circuit_tests {
             );
 
             assert!(!verify_vesta_affine_fixed_window_table(base, circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_table_rows_accepts_two_bit_table() {
+        run_vesta_affine_fixed_window_table_test(|| {
+            let table = vesta_fixed_window_select_table();
+            let base = table[1];
+            let circuit = pasta_tiny::NonNativeVestaAffineFixedWindowTableRows::<2>::try_from_base(
+                base,
+                table.clone(),
+            )
+            .expect("valid row-oriented two-bit Vesta fixed-window table");
+
+            assert!(verify_vesta_affine_fixed_window_table_rows(base, circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_table_rows_reduces_advice_columns() {
+        let column_heavy =
+            halo2_backend::circuit_shape::<pasta_tiny::NonNativeVestaAffineFixedWindowTable<4>>();
+        let row_oriented = halo2_backend::circuit_shape::<
+            pasta_tiny::NonNativeVestaAffineFixedWindowTableRows<4>,
+        >();
+
+        assert!(
+            row_oriented.advice_columns * 2 < column_heavy.advice_columns,
+            "row-oriented table should remove per-entry/per-add advice columns: row={row_oriented:?} column={column_heavy:?}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_table_rows_rejects_public_base_substitution()
+    {
+        run_vesta_affine_fixed_window_table_test(|| {
+            let table = vesta_fixed_window_select_table();
+            let base = table[1];
+            let circuit = pasta_tiny::NonNativeVestaAffineFixedWindowTableRows::<2>::try_from_base(
+                base,
+                table.clone(),
+            )
+            .expect("valid row-oriented fixed-window table");
+
+            assert!(!verify_vesta_affine_fixed_window_table_rows(
+                table[2], circuit
+            ));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_table_rows_rejects_identity_entry_tamper() {
+        run_vesta_affine_fixed_window_table_test(|| {
+            let table = vesta_fixed_window_select_table();
+            let base = table[1];
+            let mut circuit =
+                pasta_tiny::NonNativeVestaAffineFixedWindowTableRows::<2>::try_from_base(
+                    base,
+                    table.clone(),
+                )
+                .expect("valid row-oriented fixed-window table");
+            circuit.table.table[0] = pasta_tiny::NonNativeVestaAffineMaybeIdentity::try_from_limbs(
+                table[1].0, table[1].1, table[1].2,
+            )
+            .expect("valid forged non-identity table entry");
+
+            assert!(!verify_vesta_affine_fixed_window_table_rows(base, circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_table_rows_rejects_entry_splice() {
+        run_vesta_affine_fixed_window_table_test(|| {
+            let table = vesta_fixed_window_select_table();
+            let base = table[1];
+            let mut circuit =
+                pasta_tiny::NonNativeVestaAffineFixedWindowTableRows::<2>::try_from_base(
+                    base,
+                    table.clone(),
+                )
+                .expect("valid row-oriented fixed-window table");
+            circuit.table.table[2] = pasta_tiny::NonNativeVestaAffineMaybeIdentity::try_from_limbs(
+                table[1].0, table[1].1, table[1].2,
+            )
+            .expect("valid forged table entry");
+
+            assert!(!verify_vesta_affine_fixed_window_table_rows(base, circuit));
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_table_rows_rejects_chain_link_tamper() {
+        run_vesta_affine_fixed_window_table_test(|| {
+            let table = vesta_fixed_window_select_table();
+            let base = table[1];
+            let mut circuit =
+                pasta_tiny::NonNativeVestaAffineFixedWindowTableRows::<2>::try_from_base(
+                    base,
+                    table.clone(),
+                )
+                .expect("valid row-oriented fixed-window table");
+            circuit.table.adds[0].q = Box::new(
+                pasta_tiny::NonNativeVestaAffineMaybeIdentity::try_from_limbs(
+                    table[2].0, table[2].1, table[2].2,
+                )
+                .expect("valid forged add input"),
+            );
+
+            assert!(!verify_vesta_affine_fixed_window_table_rows(base, circuit));
         });
     }
 
@@ -51929,6 +52917,7 @@ mod pasta_tiny {
     pub const VESTA_CURVE_B_LIMBS: [u64; NON_NATIVE_PASTA_FIELD_LIMBS] = [5, 0, 0, 0];
     /// Vesta base-field one as little-endian limbs.
     pub const VESTA_FQ_ONE_LIMBS: [u64; NON_NATIVE_PASTA_FIELD_LIMBS] = [1, 0, 0, 0];
+    const NON_NATIVE_VESTA_ROW_ARITHMETIC_STRIDE: usize = NON_NATIVE_U64_LIMB_BITS + 1;
 
     type VestaPointEncoding = (
         [u64; NON_NATIVE_PASTA_FIELD_LIMBS],
@@ -56006,13 +56995,33 @@ mod pasta_tiny {
         bits: [Scalar; NON_NATIVE_U64_LIMB_BITS],
         accumulators: [Scalar; NON_NATIVE_U64_LIMB_BITS + 1],
     ) -> Result<(), PlonkError> {
-        config.start.enable(region, 0)?;
-        config.finish.enable(region, NON_NATIVE_U64_LIMB_BITS)?;
+        assign_non_native_u64_limb_range_region_at_offset(
+            region,
+            config,
+            value,
+            bits,
+            accumulators,
+            0,
+        )
+    }
+
+    fn assign_non_native_u64_limb_range_region_at_offset(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeU64LimbRangeConfig,
+        value: Scalar,
+        bits: [Scalar; NON_NATIVE_U64_LIMB_BITS],
+        accumulators: [Scalar; NON_NATIVE_U64_LIMB_BITS + 1],
+        offset: usize,
+    ) -> Result<(), PlonkError> {
+        config.start.enable(region, offset)?;
+        config
+            .finish
+            .enable(region, offset + NON_NATIVE_U64_LIMB_BITS)?;
         crate::zk::assign_advice_compat(
             region,
             || "limb_value",
             config.value,
-            0,
+            offset,
             || Value::known(value),
         )?;
         for (row, accumulator) in accumulators.iter().copied().enumerate() {
@@ -56020,17 +57029,17 @@ mod pasta_tiny {
                 region,
                 move || format!("accumulator{row}"),
                 config.accumulator,
-                row,
+                offset + row,
                 || Value::known(accumulator),
             )?;
         }
         for (row, bit) in bits.iter().copied().enumerate() {
-            config.step.enable(region, row)?;
+            config.step.enable(region, offset + row)?;
             crate::zk::assign_advice_compat(
                 region,
                 move || format!("bit{row}"),
                 config.bit,
-                row,
+                offset + row,
                 || Value::known(bit),
             )?;
         }
@@ -56733,6 +57742,233 @@ mod pasta_tiny {
                         &mut region,
                         &config,
                         self,
+                    )
+                },
+            )
+        }
+    }
+
+    /// Row-oriented config for fixed-window decomposition of a private native Pasta/Fp scalar.
+    #[derive(Clone)]
+    pub struct NativePastaFpFixedWindowDecompositionRowsConfig {
+        scalar: NativePastaFpScalarConfig,
+        digit: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        digit_bits: Vec<halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>>,
+        windows: Vec<Selector>,
+        aggregate: Selector,
+    }
+
+    /// Row-oriented wrapper proving a private scalar equals little-endian fixed-window digits.
+    ///
+    /// This is the first reusable row-machine primitive for the recursive
+    /// verifier rewrite. It reuses one digit column across all windows and
+    /// derives digit bits directly from the canonical scalar bit rows, instead
+    /// of allocating one advice column per window bit. The witness type is kept
+    /// aligned with [`NativePastaFpFixedWindowDecomposition`] so the production
+    /// scalar-mul path can migrate to this config without changing host witness
+    /// construction.
+    #[derive(Clone, Default)]
+    pub struct NativePastaFpFixedWindowDecompositionRows<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    > {
+        /// Fixed-window decomposition witness assigned with the row-oriented config.
+        pub decomposition: NativePastaFpFixedWindowDecomposition<WINDOWS, WINDOW_BITS>,
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize>
+        NativePastaFpFixedWindowDecompositionRows<WINDOWS, WINDOW_BITS>
+    {
+        /// Build an honest row-oriented fixed-window decomposition witness.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error when the fixed-window shape is unsupported or the
+        /// scalar does not fit into the configured window width.
+        pub fn try_from_scalar(scalar: Scalar) -> Result<Self, String> {
+            Ok(Self {
+                decomposition:
+                    NativePastaFpFixedWindowDecomposition::<WINDOWS, WINDOW_BITS>::try_from_scalar(
+                        scalar,
+                    )?,
+            })
+        }
+    }
+
+    fn configure_native_pasta_fp_fixed_window_decomposition_rows<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NativePastaFpFixedWindowDecompositionRowsConfig {
+        validate_fixed_window_shape::<WINDOWS, WINDOW_BITS>()
+            .expect("invalid Pasta Fp fixed-window row decomposition shape");
+        let scalar = configure_private_native_pasta_fp_scalar(meta);
+        let digit = meta.advice_column();
+        let digit_bits = (0..WINDOW_BITS)
+            .map(|_| meta.advice_column())
+            .collect::<Vec<_>>();
+        let scalar_limb_bits = scalar.limbs.iter().map(|limb| limb.bit).collect::<Vec<_>>();
+        let windows = (0..WINDOWS).map(|_| meta.selector()).collect::<Vec<_>>();
+        let aggregate = meta.selector();
+
+        for (window_index, selector) in windows.iter().copied().enumerate() {
+            let digit_bits_for_gate = digit_bits.clone();
+            let scalar_limb_bits_for_gate = scalar_limb_bits.clone();
+            meta.create_gate(
+                format!("native_pasta_fp_fixed_window_decomposition_rows_window{window_index}"),
+                move |meta| {
+                    let s = meta.query_selector(selector);
+                    let window_digit = meta.query_advice(digit, Rotation::cur());
+                    let mut constraints = Vec::with_capacity(WINDOW_BITS * 2 + 1);
+                    let mut digit_sum = Expression::Constant(Scalar::from(0));
+                    for (local_bit, bit_column) in digit_bits_for_gate.iter().copied().enumerate() {
+                        let bit = meta.query_advice(bit_column, Rotation::cur());
+                        constraints.push(
+                            s.clone()
+                                * bit.clone()
+                                * (bit.clone() - Expression::Constant(Scalar::from(1))),
+                        );
+                        let global_bit = window_index * WINDOW_BITS + local_bit;
+                        let assigned_scalar_bits =
+                            NON_NATIVE_PASTA_FIELD_LIMBS * NON_NATIVE_U64_LIMB_BITS;
+                        let scalar_bit = if global_bit < assigned_scalar_bits {
+                            let limb_index = global_bit / NON_NATIVE_U64_LIMB_BITS;
+                            let scalar_local_bit = global_bit % NON_NATIVE_U64_LIMB_BITS;
+                            let row_distance = i32::try_from(scalar_local_bit)
+                                .expect("scalar bit row fits i32")
+                                - i32::try_from(window_index).expect("window row fits i32");
+                            meta.query_advice(
+                                scalar_limb_bits_for_gate[limb_index],
+                                Rotation(row_distance),
+                            )
+                        } else {
+                            Expression::Constant(Scalar::from(0))
+                        };
+                        constraints.push(s.clone() * (bit.clone() - scalar_bit));
+                        digit_sum = digit_sum
+                            + bit
+                                * Expression::Constant(Scalar::from(
+                                    1u64 << u32::try_from(local_bit).expect("local bit fits"),
+                                ));
+                    }
+                    constraints.push(s * (window_digit - digit_sum));
+                    constraints
+                },
+            );
+        }
+
+        let scalar_limb_bits_for_aggregate = scalar_limb_bits;
+        let scalar_value_column = scalar.value;
+        meta.create_gate(
+            "native_pasta_fp_fixed_window_decomposition_rows_aggregate",
+            move |meta| {
+                let s = meta.query_selector(aggregate);
+                let mut constraints = Vec::with_capacity(
+                    1 + PASTA_FP_SCALAR_BITS.saturating_sub(WINDOWS * WINDOW_BITS),
+                );
+                let mut recomposed = Expression::Constant(Scalar::from(0));
+                let mut coefficient = Scalar::from(1);
+                let digit_radix = Scalar::from(1u64 << WINDOW_BITS);
+                for window_index in 0..WINDOWS {
+                    let digit_value = meta.query_advice(
+                        digit,
+                        Rotation(i32::try_from(window_index).expect("window row fits i32")),
+                    );
+                    recomposed = recomposed + Expression::Constant(coefficient) * digit_value;
+                    coefficient *= digit_radix;
+                }
+                for bit_index in (WINDOWS * WINDOW_BITS)..PASTA_FP_SCALAR_BITS {
+                    let limb_index = bit_index / NON_NATIVE_U64_LIMB_BITS;
+                    let local_bit = bit_index % NON_NATIVE_U64_LIMB_BITS;
+                    let high_bit = meta.query_advice(
+                        scalar_limb_bits_for_aggregate[limb_index],
+                        Rotation(i32::try_from(local_bit).expect("scalar bit row fits i32")),
+                    );
+                    constraints.push(s.clone() * high_bit);
+                }
+                let scalar_value = meta.query_advice(scalar_value_column, Rotation::cur());
+                constraints.push(s * (scalar_value - recomposed));
+                constraints
+            },
+        );
+
+        NativePastaFpFixedWindowDecompositionRowsConfig {
+            scalar,
+            digit,
+            digit_bits,
+            windows,
+            aggregate,
+        }
+    }
+
+    fn assign_native_pasta_fp_fixed_window_decomposition_rows_region<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NativePastaFpFixedWindowDecompositionRowsConfig,
+        witness: &NativePastaFpFixedWindowDecomposition<WINDOWS, WINDOW_BITS>,
+    ) -> Result<(), PlonkError> {
+        ensure_witness_vector_len(WINDOWS, witness.digits.len())?;
+        ensure_witness_vector_len(WINDOWS, witness.digit_bits.len())?;
+        for bits in &witness.digit_bits {
+            ensure_witness_vector_len(config.digit_bits.len(), bits.len())?;
+        }
+        config.aggregate.enable(region, 0)?;
+        assign_native_pasta_fp_scalar_region(
+            region,
+            &config.scalar,
+            witness.scalar.as_ref(),
+            false,
+        )?;
+        for (window_index, digit) in witness.digits.iter().copied().enumerate() {
+            config.windows[window_index].enable(region, window_index)?;
+            crate::zk::assign_advice_compat(
+                region,
+                move || format!("fixed_window_row_digit{window_index}"),
+                config.digit,
+                window_index,
+                || Value::known(digit),
+            )?;
+            for (local_bit, bit) in witness.digit_bits[window_index].iter().copied().enumerate() {
+                crate::zk::assign_advice_compat(
+                    region,
+                    move || format!("fixed_window_row_digit{window_index}_bit{local_bit}"),
+                    config.digit_bits[local_bit],
+                    window_index,
+                    || Value::known(bit),
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize> Circuit<Scalar>
+        for NativePastaFpFixedWindowDecompositionRows<WINDOWS, WINDOW_BITS>
+    {
+        type Config = NativePastaFpFixedWindowDecompositionRowsConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_native_pasta_fp_fixed_window_decomposition_rows::<WINDOWS, WINDOW_BITS>(meta)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "native_pasta_fp_fixed_window_decomposition_rows",
+                |mut region| {
+                    assign_native_pasta_fp_fixed_window_decomposition_rows_region(
+                        &mut region,
+                        &config,
+                        &self.decomposition,
                     )
                 },
             )
@@ -59045,28 +60281,46 @@ mod pasta_tiny {
         witness: &NonNativeVestaFqCanonicalRange,
         expose_public: bool,
     ) -> Result<(), PlonkError> {
+        assign_non_native_vesta_fq_canonical_range_region_at_offset(
+            region,
+            config,
+            witness,
+            expose_public,
+            0,
+        )
+    }
+
+    fn assign_non_native_vesta_fq_canonical_range_region_at_offset(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaFqCanonicalRangeConfig,
+        witness: &NonNativeVestaFqCanonicalRange,
+        expose_public: bool,
+        offset: usize,
+    ) -> Result<(), PlonkError> {
         if expose_public {
             let public = config
                 .public
                 .as_ref()
                 .expect("public non-native range config");
-            public.expose.enable(region, 0)?;
+            public.expose.enable(region, offset)?;
         }
-        config.subtract.enable(region, 0)?;
+        config.subtract.enable(region, offset)?;
         for index in 0..NON_NATIVE_PASTA_FIELD_LIMBS {
-            assign_non_native_u64_limb_range_region(
+            assign_non_native_u64_limb_range_region_at_offset(
                 region,
                 &config.limbs[index],
                 witness.limbs[index],
                 witness.limb_bits[index],
                 witness.limb_accumulators[index],
+                offset,
             )?;
-            assign_non_native_u64_limb_range_region(
+            assign_non_native_u64_limb_range_region_at_offset(
                 region,
                 &config.slack_limbs[index],
                 witness.slack_limbs[index],
                 witness.slack_bits[index],
                 witness.slack_accumulators[index],
+                offset,
             )?;
         }
         for (index, borrow) in witness.borrow_bits.iter().copied().enumerate() {
@@ -59074,7 +60328,7 @@ mod pasta_tiny {
                 region,
                 move || format!("borrow{index}"),
                 config.borrows[index],
-                0,
+                offset,
                 || Value::known(borrow),
             )?;
         }
@@ -59184,21 +60438,31 @@ mod pasta_tiny {
         config: &NonNativeU128RangeConfig,
         witness: &NonNativeU128Range,
     ) -> Result<(), PlonkError> {
-        config.bind.enable(region, 0)?;
+        assign_non_native_u128_range_region_at_offset(region, config, witness, 0)
+    }
+
+    fn assign_non_native_u128_range_region_at_offset(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeU128RangeConfig,
+        witness: &NonNativeU128Range,
+        offset: usize,
+    ) -> Result<(), PlonkError> {
+        config.bind.enable(region, offset)?;
         crate::zk::assign_advice_compat(
             region,
             || "u128_value",
             config.value,
-            0,
+            offset,
             || Value::known(witness.value),
         )?;
         for index in 0..NON_NATIVE_U128_LIMBS {
-            assign_non_native_u64_limb_range_region(
+            assign_non_native_u64_limb_range_region_at_offset(
                 region,
                 &config.limbs[index],
                 witness.limbs[index],
                 witness.limb_bits[index],
                 witness.limb_accumulators[index],
+                offset,
             )?;
         }
         Ok(())
@@ -59458,39 +60722,53 @@ mod pasta_tiny {
         witness: &NonNativeVestaFqAdd,
         exposure: NonNativeVestaFqBinaryExposure,
     ) -> Result<(), PlonkError> {
-        config.add.enable(region, 0)?;
-        assign_non_native_vesta_fq_canonical_range_region(
+        assign_non_native_vesta_fq_add_region_at_offset(region, config, witness, exposure, 0)
+    }
+
+    fn assign_non_native_vesta_fq_add_region_at_offset(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaFqAddConfig,
+        witness: &NonNativeVestaFqAdd,
+        exposure: NonNativeVestaFqBinaryExposure,
+        offset: usize,
+    ) -> Result<(), PlonkError> {
+        config.add.enable(region, offset)?;
+        assign_non_native_vesta_fq_canonical_range_region_at_offset(
             region,
             &config.lhs,
             &witness.lhs,
             exposure.lhs,
+            offset,
         )?;
-        assign_non_native_vesta_fq_canonical_range_region(
+        assign_non_native_vesta_fq_canonical_range_region_at_offset(
             region,
             &config.rhs,
             &witness.rhs,
             exposure.rhs,
+            offset,
         )?;
-        assign_non_native_vesta_fq_canonical_range_region(
+        assign_non_native_vesta_fq_canonical_range_region_at_offset(
             region,
             &config.out,
             &witness.out,
             exposure.out,
+            offset,
         )?;
         for index in 0..NON_NATIVE_PASTA_FIELD_LIMBS {
-            assign_non_native_u64_limb_range_region(
+            assign_non_native_u64_limb_range_region_at_offset(
                 region,
                 &config.sum_limbs[index],
                 witness.sum_limbs[index],
                 witness.sum_bits[index],
                 witness.sum_accumulators[index],
+                offset,
             )?;
         }
         crate::zk::assign_advice_compat(
             region,
             || "reduction_bit",
             config.reduction_bit,
-            0,
+            offset,
             || Value::known(witness.reduction_bit),
         )?;
         for (index, carry) in witness.add_carries.iter().copied().enumerate() {
@@ -59498,7 +60776,7 @@ mod pasta_tiny {
                 region,
                 move || format!("add_carry{index}"),
                 config.add_carries[index],
-                0,
+                offset,
                 || Value::known(carry),
             )?;
         }
@@ -59507,7 +60785,7 @@ mod pasta_tiny {
                 region,
                 move || format!("reduction_carry{index}"),
                 config.reduction_carries[index],
-                0,
+                offset,
                 || Value::known(carry),
             )?;
         }
@@ -59746,45 +61024,70 @@ mod pasta_tiny {
         witness: &NonNativeVestaFqMul,
         exposure: NonNativeVestaFqBinaryExposure,
     ) -> Result<(), PlonkError> {
-        config.mul.enable(region, 0)?;
-        assign_non_native_vesta_fq_canonical_range_region(
+        assign_non_native_vesta_fq_mul_region_at_offset(region, config, witness, exposure, 0)
+    }
+
+    fn assign_non_native_vesta_fq_mul_region_at_offset(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaFqMulConfig,
+        witness: &NonNativeVestaFqMul,
+        exposure: NonNativeVestaFqBinaryExposure,
+        offset: usize,
+    ) -> Result<(), PlonkError> {
+        config.mul.enable(region, offset)?;
+        assign_non_native_vesta_fq_canonical_range_region_at_offset(
             region,
             &config.lhs,
             witness.lhs.as_ref(),
             exposure.lhs,
+            offset,
         )?;
-        assign_non_native_vesta_fq_canonical_range_region(
+        assign_non_native_vesta_fq_canonical_range_region_at_offset(
             region,
             &config.rhs,
             witness.rhs.as_ref(),
             exposure.rhs,
+            offset,
         )?;
-        assign_non_native_vesta_fq_canonical_range_region(
+        assign_non_native_vesta_fq_canonical_range_region_at_offset(
             region,
             &config.out,
             witness.out.as_ref(),
             exposure.out,
+            offset,
         )?;
-        assign_non_native_vesta_fq_canonical_range_region(
+        assign_non_native_vesta_fq_canonical_range_region_at_offset(
             region,
             &config.quotient,
             witness.quotient.as_ref(),
             false,
+            offset,
         )?;
         for index in 0..NON_NATIVE_VESTA_FQ_PRODUCT_LIMBS {
-            assign_non_native_u64_limb_range_region(
+            assign_non_native_u64_limb_range_region_at_offset(
                 region,
                 &config.product_limbs[index],
                 witness.product_limbs[index],
                 witness.product_bits[index],
                 witness.product_accumulators[index],
+                offset,
             )?;
         }
         for (index, carry) in witness.product_carries.iter().enumerate() {
-            assign_non_native_u128_range_region(region, &config.product_carries[index], carry)?;
+            assign_non_native_u128_range_region_at_offset(
+                region,
+                &config.product_carries[index],
+                carry,
+                offset,
+            )?;
         }
         for (index, carry) in witness.reduction_carries.iter().enumerate() {
-            assign_non_native_u128_range_region(region, &config.reduction_carries[index], carry)?;
+            assign_non_native_u128_range_region_at_offset(
+                region,
+                &config.reduction_carries[index],
+                carry,
+                offset,
+            )?;
         }
         Ok(())
     }
@@ -60192,41 +61495,54 @@ mod pasta_tiny {
         config: &NonNativeVestaAffineMaybeIdentityConfig,
         witness: &NonNativeVestaAffineMaybeIdentity,
     ) -> Result<(), PlonkError> {
-        config.link.enable(region, 0)?;
+        assign_non_native_vesta_affine_maybe_identity_region_at_offset(region, config, witness, 0)
+    }
+
+    fn assign_non_native_vesta_affine_maybe_identity_region_at_offset(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineMaybeIdentityConfig,
+        witness: &NonNativeVestaAffineMaybeIdentity,
+        offset: usize,
+    ) -> Result<(), PlonkError> {
+        config.link.enable(region, offset)?;
         let lhs_private_rhs_out = NonNativeVestaFqBinaryExposure {
             lhs: config.public_coordinates,
             rhs: false,
             out: false,
         };
-        assign_non_native_vesta_fq_mul_region(
+        assign_non_native_vesta_fq_mul_region_at_offset(
             region,
             &config.x_squared,
             witness.x_squared.as_ref(),
             lhs_private_rhs_out,
+            offset,
         )?;
-        assign_non_native_vesta_fq_mul_region(
+        assign_non_native_vesta_fq_mul_region_at_offset(
             region,
             &config.y_squared,
             witness.y_squared.as_ref(),
             lhs_private_rhs_out,
+            offset,
         )?;
-        assign_non_native_vesta_fq_mul_region(
+        assign_non_native_vesta_fq_mul_region_at_offset(
             region,
             &config.x_cubed,
             witness.x_cubed.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_add_region(
+        assign_non_native_vesta_fq_add_region_at_offset(
             region,
             &config.rhs,
             witness.rhs.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
         crate::zk::assign_advice_compat(
             region,
             || "identity",
             config.identity,
-            0,
+            offset,
             || Value::known(witness.identity),
         )?;
         Ok(())
@@ -62421,19 +63737,33 @@ mod pasta_tiny {
             Scalar,
         ),
     ) -> Result<(), PlonkError> {
+        assign_non_native_vesta_point_advice_at_offset(region, config, label, point, 0)
+    }
+
+    fn assign_non_native_vesta_point_advice_at_offset(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaPointAdviceConfig,
+        label: &str,
+        point: &(
+            [Scalar; NON_NATIVE_PASTA_FIELD_LIMBS],
+            [Scalar; NON_NATIVE_PASTA_FIELD_LIMBS],
+            Scalar,
+        ),
+        offset: usize,
+    ) -> Result<(), PlonkError> {
         for index in 0..NON_NATIVE_PASTA_FIELD_LIMBS {
             crate::zk::assign_advice_compat(
                 region,
                 || format!("{label}_x{index}"),
                 config.x[index],
-                0,
+                offset,
                 || Value::known(point.0[index]),
             )?;
             crate::zk::assign_advice_compat(
                 region,
                 || format!("{label}_y{index}"),
                 config.y[index],
-                0,
+                offset,
                 || Value::known(point.1[index]),
             )?;
         }
@@ -62441,7 +63771,7 @@ mod pasta_tiny {
             region,
             || format!("{label}_identity"),
             config.identity,
-            0,
+            offset,
             || Value::known(point.2),
         )?;
         Ok(())
@@ -62489,6 +63819,34 @@ mod pasta_tiny {
             point.1.map(Scalar::from),
             Scalar::from(u64::from(point.2)),
         )
+    }
+
+    fn vesta_identity_point_scalars() -> (
+        [Scalar; NON_NATIVE_PASTA_FIELD_LIMBS],
+        [Scalar; NON_NATIVE_PASTA_FIELD_LIMBS],
+        Scalar,
+    ) {
+        (
+            [Scalar::from(0); NON_NATIVE_PASTA_FIELD_LIMBS],
+            [Scalar::from(0); NON_NATIVE_PASTA_FIELD_LIMBS],
+            Scalar::from(1),
+        )
+    }
+
+    fn vesta_fixed_window_select_tree_level_start(table_len: usize, level: usize) -> usize {
+        let mut start = table_len;
+        for prior_level in 0..level {
+            start += table_len >> (prior_level + 1);
+        }
+        start
+    }
+
+    fn vesta_fixed_window_select_tree_rows<const WINDOW_BITS: usize>() -> usize {
+        if !(1..=4).contains(&WINDOW_BITS) {
+            return 0;
+        }
+        let table_len = 1usize << WINDOW_BITS;
+        2 * table_len - 1
     }
 
     /// Config for fixed-window private Vesta point-table selection.
@@ -63100,6 +64458,326 @@ mod pasta_tiny {
         Ok(())
     }
 
+    /// Config for row-oriented selection from an already-derived Vesta table.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineFixedWindowSelectFromTableRowsConfig {
+        digit_bits: Vec<halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>>,
+        node: NonNativeVestaPointAdviceConfig,
+        selected: NonNativeVestaPointAdviceConfig,
+        selection_links: Vec<Vec<Selector>>,
+        selected_link: Selector,
+    }
+
+    /// Row-oriented witness selecting from a fixed-window Vesta table.
+    ///
+    /// The table leaves and intermediate tree nodes are assigned into one
+    /// reusable point column set. Internal rows use fixed rotations back to
+    /// their source rows, so the selector grows in rows and fixed selectors
+    /// instead of duplicating point advice columns for each tree node.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineFixedWindowSelectFromTableRows<const WINDOW_BITS: usize> {
+        /// Little-endian window bits.
+        pub digit_bits: Vec<Scalar>,
+        /// Leaf table entries followed by binary-selection internal nodes.
+        pub nodes: Vec<(
+            [Scalar; NON_NATIVE_PASTA_FIELD_LIMBS],
+            [Scalar; NON_NATIVE_PASTA_FIELD_LIMBS],
+            Scalar,
+        )>,
+        /// Final selected point.
+        pub selected: Box<(
+            [Scalar; NON_NATIVE_PASTA_FIELD_LIMBS],
+            [Scalar; NON_NATIVE_PASTA_FIELD_LIMBS],
+            Scalar,
+        )>,
+    }
+
+    impl<const WINDOW_BITS: usize> Default
+        for NonNativeVestaAffineFixedWindowSelectFromTableRows<WINDOW_BITS>
+    {
+        fn default() -> Self {
+            Self {
+                digit_bits: vec![Scalar::from(0); WINDOW_BITS],
+                nodes: vec![
+                    vesta_identity_point_scalars();
+                    vesta_fixed_window_select_tree_rows::<WINDOW_BITS>()
+                ],
+                selected: Box::new(vesta_identity_point_scalars()),
+            }
+        }
+    }
+
+    impl<const WINDOW_BITS: usize> NonNativeVestaAffineFixedWindowSelectFromTableRows<WINDOW_BITS> {
+        /// Build an honest row-oriented shared-table selection witness.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error when the window width is unsupported, table length
+        /// is not `2^WINDOW_BITS`, the digit is out of range, any point encoding
+        /// is invalid, or `selected` is not the table entry selected by `digit`.
+        pub fn try_from_table(
+            digit: u64,
+            table: Vec<VestaPointEncoding>,
+            selected: VestaPointEncoding,
+        ) -> Result<Self, String> {
+            validate_vesta_fixed_window_select_shape::<WINDOW_BITS>()?;
+            let table_len = 1usize << WINDOW_BITS;
+            if table.len() != table_len {
+                return Err(format!(
+                    "Vesta row shared-table fixed-window selection table length mismatch: expected {table_len}, found {}",
+                    table.len()
+                ));
+            }
+            let digit_index = usize::try_from(digit).map_err(|_| {
+                "Vesta row shared-table fixed-window selection digit does not fit usize".to_owned()
+            })?;
+            if digit_index >= table_len {
+                return Err(
+                    "Vesta row shared-table fixed-window selection digit is out of range"
+                        .to_owned(),
+                );
+            }
+            if table[digit_index] != selected {
+                return Err(
+                    "Vesta row shared-table fixed-window selected point mismatch".to_owned(),
+                );
+            }
+            for point in table.iter().copied().chain(core::iter::once(selected)) {
+                NonNativeVestaAffineMaybeIdentity::try_from_limbs(point.0, point.1, point.2)?;
+            }
+
+            let mut nodes = vec![
+                vesta_identity_point_scalars();
+                vesta_fixed_window_select_tree_rows::<WINDOW_BITS>()
+            ];
+            let mut current = table
+                .iter()
+                .copied()
+                .map(vesta_point_encoding_to_scalars)
+                .collect::<Vec<_>>();
+            for (index, point) in current.iter().copied().enumerate() {
+                nodes[index] = point;
+            }
+
+            let mut digit_bits = Vec::with_capacity(WINDOW_BITS);
+            for level in 0..WINDOW_BITS {
+                let bit = ((digit >> level) & 1) != 0;
+                digit_bits.push(Scalar::from(u64::from(bit)));
+                let mut next = Vec::with_capacity(current.len() / 2);
+                let level_start = vesta_fixed_window_select_tree_level_start(table_len, level);
+                for (index, pair) in current.chunks_exact(2).enumerate() {
+                    let selected_node = if bit { pair[1] } else { pair[0] };
+                    nodes[level_start + index] = selected_node;
+                    next.push(selected_node);
+                }
+                current = next;
+            }
+
+            Ok(Self {
+                digit_bits,
+                nodes,
+                selected: Box::new(vesta_point_encoding_to_scalars(selected)),
+            })
+        }
+    }
+
+    fn configure_non_native_vesta_affine_fixed_window_select_from_table_rows<
+        const WINDOW_BITS: usize,
+    >(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NonNativeVestaAffineFixedWindowSelectFromTableRowsConfig {
+        validate_vesta_fixed_window_select_shape::<WINDOW_BITS>()
+            .expect("invalid Vesta fixed-window row shared-table selection shape");
+        let table_len = 1usize << WINDOW_BITS;
+        let digit_bits = (0..WINDOW_BITS)
+            .map(|_| meta.advice_column())
+            .collect::<Vec<_>>();
+        let node = configure_non_native_vesta_point_advice(meta);
+        let selected = configure_non_native_vesta_point_advice(meta);
+        let selection_links = (0..WINDOW_BITS)
+            .map(|level| {
+                let width = table_len >> (level + 1);
+                (0..width).map(|_| meta.selector()).collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let selected_link = meta.selector();
+
+        for level in 0..WINDOW_BITS {
+            let level_start = vesta_fixed_window_select_tree_level_start(table_len, level);
+            let previous_level_start = if level == 0 {
+                0
+            } else {
+                vesta_fixed_window_select_tree_level_start(table_len, level - 1)
+            };
+            let width = table_len >> (level + 1);
+            for index in 0..width {
+                let selector = selection_links[level][index];
+                let digit_bit = digit_bits[level];
+                let node_for_gate = node.clone();
+                let parent_row = level_start + index;
+                let left_row = previous_level_start + 2 * index;
+                let right_row = left_row + 1;
+                let left_rotation = i32::try_from(left_row).expect("row fits i32")
+                    - i32::try_from(parent_row).expect("row fits i32");
+                let right_rotation = i32::try_from(right_row).expect("row fits i32")
+                    - i32::try_from(parent_row).expect("row fits i32");
+                meta.create_gate(
+                    format!(
+                        "non_native_vesta_affine_fixed_window_select_from_table_rows_level{level}_node{index}"
+                    ),
+                    move |meta| {
+                        let s = meta.query_selector(selector);
+                        let bit = meta.query_advice(digit_bit, Rotation::cur());
+                        let left = query_non_native_vesta_point_advice(
+                            meta,
+                            &node_for_gate,
+                            Rotation(left_rotation),
+                        );
+                        let right = query_non_native_vesta_point_advice(
+                            meta,
+                            &node_for_gate,
+                            Rotation(right_rotation),
+                        );
+                        let out =
+                            query_non_native_vesta_point_advice(meta, &node_for_gate, Rotation::cur());
+                        let mut constraints =
+                            Vec::with_capacity(2 + 2 * NON_NATIVE_PASTA_FIELD_LIMBS + 1);
+                        constraints.push(
+                            s.clone()
+                                * bit.clone()
+                                * (bit.clone() - Expression::Constant(Scalar::from(1))),
+                        );
+                        push_non_native_vesta_point_select_constraints(
+                            &mut constraints,
+                            &s,
+                            &bit,
+                            &left,
+                            &right,
+                            &out,
+                        );
+                        constraints
+                    },
+                );
+            }
+        }
+
+        let node_for_selected_gate = node.clone();
+        let selected_for_gate = selected.clone();
+        meta.create_gate(
+            "non_native_vesta_affine_fixed_window_select_from_table_rows_selected_link",
+            move |meta| {
+                let s = meta.query_selector(selected_link);
+                let final_node = query_non_native_vesta_point_advice(
+                    meta,
+                    &node_for_selected_gate,
+                    Rotation::cur(),
+                );
+                let selected_point =
+                    query_non_native_vesta_point_advice(meta, &selected_for_gate, Rotation::cur());
+                let mut constraints = Vec::with_capacity(2 * NON_NATIVE_PASTA_FIELD_LIMBS + 1);
+                push_non_native_vesta_point_equality_constraints(
+                    &mut constraints,
+                    &s,
+                    &final_node,
+                    &selected_point,
+                );
+                constraints
+            },
+        );
+
+        NonNativeVestaAffineFixedWindowSelectFromTableRowsConfig {
+            digit_bits,
+            node,
+            selected,
+            selection_links,
+            selected_link,
+        }
+    }
+
+    fn assign_non_native_vesta_affine_fixed_window_select_from_table_rows_region<
+        const WINDOW_BITS: usize,
+    >(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineFixedWindowSelectFromTableRowsConfig,
+        witness: &NonNativeVestaAffineFixedWindowSelectFromTableRows<WINDOW_BITS>,
+    ) -> Result<(), PlonkError> {
+        validate_vesta_fixed_window_select_shape::<WINDOW_BITS>()
+            .map_err(|_| PlonkError::Synthesis)?;
+        ensure_witness_vector_len(config.digit_bits.len(), witness.digit_bits.len())?;
+        let table_len = 1usize << WINDOW_BITS;
+        let total_rows = vesta_fixed_window_select_tree_rows::<WINDOW_BITS>();
+        ensure_witness_vector_len(total_rows, witness.nodes.len())?;
+
+        for (row, point) in witness.nodes.iter().enumerate() {
+            assign_non_native_vesta_point_advice_at_offset(
+                region,
+                &config.node,
+                &format!("fixed_window_shared_table_row_node{row}"),
+                point,
+                row,
+            )?;
+        }
+        let final_row = total_rows - 1;
+        assign_non_native_vesta_point_advice_at_offset(
+            region,
+            &config.selected,
+            "fixed_window_shared_table_row_selected",
+            witness.selected.as_ref(),
+            final_row,
+        )?;
+        config.selected_link.enable(region, final_row)?;
+
+        for level in 0..WINDOW_BITS {
+            let level_start = vesta_fixed_window_select_tree_level_start(table_len, level);
+            let width = table_len >> (level + 1);
+            for index in 0..width {
+                let row = level_start + index;
+                config.selection_links[level][index].enable(region, row)?;
+                crate::zk::assign_advice_compat(
+                    region,
+                    move || format!("fixed_window_shared_table_row_level{level}_bit"),
+                    config.digit_bits[level],
+                    row,
+                    || Value::known(witness.digit_bits[level]),
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    impl<const WINDOW_BITS: usize> Circuit<Scalar>
+        for NonNativeVestaAffineFixedWindowSelectFromTableRows<WINDOW_BITS>
+    {
+        type Config = NonNativeVestaAffineFixedWindowSelectFromTableRowsConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_non_native_vesta_affine_fixed_window_select_from_table_rows::<WINDOW_BITS>(
+                meta,
+            )
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "non_native_vesta_affine_fixed_window_select_from_table_rows",
+                |mut region| {
+                    assign_non_native_vesta_affine_fixed_window_select_from_table_rows_region(
+                        &mut region,
+                        &config,
+                        self,
+                    )
+                },
+            )
+        }
+    }
+
     /// Config for deriving a fixed-window Vesta point table from a public base.
     #[derive(Clone)]
     pub struct NonNativeVestaAffineFixedWindowTableConfig {
@@ -63341,6 +65019,263 @@ mod pasta_tiny {
                 || "non_native_vesta_affine_fixed_window_table",
                 |mut region| {
                     assign_non_native_vesta_affine_fixed_window_table_region(
+                        &mut region,
+                        &config,
+                        self,
+                    )
+                },
+            )
+        }
+    }
+
+    /// Config for row-oriented derivation of a fixed-window Vesta point table.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineFixedWindowTableRowsConfig {
+        entry: NonNativeVestaAffineMaybeIdentityConfig,
+        add: NonNativeVestaAffineCompleteAddConfig,
+        base_instances: [halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>;
+            2 * NON_NATIVE_PASTA_FIELD_LIMBS + 1],
+        identity_link: Selector,
+        base_link: Selector,
+        add_links: Vec<Selector>,
+    }
+
+    /// Row-oriented circuit proving a fixed-window table is `[0, B, 2B, ...]`.
+    ///
+    /// Table entries reuse one point-or-identity config at fixed row strides,
+    /// and all later entries reuse one complete-add config at fixed row
+    /// strides. This removes the per-entry and per-addition advice-column
+    /// duplication from the column-heavy table-derivation circuit.
+    #[derive(Clone)]
+    pub struct NonNativeVestaAffineFixedWindowTableRows<const WINDOW_BITS: usize> {
+        /// Private row-oriented table derivation witness.
+        pub table: NonNativeVestaAffineFixedWindowTable<WINDOW_BITS>,
+    }
+
+    impl<const WINDOW_BITS: usize> Default for NonNativeVestaAffineFixedWindowTableRows<WINDOW_BITS> {
+        fn default() -> Self {
+            Self {
+                table: NonNativeVestaAffineFixedWindowTable::default(),
+            }
+        }
+    }
+
+    impl<const WINDOW_BITS: usize> NonNativeVestaAffineFixedWindowTableRows<WINDOW_BITS> {
+        /// Build an honest row-oriented fixed-window table witness.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if table derivation validation fails.
+        pub fn try_from_base(
+            base: VestaPointEncoding,
+            table: Vec<VestaPointEncoding>,
+        ) -> Result<Self, String> {
+            Ok(Self {
+                table: NonNativeVestaAffineFixedWindowTable::<WINDOW_BITS>::try_from_base(
+                    base, table,
+                )?,
+            })
+        }
+    }
+
+    fn configure_non_native_vesta_affine_fixed_window_table_rows<const WINDOW_BITS: usize>(
+        meta: &mut ConstraintSystem<Scalar>,
+    ) -> NonNativeVestaAffineFixedWindowTableRowsConfig {
+        validate_vesta_fixed_window_select_shape::<WINDOW_BITS>()
+            .expect("invalid Vesta fixed-window row table shape");
+        let table_len = 1usize << WINDOW_BITS;
+        let entry =
+            configure_non_native_vesta_affine_maybe_identity_with_exposure(meta, false, false);
+        let add =
+            configure_non_native_vesta_affine_complete_add_with_exposure(meta, false, false, false);
+        let base_instances = std::array::from_fn(|_| meta.instance_column());
+        let identity_link = meta.selector();
+        let base_link = meta.selector();
+        let add_links = (2..table_len).map(|_| meta.selector()).collect::<Vec<_>>();
+
+        meta.create_gate(
+            "non_native_vesta_affine_fixed_window_table_rows_identity_link",
+            |meta| {
+                let s = meta.query_selector(identity_link);
+                let identity = query_non_native_vesta_affine_maybe_identity_point(
+                    meta,
+                    &entry,
+                    Rotation::cur(),
+                );
+                let mut constraints = Vec::with_capacity(2 * NON_NATIVE_PASTA_FIELD_LIMBS + 1);
+                push_non_native_vesta_identity_constraints(&mut constraints, &s, &identity);
+                constraints
+            },
+        );
+
+        let entry_for_base = entry.clone();
+        meta.create_gate(
+            "non_native_vesta_affine_fixed_window_table_rows_base_link",
+            move |meta| {
+                let s = meta.query_selector(base_link);
+                let table_base = query_non_native_vesta_affine_maybe_identity_point(
+                    meta,
+                    &entry_for_base,
+                    Rotation(
+                        i32::try_from(NON_NATIVE_VESTA_ROW_ARITHMETIC_STRIDE)
+                            .expect("row stride fits i32"),
+                    ),
+                );
+                let public_base = query_non_native_vesta_affine_point_instances(
+                    meta,
+                    &base_instances,
+                    Rotation::cur(),
+                );
+                let mut constraints = Vec::with_capacity(2 * NON_NATIVE_PASTA_FIELD_LIMBS + 1);
+                push_non_native_vesta_point_equality_constraints(
+                    &mut constraints,
+                    &s,
+                    &table_base,
+                    &public_base,
+                );
+                constraints
+            },
+        );
+
+        for index in 2..table_len {
+            let selector = add_links[index - 2];
+            let entry_for_gate = entry.clone();
+            let add_for_gate = add.clone();
+            let add_row = (table_len + index - 2) * NON_NATIVE_VESTA_ROW_ARITHMETIC_STRIDE;
+            let previous_row = (index - 1) * NON_NATIVE_VESTA_ROW_ARITHMETIC_STRIDE;
+            let base_row = NON_NATIVE_VESTA_ROW_ARITHMETIC_STRIDE;
+            let current_row = index * NON_NATIVE_VESTA_ROW_ARITHMETIC_STRIDE;
+            let previous_rotation = i32::try_from(previous_row).expect("row fits i32")
+                - i32::try_from(add_row).expect("row fits i32");
+            let base_rotation = i32::try_from(base_row).expect("row fits i32")
+                - i32::try_from(add_row).expect("row fits i32");
+            let current_rotation = i32::try_from(current_row).expect("row fits i32")
+                - i32::try_from(add_row).expect("row fits i32");
+            meta.create_gate(
+                format!("non_native_vesta_affine_fixed_window_table_rows_add_link{index}"),
+                move |meta| {
+                    let s = meta.query_selector(selector);
+                    let previous = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &entry_for_gate,
+                        Rotation(previous_rotation),
+                    );
+                    let base = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &entry_for_gate,
+                        Rotation(base_rotation),
+                    );
+                    let current = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &entry_for_gate,
+                        Rotation(current_rotation),
+                    );
+                    let add_p = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &add_for_gate.p,
+                        Rotation::cur(),
+                    );
+                    let add_q = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &add_for_gate.q,
+                        Rotation::cur(),
+                    );
+                    let add_r = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &add_for_gate.r,
+                        Rotation::cur(),
+                    );
+                    let mut constraints =
+                        Vec::with_capacity(3 * (2 * NON_NATIVE_PASTA_FIELD_LIMBS + 1));
+                    push_non_native_vesta_point_equality_constraints(
+                        &mut constraints,
+                        &s,
+                        &previous,
+                        &add_p,
+                    );
+                    push_non_native_vesta_point_equality_constraints(
+                        &mut constraints,
+                        &s,
+                        &base,
+                        &add_q,
+                    );
+                    push_non_native_vesta_point_equality_constraints(
+                        &mut constraints,
+                        &s,
+                        &current,
+                        &add_r,
+                    );
+                    constraints
+                },
+            );
+        }
+
+        NonNativeVestaAffineFixedWindowTableRowsConfig {
+            entry,
+            add,
+            base_instances,
+            identity_link,
+            base_link,
+            add_links,
+        }
+    }
+
+    fn assign_non_native_vesta_affine_fixed_window_table_rows_region<const WINDOW_BITS: usize>(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineFixedWindowTableRowsConfig,
+        witness: &NonNativeVestaAffineFixedWindowTableRows<WINDOW_BITS>,
+    ) -> Result<(), PlonkError> {
+        validate_vesta_fixed_window_select_shape::<WINDOW_BITS>()
+            .map_err(|_| PlonkError::Synthesis)?;
+        let table_len = 1usize << WINDOW_BITS;
+        ensure_witness_vector_len(table_len, witness.table.table.len())?;
+        ensure_witness_vector_len(table_len.saturating_sub(2), witness.table.adds.len())?;
+
+        config.identity_link.enable(region, 0)?;
+        config.base_link.enable(region, 0)?;
+        for (index, entry) in witness.table.table.iter().enumerate() {
+            assign_non_native_vesta_affine_maybe_identity_region_at_offset(
+                region,
+                &config.entry,
+                entry,
+                index * NON_NATIVE_VESTA_ROW_ARITHMETIC_STRIDE,
+            )?;
+        }
+        for (add_index, add) in witness.table.adds.iter().enumerate() {
+            let row = (table_len + add_index) * NON_NATIVE_VESTA_ROW_ARITHMETIC_STRIDE;
+            config.add_links[add_index].enable(region, row)?;
+            assign_non_native_vesta_affine_complete_add_region_at_offset(
+                region,
+                &config.add,
+                add,
+                row,
+            )?;
+        }
+        Ok(())
+    }
+
+    impl<const WINDOW_BITS: usize> Circuit<Scalar>
+        for NonNativeVestaAffineFixedWindowTableRows<WINDOW_BITS>
+    {
+        type Config = NonNativeVestaAffineFixedWindowTableRowsConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_non_native_vesta_affine_fixed_window_table_rows::<WINDOW_BITS>(meta)
+        }
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "non_native_vesta_affine_fixed_window_table_rows",
+                |mut region| {
+                    assign_non_native_vesta_affine_fixed_window_table_rows_region(
                         &mut region,
                         &config,
                         self,
@@ -65457,159 +67392,194 @@ mod pasta_tiny {
         config: &NonNativeVestaAffineCompleteAddConfig,
         witness: &NonNativeVestaAffineCompleteAdd,
     ) -> Result<(), PlonkError> {
-        config.link.enable(region, 0)?;
-        assign_non_native_vesta_affine_maybe_identity_region(
+        assign_non_native_vesta_affine_complete_add_region_at_offset(region, config, witness, 0)
+    }
+
+    fn assign_non_native_vesta_affine_complete_add_region_at_offset(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineCompleteAddConfig,
+        witness: &NonNativeVestaAffineCompleteAdd,
+        offset: usize,
+    ) -> Result<(), PlonkError> {
+        config.link.enable(region, offset)?;
+        assign_non_native_vesta_affine_maybe_identity_region_at_offset(
             region,
             &config.p,
             witness.p.as_ref(),
+            offset,
         )?;
-        assign_non_native_vesta_affine_maybe_identity_region(
+        assign_non_native_vesta_affine_maybe_identity_region_at_offset(
             region,
             &config.q,
             witness.q.as_ref(),
+            offset,
         )?;
-        assign_non_native_vesta_affine_maybe_identity_region(
+        assign_non_native_vesta_affine_maybe_identity_region_at_offset(
             region,
             &config.r,
             witness.r.as_ref(),
+            offset,
         )?;
-        assign_non_native_vesta_fq_add_region(
+        assign_non_native_vesta_fq_add_region_at_offset(
             region,
             &config.inverse_y_sum,
             witness.inverse_y_sum.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_add_region(
+        assign_non_native_vesta_fq_add_region_at_offset(
             region,
             &config.distinct_x_delta,
             witness.distinct_x_delta.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_add_region(
+        assign_non_native_vesta_fq_add_region_at_offset(
             region,
             &config.distinct_y_delta,
             witness.distinct_y_delta.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_mul_region(
+        assign_non_native_vesta_fq_mul_region_at_offset(
             region,
             &config.distinct_lambda_times_x_delta,
             witness.distinct_lambda_times_x_delta.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_mul_region(
+        assign_non_native_vesta_fq_mul_region_at_offset(
             region,
             &config.distinct_x_delta_inverse,
             witness.distinct_x_delta_inverse.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_mul_region(
+        assign_non_native_vesta_fq_mul_region_at_offset(
             region,
             &config.distinct_lambda_squared,
             witness.distinct_lambda_squared.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_add_region(
+        assign_non_native_vesta_fq_add_region_at_offset(
             region,
             &config.distinct_x3_plus_x1,
             witness.distinct_x3_plus_x1.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_add_region(
+        assign_non_native_vesta_fq_add_region_at_offset(
             region,
             &config.distinct_x_sum_plus_x2,
             witness.distinct_x_sum_plus_x2.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_add_region(
+        assign_non_native_vesta_fq_add_region_at_offset(
             region,
             &config.distinct_x3_plus_x_diff,
             witness.distinct_x3_plus_x_diff.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_mul_region(
+        assign_non_native_vesta_fq_mul_region_at_offset(
             region,
             &config.distinct_lambda_times_x_diff,
             witness.distinct_lambda_times_x_diff.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_add_region(
+        assign_non_native_vesta_fq_add_region_at_offset(
             region,
             &config.distinct_y3_plus_y1,
             witness.distinct_y3_plus_y1.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_add_region(
+        assign_non_native_vesta_fq_add_region_at_offset(
             region,
             &config.double_y_denominator,
             witness.double_y_denominator.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_mul_region(
+        assign_non_native_vesta_fq_mul_region_at_offset(
             region,
             &config.double_x_squared,
             witness.double_x_squared.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_add_region(
+        assign_non_native_vesta_fq_add_region_at_offset(
             region,
             &config.double_two_x_squared,
             witness.double_two_x_squared.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_add_region(
+        assign_non_native_vesta_fq_add_region_at_offset(
             region,
             &config.double_three_x_squared,
             witness.double_three_x_squared.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_mul_region(
+        assign_non_native_vesta_fq_mul_region_at_offset(
             region,
             &config.double_lambda_times_denominator,
             witness.double_lambda_times_denominator.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_mul_region(
+        assign_non_native_vesta_fq_mul_region_at_offset(
             region,
             &config.double_denominator_inverse,
             witness.double_denominator_inverse.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_mul_region(
+        assign_non_native_vesta_fq_mul_region_at_offset(
             region,
             &config.double_lambda_squared,
             witness.double_lambda_squared.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_add_region(
+        assign_non_native_vesta_fq_add_region_at_offset(
             region,
             &config.double_x3_plus_x1,
             witness.double_x3_plus_x1.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_add_region(
+        assign_non_native_vesta_fq_add_region_at_offset(
             region,
             &config.double_x_sum_plus_x1,
             witness.double_x_sum_plus_x1.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_add_region(
+        assign_non_native_vesta_fq_add_region_at_offset(
             region,
             &config.double_x3_plus_x_diff,
             witness.double_x3_plus_x_diff.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_mul_region(
+        assign_non_native_vesta_fq_mul_region_at_offset(
             region,
             &config.double_lambda_times_x_diff,
             witness.double_lambda_times_x_diff.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_add_region(
+        assign_non_native_vesta_fq_add_region_at_offset(
             region,
             &config.double_y3_plus_y1,
             witness.double_y3_plus_y1.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
         for (label, column, value) in [
             (
@@ -65626,7 +67596,13 @@ mod pasta_tiny {
             ("case_double", config.case_double, witness.case_double),
             ("case_distinct", config.case_distinct, witness.case_distinct),
         ] {
-            crate::zk::assign_advice_compat(region, || label, column, 0, || Value::known(value))?;
+            crate::zk::assign_advice_compat(
+                region,
+                || label,
+                column,
+                offset,
+                || Value::known(value),
+            )?;
         }
         Ok(())
     }

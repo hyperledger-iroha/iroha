@@ -1818,6 +1818,7 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             self.assertEqual(rc, 0, stderr)
             summary = json.loads(stdout)
             self.assertEqual(summary["version"], VERIFIER.TRUST_SUMMARY_VERSION)
+            self.assertTrue(summary["ok"])
             self.assertEqual(summary["verified_bundles"], 1)
             self.assertFalse(summary["allow_record_only"])
             self.assertFalse(summary["allow_insecure_source_url"])
@@ -2984,6 +2985,36 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                 "uppercase-rail",
                 lambda bundle: bundle.__setitem__("rail", "Swift-CBPR-Plus"),
                 "rail must be one of",
+            ),
+            (
+                "uppercase-environment",
+                lambda bundle: bundle.__setitem__("environment", "Preprod"),
+                "environment must be a canonical lowercase context id",
+            ),
+            (
+                "slash-environment",
+                lambda bundle: bundle.__setitem__("environment", "pre/prod"),
+                "environment must be a canonical lowercase context id",
+            ),
+            (
+                "leading-hyphen-environment",
+                lambda bundle: bundle.__setitem__("environment", "-preprod"),
+                "environment must be a canonical lowercase context id",
+            ),
+            (
+                "trailing-hyphen-environment",
+                lambda bundle: bundle.__setitem__("environment", "preprod-"),
+                "environment must be a canonical lowercase context id",
+            ),
+            (
+                "placeholder-environment",
+                lambda bundle: bundle.__setitem__("environment", "test"),
+                "environment must not use placeholder context id",
+            ),
+            (
+                "placeholder-token-environment",
+                lambda bundle: bundle.__setitem__("environment", "sample-bank"),
+                "environment must not use placeholder context id",
             ),
         )
         for name, mutate, message in cases:
@@ -4199,6 +4230,7 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             rc, stdout, stderr = run_verify(["--bundle", str(path), "--allow-synthetic-der"])
             self.assertEqual(rc, 0, stderr)
             summary = json.loads(stdout)
+            self.assertFalse(summary["ok"])
             self.assertTrue(summary["allow_synthetic_der"])
             self.assertFalse(summary["profile_json_emittable"])
             self.assertFalse(summary["profile_json_emitted"])
@@ -4262,6 +4294,7 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
         self.assertEqual(rc, 0, stderr)
         summary = json.loads(stdout)
         self.assertEqual(summary["verified_bundles"], len(templates))
+        self.assertFalse(summary["ok"])
         self.assertTrue(summary["allow_synthetic_der"])
         self.assertFalse(summary["profile_json_emittable"])
         self.assertFalse(summary["profile_json_emitted"])

@@ -15340,19 +15340,12 @@ export interface KagemushaRecursiveTopUpTransactionBaseInput {
 
 export type KagemushaRecursiveTopUpArchiveInput =
   | {
-      initRequestArchive: BinaryLike;
-      init_request_archive?: never;
-      requestArchive?: never;
+      topUpRequestArchive: BinaryLike;
+      top_up_request_archive?: never;
     }
   | {
-      initRequestArchive?: never;
-      init_request_archive: BinaryLike;
-      requestArchive?: never;
-    }
-  | {
-      initRequestArchive?: never;
-      init_request_archive?: never;
-      requestArchive: BinaryLike;
+      topUpRequestArchive?: never;
+      top_up_request_archive: BinaryLike;
     };
 
 export type KagemushaRecursiveTopUpTransactionInput =
@@ -16404,13 +16397,24 @@ export interface SetContractAliasResponse {
 
 export interface ContractCallRequest {
   authority: string;
-  privateKey: string;
+  privateKey?: string | null;
+  private_key?: string | null;
+  privateKeyHex?: string | ArrayBufferView | ArrayBuffer | Buffer | null;
+  private_key_hex?: string | ArrayBufferView | ArrayBuffer | Buffer | null;
+  privateKeyBytes?: string | ArrayBufferView | ArrayBuffer | Buffer | null;
+  private_key_bytes?: string | ArrayBufferView | ArrayBuffer | Buffer | null;
+  privateKeyMultihash?: string | null;
+  private_key_multihash?: string | null;
   contractAddress?: string;
   contractAlias?: string;
   entrypoint?: string | null;
   payload?: unknown;
   gasAssetId?: string | null;
+  gas_asset_id?: string | null;
+  feeSponsor?: string | null;
+  fee_sponsor?: string | null;
   gasLimit: NumericLike;
+  gas_limit?: NumericLike;
 }
 
 export interface ContractCallResponse {
@@ -18784,6 +18788,10 @@ export declare class ToriiClient {
   submitTransaction(
     payload: ArrayBufferView | ArrayBuffer | Buffer,
   ): Promise<unknown>;
+  submitTransactionBatch(
+    payloads: ReadonlyArray<ArrayBufferView | ArrayBuffer | Buffer>,
+    options?: { signal?: AbortSignal },
+  ): Promise<{ acceptedCount: number; route?: unknown }>;
   getTransactionStatus(
     hashHex: string,
     options?: {
@@ -20079,6 +20087,18 @@ export interface KagemushaRecursiveSpendRedeemRequestInput {
   readonly blockHeight?: number | bigint | string | null;
   readonly block_height?: number | bigint | string | null;
 }
+export interface KagemushaRecursiveSpendTopUpRequestInput {
+  readonly assetId?: string;
+  readonly asset_id?: string;
+  readonly asset?: string;
+  readonly accountId?: string;
+  readonly account_id?: string;
+  readonly assetDefinitionId?: string;
+  readonly asset_definition_id?: string;
+  readonly amount: NumericLike;
+  readonly initRequestArchive?: BinaryLike;
+  readonly init_request_archive?: BinaryLike;
+}
 export interface KagemushaRecursiveSpendVerifyResult {
   readonly valid: boolean;
   readonly hopCount: number;
@@ -20121,6 +20141,9 @@ export function buildKagemushaRecursiveSpendVerifierRecordRef(
 export function encodeKagemushaRecursiveSpendInitRequest(
   request: KagemushaRecursiveSpendInitRequestInput,
 ): Buffer;
+export function encodeKagemushaRecursiveSpendTopUpRequest(
+  request: KagemushaRecursiveSpendTopUpRequestInput,
+): Buffer;
 export function encodeKagemushaRecursiveSpendAppendRequest(
   request: KagemushaRecursiveSpendAppendRequestInput,
 ): Buffer;
@@ -20140,7 +20163,7 @@ export function kagemushaRecursiveSpendInitTyped(
   request: KagemushaRecursiveSpendInitRequestInput,
 ): Buffer;
 export function kagemushaRecursiveSpendTopUpTyped(
-  request: KagemushaRecursiveSpendInitRequestInput,
+  request: KagemushaRecursiveSpendTopUpRequestInput,
 ): Buffer;
 export function kagemushaRecursiveSpendAppendTyped(
   request: KagemushaRecursiveSpendAppendRequestInput,
@@ -20216,6 +20239,9 @@ export function sm2FixtureFromSeed(
 ): Sm2Fixture;
 
 export function noritoEncodeInstruction(instruction: object | string): Buffer;
+export function noritoEncodeTransactionPayloadBatch(
+  payloads: ReadonlyArray<ArrayBufferView | ArrayBuffer | Buffer>,
+): Buffer;
 export function noritoEncodePrivacyProofEnvelope(envelope: object): Buffer;
 export function noritoDecodePrivacyProofEnvelope(
   bytes: ArrayBufferView | ArrayBuffer | Buffer | string,

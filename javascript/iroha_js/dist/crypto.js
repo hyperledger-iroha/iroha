@@ -82,8 +82,15 @@ const KAGEMUSHA_ZK1_TLV_H2VK = Buffer.from("H2VK", "ascii");
 const KAGEMUSHA_NORITO_COMPACT_LEN_FLAG = 0x02;
 const KAGEMUSHA_NORITO_PACKED_STRUCT_FLAG = 0x04;
 const KAGEMUSHA_ASSET_DEFINITION_ADDRESS_VERSION = 1;
+const KAGEMUSHA_ASSET_DEFINITION_ADDRESS_LEN = 21;
 const KAGEMUSHA_ASSET_DEFINITION_BASE58_ALPHABET =
   "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+const KAGEMUSHA_ASSET_DEFINITION_BASE58_INDEX = new Map(
+  Array.from(KAGEMUSHA_ASSET_DEFINITION_BASE58_ALPHABET, (symbol, index) => [
+    symbol,
+    index,
+  ]),
+);
 const KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_VERSION_V1 = 1;
 const KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH = Buffer.from(
   "c88489618a012c283ff3bb2ebabc7775",
@@ -1199,7 +1206,7 @@ export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDIN
 export const KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME =
   "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1";
 export const KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME =
-  "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1";
+  "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpRequestV1";
 export const KAGEMUSHA_RECURSIVE_SPEND_APPEND_REQUEST_WIRE_NAME =
   "iroha_data_model::offline::model::KagemushaRecursiveSpendAppendRequestV1";
 export const KAGEMUSHA_RECURSIVE_SPEND_VERIFY_REQUEST_WIRE_NAME =
@@ -2160,6 +2167,25 @@ export function encodeKagemushaRecursiveSpendInitRequest(request) {
   );
 }
 
+export function encodeKagemushaRecursiveSpendTopUpRequest(request) {
+  const normalized = kagemushaNormalizeTopUpRequest(request);
+  const payload = Buffer.concat([
+    kagemushaField(kagemushaAssetIdPayload(normalized.assetId)),
+    kagemushaField(kagemushaNumeric(normalized.amount)),
+    kagemushaRawField(
+      kagemushaCompactPayloadForRequest(
+        normalized.initRequestArchive,
+        KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME,
+        "initRequestArchive",
+      ),
+    ),
+  ]);
+  return kagemushaNoritoArchiveForType(
+    KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME,
+    payload,
+  );
+}
+
 export function encodeKagemushaRecursiveSpendAppendRequest(request) {
   const normalized = kagemushaNormalizeAppendRequest(request);
   const normalizedOutput = normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(
@@ -2462,7 +2488,7 @@ export function kagemushaRecursiveSpendInitTyped(request) {
 
 export function kagemushaRecursiveSpendTopUpTyped(request) {
   return kagemushaRecursiveSpendTopUp(
-    encodeKagemushaRecursiveSpendInitRequest(request),
+    encodeKagemushaRecursiveSpendTopUpRequest(request),
   );
 }
 
@@ -3343,6 +3369,45 @@ function kagemushaNormalizeInitRequest(request) {
     blockHeight: kagemushaNormalizeBlockHeight(
       kagemushaObjectValue(request, ["blockHeight", "block_height"]),
       "blockHeight",
+    ),
+  });
+}
+
+function kagemushaNormalizeTopUpRequest(request) {
+  kagemushaRequirePlainObject(request, "request");
+  const explicitAssetId = kagemushaObjectValue(request, [
+    "assetId",
+    "asset_id",
+    "asset",
+  ]);
+  const accountId = kagemushaObjectValue(request, ["accountId", "account_id"]);
+  const assetDefinitionId = kagemushaObjectValue(request, [
+    "assetDefinitionId",
+    "asset_definition_id",
+  ]);
+  let assetId = explicitAssetId;
+  if (assetId === undefined || assetId === null) {
+    if (accountId === undefined || accountId === null) {
+      throw new TypeError("request.accountId is required when assetId is absent");
+    }
+    if (assetDefinitionId === undefined || assetDefinitionId === null) {
+      throw new TypeError("request.assetDefinitionId is required when assetId is absent");
+    }
+    assetId = `${assetDefinitionId}#${accountId}`;
+  }
+  return Object.freeze({
+    assetId: kagemushaNormalizeAssetId(assetId, "assetId"),
+    amount: kagemushaCanonicalU128Decimal(
+      kagemushaObjectValue(request, ["amount"]),
+      "amount",
+    ),
+    initRequestArchive: kagemushaRequiredOwnedBuffer(
+      request,
+      [
+        "initRequestArchive",
+        "init_request_archive",
+      ],
+      "initRequestArchive",
     ),
   });
 }
@@ -4403,7 +4468,7 @@ function kagemushaVerifyingKeyBoxPayload(lineageVerifierKey) {
   ]);
 }
 
-function kagemushaAccountIdPayload(recipient) {
+function kagemushaAccountIdPayload(recipient, field = "recipient") {
   try {
     const { address } = AccountAddress.parseEncoded(recipient);
     const canonical = Buffer.from(address.canonicalBytes());
@@ -4424,10 +4489,147 @@ function kagemushaAccountIdPayload(recipient) {
     ]);
   } catch {
     throw kagemushaFieldCodecError(
-      "recipient",
-      "recipient must use canonical I105 account form",
+      field,
+      `${field} must use canonical I105 account form`,
     );
   }
+}
+
+function kagemushaAssetIdPayload(assetId) {
+  const parsed = kagemushaParseAssetId(assetId, "assetId");
+  return Buffer.concat([
+    kagemushaField(kagemushaAccountIdPayload(parsed.accountId, "assetId.account")),
+    kagemushaField(parsed.definitionBytes),
+    kagemushaField(kagemushaAssetBalanceScopePayload(parsed.dataspaceId)),
+  ]);
+}
+
+function kagemushaNormalizeAssetId(value, field) {
+  const parsed = kagemushaParseAssetId(value, field);
+  const base = `${parsed.assetDefinitionId}#${parsed.accountId}`;
+  return parsed.dataspaceId === null ? base : `${base}#dataspace:${parsed.dataspaceId}`;
+}
+
+function kagemushaParseAssetId(value, field) {
+  kagemushaRequireNonBlankUnpadded(value, field);
+  const parts = value.split("#");
+  if (parts.length !== 2 && parts.length !== 3) {
+    throw kagemushaFieldCodecError(
+      field,
+      `${field} must use '<asset-definition>#<account>' with optional '#dataspace:<id>'`,
+    );
+  }
+  const definitionBytes = kagemushaAssetDefinitionBytesFromAddress(parts[0], `${field}.definition`);
+  kagemushaAccountIdPayload(parts[1], `${field}.account`);
+  let dataspaceId = null;
+  if (parts.length === 3) {
+    const match = /^dataspace:(0|[1-9]\d*)$/u.exec(parts[2]);
+    if (!match) {
+      throw kagemushaFieldCodecError(
+        field,
+        `${field}.scope must use canonical dataspace:<id>`,
+      );
+    }
+    dataspaceId = BigInt(match[1]);
+    if (dataspaceId > U64_MAX) {
+      throw kagemushaFieldCodecError(field, `${field}.scope must fit in u64`);
+    }
+  }
+  return {
+    assetDefinitionId: parts[0],
+    accountId: parts[1],
+    definitionBytes,
+    dataspaceId,
+  };
+}
+
+function kagemushaAssetDefinitionBytesFromAddress(value, field) {
+  kagemushaRequireNonBlankUnpadded(value, field);
+  if (value.includes(":") || value.includes("#")) {
+    throw kagemushaFieldCodecError(
+      field,
+      `${field} must be a canonical Base58 asset definition id`,
+    );
+  }
+  const payload = kagemushaDecodeBase58(value, field);
+  if (payload.length !== KAGEMUSHA_ASSET_DEFINITION_ADDRESS_LEN) {
+    throw kagemushaFieldCodecError(
+      field,
+      `${field} must contain exactly ${KAGEMUSHA_ASSET_DEFINITION_ADDRESS_LEN} decoded bytes`,
+    );
+  }
+  if (payload[0] !== KAGEMUSHA_ASSET_DEFINITION_ADDRESS_VERSION) {
+    throw kagemushaFieldCodecError(field, `${field} version is not supported`);
+  }
+  const body = payload.subarray(0, 17);
+  const expectedChecksum = Buffer.from(blake3(body)).subarray(0, 4);
+  if (!kagemushaBytesEqual(payload.subarray(17), expectedChecksum)) {
+    throw kagemushaFieldCodecError(field, `${field} checksum is invalid`);
+  }
+  const definitionBytes = payload.subarray(1, 17);
+  if (!kagemushaIsUuidV4Bytes(definitionBytes)) {
+    throw kagemushaFieldCodecError(
+      field,
+      `${field} is not a canonical UUIDv4-backed asset definition id`,
+    );
+  }
+  return Buffer.from(definitionBytes);
+}
+
+function kagemushaDecodeBase58(value, field) {
+  const digits = [];
+  for (const symbol of value) {
+    const digit = KAGEMUSHA_ASSET_DEFINITION_BASE58_INDEX.get(symbol);
+    if (digit === undefined) {
+      throw kagemushaFieldCodecError(
+        field,
+        `${field} must be a canonical Base58 asset definition id`,
+      );
+    }
+    digits.push(digit);
+  }
+  const scratch = Array.from(digits);
+  let leadingZeroCount = 0;
+  while (leadingZeroCount < scratch.length && scratch[leadingZeroCount] === 0) {
+    leadingZeroCount += 1;
+  }
+  const decoded = [];
+  let start = leadingZeroCount;
+  while (start < scratch.length) {
+    let remainder = 0;
+    for (let index = start; index < scratch.length; index += 1) {
+      const accumulator = remainder * 58 + scratch[index];
+      scratch[index] = Math.floor(accumulator / 256);
+      remainder = accumulator % 256;
+    }
+    decoded.push(remainder);
+    while (start < scratch.length && scratch[start] === 0) {
+      start += 1;
+    }
+  }
+  for (let index = 0; index < leadingZeroCount; index += 1) {
+    decoded.push(0);
+  }
+  return Buffer.from(decoded.reverse());
+}
+
+function kagemushaBytesEqual(left, right) {
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
+}
+
+function kagemushaAssetBalanceScopePayload(dataspaceId) {
+  const tag = Buffer.alloc(4);
+  if (dataspaceId === null) {
+    return tag;
+  }
+  tag.writeUInt32LE(1, 0);
+  const value = Buffer.alloc(8);
+  value.writeBigUInt64LE(dataspaceId, 0);
+  return Buffer.concat([tag, kagemushaField(value)]);
 }
 
 function kagemushaPublicKeyPayload(curveId, publicKey) {

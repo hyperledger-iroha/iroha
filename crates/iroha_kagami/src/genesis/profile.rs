@@ -4,12 +4,18 @@ use clap::ValueEnum;
 use color_eyre::eyre::{Result, eyre};
 use iroha_core::sumeragi::network_topology::redundant_send_r_from_len;
 use iroha_crypto::Hash;
-use iroha_data_model::prelude::ChainId;
+use iroha_data_model::{asset::AssetDefinitionId, prelude::ChainId};
 
 /// Canonical I105 discriminant for the public Taira testnet.
 pub const TAIRA_CHAIN_DISCRIMINANT: u16 = 369;
 /// Canonical I105 discriminant for the public Nexus mainnet.
 pub const NEXUS_CHAIN_DISCRIMINANT: u16 = 753;
+/// Live public Taira XOR asset definition id.
+pub const TAIRA_XOR_ASSET_DEFINITION_ID: &str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
+/// Public XOR alias selector used by Nexus/Taira configs.
+pub const PUBLIC_XOR_ALIAS: &str = "xor#universal";
+/// Public XOR domain registered in public-profile genesis manifests.
+pub const PUBLIC_XOR_DOMAIN: &str = "universal.universal";
 const PUBLIC_TAIRA_CHAIN_ID: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
 const PUBLIC_NEXUS_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000753";
 const PK2_NEXUS_CHAIN_ID: &str = "cbdc16";
@@ -87,6 +93,103 @@ pub fn profile_defaults(profile: GenesisProfile) -> ProfileDefaults {
 #[must_use]
 pub fn profile_requires_npos(profile: GenesisProfile) -> bool {
     matches!(profile, GenesisProfile::Iroha3Nexus)
+}
+
+/// Whether the profile represents a public network whose XOR must be canonical.
+#[must_use]
+pub fn profile_uses_public_xor(profile: GenesisProfile) -> bool {
+    matches!(
+        profile,
+        GenesisProfile::Iroha3Taira | GenesisProfile::Iroha3Nexus
+    )
+}
+
+/// Return the public profile associated with a known public chain id.
+#[must_use]
+pub fn public_xor_profile_for_chain_id(chain_id: &str) -> Option<GenesisProfile> {
+    match chain_id {
+        "iroha3-taira" | PUBLIC_TAIRA_CHAIN_ID => Some(GenesisProfile::Iroha3Taira),
+        "iroha3-nexus" | PUBLIC_NEXUS_CHAIN_ID | PK2_NEXUS_CHAIN_ID => {
+            Some(GenesisProfile::Iroha3Nexus)
+        }
+        _ => None,
+    }
+}
+
+/// Default canonical XOR asset id for public profiles where it is known.
+///
+/// # Errors
+///
+/// Returns an error if the built-in literal stops parsing as a canonical asset
+/// definition id.
+pub fn default_public_xor_asset_definition_id(
+    profile: GenesisProfile,
+) -> Result<Option<AssetDefinitionId>> {
+    match profile {
+        GenesisProfile::Iroha3Taira => Ok(Some(
+            AssetDefinitionId::parse_address_literal(TAIRA_XOR_ASSET_DEFINITION_ID)
+                .map_err(|err| eyre!("built-in Taira XOR asset definition id is invalid: {err}"))?,
+        )),
+        GenesisProfile::Iroha3Nexus | GenesisProfile::Iroha3Dev => Ok(None),
+    }
+}
+
+/// Resolve the canonical public XOR id selected for a profile run.
+///
+/// # Errors
+///
+/// Returns an error when a supplied literal is not canonical Base58, when a
+/// public Nexus NPoS manifest omits the id, or when the flag is used for a
+/// non-public/non-NPoS manifest.
+pub fn resolve_public_xor_asset_definition_id(
+    profile: Option<GenesisProfile>,
+    configured: Option<&str>,
+    wants_npos: bool,
+) -> Result<Option<AssetDefinitionId>> {
+    let Some(profile) = profile else {
+        if configured.is_some() {
+            return Err(eyre!(
+                "`--xor-asset-definition-id` is only supported with public Iroha3 profiles"
+            ));
+        }
+        return Ok(None);
+    };
+
+    if !profile_uses_public_xor(profile) {
+        if configured.is_some() {
+            return Err(eyre!(
+                "`--xor-asset-definition-id` applies only to iroha3-taira/iroha3-nexus profiles"
+            ));
+        }
+        return Ok(None);
+    }
+
+    if !wants_npos {
+        if configured.is_some() {
+            return Err(eyre!(
+                "`--xor-asset-definition-id` applies only to NPoS public-profile manifests"
+            ));
+        }
+        return Ok(None);
+    }
+
+    if let Some(configured) = configured {
+        return AssetDefinitionId::parse_address_literal(configured)
+            .map(Some)
+            .map_err(|err| {
+                eyre!(
+                    "invalid --xor-asset-definition-id `{configured}`: {err}; expected canonical unprefixed Base58 asset definition id, not an alias such as `{PUBLIC_XOR_ALIAS}`"
+                )
+            });
+    }
+
+    if let Some(default) = default_public_xor_asset_definition_id(profile)? {
+        return Ok(Some(default));
+    }
+
+    Err(eyre!(
+        "profile {profile:?} requires `--xor-asset-definition-id <BASE58>` so public XOR is bound to a real canonical asset definition"
+    ))
 }
 
 /// Return the canonical I105 chain discriminant for well-known network ids.
@@ -206,6 +309,49 @@ mod tests {
         assert!(!profile_requires_npos(GenesisProfile::Iroha3Dev));
         assert!(!profile_requires_npos(GenesisProfile::Iroha3Taira));
         assert!(profile_requires_npos(GenesisProfile::Iroha3Nexus));
+    }
+
+    #[test]
+    fn public_xor_profiles_are_classified() {
+        assert!(!profile_uses_public_xor(GenesisProfile::Iroha3Dev));
+        assert!(profile_uses_public_xor(GenesisProfile::Iroha3Taira));
+        assert!(profile_uses_public_xor(GenesisProfile::Iroha3Nexus));
+        assert_eq!(
+            public_xor_profile_for_chain_id("iroha3-taira"),
+            Some(GenesisProfile::Iroha3Taira)
+        );
+    }
+
+    #[test]
+    fn public_xor_resolver_defaults_taira_and_requires_nexus() {
+        let taira =
+            resolve_public_xor_asset_definition_id(Some(GenesisProfile::Iroha3Taira), None, true)
+                .expect("Taira should use built-in live XOR id")
+                .expect("Taira should resolve an id");
+        assert_eq!(taira.to_string(), TAIRA_XOR_ASSET_DEFINITION_ID);
+
+        let err =
+            resolve_public_xor_asset_definition_id(Some(GenesisProfile::Iroha3Nexus), None, true)
+                .expect_err("Nexus must require an explicit XOR id");
+        assert!(
+            err.to_string().contains("--xor-asset-definition-id"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn public_xor_resolver_rejects_alias_literal() {
+        let err = resolve_public_xor_asset_definition_id(
+            Some(GenesisProfile::Iroha3Taira),
+            Some(PUBLIC_XOR_ALIAS),
+            true,
+        )
+        .expect_err("alias selector is not a canonical Base58 id");
+        assert!(
+            err.to_string()
+                .contains("expected canonical unprefixed Base58"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

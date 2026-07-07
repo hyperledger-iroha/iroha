@@ -3336,6 +3336,86 @@ class OfflineNoteTest {
     }
 
     @Test
+    fun toriiIssuerClientSubmitsKagemushaTopUpArchive() {
+        val fixture = loadFixture()
+        val certificateJson = currentIssuerCertificateJson(obj(obj(fixture, "payment_token"), "sender_key_certificate"))
+        val accountId = string(certificateJson, "account_id")
+        val assetDefinitionId = assetDefinitionFromAssetId(string(obj(obj(fixture, "chain_vectors"), "issue"), "asset_id"))
+        val offlinePublicKey = "a5".repeat(32)
+        val deviceBinding = OfflineNoteIssuerDeviceBinding(
+            deviceId = "device-1",
+            offlinePublicKey = offlinePublicKey,
+            deviceBinding = linkedMapOf(
+                "device_id" to "device-1",
+                "attestation_key_id" to "attestation-key-1",
+                "offline_public_key" to offlinePublicKey,
+            ),
+        )
+        val executor = OfflineIssuerExecutor(certificateJson)
+        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        val client = ToriiOfflineNoteIssuerClient(
+            canonicalAuth = ToriiCanonicalRequestAuth(accountId, keyPair.private),
+            deviceBindingProvider = object : OfflineNoteIssuerDeviceBindingProvider {
+                override fun currentDeviceBinding(
+                    chainId: String,
+                    accountId: String,
+                    assetDefinitionId: String,
+                ): OfflineNoteIssuerDeviceBinding = deviceBinding
+            },
+            executor = executor,
+            baseUri = URI.create("https://torii.example"),
+            defaultHeaders = mapOf(
+                "X-Iroha-Account" to "retired-account",
+                "x-iroha-signature" to "retired-signature",
+                "X-Iroha-Nonce" to "retired-nonce",
+                "X-Client-Trace" to "trace-topup",
+            ),
+            clock = java.util.function.LongSupplier { 1_700_000_000_000L },
+            nonceGenerator = SequenceIdGenerator("operation-topup-1", "auth-topup-1"),
+        )
+        val archive = byteArrayOf(0x4b, 0x54)
+
+        val future = client.submitKagemushaTopUp("chain-1", accountId, assetDefinitionId, archive)
+        archive[0] = 0
+        val response = future.join()
+
+        assertEquals("operation-topup-1", response.operationId)
+        assertEquals("topup-chain-tx-hash", response.chainTxHash)
+        assertEquals(assetDefinitionId, response.assetDefinitionId)
+        assertEquals("5", response.amount)
+        assertEquals(listOf("hash-1", "hash-2"), response.topupAnchorNullifiers)
+        assertEquals(listOf("commitment-1"), response.outputCommitments)
+        assertEquals("root-hint", response.rootHint)
+        assertEquals(1, executor.requests.size)
+        assertEquals("/v1/offline/v2/kagemusha/topup", executor.requests[0].uri.path)
+        assertFalse(executor.requests[0].headers.keys.any { it.startsWith("X-Iroha-", ignoreCase = true) })
+        assertEquals<List<String>?>(listOf("trace-topup"), executor.requests[0].headers["X-Client-Trace"])
+        val body = executor.requestBody(0)
+        assertEquals(accountId, string(body, "account_id"))
+        assertEquals("operation-topup-1", string(body, "operation_id"))
+        assertEquals("device-1", string(body, "device_id"))
+        assertEquals(offlinePublicKey, string(body, "offline_public_key"))
+        assertEquals(assetDefinitionId, string(body, "asset_definition_id"))
+        assertEquals("auth-topup-1", string(body, "nonce"))
+        assertEquals("S1Q=", string(body, "topup_request_norito_base64"))
+        assertTrue(string(body, "signature_base64").isNotBlank())
+        assertEquals("device-1", string(obj(body, "device_binding"), "device_id"))
+        assertFalse(body.containsKey("amount"))
+        assertFalse(body.containsKey("init_request_norito_base64"))
+        assertFalse(body.containsKey("topup_init_request_norito_base64"))
+
+        val mismatchFailure = assertFailsWith<IllegalArgumentException> {
+            client.submitKagemushaTopUp("chain-1", "$accountId-other", assetDefinitionId, byteArrayOf(1))
+        }
+        assertEquals("canonical auth accountId must match top-up accountId", mismatchFailure.message)
+        val emptyFailure = assertFailsWith<IllegalArgumentException> {
+            client.submitKagemushaTopUp("chain-1", accountId, assetDefinitionId, ByteArray(0))
+        }
+        assertEquals("topUpRequestArchive must not be empty", emptyFailure.message)
+        assertEquals(1, executor.requests.size)
+    }
+
+    @Test
     fun toriiIssuerDeviceBindingRejectsRetiredAssertionPublicKeyAliases() {
         val offlinePublicKey = "a5".repeat(32)
         for (retiredKey in listOf("device_public_key", "app_attest_public_key_base64")) {
@@ -6043,6 +6123,15 @@ class OfflineNoteTest {
                     "issued_note_commitment" to string(body, "note_commitment"),
                     "key_certificate" to certificateWithExpiry(),
                     "key_certificates" to listOf(certificateWithExpiry()),
+                )
+                "/v1/offline/v2/kagemusha/topup" -> linkedMapOf<String, Any?>(
+                    "operation_id" to string(body, "operation_id"),
+                    "chain_tx_hash" to "topup-chain-tx-hash",
+                    "asset_definition_id" to string(body, "asset_definition_id"),
+                    "amount" to "5",
+                    "topup_anchor_nullifiers" to listOf("hash-1", "hash-2"),
+                    "output_commitments" to listOf("commitment-1"),
+                    "root_hint" to "root-hint",
                 )
                 else -> throw IllegalStateException("unexpected path ${request.uri.path}")
             }

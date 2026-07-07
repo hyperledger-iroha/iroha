@@ -82,6 +82,51 @@ fn try_sign_consensus_preimage(
     Signature::try_new(private_key, preimage).map(|signature| signature.payload().to_vec())
 }
 
+fn queued_empty_frontier_can_make_progress(
+    height: u64,
+    committed_height: u64,
+    active_queue_len: usize,
+    pending_blocks_for_height: usize,
+    slot_has_round_liveness: bool,
+) -> bool {
+    height == committed_height.saturating_add(1)
+        && active_queue_len > 0
+        && pending_blocks_for_height == 0
+        && !slot_has_round_liveness
+}
+
+#[cfg(test)]
+mod queued_empty_frontier_can_make_progress_tests {
+    use super::queued_empty_frontier_can_make_progress;
+
+    #[test]
+    fn allows_queued_empty_frontier_without_round_liveness() {
+        assert!(queued_empty_frontier_can_make_progress(2, 1, 1, 0, false));
+    }
+
+    #[test]
+    fn rejects_non_frontier_or_inactive_work() {
+        for (height, committed_height, queue_len, pending_blocks, has_liveness) in [
+            (1, 1, 1, 0, false),
+            (3, 1, 1, 0, false),
+            (2, 1, 0, 0, false),
+            (2, 1, 1, 1, false),
+            (2, 1, 1, 0, true),
+        ] {
+            assert!(
+                !queued_empty_frontier_can_make_progress(
+                    height,
+                    committed_height,
+                    queue_len,
+                    pending_blocks,
+                    has_liveness
+                ),
+                "height={height} committed_height={committed_height} queue_len={queue_len} pending_blocks={pending_blocks} has_liveness={has_liveness}"
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod checked_consensus_signing_tests {
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
@@ -37886,11 +37931,13 @@ impl Actor {
             .max(Duration::from_millis(1));
         let committed_height = self.committed_height_snapshot();
         let current_view = self.phase_tracker.current_view(height).unwrap_or(0);
-        let local_leader_can_make_frontier_progress = height == committed_height.saturating_add(1)
-            && self.queue.active_len() > 0
-            && self.pending_block_count_for_height(height) == 0
-            && !self.slot_has_round_liveness(height, current_view)
-            && self.local_is_round_leader(height, current_view);
+        let queued_empty_frontier_can_make_progress = queued_empty_frontier_can_make_progress(
+            height,
+            committed_height,
+            self.queue.active_len(),
+            self.pending_block_count_for_height(height),
+            self.slot_has_round_liveness(height, current_view),
+        );
         if !self.missing_qc_height_has_unresolved_dependency_at_height(height) {
             let _ = self.clear_non_actionable_missing_dependencies_for_height(
                 height,
@@ -37900,13 +37947,14 @@ impl Actor {
             self.clear_missing_block_recovery_for_height(height, now);
             return false;
         }
-        if local_leader_can_make_frontier_progress {
+        if queued_empty_frontier_can_make_progress {
             self.clear_missing_block_recovery_for_height_preserving_frontier_state(height, now);
             debug!(
                 height,
                 view = current_view,
                 queue_len = self.queue.active_len(),
-                "allowing local leader proposal despite same-height missing dependency"
+                local_leader = self.local_is_round_leader(height, current_view),
+                "allowing queued empty-frontier proposal path despite same-height missing dependency"
             );
             return false;
         }

@@ -25,6 +25,8 @@ import org.hyperledger.iroha.norito.TypeAdapter;
 public final class KagemushaRecursiveSpendRequestCodecs {
   public static final String SCHEMA_INIT_REQUEST =
       "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1";
+  public static final String SCHEMA_TOP_UP_REQUEST =
+      "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpRequestV1";
   public static final String SCHEMA_APPEND_REQUEST =
       "iroha_data_model::offline::model::KagemushaRecursiveSpendAppendRequestV1";
   public static final String SCHEMA_VERIFY_REQUEST =
@@ -92,6 +94,12 @@ public final class KagemushaRecursiveSpendRequestCodecs {
   public static byte[] encodeInitRequest(final InitSpendRequest request) {
     return NoritoCodec.encode(
         Objects.requireNonNull(request, "request"), SCHEMA_INIT_REQUEST, INIT_REQUEST_ADAPTER, REQUEST_FLAGS);
+  }
+
+  public static byte[] encodeTopUpRequest(final TopUpSpendRequest request) {
+    validateTopUpRequestPublicBinding(Objects.requireNonNull(request, "request"));
+    return NoritoCodec.encode(
+        request, SCHEMA_TOP_UP_REQUEST, TOP_UP_REQUEST_ADAPTER, REQUEST_FLAGS);
   }
 
   public static byte[] encodeAppendRequest(final AppendSpendRequest request) {
@@ -208,6 +216,51 @@ public final class KagemushaRecursiveSpendRequestCodecs {
             lineageVerifierKey,
             lineageProvingKeyArchive,
             blockHeight));
+  }
+
+  public static byte[] buildRecursiveSpendTopUpRequest(
+      final String assetId,
+      final String amount,
+      final byte[] initRequestArchive) {
+    return encodeTopUpRequest(new TopUpSpendRequest(assetId, amount, initRequestArchive));
+  }
+
+  public static byte[] buildRecursiveSpendTopUpRequest(
+      final String accountId,
+      final String assetDefinitionId,
+      final String amount,
+      final byte[] initRequestArchive,
+      final Long dataspaceId) {
+    return buildRecursiveSpendTopUpRequest(
+        canonicalAssetId(accountId, assetDefinitionId, dataspaceId), amount, initRequestArchive);
+  }
+
+  public static byte[] buildRecursiveSpendTopUpInitRequest(
+      final byte[] recordBundle,
+      final byte[] pallasOpenEnvelopes,
+      final SpendableNoteDescriptor spendableNote,
+      final Long blockHeight) {
+    require(recordBundle != null, "recordBundle is required");
+    require(pallasOpenEnvelopes != null, "pallasOpenEnvelopes is required");
+    require(spendableNote != null, "spendableNote is required");
+    return NoritoCodec.encode(
+        new TopUpInitSpendRequest(recordBundle, pallasOpenEnvelopes, spendableNote, blockHeight),
+        SCHEMA_INIT_REQUEST,
+        TOP_UP_INIT_REQUEST_ADAPTER,
+        REQUEST_FLAGS);
+  }
+
+  public static byte[] buildRecursiveSpendTopUpRequestFromInitRequest(
+      final String accountId, final byte[] initRequestArchive) {
+    return buildRecursiveSpendTopUpRequestFromInitRequest(accountId, initRequestArchive, null);
+  }
+
+  public static byte[] buildRecursiveSpendTopUpRequestFromInitRequest(
+      final String accountId, final byte[] initRequestArchive, final Long dataspaceId) {
+    final TopUpInitRequestSummary summary = readTopUpInitRequestSummary(initRequestArchive);
+    return encodeTopUpRequest(
+        new TopUpSpendRequest(
+            accountId, summary.assetDefinitionId, summary.amount, initRequestArchive, dataspaceId));
   }
 
   public static byte[] buildRecursiveSpendInitRequest(
@@ -638,6 +691,80 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     return requireAppendLineageKeyArtifacts(lineageKeyArtifacts);
   }
 
+  private static TopUpInitRequestSummary readTopUpInitRequestSummary(
+      final byte[] initRequestArchive) {
+    final byte[] payload =
+        compactPayloadForRequest(initRequestArchive, SCHEMA_INIT_REQUEST, "initRequestArchive");
+    final NoritoDecoder decoder = new NoritoDecoder(payload, REQUEST_FLAGS);
+    final byte[] recordBundlePayload =
+        readField(decoder, KagemushaRecursiveSpendRequestCodecs::readRemainingBytes);
+    final byte[] pallasOpenEnvelopes =
+        readField(decoder, KagemushaRecursiveSpendRequestCodecs::readBytesVec);
+    final SpendableNoteDescriptor currentNote =
+        readField(
+            decoder,
+            child -> readSpendableNote(child, "initRequestArchive.current_note"));
+    final byte[] lineageVerifierKey = readField(
+        decoder,
+        child -> readOptionRawPayload(child, "initRequestArchive.lineage_verifier_key"));
+    final byte[] lineageProvingKeyArchive = readField(
+        decoder,
+        child -> readOptionRawPayload(child, "initRequestArchive.lineage_proving_key_archive"));
+    readField(decoder, KagemushaRecursiveSpendRequestCodecs::readOptionU64Value);
+    require(decoder.remaining() == 0, "Trailing bytes after initRequestArchive");
+    require(
+        lineageVerifierKey == null,
+        "top-up init request lineageVerifierKey must be absent");
+    require(
+        lineageProvingKeyArchive == null,
+        "top-up init request lineageProvingKeyArchive must be absent");
+
+    final TopUpInitRecordBundleSummary recordBundle =
+        readTopUpInitRecordBundleSummary(recordBundlePayload);
+    require(
+        recordBundle.hopCount == 1,
+        "top-up init request must contain exactly one checked hop");
+    requirePallasOpenEnvelopesArchive(
+        pallasOpenEnvelopes,
+        recordBundle.hopCount,
+        "initRequestArchive.pallas_open_envelopes",
+        KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES);
+    return new TopUpInitRequestSummary(recordBundle.assetDefinitionId, currentNote.amount);
+  }
+
+  private static TopUpInitRecordBundleSummary readTopUpInitRecordBundleSummary(
+      final byte[] recordBundlePayload) {
+    final NoritoDecoder decoder = new NoritoDecoder(recordBundlePayload, REQUEST_FLAGS);
+    final byte[] bundlePayload =
+        readField(decoder, KagemushaRecursiveSpendRequestCodecs::readRemainingBytes);
+    readField(decoder, KagemushaRecursiveSpendRequestCodecs::readRemainingBytes);
+    require(decoder.remaining() == 0, "Trailing bytes after initRequestArchive.record_bundle");
+
+    final NoritoDecoder bundle = new NoritoDecoder(bundlePayload, REQUEST_FLAGS);
+    readField(bundle, KagemushaRecursiveSpendRequestCodecs::readChainId);
+    final String assetDefinitionId =
+        readField(
+            bundle,
+            child -> readAssetDefinitionId(child, "initRequestArchive.record_bundle.asset"));
+    final int hopCount =
+        readField(
+            bundle,
+            child -> readVerifiedFoldStepCount(child, "initRequestArchive.record_bundle.steps"));
+    require(bundle.remaining() == 0, "Trailing bytes after initRequestArchive.record_bundle.bundle");
+    return new TopUpInitRecordBundleSummary(assetDefinitionId, hopCount);
+  }
+
+  private static void validateTopUpRequestPublicBinding(final TopUpSpendRequest request) {
+    final TopUpInitRequestSummary summary = readTopUpInitRequestSummary(request.initRequestArchive());
+    final ParsedAssetId parsedAsset = parseAssetId(request.assetId, "assetId");
+    require(
+        parsedAsset.assetDefinitionId.equals(summary.assetDefinitionId),
+        "top-up request asset definition must match the nested init request");
+    require(
+        request.amount.equals(summary.amount),
+        "top-up request amount must match the nested current note");
+  }
+
   private static byte[] previousProofOpenEnvelopesOrGenerated(
       final byte[] previousBundle,
       final String outputCircuitId,
@@ -847,6 +974,74 @@ public final class KagemushaRecursiveSpendRequestCodecs {
 
     public byte[] lineageProvingKeyArchive() {
       return copyNullable(lineageProvingKeyArchive);
+    }
+  }
+
+  /** Typed top-up-only encoder input for {@code KagemushaRecursiveSpendInitRequestV1}. */
+  private static final class TopUpInitSpendRequest {
+    private final byte[] recordBundle;
+    private final byte[] pallasOpenEnvelopes;
+    final SpendableNoteDescriptor currentNote;
+    final Long blockHeight;
+
+    TopUpInitSpendRequest(
+        final byte[] recordBundle,
+        final byte[] pallasOpenEnvelopes,
+        final SpendableNoteDescriptor currentNote,
+        final Long blockHeight) {
+      this.recordBundle = copyOf(recordBundle, "recordBundle");
+      this.pallasOpenEnvelopes = copyOf(pallasOpenEnvelopes, "pallasOpenEnvelopes");
+      this.currentNote = Objects.requireNonNull(currentNote, "currentNote");
+      this.blockHeight = blockHeight;
+      requireNonNegativeHeight(blockHeight);
+      final byte[] recordBundlePayload =
+          compactPayloadForRequest(this.recordBundle, SCHEMA_RECORD_BUNDLE, "recordBundle");
+      final int recordBundleHopCount =
+          readVerifiedFoldRecordBundleHopCount(recordBundlePayload, REQUEST_FLAGS, "recordBundle");
+      require(
+          recordBundleHopCount == 1,
+          "top-up init request must contain exactly one checked hop");
+      requirePallasOpenEnvelopesArchive(
+          this.pallasOpenEnvelopes,
+          recordBundleHopCount,
+          "pallasOpenEnvelopes",
+          KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES);
+    }
+
+    byte[] recordBundle() {
+      return Arrays.copyOf(recordBundle, recordBundle.length);
+    }
+
+    byte[] pallasOpenEnvelopes() {
+      return Arrays.copyOf(pallasOpenEnvelopes, pallasOpenEnvelopes.length);
+    }
+  }
+
+  /** Typed request for {@code KagemushaRecursiveSpendTopUpRequestV1}. */
+  public static final class TopUpSpendRequest {
+    public final String assetId;
+    public final String amount;
+    private final byte[] initRequestArchive;
+
+    public TopUpSpendRequest(
+        final String assetId, final String amount, final byte[] initRequestArchive) {
+      this.assetId = canonicalAssetId(assetId, "assetId");
+      this.amount = canonicalU128Decimal(amount, "amount");
+      this.initRequestArchive = copyOf(initRequestArchive, "initRequestArchive");
+      compactPayloadForRequest(this.initRequestArchive, SCHEMA_INIT_REQUEST, "initRequestArchive");
+    }
+
+    public TopUpSpendRequest(
+        final String accountId,
+        final String assetDefinitionId,
+        final String amount,
+        final byte[] initRequestArchive,
+        final Long dataspaceId) {
+      this(canonicalAssetId(accountId, assetDefinitionId, dataspaceId), amount, initRequestArchive);
+    }
+
+    public byte[] initRequestArchive() {
+      return Arrays.copyOf(initRequestArchive, initRequestArchive.length);
     }
   }
 
@@ -1272,18 +1467,79 @@ public final class KagemushaRecursiveSpendRequestCodecs {
       new TypeAdapter<InitSpendRequest>() {
         @Override
         public void encode(final NoritoEncoder encoder, final InitSpendRequest value) {
-          writeRawField(
+          writeInitRequestFields(
               encoder,
-              compactPayloadForRequest(value.recordBundle(), SCHEMA_RECORD_BUNDLE, "recordBundle"));
-          writeField(encoder, child -> writeBytesVec(child, value.pallasOpenEnvelopes()));
-          writeField(encoder, child -> writeSpendableNote(child, value.currentNote));
-          writeField(encoder, child -> writeOptionRaw(child, verifyingKeyBoxPayload(value.lineageVerifierKey())));
-          writeField(encoder, child -> writeOptionBytesVec(child, value.lineageProvingKeyArchive()));
-          writeField(encoder, child -> writeOptionU64(child, value.blockHeight));
+              value.recordBundle(),
+              value.pallasOpenEnvelopes(),
+              value.currentNote,
+              value.lineageVerifierKey(),
+              value.lineageProvingKeyArchive(),
+              value.blockHeight);
         }
 
         @Override
         public InitSpendRequest decode(final NoritoDecoder decoder) {
+          throw new UnsupportedOperationException("recursive spend requests are encode-only");
+        }
+      };
+
+  private static final TypeAdapter<TopUpInitSpendRequest> TOP_UP_INIT_REQUEST_ADAPTER =
+      new TypeAdapter<TopUpInitSpendRequest>() {
+        @Override
+        public void encode(final NoritoEncoder encoder, final TopUpInitSpendRequest value) {
+          writeInitRequestFields(
+              encoder,
+              value.recordBundle(),
+              value.pallasOpenEnvelopes(),
+              value.currentNote,
+              null,
+              null,
+              value.blockHeight);
+        }
+
+        @Override
+        public TopUpInitSpendRequest decode(final NoritoDecoder decoder) {
+          throw new UnsupportedOperationException("recursive spend top-up init requests are encode-only");
+        }
+      };
+
+  private static void writeInitRequestFields(
+      final NoritoEncoder encoder,
+      final byte[] recordBundle,
+      final byte[] pallasOpenEnvelopes,
+      final SpendableNoteDescriptor currentNote,
+      final byte[] lineageVerifierKey,
+      final byte[] lineageProvingKeyArchive,
+      final Long blockHeight) {
+    writeRawField(
+        encoder,
+        compactPayloadForRequest(recordBundle, SCHEMA_RECORD_BUNDLE, "recordBundle"));
+    writeField(encoder, child -> writeBytesVec(child, pallasOpenEnvelopes));
+    writeField(encoder, child -> writeSpendableNote(child, currentNote));
+    writeField(
+        encoder,
+        child ->
+            writeOptionRaw(
+                child,
+                lineageVerifierKey == null ? null : verifyingKeyBoxPayload(lineageVerifierKey)));
+    writeField(encoder, child -> writeOptionBytesVec(child, lineageProvingKeyArchive));
+    writeField(encoder, child -> writeOptionU64(child, blockHeight));
+  }
+
+  private static final TypeAdapter<TopUpSpendRequest> TOP_UP_REQUEST_ADAPTER =
+      new TypeAdapter<TopUpSpendRequest>() {
+        @Override
+        public void encode(final NoritoEncoder encoder, final TopUpSpendRequest value) {
+          writeField(encoder, child -> writeAssetId(child, value.assetId));
+          writeField(encoder, child -> writeNumeric(child, value.amount));
+          writeRawField(
+              encoder,
+              compactPayloadForRequest(
+                  value.initRequestArchive(), SCHEMA_INIT_REQUEST, "initRequestArchive"));
+        }
+
+        @Override
+        public TopUpSpendRequest decode(final NoritoDecoder decoder) {
           throw new UnsupportedOperationException("recursive spend requests are encode-only");
         }
       };
@@ -2520,6 +2776,13 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     writeField(encoder, child -> writeNumeric(child, value.amount));
   }
 
+  private static void writeAssetId(final NoritoEncoder encoder, final String assetId) {
+    final ParsedAssetId parsed = parseAssetId(assetId, "assetId");
+    writeField(encoder, child -> writeAccountId(child, parsed.accountId));
+    writeField(encoder, child -> writeAssetDefinitionId(child, parsed.assetDefinitionId));
+    writeField(encoder, child -> writeAssetBalanceScope(child, parsed.dataspaceId));
+  }
+
   private static void writeChainId(final NoritoEncoder encoder, final String value) {
     requirePortableId(value, "chainId");
     writeField(encoder, child -> writeString(child, value));
@@ -2533,6 +2796,16 @@ public final class KagemushaRecursiveSpendRequestCodecs {
       throw new IllegalArgumentException("asset must be a canonical asset definition id", ex);
     }
     encoder.writeBytes(bytes);
+  }
+
+  private static void writeAssetBalanceScope(
+      final NoritoEncoder encoder, final Long dataspaceId) {
+    if (dataspaceId == null) {
+      encoder.writeUInt(0, 32);
+      return;
+    }
+    encoder.writeUInt(1, 32);
+    writeField(encoder, child -> child.writeUInt(dataspaceId, 64));
   }
 
   private static void writeFixed32Vec(final NoritoEncoder encoder, final List<byte[]> values) {
@@ -2616,6 +2889,91 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     }
     encoder.writeUInt(1, 32);
     writeField(encoder, child -> writeMultisigPolicy(child, multisig.get()));
+  }
+
+  private static String canonicalAssetId(final String value, final String field) {
+    final ParsedAssetId parsed = parseAssetId(value, field);
+    final String base = parsed.assetDefinitionId + "#" + parsed.accountId;
+    return parsed.dataspaceId == null ? base : base + "#dataspace:" + parsed.dataspaceId;
+  }
+
+  private static String canonicalAssetId(
+      final String accountId, final String assetDefinitionId, final Long dataspaceId) {
+    require(dataspaceId == null || dataspaceId >= 0L, "dataspaceId must be non-negative");
+    final String definition;
+    try {
+      definition =
+          AssetDefinitionIdEncoder.encodeFromBytes(
+              AssetDefinitionIdEncoder.parseAddressBytes(assetDefinitionId));
+    } catch (final IllegalArgumentException ex) {
+      throw new IllegalArgumentException(
+          "assetDefinitionId must be a canonical asset definition id", ex);
+    }
+    writeAccountId(new NoritoEncoder(0), accountId);
+    final String base = definition + "#" + accountId;
+    return dataspaceId == null ? base : base + "#dataspace:" + dataspaceId;
+  }
+
+  private static ParsedAssetId parseAssetId(final String value, final String field) {
+    requireNonBlankUnpadded(value, field);
+    final String[] parts = value.split("#", -1);
+    require(
+        parts.length == 2 || parts.length == 3,
+        field + " must use '<asset-definition>#<account>' with optional '#dataspace:<id>'");
+    final String definition;
+    try {
+      definition =
+          AssetDefinitionIdEncoder.encodeFromBytes(
+              AssetDefinitionIdEncoder.parseAddressBytes(parts[0]));
+    } catch (final IllegalArgumentException ex) {
+      throw new IllegalArgumentException(
+          field + ".definition must be a canonical asset definition id", ex);
+    }
+    writeAccountId(new NoritoEncoder(0), parts[1]);
+    final Long dataspaceId;
+    if (parts.length == 3) {
+      final String prefix = "dataspace:";
+      require(parts[2].startsWith(prefix), field + ".scope must use dataspace:<id>");
+      final String raw = parts[2].substring(prefix.length());
+      require(isCanonicalUnsignedDecimal(raw), field + ".scope must use canonical dataspace:<id>");
+      try {
+        dataspaceId = Long.parseLong(raw);
+      } catch (final NumberFormatException ex) {
+        throw new IllegalArgumentException(field + ".scope must fit in signed 64-bit range", ex);
+      }
+    } else {
+      dataspaceId = null;
+    }
+    return new ParsedAssetId(parts[1], definition, dataspaceId);
+  }
+
+  private static boolean isCanonicalUnsignedDecimal(final String value) {
+    if (value == null || value.isEmpty()) {
+      return false;
+    }
+    if (value.length() > 1 && value.charAt(0) == '0') {
+      return false;
+    }
+    for (int index = 0; index < value.length(); index++) {
+      final char ch = value.charAt(index);
+      if (ch < '0' || ch > '9') {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private static final class ParsedAssetId {
+    final String accountId;
+    final String assetDefinitionId;
+    final Long dataspaceId;
+
+    ParsedAssetId(
+        final String accountId, final String assetDefinitionId, final Long dataspaceId) {
+      this.accountId = accountId;
+      this.assetDefinitionId = assetDefinitionId;
+      this.dataspaceId = dataspaceId;
+    }
   }
 
   private static void writeMultisigPolicy(
@@ -3249,6 +3607,26 @@ public final class KagemushaRecursiveSpendRequestCodecs {
       this.publicInputs = publicInputs;
       this.envelope = envelope;
       this.verifierRecord = verifierRecord;
+    }
+  }
+
+  private static final class TopUpInitRequestSummary {
+    final String assetDefinitionId;
+    final String amount;
+
+    TopUpInitRequestSummary(final String assetDefinitionId, final String amount) {
+      this.assetDefinitionId = assetDefinitionId;
+      this.amount = amount;
+    }
+  }
+
+  private static final class TopUpInitRecordBundleSummary {
+    final String assetDefinitionId;
+    final int hopCount;
+
+    TopUpInitRecordBundleSummary(final String assetDefinitionId, final int hopCount) {
+      this.assetDefinitionId = assetDefinitionId;
+      this.hopCount = hopCount;
     }
   }
 

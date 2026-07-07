@@ -7,10 +7,18 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.function.Consumer;
 import org.bouncycastle.crypto.digests.KeccakDigest;
 import org.hyperledger.iroha.android.crypto.Blake2b;
+import org.hyperledger.iroha.norito.NoritoCodec;
+import org.hyperledger.iroha.norito.NoritoDecoder;
+import org.hyperledger.iroha.norito.NoritoEncoder;
+import org.hyperledger.iroha.norito.TypeAdapter;
 
 public final class TonSccpProverTests {
+  private static final String TEST_NEXUS_BRIDGE_FINALITY_PROOF_SCHEMA =
+      "iroha_sccp::NexusBridgeFinalityProofV1";
+
   private TonSccpProverTests() {}
 
   public static void main(final String[] args) {
@@ -2822,7 +2830,8 @@ public final class TonSccpProverTests {
         : "TON omitted-source submission must emit a BOC body";
     boolean mismatchedBundleThrew = false;
     try {
-      new TonSccpProver.MessageBodyInput(result, sampleTonBundleBytes(new byte[] {0x71, 0x73}));
+      new TonSccpProver.MessageBodyInput(
+          result, sampleTonBundleBytesWithFinalityHeader(new byte[] {0x21, 0x23}));
     } catch (final IllegalArgumentException ex) {
       mismatchedBundleThrew = ex.getMessage().contains("proofResult.bundleBytes");
     }
@@ -2832,8 +2841,9 @@ public final class TonSccpProverTests {
     boolean tamperedResultBundleThrew = false;
     try {
       new TonSccpProver.MessageBodyInput(
-          tonProofResultWithBundleBytes(result, sampleTonBundleBytes(new byte[] {0x71, 0x73})),
-          sampleTonBundleBytes(new byte[] {0x71, 0x73}));
+          tonProofResultWithBundleBytes(
+              result, sampleTonBundleBytesWithFinalityHeader(new byte[] {0x21, 0x23})),
+          sampleTonBundleBytesWithFinalityHeader(new byte[] {0x21, 0x23}));
     } catch (final IllegalArgumentException ex) {
       tamperedResultBundleThrew = ex.getMessage().contains("requestHash");
     }
@@ -3464,7 +3474,7 @@ public final class TonSccpProverTests {
         TonSccpProver.buildProofRequest(
             new TonSccpProver.ProofRequestInput(
                 samplePublicInputs(),
-                sampleTonBundleBytes(new byte[] {0x71}),
+                sampleTonBundleBytesWithFinalityHeader(new byte[] {0x21}),
                 new byte[0],
                 repeat("56", 32),
                 repeat("78", 32),
@@ -3478,7 +3488,7 @@ public final class TonSccpProverTests {
         TonSccpProver.buildProofRequest(
             new TonSccpProver.ProofRequestInput(
                 samplePublicInputs(),
-                sampleTonBundleBytes(new byte[] {0x71, 0x73}),
+                sampleTonBundleBytesWithFinalityHeader(new byte[] {0x21, 0x73}),
                 new byte[0],
                 repeat("56", 32),
                 repeat("78", 32),
@@ -3590,6 +3600,34 @@ public final class TonSccpProverTests {
       threw = ex.getMessage().contains("payloadHash must be canonical hex");
     }
     assert threw : "TON proof requests must reject uppercase payload hashes";
+
+    final SampleTonBundleFixture nonSoraOrderingFixture =
+        sampleTonBundleFixture(
+            SourceSccpProofs.DOMAIN_SOL,
+            TonSccpProver.CODEC_SOLANA_BASE58,
+            "11111111111111111111111111111111");
+    final TonSccpProver.PublicInputsInput malformedPublicInputsBeforeSourceProof =
+        new TonSccpProver.PublicInputsInput(
+            nonSoraOrderingFixture.publicInputs.version(),
+            nonSoraOrderingFixture.publicInputs.messageId(),
+            "0x" + repeat("AA", 32),
+            nonSoraOrderingFixture.publicInputs.targetDomain(),
+            nonSoraOrderingFixture.publicInputs.commitmentRoot(),
+            nonSoraOrderingFixture.publicInputs.finalityHeight(),
+            nonSoraOrderingFixture.publicInputs.finalityBlockHash());
+    threw = false;
+    try {
+      TonSccpProver.buildProofRequest(
+          proofRequestInputWithBundle(
+              malformedPublicInputsBeforeSourceProof,
+              nonSoraOrderingFixture.bundleBytes,
+              new byte[] {9, 10}));
+    } catch (final IllegalArgumentException ex) {
+      threw =
+          ex.getMessage().contains("payloadHash must be canonical hex")
+              && !ex.getMessage().contains("sourceProofBytes");
+    }
+    assert threw : "TON proof requests must validate public inputs before source-proof matching";
 
     threw = false;
     try {
@@ -4188,7 +4226,7 @@ public final class TonSccpProverTests {
     assert "0x7d35b186e3d49aed31693e33d33355fa8fa9032160c929f2c7fe260094f6ccdf"
         .equals(request.sourceAdapterDeploymentBindingHash())
         : "TON deployment binding hash must match other SDKs";
-    assert "0x01c228459f04cf7a6c863fd116e6c916e4b44f192168ec6dc24a0bf62775e966"
+    assert "0xf0a1c6d7b987392d9956a2e291552287d063dea146772d1f16909a79e0afe5ca"
         .equals(request.requestHash())
         : "TON proof request hash must match other SDKs";
     final TonSccpProver.ProofResult proofResult =
@@ -4197,7 +4235,7 @@ public final class TonSccpProverTests {
               (byte) 0x91, (byte) 0x92, (byte) 0x93, (byte) 0x94, (byte) 0x95
             },
             request);
-    assert "0x5c7f16603f28514899734ab2809f6e1ceb3da0e9d47e13ed95ca60f8c3a88864"
+    assert "0x09df47e8a2509f4e7fbb6cf4b0b271bb87fd8c1d76b37823332d08ee2c062e5e"
         .equals(proofResult.envelopeHash())
         : "TON proof envelope hash must match other SDKs";
   }
@@ -4414,6 +4452,16 @@ public final class TonSccpProverTests {
         .bundleBytes;
   }
 
+  private static byte[] sampleTonBundleBytesWithFinalityHeader(final byte[] blockHeaderBytes) {
+    final TonSccpProver.PublicInputsInput publicInputs = samplePublicInputs();
+    return sampleTonBundleBytes(
+        testNexusBridgeFinalityProofBytes(
+            publicInputs.commitmentRoot(),
+            publicInputs.finalityHeight(),
+            publicInputs.finalityBlockHash(),
+            blockHeaderBytes));
+  }
+
   private static SampleTonBundleFixture sampleTonBundleFixture() {
     return sampleTonBundleFixture(
         SolanaSccpProver.DOMAIN_SORA,
@@ -4423,7 +4471,7 @@ public final class TonSccpProverTests {
         BigInteger.valueOf(42L),
         "sccp-ton-proof-request",
         Collections.emptyList(),
-        new byte[] {0x71, 0x72});
+        null);
   }
 
   private static SampleTonBundleFixture sampleTonBundleFixture(final BigInteger amount) {
@@ -4435,7 +4483,7 @@ public final class TonSccpProverTests {
         amount,
         "sccp-ton-proof-request",
         Collections.emptyList(),
-        new byte[] {0x71, 0x72});
+        null);
   }
 
   private static SampleTonBundleFixture sampleTonBundleFixture(
@@ -4448,7 +4496,7 @@ public final class TonSccpProverTests {
         BigInteger.valueOf(42L),
         "sccp-ton-proof-request",
         Collections.emptyList(),
-        new byte[] {0x71, 0x72});
+        null);
   }
 
   private static SampleTonBundleFixture sampleTonBundleFixture(
@@ -4461,7 +4509,7 @@ public final class TonSccpProverTests {
         BigInteger.valueOf(42L),
         "sccp-ton-proof-request",
         merkleProofSteps,
-        new byte[] {0x71, 0x72});
+        null);
   }
 
   private static SampleTonBundleFixture sampleTonBundleFixture(
@@ -4529,15 +4577,7 @@ public final class TonSccpProverTests {
     }
     final String commitmentRoot = "0x" + hexLower(currentRoot);
 
-    final ByteArrayOutputStream bundle = new ByteArrayOutputStream();
-    bundle.write(1);
-    writeTestRawBytes(bundle, currentRoot);
-    writeTestBytes(bundle, commitmentBytes);
-    writeTestBytes(bundle, merkleProof.toByteArray());
-    writeTestBytes(bundle, payloadBytes);
-    writeTestBytes(bundle, finalityProof);
-
-    return new SampleTonBundleFixture(
+    final TonSccpProver.PublicInputsInput publicInputs =
         new TonSccpProver.PublicInputsInput(
             1,
             messageId,
@@ -4545,8 +4585,26 @@ public final class TonSccpProverTests {
             TonSccpProver.DOMAIN_TON,
             commitmentRoot,
             "19",
-            repeat("aa", 32)),
-        bundle.toByteArray());
+            repeat("aa", 32));
+    final byte[] resolvedFinalityProof =
+        finalityProof != null
+            ? finalityProof
+            : sourceDomain == SolanaSccpProver.DOMAIN_SORA
+                ? testNexusBridgeFinalityProofBytes(
+                    publicInputs.commitmentRoot(),
+                    publicInputs.finalityHeight(),
+                    publicInputs.finalityBlockHash())
+                : new byte[] {0x71, 0x72};
+
+    final ByteArrayOutputStream bundle = new ByteArrayOutputStream();
+    bundle.write(1);
+    writeTestRawBytes(bundle, currentRoot);
+    writeTestBytes(bundle, commitmentBytes);
+    writeTestBytes(bundle, merkleProof.toByteArray());
+    writeTestBytes(bundle, payloadBytes);
+    writeTestBytes(bundle, resolvedFinalityProof);
+
+    return new SampleTonBundleFixture(publicInputs, bundle.toByteArray());
   }
 
   private static SampleTonBundleFixture sampleTonTokenAddBundleFixture(
@@ -4590,15 +4648,7 @@ public final class TonSccpProverTests {
     final ByteArrayOutputStream merkleProof = new ByteArrayOutputStream();
     writeTestU32Le(merkleProof, 0);
 
-    final ByteArrayOutputStream bundle = new ByteArrayOutputStream();
-    bundle.write(1);
-    writeTestRawBytes(bundle, currentRoot);
-    writeTestBytes(bundle, commitmentBytes);
-    writeTestBytes(bundle, merkleProof.toByteArray());
-    writeTestBytes(bundle, payloadBytes);
-    writeTestBytes(bundle, new byte[] {0x71, 0x72});
-
-    return new SampleTonBundleFixture(
+    final TonSccpProver.PublicInputsInput publicInputs =
         new TonSccpProver.PublicInputsInput(
             1,
             messageId,
@@ -4606,8 +4656,123 @@ public final class TonSccpProverTests {
             targetDomain,
             commitmentRoot,
             "19",
-            repeat("aa", 32)),
-        bundle.toByteArray());
+            repeat("aa", 32));
+    final byte[] resolvedFinalityProof =
+        testNexusBridgeFinalityProofBytes(
+            publicInputs.commitmentRoot(),
+            publicInputs.finalityHeight(),
+            publicInputs.finalityBlockHash());
+
+    final ByteArrayOutputStream bundle = new ByteArrayOutputStream();
+    bundle.write(1);
+    writeTestRawBytes(bundle, currentRoot);
+    writeTestBytes(bundle, commitmentBytes);
+    writeTestBytes(bundle, merkleProof.toByteArray());
+    writeTestBytes(bundle, payloadBytes);
+    writeTestBytes(bundle, resolvedFinalityProof);
+
+    return new SampleTonBundleFixture(publicInputs, bundle.toByteArray());
+  }
+
+  private static final class TestNexusBridgeFinalityProof {
+    private final String commitmentRoot;
+    private final long finalityHeight;
+    private final String finalityBlockHash;
+    private final byte[] blockHeaderBytes;
+
+    private TestNexusBridgeFinalityProof(
+        final String commitmentRoot,
+        final long finalityHeight,
+        final String finalityBlockHash,
+        final byte[] blockHeaderBytes) {
+      this.commitmentRoot = commitmentRoot;
+      this.finalityHeight = finalityHeight;
+      this.finalityBlockHash = finalityBlockHash;
+      this.blockHeaderBytes = Arrays.copyOf(blockHeaderBytes, blockHeaderBytes.length);
+    }
+  }
+
+  private static final TypeAdapter<TestNexusBridgeFinalityProof>
+      TEST_NEXUS_BRIDGE_FINALITY_PROOF_ADAPTER =
+          new TypeAdapter<TestNexusBridgeFinalityProof>() {
+            @Override
+            public void encode(
+                final NoritoEncoder encoder, final TestNexusBridgeFinalityProof value) {
+              writeTestNoritoField(encoder, child -> child.writeUInt(1, 8));
+              writeTestNoritoField(
+                  encoder,
+                  child ->
+                      writeTestNoritoString(
+                          child, "00000000-0000-0000-0000-000000000753"));
+              writeTestNoritoField(encoder, child -> child.writeUInt(value.finalityHeight, 64));
+              writeTestNoritoField(
+                  encoder, child -> child.writeBytes(hexBytes(stripHex(value.finalityBlockHash))));
+              writeTestNoritoField(
+                  encoder, child -> child.writeBytes(hexBytes(stripHex(value.commitmentRoot))));
+              writeTestNoritoField(
+                  encoder, child -> writeTestNoritoRawByteVec(child, value.blockHeaderBytes));
+              writeTestNoritoField(encoder, child -> writeTestNexusCommitQc(child, value));
+            }
+
+            @Override
+            public TestNexusBridgeFinalityProof decode(final NoritoDecoder decoder) {
+              throw new UnsupportedOperationException(
+                  "test Nexus finality proof decoding is not used");
+            }
+          };
+
+  private static byte[] testNexusBridgeFinalityProofBytes(
+      final String commitmentRoot, final String finalityHeight, final String finalityBlockHash) {
+    return testNexusBridgeFinalityProofBytes(
+        commitmentRoot, finalityHeight, finalityBlockHash, new byte[] {0x21, 0x22});
+  }
+
+  private static byte[] testNexusBridgeFinalityProofBytes(
+      final String commitmentRoot,
+      final String finalityHeight,
+      final String finalityBlockHash,
+      final byte[] blockHeaderBytes) {
+    return NoritoCodec.encode(
+        new TestNexusBridgeFinalityProof(
+            commitmentRoot, Long.parseLong(finalityHeight), finalityBlockHash, blockHeaderBytes),
+        TEST_NEXUS_BRIDGE_FINALITY_PROOF_SCHEMA,
+        TEST_NEXUS_BRIDGE_FINALITY_PROOF_ADAPTER);
+  }
+
+  private static void writeTestNexusCommitQc(
+      final NoritoEncoder encoder, final TestNexusBridgeFinalityProof value) {
+    writeTestNoritoField(encoder, child -> child.writeUInt(1, 8));
+    writeTestNoritoField(encoder, child -> child.writeUInt(2, 32));
+    writeTestNoritoField(encoder, child -> child.writeUInt(value.finalityHeight, 64));
+    writeTestNoritoField(encoder, child -> child.writeUInt(0, 64));
+    writeTestNoritoField(encoder, child -> child.writeUInt(0, 64));
+    writeTestNoritoField(
+        encoder,
+        child -> writeTestNoritoString(child, "iroha2-consensus::permissioned-sumeragi@v1"));
+    writeTestNoritoField(
+        encoder, child -> child.writeBytes(hexBytes(stripHex(value.finalityBlockHash))));
+    writeTestNoritoField(encoder, child -> child.writeBytes(new byte[32]));
+    writeTestNoritoField(encoder, child -> child.writeBytes(new byte[32]));
+    writeTestNoritoField(encoder, child -> child.writeBytes(new byte[32]));
+    writeTestNoritoField(encoder, child -> child.writeUInt(0, 64));
+    writeTestNoritoField(encoder, child -> child.writeByte(0));
+    writeTestNoritoField(encoder, child -> child.writeBytes(repeatedByte((byte) 0x77, 32)));
+    writeTestNoritoField(encoder, child -> child.writeUInt(1, 16));
+    writeTestNoritoField(
+        encoder,
+        child ->
+            writeTestNoritoStringSequence(
+                child,
+                Collections.singletonList(
+                    "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2")));
+    writeTestNoritoField(
+        encoder,
+        child ->
+            writeTestNoritoRawByteVecSequence(
+                child, Collections.singletonList(repeatedByte((byte) 0x01, 48))));
+    writeTestNoritoField(encoder, child -> writeTestNoritoRawByteVec(child, new byte[] {0x01}));
+    writeTestNoritoField(
+        encoder, child -> writeTestNoritoRawByteVec(child, repeatedByte((byte) 0x02, 96)));
   }
 
   private static byte[] fixedTestAscii32(final String value) {
@@ -4672,6 +4837,50 @@ public final class TonSccpProverTests {
     writeTestRawBytes(out, replacement);
     out.write(bundleBytes, vecRange.bytesEnd, bundleBytes.length - vecRange.bytesEnd);
     return out.toByteArray();
+  }
+
+  private static void writeTestNoritoField(
+      final NoritoEncoder encoder, final Consumer<NoritoEncoder> writePayload) {
+    final NoritoEncoder child = encoder.childEncoder();
+    writePayload.accept(child);
+    final byte[] payload = child.toByteArray();
+    encoder.writeLength(payload.length, true);
+    encoder.writeBytes(payload);
+  }
+
+  private static void writeTestNoritoString(final NoritoEncoder encoder, final String value) {
+    final byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+    encoder.writeLength(bytes.length, true);
+    encoder.writeBytes(bytes);
+  }
+
+  private static void writeTestNoritoStringSequence(
+      final NoritoEncoder encoder, final List<String> values) {
+    encoder.writeLength(values.size(), false);
+    for (final String value : values) {
+      final NoritoEncoder child = encoder.childEncoder();
+      writeTestNoritoString(child, value);
+      final byte[] payload = child.toByteArray();
+      encoder.writeLength(payload.length, true);
+      encoder.writeBytes(payload);
+    }
+  }
+
+  private static void writeTestNoritoRawByteVec(final NoritoEncoder encoder, final byte[] value) {
+    encoder.writeLength(value.length, false);
+    encoder.writeBytes(value);
+  }
+
+  private static void writeTestNoritoRawByteVecSequence(
+      final NoritoEncoder encoder, final List<byte[]> values) {
+    encoder.writeLength(values.size(), false);
+    for (final byte[] value : values) {
+      final NoritoEncoder child = encoder.childEncoder();
+      writeTestNoritoRawByteVec(child, value);
+      final byte[] payload = child.toByteArray();
+      encoder.writeLength(payload.length, true);
+      encoder.writeBytes(payload);
+    }
   }
 
   private static void writeTestBytes(final ByteArrayOutputStream out, final byte[] value) {
@@ -5113,6 +5322,10 @@ public final class TonSccpProverTests {
     final byte[] out = new byte[count];
     Arrays.fill(out, value);
     return out;
+  }
+
+  private static String stripHex(final String value) {
+    return value.startsWith("0x") ? value.substring(2) : value;
   }
 
   private static byte[] hexBytes(final String hex) {

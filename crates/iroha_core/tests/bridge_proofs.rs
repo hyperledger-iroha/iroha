@@ -939,7 +939,7 @@ fn configured_sol_source_verifier_material() -> iroha_sccp::SccpSourceVerifierMa
             solana_vote_roster_hash(),
             [0x22; 32],
             [0x33; 32],
-            [0x35; 32],
+            [0xE5; 32],
             [0x44; 32],
         )
         .expect("SOL mainnet source verifier material");
@@ -960,7 +960,7 @@ fn generic_sol_source_verifier_material() -> iroha_sccp::SccpSourceVerifierMater
         "sccp:sol:message-inclusion-verifier:mainnet:v1".to_owned();
     material.message_inclusion_verifier_hash = [0x33; 32];
     material.source_state_verifier_id = "sccp:sol:source-state-verifier:mainnet:v1".to_owned();
-    material.source_state_verifier_hash = [0x35; 32];
+    material.source_state_verifier_hash = [0xE5; 32];
     material.finality_policy_id = "sccp:sol:finality-policy:mainnet:v1".to_owned();
     material.finality_policy_hash = [0x44; 32];
     assert!(

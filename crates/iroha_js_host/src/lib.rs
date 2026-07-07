@@ -3214,7 +3214,7 @@ pub fn kagemusha_recursive_spend_init(request_archive: Uint8Array) -> napi::Resu
     )
 }
 
-/// Build the online-to-offline top-up Kagemusha transfer instruction from an init request archive.
+/// Build the online-to-offline top-up Kagemusha instruction from a top-up request archive.
 #[napi(js_name = "kagemushaRecursiveSpendTopUp")]
 pub fn kagemusha_recursive_spend_topup(request_archive: Uint8Array) -> napi::Result<Buffer> {
     use iroha_core::zk::{
@@ -3222,32 +3222,34 @@ pub fn kagemusha_recursive_spend_topup(request_archive: Uint8Array) -> napi::Res
         kagemusha_verified_folded_public_inputs_from_record_bundle_at_height,
     };
 
-    let request: iroha_data_model::offline::KagemushaRecursiveSpendInitRequestV1 =
+    let request: iroha_data_model::offline::KagemushaRecursiveSpendTopUpRequestV1 =
         decode_kagemusha_recursive_archive(&request_archive, "Kagemusha recursive spend top-up")?;
-    ensure_kagemusha_recursive_spend_pallas_archive(&request.pallas_open_envelopes_archive)?;
+    ensure_kagemusha_recursive_spend_pallas_archive(
+        &request.init_request.pallas_open_envelopes_archive,
+    )?;
     request
         .validate_public_binding()
         .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err.to_string()))?;
-    let _public_inputs = match request.block_height {
+    let _public_inputs = match request.init_request.block_height {
         Some(block_height) => kagemusha_verified_folded_public_inputs_from_record_bundle_at_height(
-            &request.record_bundle,
+            &request.init_request.record_bundle,
             block_height,
         ),
-        None => kagemusha_verified_folded_public_inputs_from_record_bundle(&request.record_bundle),
+        None => kagemusha_verified_folded_public_inputs_from_record_bundle(
+            &request.init_request.record_bundle,
+        ),
     }
     .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err.to_string()))?;
-    let step = request.record_bundle.bundle.steps.first().ok_or_else(|| {
-        napi::Error::new(
+    if request.init_request.record_bundle.bundle.steps.len() != 1 {
+        return Err(napi::Error::new(
             napi::Status::InvalidArg,
-            "Kagemusha recursive spend top-up init request has no fold steps",
-        )
-    })?;
-    let instruction = iroha_data_model::isi::offline::KagemushaTransfer::new(
-        request.record_bundle.bundle.asset.clone(),
-        step.input_nullifiers.clone(),
-        step.output_commitments.clone(),
-        step.attachment.clone(),
-        Some(step.root_before),
+            "Kagemusha recursive top-up init request must contain exactly one checked hop",
+        ));
+    }
+    let instruction = iroha_data_model::isi::offline::TopUpKagemushaRecursive::new(
+        request.asset,
+        request.amount,
+        request.init_request,
     );
     encode_kagemusha_recursive_archive(
         &instruction,
@@ -8420,10 +8422,20 @@ fn kagemusha_instruction_archive_from_json(value: json::Value) -> napi::Result<I
                 })?;
             Ok(InstructionBox::from(instruction))
         }
+        "TopUpKagemushaRecursive" => {
+            let instruction: iroha_data_model::isi::offline::TopUpKagemushaRecursive =
+                decode_from_bytes(&archive).map_err(|err| {
+                    napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!("invalid TopUpKagemushaRecursive instruction archive: {err}"),
+                    )
+                })?;
+            Ok(InstructionBox::from(instruction))
+        }
         other => Err(napi::Error::new(
             napi::Status::InvalidArg,
             format!(
-                "unsupported KagemushaInstructionArchive.type `{other}`; expected KagemushaTransfer or RedeemKagemushaRecursive"
+                "unsupported KagemushaInstructionArchive.type `{other}`; expected KagemushaTransfer, RedeemKagemushaRecursive, or TopUpKagemushaRecursive"
             ),
         )),
     }
@@ -11261,6 +11273,26 @@ pub fn encode_signed_transaction_versioned(bytes: Uint8Array) -> napi::Result<Bu
     let tx = decode_signed_transaction(bytes.as_ref())?;
     let encoded =
         <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(&tx);
+    Ok(Buffer::from(encoded))
+}
+
+/// Encode a `/v1/pipeline/transactions/batch` payload as a framed Norito
+/// `Vec<Vec<u8>>`, where every item is a versioned signed transaction payload.
+#[napi]
+#[allow(clippy::needless_pass_by_value)] // N-API arrays own their buffers at the boundary
+pub fn encode_transaction_payload_batch(payloads: Vec<Buffer>) -> napi::Result<Buffer> {
+    ensure_packed_struct_disabled();
+    if payloads.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "transaction payload batch must contain at least one payload",
+        ));
+    }
+    let payloads: Vec<Vec<u8>> = payloads
+        .into_iter()
+        .map(|payload| payload.as_ref().to_vec())
+        .collect();
+    let encoded = norito::to_bytes(&payloads).map_err(norito_to_napi)?;
     Ok(Buffer::from(encoded))
 }
 

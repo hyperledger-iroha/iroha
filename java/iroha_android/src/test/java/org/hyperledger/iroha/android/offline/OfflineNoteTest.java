@@ -108,6 +108,7 @@ public final class OfflineNoteTest {
     walletLoadDoesNotBlockIssuerCompletionThread();
     walletLoadCompletesExceptionallyWhenIssuerThrowsSynchronously();
     toriiIssuerClientBodySignsRefillAndRetiresNoteIssue();
+    toriiIssuerClientSubmitsKagemushaTopUpArchive();
     toriiIssuerDeviceBindingRejectsRetiredAssertionPublicKeyAliases();
     toriiIssuerDeviceBindingRejectsWhitespaceNormalizedFields();
     toriiIssuerClientRejectsMalformedDeviceProofProviderOutput();
@@ -3893,6 +3894,116 @@ public final class OfflineNoteTest {
     assertEquals("", string(secondRefillBody, "local_state_hash"), "second refill local state hash");
   }
 
+  private static void toriiIssuerClientSubmitsKagemushaTopUpArchive() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> certificateJson =
+        currentIssuerCertificateJson(obj(obj(fixture, "payment_token"), "sender_key_certificate"));
+    final String accountId = string(certificateJson, "account_id");
+    final String assetDefinitionId =
+        assetDefinitionFromAssetId(string(obj(obj(fixture, "chain_vectors"), "issue"), "asset_id"));
+    final String offlinePublicKey = "a5".repeat(32);
+    final Map<String, Object> bindingJson = new LinkedHashMap<>();
+    bindingJson.put("device_id", "device-1");
+    bindingJson.put("attestation_key_id", "attestation-key-1");
+    bindingJson.put("offline_public_key", offlinePublicKey);
+    final OfflineNoteIssuerDeviceBinding binding =
+        new OfflineNoteIssuerDeviceBinding("device-1", offlinePublicKey, bindingJson);
+    final OfflineIssuerExecutor executor = new OfflineIssuerExecutor(certificateJson);
+    final List<byte[]> signedMessages = new ArrayList<>();
+    final Map<String, String> defaultHeaders = new LinkedHashMap<>();
+    defaultHeaders.put("X-Iroha-Account", "retired-account");
+    defaultHeaders.put("x-iroha-signature", "retired-signature");
+    defaultHeaders.put("X-Iroha-Nonce", "retired-nonce");
+    defaultHeaders.put("X-Client-Trace", "trace-topup");
+    final ToriiOfflineNoteIssuerClient client =
+        new ToriiOfflineNoteIssuerClient(
+            new ToriiCanonicalRequestAuth(
+                accountId,
+                message -> {
+                  signedMessages.add(Arrays.copyOf(message, message.length));
+                  return fakeIssuerSignature(message);
+                }),
+            (chainId, requestAccountId, requestAssetDefinitionId) -> binding,
+            executor,
+            URI.create("https://torii.example"),
+            java.time.Duration.ofSeconds(15),
+            defaultHeaders,
+            Collections.emptyList(),
+            () -> 1_700_000_000_000L,
+            new SequenceIdGenerator("operation-topup-1", "auth-topup-1"));
+    final byte[] archive = new byte[] {0x4b, 0x54};
+
+    final CompletableFuture<KagemushaTopUpResponse> future =
+        client.submitKagemushaTopUp("chain-1", accountId, assetDefinitionId, archive);
+    archive[0] = 0;
+    final KagemushaTopUpResponse response = future.get();
+
+    assertEquals("operation-topup-1", response.operationId(), "top-up operation id");
+    assertEquals("topup-chain-tx-hash", response.chainTxHash(), "top-up transaction hash");
+    assertEquals(assetDefinitionId, response.assetDefinitionId(), "top-up asset definition");
+    assertEquals("5", response.amount(), "top-up amount");
+    assertTrue(
+        Arrays.asList("hash-1", "hash-2").equals(response.topupAnchorNullifiers()),
+        "top-up anchor nullifiers");
+    assertTrue(
+        Collections.singletonList("commitment-1").equals(response.outputCommitments()),
+        "top-up output commitments");
+    assertEquals("root-hint", response.rootHint(), "top-up root hint");
+    assertEquals(1L, executor.requests.size(), "top-up request count");
+    assertEquals(
+        "/v1/offline/v2/kagemusha/topup",
+        executor.requests.get(0).uri().getPath(),
+        "top-up path");
+    assertTrue(
+        executor.requests.get(0).headers().keySet().stream()
+            .noneMatch(name -> name.regionMatches(true, 0, "X-Iroha-", 0, "X-Iroha-".length())),
+        "top-up body auth must not use X-Iroha headers");
+    assertTrue(
+        Collections.singletonList("trace-topup")
+            .equals(executor.requests.get(0).headers().get("X-Client-Trace")),
+        "top-up non-auth default header should survive");
+
+    final Map<String, Object> body = executor.requestBody(0);
+    assertEquals(accountId, string(body, "account_id"), "top-up account id");
+    assertEquals("operation-topup-1", string(body, "operation_id"), "top-up operation");
+    assertEquals("device-1", string(body, "device_id"), "top-up device id");
+    assertEquals(offlinePublicKey, string(body, "offline_public_key"), "top-up offline public key");
+    assertEquals(assetDefinitionId, string(body, "asset_definition_id"), "top-up asset");
+    assertEquals("auth-topup-1", string(body, "nonce"), "top-up nonce");
+    assertEquals("S1Q=", string(body, "topup_request_norito_base64"), "top-up archive copy");
+    assertEquals("device-1", string(obj(body, "device_binding"), "device_id"), "top-up binding");
+    assertTrue(!body.containsKey("amount"), "top-up body must not carry amount");
+    assertTrue(
+        !body.containsKey("init_request_norito_base64"),
+        "top-up body must not carry raw init request");
+    assertTrue(
+        !body.containsKey("topup_init_request_norito_base64"),
+        "top-up body must not carry raw top-up init request");
+    assertEquals(1L, signedMessages.size(), "top-up signing count");
+    final byte[] topUpMessage =
+        CanonicalRequestSigner.canonicalBodyAuthSignatureMessage(
+            "POST",
+            executor.requests.get(0).uri(),
+            body,
+            1_700_000_000_000L,
+            "auth-topup-1");
+    assertTrue(Arrays.equals(topUpMessage, signedMessages.get(0)), "top-up body auth message");
+    assertEquals(
+        Base64.getEncoder().encodeToString(fakeIssuerSignature(topUpMessage)),
+        string(body, "signature_base64"),
+        "top-up body signature");
+
+    assertIllegalArgumentContains(
+        () ->
+            client.submitKagemushaTopUp(
+                "chain-1", accountId + "-other", assetDefinitionId, new byte[] {1}),
+        "canonical auth accountId must match top-up accountId");
+    assertIllegalArgumentContains(
+        () -> client.submitKagemushaTopUp("chain-1", accountId, assetDefinitionId, new byte[0]),
+        "topUpRequestArchive must not be empty");
+    assertEquals(1L, executor.requests.size(), "invalid top-up calls must not submit");
+  }
+
   private static void toriiIssuerDeviceBindingRejectsRetiredAssertionPublicKeyAliases() {
     final String offlinePublicKey = "a5".repeat(32);
     for (final String retiredKey :
@@ -6577,6 +6688,15 @@ public final class OfflineNoteTest {
           response.put("issued_note_commitment", string(body, "note_commitment"));
           response.put("key_certificate", certificateWithExpiry());
           response.put("key_certificates", List.of(certificateWithExpiry()));
+        }
+        case "/v1/offline/v2/kagemusha/topup" -> {
+          response.put("operation_id", string(body, "operation_id"));
+          response.put("chain_tx_hash", "topup-chain-tx-hash");
+          response.put("asset_definition_id", string(body, "asset_definition_id"));
+          response.put("amount", "5");
+          response.put("topup_anchor_nullifiers", Arrays.asList("hash-1", "hash-2"));
+          response.put("output_commitments", Collections.singletonList("commitment-1"));
+          response.put("root_hint", "root-hint");
         }
         default -> throw new IllegalStateException("unexpected path " + request.uri().getPath());
       }

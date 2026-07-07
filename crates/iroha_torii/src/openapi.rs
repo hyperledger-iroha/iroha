@@ -705,7 +705,12 @@ fn offline_paths() -> Map {
         (
             "/v1/offline/v2/notes/issue",
             "Retired Offline V2 note issue route.",
-            "Classic Offline V2 note issuance is retired and this retired route fails closed. Use Kagemusha online-to-offline top-up flows. Retired X-Iroha-* app-auth headers are rejected on this endpoint.",
+            "Classic Offline V2 note issuance is retired and this retired route fails closed. Use /v1/offline/v2/kagemusha/topup for Kagemusha online-to-offline top-up. Retired X-Iroha-* app-auth headers are rejected on this endpoint.",
+        ),
+        (
+            "/v1/offline/v2/kagemusha/topup",
+            "Top up recursive Kagemusha offline cash.",
+            "POST a recursive Kagemusha online-to-offline top-up request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one non-empty exact proof field: signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Retired X-Iroha-* app-auth headers are rejected on this endpoint. Production top-up requires topup_request_norito_base64 as canonical standard-base64 KagemushaRecursiveSpendTopUpRequestV1 bytes with no surrounding whitespace. The authenticated account_id is charged for the archive-bound asset_definition_id, and retired Offline Note issue fields plus raw init-request top-up fields are rejected.",
         ),
         (
             "/v1/offline/v2/notes/redeem",
@@ -13784,6 +13789,7 @@ mod tests {
         assert!(paths.contains_key("/v1/offline/v2/readiness"));
         assert!(paths.contains_key("/v1/offline/v2/keys/refill"));
         assert!(paths.contains_key("/v1/offline/v2/notes/issue"));
+        assert!(paths.contains_key("/v1/offline/v2/kagemusha/topup"));
         assert!(paths.contains_key("/v1/offline/v2/notes/redeem"));
         assert!(paths.contains_key("/v1/offline/v2/audit"));
         assert!(!paths.contains_key("/v1/offline/notes/redeem"));
@@ -13817,7 +13823,21 @@ mod tests {
         assert!(issue_description.contains("retired"));
         assert!(issue_description.contains("retired route fails closed"));
         assert!(!issue_description.contains("compatibility route"));
-        assert!(issue_description.contains("Kagemusha online-to-offline top-up"));
+        assert!(issue_description.contains("/v1/offline/v2/kagemusha/topup"));
+        let topup_post = paths
+            .get("/v1/offline/v2/kagemusha/topup")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("post"))
+            .and_then(Value::as_object)
+            .expect("offline Kagemusha top-up post operation");
+        let topup_description = topup_post
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("offline Kagemusha top-up description");
+        assert!(topup_description.contains("topup_request_norito_base64"));
+        assert!(!topup_description.contains("topup_init_request_norito_base64"));
+        assert!(topup_description.contains("KagemushaRecursiveSpendTopUpRequestV1"));
+        assert!(topup_description.contains("authenticated account_id is charged"));
         let audit_post = paths
             .get("/v1/offline/v2/audit")
             .and_then(Value::as_object)

@@ -20,23 +20,28 @@ KagemushaOfflineSpendMode = Literal[
 KagemushaInstructionArchiveType = Literal[
     "KagemushaTransfer",
     "RedeemKagemushaRecursive",
+    "TopUpKagemushaRecursive",
 ]
 
 KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1 = "recursive_compact_v1"
 KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1 = "recursive_spend_v1"
 KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TRANSFER = "KagemushaTransfer"
 KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE = "RedeemKagemushaRecursive"
+KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TOPUP_RECURSIVE = "TopUpKagemushaRecursive"
 KAGEMUSHA_TRANSFER_INSTRUCTION_WIRE_NAME = (
     "iroha_data_model::isi::offline::KagemushaTransfer"
 )
 KAGEMUSHA_REDEEM_RECURSIVE_INSTRUCTION_WIRE_NAME = (
     "iroha_data_model::isi::offline::RedeemKagemushaRecursive"
 )
+KAGEMUSHA_TOPUP_RECURSIVE_INSTRUCTION_WIRE_NAME = (
+    "iroha_data_model::isi::offline::TopUpKagemushaRecursive"
+)
 KAGEMUSHA_RECURSIVE_REDEEM_REQUEST_WIRE_NAME = (
     "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV1"
 )
 KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME = (
-    "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1"
+    "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpRequestV1"
 )
 KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME = (
     "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1"
@@ -67,11 +72,15 @@ KAGEMUSHA_VERIFYING_KEY_RECORD_WIRE_NAME = "iroha_data_model::proof::VerifyingKe
 KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES = (
     KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TRANSFER,
     KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE,
+    KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TOPUP_RECURSIVE,
 )
 KAGEMUSHA_INSTRUCTION_ARCHIVE_WIRE_NAMES = {
     KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TRANSFER: KAGEMUSHA_TRANSFER_INSTRUCTION_WIRE_NAME,
     KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE: (
         KAGEMUSHA_REDEEM_RECURSIVE_INSTRUCTION_WIRE_NAME
+    ),
+    KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TOPUP_RECURSIVE: (
+        KAGEMUSHA_TOPUP_RECURSIVE_INSTRUCTION_WIRE_NAME
     ),
 }
 KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 6
@@ -168,8 +177,10 @@ __all__ = [
     "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1",
     "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TRANSFER",
     "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE",
+    "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TOPUP_RECURSIVE",
     "KAGEMUSHA_TRANSFER_INSTRUCTION_WIRE_NAME",
     "KAGEMUSHA_REDEEM_RECURSIVE_INSTRUCTION_WIRE_NAME",
+    "KAGEMUSHA_TOPUP_RECURSIVE_INSTRUCTION_WIRE_NAME",
     "KAGEMUSHA_RECURSIVE_REDEEM_REQUEST_WIRE_NAME",
     "KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME",
     "KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME",
@@ -216,6 +227,7 @@ __all__ = [
     "KagemushaRecursiveSpendableNoteDescriptor",
     "KagemushaRecursiveSpendVerifierRecordRef",
     "KagemushaRecursiveSpendInitRequest",
+    "KagemushaRecursiveSpendTopUpRequest",
     "KagemushaRecursiveSpendAppendRequest",
     "KagemushaRecursiveSpendVerifyRequest",
     "KagemushaRecursiveSpendVerifyResult",
@@ -272,6 +284,7 @@ __all__ = [
     "kagemusha_recursive_spend_lineage_witness_from_init_result",
     "kagemusha_recursive_spend_lineage_witness_append_result",
     "encode_kagemusha_recursive_spend_init_request",
+    "encode_kagemusha_recursive_spend_topup_request",
     "encode_kagemusha_recursive_spend_append_request",
     "encode_kagemusha_recursive_spend_verify_request",
     "encode_kagemusha_recursive_spend_redeem_request",
@@ -1518,6 +1531,39 @@ class KagemushaRecursiveSpendInitRequest:
 
 
 @dataclass(frozen=True)
+class KagemushaRecursiveSpendTopUpRequest:
+    """Typed `KagemushaRecursiveSpendTopUpRequestV1` encoder input."""
+
+    amount: str
+    init_request_archive: bytes
+    asset_id: str | None = None
+    account_id: str | None = None
+    asset_definition_id: str | None = None
+
+    def __post_init__(self) -> None:
+        amount = _kagemusha_canonical_u128_decimal(self.amount, "amount")
+        init_request_archive = _kagemusha_archive_bytes_named(
+            self.init_request_archive,
+            "init_request_archive",
+        )
+        _kagemusha_compact_payload_for_request(
+            init_request_archive,
+            KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME,
+            "init_request_archive",
+        )
+        if self.asset_id is None:
+            if self.account_id is None or self.asset_definition_id is None:
+                raise ValueError("asset_id or account_id plus asset_definition_id is required")
+            asset_id = f"{self.asset_definition_id}#{self.account_id}"
+        else:
+            asset_id = self.asset_id
+        canonical_asset_id = _kagemusha_canonical_asset_id(asset_id, "asset_id")
+        object.__setattr__(self, "amount", amount)
+        object.__setattr__(self, "init_request_archive", init_request_archive)
+        object.__setattr__(self, "asset_id", canonical_asset_id)
+
+
+@dataclass(frozen=True)
 class KagemushaRecursiveSpendAppendRequest:
     """Typed `KagemushaRecursiveSpendAppendRequestV1` encoder input."""
 
@@ -1912,6 +1958,31 @@ def encode_kagemusha_recursive_spend_init_request(
     )
 
 
+def encode_kagemusha_recursive_spend_topup_request(
+    request: KagemushaRecursiveSpendTopUpRequest,
+) -> bytes:
+    if not isinstance(request, KagemushaRecursiveSpendTopUpRequest):
+        raise ValueError("request")
+    assert request.asset_id is not None
+    payload = b"".join(
+        (
+            _kagemusha_field(_kagemusha_asset_id_payload(request.asset_id)),
+            _kagemusha_field(_kagemusha_numeric(request.amount)),
+            _kagemusha_raw_field(
+                _kagemusha_compact_payload_for_request(
+                    request.init_request_archive,
+                    KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME,
+                    "init_request_archive",
+                )
+            ),
+        )
+    )
+    return _kagemusha_norito_archive(
+        KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME,
+        payload,
+    )
+
+
 def encode_kagemusha_recursive_spend_append_request(
     request: KagemushaRecursiveSpendAppendRequest,
 ) -> bytes:
@@ -2208,10 +2279,10 @@ def kagemusha_recursive_spend_init_typed(
 
 
 def kagemusha_recursive_spend_topup_typed(
-    request: KagemushaRecursiveSpendInitRequest,
+    request: KagemushaRecursiveSpendTopUpRequest,
 ) -> bytes:
     return kagemusha_recursive_spend_topup(
-        encode_kagemusha_recursive_spend_init_request(request)
+        encode_kagemusha_recursive_spend_topup_request(request)
     )
 
 
@@ -2408,19 +2479,36 @@ def _kagemusha_verifying_key_box_payload(lineage_verifier_key: bytes | None) -> 
     )
 
 
-def _kagemusha_account_id_payload(recipient: str) -> bytes:
+def _kagemusha_account_id_payload(recipient: str, field: str = "recipient") -> bytes:
     try:
         from .address import AccountAddress, AccountAddressError
 
         address = AccountAddress.parse_encoded(recipient)
     except Exception as exc:
-        raise ValueError("recipient must use canonical I105 account form") from exc
+        raise ValueError(f"{field} must use canonical I105 account form") from exc
     controller = address.controller
     if controller.tag != 0:
-        raise ValueError("recipient has no supported controller")
+        raise ValueError(f"{field} has no supported controller")
     return (0).to_bytes(4, "little") + _kagemusha_field(
         _kagemusha_public_key_payload(int(controller.curve), controller.public_key)
     )
+
+
+def _kagemusha_asset_id_payload(asset_id: str) -> bytes:
+    account_id, definition_bytes, dataspace_id = _kagemusha_parse_asset_id(asset_id, "asset_id")
+    return b"".join(
+        (
+            _kagemusha_field(_kagemusha_account_id_payload(account_id, "asset_id.account")),
+            _kagemusha_field(definition_bytes),
+            _kagemusha_field(_kagemusha_asset_balance_scope_payload(dataspace_id)),
+        )
+    )
+
+
+def _kagemusha_asset_balance_scope_payload(dataspace_id: int | None) -> bytes:
+    if dataspace_id is None:
+        return (0).to_bytes(4, "little")
+    return (1).to_bytes(4, "little") + _kagemusha_field(dataspace_id.to_bytes(8, "little"))
 
 
 def _kagemusha_public_key_payload(curve_id: int, public_key: bytes) -> bytes:
@@ -3587,6 +3675,57 @@ def _kagemusha_asset_definition_from_bytes(value: bytes) -> str:
     return _kagemusha_base58_encode(body + checksum)
 
 
+def _kagemusha_canonical_asset_id(value: str, field: str) -> str:
+    account_id, definition_bytes, dataspace_id = _kagemusha_parse_asset_id(value, field)
+    base = f"{_kagemusha_asset_definition_from_bytes(definition_bytes)}#{account_id}"
+    if dataspace_id is None:
+        return base
+    return f"{base}#dataspace:{dataspace_id}"
+
+
+def _kagemusha_parse_asset_id(value: str, field: str) -> tuple[str, bytes, int | None]:
+    if not isinstance(value, str) or not value or value.strip() != value:
+        raise ValueError(field)
+    parts = value.split("#")
+    if len(parts) not in (2, 3):
+        raise ValueError(f"{field} must use '<asset-definition>#<account>' with optional '#dataspace:<id>'")
+    definition_bytes = _kagemusha_asset_definition_bytes_from_address(parts[0], f"{field}.definition")
+    _kagemusha_account_id_payload(parts[1], f"{field}.account")
+    dataspace_id = None
+    if len(parts) == 3:
+        scope = parts[2]
+        prefix = "dataspace:"
+        if not scope.startswith(prefix):
+            raise ValueError(f"{field}.scope must use canonical dataspace:<id>")
+        raw = scope[len(prefix):]
+        if not raw or (len(raw) > 1 and raw.startswith("0")) or any(ch < "0" or ch > "9" for ch in raw):
+            raise ValueError(f"{field}.scope must use canonical dataspace:<id>")
+        dataspace_id = int(raw)
+        if dataspace_id > _KAGEMUSHA_U64_MAX:
+            raise ValueError(f"{field}.scope must fit in u64")
+    return parts[1], definition_bytes, dataspace_id
+
+
+def _kagemusha_asset_definition_bytes_from_address(value: str, field: str) -> bytes:
+    if not isinstance(value, str) or not value or value.strip() != value:
+        raise ValueError(field)
+    if ":" in value or "#" in value:
+        raise ValueError(f"{field} must be a canonical Base58 asset definition id")
+    payload = _kagemusha_base58_decode(value)
+    if len(payload) != 21 or payload[0] != _KAGEMUSHA_ASSET_DEFINITION_ADDRESS_VERSION:
+        raise ValueError(f"{field} must contain exactly 21 decoded bytes")
+    asset_bytes = payload[1:17]
+    checksum = payload[17:]
+    if not _kagemusha_is_uuid_v4_bytes(asset_bytes):
+        raise ValueError(f"{field} is not a canonical UUIDv4-backed asset definition id")
+    body = payload[:17]
+    if checksum != _kagemusha_blake3_hash_small_input(body)[:4]:
+        raise ValueError(f"{field} checksum is invalid")
+    if _kagemusha_base58_encode(payload) != value:
+        raise ValueError(f"{field} must be canonical")
+    return asset_bytes
+
+
 def _kagemusha_require_recursive_spend_asset_summary(value: str, field: str) -> None:
     if not isinstance(value, str) or not value or value.strip() != value:
         raise ValueError(field)
@@ -4077,12 +4216,12 @@ def kagemusha_recursive_redeem_instruction(redeem_request_archive: BytesLike) ->
     return builder(request)
 
 
-def kagemusha_recursive_topup_instruction(init_request_archive: BytesLike) -> object:
+def kagemusha_recursive_topup_instruction(topup_request_archive: BytesLike) -> object:
     """Derive an online-to-offline recursive Kagemusha top-up instruction."""
 
-    instruction_archive = kagemusha_recursive_spend_topup(init_request_archive)
+    instruction_archive = kagemusha_recursive_spend_topup(topup_request_archive)
     return kagemusha_instruction_archive_instruction(
-        KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TRANSFER,
+        KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TOPUP_RECURSIVE,
         instruction_archive,
     )
 
@@ -4126,7 +4265,7 @@ def build_kagemusha_recursive_topup_transaction(
     chain_id: str,
     authority: str,
     private_key: BytesLike,
-    init_request_archive: BytesLike,
+    topup_request_archive: BytesLike,
     *,
     creation_time_ms: Optional[int] = None,
     ttl_ms: Optional[int] = None,
@@ -4137,7 +4276,7 @@ def build_kagemusha_recursive_topup_transaction(
 
     _kagemusha_require_non_blank_unpadded(chain_id, "chain_id")
     _kagemusha_require_non_blank_unpadded(authority, "authority")
-    instruction = kagemusha_recursive_topup_instruction(init_request_archive)
+    instruction = kagemusha_recursive_topup_instruction(topup_request_archive)
     private_key_bytes = _archive_bytes_named(private_key, "private_key")
     from .crypto import build_signed_transaction
 

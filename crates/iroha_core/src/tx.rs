@@ -959,6 +959,7 @@ fn is_time_sensitive_instruction(instruction: &InstructionBox) -> bool {
         return is_time_sensitive_executable(trigger.action().executable());
     }
     any.is::<iroha_data_model::isi::offline::KagemushaTransfer>()
+        || any.is::<iroha_data_model::isi::offline::TopUpKagemushaRecursive>()
         || any.is::<iroha_data_model::isi::oracle::RecordTwitterBinding>()
         || any.is::<iroha_data_model::isi::social::ClaimTwitterFollowReward>()
         || any.is::<iroha_data_model::isi::social::SendToTwitter>()
@@ -1186,6 +1187,15 @@ pub(crate) fn validate_confidential_policy_admission_for_world(
             validate_confidential_policy_for_action(
                 world,
                 &transfer.asset,
+                block_height,
+                ConfidentialPolicyAdmissionAction::Transfer,
+            )?;
+        } else if let Some(topup) =
+            any.downcast_ref::<iroha_data_model::isi::offline::TopUpKagemushaRecursive>()
+        {
+            validate_confidential_policy_for_action(
+                world,
+                topup.asset.definition(),
                 block_height,
                 ConfidentialPolicyAdmissionAction::Transfer,
             )?;

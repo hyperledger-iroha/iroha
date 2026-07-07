@@ -72,6 +72,9 @@ const MULTISIG_CONTRACT_CALL_APPROVE_DTO_SCHEMA_HASH = schemaHashForTypeName(
 const OPEN_VERIFY_ENVELOPE_SCHEMA_HASH = schemaHashForTypeName(
   "iroha_data_model::zk::OpenVerifyEnvelope",
 );
+const TRANSACTION_PAYLOAD_BATCH_SCHEMA_HASH = schemaHashForTypeName(
+  "alloc::vec::Vec<alloc::vec::Vec<u8>>",
+);
 const INNER_SCHEMA_HASH_BY_WIRE_ID = Object.freeze({
   "iroha.mint": Buffer.from("ec0b538ed0e5b46ed163e0aedb335e73", "hex"),
   "iroha.burn": Buffer.from("361f279124a0aad61978c80ff1c9ce0a", "hex"),
@@ -540,6 +543,34 @@ export function noritoEncodeInstruction(instruction) {
   }
   const normalized = normalizeInstructionJsonValue(cloneJson(instruction));
   return encodeNormalizedInstruction(normalized);
+}
+
+/**
+ * Encode a `/v1/pipeline/transactions/batch` request body.
+ *
+ * Torii expects a Norito `Vec<Vec<u8>>` where each inner byte vector is one
+ * versioned signed transaction payload.
+ *
+ * @param {ReadonlyArray<ArrayBufferView | ArrayBuffer | Buffer>} payloads
+ * @returns {Buffer}
+ */
+export function noritoEncodeTransactionPayloadBatch(payloads) {
+  if (!Array.isArray(payloads)) {
+    throw new TypeError("transaction payload batch must be an array");
+  }
+  if (payloads.length === 0) {
+    throw new TypeError("transaction payload batch must contain at least one payload");
+  }
+  const payload = withNoritoCompactLengths(() =>
+    encodeNoritoVec(payloads, (item, index) =>
+      encodeByteVecValue(item, `transaction payload batch[${index}]`),
+    ),
+  );
+  return frameNoritoPayload(
+    payload,
+    TRANSACTION_PAYLOAD_BATCH_SCHEMA_HASH,
+    COMPACT_LEN_FLAG,
+  );
 }
 
 /**

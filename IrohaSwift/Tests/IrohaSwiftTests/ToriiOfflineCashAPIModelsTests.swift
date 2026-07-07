@@ -339,6 +339,8 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
     func testDeviceBindingRejectsNonCanonicalIdentityFields() throws {
         XCTAssertEqual(try Self.binding().offlinePublicKey, "offline-public-key")
         XCTAssertEqual(try Self.binding(platform: "android").platform, "android")
+        XCTAssertEqual(try Self.binding(platform: "ios-appattest").platform, "ios-appattest")
+        try assertInvalidBinding(platform: "ios-app-attest", expectedField: "platform")
         XCTAssertEqual(
             try Self.binding(platform: OfflineNoteV2Constants.iosPlatform, iosEnvironment: "production").iosEnvironment,
             "production"
@@ -415,7 +417,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
             }
         }
 
-        for invalidPlatform in ["ios-appattest", "ios-app-attest", "android-keymint", "android-keymint ", "Android"] {
+        for invalidPlatform in ["android-keymint", "android-keymint ", "Android", "ios-appattest-android"] {
             try assertInvalidBinding(platform: invalidPlatform, expectedField: "platform")
         }
         for (field, expectedField, applyInvalid) in [

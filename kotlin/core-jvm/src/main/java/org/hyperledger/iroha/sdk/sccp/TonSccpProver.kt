@@ -2128,6 +2128,7 @@ object SccpTon {
         require(input.publicInputs.targetDomain == DOMAIN_TON) {
             "publicInputs.targetDomain must be TON"
         }
+        val publicInputsBytes = canonicalPublicInputsBytes(input.publicInputs)
         val bundleBytes = requireNativeRecursivePayloadBytes(input.bundleBytes, "bundleBytes")
         val sourceProofBytes = requireOptionalSourceProofBytes(input.sourceProofBytes, "sourceProofBytes")
         requireSccpProofRequestBundleMatchesPublicInputs(
@@ -2135,7 +2136,6 @@ object SccpTon {
             bundleBytes = bundleBytes,
             sourceProofBytes = sourceProofBytes,
         )
-        val publicInputsBytes = canonicalPublicInputsBytes(input.publicInputs)
         val proofContext = normalizeProofContext(input.statementHash, input.destinationBindingHash)
         val sourceStateVerifierId = normalizeNonEmpty(input.sourceStateVerifierId, "sourceStateVerifierId")
         require(sourceStateVerifierId == MAINNET_SHARD_STATE_VERIFIER_ID_V1) {

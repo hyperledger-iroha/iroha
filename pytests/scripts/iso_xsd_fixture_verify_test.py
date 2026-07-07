@@ -2690,6 +2690,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             self.assertEqual(rc, 0, stderr)
             summary = json.loads(stdout)
             self.assertEqual(summary["version"], VERIFIER.SUMMARY_VERSION)
+            self.assertFalse(summary["ok"])
             self.assertEqual(summary["verified_schemas"], 7)
             self.assertEqual(summary["verified_fixtures"], 7)
             self.assertEqual(summary["schema_backed_fixtures"], 7)
@@ -5435,19 +5436,24 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
             manifest_path = write_minimal_tree(root, minimal_manifest())
+            profile_catalog = write_profile_catalog(root / "profiles.rs")
 
             rc, stdout, stderr = run_verify(
                 [
                     "--manifest",
                     str(manifest_path),
+                    "--profile-catalog",
+                    str(profile_catalog),
                     "--require-schema-backed-fixtures",
                     "--require-fixture-for-schema",
+                    "--require-profile-schema-backed-versions",
                     "--validate-xml-schema",
                 ]
             )
 
             self.assertEqual(rc, 0, stderr)
             summary = json.loads(stdout)
+            self.assertTrue(summary["ok"])
             self.assertTrue(summary["strict"]["validate_xml_schema"])
             self.assertEqual(summary["schema_validated_fixtures"], 1)
             self.assertTrue(summary["fixtures"][0]["schema_validated"])

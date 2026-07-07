@@ -34,7 +34,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         const val RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1: Int = 1
         const val RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES: Int = 8 * 1024 * 1024
         const val RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES: Int = 128
-        const val NATIVE_ARCHIVE_MAX_BYTES: Int = 64 * 1024 * 1024
+        const val NATIVE_ARCHIVE_MAX_BYTES: Int = 256 * 1024 * 1024
         const val RECURSIVE_SPEND_ACCUMULATOR_DOMAIN: String =
             "iroha:kagemusha:v1:recursive-spend-accumulator"
         const val RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN: String =
@@ -77,7 +77,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                     nativeBridgeAbiVersionProbe = { nativeBridgeAbiVersion() },
                     probeSymbol = {
                         expectIllegalArgumentProbe {
-                            nativeTopUpSpend(MALFORMED_NATIVE_PROBE_ARCHIVE)
+                            nativeTopUpInstruction(MALFORMED_NATIVE_PROBE_ARCHIVE)
                         }
                     },
                     requiredNativeBridgeAbiVersion = TOP_UP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
@@ -702,13 +702,13 @@ class KagemushaRecursiveSpendProver private constructor() {
             call(
                 "top-up",
                 requestArchive,
-                ::nativeTopUpSpend,
+                ::nativeTopUpInstruction,
                 bridgeAvailable = nativeTopUpAvailable,
             )
 
         @JvmStatic
-        fun topUpSpend(request: InitSpendRequest): ByteArray =
-            topUpSpend(KagemushaRecursiveSpendRequestCodecs.encodeInitRequest(request))
+        fun topUpSpend(request: TopUpSpendRequest): ByteArray =
+            topUpSpend(KagemushaRecursiveSpendRequestCodecs.encodeTopUpRequest(request))
 
         @JvmStatic
         fun appendSpend(requestArchive: ByteArray?): ByteArray =
@@ -970,7 +970,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         private external fun nativeAppendSpend(requestArchive: ByteArray): ByteArray?
 
         @JvmStatic
-        private external fun nativeTopUpSpend(requestArchive: ByteArray): ByteArray?
+        private external fun nativeTopUpInstruction(requestArchive: ByteArray): ByteArray?
 
         @JvmStatic
         private external fun nativeTransitionProfileInit(requestArchive: ByteArray): ByteArray?

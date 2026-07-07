@@ -757,6 +757,77 @@ public sealed class SccpBscMainnetTests
     }
 
     [Fact]
+    public void BscCommitMessageHelpersMatchSharedVectorAndRejectMalformedInputs()
+    {
+        const string validatorSetHash =
+            "0xc5152802f6ca9ec72a4249646aca7476496f00b71ab5b1482c881a31fb42dd8c";
+
+        var bytes = BscMainnetSccp.CanonicalBscCommitMessageBytes(
+            validatorEpoch: 2,
+            blockNumber: 401,
+            blockHash: "0x" + new string('2', 64),
+            receiptsRoot: "0x" + new string('3', 64),
+            validatorSetHash: validatorSetHash);
+
+        Assert.Equal(117, bytes.Length);
+        Assert.Equal(
+            "0x5832165d1a87ed49a323f2ecaecbef973489aed1a42e7eab369244e7abec43c7",
+            BscMainnetSccp.BscCommitMessageHash(
+                validatorEpoch: 2,
+                blockNumber: 401,
+                blockHash: "0x" + new string('2', 64),
+                receiptsRoot: "0x" + new string('3', 64),
+                validatorSetHash: validatorSetHash));
+
+        AssertArgumentContains(
+            () => BscMainnetSccp.BscCommitMessageHash(
+                validatorEpoch: 2,
+                blockNumber: 401,
+                blockHash: "0x" + new string('2', 64),
+                receiptsRoot: "0x" + new string('3', 64),
+                validatorSetHash: validatorSetHash,
+                sourceDomain: EthereumMainnetSccp.DomainEthereum),
+            "sourceDomain",
+            "BSC");
+        AssertArgumentContains(
+            () => BscMainnetSccp.BscCommitMessageHash(
+                validatorEpoch: 2,
+                blockNumber: 401,
+                blockHash: "0X" + new string('2', 64),
+                receiptsRoot: "0x" + new string('3', 64),
+                validatorSetHash: validatorSetHash),
+            "blockHash",
+            "canonical lowercase 0x hex");
+        AssertArgumentContains(
+            () => BscMainnetSccp.BscCommitMessageHash(
+                validatorEpoch: 2,
+                blockNumber: 401,
+                blockHash: "0x" + new string('2', 64),
+                receiptsRoot: "0x" + new string('0', 64),
+                validatorSetHash: validatorSetHash),
+            "receiptsRoot",
+            "must not be zero");
+        AssertArgumentContains(
+            () => BscMainnetSccp.BscCommitMessageHash(
+                validatorEpoch: 2,
+                blockNumber: 401,
+                blockHash: "0x" + new string('2', 64),
+                receiptsRoot: "0x" + new string('3', 64),
+                validatorSetHash: "0x" + new string('0', 64)),
+            "validatorSetHash",
+            "must not be zero");
+
+        static void AssertArgumentContains(Action action, params string[] snippets)
+        {
+            var error = Assert.Throws<ArgumentException>(action);
+            foreach (var snippet in snippets)
+            {
+                Assert.Contains(snippet, error.Message);
+            }
+        }
+    }
+
+    [Fact]
     public void BscCommitSealHelpersValidateSignersAndQuorum()
     {
         var seal = SampleCommitSealProof();

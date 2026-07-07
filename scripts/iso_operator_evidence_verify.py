@@ -51,6 +51,35 @@ TRUST_SUMMARY_VERSION = 1
 REQUIRE_VERIFIED = "require-verified"
 TRUST_SIGNATURE_POLICIES = {"record-only", "reject-unsupported", REQUIRE_VERIFIED}
 PROFILE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
+CONTEXT_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
+PLACEHOLDER_CONTEXT_IDS = {
+    "ci",
+    "dev",
+    "development",
+    "dummy",
+    "example",
+    "fake",
+    "local",
+    "not-production",
+    "not-production-ready",
+    "placeholder",
+    "sample",
+    "template",
+    "test",
+}
+PLACEHOLDER_CONTEXT_TOKENS = {
+    "dummy",
+    "example",
+    "fake",
+    "placeholder",
+    "sample",
+    "template",
+    "test",
+}
+PLACEHOLDER_CONTEXT_PHRASES = (
+    "not-production",
+    "not-production-ready",
+)
 MESSAGE_TYPE_RE = re.compile(r"^[a-z]{4}\.[0-9]{3}$")
 RAIL_MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._:@+-]*[A-Za-z0-9])?$")
 CLI_CANONICAL_INT_RE = re.compile(r"(?:0|-?[1-9][0-9]*)")
@@ -390,6 +419,7 @@ NOTARY_STAGE_STDOUT_KEYS = {"published_anchors", "endpoint_count", "receipts", "
 CANARY_PLANNED_STAGE_KEYS = {"name", "command", "receipt_dir", "dry_run"}
 RECEIPT_SUMMARY_KEYS = {
     "version",
+    "ok",
     "verified_receipts",
     "receipt_kind",
     "allow_failed",
@@ -437,6 +467,7 @@ RAIL_RECEIPT_METADATA_KEYS = {
 TRUST_SUMMARY_KEYS = {
     "version",
     "verified_at",
+    "ok",
     "verified_bundles",
     "allow_record_only",
     "allow_insecure_source_url",
@@ -1701,6 +1732,20 @@ def _reject_non_ascii_context(value: str, label: str) -> None:
         raise EvidenceError(f"{label} must use printable ASCII")
 
 
+def _reject_noncanonical_context_id(value: str, label: str) -> None:
+    if CONTEXT_ID_RE.fullmatch(value) is None:
+        raise EvidenceError(f"{label} must be a canonical lowercase context id")
+
+
+def _reject_placeholder_context_id(value: str, label: str) -> None:
+    if (
+        value in PLACEHOLDER_CONTEXT_IDS
+        or any(token in PLACEHOLDER_CONTEXT_TOKENS for token in value.split("-"))
+        or any(phrase in value for phrase in PLACEHOLDER_CONTEXT_PHRASES)
+    ):
+        raise EvidenceError(f"{label} must not use placeholder context id")
+
+
 def _reject_overlong_trust_policy(value: str, label: str) -> None:
     if len(value) > MAX_TRUST_POLICY_CHARS:
         raise EvidenceError(
@@ -1744,6 +1789,8 @@ def _required_context_string(value: dict[str, Any], key: str, label: str) -> str
     raw = _required_string(value, key, label)
     _reject_non_ascii_context(raw, f"{label}.{key}")
     _reject_secret_looking_identifier(raw, f"{label}.{key}")
+    _reject_noncanonical_context_id(raw, f"{label}.{key}")
+    _reject_placeholder_context_id(raw, f"{label}.{key}")
     return raw
 
 
@@ -2005,6 +2052,8 @@ def _required_cli_string(value: str | None, label: str) -> str:
         raise EvidenceError(f"{label} must not have surrounding whitespace")
     _reject_non_ascii_context(value, label)
     _reject_secret_looking_identifier(value, label)
+    _reject_noncanonical_context_id(value, label)
+    _reject_placeholder_context_id(value, label)
     return value
 
 
@@ -2761,6 +2810,7 @@ def _verify_receipt_verifier_summary(
             f"{label}.version must be receipt verifier summary version "
             f"{RECEIPT_SUMMARY_VERSION}"
         )
+    summary_ok = _required_bool(receipt_obj, "ok", label)
     verified_receipts = receipt_obj.get("verified_receipts")
     if type(verified_receipts) is not int or verified_receipts <= 0:
         raise EvidenceError(f"{label}.verified_receipts must be positive")
@@ -2839,6 +2889,7 @@ def _verify_receipt_verifier_summary(
     seen_source_material_fields: dict[tuple[str, str], dict[str, int]] = {}
     has_failed_receipt = False
     has_insecure_receipt_endpoint = False
+    has_default_profile_receipt = False
     for offset, receipt_entry_raw in enumerate(receipt_entries_raw):
         entry_label = f"{label}.receipts[{offset}]"
         receipt_entry = _require_object(receipt_entry_raw, entry_label)
@@ -2976,6 +3027,8 @@ def _verify_receipt_verifier_summary(
                     )
                 seen_for_field[value] = offset
         receipt_entry_kinds.add(entry_kind)
+        if entry_kind == "iso-rail-gateway" and receipt_entry.get("profile") is None:
+            has_default_profile_receipt = True
         receipt_entries.append(dict(receipt_entry))
     if receipt_order_keys != sorted(receipt_order_keys):
         raise EvidenceError(
@@ -2990,9 +3043,29 @@ def _verify_receipt_verifier_summary(
             f"{label}.allow_insecure_http requires at least one http:// "
             "or local/private receipt endpoint"
         )
+    if allow_default_profile and not has_default_profile_receipt:
+        raise EvidenceError(
+            f"{label}.allow_default_profile requires at least one default-profile receipt"
+        )
+    expected_ok = (
+        version == RECEIPT_SUMMARY_VERSION
+        and verified_receipts == len(receipt_entries_raw)
+        and receipt_kind_set == REQUIRED_RECEIPT_KINDS
+        and receipt_entry_kinds == REQUIRED_RECEIPT_KINDS
+        and not allow_failed
+        and not allow_insecure_http
+        and not allow_default_profile
+        and require_source_files
+        and not has_failed_receipt
+        and not has_insecure_receipt_endpoint
+        and not has_default_profile_receipt
+    )
+    if summary_ok != expected_ok:
+        raise EvidenceError(f"{label}.ok does not match receipt summary production policy")
 
     return {
         "version": version,
+        "ok": summary_ok,
         "verified_receipts": verified_receipts,
         "receipt_kind": sorted(receipt_kind_set),
         "allow_failed": allow_failed,
@@ -3857,6 +3930,10 @@ def _stage_summary(
         result["_uses_insecure_http_policy"] = (
             command_uses_insecure_http or receipt_summary["allow_insecure_http"]
         )
+        result["_uses_default_profile_policy"] = (
+            _command_has_flag(command, "--allow-default-profile")
+            or receipt_summary["allow_default_profile"]
+        )
         result["_uses_failed_receipt_policy"] = receipt_summary["allow_failed"]
         return result
     return {
@@ -3941,6 +4018,10 @@ def _planned_stage_summary(
         "_uses_insecure_http_policy": _command_uses_insecure_http_policy(
             command,
             label,
+        ),
+        "_uses_default_profile_policy": _command_has_flag(
+            command,
+            "--allow-default-profile",
         ),
         "_uses_failed_receipt_policy": False,
         "_command_modes": _stage_command_mode_summary(name, command),
@@ -4217,10 +4298,10 @@ def verify_canary_summary(
     if args.environment is not None and environment != args.environment:
         raise EvidenceError(f"{label}.environment does not match expected environment")
 
-    ok = _required_bool(summary, "ok", label)
-    if not ok:
-        raise EvidenceError(f"{label} is not an ok canary summary")
     plan_only = _required_bool(summary, "plan_only", label)
+    ok = _required_bool(summary, "ok", label)
+    if plan_only and ok:
+        raise EvidenceError(f"{label}.ok must be false for plan-only evidence")
     if plan_only and not args.allow_plan_only:
         raise EvidenceError(f"{label} is plan-only evidence")
     policy = _require_object(summary.get("policy"), f"{label}.policy")
@@ -4371,6 +4452,24 @@ def verify_canary_summary(
     _check_rail_receipt_policy_binding(label, stage_results, receipt_summary)
     _check_notary_receipt_anchor_policy_binding(label, stage_results, receipt_summary)
     policy_stage_results = planned_stage_results if plan_only else stage_results
+    stage_dry_run = [bool(stage.get("_dry_run")) for stage in policy_stage_results]
+    uses_local_diagnostic_policy = any(
+        stage["_uses_dry_run_policy"]
+        or stage["_uses_insecure_http_policy"]
+        or stage["_uses_failed_receipt_policy"]
+        or stage.get("_uses_default_profile_policy", False)
+        for stage in policy_stage_results
+    )
+    expected_ok = (
+        not plan_only
+        and require_explicit_policy
+        and tuple(stage_names) == EXPECTED_CANARY_STAGE_ORDER
+        and not uses_local_diagnostic_policy
+        and receipt_summary is not None
+        and receipt_summary.get("ok") is True
+    )
+    if ok != expected_ok:
+        raise EvidenceError(f"{label}.ok does not match canary summary production policy")
 
     return {
         "version": version,
@@ -4380,12 +4479,11 @@ def verify_canary_summary(
         "environment": environment,
         "started_at": started_at_raw,
         "finished_at": finished_at_raw,
+        "ok": expected_ok,
         "plan_only": plan_only,
         "require_explicit_policy": require_explicit_policy,
         "stage_names": stage_names,
-        "stage_dry_run": [
-            bool(stage.get("_dry_run")) for stage in policy_stage_results
-        ],
+        "stage_dry_run": stage_dry_run,
         "stage_command_modes": [
             stage["_command_modes"] for stage in policy_stage_results
         ],
@@ -5191,6 +5289,7 @@ def verify_trust_summary(
     allow_insecure_source_url = _required_bool(summary, "allow_insecure_source_url", label)
     profile_json_emitted = _required_bool(summary, "profile_json_emitted", label)
     profile_json_emittable = _required_bool(summary, "profile_json_emittable", label)
+    ok = _required_bool(summary, "ok", label)
     if "max_source_age_days" not in summary:
         raise EvidenceError(f"{label}.max_source_age_days must be recorded")
     if summary["max_source_age_days"] is None:
@@ -5294,6 +5393,15 @@ def verify_trust_summary(
         raise EvidenceError(
             f"{label}.profile_json_emitted cannot be true when trust source policy is not emittable"
         )
+    expected_ok = (
+        profile_json_emitted
+        and profile_json_emittable
+        and not allow_synthetic_der
+        and not allow_record_only
+        and not allow_insecure_source_url
+    )
+    if ok != expected_ok:
+        raise EvidenceError(f"{label}.ok does not match trust summary production policy")
     if profile_json_emitted:
         profile_config = [bundle["profile_overrides"] for bundle in bundle_objects]
         expected_profile_text = (
@@ -5361,6 +5469,7 @@ def verify_trust_summary(
         "version": version,
         "path": str(path),
         "verified_at": verified_at_raw,
+        "ok": ok,
         "verified_bundles": verified_bundles,
         "max_source_age_days": max_source_age_days,
         "allow_synthetic_der": allow_synthetic_der,
@@ -5870,21 +5979,30 @@ def _reject_archive_rail_receipts_without_trust(
         )
 
 
+NONPRODUCTION_POLICY_FLAGS = (
+    "allow_plan_only",
+    "allow_dry_run",
+    "allow_insecure_http",
+    "allow_default_profile",
+    "allow_failed_receipts",
+    "allow_partial_canary",
+    "allow_canary_stage_receipts_only",
+    "allow_receipt_source_missing",
+    "allow_record_only_trust",
+    "allow_synthetic_trust",
+    "allow_missing_trust_source",
+    "allow_profile_json_not_emitted",
+)
+
+
+def _uses_nonproduction_policy(args: argparse.Namespace) -> bool:
+    """Return true when evidence was accepted only under local-audit policy."""
+
+    return any(bool(getattr(args, attr)) for attr in NONPRODUCTION_POLICY_FLAGS)
+
+
 def _require_policy_booleans(args: argparse.Namespace) -> None:
-    for attr in (
-        "allow_plan_only",
-        "allow_dry_run",
-        "allow_insecure_http",
-        "allow_default_profile",
-        "allow_failed_receipts",
-        "allow_partial_canary",
-        "allow_canary_stage_receipts_only",
-        "allow_receipt_source_missing",
-        "allow_record_only_trust",
-        "allow_synthetic_trust",
-        "allow_missing_trust_source",
-        "allow_profile_json_not_emitted",
-    ):
+    for attr in NONPRODUCTION_POLICY_FLAGS:
         flag = f"--{attr.replace('_', '-')}"
         setattr(args, attr, _required_cli_bool(getattr(args, attr, None), flag))
 
@@ -6122,7 +6240,7 @@ def run(args: argparse.Namespace) -> int:
     output: dict[str, Any] = {
         "version": EVIDENCE_VERSION,
         "verified_at": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat(),
-        "ok": True,
+        "ok": not _uses_nonproduction_policy(args),
         "canary_summaries": public_canaries,
         "trust_summaries": public_trusts,
         "receipt_verification": receipt_summary,

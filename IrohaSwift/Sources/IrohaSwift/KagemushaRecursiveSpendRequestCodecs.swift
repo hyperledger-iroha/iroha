@@ -110,6 +110,53 @@ public struct KagemushaRecursiveSpendInitRequest: Equatable, Sendable {
     }
 }
 
+public struct KagemushaRecursiveSpendTopUpRequest: Equatable, Sendable {
+    public let assetId: String
+    public let amount: String
+    public let initRequestArchive: Data
+
+    public init(
+        assetId: String,
+        amount: String,
+        initRequestArchive: Data
+    ) throws {
+        let canonicalAssetId = try KagemushaRecursiveSpendRequestCodecs.canonicalAssetId(
+            assetId,
+            field: "assetId"
+        )
+        let canonicalAmount = try KagemushaRecursiveSpendRequestCodecs.canonicalU128Decimal(
+            amount,
+            field: "amount"
+        )
+        _ = try KagemushaRecursiveSpendRequestCodecs.compactPayloadForRequest(
+            initRequestArchive,
+            schema: KagemushaRecursiveSpendRequestCodecs.initRequestWireName,
+            field: "initRequestArchive"
+        )
+        self.assetId = canonicalAssetId
+        self.amount = canonicalAmount
+        self.initRequestArchive = initRequestArchive
+    }
+
+    public init(
+        accountId: String,
+        assetDefinitionId: String,
+        amount: String,
+        initRequestArchive: Data,
+        dataspaceId: UInt64? = nil
+    ) throws {
+        try self.init(
+            assetId: KagemushaRecursiveSpendRequestCodecs.canonicalAssetId(
+                accountId: accountId,
+                assetDefinitionId: assetDefinitionId,
+                dataspaceId: dataspaceId
+            ),
+            amount: amount,
+            initRequestArchive: initRequestArchive
+        )
+    }
+}
+
 public struct KagemushaRecursiveSpendAppendRequest: Equatable, Sendable {
     public let previousBundle: Data
     public let recordBundle: Data
@@ -473,6 +520,8 @@ public struct KagemushaRecursiveSpendBundleSummary: Equatable, Sendable {
 public enum KagemushaRecursiveSpendRequestCodecs {
     public static let initRequestWireName =
         "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1"
+    public static let topUpRequestWireName =
+        "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpRequestV1"
     public static let appendRequestWireName =
         "iroha_data_model::offline::model::KagemushaRecursiveSpendAppendRequestV1"
     public static let verifyRequestWireName =
@@ -520,6 +569,18 @@ public enum KagemushaRecursiveSpendRequestCodecs {
         writer.writeField(encodeOptionBytesVec(request.lineageProvingKeyArchive))
         writer.writeField(encodeOptionUInt64(request.blockHeight))
         return noritoEncode(typeName: initRequestWireName, payload: writer.data, flags: requestFlags)
+    }
+
+    public static func encodeTopUpRequest(_ request: KagemushaRecursiveSpendTopUpRequest) throws -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(try assetIdPayload(request.assetId))
+        writer.writeField(try encodeNumeric(request.amount))
+        writer.writeField(try compactPayloadForRequest(
+            request.initRequestArchive,
+            schema: initRequestWireName,
+            field: "initRequestArchive"
+        ))
+        return noritoEncode(typeName: topUpRequestWireName, payload: writer.data, flags: requestFlags)
     }
 
     public static func encodeAppendRequest(_ request: KagemushaRecursiveSpendAppendRequest) throws -> Data {
@@ -713,6 +774,10 @@ public extension KagemushaRecursiveSpendProver {
 
     static func redeemSpend(request: KagemushaRecursiveSpendRedeemRequest) throws -> Data {
         try redeemSpend(requestArchive: KagemushaRecursiveSpendRequestCodecs.encodeRedeemRequest(request))
+    }
+
+    static func topUpSpend(request: KagemushaRecursiveSpendTopUpRequest) throws -> Data {
+        try topUpSpend(requestArchive: KagemushaRecursiveSpendRequestCodecs.encodeTopUpRequest(request))
     }
 }
 
@@ -1410,6 +1475,116 @@ extension KagemushaRecursiveSpendRequestCodecs {
         } catch {
             throw KagemushaRecursiveSpendRequestCodecError.invalidField("recipient")
         }
+    }
+
+    static func canonicalAssetId(_ value: String, field: String) throws -> String {
+        let parsed = try parseAssetId(value, field: field)
+        let definition = AssetDefinitionAddress.encode(uuidBytes: parsed.definitionBytes)
+            ?? parsed.assetDefinitionId
+        let base = "\(definition)#\(parsed.accountId)"
+        guard let dataspaceId = parsed.dataspaceId else {
+            return base
+        }
+        return "\(base)#dataspace:\(dataspaceId)"
+    }
+
+    static func canonicalAssetId(
+        accountId: String,
+        assetDefinitionId: String,
+        dataspaceId: UInt64? = nil
+    ) throws -> String {
+        let canonicalAccount = try canonicalAccountId(accountId, field: "accountId")
+        guard AssetDefinitionAddress.decode(assetDefinitionId) != nil else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidField("assetDefinitionId")
+        }
+        let base = "\(assetDefinitionId)#\(canonicalAccount)"
+        guard let dataspaceId else {
+            return base
+        }
+        return "\(base)#dataspace:\(dataspaceId)"
+    }
+
+    private struct ParsedAssetId {
+        let accountId: String
+        let assetDefinitionId: String
+        let definitionBytes: Data
+        let dataspaceId: UInt64?
+    }
+
+    private static func assetIdPayload(_ assetId: String) throws -> Data {
+        let parsed = try parseAssetId(assetId, field: "assetId")
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(try accountIdPayload(parsed.accountId, field: "assetId.account"))
+        writer.writeField(parsed.definitionBytes)
+        writer.writeField(assetBalanceScopePayload(dataspaceId: parsed.dataspaceId))
+        return writer.data
+    }
+
+    private static func parseAssetId(_ value: String, field: String) throws -> ParsedAssetId {
+        let parts = value.split(separator: "#", omittingEmptySubsequences: false)
+        guard parts.count == 2 || parts.count == 3,
+              !parts[0].isEmpty,
+              !parts[1].isEmpty else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidField(field)
+        }
+        let definition = String(parts[0])
+        guard let definitionBytes = AssetDefinitionAddress.decode(definition) else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidField("\(field).definition")
+        }
+        let account = try canonicalAccountId(String(parts[1]), field: "\(field).account")
+        var dataspaceId: UInt64?
+        if parts.count == 3 {
+            let scope = String(parts[2])
+            let prefix = "dataspace:"
+            guard scope.hasPrefix(prefix) else {
+                throw KagemushaRecursiveSpendRequestCodecError.invalidField("\(field).scope")
+            }
+            let raw = String(scope.dropFirst(prefix.count))
+            guard !raw.isEmpty,
+                  (raw == "0" || !raw.hasPrefix("0")),
+                  raw.allSatisfy({ $0 >= "0" && $0 <= "9" }),
+                  let parsed = UInt64(raw) else {
+                throw KagemushaRecursiveSpendRequestCodecError.invalidField("\(field).scope")
+            }
+            dataspaceId = parsed
+        }
+        return ParsedAssetId(
+            accountId: account,
+            assetDefinitionId: definition,
+            definitionBytes: definitionBytes,
+            dataspaceId: dataspaceId
+        )
+    }
+
+    private static func canonicalAccountId(_ value: String, field: String) throws -> String {
+        do {
+            let address = try AccountAddress.parseEncoded(value, expectedPrefix: 0x02F1)
+            return try address.toI105(networkPrefix: 0x02F1)
+        } catch {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidField(field)
+        }
+    }
+
+    private static func accountIdPayload(_ accountId: String, field: String) throws -> Data {
+        do {
+            let address = try AccountAddress.parseEncoded(accountId, expectedPrefix: 0x02F1)
+            return try address.compactNoritoAccountControllerPayload()
+        } catch {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidField(field)
+        }
+    }
+
+    private static func assetBalanceScopePayload(dataspaceId: UInt64?) -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        guard let dataspaceId else {
+            writer.writeUInt32LE(0)
+            return writer.data
+        }
+        writer.writeUInt32LE(1)
+        var payload = OfflineCompactNoritoWriter()
+        payload.writeUInt64LE(dataspaceId)
+        writer.writeField(payload.data)
+        return writer.data
     }
 
     private static func decimalLittleEndianBytes(

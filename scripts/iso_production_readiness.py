@@ -81,6 +81,35 @@ ISO_SUBMITTING_ORGANISATION_PART_RE = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9&'().-]*(?:(?: |/)[A-Za-z0-9][A-Za-z0-9&'().-]*)*$"
 )
 PROFILE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
+CONTEXT_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
+PLACEHOLDER_CONTEXT_IDS = {
+    "ci",
+    "dev",
+    "development",
+    "dummy",
+    "example",
+    "fake",
+    "local",
+    "not-production",
+    "not-production-ready",
+    "placeholder",
+    "sample",
+    "template",
+    "test",
+}
+PLACEHOLDER_CONTEXT_TOKENS = {
+    "dummy",
+    "example",
+    "fake",
+    "placeholder",
+    "sample",
+    "template",
+    "test",
+}
+PLACEHOLDER_CONTEXT_PHRASES = (
+    "not-production",
+    "not-production-ready",
+)
 MESSAGE_TYPE_RE = re.compile(r"^[a-z]{4}\.[0-9]{3}$")
 RAIL_MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._:@+-]*[A-Za-z0-9])?$")
 CLI_CANONICAL_INT_RE = re.compile(r"(?:0|-?[1-9][0-9]*)")
@@ -270,6 +299,7 @@ COMPACT_CANARY_KEYS = {
     "environment",
     "started_at",
     "finished_at",
+    "ok",
     "plan_only",
     "require_explicit_policy",
     "stage_names",
@@ -290,6 +320,7 @@ COMPACT_STAGE_COMMAND_MODE_KEYS = {
 }
 RECEIPT_SUMMARY_KEYS = {
     "version",
+    "ok",
     "verified_receipts",
     "receipt_kind",
     "allow_failed",
@@ -435,6 +466,7 @@ TRUST_SUMMARY_KEYS = {
     "version",
     "path",
     "verified_at",
+    "ok",
     "verified_bundles",
     "max_source_age_days",
     "allow_synthetic_der",
@@ -469,6 +501,7 @@ TRUST_PROFILE_KEYS = {
 }
 XSD_SUMMARY_KEYS = {
     "version",
+    "ok",
     "verified_at",
     "manifest",
     "manifest_sha256",
@@ -1799,6 +1832,20 @@ def _reject_non_ascii_context(value: str, label: str) -> None:
         raise ReadinessError(f"{label} must use printable ASCII")
 
 
+def _reject_noncanonical_context_id(value: str, label: str) -> None:
+    if CONTEXT_ID_RE.fullmatch(value) is None:
+        raise ReadinessError(f"{label} must be a canonical lowercase context id")
+
+
+def _reject_placeholder_context_id(value: str, label: str) -> None:
+    if (
+        value in PLACEHOLDER_CONTEXT_IDS
+        or any(token in PLACEHOLDER_CONTEXT_TOKENS for token in value.split("-"))
+        or any(phrase in value for phrase in PLACEHOLDER_CONTEXT_PHRASES)
+    ):
+        raise ReadinessError(f"{label} must not use placeholder context id")
+
+
 def _require_list(value: Any, label: str) -> list[Any]:
     if type(value) is not list:
         raise ReadinessError(f"{label} must be a JSON array")
@@ -1828,6 +1875,8 @@ def _require_context_string(value: dict[str, Any], key: str, label: str) -> str:
     raw = _require_string(value, key, label)
     _reject_non_ascii_context(raw, f"{label}.{key}")
     _reject_secret_looking_identifier(raw, f"{label}.{key}")
+    _reject_noncanonical_context_id(raw, f"{label}.{key}")
+    _reject_placeholder_context_id(raw, f"{label}.{key}")
     return raw
 
 
@@ -1847,6 +1896,8 @@ def _require_cli_string(value: str | None, label: str) -> str:
         raise ReadinessError(f"{label} must not have surrounding whitespace")
     _reject_non_ascii_context(value, label)
     _reject_secret_looking_identifier(value, label)
+    _reject_noncanonical_context_id(value, label)
+    _reject_placeholder_context_id(value, label)
     return value
 
 
@@ -5753,6 +5804,8 @@ def _verify_receipt_summary(
     digest_role_reuse_code: str,
     kind_entry_mismatch_code: str,
     receipt_entry_order_code: str,
+    summary_not_ok_code: str,
+    summary_ok_drift_code: str,
     source_material_reuse_codes: tuple[tuple[str, str], ...],
 ) -> dict[str, Any]:
     digest = _require_summary_digest(receipt_obj, label)
@@ -5768,6 +5821,7 @@ def _verify_receipt_summary(
             ),
             path,
         )
+    summary_ok = _require_bool(receipt_obj, "ok", label)
     verified_receipts = _require_positive_int(
         receipt_obj,
         "verified_receipts",
@@ -6134,9 +6188,37 @@ def _verify_receipt_summary(
         if not has_default_profile_receipt:
             message += " but no default-profile receipt entry was recorded"
         _blocker(blockers, allow_default_profile_code, message, path)
+    expected_ok = (
+        version == RECEIPT_SUMMARY_VERSION
+        and verified_receipts == len(receipts_raw)
+        and receipt_kind_set == REQUIRED_RECEIPT_KINDS
+        and receipt_entry_kinds == REQUIRED_RECEIPT_KINDS
+        and not allow_failed
+        and not allow_insecure_http
+        and not allow_default_profile
+        and require_source_files
+        and not has_failed_receipt
+        and not has_insecure_receipt_endpoint
+        and not has_default_profile_receipt
+    )
+    if not summary_ok:
+        _blocker(
+            blockers,
+            summary_not_ok_code,
+            "receipt verifier summary is not production-complete",
+            path,
+        )
+    if summary_ok != expected_ok:
+        _blocker(
+            blockers,
+            summary_ok_drift_code,
+            "receipt verifier summary ok does not match replayed production policy",
+            path,
+        )
 
     return {
         "version": _version_for_readiness_output(version, RECEIPT_SUMMARY_VERSION),
+        "ok": _required_flag_for_readiness_output(summary_ok),
         "verified_receipts": verified_receipts,
         "receipt_kind": sorted(receipt_kind_set & REQUIRED_RECEIPT_KINDS),
         "allow_failed": _nonproduction_flag_for_readiness_output(allow_failed),
@@ -6178,6 +6260,7 @@ def verify_xsd_summary(
             f"XSD summary version must be {XSD_SUMMARY_VERSION}",
             path,
         )
+    ok = _require_bool(summary, "ok", str(path))
     if _receipt_path_is_repository_fixture(str(path)):
         _blocker(
             blockers,
@@ -6518,8 +6601,43 @@ def verify_xsd_summary(
                 blockers.append(profile_gap_block(unreviewed_profile_versions))
         else:
             blockers.append(profile_gap_block(missing_profile_schema_versions))
+    expected_ok = (
+        version == XSD_SUMMARY_VERSION
+        and not repository_fixture_manifest
+        and require_schema_backed
+        and require_fixture_for_schema
+        and require_profile_schema_backed
+        and validate_xml_schema
+        and verified_schemas > 0
+        and verified_fixtures > 0
+        and schema_backed_fixtures == verified_fixtures
+        and schema_validated_fixtures == verified_fixtures
+        and profile_checked_versions > 0
+        and profile_schema_backed_versions == profile_checked_versions
+        and not missing_schema_fixtures
+        and not schema_only_entries
+        and not missing_profile_schema_versions
+        and not blocked_schema_sources
+        and not pending_schema_sources
+        and not unreviewed_missing_profile_message_ids
+    )
+    if not ok:
+        _blocker(
+            blockers,
+            "xsd.summary_not_ok",
+            "XSD summary is not a production-complete schema verification",
+            path,
+        )
+    if ok != expected_ok:
+        _blocker(
+            blockers,
+            "xsd.summary_ok_drift",
+            "XSD summary ok does not match replayed production policy",
+            path,
+        )
     return {
         "version": _version_for_readiness_output(version, XSD_SUMMARY_VERSION),
+        "ok": _required_flag_for_readiness_output(ok),
         "path": str(path),
         "verified_at": verified_at,
         "manifest": manifest,
@@ -6940,6 +7058,37 @@ def _block_pending_xsd_probe_coverage(
         )
 
 
+def _block_local_readiness_policy(
+    *,
+    args: argparse.Namespace,
+    xsd_paths: list[Path],
+    evidence_paths: list[Path],
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Keep local diagnostic readiness overrides out of production verdicts."""
+
+    if args.allow_reviewed_xsd_gaps:
+        _blocker(
+            blockers,
+            "readiness.policy.allow_reviewed_xsd_gaps",
+            (
+                "Final readiness used local diagnostic policy "
+                "allow_reviewed_xsd_gaps=true"
+            ),
+            xsd_paths[0],
+        )
+    if args.allow_canary_stage_receipts_only:
+        _blocker(
+            blockers,
+            "readiness.policy.allow_canary_stage_receipts_only",
+            (
+                "Final readiness used local diagnostic policy "
+                "allow_canary_stage_receipts_only=true"
+            ),
+            evidence_paths[0],
+        )
+
+
 def _verify_policy(
     summary: dict[str, Any],
     path: Path,
@@ -7006,6 +7155,7 @@ def _verify_policy(
         "provider": provider,
         "environment": environment,
         "default_rail_profile": default_rail_profile,
+        **policy_flags,
         **freshness,
     }
 
@@ -7063,6 +7213,7 @@ def _verify_canary(
     )
     provider = _require_context_string(canary, "provider", label)
     environment = _require_context_string(canary, "environment", label)
+    canary_ok = _require_bool(canary, "ok", label)
     plan_only = _require_bool(canary, "plan_only", label)
     require_explicit_policy = _require_bool(canary, "require_explicit_policy", label)
     if args.provider is not None and provider != args.provider:
@@ -7230,6 +7381,8 @@ def _verify_canary(
             digest_role_reuse_code="evidence.receipt_digest_role_reuse",
             kind_entry_mismatch_code="evidence.receipt_kind_entry_mismatch",
             receipt_entry_order_code="evidence.receipt_entries_not_canonical_order",
+            summary_not_ok_code="evidence.receipt_summary_not_ok",
+            summary_ok_drift_code="evidence.receipt_summary_ok_drift",
             source_material_reuse_codes=CANARY_RECEIPT_SOURCE_MATERIAL_REUSE_CODES,
         )
         expected_receipt_kinds = {
@@ -7263,6 +7416,28 @@ def _verify_canary(
             dry_run_by_stage,
             receipt_summary,
         )
+    expected_ok = (
+        not plan_only
+        and require_explicit_policy
+        and tuple(stage_names_raw) == EXPECTED_CANARY_STAGE_ORDER
+        and not any(stage_dry_run)
+        and receipt_summary is not None
+        and receipt_summary.get("ok") is True
+    )
+    if not canary_ok:
+        _blocker(
+            blockers,
+            "evidence.canary_summary_not_ok",
+            "canary summary is not production-complete",
+            path,
+        )
+    if canary_ok != expected_ok:
+        _blocker(
+            blockers,
+            "evidence.canary_summary_ok_drift",
+            "canary summary ok does not match replayed production policy",
+            path,
+        )
     return {
         "version": _version_for_readiness_output(version, CANARY_SUMMARY_VERSION),
         "path": canary_path,
@@ -7271,6 +7446,7 @@ def _verify_canary(
         "finished_at": finished_at_raw,
         "provider": provider,
         "environment": environment,
+        "ok": _required_flag_for_readiness_output(canary_ok),
         "plan_only": plan_only,
         "require_explicit_policy": require_explicit_policy,
         "stage_names": list(stage_names_raw),
@@ -7653,6 +7829,8 @@ def _verify_archive_receipts(
         digest_role_reuse_code="evidence.archive_receipt_digest_role_reuse",
         kind_entry_mismatch_code="evidence.archive_receipt_kind_entry_mismatch",
         receipt_entry_order_code="evidence.archive_receipt_entries_not_canonical_order",
+        summary_not_ok_code="evidence.archive_receipt_summary_not_ok",
+        summary_ok_drift_code="evidence.archive_receipt_summary_ok_drift",
         source_material_reuse_codes=ARCHIVE_RECEIPT_SOURCE_MATERIAL_REUSE_CODES,
     )
 
@@ -9702,7 +9880,8 @@ def verify_evidence_summary(
     version = summary.get("version")
     if type(version) is not int or version != EVIDENCE_VERSION:
         raise ReadinessError(f"{path}.version must be {EVIDENCE_VERSION}")
-    if not _require_bool(summary, "ok", str(path)):
+    summary_ok = _require_bool(summary, "ok", str(path))
+    if not summary_ok:
         _blocker(blockers, "evidence.summary_not_ok", "evidence summary is not ok", path)
     if _receipt_path_is_repository_fixture(str(path)):
         _blocker(
@@ -9712,6 +9891,16 @@ def verify_evidence_summary(
             path,
         )
     evidence_policy = _verify_policy(summary, path, args, blockers)
+    expected_summary_ok = not any(
+        evidence_policy[flag] for flag in PRODUCTION_FALSE_POLICY_FLAGS
+    )
+    if summary_ok != expected_summary_ok:
+        _blocker(
+            blockers,
+            "evidence.summary_ok_drift",
+            "evidence summary ok field does not match archived production policy",
+            path,
+        )
 
     canary_summaries = _require_list(summary.get("canary_summaries"), f"{path}.canary_summaries")
     trust_summaries = _require_list(summary.get("trust_summaries"), f"{path}.trust_summaries")
@@ -9803,6 +9992,7 @@ def verify_evidence_summary(
                 f"{label}.version must be {TRUST_SUMMARY_VERSION}",
                 path,
             )
+        ok = _require_bool(trust_obj, "ok", label)
         verified_bundles = _require_positive_int(trust_obj, "verified_bundles", label)
         if "max_source_age_days" not in trust_obj:
             raise ReadinessError(f"{label}.max_source_age_days must be recorded")
@@ -9937,6 +10127,27 @@ def verify_evidence_summary(
                 "trust summary emitted profile JSON even though profile emission policy is not consistently emittable",
                 path,
             )
+        expected_ok = (
+            profile_json_emitted
+            and profile_json_emittable
+            and not allow_synthetic_der
+            and not allow_record_only
+            and not allow_insecure_source_url
+        )
+        if not ok:
+            _blocker(
+                blockers,
+                "trust.summary_not_ok",
+                "trust summary is not production-ready",
+                path,
+            )
+        if ok != expected_ok:
+            _blocker(
+                blockers,
+                "trust.summary_ok_drift",
+                "trust summary ok field does not match compact trust production policy",
+                path,
+            )
         profile_ids = [profile["profile_id"] for profile in profiles]
         if profile_ids != sorted(profile_ids):
             _blocker(
@@ -10003,6 +10214,7 @@ def verify_evidence_summary(
                 ),
                 "path": trust_path,
                 "verified_at": verified_at_raw,
+                "ok": _required_flag_for_readiness_output(ok),
                 "verified_bundles": verified_bundles,
                 "max_source_age_days": max_source_age_days,
                 "allow_synthetic_der": _nonproduction_flag_for_readiness_output(
@@ -10063,6 +10275,7 @@ def verify_evidence_summary(
     return {
         "path": str(path),
         "verified_at": verified_at,
+        "ok": _required_flag_for_readiness_output(summary_ok),
         "policy": _evidence_policy_for_readiness_output(evidence_policy, args),
         "canary_summaries": [
             _canary_for_readiness_output(canary, args) for canary in canaries
@@ -10265,6 +10478,12 @@ def run(args: argparse.Namespace) -> int:
             "summary with canary-stage-only receipt policy and missing direct "
             "receipt archive verification"
         )
+    _block_local_readiness_policy(
+        args=args,
+        xsd_paths=xsd_paths,
+        evidence_paths=evidence_paths,
+        blockers=blockers,
+    )
     _reject_duplicate_compact_summaries(xsd_summaries, "xsd_summaries")
     _reject_duplicate_compact_summaries(evidence_summaries, "evidence_summaries")
     _reject_duplicate_compact_summaries(

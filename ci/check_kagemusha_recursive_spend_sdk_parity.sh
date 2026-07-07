@@ -227,9 +227,11 @@ REQUIRED_RECURSIVE_SPEND_COMPACT_PROJECTION_PYTHON_PUBLIC_METHODS = (
 REQUIRED_PYTHON_KAGEMUSHA_INSTRUCTION_TRANSACTION_PUBLIC_METHODS = (
     "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TRANSFER",
     "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE",
+    "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TOPUP_RECURSIVE",
     "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES",
     "KAGEMUSHA_TRANSFER_INSTRUCTION_WIRE_NAME",
     "KAGEMUSHA_REDEEM_RECURSIVE_INSTRUCTION_WIRE_NAME",
+    "KAGEMUSHA_TOPUP_RECURSIVE_INSTRUCTION_WIRE_NAME",
     "KAGEMUSHA_RECURSIVE_REDEEM_REQUEST_WIRE_NAME",
     "KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME",
     "KAGEMUSHA_INSTRUCTION_ARCHIVE_WIRE_NAMES",
@@ -398,7 +400,7 @@ JNI_METHODS = (
     "nativeLineageWitnessAppendResult",
     "nativeVerifySpend",
     "nativeRedeemSpend",
-    "nativeTopUpSpend",
+    "nativeTopUpInstruction",
 )
 
 REQUIRED_RECURSIVE_COMPACT_JNI_METHODS = (
@@ -690,6 +692,8 @@ SOURCE_PATHS = (
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/IrohaOfflineNoteTransactionSubmitter.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteIssuerDeviceBinding.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/ToriiOfflineNoteIssuerClient.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaTopUpClient.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaTopUpResponse.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/ToriiOfflineNoteOutcomeProvider.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineQrStream.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineToriiException.java",
@@ -8810,9 +8814,7 @@ def check_offline_readiness_artifact_contract(texts, errors):
         texts,
         "crates/iroha_torii/src/lib.rs",
             (
-                "Mobile artifact archives are",
-                "served and gated by Core API",
-                "let offline_kagemusha_recursive_compact_artifacts = false;",
+                "let offline_kagemusha_recursive_compact_artifacts =\n        offline_kagemusha_recursive_compact_available;",
                 '"offline_kagemusha_recursive_compact_artifacts_available"',
             ),
             "Torii offline readiness artifact contract",
@@ -8832,7 +8834,7 @@ def check_offline_readiness_artifact_contract(texts, errors):
             texts,
             relative,
             (
-                '\\"offline_kagemusha_recursive_compact_artifacts_available\\":false',
+                '\\"offline_kagemusha_recursive_compact_artifacts_available\\":true',
             ),
             label,
             errors,
@@ -13375,6 +13377,14 @@ def check_mobile_retired_offline_note_issuers(texts, errors):
         "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/"
         "OfflineNoteIssuerDeviceBinding.java"
     )
+    android_topup_client_source = (
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/"
+        "KagemushaTopUpClient.java"
+    )
+    android_topup_response_source = (
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/"
+        "KagemushaTopUpResponse.java"
+    )
     android_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java"
     retired_issue_message = (
         "Classic Offline Note issue transactions are retired; "
@@ -13530,6 +13540,14 @@ def check_mobile_retired_offline_note_issuers(texts, errors):
             "private fun requiredAssertionKeyAlgorithm(value: Map<String, Any?>): String",
             "Base64.getEncoder().encodeToString(decoded) == value",
             '"$field must be canonical base64"',
+            "interface KagemushaTopUpClient",
+            "class KagemushaTopUpResponse",
+            "override fun submitKagemushaTopUp(",
+            "private const val KAGEMUSHA_TOPUP_PATH = \"/v1/offline/v2/kagemusha/topup\"",
+            '"canonical auth accountId must match top-up accountId"',
+            '"topUpRequestArchive must not be empty"',
+            '"topup_request_norito_base64" to Base64.getEncoder().encodeToString(topUpRequestArchive.copyOf())',
+            "requiredStringList(response, \"topup_anchor_nullifiers\")",
         ),
         "Kotlin retired Offline Note issuer source",
         errors,
@@ -13583,6 +13601,12 @@ def check_mobile_retired_offline_note_issuers(texts, errors):
             '"assertion_public_key" to base64(ByteArray(65) { 0xff.toByte() }).replace(\'/\', \'_\')',
             '"issuer_signature_base64" to " ${base64(ByteArray(64) { 3 })}"',
             '"issuer_signature_base64" to base64(ByteArray(64) { 3 }).replace("=", "")',
+            "toriiIssuerClientSubmitsKagemushaTopUpArchive",
+            "\"/v1/offline/v2/kagemusha/topup\"",
+            '"topup_request_norito_base64"',
+            'assertFalse(body.containsKey("amount"))',
+            'assertFalse(body.containsKey("init_request_norito_base64"))',
+            'assertFalse(body.containsKey("topup_init_request_norito_base64"))',
         ),
         "Kotlin retired Offline Note issuer tests",
         errors,
@@ -13599,7 +13623,7 @@ def check_mobile_retired_offline_note_issuers(texts, errors):
         texts,
         android_source,
         (
-            "public final class ToriiOfflineNoteIssuerClient implements OfflineNoteIssuerClient",
+            "implements OfflineNoteIssuerClient, KagemushaTopUpClient",
             "public static final String RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE =",
             retired_issue_message,
             "public CompletableFuture<OfflineNoteIssueResponse> issueNote(",
@@ -13624,8 +13648,40 @@ def check_mobile_retired_offline_note_issuers(texts, errors):
             "private static String requiredAssertionKeyAlgorithm(final Map<String, Object> value)",
             "Base64.getEncoder().encodeToString(decoded).equals(value)",
             "field + \" must be canonical base64\"",
+            "private static final String KAGEMUSHA_TOPUP_PATH = \"/v1/offline/v2/kagemusha/topup\";",
+            "public CompletableFuture<KagemushaTopUpResponse> submitKagemushaTopUp(",
+            '"canonical auth accountId must match top-up accountId"',
+            '"topUpRequestArchive must not be empty"',
+            '"topup_request_norito_base64"',
+            "Arrays.copyOf(topUpRequestArchive, topUpRequestArchive.length)",
+            "requiredStringList(response, \"topup_anchor_nullifiers\")",
+            "\"kagemusha.topup\"",
         ),
         "Android Java retired Offline Note issuer source",
+        errors,
+    )
+    require_contains(
+        texts,
+        android_topup_client_source,
+        (
+            "public interface KagemushaTopUpClient",
+            "CompletableFuture<KagemushaTopUpResponse> submitKagemushaTopUp(",
+            "byte[] topUpRequestArchive",
+        ),
+        "Android Java Kagemusha top-up client source",
+        errors,
+    )
+    require_contains(
+        texts,
+        android_topup_response_source,
+        (
+            "public final class KagemushaTopUpResponse",
+            "private final List<String> topupAnchorNullifiers;",
+            "Collections.unmodifiableList(copy)",
+            "public List<String> topupAnchorNullifiers()",
+            "public List<String> outputCommitments()",
+        ),
+        "Android Java Kagemusha top-up response source",
         errors,
     )
     require_contains(
@@ -13715,6 +13771,12 @@ def check_mobile_retired_offline_note_issuers(texts, errors):
             'base64(filledBytes(65, 0xff)).replace(\'/\', \'_\')',
             'certificateJson.put("issuer_signature_base64", " " + base64(filledBytes(64, 3)))',
             'certificateJson.put("issuer_signature_base64", base64(filledBytes(64, 3)).replace("=", ""))',
+            "toriiIssuerClientSubmitsKagemushaTopUpArchive",
+            "\"/v1/offline/v2/kagemusha/topup\"",
+            '"topup_request_norito_base64"',
+            "!body.containsKey(\"amount\")",
+            "!body.containsKey(\"init_request_norito_base64\")",
+            "!body.containsKey(\"topup_init_request_norito_base64\")",
         ),
         "Android Java retired Offline Note issuer tests",
         errors,
@@ -18356,7 +18418,7 @@ def check_javascript(texts, errors):
             "KagemushaInstructionArchive:",
             "bytes_base64: string;",
             "redeemRequestArchive: BinaryLike;",
-            "initRequestArchive: BinaryLike;",
+            "topUpRequestArchive: BinaryLike;",
         ),
         "JavaScript TypeScript Kagemusha instruction transaction declarations",
         errors,
@@ -18388,7 +18450,7 @@ def check_javascript(texts, errors):
                 "kagemushaRecursiveSpendRedeem",
                 "kagemushaRecursiveRedeem.redeemRequestArchive",
                 "kagemushaRecursiveSpendTopUp",
-                "kagemushaRecursiveTopUp.initRequestArchive",
+                "kagemushaRecursiveTopUp.topUpRequestArchive",
                 "Buffer.from(new Uint8Array(value.buffer, value.byteOffset, value.byteLength))",
                 "Buffer.from(new Uint8Array(value))",
             ),
@@ -18457,7 +18519,7 @@ def check_javascript(texts, errors):
             "bytesBase64 must be canonical standard base64",
             "buildKagemushaInstructionTransaction wraps one archive instruction",
             "buildKagemushaRecursiveRedeemTransaction derives instruction before signing",
-            "buildKagemushaRecursiveTopUpTransaction derives transfer instruction before signing",
+            "buildKagemushaRecursiveTopUpTransaction derives top-up instruction before signing",
             "transaction builders reject padded authority and asset definition IDs before native dispatch",
             "authority must not contain surrounding whitespace",
             r"assetDefinition\.assetDefinitionId must not contain surrounding whitespace",
@@ -18472,7 +18534,7 @@ def check_javascript(texts, errors):
             r"privateEndKaigi\.chainId must not contain surrounding whitespace",
             r"privateEndKaigi\.callId must not contain surrounding whitespace",
             "redeemRequestArchive must be a Buffer or ArrayBuffer view",
-            "initRequestArchive must be a Buffer or ArrayBuffer view",
+            "topUpRequestArchive must be a Buffer or ArrayBuffer view",
             "redeem native rejected",
             "top-up native rejected",
             "buildKagemusha transaction helpers copy mutable buffers before native calls",
@@ -18480,7 +18542,7 @@ def check_javascript(texts, errors):
             "mutableRedeemInstructionArchive",
             "mutableRedeemRequestArchive",
             "mutableTopUpInstructionArchive",
-            "mutableInitRequestArchive",
+            "mutableTopUpRequestArchive",
             "mutablePrivateKey",
             "fill(0xa5)",
         ),
@@ -18510,7 +18572,7 @@ def check_javascript(texts, errors):
             "mutableRedeemInstructionArchive",
             "mutableRedeemRequestArchive",
             "mutableTopUpInstructionArchive",
-            "mutableInitRequestArchive",
+            "mutableTopUpRequestArchive",
             "mutablePrivateKey",
             "fill(0xa5)",
         ),
@@ -18555,6 +18617,28 @@ def check_javascript(texts, errors):
                 "native ${operation} returned empty Norito payload",
             ),
             f"{relative} native output Norito guard",
+            errors,
+        )
+        require_block_contains(
+            texts,
+            relative,
+            "function callKagemushaRecursiveSpendNative(",
+            "function callKagemushaRecursiveSpendTopUpNative(",
+            (
+                "const request = toOwnedKagemushaArchiveBuffer(requestArchive, archiveName)",
+            ),
+            f"{relative} recursive spend native input copy",
+            errors,
+        )
+        require_block_contains(
+            texts,
+            relative,
+            "function callKagemushaRecursiveSpendTopUpNative(",
+            "function kagemushaRecursiveSpendOutputToBuffer(",
+            (
+                "const request = toOwnedKagemushaArchiveBuffer(requestArchive, archiveName)",
+            ),
+            f"{relative} recursive spend top-up native input copy",
             errors,
         )
         require_block_contains(
@@ -20783,10 +20867,10 @@ def check_python(texts, errors):
             "instructions=(instruction,)",
             "_archive_bytes_named(private_key, \"private_key\")",
             "_norito_archive_bytes_named(redeem_request_archive, \"redeem_request_archive\")",
-            "instruction_archive = kagemusha_recursive_spend_topup(init_request_archive)",
-            "kagemusha_instruction_archive_instruction(\n        KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TRANSFER,",
+            "instruction_archive = kagemusha_recursive_spend_topup(topup_request_archive)",
+            "kagemusha_instruction_archive_instruction(\n        KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TOPUP_RECURSIVE,",
             "instruction = kagemusha_recursive_redeem_instruction(redeem_request_archive)",
-            "instruction = kagemusha_recursive_topup_instruction(init_request_archive)",
+            "instruction = kagemusha_recursive_topup_instruction(topup_request_archive)",
         ),
         "Python Kagemusha instruction transaction builder",
         errors,
@@ -20901,9 +20985,9 @@ def check_python(texts, errors):
             "fn kagemusha_instruction_archive_box(",
             "fn kagemusha_instruction_archive(",
             "fn kagemusha_recursive_redeem(",
-            "fn kagemusha_recursive_spend_topup_instruction_from_init_request(",
+            "fn kagemusha_recursive_spend_topup_instruction_from_request(",
             "fn kagemusha_recursive_spend_topup_py(",
-            "KagemushaTransfer",
+            "TopUpKagemushaRecursive",
             "RedeemKagemushaRecursive",
             "decode_from_bytes(instruction_archive)",
             "kagemusha_recursive_spend_redeem_instruction_from_request(request)",
@@ -20920,7 +21004,7 @@ def check_python(texts, errors):
         (
             "test_kagemusha_instruction_archive_transaction_helpers_wrap_redeem_archive",
             "test_kagemusha_recursive_redeem_transaction_helper_derives_instruction_before_signing",
-            "test_kagemusha_recursive_topup_transaction_helper_derives_transfer_before_signing",
+            "test_kagemusha_recursive_topup_transaction_helper_derives_topup_before_signing",
             "test_kagemusha_instruction_transaction_helpers_copy_mutable_archives_before_building",
             "test_kagemusha_instruction_transaction_helpers_reject_padded_chain_and_authority_before_signing",
             "test_python_transaction_builder_rejects_padded_chain_and_authority_before_signing",
@@ -20941,16 +21025,17 @@ def check_python(texts, errors):
             "redeem_instruction_archive = bytearray(",
             "redeem_request_archive = bytearray(",
             "top_up_instruction_archive = bytearray(",
-            "init_request_archive = bytearray(",
+            "topup_request_archive = bytearray(",
             "private_key = bytearray(keypair.private_key)",
             "memoryview(redeem_instruction_archive)",
             "memoryview(redeem_request_archive)",
             "expected_top_up_instruction_archive = bytes(top_up_instruction_archive)",
-            "memoryview(init_request_archive)",
+            "expected_topup_request_archive = bytes(topup_request_archive)",
+            "memoryview(topup_request_archive)",
             "memoryview(private_key)",
             "_shared_recursive_spend_abi7_archive(\"redeem_instruction\")",
             "_shared_recursive_spend_abi7_archive(\"redeem_request\")",
-            "_shared_recursive_spend_archive(\"init_request\")",
+            "KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME",
             "_instruction_archive_bytes(instruction)",
             "committed_instruction = kagemusha.kagemusha_instruction_archive_instruction",
             "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE",
@@ -20968,7 +21053,7 @@ def check_python(texts, errors):
             "bad_request_flags[39] = 0x20",
             "redeem_request_archive must be a valid Norito archive",
             "draft.kagemusha_recursive_redeem(request_archive)",
-            "draft.kagemusha_recursive_topup(init_request_archive)",
+            "draft.kagemusha_recursive_topup(topup_request_archive)",
         ),
         "Python Kagemusha instruction transaction tests",
         errors,
@@ -22127,7 +22212,7 @@ def check_swift(texts, errors):
         (
             "private static func supportedPlatform(",
             "switch value {",
-            "case OfflineNoteV2Constants.iosPlatform, OfflineNoteV2Constants.androidPlatform:",
+            "case OfflineNoteV2Constants.iosPlatform,\n             OfflineNoteV2Constants.androidPlatform:",
             "return value",
             "guard binding.platform == Self.platform else",
             "guard proof.platform == Self.platform else",
@@ -22475,7 +22560,7 @@ def check_swift(texts, errors):
             "KagemushaRecursiveSpendRequestCodecs.encodeRedeemRequest",
             "KagemushaRecursiveSpendRequestCodecs.decodeBundle",
             "KagemushaRecursiveSpendRequestCodecs.decodeVerifyResult",
-            "lineageVerifierKey: nil",
+            "lineageVerifierKey: Data()",
             "u128MaxPlusOne",
             "KagemushaRecursiveSpendRedeemRequest(",
             "publicAmount: amount",
@@ -22539,7 +22624,7 @@ def check_swift(texts, errors):
     require_regex(
         texts,
         request_codecs_test,
-        r'lineageVerifierKey: nil,[\s\S]*?lineageProvingKeyArchive: nil[\s\S]*?\.invalidField\("lineageVerifierKey"\)',
+        r'lineageVerifierKey: Data\(\),[\s\S]*?lineageProvingKeyArchive: lineageProvingKeyArchive[\s\S]*?\.invalidField\("lineageVerifierKey"\)',
         "Swift typed recursive spend init lineage-key exact diagnostics",
         errors,
         flags=re.S,
@@ -24502,6 +24587,41 @@ def check_java_kotlin(texts, errors):
         "Android Java append request must require an explicit output proof circuit id",
         errors,
     )
+    recursive_topup_init_source_needles = (
+        "buildRecursiveSpendTopUpInitRequest",
+        "buildRecursiveSpendTopUpRequestFromInitRequest",
+        "validateTopUpRequestPublicBinding",
+        "readTopUpInitRequestSummary",
+        "top-up init request lineageVerifierKey must be absent",
+        "top-up init request lineageProvingKeyArchive must be absent",
+        "top-up init request must contain exactly one checked hop",
+        "top-up request asset definition must match the nested init request",
+        "top-up request amount must match the nested current note",
+    )
+    recursive_topup_init_test_needles = (
+        "buildRecursiveSpendTopUpInitRequest",
+        "buildRecursiveSpendTopUpRequestFromInitRequest",
+        "top-up init request lineageVerifierKey must be absent",
+        "top-up init request must contain exactly one checked hop",
+        "pallasOpenEnvelopes requires exactly 1 envelope(s)",
+        "top-up request asset definition must match the nested init request",
+        "top-up request amount must match the nested current note",
+        "lineageVerifierKey is required for recursive spend init",
+    )
+    require_contains(
+        texts,
+        kotlin_request_codecs,
+        recursive_topup_init_source_needles,
+        "Kotlin recursive spend top-up init producer public binding guard",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_request_codecs,
+        recursive_topup_init_source_needles,
+        "Android Java recursive spend top-up init producer public binding guard",
+        errors,
+    )
     java_key_gen_parameters = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/keystore/KeyGenParameters.java"
     java_keystore_key_provider = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/keystore/KeystoreKeyProvider.java"
     java_system_android_keystore_backend = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/keystore/SystemAndroidKeystoreBackend.java"
@@ -24536,6 +24656,10 @@ def check_java_kotlin(texts, errors):
     java_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java"
     kotlin_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt"
     kotlin_request_codecs_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt"
+    kotlin_instruction_archives = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaInstructionArchives.kt"
+    java_instruction_archives = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaInstructionArchives.java"
+    kotlin_instruction_archives_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaInstructionArchivesTest.kt"
+    java_transaction_builder_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionBuilderTests.java"
     java_claim_identifier_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/ClaimIdentifierWirePayloadEncoderTests.java"
     java_identifier_encoder_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/IdentifierReceiptCanonicalEncoderTests.java"
     kotlin_identifier_encoder_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/ClaimIdentifierWirePayloadEncoderParityTest.kt"
@@ -24547,6 +24671,95 @@ def check_java_kotlin(texts, errors):
     kotlin_offline_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt"
     java_offline_v2_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteV2Test.java"
     kotlin_offline_v2_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteV2Test.kt"
+    java_ton_sccp_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TonSccpProverTests.java"
+    kotlin_ton_sccp_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TonSccpProverTest.kt"
+    require_contains(
+        texts,
+        kotlin_request_codecs_test,
+        recursive_topup_init_test_needles,
+        "Kotlin recursive spend top-up init producer public binding tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_test,
+        recursive_topup_init_test_needles,
+        "Android Java recursive spend top-up init producer public binding tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_instruction_archives,
+        (
+            "topUpTransactionPayloadFromInitRequest",
+            "buildRecursiveSpendTopUpRequestFromInitRequest",
+            "topUpTransactionPayloadFromRequest(",
+            'val exactChainId = requireNonBlankUnpadded(chainId, "chainId")',
+            'val exactAuthority = requireNonBlankUnpadded(authority, "authority")',
+        ),
+        "Kotlin recursive spend top-up init transaction helper",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_instruction_archives,
+        (
+            "topUpTransactionPayloadFromInitRequest",
+            "buildRecursiveSpendTopUpRequestFromInitRequest",
+            "topUpTransactionPayloadFromRequest(",
+            'final String exactChainId = requireNonBlankUnpadded(chainId, "chainId")',
+            'final String exactAuthority = requireNonBlankUnpadded(authority, "authority")',
+        ),
+        "Android Java recursive spend top-up init transaction helper",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_instruction_archives_test,
+        (
+            "topUpTransactionPayloadFromInitRequest",
+            "transactionPayload rejects padded ids before archive validation or native redeem",
+            "chainId must not contain surrounding whitespace",
+            "authority must not contain surrounding whitespace",
+        ),
+        "Kotlin recursive spend top-up init transaction helper tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_transaction_builder_test,
+        (
+            "topUpTransactionPayloadFromInitRequest",
+            "kagemushaInstructionArchivesRejectPaddedIdsBeforeArchiveOrNativeRedeem",
+            "chainId must not contain surrounding whitespace",
+            "authority must not contain surrounding whitespace",
+        ),
+        "Android Java recursive spend top-up init transaction helper tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_ton_sccp_test,
+        (
+            "val publicInputOrder = assertFailsWith<IllegalArgumentException>",
+            "payloadHash = \"0x\" + \"AA\".repeat(32)",
+            "assertFalse(publicInputOrder.message?.contains(\"sourceProofBytes\") == true)",
+        ),
+        "Kotlin TON SCCP public-input validation ordering coverage",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_ton_sccp_test,
+        (
+            "malformedPublicInputsBeforeSourceProof",
+            "ex.getMessage().contains(\"payloadHash must be canonical hex\")",
+            "&& !ex.getMessage().contains(\"sourceProofBytes\")",
+            "TON proof requests must validate public inputs before source-proof matching",
+        ),
+        "Android Java TON SCCP public-input validation ordering coverage",
+        errors,
+    )
     require_contains(
         texts,
         kotlin,
@@ -37482,6 +37695,51 @@ if mode == "--negative-control-jvm-recursive-compact-shape-classifier":
         print(detected_message)
     raise SystemExit(0)
 
+if mode == "--negative-control-ton-sccp-public-input-validation-ordering":
+    mutated_texts = dict(texts)
+    mutations = (
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TonSccpProverTest.kt",
+            "assertFalse(publicInputOrder.message?.contains(\"sourceProofBytes\") == true)",
+            "assertTrue(publicInputOrder.message?.contains(\"sourceProofBytes\") == true)",
+            "Kotlin TON SCCP public-input validation ordering coverage",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TonSccpProverTests.java",
+            "&& !ex.getMessage().contains(\"sourceProofBytes\")",
+            "&& ex.getMessage().contains(\"sourceProofBytes\")",
+            "Android Java TON SCCP public-input validation ordering coverage",
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected in mutations:
+        original = mutated_texts[target]
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate TON SCCP validation-order coverage in "
+                + target
+            )
+        mutated_texts[target] = mutated
+        try:
+            detected_messages.extend(
+                detect_negative_control(
+                    mutated_texts,
+                    (expected,),
+                    "TON SCCP public-input validation-order drift",
+                )
+            )
+        finally:
+            mutated_texts[target] = original
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: TON SCCP public-input validation-order drift was not detected"
+        )
+    print("negative control rejected TON SCCP public-input validation-order drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
 if mode == "--negative-control-mobile-recursive-spend-native-output-headers":
     mutated_texts = dict(texts)
     targets = (
@@ -41053,36 +41311,36 @@ if mode == "--negative-control-offline-readiness-artifact-contract":
             "crates/iroha_torii/src/lib.rs",
             (
                 (
+                    "let offline_kagemusha_recursive_compact_artifacts =\n        offline_kagemusha_recursive_compact_available;",
                     "let offline_kagemusha_recursive_compact_artifacts = false;",
-                    "let offline_kagemusha_recursive_compact_artifacts = true;",
                 ),
             ),
             (
-                "Torii offline readiness artifact contract missing let offline_kagemusha_recursive_compact_artifacts = false;",
+                "Torii offline readiness artifact contract missing let offline_kagemusha_recursive_compact_artifacts =\n        offline_kagemusha_recursive_compact_available;",
             ),
         ),
         (
             "crates/iroha_torii/tests/offline_readiness_smoke.rs",
             (
                 (
-                    '\\"offline_kagemusha_recursive_compact_artifacts_available\\":false',
                     '\\"offline_kagemusha_recursive_compact_artifacts_available\\":true',
+                    '\\"offline_kagemusha_recursive_compact_artifacts_available\\":false',
                 ),
             ),
             (
-                'Torii offline readiness smoke artifact contract missing \\"offline_kagemusha_recursive_compact_artifacts_available\\":false',
+                'Torii offline readiness smoke artifact contract missing \\"offline_kagemusha_recursive_compact_artifacts_available\\":true',
             ),
         ),
         (
             "crates/iroha_torii/tests/offline_v2_readiness_smoke.rs",
             (
                 (
-                    '\\"offline_kagemusha_recursive_compact_artifacts_available\\":false',
                     '\\"offline_kagemusha_recursive_compact_artifacts_available\\":true',
+                    '\\"offline_kagemusha_recursive_compact_artifacts_available\\":false',
                 ),
             ),
             (
-                'Torii offline V2 readiness smoke artifact contract missing \\"offline_kagemusha_recursive_compact_artifacts_available\\":false',
+                'Torii offline V2 readiness smoke artifact contract missing \\"offline_kagemusha_recursive_compact_artifacts_available\\":true',
             ),
         ),
         (
@@ -48247,8 +48505,8 @@ if mode == "--negative-control-android-java-kagemusha-jdk8-api-surface":
         ),
         (
             offline_explorer_outcome_source,
-            "kind.trim().isEmpty()",
-            "kind.isBlank()",
+            "value.equals(value.trim())",
+            "value.isBlank()",
         ),
         (
             executable_source,
@@ -49194,6 +49452,7 @@ if mode == "--negative-control-js-package-dist-pallas-opening-vectors":
     )
     updated = texts[target]
     detected_messages = []
+    expected_labels = []
 
     def replace_in_package_dist_vector_block(updated, block_start_marker, replacements, block_name):
         block_end_marker = "  ];"
@@ -53801,13 +54060,29 @@ if mode == "--negative-control-sdk-archive-input-copy":
             "javascript/iroha_js/src/crypto.js",
             "const request = toOwnedKagemushaArchiveBuffer(requestArchive, archiveName)",
             "const request = toOwnedBuffer(requestArchive, archiveName)",
-            "javascript/iroha_js/src/crypto.js native output Norito guard",
+            "javascript/iroha_js/src/crypto.js recursive spend native input copy",
+        ),
+        (
+            "javascript/iroha_js/src/crypto.js",
+            "function callKagemushaRecursiveSpendTopUpNative(operation, requestArchive, archiveName = \"requestArchive\") {\n"
+            "  const request = toOwnedKagemushaArchiveBuffer(requestArchive, archiveName)",
+            "function callKagemushaRecursiveSpendTopUpNative(operation, requestArchive, archiveName = \"requestArchive\") {\n"
+            "  const request = toOwnedBuffer(requestArchive, archiveName)",
+            "javascript/iroha_js/src/crypto.js recursive spend top-up native input copy",
         ),
         (
             "javascript/iroha_js/dist/crypto.js",
             "const request = toOwnedKagemushaArchiveBuffer(requestArchive, archiveName)",
             "const request = toOwnedBuffer(requestArchive, archiveName)",
-            "javascript/iroha_js/dist/crypto.js native output Norito guard",
+            "javascript/iroha_js/dist/crypto.js recursive spend native input copy",
+        ),
+        (
+            "javascript/iroha_js/dist/crypto.js",
+            "function callKagemushaRecursiveSpendTopUpNative(operation, requestArchive, archiveName = \"requestArchive\") {\n"
+            "  const request = toOwnedKagemushaArchiveBuffer(requestArchive, archiveName)",
+            "function callKagemushaRecursiveSpendTopUpNative(operation, requestArchive, archiveName = \"requestArchive\") {\n"
+            "  const request = toOwnedBuffer(requestArchive, archiveName)",
+            "javascript/iroha_js/dist/crypto.js recursive spend top-up native input copy",
         ),
         (
             "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
@@ -54142,6 +54417,14 @@ if mode == "--negative-control-sdk-archive-input-copy":
     def expected_archive_input_copy_label(target, old, label):
         if " missing " in label:
             return label
+        if (
+            target in ("javascript/iroha_js/src/crypto.js", "javascript/iroha_js/dist/crypto.js")
+            and "toOwnedKagemushaArchiveBuffer(requestArchive, archiveName)" in old
+        ):
+            return (
+                f"{label} missing "
+                "const request = toOwnedKagemushaArchiveBuffer(requestArchive, archiveName)"
+            )
         if label == "Android Java recursive compact archive input copy":
             return (
                 f"{label} missing pattern "
@@ -66969,10 +67252,12 @@ if mode == "--negative-control-swift-offline-proof-platform-exactness":
     source_replacements = (
         (
             '        switch value {\n'
-            '        case OfflineNoteV2Constants.iosPlatform, OfflineNoteV2Constants.androidPlatform:\n'
+            '        case OfflineNoteV2Constants.iosPlatform,\n'
+            '             OfflineNoteV2Constants.androidPlatform:\n'
             "            return value\n",
             '        switch value.lowercased() {\n'
-            '        case OfflineNoteV2Constants.iosPlatform, OfflineNoteV2Constants.androidPlatform:\n'
+            '        case OfflineNoteV2Constants.iosPlatform,\n'
+            '             OfflineNoteV2Constants.androidPlatform:\n'
             "            return value.lowercased()\n",
         ),
         (

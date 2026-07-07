@@ -33,6 +33,7 @@ public static partial class BscMainnetSccp
     private const string SourceAdapterEngineDeploymentRecordPrefix =
         "sccp:source-adapter-engine-deployment:v1";
     private const string BscReceiptProofPrefix = "sccp:bsc:receipt-proof:v1";
+    private const string BscCommitMessagePrefix = "sccp:bsc:commit-message:v1";
     private const string BscValidatorSetPayloadPrefix = "sccp:bsc:validator-set-payload:v1";
     private const string BscValidatorSetPrefix = "sccp:bsc:validator-set:v1";
     private const string BscCommitSealPrefix = "sccp:bsc:commit-seal:v1";
@@ -532,6 +533,75 @@ public static partial class BscMainnetSccp
                 receiptRootIndex,
                 receiptTrieProofNodes,
                 inclusionBranch,
+                sourceDomain));
+
+    public static byte[] CanonicalBscCommitMessageBytes(
+        ulong validatorEpoch,
+        ulong blockNumber,
+        string blockHash,
+        string receiptsRoot,
+        string validatorSetHash)
+        => CanonicalBscCommitMessageBytes(
+            validatorEpoch,
+            blockNumber,
+            blockHash,
+            receiptsRoot,
+            validatorSetHash,
+            DomainBsc);
+
+    public static byte[] CanonicalBscCommitMessageBytes(
+        ulong validatorEpoch,
+        ulong blockNumber,
+        string blockHash,
+        string receiptsRoot,
+        string validatorSetHash,
+        int sourceDomain)
+    {
+        if (sourceDomain != DomainBsc)
+        {
+            throw new ArgumentException("sourceDomain must be BSC.", nameof(sourceDomain));
+        }
+
+        using var payload = new MemoryStream();
+        payload.WriteByte(1);
+        payload.Write(LeU32(sourceDomain));
+        payload.Write(LeU64(validatorEpoch));
+        payload.Write(LeU64(blockNumber));
+        payload.Write(RpcHexToBytes(blockHash, nameof(blockHash), 32));
+        payload.Write(RpcHexToBytes(receiptsRoot, nameof(receiptsRoot), 32));
+        payload.Write(RpcHexToBytes(validatorSetHash, nameof(validatorSetHash), 32));
+        return payload.ToArray();
+    }
+
+    public static string BscCommitMessageHash(
+        ulong validatorEpoch,
+        ulong blockNumber,
+        string blockHash,
+        string receiptsRoot,
+        string validatorSetHash)
+        => BscCommitMessageHash(
+            validatorEpoch,
+            blockNumber,
+            blockHash,
+            receiptsRoot,
+            validatorSetHash,
+            DomainBsc);
+
+    public static string BscCommitMessageHash(
+        ulong validatorEpoch,
+        ulong blockNumber,
+        string blockHash,
+        string receiptsRoot,
+        string validatorSetHash,
+        int sourceDomain)
+        => PrefixedKeccakHex(
+            BscCommitMessagePrefix,
+            CanonicalBscCommitMessageBytes(
+                validatorEpoch,
+                blockNumber,
+                blockHash,
+                receiptsRoot,
+                validatorSetHash,
                 sourceDomain));
 
     public static byte[] CanonicalBscValidatorSetPayloadBytes(

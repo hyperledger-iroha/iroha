@@ -80,9 +80,9 @@ class KagemushaInstructionArchivesTest {
     }
 
     @Test
-    fun `topUpTransactionPayload preserves transfer archive bytes after caller mutation`() {
-        val archive = kagemushaArchive(KagemushaInstructionType.TRANSFER)
-        val expectedTransferArchive = archive.copyOf()
+    fun `topUpTransactionPayload preserves top-up archive bytes after caller mutation`() {
+        val archive = kagemushaArchive(KagemushaInstructionType.TOP_UP_RECURSIVE)
+        val expectedTopUpArchive = archive.copyOf()
         val payload = KagemushaInstructionArchives.topUpTransactionPayload(
             instructionArchive = archive,
             chainId = "00000042",
@@ -96,12 +96,12 @@ class KagemushaInstructionArchivesTest {
         val executable = assertIs<Executable.Instructions>(payload.executable)
         val wire = assertIs<WirePayload>(executable.instructions.single().payload)
         assertEquals(
-            "iroha_data_model::isi::offline::KagemushaTransfer",
+            "iroha_data_model::isi::offline::TopUpKagemushaRecursive",
             wire.wireName,
         )
-        assertContentEquals(expectedTransferArchive, wire.payloadBytes)
+        assertContentEquals(expectedTopUpArchive, wire.payloadBytes)
         archive[0] = 0x7d.toByte()
-        assertContentEquals(expectedTransferArchive, wire.payloadBytes)
+        assertContentEquals(expectedTopUpArchive, wire.payloadBytes)
     }
 
     @Test
@@ -181,8 +181,8 @@ class KagemushaInstructionArchivesTest {
         )
 
         val paddedTopUpChainId = assertFailsWith<IllegalArgumentException> {
-            KagemushaInstructionArchives.topUpTransactionPayloadFromInitRequest(
-                initRequestArchive = byteArrayOf(),
+            KagemushaInstructionArchives.topUpTransactionPayloadFromRequest(
+                topUpRequestArchive = byteArrayOf(),
                 chainId = " 00000042",
                 authority = authority,
                 creationTimeMs = 1_735_000_000_000L,
@@ -194,6 +194,32 @@ class KagemushaInstructionArchivesTest {
         )
 
         val paddedTopUpAuthority = assertFailsWith<IllegalArgumentException> {
+            KagemushaInstructionArchives.topUpTransactionPayloadFromRequest(
+                topUpRequestArchive = byteArrayOf(),
+                chainId = "00000042",
+                authority = " $authority",
+                creationTimeMs = 1_735_000_000_000L,
+            )
+        }
+        assertEquals(
+            "authority must not contain surrounding whitespace",
+            paddedTopUpAuthority.message,
+        )
+
+        val paddedTopUpInitChainId = assertFailsWith<IllegalArgumentException> {
+            KagemushaInstructionArchives.topUpTransactionPayloadFromInitRequest(
+                initRequestArchive = byteArrayOf(),
+                chainId = " 00000042",
+                authority = authority,
+                creationTimeMs = 1_735_000_000_000L,
+            )
+        }
+        assertEquals(
+            "chainId must not contain surrounding whitespace",
+            paddedTopUpInitChainId.message,
+        )
+
+        val paddedTopUpInitAuthority = assertFailsWith<IllegalArgumentException> {
             KagemushaInstructionArchives.topUpTransactionPayloadFromInitRequest(
                 initRequestArchive = byteArrayOf(),
                 chainId = "00000042",
@@ -203,7 +229,7 @@ class KagemushaInstructionArchivesTest {
         }
         assertEquals(
             "authority must not contain surrounding whitespace",
-            paddedTopUpAuthority.message,
+            paddedTopUpInitAuthority.message,
         )
     }
 
@@ -226,7 +252,7 @@ class KagemushaInstructionArchivesTest {
             KagemushaInstructionArchives.recursiveRedeemInstructionBoxFromRequest(byteArrayOf())
         }
         assertFailsWith<IllegalArgumentException> {
-            KagemushaInstructionArchives.topUpInstructionBoxFromInitRequest(byteArrayOf())
+            KagemushaInstructionArchives.topUpInstructionBoxFromRequest(byteArrayOf())
         }
         assertFailsWith<IllegalArgumentException> {
             KagemushaInstructionArchives.recursiveRedeemTransactionPayloadFromRequest(
@@ -237,8 +263,8 @@ class KagemushaInstructionArchivesTest {
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            KagemushaInstructionArchives.topUpTransactionPayloadFromInitRequest(
-                initRequestArchive = byteArrayOf(),
+            KagemushaInstructionArchives.topUpTransactionPayloadFromRequest(
+                topUpRequestArchive = byteArrayOf(),
                 chainId = "00000042",
                 authority = sampleAuthority(),
                 creationTimeMs = 1_735_000_000_000L,

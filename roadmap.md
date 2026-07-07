@@ -7,6 +7,40 @@ The detailed engineering backlog lives in
 [`docs/source/engineering_backlog.md`](./docs/source/engineering_backlog.md),
 and completed history lives in [`status.md`](./status.md).
 
+Kagemusha online-to-offline top-up now has a first-class
+`KagemushaRecursiveSpendTopUpRequestV1` producer path, a chain-side
+`TopUpKagemushaRecursive` instruction, and Torii
+`/v1/offline/v2/kagemusha/topup` submission that accepts only client-produced
+top-up request archives. SDKs now expose a mobile-facing top-up init encoder
+that emits the nested one-hop, lineage-free init request and a wrapper helper
+that derives the canonical top-up request from it; Kotlin/JVM and Java Android
+also expose `KagemushaTopUpClient.submitKagemushaTopUp` for the signed Torii
+submission route. Raw init-request submission helpers and compatibility aliases
+remain retired for the first release.
+Remaining launch work should focus on end-to-end operator/mobile rollout
+validation rather than reviving the retired Offline V2 `/notes/issue`
+construction path.
+
+Kagemusha Reserved-lineage key artifact generation remains the active launch
+blocker for offline transfer verification. The `lineage-key-artifacts` command
+now fails before Halo2 verifier-slice configuration when deterministic
+fixed-window layout estimates exceed the memory guard, instead of silently
+entering unbounded configure/keygen on laptops. The next implementation step is
+a full row-oriented verifier-slice layout, followed by signed release artifact
+generation for the init and append profiles. The first reusable row primitive
+for scalar fixed-window decomposition is in place, and a row-oriented
+shared-table selector primitive now proves fixed-window table selection without
+per-tree-node advice columns. Remaining work is to migrate the fixed-window
+point table, complete-add/MSM, and IPA verifier composition configs onto the
+same row-oriented model, wire the row selector into those production
+compositions, and then remove the artifact-generation guard as a hard stop.
+
+Public NPoS XOR handling is pinned to canonical asset-definition bindings:
+`xor#universal` is only an alias selector, Taira binds it to
+`6TEAJqbb8oEPmLncoNiMRbLEK6tw`, and Nexus deployable genesis generation must
+receive an operator-supplied canonical Base58 XOR id through
+`--xor-asset-definition-id`.
+
 Crypto production-readiness hardening closed the remaining BFV wrapper-order
 follow-up on 2026-07-05. The exact and bounded artifact-aware wrappers now
 fail closed on the intended registry/mode guards, and the targeted BFV

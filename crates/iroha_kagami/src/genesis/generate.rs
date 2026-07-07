@@ -9,6 +9,7 @@ use iroha_core::sumeragi::network_topology::redundant_send_r_from_len;
 use iroha_crypto::Algorithm;
 use iroha_data_model::{
     account::address::ChainDiscriminantGuard,
+    asset::{AssetDefinitionAlias, definition::AssetConfidentialPolicy},
     isi::verifying_keys,
     parameter::{
         Parameter, Parameters,
@@ -29,8 +30,9 @@ use iroha_version::BuildLine;
 use crate::{
     Outcome, RunArgs,
     genesis::profile::{
-        GenesisProfile, ProfileDefaults, known_chain_discriminant_for_chain_id, parse_vrf_seed_hex,
-        profile_defaults, profile_requires_npos, resolve_vrf_seed,
+        GenesisProfile, PUBLIC_XOR_ALIAS, PUBLIC_XOR_DOMAIN, ProfileDefaults,
+        known_chain_discriminant_for_chain_id, parse_vrf_seed_hex, profile_defaults,
+        profile_requires_npos, resolve_public_xor_asset_definition_id, resolve_vrf_seed,
     },
     tui,
 };
@@ -61,6 +63,10 @@ pub struct Args {
     /// when NPoS is selected; ignored for permissioned manifests.
     #[clap(long, value_name = "HEX")]
     vrf_seed_hex: Option<String>,
+    /// Canonical public XOR asset definition id (Base58). Required for `iroha3-nexus`
+    /// NPoS manifests; `iroha3-taira` defaults to its live XOR id.
+    #[clap(long, value_name = "BASE58")]
+    xor_asset_definition_id: Option<String>,
     /// Optional path (relative to output) to the executor bytecode file (.to).
     /// If omitted, no executor upgrade is included in genesis.
     #[clap(long, value_name = "PATH")]
@@ -220,6 +226,7 @@ struct ResolvedGenesisSettings {
     consensus_mode: SumeragiConsensusMode,
     next_consensus_mode: Option<SumeragiConsensusMode>,
     profile_vrf_seed: Option<[u8; 32]>,
+    public_xor_asset_definition_id: Option<AssetDefinitionId>,
 }
 
 fn validate_consensus_cutover(
@@ -257,6 +264,7 @@ fn apply_profile_overrides(
     consensus_mode: SumeragiConsensusMode,
     next_consensus_mode: Option<SumeragiConsensusMode>,
     vrf_seed_override: Option<[u8; 32]>,
+    xor_asset_definition_id: Option<&str>,
     ivm_gas_limit_per_block: Option<u64>,
     defaults: &ProfileDefaults,
 ) -> color_eyre::Result<ResolvedGenesisSettings> {
@@ -303,6 +311,11 @@ fn apply_profile_overrides(
         consensus_mode,
         next_consensus_mode,
         profile_vrf_seed,
+        public_xor_asset_definition_id: resolve_public_xor_asset_definition_id(
+            Some(profile),
+            xor_asset_definition_id,
+            wants_npos_seed,
+        )?,
     })
 }
 
@@ -313,6 +326,7 @@ fn resolve_profile_settings(
     consensus_mode: SumeragiConsensusMode,
     next_consensus_mode: Option<SumeragiConsensusMode>,
     vrf_seed_override: Option<[u8; 32]>,
+    xor_asset_definition_id: Option<&str>,
     ivm_gas_limit_per_block: Option<u64>,
 ) -> color_eyre::Result<ResolvedGenesisSettings> {
     let mut chain = chain_id
@@ -321,6 +335,7 @@ fn resolve_profile_settings(
         .unwrap_or_else(|| ChainId::from("00000000-0000-0000-0000-000000000000"));
     let mut consensus_mode = consensus_mode;
     let mut next_consensus_mode = next_consensus_mode;
+    let mut public_xor_asset_definition_id = None;
     let profile_vrf_seed = if let Some(profile) = profile {
         let defaults = profile_defaults.expect("profile defaults available when profile is set");
         let overrides = apply_profile_overrides(
@@ -329,22 +344,32 @@ fn resolve_profile_settings(
             consensus_mode,
             next_consensus_mode,
             vrf_seed_override,
+            xor_asset_definition_id,
             ivm_gas_limit_per_block,
             defaults,
         )?;
         chain = overrides.chain;
         consensus_mode = overrides.consensus_mode;
         next_consensus_mode = overrides.next_consensus_mode;
+        public_xor_asset_definition_id = overrides.public_xor_asset_definition_id;
         overrides.profile_vrf_seed
     } else {
         None
     };
+
+    if profile.is_none() {
+        let wants_npos = matches!(consensus_mode, SumeragiConsensusMode::Npos)
+            || matches!(next_consensus_mode, Some(SumeragiConsensusMode::Npos));
+        public_xor_asset_definition_id =
+            resolve_public_xor_asset_definition_id(profile, xor_asset_definition_id, wants_npos)?;
+    }
 
     Ok(ResolvedGenesisSettings {
         chain,
         consensus_mode,
         next_consensus_mode,
         profile_vrf_seed,
+        public_xor_asset_definition_id,
     })
 }
 
@@ -435,6 +460,86 @@ fn apply_npos_crypto_overrides(
     genesis.into_builder().with_crypto(crypto).build_raw()
 }
 
+fn append_public_xor_binding(
+    genesis: RawGenesisTransaction,
+    asset_definition_id: &AssetDefinitionId,
+) -> color_eyre::Result<RawGenesisTransaction> {
+    let public_xor_domain = DomainId::parse_fully_qualified(PUBLIC_XOR_DOMAIN)?;
+    let public_xor_alias: AssetDefinitionAlias = PUBLIC_XOR_ALIAS.parse()?;
+
+    let mut has_domain = false;
+    let mut has_asset_definition = false;
+    let mut alias_bound = false;
+    for instruction in genesis.instructions() {
+        if let Some(register) = instruction.as_any().downcast_ref::<Register<Domain>>() {
+            has_domain |= register.object.id == public_xor_domain;
+            continue;
+        }
+        if let Some(register) = instruction
+            .as_any()
+            .downcast_ref::<Register<AssetDefinition>>()
+        {
+            has_asset_definition |= register.object.id == *asset_definition_id;
+            continue;
+        }
+        if let Some(register) = instruction
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::register::RegisterBox>()
+        {
+            match register {
+                iroha_data_model::isi::register::RegisterBox::Domain(register) => {
+                    has_domain |= register.object.id == public_xor_domain;
+                }
+                iroha_data_model::isi::register::RegisterBox::AssetDefinition(register) => {
+                    has_asset_definition |= register.object.id == *asset_definition_id;
+                }
+                _ => {}
+            }
+            continue;
+        }
+        if let Some(bind) = instruction
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::asset_alias::SetAssetDefinitionAlias>(
+        ) && bind.alias.as_ref() == Some(&public_xor_alias)
+        {
+            if bind.asset_definition_id != *asset_definition_id {
+                return Err(color_eyre::eyre::eyre!(
+                    "public XOR alias `{PUBLIC_XOR_ALIAS}` is already bound to `{}`, expected `{asset_definition_id}`",
+                    bind.asset_definition_id
+                ));
+            }
+            alias_bound = true;
+        }
+    }
+
+    if has_domain && has_asset_definition && alias_bound {
+        return Ok(genesis);
+    }
+
+    let mut builder = genesis.into_builder().next_transaction();
+    if !has_domain {
+        builder = builder.append_instruction(Register::domain(Domain::new(public_xor_domain)));
+    }
+    if !has_asset_definition {
+        let definition = AssetDefinition::new(asset_definition_id.clone(), NumericSpec::default())
+            .with_name("xor".to_owned())
+            .confidential_policy(AssetConfidentialPolicy::convertible())
+            .with_metadata(Metadata::default());
+        builder = builder.append_instruction(Register::asset_definition(definition));
+    }
+    if !alias_bound {
+        builder = builder.append_instruction(
+            iroha_data_model::isi::asset_alias::SetAssetDefinitionAlias::bind(
+                asset_definition_id.clone(),
+                public_xor_alias,
+                None,
+            ),
+        );
+    }
+
+    Ok(builder.build_raw().with_consensus_meta())
+}
+
 fn format_profile_summary(
     profile: GenesisProfile,
     summary_chain: &ChainId,
@@ -514,6 +619,7 @@ impl<T: Write> RunArgs<T> for Args {
             profile,
             chain_id,
             vrf_seed_hex,
+            xor_asset_definition_id,
             executor,
             ivm_dir,
             genesis_public_key,
@@ -568,12 +674,14 @@ impl<T: Write> RunArgs<T> for Args {
             consensus_mode,
             next_consensus_mode,
             vrf_seed_override,
+            xor_asset_definition_id.as_deref(),
             ivm_gas_limit_per_block,
         )?;
         let chain = resolved.chain;
         let consensus_mode = resolved.consensus_mode;
         let next_consensus_mode = resolved.next_consensus_mode;
         let profile_vrf_seed = resolved.profile_vrf_seed;
+        let public_xor_asset_definition_id = resolved.public_xor_asset_definition_id;
 
         let resolved_vrf_seed = profile_vrf_seed.or(vrf_seed_override);
         validate_vrf_seed_usage(resolved_vrf_seed, consensus_mode, next_consensus_mode)?;
@@ -594,7 +702,7 @@ impl<T: Write> RunArgs<T> for Args {
             None => GenesisBuilder::new_without_executor(chain, ivm_dir),
         }
         .with_crypto(crypto);
-        let genesis = build_genesis_for_mode(
+        let mut genesis = build_genesis_for_mode(
             mode,
             builder,
             &genesis_public_key,
@@ -606,6 +714,9 @@ impl<T: Write> RunArgs<T> for Args {
             resolved_vrf_seed,
             build_line,
         )?;
+        if let Some(asset_definition_id) = public_xor_asset_definition_id.as_ref() {
+            genesis = append_public_xor_binding(genesis, asset_definition_id)?;
+        }
         let chain_discriminant = profile_defaults
             .as_ref()
             .and_then(|defaults| defaults.chain_discriminant)
@@ -1045,7 +1156,11 @@ mod da_tests {
 mod profile_cli_tests {
     use std::io::{BufWriter, Write};
 
-    use iroha_data_model::parameter::system::{SumeragiConsensusMode, SumeragiNposParameters};
+    use iroha_data_model::{
+        asset::{AssetDefinitionAlias, definition::ConfidentialPolicyMode},
+        isi::asset_alias::SetAssetDefinitionAlias,
+        parameter::system::{SumeragiConsensusMode, SumeragiNposParameters},
+    };
     use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
 
     use super::*;
@@ -1055,6 +1170,7 @@ mod profile_cli_tests {
             profile: Some(profile),
             chain_id: None,
             vrf_seed_hex: None,
+            xor_asset_definition_id: None,
             executor: None,
             ivm_dir: PathBuf::from("."),
             genesis_public_key: SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
@@ -1080,6 +1196,16 @@ mod profile_cli_tests {
         buf.flush().expect("flush buffer");
         let bytes = buf.into_inner().expect("buffer into inner");
         Ok(String::from_utf8(bytes).expect("utf8 output"))
+    }
+
+    fn public_xor_binding(manifest: &RawGenesisTransaction) -> Option<AssetDefinitionId> {
+        let alias: AssetDefinitionAlias = PUBLIC_XOR_ALIAS.parse().expect("valid public XOR alias");
+        manifest.instructions().find_map(|instruction| {
+            let bind = instruction
+                .as_any()
+                .downcast_ref::<SetAssetDefinitionAlias>()?;
+            (bind.alias.as_ref() == Some(&alias)).then(|| bind.asset_definition_id.clone())
+        })
     }
 
     #[test]
@@ -1232,6 +1358,83 @@ mod profile_cli_tests {
             "taira profile JSON must not leak mainnet i105 literals: {json}"
         );
     }
+
+    #[test]
+    fn taira_profile_injects_canonical_public_xor_binding() {
+        let mut args = base_profile_args(GenesisProfile::Iroha3Taira);
+        args.vrf_seed_hex = Some(hex::encode([0x33u8; 32]));
+
+        let manifest = run_and_parse(args).expect("taira profile should build");
+        let expected =
+            AssetDefinitionId::parse_address_literal(crate::genesis::TAIRA_XOR_ASSET_DEFINITION_ID)
+                .expect("valid taira XOR id");
+        assert_eq!(public_xor_binding(&manifest), Some(expected.clone()));
+
+        let registered = manifest.instructions().find_map(|instruction| {
+            if let Some(register) = instruction
+                .as_any()
+                .downcast_ref::<Register<AssetDefinition>>()
+                && register.object.id == expected
+            {
+                return Some(register.object.clone());
+            }
+            let register = instruction
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::register::RegisterBox>()?;
+            match register {
+                iroha_data_model::isi::register::RegisterBox::AssetDefinition(register)
+                    if register.object.id == expected =>
+                {
+                    Some(register.object.clone())
+                }
+                _ => None,
+            }
+        });
+        let registered = registered.expect("canonical XOR asset definition should be registered");
+        assert_eq!(registered.name, "xor");
+        assert_eq!(
+            registered.confidential_policy.mode,
+            ConfidentialPolicyMode::Convertible
+        );
+    }
+
+    #[test]
+    fn nexus_profile_requires_explicit_public_xor_asset_id() {
+        let mut args = base_profile_args(GenesisProfile::Iroha3Nexus);
+        args.vrf_seed_hex = Some(hex::encode([0x44u8; 32]));
+
+        let err = run_and_parse(args).expect_err("nexus profile should require explicit XOR id");
+        assert!(
+            err.to_string().contains("--xor-asset-definition-id"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn nexus_profile_accepts_explicit_public_xor_asset_id() {
+        let mut args = base_profile_args(GenesisProfile::Iroha3Nexus);
+        args.vrf_seed_hex = Some(hex::encode([0x55u8; 32]));
+        args.xor_asset_definition_id = Some("61CtjvNd9T3THAR65GsMVHr82Bjc".to_owned());
+
+        let manifest = run_and_parse(args).expect("nexus profile should build");
+        let expected = AssetDefinitionId::parse_address_literal("61CtjvNd9T3THAR65GsMVHr82Bjc")
+            .expect("valid public XOR fixture id");
+        assert_eq!(public_xor_binding(&manifest), Some(expected));
+    }
+
+    #[test]
+    fn public_xor_asset_id_rejects_alias_literals() {
+        let mut args = base_profile_args(GenesisProfile::Iroha3Taira);
+        args.vrf_seed_hex = Some(hex::encode([0x66u8; 32]));
+        args.xor_asset_definition_id = Some(PUBLIC_XOR_ALIAS.to_owned());
+
+        let err = run_and_parse(args).expect_err("alias literal should be rejected");
+        assert!(
+            err.to_string()
+                .contains("expected canonical unprefixed Base58"),
+            "unexpected error: {err}"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1281,6 +1484,7 @@ mod helper_tests {
             None,
             None,
             None,
+            None,
             &defaults,
         )
         .expect_err("chain mismatch should be rejected");
@@ -1298,6 +1502,7 @@ mod helper_tests {
             profile,
             None,
             SumeragiConsensusMode::Npos,
+            None,
             None,
             None,
             None,
@@ -1324,6 +1529,7 @@ mod helper_tests {
             None,
             None,
             None,
+            None,
             &defaults,
         )
         .expect("permissioned dev profile should succeed");
@@ -1344,6 +1550,7 @@ mod helper_tests {
             Some(&chain_id),
             None,
             SumeragiConsensusMode::Permissioned,
+            None,
             None,
             None,
             None,
@@ -1368,6 +1575,7 @@ mod helper_tests {
             None,
             None,
             None,
+            None,
         )
         .expect("profile settings should resolve");
 
@@ -1386,6 +1594,7 @@ mod helper_tests {
             None,
             Some(&defaults),
             SumeragiConsensusMode::Permissioned,
+            None,
             None,
             None,
             None,
@@ -1728,6 +1937,7 @@ mod tests {
             profile: Some(GenesisProfile::Iroha3Dev),
             chain_id: None,
             vrf_seed_hex: None,
+            xor_asset_definition_id: None,
             executor: None,
             ivm_dir: PathBuf::from("."),
             genesis_public_key: SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),

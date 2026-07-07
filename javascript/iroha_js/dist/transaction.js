@@ -147,6 +147,10 @@ const KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES = new Map([
     "RedeemKagemushaRecursive",
     "iroha_data_model::isi::offline::RedeemKagemushaRecursive",
   ],
+  [
+    "TopUpKagemushaRecursive",
+    "iroha_data_model::isi::offline::TopUpKagemushaRecursive",
+  ],
 ]);
 const KAGEMUSHA_INSTRUCTION_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;
 const NORITO_HEADER_BYTES = 40;
@@ -178,7 +182,7 @@ function normalizeKagemushaInstructionArchiveType(type, context) {
     !KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES.has(type)
   ) {
     throw new TypeError(
-      `${context}.type must be KagemushaTransfer or RedeemKagemushaRecursive`,
+      `${context}.type must be KagemushaTransfer, RedeemKagemushaRecursive, or TopUpKagemushaRecursive`,
     );
   }
   return type;
@@ -913,15 +917,14 @@ export function buildKagemushaRecursiveRedeemTransaction({
 }
 
 /**
- * Build the native online-to-offline top-up instruction from an init request
+ * Build the native online-to-offline top-up instruction from a top-up request
  * archive and sign it in a single-instruction transaction.
  */
 export function buildKagemushaRecursiveTopUpTransaction({
   chainId,
   authority,
-  initRequestArchive,
-  init_request_archive,
-  requestArchive,
+  topUpRequestArchive,
+  top_up_request_archive,
   metadata = null,
   creationTimeMs = null,
   ttlMs = null,
@@ -936,19 +939,20 @@ export function buildKagemushaRecursiveTopUpTransaction({
     );
   }
   const selectedArchive =
-    initRequestArchive ?? init_request_archive ?? requestArchive;
+    topUpRequestArchive
+    ?? top_up_request_archive;
   const instructionArchive = Buffer.from(
     native.kagemushaRecursiveSpendTopUp(
       toBuffer(
         selectedArchive,
-        "kagemushaRecursiveTopUp.initRequestArchive",
+        "kagemushaRecursiveTopUp.topUpRequestArchive",
       ),
     ),
   );
   return buildKagemushaInstructionTransaction({
     chainId,
     authority,
-    type: "KagemushaTransfer",
+    type: "TopUpKagemushaRecursive",
     instructionArchive,
     metadata,
     creationTimeMs,

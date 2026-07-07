@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -28,8 +29,10 @@ import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 
 /** Torii-backed issuer client for Offline Note wallet loads. */
-public final class ToriiOfflineNoteIssuerClient implements OfflineNoteIssuerClient {
+public final class ToriiOfflineNoteIssuerClient
+    implements OfflineNoteIssuerClient, KagemushaTopUpClient {
   private static final String KEYS_REFILL_PATH = "/v1/offline/v2/keys/refill";
+  private static final String KAGEMUSHA_TOPUP_PATH = "/v1/offline/v2/kagemusha/topup";
   private static final String HEADER_WITNESS = "X-Iroha-Witness";
   private static final String DEVICE_PROOF_PLATFORM_IOS = "ios";
   private static final String DEVICE_PROOF_PLATFORM_ANDROID = "android";
@@ -216,6 +219,54 @@ public final class ToriiOfflineNoteIssuerClient implements OfflineNoteIssuerClie
                   + "."));
     }
     return failedFuture(new IllegalStateException(RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE));
+  }
+
+  @Override
+  public CompletableFuture<KagemushaTopUpResponse> submitKagemushaTopUp(
+      final String chainId,
+      final String accountId,
+      final String assetDefinitionId,
+      final byte[] topUpRequestArchive) {
+    if (!canonicalAuth.accountId().equals(accountId)) {
+      throw new IllegalArgumentException("canonical auth accountId must match top-up accountId");
+    }
+    requireExactNonEmptyText(chainId, "chainId");
+    requireExactNonEmptyText(accountId, "accountId");
+    requireExactNonEmptyText(assetDefinitionId, "assetDefinitionId");
+    Objects.requireNonNull(topUpRequestArchive, "topUpRequestArchive");
+    if (topUpRequestArchive.length == 0) {
+      throw new IllegalArgumentException("topUpRequestArchive must not be empty");
+    }
+    final OfflineNoteIssuerDeviceBinding binding =
+        deviceBindingProvider.currentDeviceBinding(chainId, accountId, assetDefinitionId);
+    final String operationId = nonceGenerator.nextId("offline-kagemusha-topup");
+    final Map<String, Object> body = new LinkedHashMap<>();
+    body.put("account_id", accountId);
+    body.put("operation_id", operationId);
+    body.put("device_id", binding.deviceId());
+    body.put("offline_public_key", binding.offlinePublicKey());
+    body.put("asset_definition_id", assetDefinitionId);
+    body.put("device_binding", binding.deviceBinding());
+    body.put(
+        "topup_request_norito_base64",
+        Base64.getEncoder()
+            .encodeToString(Arrays.copyOf(topUpRequestArchive, topUpRequestArchive.length)));
+    return executePost(
+        KAGEMUSHA_TOPUP_PATH,
+        body,
+        payload -> {
+          final Map<String, Object> response =
+              expectObject(parseJson(payload), "kagemusha top-up response");
+          notifyIssuerResponse(KAGEMUSHA_TOPUP_PATH, response);
+          return new KagemushaTopUpResponse(
+              requiredString(response, "operation_id"),
+              requiredString(response, "chain_tx_hash"),
+              requiredString(response, "asset_definition_id"),
+              requiredString(response, "amount"),
+              requiredStringList(response, "topup_anchor_nullifiers"),
+              requiredStringList(response, "output_commitments"),
+              requiredString(response, "root_hint"));
+        });
   }
 
   private CompletableFuture<OfflineNoteLoadContext> refillKeys(
@@ -596,6 +647,37 @@ public final class ToriiOfflineNoteIssuerClient implements OfflineNoteIssuerClie
     return string;
   }
 
+  private static List<String> requiredStringList(
+      final Map<String, Object> value, final String field) {
+    final Object item = requiredValue(value, field);
+    if (!(item instanceof List<?> list)) {
+      throw new IllegalStateException(field + " must be an array");
+    }
+    final List<String> result = new ArrayList<>(list.size());
+    for (int index = 0; index < list.size(); index++) {
+      final Object valueAtIndex = list.get(index);
+      if (!(valueAtIndex instanceof String string)) {
+        throw new IllegalStateException(field + "[" + index + "] must be a string");
+      }
+      if (!isExactNonEmptyText(string)) {
+        throw new IllegalStateException(field + "[" + index + "] must be exact non-empty text");
+      }
+      result.add(string);
+    }
+    return result;
+  }
+
+  private static String requireExactNonEmptyText(final String value, final String field) {
+    if (!isExactNonEmptyText(value)) {
+      throw new IllegalArgumentException(field + " must be exact non-empty text");
+    }
+    return value;
+  }
+
+  private static boolean isExactNonEmptyText(final String value) {
+    return value != null && !value.isEmpty() && value.equals(value.trim());
+  }
+
   private static String requiredExactNonEmptyString(
       final Map<String, Object> value, final String field) {
     final String string = requiredString(value, field);
@@ -871,7 +953,9 @@ public final class ToriiOfflineNoteIssuerClient implements OfflineNoteIssuerClie
     final String action =
         path.contains("/keys/refill")
             ? "keys.refill"
-            : path.contains("/notes/issue") ? "notes.issue" : "mutation";
+            : path.contains("/kagemusha/topup")
+                ? "kagemusha.topup"
+                : path.contains("/notes/issue") ? "notes.issue" : "mutation";
     return "offline-cash." + action + "." + sha256Hex(body);
   }
 
