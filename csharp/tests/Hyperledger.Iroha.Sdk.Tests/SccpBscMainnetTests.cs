@@ -647,6 +647,278 @@ public sealed class SccpBscMainnetTests
     }
 
     [Fact]
+    public void BscValidatorSetPayloadHelpersRejectMalformedMaterial()
+    {
+        var validatorAddresses = new[]
+        {
+            "0x" + new string('1', 40),
+            "0x" + new string('2', 40),
+        };
+        var validatorPowers = new ulong[] { 1, 2 };
+        var expectedPayload = Convert.FromHexString(
+            "0102000000"
+            + new string('1', 40)
+            + "0100000000000000"
+            + new string('2', 40)
+            + "0200000000000000");
+
+        var payload = BscMainnetSccp.CanonicalBscValidatorSetPayloadBytes(
+            validatorAddresses,
+            validatorPowers);
+
+        Assert.Equal(expectedPayload, payload);
+        Assert.Equal(
+            "0xdc6190956bc147c9a0a2fbf1384d40a1deb4b211a709f229275d1ea5ac3f8370",
+            BscMainnetSccp.BscValidatorSetPayloadHash(payload));
+        Assert.Equal(
+            "0xdc6190956bc147c9a0a2fbf1384d40a1deb4b211a709f229275d1ea5ac3f8370",
+            BscMainnetSccp.BscValidatorSetPayloadHash(
+                validatorAddresses,
+                validatorPowers));
+        Assert.Equal(
+            "0x3ef5ecfb6dc4f5fc9e970cc18cd72164495c827e96f77851813973a286f5c762",
+            BscMainnetSccp.BscValidatorSetHashFromPayload(payload));
+        Assert.Equal(
+            "0x3ef5ecfb6dc4f5fc9e970cc18cd72164495c827e96f77851813973a286f5c762",
+            BscMainnetSccp.BscValidatorSetHashFromPayload(
+                validatorAddresses,
+                validatorPowers));
+
+        AssertArgumentContains(
+            () => BscMainnetSccp.CanonicalBscValidatorSetPayloadBytes(
+                validatorAddresses,
+                new ulong[] { 1 }),
+            "non-empty equal-length arrays");
+        AssertArgumentContains(
+            () => BscMainnetSccp.CanonicalBscValidatorSetPayloadBytes(
+                Array.Empty<string>(),
+                Array.Empty<ulong>()),
+            "non-empty equal-length arrays");
+        AssertArgumentContains(
+            () => BscMainnetSccp.CanonicalBscValidatorSetPayloadBytes(
+                Enumerable.Repeat("0x" + new string('1', 40), 256).ToArray(),
+                Enumerable.Repeat(1UL, 256).ToArray()),
+            "at most 255 entries");
+        AssertArgumentContains(
+            () => BscMainnetSccp.CanonicalBscValidatorSetPayloadBytes(
+                new[] { "0X" + new string('1', 40) },
+                new ulong[] { 1 }),
+            "validatorAddresses[0]",
+            "canonical lowercase 0x hex");
+        AssertArgumentContains(
+            () => BscMainnetSccp.CanonicalBscValidatorSetPayloadBytes(
+                new[] { "0x" + new string('0', 40) },
+                new ulong[] { 1 }),
+            "validatorAddresses[0]",
+            "must not be zero");
+        AssertArgumentContains(
+            () => BscMainnetSccp.CanonicalBscValidatorSetPayloadBytes(
+                new[] { "0x" + new string('1', 40), "0x" + new string('1', 40) },
+                new ulong[] { 1, 2 }),
+            "validatorAddresses[1]",
+            "unique");
+        AssertArgumentContains(
+            () => BscMainnetSccp.CanonicalBscValidatorSetPayloadBytes(
+                new[] { "0x" + new string('1', 40) },
+                new ulong[] { 0 }),
+            "validatorPowers[0]",
+            "must not be zero");
+
+        var duplicatePayload = payload.ToArray();
+        Array.Copy(duplicatePayload, 5, duplicatePayload, 5 + 28, 20);
+        AssertArgumentContains(
+            () => BscMainnetSccp.BscValidatorSetHashFromPayload(duplicatePayload),
+            "validatorAddresses[1]",
+            "unique");
+
+        var zeroPowerPayload = payload.ToArray();
+        Array.Clear(zeroPowerPayload, 5 + 20, 8);
+        AssertArgumentContains(
+            () => BscMainnetSccp.BscValidatorSetHashFromPayload(zeroPowerPayload),
+            "validatorPowers[0]",
+            "must not be zero");
+
+        AssertArgumentContains(
+            () => BscMainnetSccp.BscValidatorSetHashFromPayload(new byte[] { 0 }),
+            "version 1");
+        AssertArgumentContains(
+            () => BscMainnetSccp.BscValidatorSetHashFromPayload(
+                payload.Concat(new byte[] { 0 }).ToArray()),
+            "invalid validator count");
+
+        static void AssertArgumentContains(Action action, params string[] snippets)
+        {
+            var error = Assert.Throws<ArgumentException>(action);
+            foreach (var snippet in snippets)
+            {
+                Assert.Contains(snippet, error.Message);
+            }
+        }
+    }
+
+    [Fact]
+    public void BscCommitSealHelpersValidateSignersAndQuorum()
+    {
+        var seal = SampleCommitSealProof();
+
+        Assert.Equal(297, BscMainnetSccp.CanonicalBscCommitSealBytes(seal).Length);
+        Assert.Equal(
+            "0x14659b4643d3a7961f7f86f46319992444617392c8e84967a3bb2a5ad7bc72fb",
+            BscMainnetSccp.BscCommitSealHash(seal));
+
+        foreach (var recoveryId in new byte[] { 0, 1, 29, 30 })
+        {
+            var badRecoveryId = MutatedSignature(0, 64, recoveryId);
+            AssertArgumentContains(
+                () => BscMainnetSccp.CanonicalBscCommitSealBytes(seal with
+                {
+                    Signatures =
+                    [
+                        badRecoveryId,
+                        seal.Signatures[1],
+                        seal.Signatures[2],
+                    ],
+                }),
+                "canonical recoverable");
+        }
+
+        var wrongSigner = MutatedSignature(0, 0, 0x31);
+        AssertArgumentContains(
+            () => BscMainnetSccp.CanonicalBscCommitSealBytes(seal with
+            {
+                Signatures =
+                [
+                    wrongSigner,
+                    seal.Signatures[1],
+                    seal.Signatures[2],
+                ],
+            }),
+            "recover the selected validator address");
+
+        AssertArgumentContains(
+            () => BscMainnetSccp.CanonicalBscCommitSealBytes(seal with
+            {
+                SignedPower = 2,
+                SignersBitmap = HexBytes("03"),
+                Signatures = seal.Signatures.Take(2).ToArray(),
+            }),
+            "two thirds");
+        AssertArgumentContains(
+            () => BscMainnetSccp.CanonicalBscCommitSealBytes(seal with
+            {
+                SignersBitmap = HexBytes("1f"),
+            }),
+            "padding bits");
+        AssertArgumentContains(
+            () => BscMainnetSccp.CanonicalBscCommitSealBytes(seal with
+            {
+                ValidatorSetHash = "0x" + new string('a', 64),
+            }),
+            "validatorSetHash");
+        AssertArgumentContains(
+            () => BscMainnetSccp.CanonicalBscCommitSealBytes(seal with
+            {
+                TotalPower = 5,
+            }),
+            "totalPower");
+        AssertArgumentContains(
+            () => BscMainnetSccp.CanonicalBscCommitSealBytes(seal with
+            {
+                SignedPower = 4,
+            }),
+            "signedPower");
+        AssertArgumentContains(
+            () => BscMainnetSccp.CanonicalBscCommitSealBytes(seal with
+            {
+                ValidatorPublicKeys =
+                [
+                    seal.ValidatorPublicKeys[0],
+                    seal.ValidatorPublicKeys[0],
+                    seal.ValidatorPublicKeys[2],
+                    seal.ValidatorPublicKeys[3],
+                ],
+            }),
+            "validatorPublicKeys[1]",
+            "unique");
+        AssertArgumentContains(
+            () => BscMainnetSccp.CanonicalBscCommitSealBytes(seal with
+            {
+                ValidatorPowers = new ulong[] { 0, 1, 1, 1 },
+            }),
+            "validatorPowers[0]",
+            "must not be zero");
+        AssertArgumentContains(
+            () => BscMainnetSccp.CanonicalBscCommitSealBytes(seal with
+            {
+                ValidatorPublicKeys =
+                [
+                    new byte[] { 0x05 },
+                    seal.ValidatorPublicKeys[1],
+                    seal.ValidatorPublicKeys[2],
+                    seal.ValidatorPublicKeys[3],
+                ],
+            }),
+            "compressed or uncompressed");
+
+        static BscMainnetCommitSealProof SampleCommitSealProof()
+        {
+            var validatorPublicKeys = new[]
+            {
+                HexBytes("0x0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"),
+                HexBytes("0x02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5"),
+                HexBytes("0x02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"),
+                HexBytes("0x02e493dbf1c10d80f3581e4904930b1404cc6c13900ee0758474fa94abe8c4cd13"),
+            };
+            var signatures = new[]
+            {
+                HexBytes(
+                    "0x1b8802069b82c3d4cb6d7bec82323853f36d965c1e71647560084e7c7a0de9c"
+                    + "17c85fcc3c6222f905cbbc4ba5b5f3f005f07d144304184181be67b3d02d1ba9f1b"),
+                HexBytes(
+                    "0x921d39c29fb793c496f96cf647128232d228024ed2f3e68cc6a52aa4cf64fac"
+                    + "f6bbd9dfcf7d703165f7880e7e1310f34d1b0fb8ca6dd8f506bf289ba012387f01c"),
+                HexBytes(
+                    "0xcfa11aa1ec214278afdb4ef7f3c40af97a2784e0336afb5ebef345c0d2eaa9"
+                    + "ef629ad2d25cf9709eb9b842fb2fb3f749ce365af97af6e7064771614312d361961b"),
+            };
+            return new BscMainnetCommitSealProof(
+                Version: 1,
+                TotalPower: 4,
+                SignedPower: 3,
+                CommitMessageHash:
+                    "0x5832165d1a87ed49a323f2ecaecbef973489aed1a42e7eab369244e7abec43c7",
+                ValidatorPublicKeys: validatorPublicKeys,
+                ValidatorPowers: new ulong[] { 1, 1, 1, 1 },
+                SignersBitmap: HexBytes("0x07"),
+                Signatures: signatures,
+                ValidatorSetHash:
+                    "0xc5152802f6ca9ec72a4249646aca7476496f00b71ab5b1482c881a31fb42dd8c");
+        }
+
+        static byte[] MutatedSignature(int signatureIndex, int byteIndex, byte value)
+        {
+            var signature = SampleCommitSealProof().Signatures[signatureIndex].ToArray();
+            signature[byteIndex] = value;
+            return signature;
+        }
+
+        static byte[] HexBytes(string value)
+        {
+            var hex = value.StartsWith("0x", StringComparison.Ordinal) ? value[2..] : value;
+            return Convert.FromHexString(hex);
+        }
+
+        static void AssertArgumentContains(Action action, params string[] snippets)
+        {
+            var error = Assert.Throws<ArgumentException>(action);
+            foreach (var snippet in snippets)
+            {
+                Assert.Contains(snippet, error.Message);
+            }
+        }
+    }
+
+    [Fact]
     public void LocalAdmissionSubmissionWrapsNativeBscOutput()
     {
         var proofBytes = new byte[] { 1, 2, 3 };

@@ -14292,6 +14292,7 @@ test("package dist entrypoint exports SCCP source record helpers", () => {
 });
 
 test("package dist entrypoint exports BSC validator-set payload helpers", () => {
+  const u64OverflowDecimal = "18446744073709551616";
   const payload = canonicalBscValidatorSetPayloadBytes({
     validatorAddresses: [`0x${"11".repeat(20)}`, `0x${"22".repeat(20)}`],
     validatorPowers: [1n, 2n],
@@ -14381,6 +14382,33 @@ test("package dist entrypoint exports BSC validator-set payload helpers", () => 
 	    bscCommitSealHash(commitSeal),
 	    "0x14659b4643d3a7961f7f86f46319992444617392c8e84967a3bb2a5ad7bc72fb",
 	  );
+  assert.throws(
+    () =>
+      canonicalBscValidatorSetPayloadBytes({
+        validatorAddresses: [`0x${"11".repeat(20)}`],
+        validatorPowers: [u64OverflowDecimal],
+      }),
+    /validatorPowers\[0\] must fit u64/u,
+  );
+  assert.throws(
+    () =>
+      canonicalBscCommitSealBytes({
+        ...commitSeal,
+        totalPower: u64OverflowDecimal,
+      }),
+    /totalPower must fit u64/u,
+  );
+  assert.throws(
+    () =>
+      canonicalBscCommitSealBytes({
+        ...commitSeal,
+        validatorPowers: [
+          u64OverflowDecimal,
+          ...commitSeal.validatorPowers.slice(1),
+        ],
+      }),
+    /validatorPowers\[0\] must fit u64/u,
+  );
   assert.equal(typeof bscValidatorSetPayloadFromParliaExtra, "function");
   assert.equal(typeof bscValidatorSetPayloadFromHeaderRlp, "function");
   assert.equal(

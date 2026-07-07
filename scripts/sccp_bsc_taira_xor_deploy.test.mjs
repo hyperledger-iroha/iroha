@@ -2371,6 +2371,13 @@ test("BSC route-manifest command rejects output path collisions with inputs befo
       sourceSidecarPath,
       /--out must not be the same path as --source-browser-prover-manifest/u,
     );
+
+    const linkedInputDir = join(dir, "linked-inputs");
+    await symlink(dir, linkedInputDir);
+    await assertCollisionRejected(
+      join(linkedInputDir, "deployment.evidence.json"),
+      /--out must not be the same path as --evidence/u,
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -2893,6 +2900,55 @@ test("BSC publish commands reject output path collisions before writing artifact
         templatePath,
         "--out",
         templatePath,
+      ]),
+    /--out must not be the same path as --vk-template/u,
+  );
+  assert.equal(await readFile(manifestPath, "utf8"), manifestText);
+  assert.equal(await readFile(templatePath, "utf8"), templateText);
+
+  const linkedInputDir = join(dir, "linked-publish-inputs");
+  await symlink(dir, linkedInputDir);
+
+  await assert.rejects(
+    () =>
+      main([
+        "publish-route-manifest",
+        "--manifest",
+        manifestPath,
+        "--out",
+        join(linkedInputDir, "route.manifest.json"),
+      ]),
+    /--out must not be the same path as --manifest/u,
+  );
+  assert.equal(await readFile(manifestPath, "utf8"), manifestText);
+  assert.equal(await readFile(templatePath, "utf8"), templateText);
+
+  await assert.rejects(
+    () =>
+      main([
+        "publish-burn-record-vk",
+        "--route-manifest",
+        manifestPath,
+        "--vk-template",
+        templatePath,
+        "--out",
+        join(linkedInputDir, "route.manifest.json"),
+      ]),
+    /--out must not be the same path as --route-manifest/u,
+  );
+  assert.equal(await readFile(manifestPath, "utf8"), manifestText);
+  assert.equal(await readFile(templatePath, "utf8"), templateText);
+
+  await assert.rejects(
+    () =>
+      main([
+        "publish-burn-record-vk",
+        "--route-manifest",
+        manifestPath,
+        "--vk-template",
+        templatePath,
+        "--out",
+        join(linkedInputDir, "burn-record-vk.template.json"),
       ]),
     /--out must not be the same path as --vk-template/u,
   );
@@ -6482,6 +6538,11 @@ test("BSC route-config requires explicit post-deploy evidence for production-rea
       "BSC source event transaction percent-encoded whitespace sensitive blocker",
     ],
     [
+      "source_event_transaction_production_blockers",
+      "api%20%20key-source-event-blocker",
+      "BSC source event transaction percent-encoded repeated-space sensitive blocker",
+    ],
+    [
       "route_canary_production_blockers",
       "private&#95;key-route-canary-blocker",
       "BSC route canary HTML-entity sensitive blocker",
@@ -6490,6 +6551,11 @@ test("BSC route-config requires explicit post-deploy evidence for production-rea
       "route_canary_production_blockers",
       "private&#32;key-route-canary-blocker",
       "BSC route canary HTML-entity whitespace sensitive blocker",
+    ],
+    [
+      "route_canary_production_blockers",
+      "private&#32;&#32;key-route-canary-blocker",
+      "BSC route canary HTML-entity repeated-space sensitive blocker",
     ],
   ]) {
     let caught;
@@ -6510,14 +6576,14 @@ test("BSC route-config requires explicit post-deploy evidence for production-rea
     [
       "source_event_transaction_production_blockers",
       "safe duplicated source event blocker",
-      "safe%20duplicated%20source%20event%20blocker",
-      "BSC source event decoded duplicate blocker",
+      "safe%20%20duplicated%20source%20%20event%20blocker",
+      "BSC source event decoded repeated-space duplicate blocker",
     ],
     [
       "route_canary_production_blockers",
       "safe duplicated route canary blocker",
-      "safe duplicated route&#32;canary blocker",
-      "BSC route canary decoded duplicate blocker",
+      "safe duplicated%20%20route&#32;&#32;canary blocker",
+      "BSC route canary decoded repeated-space duplicate blocker",
     ],
   ]) {
     let caught;
@@ -9704,6 +9770,65 @@ test("BSC native-prover-bundle rejects output path collisions before writing art
   assert.equal(await readFile(fixture.routeManifestPath, "utf8"), routeManifestText);
   assert.deepEqual(await readFile(proofArtifactPath), proofArtifactBytes);
   assert.deepEqual(await readFile(auditArtifactPath), auditArtifactBytes);
+
+  const linkedInputRoot = join(fixture.workDir, "linked-native-inputs");
+  await symlink(fixture.workDir, linkedInputRoot);
+
+  await assert.rejects(
+    () =>
+      main(
+        commandArgs([
+          "--out",
+          collisionOut,
+          "--attach-route-manifest-out",
+          join(linkedInputRoot, "bundle-or-manifest.json"),
+        ]),
+      ),
+    /--attach-route-manifest-out must not be the same path as --out/u,
+  );
+  assert.equal(await readFile(collisionOut, "utf8"), collisionSentinel);
+  assert.equal(await readFile(fixture.routeManifestPath, "utf8"), routeManifestText);
+  assert.deepEqual(await readFile(proofArtifactPath), proofArtifactBytes);
+  assert.deepEqual(await readFile(auditArtifactPath), auditArtifactBytes);
+
+  await assert.rejects(
+    () => main(commandArgs(["--out", join(linkedInputRoot, "route.json")])),
+    /--out must not be the same path as --route-manifest/u,
+  );
+  assert.equal(await readFile(collisionOut, "utf8"), collisionSentinel);
+  assert.equal(await readFile(fixture.routeManifestPath, "utf8"), routeManifestText);
+  assert.deepEqual(await readFile(proofArtifactPath), proofArtifactBytes);
+  assert.deepEqual(await readFile(auditArtifactPath), auditArtifactBytes);
+
+  await assert.rejects(
+    () =>
+      main(
+        commandArgs([
+          "--out",
+          join(linkedInputRoot, "native", "proof-artifact.r1cs"),
+        ]),
+      ),
+    /--out must not be the same path as --proof-artifact/u,
+  );
+  assert.equal(await readFile(collisionOut, "utf8"), collisionSentinel);
+  assert.equal(await readFile(fixture.routeManifestPath, "utf8"), routeManifestText);
+  assert.deepEqual(await readFile(proofArtifactPath), proofArtifactBytes);
+  assert.deepEqual(await readFile(auditArtifactPath), auditArtifactBytes);
+
+  await assert.rejects(
+    () =>
+      main(
+        commandArgs([
+          "--out",
+          join(linkedInputRoot, "native", "circuit-security-attestation.json"),
+        ]),
+      ),
+    /--out must not be the same path as --audit-circuit-security/u,
+  );
+  assert.equal(await readFile(collisionOut, "utf8"), collisionSentinel);
+  assert.equal(await readFile(fixture.routeManifestPath, "utf8"), routeManifestText);
+  assert.deepEqual(await readFile(proofArtifactPath), proofArtifactBytes);
+  assert.deepEqual(await readFile(auditArtifactPath), auditArtifactBytes);
 });
 
 test("BSC native-prover-bundle rejects duplicate JSON keys in route manifests", async () => {
@@ -11845,6 +11970,25 @@ test("BSC deploy command rejects output path collisions before verifier parsing"
           "taira_bsc_xor:testnet",
           "--out",
           verifierFile,
+        ]),
+      /--out must not be the same path as --verifier/u,
+    );
+    assert.equal(await readFile(verifierFile, "utf8"), verifierText);
+
+    const linkedInputDir = join(dir, "linked-bsc-deploy-inputs");
+    await symlink(dir, linkedInputDir);
+    await assert.rejects(
+      () =>
+        main([
+          "deploy",
+          "--verifier",
+          verifierFile,
+          "--broadcast",
+          "true",
+          "--confirm-network",
+          "taira_bsc_xor:testnet",
+          "--out",
+          join(linkedInputDir, "verifier.json"),
         ]),
       /--out must not be the same path as --verifier/u,
     );

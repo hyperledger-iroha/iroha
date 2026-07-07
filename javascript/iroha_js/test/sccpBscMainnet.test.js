@@ -1041,6 +1041,63 @@ test("BSC source-chain proof builder requires validator keys and block receipts"
   );
 });
 
+test("BSC source-chain proof builder rejects duplicate validator private keys", () => {
+  const duplicateBscSourceValidatorPrivateKey = `0x${"1".padStart(64, "0")}`;
+  const duplicateValidatorAliasInput = sampleBscSourceChainProofInput();
+  delete duplicateValidatorAliasInput.sourceValidatorPrivateKeys;
+  duplicateValidatorAliasInput.validatorPrivateKeys =
+    `${duplicateBscSourceValidatorPrivateKey},${duplicateBscSourceValidatorPrivateKey}`;
+  duplicateValidatorAliasInput.validatorPowers = [1, 1];
+  const duplicateValidatorInputs = [
+    sampleBscSourceChainProofInput({
+      sourceValidatorPrivateKeys: [
+        duplicateBscSourceValidatorPrivateKey,
+        duplicateBscSourceValidatorPrivateKey,
+      ],
+      sourceValidatorPowers: [1, 1],
+    }),
+    duplicateValidatorAliasInput,
+  ];
+
+  for (const duplicateValidatorInput of duplicateValidatorInputs) {
+    assert.throws(
+      () => buildBscSourceChainProofEnvelope(duplicateValidatorInput),
+      /sourceValidatorPrivateKeys must not contain duplicate validator addresses/u,
+    );
+  }
+});
+
+test("BSC source-chain proof builder rejects validator power overflows", () => {
+  const bscSourceValidatorPrivateKey = `0x${"1".padStart(64, "0")}`;
+  const secondBscSourceValidatorPrivateKey = `0x${"2".padStart(64, "0")}`;
+  const u64MaxDecimal = "18446744073709551615";
+  const u64OverflowDecimal = "18446744073709551616";
+
+  assert.throws(
+    () =>
+      buildBscSourceChainProofEnvelope(
+        sampleBscSourceChainProofInput({
+          sourceValidatorPrivateKeys: [bscSourceValidatorPrivateKey],
+          sourceValidatorPowers: [u64OverflowDecimal],
+        }),
+      ),
+    /sourceValidatorPowers\[0\] must fit u64/u,
+  );
+  assert.throws(
+    () =>
+      buildBscSourceChainProofEnvelope(
+        sampleBscSourceChainProofInput({
+          sourceValidatorPrivateKeys: [
+            bscSourceValidatorPrivateKey,
+            secondBscSourceValidatorPrivateKey,
+          ],
+          sourceValidatorPowers: [u64MaxDecimal, 1],
+        }),
+      ),
+    /sourceValidatorPowers total must fit u64/u,
+  );
+});
+
 test("BscMainnetSccp validates EIP-1193 execution providers as BSC mainnet", async () => {
   const provider = {
     async request({ method }) {

@@ -1224,24 +1224,36 @@ def _normalize_i32(value: Any, label: str) -> int:
     return numeric
 
 
+def _normalize_unsigned_bits(value: Any, label: str, bits: int) -> int:
+    if type(value) is int:
+        numeric = value
+    elif isinstance(value, str) and _is_canonical_decimal_text(value):
+        numeric = int(value, 10)
+    else:
+        raise TypeError(f"{label} must be an unsigned integer")
+    if numeric < 0 or numeric > (1 << bits) - 1:
+        raise ValueError(f"{label} must fit u{bits}")
+    return numeric
+
+
 def _write_u8(value: int) -> bytes:
-    return int(value).to_bytes(1, "little")
+    return _normalize_unsigned_bits(value, "u8 value", 8).to_bytes(1, "little")
 
 
 def _write_u16_le(value: int) -> bytes:
-    return int(value).to_bytes(2, "little")
+    return _normalize_unsigned_bits(value, "u16 value", 16).to_bytes(2, "little")
 
 
 def _write_u32_le(value: int) -> bytes:
-    return int(value).to_bytes(4, "little")
+    return _normalize_unsigned_bits(value, "u32 value", 32).to_bytes(4, "little")
 
 
 def _write_i32_le(value: int) -> bytes:
-    return int(value).to_bytes(4, "little", signed=True)
+    return _normalize_i32(value, "i32 value").to_bytes(4, "little", signed=True)
 
 
 def _write_u64_le(value: int) -> bytes:
-    return int(value).to_bytes(8, "little")
+    return _normalize_unsigned_bits(value, "u64 value", 64).to_bytes(8, "little")
 
 
 def _abi_word_u32(value: Any, label: str) -> bytes:

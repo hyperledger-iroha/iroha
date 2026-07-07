@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Globalization;
+using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -32,6 +33,9 @@ public static partial class BscMainnetSccp
     private const string SourceAdapterEngineDeploymentRecordPrefix =
         "sccp:source-adapter-engine-deployment:v1";
     private const string BscReceiptProofPrefix = "sccp:bsc:receipt-proof:v1";
+    private const string BscValidatorSetPayloadPrefix = "sccp:bsc:validator-set-payload:v1";
+    private const string BscValidatorSetPrefix = "sccp:bsc:validator-set:v1";
+    private const string BscCommitSealPrefix = "sccp:bsc:commit-seal:v1";
     private const string SourceChain = "bsc";
     private const byte SourceProofPlan = 2;
     private const byte SourceFinalityModel = 2;
@@ -49,6 +53,13 @@ public static partial class BscMainnetSccp
     private const int MaxSourceMerkleBranchNodes = 64;
     private const int MaxMptProofNodes = 64;
     private const int MaxMptNodeBytes = 16 * 1024;
+    private const int BscParliaValidatorAddressBytes = 20;
+    private const int BscMaxParliaValidators = 255;
+    private const int BscMaxValidatorSetPayloadBytes =
+        1 + 4 + (BscMaxParliaValidators * (BscParliaValidatorAddressBytes + 8));
+    private const int Secp256k1PublicKeyCompressedBytes = 33;
+    private const int Secp256k1PublicKeyUncompressedBytes = 65;
+    private const int Secp256k1RecoverableSignatureBytes = 65;
     private const ulong SourceAdapterFastPqTraceRoot = 0x002A_247F_81C6_F850UL;
     private const ulong SourceAdapterFastPqLdeRoot = 0x6026_3388_DBBF_9B2AUL;
     private const ulong SourceAdapterFastPqOmegaCoset = 0x6AF3_25E8_25AD_5C18UL;
@@ -76,6 +87,22 @@ public static partial class BscMainnetSccp
         string SourceBridgeEmitterCodeHash,
         string AdapterVerifierVkHash,
         string DeploymentReceiptHash);
+
+    private readonly record struct Secp256k1Point(BigInteger X, BigInteger Y, bool IsInfinity);
+
+    private static readonly BigInteger Secp256k1FieldPrime = BigIntegerFromHex(
+        "fffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f");
+
+    private static readonly BigInteger Secp256k1ScalarOrder = BigIntegerFromHex(
+        "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141");
+
+    private static readonly BigInteger Secp256k1ScalarHalfOrder = BigIntegerFromHex(
+        "7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0");
+
+    private static readonly Secp256k1Point Secp256k1Generator = new(
+        BigIntegerFromHex("79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"),
+        BigIntegerFromHex("483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8"),
+        false);
 
     private static readonly int[] KeccakRhoOffsets =
     [
@@ -506,6 +533,235 @@ public static partial class BscMainnetSccp
                 receiptTrieProofNodes,
                 inclusionBranch,
                 sourceDomain));
+
+    public static byte[] CanonicalBscValidatorSetPayloadBytes(
+        IReadOnlyList<string> validatorAddresses,
+        IReadOnlyList<ulong> validatorPowers)
+    {
+        ArgumentNullException.ThrowIfNull(validatorAddresses);
+        ArgumentNullException.ThrowIfNull(validatorPowers);
+        if (validatorAddresses.Count == 0 || validatorAddresses.Count != validatorPowers.Count)
+        {
+            throw new ArgumentException(
+                "validatorAddresses and validatorPowers must be non-empty equal-length arrays.",
+                nameof(validatorAddresses));
+        }
+
+        if (validatorAddresses.Count > BscMaxParliaValidators)
+        {
+            throw new ArgumentException(
+                $"validatorAddresses must contain at most {BscMaxParliaValidators} entries.",
+                nameof(validatorAddresses));
+        }
+
+        using var payload = new MemoryStream();
+        payload.WriteByte(1);
+        payload.Write(LeU32(validatorAddresses.Count));
+
+        var seenAddresses = new HashSet<string>(StringComparer.Ordinal);
+        for (var index = 0; index < validatorAddresses.Count; index++)
+        {
+            var address = RpcHexToBytes(
+                validatorAddresses[index],
+                $"validatorAddresses[{index}]",
+                BscParliaValidatorAddressBytes);
+            var addressHex = ToHex(address);
+            if (!seenAddresses.Add(addressHex))
+            {
+                throw new ArgumentException(
+                    $"validatorAddresses[{index}] must be unique.",
+                    nameof(validatorAddresses));
+            }
+
+            var power = validatorPowers[index];
+            if (power == 0)
+            {
+                throw new ArgumentException(
+                    $"validatorPowers[{index}] must not be zero.",
+                    nameof(validatorPowers));
+            }
+
+            payload.Write(address);
+            payload.Write(LeU64(power));
+        }
+
+        return payload.ToArray();
+    }
+
+    public static string BscValidatorSetPayloadHash(byte[] payload)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+        return PrefixedKeccakHex(BscValidatorSetPayloadPrefix, payload.ToArray());
+    }
+
+    public static string BscValidatorSetPayloadHash(
+        IReadOnlyList<string> validatorAddresses,
+        IReadOnlyList<ulong> validatorPowers)
+        => BscValidatorSetPayloadHash(
+            CanonicalBscValidatorSetPayloadBytes(validatorAddresses, validatorPowers));
+
+    public static string BscValidatorSetHashFromPayload(byte[] payload)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+        var snapshot = payload.ToArray();
+        ValidateBscValidatorSetPayload(snapshot);
+        return PrefixedKeccakHex(BscValidatorSetPrefix, snapshot);
+    }
+
+    public static string BscValidatorSetHashFromPayload(
+        IReadOnlyList<string> validatorAddresses,
+        IReadOnlyList<ulong> validatorPowers)
+        => BscValidatorSetHashFromPayload(
+            CanonicalBscValidatorSetPayloadBytes(validatorAddresses, validatorPowers));
+
+    public static byte[] CanonicalBscCommitSealBytes(BscMainnetCommitSealProof proof)
+    {
+        ArgumentNullException.ThrowIfNull(proof);
+        if (proof.Version != 1)
+        {
+            throw new ArgumentException(
+                "BSC commit seal version must be 1.",
+                nameof(proof));
+        }
+
+        var commitMessageHash = RpcHexToBytes(
+            proof.CommitMessageHash,
+            nameof(proof.CommitMessageHash),
+            32);
+        var validatorPublicKeys = SnapshotByteList(
+            proof.ValidatorPublicKeys,
+            nameof(proof.ValidatorPublicKeys));
+        var validatorPowers = proof.ValidatorPowers?.ToArray()
+            ?? throw new ArgumentNullException(nameof(proof.ValidatorPowers));
+        if (validatorPublicKeys.Count == 0
+            || validatorPublicKeys.Count != validatorPowers.Length
+            || validatorPublicKeys.Count > BscMaxParliaValidators)
+        {
+            throw new ArgumentException(
+                "validatorPublicKeys and validatorPowers must be non-empty bounded arrays.",
+                nameof(proof.ValidatorPublicKeys));
+        }
+
+        var validatorAddresses = new byte[validatorPublicKeys.Count][];
+        var seenAddresses = new HashSet<string>(StringComparer.Ordinal);
+        for (var index = 0; index < validatorPublicKeys.Count; index++)
+        {
+            var address = BscValidatorAddress20(
+                validatorPublicKeys[index],
+                $"validatorPublicKeys[{index}]");
+            if (!seenAddresses.Add(ToHex(address)))
+            {
+                throw new ArgumentException(
+                    $"validatorPublicKeys[{index}] must derive a unique address.",
+                    nameof(proof.ValidatorPublicKeys));
+            }
+
+            if (validatorPowers[index] == 0)
+            {
+                throw new ArgumentException(
+                    $"validatorPowers[{index}] must not be zero.",
+                    nameof(proof.ValidatorPowers));
+            }
+
+            validatorAddresses[index] = address;
+        }
+
+        var validatorSetPayload = CanonicalBscValidatorSetPayloadBytesFromAddressPowers(
+            validatorAddresses,
+            validatorPowers);
+        var validatorSetHash = PrefixedKeccakBytes(BscValidatorSetPrefix, validatorSetPayload);
+        if (proof.ValidatorSetHash is not null)
+        {
+            var suppliedValidatorSetHash = RpcHexToBytes(
+                proof.ValidatorSetHash,
+                nameof(proof.ValidatorSetHash),
+                32);
+            if (!suppliedValidatorSetHash.AsSpan().SequenceEqual(validatorSetHash))
+            {
+                throw new ArgumentException(
+                    "validatorSetHash must match validatorPublicKeys and validatorPowers.",
+                    nameof(proof.ValidatorSetHash));
+            }
+        }
+
+        var computedTotalPower = SumPowers(validatorPowers, "totalPower");
+        if (computedTotalPower != proof.TotalPower)
+        {
+            throw new ArgumentException(
+                "totalPower must equal validatorPowers sum.",
+                nameof(proof.TotalPower));
+        }
+
+        var signersBitmap = proof.SignersBitmap?.ToArray()
+            ?? throw new ArgumentNullException(nameof(proof.SignersBitmap));
+        var signerIndices = BscSignerIndicesFromBitmap(signersBitmap, validatorAddresses.Length);
+        var signatures = SnapshotByteList(proof.Signatures, nameof(proof.Signatures));
+        if (signatures.Count != signerIndices.Count)
+        {
+            throw new ArgumentException(
+                "signatures length must equal selected signers.",
+                nameof(proof.Signatures));
+        }
+
+        var computedSignedPower = 0UL;
+        for (var signatureIndex = 0; signatureIndex < signatures.Count; signatureIndex++)
+        {
+            var signature = signatures[signatureIndex];
+            if (!BscRecoverableSignatureIsCanonical(signature))
+            {
+                throw new ArgumentException(
+                    $"signatures[{signatureIndex}] must be a canonical recoverable secp256k1 signature.",
+                    nameof(proof.Signatures));
+            }
+
+            var signerIndex = signerIndices[signatureIndex];
+            var recoveredAddress = BscRecoveredSignerAddress20(commitMessageHash, signature);
+            if (recoveredAddress is null
+                || !recoveredAddress.AsSpan().SequenceEqual(validatorAddresses[signerIndex]))
+            {
+                throw new ArgumentException(
+                    $"signatures[{signatureIndex}] must recover the selected validator address.",
+                    nameof(proof.Signatures));
+            }
+
+            computedSignedPower = CheckedAddPower(
+                computedSignedPower,
+                validatorPowers[signerIndex],
+                "signedPower");
+        }
+
+        if (computedSignedPower != proof.SignedPower)
+        {
+            throw new ArgumentException(
+                "signedPower must equal selected validator power.",
+                nameof(proof.SignedPower));
+        }
+
+        if ((new BigInteger(computedSignedPower) * 3) <= (new BigInteger(proof.TotalPower) * 2))
+        {
+            throw new ArgumentException(
+                "signedPower must be greater than two thirds of totalPower.",
+                nameof(proof.SignedPower));
+        }
+
+        using var payload = new MemoryStream();
+        payload.WriteByte((byte)proof.Version);
+        payload.Write(LeU64(proof.TotalPower));
+        payload.Write(LeU64(proof.SignedPower));
+        payload.Write(commitMessageHash);
+        payload.Write(validatorSetHash);
+        payload.Write(WriteBytes(signersBitmap));
+        payload.Write(LeU32(signatures.Count));
+        foreach (var signature in signatures)
+        {
+            payload.Write(WriteBytes(signature));
+        }
+
+        return payload.ToArray();
+    }
+
+    public static string BscCommitSealHash(BscMainnetCommitSealProof proof)
+        => PrefixedKeccakHex(BscCommitSealPrefix, CanonicalBscCommitSealBytes(proof));
 
     public static string SourceAdapterVerifierVkHash(
         int sourceDomain = DomainBsc,
@@ -1283,6 +1539,19 @@ public static partial class BscMainnetSccp
         return text[2..].All(static character => character == '0');
     }
 
+    private static bool IsZeroBytes(ReadOnlySpan<byte> value)
+    {
+        foreach (var entry in value)
+        {
+            if (entry != 0)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private static string NormalizeRpcQuantity(object? value, string parameterName)
     {
         if (value is not string text
@@ -1436,6 +1705,485 @@ public static partial class BscMainnetSccp
     {
         var normalized = NormalizeRpcHex(value, parameterName, byteLength);
         return Convert.FromHexString(normalized[2..]);
+    }
+
+    private static IReadOnlyList<byte[]> SnapshotByteList(
+        IReadOnlyList<byte[]>? values,
+        string parameterName)
+    {
+        ArgumentNullException.ThrowIfNull(values, parameterName);
+        var normalized = new byte[values.Count][];
+        for (var index = 0; index < values.Count; index++)
+        {
+            normalized[index] = values[index]?.ToArray()
+                ?? throw new ArgumentException(
+                    $"{parameterName}[{index}] is required.",
+                    parameterName);
+        }
+
+        return normalized;
+    }
+
+    private static byte[] CanonicalBscValidatorSetPayloadBytesFromAddressPowers(
+        IReadOnlyList<byte[]> validatorAddresses,
+        IReadOnlyList<ulong> validatorPowers)
+    {
+        if (validatorAddresses.Count == 0 || validatorAddresses.Count != validatorPowers.Count)
+        {
+            throw new ArgumentException(
+                "validatorAddresses and validatorPowers must be non-empty equal-length arrays.",
+                nameof(validatorAddresses));
+        }
+
+        if (validatorAddresses.Count > BscMaxParliaValidators)
+        {
+            throw new ArgumentException(
+                $"validatorAddresses must contain at most {BscMaxParliaValidators} entries.",
+                nameof(validatorAddresses));
+        }
+
+        using var payload = new MemoryStream();
+        payload.WriteByte(1);
+        payload.Write(LeU32(validatorAddresses.Count));
+        var seenAddresses = new HashSet<string>(StringComparer.Ordinal);
+        for (var index = 0; index < validatorAddresses.Count; index++)
+        {
+            var address = validatorAddresses[index];
+            if (address.Length != BscParliaValidatorAddressBytes)
+            {
+                throw new ArgumentException(
+                    $"validatorAddresses[{index}] must be {BscParliaValidatorAddressBytes} bytes.",
+                    nameof(validatorAddresses));
+            }
+
+            if (IsZeroBytes(address))
+            {
+                throw new ArgumentException(
+                    $"validatorAddresses[{index}] must not be zero.",
+                    nameof(validatorAddresses));
+            }
+
+            if (!seenAddresses.Add(ToHex(address)))
+            {
+                throw new ArgumentException(
+                    $"validatorAddresses[{index}] must be unique.",
+                    nameof(validatorAddresses));
+            }
+
+            var power = validatorPowers[index];
+            if (power == 0)
+            {
+                throw new ArgumentException(
+                    $"validatorPowers[{index}] must not be zero.",
+                    nameof(validatorPowers));
+            }
+
+            payload.Write(address);
+            payload.Write(LeU64(power));
+        }
+
+        return payload.ToArray();
+    }
+
+    private static ulong SumPowers(IReadOnlyList<ulong> powers, string parameterName)
+    {
+        var sum = 0UL;
+        foreach (var power in powers)
+        {
+            sum = CheckedAddPower(sum, power, parameterName);
+        }
+
+        return sum;
+    }
+
+    private static ulong CheckedAddPower(ulong left, ulong right, string parameterName)
+    {
+        if (ulong.MaxValue - left < right)
+        {
+            throw new ArgumentException($"{parameterName} must fit u64.", parameterName);
+        }
+
+        return left + right;
+    }
+
+    private static IReadOnlyList<int> BscSignerIndicesFromBitmap(byte[] signersBitmap, int rosterLength)
+    {
+        var expectedLength = (rosterLength + 7) / 8;
+        if (signersBitmap.Length != expectedLength)
+        {
+            throw new ArgumentException(
+                "signersBitmap has invalid length.",
+                nameof(signersBitmap));
+        }
+
+        var indices = new List<int>();
+        for (var byteIndex = 0; byteIndex < signersBitmap.Length; byteIndex++)
+        {
+            var value = signersBitmap[byteIndex];
+            for (var bit = 0; bit < 8; bit++)
+            {
+                var validatorIndex = (byteIndex * 8) + bit;
+                var bitSet = (value & (1 << bit)) != 0;
+                if (validatorIndex >= rosterLength)
+                {
+                    if (bitSet)
+                    {
+                        throw new ArgumentException(
+                            "signersBitmap padding bits must be zero.",
+                            nameof(signersBitmap));
+                    }
+
+                    continue;
+                }
+
+                if (bitSet)
+                {
+                    indices.Add(validatorIndex);
+                }
+            }
+        }
+
+        if (indices.Count == 0)
+        {
+            throw new ArgumentException(
+                "signersBitmap must select at least one signer.",
+                nameof(signersBitmap));
+        }
+
+        return indices;
+    }
+
+    private static byte[] BscValidatorAddress20(byte[] publicKey, string parameterName)
+    {
+        if (publicKey.Length == Secp256k1PublicKeyCompressedBytes
+            && (publicKey[0] == 0x02 || publicKey[0] == 0x03))
+        {
+            var x = BigIntegerFromBigEndian(publicKey.AsSpan(1, 32));
+            if (x >= Secp256k1FieldPrime)
+            {
+                throw new ArgumentException(
+                    $"{parameterName} is not a canonical secp256k1 public key.",
+                    parameterName);
+            }
+
+            if (Secp256k1Decompress(x, publicKey[0] & 1) is not { } point)
+            {
+                throw new ArgumentException(
+                    $"{parameterName} is not a valid secp256k1 public key.",
+                    parameterName);
+            }
+
+            return Secp256k1Address20(point);
+        }
+
+        if (publicKey.Length == Secp256k1PublicKeyUncompressedBytes && publicKey[0] == 0x04)
+        {
+            var x = BigIntegerFromBigEndian(publicKey.AsSpan(1, 32));
+            var y = BigIntegerFromBigEndian(publicKey.AsSpan(33, 32));
+            if (x >= Secp256k1FieldPrime || y >= Secp256k1FieldPrime)
+            {
+                throw new ArgumentException(
+                    $"{parameterName} is not a canonical secp256k1 public key.",
+                    parameterName);
+            }
+
+            if (!Secp256k1PointIsOnCurve(x, y))
+            {
+                throw new ArgumentException(
+                    $"{parameterName} is not a valid secp256k1 public key.",
+                    parameterName);
+            }
+
+            return Secp256k1Address20(new Secp256k1Point(x, y, false));
+        }
+
+        throw new ArgumentException(
+            $"{parameterName} must be a compressed or uncompressed secp256k1 public key.",
+            parameterName);
+    }
+
+    private static bool BscRecoverableSignatureIsCanonical(byte[] signature)
+    {
+        if (signature.Length != Secp256k1RecoverableSignatureBytes)
+        {
+            return false;
+        }
+
+        return (signature[64] == 27 || signature[64] == 28)
+            && RecoverableSignatureScalarsAreCanonical(signature);
+    }
+
+    private static bool RecoverableSignatureScalarsAreCanonical(byte[] signature)
+    {
+        var r = BigIntegerFromBigEndian(signature.AsSpan(0, 32));
+        var s = BigIntegerFromBigEndian(signature.AsSpan(32, 32));
+        return r > BigInteger.Zero
+            && r < Secp256k1ScalarOrder
+            && s > BigInteger.Zero
+            && s <= Secp256k1ScalarHalfOrder;
+    }
+
+    private static byte[]? BscRecoveredSignerAddress20(byte[] messageHash, byte[] signature)
+    {
+        if (messageHash.Length != 32 || !BscRecoverableSignatureIsCanonical(signature))
+        {
+            return null;
+        }
+
+        return Secp256k1RecoveredSignerAddress20(messageHash, signature, signature[64] - 27);
+    }
+
+    private static byte[]? Secp256k1RecoveredSignerAddress20(
+        byte[] messageHash,
+        byte[] signature,
+        int recoveryId)
+    {
+        if (messageHash.Length != 32 || signature.Length != Secp256k1RecoverableSignatureBytes)
+        {
+            return null;
+        }
+
+        var r = BigIntegerFromBigEndian(signature.AsSpan(0, 32));
+        var s = BigIntegerFromBigEndian(signature.AsSpan(32, 32));
+        var x = r + ((recoveryId >> 1) * Secp256k1ScalarOrder);
+        if (x >= Secp256k1FieldPrime)
+        {
+            return null;
+        }
+
+        if (Secp256k1Decompress(x, recoveryId & 1) is not { } rPoint)
+        {
+            return null;
+        }
+
+        if (!Secp256k1PointMultiply(Secp256k1ScalarOrder, rPoint).IsInfinity)
+        {
+            return null;
+        }
+
+        var e = BigIntegerFromBigEndian(messageHash) % Secp256k1ScalarOrder;
+        var candidate = Secp256k1PointMultiply(s, rPoint);
+        candidate = Secp256k1PointAdd(
+            candidate,
+            Secp256k1PointMultiply(Mod(-e, Secp256k1ScalarOrder), Secp256k1Generator));
+        var publicKey = Secp256k1PointMultiply(
+            ModInverse(r, Secp256k1ScalarOrder),
+            candidate);
+        return publicKey.IsInfinity ? null : Secp256k1Address20(publicKey);
+    }
+
+    private static Secp256k1Point? Secp256k1Decompress(BigInteger x, int parity)
+    {
+        var alpha = Mod(BigInteger.ModPow(x, 3, Secp256k1FieldPrime) + 7, Secp256k1FieldPrime);
+        var y = BigInteger.ModPow(
+            alpha,
+            (Secp256k1FieldPrime + BigInteger.One) / 4,
+            Secp256k1FieldPrime);
+        if (Mod((y * y) - alpha, Secp256k1FieldPrime) != BigInteger.Zero)
+        {
+            return null;
+        }
+
+        if (((int)(y & BigInteger.One)) != parity)
+        {
+            y = Secp256k1FieldPrime - y;
+        }
+
+        return new Secp256k1Point(x, y, false);
+    }
+
+    private static bool Secp256k1PointIsOnCurve(BigInteger x, BigInteger y)
+    {
+        var alpha = Mod(BigInteger.ModPow(x, 3, Secp256k1FieldPrime) + 7, Secp256k1FieldPrime);
+        return Mod((y * y) - alpha, Secp256k1FieldPrime) == BigInteger.Zero;
+    }
+
+    private static Secp256k1Point Secp256k1PointAdd(Secp256k1Point left, Secp256k1Point right)
+    {
+        if (left.IsInfinity)
+        {
+            return right;
+        }
+
+        if (right.IsInfinity)
+        {
+            return left;
+        }
+
+        if (left.X == right.X && Mod(left.Y + right.Y, Secp256k1FieldPrime) == BigInteger.Zero)
+        {
+            return new Secp256k1Point(BigInteger.Zero, BigInteger.Zero, true);
+        }
+
+        BigInteger slope;
+        if (left.X == right.X && left.Y == right.Y)
+        {
+            slope = (3 * left.X * left.X)
+                * ModInverse(2 * left.Y, Secp256k1FieldPrime);
+        }
+        else
+        {
+            slope = (right.Y - left.Y)
+                * ModInverse(right.X - left.X, Secp256k1FieldPrime);
+        }
+
+        slope = Mod(slope, Secp256k1FieldPrime);
+        var x = Mod((slope * slope) - left.X - right.X, Secp256k1FieldPrime);
+        var y = Mod((slope * (left.X - x)) - left.Y, Secp256k1FieldPrime);
+        return new Secp256k1Point(x, y, false);
+    }
+
+    private static Secp256k1Point Secp256k1PointMultiply(
+        BigInteger scalar,
+        Secp256k1Point point)
+    {
+        var working = Mod(scalar, Secp256k1ScalarOrder);
+        if (working == BigInteger.Zero || point.IsInfinity)
+        {
+            return new Secp256k1Point(BigInteger.Zero, BigInteger.Zero, true);
+        }
+
+        var result = new Secp256k1Point(BigInteger.Zero, BigInteger.Zero, true);
+        var addend = point;
+        while (working > BigInteger.Zero)
+        {
+            if (!working.IsEven)
+            {
+                result = Secp256k1PointAdd(result, addend);
+            }
+
+            addend = Secp256k1PointAdd(addend, addend);
+            working >>= 1;
+        }
+
+        return result;
+    }
+
+    private static byte[] Secp256k1Address20(Secp256k1Point point)
+    {
+        if (point.IsInfinity)
+        {
+            throw new ArgumentException("point must not be infinity.", nameof(point));
+        }
+
+        var coordinates = new byte[64];
+        Buffer.BlockCopy(FixedBigEndianBytes(point.X, 32), 0, coordinates, 0, 32);
+        Buffer.BlockCopy(FixedBigEndianBytes(point.Y, 32), 0, coordinates, 32, 32);
+        return Keccak256(coordinates).AsSpan(12).ToArray();
+    }
+
+    private static BigInteger Mod(BigInteger value, BigInteger modulus)
+    {
+        var result = value % modulus;
+        return result.Sign < 0 ? result + modulus : result;
+    }
+
+    private static BigInteger ModInverse(BigInteger value, BigInteger modulus)
+    {
+        var current = modulus;
+        var next = Mod(value, modulus);
+        var coefficient = BigInteger.Zero;
+        var nextCoefficient = BigInteger.One;
+        while (next != BigInteger.Zero)
+        {
+            var quotient = current / next;
+            (current, next) = (next, current - (quotient * next));
+            (coefficient, nextCoefficient) = (
+                nextCoefficient,
+                coefficient - (quotient * nextCoefficient));
+        }
+
+        if (current != BigInteger.One)
+        {
+            throw new ArgumentException("value must be invertible.", nameof(value));
+        }
+
+        return Mod(coefficient, modulus);
+    }
+
+    private static BigInteger BigIntegerFromHex(string hex)
+        => BigIntegerFromBigEndian(Convert.FromHexString(hex));
+
+    private static BigInteger BigIntegerFromBigEndian(ReadOnlySpan<byte> bytes)
+        => new(bytes, isUnsigned: true, isBigEndian: true);
+
+    private static byte[] FixedBigEndianBytes(BigInteger value, int byteLength)
+    {
+        if (value.Sign < 0)
+        {
+            throw new ArgumentException("value must not be negative.", nameof(value));
+        }
+
+        var raw = value.ToByteArray(isUnsigned: true, isBigEndian: true);
+        if (raw.Length > byteLength)
+        {
+            throw new ArgumentException("value does not fit fixed byte length.", nameof(value));
+        }
+
+        var output = new byte[byteLength];
+        Buffer.BlockCopy(raw, 0, output, byteLength - raw.Length, raw.Length);
+        return output;
+    }
+
+    private static void ValidateBscValidatorSetPayload(byte[] payload)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+        if (payload.Length > BscMaxValidatorSetPayloadBytes)
+        {
+            throw new ArgumentException(
+                $"BSC validator-set payload must be at most {BscMaxValidatorSetPayloadBytes} bytes.",
+                nameof(payload));
+        }
+
+        if (payload.Length < 5 || payload[0] != 1)
+        {
+            throw new ArgumentException(
+                "BSC validator-set payload must have version 1.",
+                nameof(payload));
+        }
+
+        var validatorCountU32 = BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(1, 4));
+        var entryBytes = BscParliaValidatorAddressBytes + 8;
+        var expectedLength = 5L + ((long)validatorCountU32 * entryBytes);
+        if (validatorCountU32 == 0
+            || validatorCountU32 > BscMaxParliaValidators
+            || expectedLength != payload.Length)
+        {
+            throw new ArgumentException(
+                "BSC validator-set payload has an invalid validator count.",
+                nameof(payload));
+        }
+
+        var validatorCount = (int)validatorCountU32;
+        var seenAddresses = new HashSet<string>(StringComparer.Ordinal);
+        var cursor = 5;
+        for (var index = 0; index < validatorCount; index++)
+        {
+            var address = payload.AsSpan(cursor, BscParliaValidatorAddressBytes);
+            cursor += BscParliaValidatorAddressBytes;
+            if (IsZeroBytes(address))
+            {
+                throw new ArgumentException(
+                    $"validatorAddresses[{index}] must not be zero.",
+                    nameof(payload));
+            }
+
+            if (!seenAddresses.Add(ToHex(address)))
+            {
+                throw new ArgumentException(
+                    $"validatorAddresses[{index}] must be unique.",
+                    nameof(payload));
+            }
+
+            var power = BinaryPrimitives.ReadUInt64LittleEndian(payload.AsSpan(cursor, 8));
+            cursor += 8;
+            if (power == 0)
+            {
+                throw new ArgumentException(
+                    $"validatorPowers[{index}] must not be zero.",
+                    nameof(payload));
+            }
+        }
     }
 
     private static IReadOnlyList<byte[]> NormalizeReceiptTrieProofNodes(IReadOnlyList<byte[]> nodes)
@@ -1871,6 +2619,12 @@ public static partial class BscMainnetSccp
         return "0x" + Convert.ToHexString(value).ToLowerInvariant();
     }
 
+    private static byte[] PrefixedKeccakBytes(string prefix, byte[] payload)
+        => Keccak256(Concat(Encoding.UTF8.GetBytes(prefix), payload));
+
+    private static string PrefixedKeccakHex(string prefix, byte[] payload)
+        => ToHex(PrefixedKeccakBytes(prefix, payload));
+
     private static byte[] Keccak256(ReadOnlySpan<byte> data)
     {
         var state = new ulong[25];
@@ -2290,6 +3044,17 @@ public sealed record BscMainnetReceiptProof
         return Array.AsReadOnly(output);
     }
 }
+
+public sealed record BscMainnetCommitSealProof(
+    int Version,
+    ulong TotalPower,
+    ulong SignedPower,
+    string CommitMessageHash,
+    IReadOnlyList<byte[]> ValidatorPublicKeys,
+    IReadOnlyList<ulong> ValidatorPowers,
+    byte[] SignersBitmap,
+    IReadOnlyList<byte[]> Signatures,
+    string? ValidatorSetHash = null);
 
 public sealed record BscMainnetInboundEvidence
 {

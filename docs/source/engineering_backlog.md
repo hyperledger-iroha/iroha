@@ -108,6 +108,33 @@ serialization stays fixture-only. Source-proof envelopes now also reject
 outer hash-role aliasing between message ids, payload hashes,
 source-event digests, commitment roots, finality block/header hashes, and
 receipt/message roots before material or OpenVerify checks run, and checked
+BSC JavaScript source-proof construction now canonicalizes validator private-key
+aliases, rejects duplicate derived validator addresses, and bounds individual
+plus aggregate validator powers to `u64` before Parlia validator-set or
+commit-seal transcripts are built, so duplicated local signing inputs or
+overflowing powers cannot stand in for a distinct BSC validator quorum. The
+exported JavaScript BSC validator-set payload and commit-seal canonicalizers now
+apply the same `u64` power bounds before deriving verifier-side hashes. Shared
+JavaScript SCCP `u8`, `u16`, `u32`, signed `i32`, and `u64` writers plus
+transparent public-input domain/finality-height normalization now reject
+oversized values before ABI, SSZ, TON, or little-endian transcript bytes can
+silently wrap through `DataView`. Python transcript writers now use the same
+pre-encoding bounds, and Kotlin/JVM plus Java Android SCCP helpers bound `u64`
+ABI, SSZ, TON, Solana, and source-proof transcript fields before byte emission.
+Swift's BSC helper surface now also rejects duplicate validator addresses, zero
+powers, and aggregate `UInt64` commit-seal overflow before Parlia quorum
+transcript bytes are emitted. The .NET SDK now exposes the BSC validator-set
+canonical payload/hash helpers and commit-seal canonicalization/hash helpers,
+rejecting malformed validator-set payloads, non-canonical secp256k1 keys or
+signatures, signer/quorum drift, bitmap padding, and validator-set hash
+mismatches before deriving verifier-side hashes. BSC validator-set payload and
+commit-seal overflow or signer/quorum regressions are pinned across Python,
+Swift, mobile, and C# helper tests, while the release inventory now guards the
+Python/Swift/Kotlin/Java/C# marker set. The focused C# BSC mainnet SCCP test
+filters now pass with a temporary .NET SDK installed outside the repository.
+The focused Kotlin/JVM and Java Android SCCP helper tests now also pass with a
+temporary JDK 21 installed outside the repository, closing the local SDK
+validation gap for this slice. Checked
 source-proof envelope serialization now requires that same base wrapper shape
 before canonical bytes or hashes are emitted. TON live-account destination
 rollout readiness and route-canary evidence now also reject replay between the
@@ -1436,6 +1463,10 @@ verifier rejects public Markdown if the marker is removed.
 	The top-level Blocking Items Markdown list now shares those canonical bullet
 	and hidden-spacing duplicate rules, so copied public blocker lists cannot
 	preserve a blocker marker while adding visually aliased duplicate bullets.
+	Table-cell blocker lists now also match the exact rendered cell text, so
+	release-checklist, native-prover, source-inventory, user-prover, and
+	lane-readiness cells cannot add hidden NBSP/zero-width duplicate blocker
+	aliases while preserving each blocker substring elsewhere in the section.
 	Generated Required Release Evidence now also compares source-inventory marker
 	counts and rendered labels against the generated source-inventory gate set, so
 	new release gates cannot be added without public Markdown invariant coverage.
@@ -1536,6 +1567,9 @@ Those shared public blocker-list validators now also number distinct duplicate
 decoded blocker groups, so raw-plus-encoded duplicate pairs cannot collapse into
 one generic duplicate-string diagnostic while the copied operator blocker text
 stays out of public output.
+Those duplicate keys now also collapse decoded ASCII-space runs before
+comparison, so raw or percent-encoded repeated-space aliases cannot split one
+copied blocker into distinct public blocker keys.
 Strict active-launch blocker collection now also numbers repeated redacted
 malformed, control-character, Markdown-unsafe, non-ASCII, and sensitive
 top-level evidence or active-lane blocker diagnostics while preserving
@@ -1572,10 +1606,10 @@ and strict verifier now pin that decoded key normalization through explicit
 `casefold()` helper regressions, so public blocker routing cannot silently fall
 back to ASCII-only lowercasing.
 Lane-local SCCP source, destination, receipt-proof, and live-evidence helper
-CLIs now also use decoded `casefold()` normalization before sensitive-marker
-redaction, with their helper bodies pinned by the release public scalar-text
-source inventory so direct operator diagnostics cannot silently regress to
-ASCII-only lowercasing.
+CLIs now also use decoded, ASCII-space-normalized `casefold()` normalization
+before sensitive-marker redaction, with their helper bodies pinned by the
+release public scalar-text source inventory so direct operator diagnostics
+cannot silently regress to raw repeated-space aliases or ASCII-only lowercasing.
 Active-launch blocker collection now scopes copied domain-prefixed blockers
 with the same decoded public key, so encoded or case-varied non-active domain
 blockers cannot be reclassified as active launch blockers while active-domain
@@ -2064,31 +2098,40 @@ SCCP raw all-lanes route-canary validation now rejects built-in source-material
 template hashes replayed as EVM/BSC, TON, or TRON transcript fields directly,
 with source-template and route-canary inventory pins for the exact regressions.
 BSC/TRON route-config production blocker lists now also compare
-HTML-entity-decoded and bounded URL-percent-decoded lowercase blocker text for
-duplicates, so encoded copies cannot repeat operator blockers in route-config
-or live-evidence diagnostics. The same decoded blocker text is used for
-sensitive-name matching, including whitespace-separated secret labels such as
-`api token` and `private key`, so encoded copies fail closed before diagnostics
-can echo operator blocker text. These blocker lists must also remain printable
+HTML-entity-decoded, bounded URL-percent-decoded, and ASCII-space-collapsed
+lowercase blocker text for duplicates, so encoded or repeated-space copies
+cannot repeat operator blockers in route-config or live-evidence diagnostics.
+The same decoded ASCII-space-collapsed blocker text is used for sensitive-name
+matching, including repeated-space secret labels such as `api  key` and
+`private  key`, so encoded copies fail closed before diagnostics can echo
+operator blocker text. These blocker lists must also remain printable
 ASCII and control-character-free after bounded decoding too, including encoded
 newline, tab, DEL, and RTL/non-ASCII text, before route-config diagnostics or
 generated TOML can preserve them.
+Generated Required Release Evidence now names that decoded
+ASCII-space-collapsed sensitive-name and duplicate-key blocker gate for the BSC
+and TRON route-config source inventories.
 Release public blocker decoding now runs to a deterministic
 input-length-bounded fixed point across the bundle builder, strict verifier,
 readiness renderer, all-lanes summary, and lane evidence scripts; five-layer
 percent-encoded Markdown markers and deeply nested HTML-entity sensitive names
 must still collapse to fixed public blocker diagnostics before copied operator
 text is rendered.
-BSC Groth16 material `productionBlockers` now apply the same decoded duplicate
-key rule for direct proof-self-test manifests and copied proof-self-test
-reports, so encoded copies cannot repeat operator blockers before preflight or
-proof-self-test diagnostics are rendered. Direct proof-self-test manifest
-blockers must also be non-empty canonical printable ASCII strings without
-control characters after bounded decoding, so encoded newline/tab/DEL or
-RTL/non-ASCII text fails before preflight diagnostics can quote any blocker
-text. Generated SnarkJS self-check blockers are canonicalized to single-line
-printable public text before manifest writing, while copied blocker arrays keep
-the stricter fail-closed decoded boundary.
+BSC Groth16 material `productionBlockers` now apply the same decoded
+ASCII-space-collapsed duplicate key rule for direct proof-self-test manifests
+and copied proof-self-test reports, so encoded or repeated-space copies cannot
+repeat operator blockers before preflight or proof-self-test diagnostics are
+rendered. Sensitive-name checks use that collapsed decoded text too, so
+repeated-space secret/private-key labels fail closed with fixed diagnostics.
+Direct proof-self-test manifest blockers must also be non-empty canonical
+printable ASCII strings without control characters after bounded decoding, so
+encoded newline/tab/DEL or RTL/non-ASCII text fails before preflight diagnostics
+can quote any blocker text. Generated SnarkJS self-check blockers are
+canonicalized to single-line printable public text before manifest writing,
+while copied blocker arrays keep the stricter fail-closed decoded boundary.
+Generated Required Release Evidence now names that same decoded
+ASCII-space-collapsed sensitive-name and duplicate-key blocker gate for the BSC
+Groth16 material evidence guard inventory.
 BSC Groth16 attestation request role blockers now share that canonical
 public-safe boundary in both `attestation-status` and signing/finalization
 validation, so malformed newline, tab, DEL, non-ASCII, duplicate, whitespace,

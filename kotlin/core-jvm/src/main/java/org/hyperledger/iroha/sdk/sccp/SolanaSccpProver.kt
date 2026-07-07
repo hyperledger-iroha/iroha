@@ -5201,6 +5201,7 @@ object SccpSolana {
     }
 
     private fun writeU64Le(out: ByteArrayOutputStream, value: BigInteger) {
+        require(value >= BigInteger.ZERO && value <= MAX_U64) { "u64 value must fit u64" }
         var working = value
         for (i in 0 until 8) {
             out.write(working.and(BigInteger.valueOf(0xFFL)).toInt())
