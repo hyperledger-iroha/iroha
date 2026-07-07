@@ -1077,6 +1077,121 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         assertContentEquals(lineageProvingKeyArchive, readBytesVecPayload(optionSomePayload(initFields[4])))
         assertEquals(7L, readU64Payload(optionSomePayload(initFields[5])))
 
+        val topUpRecordBundle = recordBundle.copyOf()
+        val topUpPallasOpenEnvelopes = pallasOpenEnvelopes.copyOf()
+        val topUpInit = KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendTopUpInitRequest(
+            recordBundle = topUpRecordBundle,
+            pallasOpenEnvelopes = topUpPallasOpenEnvelopes,
+            spendableNote = note,
+        )
+        topUpRecordBundle[topUpRecordBundle.lastIndex] =
+            (topUpRecordBundle.last().toInt() xor 0x01).toByte()
+        topUpPallasOpenEnvelopes[topUpPallasOpenEnvelopes.lastIndex] =
+            (topUpPallasOpenEnvelopes.last().toInt() xor 0x01).toByte()
+        assertArchiveSchema(topUpInit, KagemushaRecursiveSpendRequestCodecs.SCHEMA_INIT_REQUEST)
+        val topUpInitFields = requestFields(topUpInit, KagemushaRecursiveSpendRequestCodecs.SCHEMA_INIT_REQUEST)
+        assertEquals(6, topUpInitFields.size)
+        assertContentEquals(
+            compactPayload(recordBundle, KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE),
+            topUpInitFields[0],
+        )
+        assertContentEquals(pallasOpenEnvelopes, readBytesVecPayload(topUpInitFields[1]))
+        val topUpNoteFields = fieldPayloads(topUpInitFields[2])
+        assertContentEquals(note.noteCommitment, readFixedArrayPayload(topUpNoteFields[0], 32))
+        assertContentEquals(note.spendNullifier, readFixedArrayPayload(topUpNoteFields[1], 32))
+        assertOptionNone(topUpInitFields[3])
+        assertOptionNone(topUpInitFields[4])
+        assertOptionNone(topUpInitFields[5])
+
+        val topUpRequest = KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendTopUpRequestFromInitRequest(
+            accountId = sampleRecipient(),
+            initRequestArchive = topUpInit,
+        )
+        assertArchiveSchema(topUpRequest, KagemushaRecursiveSpendRequestCodecs.SCHEMA_TOP_UP_REQUEST)
+        assertContentEquals(
+            KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendTopUpRequest(
+                accountId = sampleRecipient(),
+                assetDefinitionId = sampleAssetDefinition(),
+                amount = note.amount,
+                initRequestArchive = topUpInit,
+            ),
+            topUpRequest,
+        )
+        assertContentEquals(
+            compactPayload(topUpInit, KagemushaRecursiveSpendRequestCodecs.SCHEMA_INIT_REQUEST),
+            requestFields(topUpRequest, KagemushaRecursiveSpendRequestCodecs.SCHEMA_TOP_UP_REQUEST)[2],
+        )
+
+        val topUpWrongAsset = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendTopUpRequest(
+                accountId = sampleRecipient(),
+                assetDefinitionId = sampleAssetDefinition(seed = 0x02),
+                amount = note.amount,
+                initRequestArchive = topUpInit,
+            )
+        }
+        assertEquals(
+            "top-up request asset definition must match the nested init request",
+            topUpWrongAsset.message,
+        )
+        val topUpWrongAmount = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.encodeTopUpRequest(
+                TopUpSpendRequest(
+                    accountId = sampleRecipient(),
+                    assetDefinitionId = sampleAssetDefinition(),
+                    amount = "18",
+                    initRequestArchive = topUpInit,
+                ),
+            )
+        }
+        assertEquals(
+            "top-up request amount must match the nested current note",
+            topUpWrongAmount.message,
+        )
+        val lineageInit = KagemushaRecursiveSpendRequestCodecs.encodeInitRequest(
+            InitSpendRequest(
+                recordBundle = recordBundle,
+                pallasOpenEnvelopes = pallasOpenEnvelopes,
+                currentNote = note,
+                lineageKeyArtifacts = lineageArtifacts.typed,
+            ),
+        )
+        val topUpLineageInit = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendTopUpRequestFromInitRequest(
+                accountId = sampleRecipient(),
+                initRequestArchive = lineageInit,
+            )
+        }
+        assertEquals(
+            "top-up init request lineageVerifierKey must be absent",
+            topUpLineageInit.message,
+        )
+
+        val missingLineage = assertFailsWith<IllegalArgumentException> {
+            InitSpendRequest(
+                recordBundle = recordBundle,
+                pallasOpenEnvelopes = pallasOpenEnvelopes,
+                currentNote = note,
+            )
+        }
+        assertEquals("lineageVerifierKey is required for recursive spend init", missingLineage.message)
+        val topUpInitMultiHop = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendTopUpInitRequest(
+                recordBundle = sampleRecordBundle(hopCount = 2),
+                pallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive(count = 2),
+                spendableNote = note,
+            )
+        }
+        assertEquals("top-up init request must contain exactly one checked hop", topUpInitMultiHop.message)
+        val topUpInitPallasMismatch = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendTopUpInitRequest(
+                recordBundle = recordBundle,
+                pallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive(count = 2),
+                spendableNote = note,
+            )
+        }
+        assertEquals("pallasOpenEnvelopes requires exactly 1 envelope(s)", topUpInitPallasMismatch.message)
+
         val redeemBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle")
         val redeemProof = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT)
         val lineageWitness = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result")

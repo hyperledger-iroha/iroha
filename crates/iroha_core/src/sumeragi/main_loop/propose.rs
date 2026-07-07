@@ -82,6 +82,135 @@ fn precommit_qc_for_view_change(
     }
 }
 
+fn queued_committed_frontier_fallback_allowed(
+    resilience_enabled: bool,
+    tracked_view: u64,
+    pending_queue_len: usize,
+    active_pending: usize,
+    tracked_height: u64,
+    committed_height: u64,
+    precommit_qc_matches_committed_frontier: bool,
+    partial_new_view_blocks_fallback: bool,
+    blocked_by_ingress: bool,
+    frontier_dependency_clear: bool,
+) -> bool {
+    resilience_enabled
+        && tracked_view > 0
+        && pending_queue_len > 0
+        && active_pending == 0
+        && tracked_height == committed_height.saturating_add(1)
+        && precommit_qc_matches_committed_frontier
+        && !partial_new_view_blocks_fallback
+        && !blocked_by_ingress
+        && frontier_dependency_clear
+}
+
+#[cfg(test)]
+mod queued_committed_frontier_fallback_allowed_tests {
+    use super::queued_committed_frontier_fallback_allowed;
+
+    #[derive(Clone, Copy)]
+    struct Case {
+        resilience_enabled: bool,
+        tracked_view: u64,
+        pending_queue_len: usize,
+        active_pending: usize,
+        tracked_height: u64,
+        committed_height: u64,
+        precommit_qc_matches_committed_frontier: bool,
+        partial_new_view_blocks_fallback: bool,
+        blocked_by_ingress: bool,
+        frontier_dependency_clear: bool,
+    }
+
+    impl Case {
+        fn pk2_stuck_frontier() -> Self {
+            Self {
+                resilience_enabled: true,
+                tracked_view: 648,
+                pending_queue_len: 1,
+                active_pending: 0,
+                tracked_height: 2667,
+                committed_height: 2666,
+                precommit_qc_matches_committed_frontier: true,
+                partial_new_view_blocks_fallback: false,
+                blocked_by_ingress: false,
+                frontier_dependency_clear: true,
+            }
+        }
+
+        fn allowed(self) -> bool {
+            queued_committed_frontier_fallback_allowed(
+                self.resilience_enabled,
+                self.tracked_view,
+                self.pending_queue_len,
+                self.active_pending,
+                self.tracked_height,
+                self.committed_height,
+                self.precommit_qc_matches_committed_frontier,
+                self.partial_new_view_blocks_fallback,
+                self.blocked_by_ingress,
+                self.frontier_dependency_clear,
+            )
+        }
+    }
+
+    #[test]
+    fn allows_queued_high_view_frontier_with_committed_qc() {
+        assert!(Case::pk2_stuck_frontier().allowed());
+    }
+
+    #[test]
+    fn rejects_unsafe_or_non_frontier_states() {
+        let reject_cases = [
+            Case {
+                resilience_enabled: false,
+                ..Case::pk2_stuck_frontier()
+            },
+            Case {
+                tracked_view: 0,
+                ..Case::pk2_stuck_frontier()
+            },
+            Case {
+                pending_queue_len: 0,
+                ..Case::pk2_stuck_frontier()
+            },
+            Case {
+                active_pending: 1,
+                ..Case::pk2_stuck_frontier()
+            },
+            Case {
+                tracked_height: 2666,
+                ..Case::pk2_stuck_frontier()
+            },
+            Case {
+                tracked_height: 2668,
+                ..Case::pk2_stuck_frontier()
+            },
+            Case {
+                precommit_qc_matches_committed_frontier: false,
+                ..Case::pk2_stuck_frontier()
+            },
+            Case {
+                partial_new_view_blocks_fallback: true,
+                ..Case::pk2_stuck_frontier()
+            },
+            Case {
+                blocked_by_ingress: true,
+                ..Case::pk2_stuck_frontier()
+            },
+            Case {
+                frontier_dependency_clear: false,
+                ..Case::pk2_stuck_frontier()
+            },
+        ];
+
+        for case in reject_cases {
+            assert!(!case.allowed());
+        }
+    }
+}
+
 fn model_stake_snapshot(
     snapshot: crate::sumeragi::stake_snapshot::CommitStakeSnapshot,
 ) -> ModelCommitStakeSnapshot {
@@ -6331,8 +6460,30 @@ impl Actor {
                     && (active_cached_frontier_slot
                         || !self.proposal_gated_by_missing_dependencies(tracked_height))
             });
-        let new_view_quorum_free_frontier_proposal_allowed =
-            tracked_view == 0 || required <= 1 || missing_qc_committed_frontier_fallback_allowed;
+        let queued_committed_frontier_fallback_preconditions =
+            queued_committed_frontier_fallback_allowed(
+                self.config.resilience.enabled,
+                tracked_view,
+                pending_queue_len,
+                active_pending,
+                tracked_height,
+                committed_height,
+                precommit_qc.is_some_and(|qc| {
+                    qc.phase == crate::sumeragi::consensus::Phase::Commit
+                        && qc.height == committed_height
+                }),
+                frontier_partial_new_view_support_blocks_precommit_qc_fallback,
+                missing_qc_frontier_self_proposal_blocked_by_ingress,
+                true,
+            );
+        let queued_committed_frontier_fallback_allowed =
+            queued_committed_frontier_fallback_preconditions
+                && (active_cached_frontier_slot
+                    || !self.proposal_gated_by_missing_dependencies(tracked_height));
+        let new_view_quorum_free_frontier_proposal_allowed = tracked_view == 0
+            || required <= 1
+            || missing_qc_committed_frontier_fallback_allowed
+            || queued_committed_frontier_fallback_allowed;
         if let Some(view) = current_view {
             // Avoid proposing stale views by pruning NEW_VIEW entries below the local view.
             self.subsystems

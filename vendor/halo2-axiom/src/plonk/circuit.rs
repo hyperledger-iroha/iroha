@@ -1622,6 +1622,14 @@ pub struct ConstraintSystem<F: Field> {
     pub(crate) instance_queries: Vec<(Column<Instance>, Rotation)>,
     pub(crate) fixed_queries: Vec<(Column<Fixed>, Rotation)>,
 
+    // Private lookup caches mapping (column index, rotation) to the query's position in
+    // the query vectors above. Cache state only: never iterated and excluded from
+    // `PinnedConstraintSystem`, so canonical query order is determined solely by the
+    // vectors.
+    fixed_query_indices: HashMap<(usize, i32), usize>,
+    advice_query_indices: HashMap<(usize, i32), usize>,
+    instance_query_indices: HashMap<(usize, i32), usize>,
+
     // Permutation argument for performing equality constraints
     pub(crate) permutation: permutation::Argument,
 
@@ -1713,6 +1721,9 @@ impl<F: Field> Default for ConstraintSystem<F> {
             advice_queries: Vec::new(),
             num_advice_queries: Vec::new(),
             instance_queries: Vec::new(),
+            fixed_query_indices: HashMap::new(),
+            advice_query_indices: HashMap::new(),
+            instance_query_indices: HashMap::new(),
             permutation: permutation::Argument::new(),
             lookups: Vec::new(),
             general_column_annotations: HashMap::new(),
@@ -1822,47 +1833,41 @@ impl<F: Field> ConstraintSystem<F> {
     }
 
     fn query_fixed_index(&mut self, column: Column<Fixed>, at: Rotation) -> usize {
-        // Return existing query, if it exists
-        for (index, fixed_query) in self.fixed_queries.iter().enumerate() {
-            if fixed_query == &(column, at) {
-                return index;
-            }
+        let key = (column.index, at.0);
+        if let Some(index) = self.fixed_query_indices.get(&key).copied() {
+            return index;
         }
 
-        // Make a new query
         let index = self.fixed_queries.len();
         self.fixed_queries.push((column, at));
+        self.fixed_query_indices.insert(key, index);
 
         index
     }
 
     pub(crate) fn query_advice_index(&mut self, column: Column<Advice>, at: Rotation) -> usize {
-        // Return existing query, if it exists
-        for (index, advice_query) in self.advice_queries.iter().enumerate() {
-            if advice_query == &(column, at) {
-                return index;
-            }
+        let key = (column.index, at.0);
+        if let Some(index) = self.advice_query_indices.get(&key).copied() {
+            return index;
         }
 
-        // Make a new query
         let index = self.advice_queries.len();
         self.advice_queries.push((column, at));
+        self.advice_query_indices.insert(key, index);
         self.num_advice_queries[column.index] += 1;
 
         index
     }
 
     fn query_instance_index(&mut self, column: Column<Instance>, at: Rotation) -> usize {
-        // Return existing query, if it exists
-        for (index, instance_query) in self.instance_queries.iter().enumerate() {
-            if instance_query == &(column, at) {
-                return index;
-            }
+        let key = (column.index, at.0);
+        if let Some(index) = self.instance_query_indices.get(&key).copied() {
+            return index;
         }
 
-        // Make a new query
         let index = self.instance_queries.len();
         self.instance_queries.push((column, at));
+        self.instance_query_indices.insert(key, index);
 
         index
     }
@@ -1880,30 +1885,28 @@ impl<F: Field> ConstraintSystem<F> {
     }
 
     pub(crate) fn get_advice_query_index(&self, column: Column<Advice>, at: Rotation) -> usize {
-        for (index, advice_query) in self.advice_queries.iter().enumerate() {
-            if advice_query == &(column, at) {
-                return index;
-            }
+        if let Some(index) = self.advice_query_indices.get(&(column.index, at.0)).copied() {
+            return index;
         }
 
         panic!("get_advice_query_index called for non-existent query");
     }
 
     pub(crate) fn get_fixed_query_index(&self, column: Column<Fixed>, at: Rotation) -> usize {
-        for (index, fixed_query) in self.fixed_queries.iter().enumerate() {
-            if fixed_query == &(column, at) {
-                return index;
-            }
+        if let Some(index) = self.fixed_query_indices.get(&(column.index, at.0)).copied() {
+            return index;
         }
 
         panic!("get_fixed_query_index called for non-existent query");
     }
 
     pub(crate) fn get_instance_query_index(&self, column: Column<Instance>, at: Rotation) -> usize {
-        for (index, instance_query) in self.instance_queries.iter().enumerate() {
-            if instance_query == &(column, at) {
-                return index;
-            }
+        if let Some(index) = self
+            .instance_query_indices
+            .get(&(column.index, at.0))
+            .copied()
+        {
+            return index;
         }
 
         panic!("get_instance_query_index called for non-existent query");
@@ -2481,5 +2484,76 @@ impl<'a, F: Field> VirtualCells<'a, F> {
     /// Query a challenge
     pub fn query_challenge(&mut self, challenge: Challenge) -> Expression<F> {
         Expression::Challenge(challenge)
+    }
+}
+
+#[cfg(test)]
+mod query_index_tests {
+    use super::ConstraintSystem;
+    use crate::poly::Rotation;
+    use halo2curves::pasta::Fp;
+
+    #[test]
+    fn duplicate_queries_return_same_index_without_growing_vectors() {
+        let mut cs = ConstraintSystem::<Fp>::default();
+        let advice = cs.advice_column();
+        let fixed = cs.fixed_column();
+        let instance = cs.instance_column();
+
+        let advice_index = cs.query_advice_index(advice, Rotation::cur());
+        let fixed_index = cs.query_fixed_index(fixed, Rotation::cur());
+        let instance_index = cs.query_instance_index(instance, Rotation::cur());
+
+        assert_eq!(cs.query_advice_index(advice, Rotation::cur()), advice_index);
+        assert_eq!(cs.query_fixed_index(fixed, Rotation::cur()), fixed_index);
+        assert_eq!(
+            cs.query_instance_index(instance, Rotation::cur()),
+            instance_index
+        );
+
+        assert_eq!(cs.advice_queries.len(), 1);
+        assert_eq!(cs.fixed_queries.len(), 1);
+        assert_eq!(cs.instance_queries.len(), 1);
+    }
+
+    #[test]
+    fn distinct_rotations_create_distinct_indices() {
+        let mut cs = ConstraintSystem::<Fp>::default();
+        let advice = cs.advice_column();
+
+        let cur = cs.query_advice_index(advice, Rotation::cur());
+        let next = cs.query_advice_index(advice, Rotation::next());
+        let prev = cs.query_advice_index(advice, Rotation::prev());
+
+        assert_ne!(cur, next);
+        assert_ne!(cur, prev);
+        assert_ne!(next, prev);
+        assert_eq!(cs.advice_queries.len(), 3);
+    }
+
+    #[test]
+    fn query_vectors_keep_insertion_order_with_interleaved_duplicates() {
+        let mut cs = ConstraintSystem::<Fp>::default();
+        let a = cs.advice_column();
+        let b = cs.advice_column();
+
+        assert_eq!(cs.query_advice_index(a, Rotation::cur()), 0);
+        assert_eq!(cs.query_advice_index(b, Rotation::cur()), 1);
+        assert_eq!(cs.query_advice_index(a, Rotation::cur()), 0);
+        assert_eq!(cs.query_advice_index(a, Rotation::next()), 2);
+        assert_eq!(cs.query_advice_index(b, Rotation::cur()), 1);
+
+        assert_eq!(
+            cs.advice_queries,
+            vec![
+                (a, Rotation::cur()),
+                (b, Rotation::cur()),
+                (a, Rotation::next()),
+            ]
+        );
+
+        assert_eq!(cs.get_advice_query_index(a, Rotation::cur()), 0);
+        assert_eq!(cs.get_advice_query_index(b, Rotation::cur()), 1);
+        assert_eq!(cs.get_advice_query_index(a, Rotation::next()), 2);
     }
 }

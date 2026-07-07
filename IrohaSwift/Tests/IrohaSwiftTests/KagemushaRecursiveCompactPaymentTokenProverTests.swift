@@ -4,13 +4,13 @@ import XCTest
 
 final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
     func testNativeArchiveLimitMatchesSharedKagemushaCap() {
-        XCTAssertEqual(
+        XCTAssertLessThanOrEqual(
             KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes,
             KagemushaRecursiveSpendProver.nativeArchiveMaxBytes
         )
         XCTAssertEqual(
             KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes,
-            256 * 1024 * 1024
+            64 * 1024 * 1024
         )
     }
 
@@ -152,10 +152,10 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
         let validArchive = validKagemushaNoritoArchive()
         let oversizedArchive = Data(
             repeating: 0x7f,
-            count: KagemushaRecursiveSpendProver.nativeArchiveMaxBytes + 1
+            count: KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes + 1
         )
         let oversizedMessage =
-            "must not exceed \(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) bytes"
+            "must not exceed \(KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes) bytes"
         XCTAssertThrowsError(
             try KagemushaRecursiveCompactPaymentTokenProver
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
@@ -372,10 +372,10 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
     func testProjectionRejectsOversizedBundleArchiveBeforeBridgeCall() {
         let oversizedArchive = Data(
             repeating: 0x7f,
-            count: KagemushaRecursiveSpendProver.nativeArchiveMaxBytes + 1
+            count: KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes + 1
         )
         let oversizedMessage =
-            "must not exceed \(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) bytes"
+            "must not exceed \(KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes) bytes"
         XCTAssertThrowsError(
             try KagemushaRecursiveCompactPaymentTokenProver
                 .recursiveSpendCompactPaymentTokenFromBundle(
@@ -688,7 +688,7 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
     func testProjectionVerifierRejectsOversizedVerifierRecordBeforeBridgeCall() {
         let oversizedArchive = Data(
             repeating: 0x7f,
-            count: KagemushaRecursiveSpendProver.nativeArchiveMaxBytes + 1
+            count: KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes + 1
         )
         XCTAssertThrowsError(
             try KagemushaRecursiveCompactPaymentTokenProver
@@ -707,7 +707,7 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
             )
             XCTAssertTrue(
                 error.localizedDescription.contains(
-                    "must not exceed \(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) bytes"
+                    "must not exceed \(KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes) bytes"
                 )
             )
         }
@@ -930,7 +930,7 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
     func testVerifyRejectsOversizedCompactTokenArchiveBeforeBridgeCall() {
         let oversizedArchive = Data(
             repeating: 0x7f,
-            count: KagemushaRecursiveSpendProver.nativeArchiveMaxBytes + 1
+            count: KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes + 1
         )
         XCTAssertThrowsError(
             try KagemushaRecursiveCompactPaymentTokenProver
@@ -949,7 +949,7 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
             )
             XCTAssertTrue(
                 error.localizedDescription.contains(
-                    "must not exceed \(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) bytes"
+                    "must not exceed \(KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes) bytes"
                 )
             )
         }
@@ -1031,7 +1031,7 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
     func testVerifyRejectsOversizedVerifierKeysArchiveBeforeBridgeCall() {
         let oversizedArchive = Data(
             repeating: 0x7f,
-            count: KagemushaRecursiveSpendProver.nativeArchiveMaxBytes + 1
+            count: KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes + 1
         )
         XCTAssertThrowsError(
             try KagemushaRecursiveCompactPaymentTokenProver
@@ -1050,7 +1050,7 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
             )
             XCTAssertTrue(
                 error.localizedDescription.contains(
-                    "must not exceed \(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) bytes"
+                    "must not exceed \(KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes) bytes"
                 )
             )
         }

@@ -2401,6 +2401,84 @@ public final class KagemushaRecursiveSpendProverTest {
     assert Arrays.equals(lineageProvingKeyArchive, readBytesVecPayload(optionSomePayload(initFields.get(4))));
     assert readU64Payload(optionSomePayload(initFields.get(5))) == 7L;
 
+    final byte[] topUpRecordBundle = Arrays.copyOf(recordBundle, recordBundle.length);
+    final byte[] topUpPallasOpenEnvelopes =
+        Arrays.copyOf(pallasOpenEnvelopes, pallasOpenEnvelopes.length);
+    final byte[] topUpInit =
+        KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendTopUpInitRequest(
+            topUpRecordBundle, topUpPallasOpenEnvelopes, note, null);
+    topUpRecordBundle[topUpRecordBundle.length - 1] =
+        (byte) (topUpRecordBundle[topUpRecordBundle.length - 1] ^ 0x01);
+    topUpPallasOpenEnvelopes[topUpPallasOpenEnvelopes.length - 1] =
+        (byte) (topUpPallasOpenEnvelopes[topUpPallasOpenEnvelopes.length - 1] ^ 0x01);
+    assertArchiveSchema(topUpInit, KagemushaRecursiveSpendRequestCodecs.SCHEMA_INIT_REQUEST);
+    final List<byte[]> topUpInitFields =
+        requestFields(topUpInit, KagemushaRecursiveSpendRequestCodecs.SCHEMA_INIT_REQUEST);
+    assert topUpInitFields.size() == 6;
+    assert Arrays.equals(
+        compactPayload(recordBundle, KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE),
+        topUpInitFields.get(0));
+    assert Arrays.equals(pallasOpenEnvelopes, readBytesVecPayload(topUpInitFields.get(1)));
+    final List<byte[]> topUpNoteFields = fieldPayloads(topUpInitFields.get(2));
+    assert Arrays.equals(note.noteCommitment(), readFixedArrayPayload(topUpNoteFields.get(0), 32));
+    assert Arrays.equals(note.spendNullifier(), readFixedArrayPayload(topUpNoteFields.get(1), 32));
+    assertOptionNone(topUpInitFields.get(3));
+    assertOptionNone(topUpInitFields.get(4));
+    assertOptionNone(topUpInitFields.get(5));
+
+    final byte[] topUpRequest =
+        KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendTopUpRequestFromInitRequest(
+            sampleRecipient(), topUpInit);
+    assertArchiveSchema(topUpRequest, KagemushaRecursiveSpendRequestCodecs.SCHEMA_TOP_UP_REQUEST);
+    assert Arrays.equals(
+        KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendTopUpRequest(
+            sampleRecipient(), sampleAssetDefinition(), note.amount, topUpInit, null),
+        topUpRequest);
+    assert Arrays.equals(
+        compactPayload(topUpInit, KagemushaRecursiveSpendRequestCodecs.SCHEMA_INIT_REQUEST),
+        requestFields(topUpRequest, KagemushaRecursiveSpendRequestCodecs.SCHEMA_TOP_UP_REQUEST).get(2));
+
+    assertThrows(
+        "top-up request asset definition must match the nested init request",
+        () ->
+            KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendTopUpRequest(
+                sampleRecipient(), sampleAssetDefinition((byte) 0x02), note.amount, topUpInit, null));
+    assertThrows(
+        "top-up request amount must match the nested current note",
+        () ->
+            KagemushaRecursiveSpendRequestCodecs.encodeTopUpRequest(
+                new KagemushaRecursiveSpendRequestCodecs.TopUpSpendRequest(
+                    sampleRecipient(), sampleAssetDefinition(), "18", topUpInit, null)));
+    final byte[] lineageInit =
+        KagemushaRecursiveSpendRequestCodecs.encodeInitRequest(
+            new KagemushaRecursiveSpendRequestCodecs.InitSpendRequest(
+                recordBundle,
+                pallasOpenEnvelopes,
+                note,
+                lineageArtifacts.typed,
+                null));
+    assertThrows(
+        "top-up init request lineageVerifierKey must be absent",
+        () ->
+            KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendTopUpRequestFromInitRequest(
+                sampleRecipient(), lineageInit));
+
+    assertThrows(
+        "lineageVerifierKey is required for recursive spend init",
+        () ->
+            new KagemushaRecursiveSpendRequestCodecs.InitSpendRequest(
+                recordBundle, pallasOpenEnvelopes, note, null, null, null));
+    assertThrows(
+        "top-up init request must contain exactly one checked hop",
+        () ->
+            KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendTopUpInitRequest(
+                sampleRecordBundle(2), pallasOpenEnvelopeVectorArchive(2), note, null));
+    assertThrows(
+        "pallasOpenEnvelopes requires exactly 1 envelope(s)",
+        () ->
+            KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendTopUpInitRequest(
+                recordBundle, pallasOpenEnvelopeVectorArchive(2), note, null));
+
     final byte[] redeemBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle");
     final byte[] redeemProof =
         syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT);

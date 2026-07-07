@@ -81,6 +81,30 @@ interface OfflineNoteIssuerDeviceBindingProvider {
     ): OfflineNoteIssuerDeviceBinding
 }
 
+/** Adapter boundary for the Torii Kagemusha online-to-offline top-up route. */
+interface KagemushaTopUpClient {
+    fun submitKagemushaTopUp(
+        chainId: String,
+        accountId: String,
+        assetDefinitionId: String,
+        topUpRequestArchive: ByteArray,
+    ): CompletableFuture<KagemushaTopUpResponse>
+}
+
+/** Torii response after a Kagemusha top-up request is accepted for chain submission. */
+class KagemushaTopUpResponse(
+    val operationId: String,
+    val chainTxHash: String,
+    val assetDefinitionId: String,
+    val amount: String,
+    topupAnchorNullifiers: List<String>,
+    outputCommitments: List<String>,
+    val rootHint: String,
+) {
+    val topupAnchorNullifiers: List<String> = Collections.unmodifiableList(topupAnchorNullifiers.toList())
+    val outputCommitments: List<String> = Collections.unmodifiableList(outputCommitments.toList())
+}
+
 /** Torii-backed issuer client for Offline Note wallet loads. */
 class ToriiOfflineNoteIssuerClient @JvmOverloads constructor(
     private val canonicalAuth: ToriiCanonicalRequestAuth,
@@ -92,7 +116,7 @@ class ToriiOfflineNoteIssuerClient @JvmOverloads constructor(
     observers: List<ClientObserver> = emptyList(),
     private val clock: LongSupplier = LongSupplier { System.currentTimeMillis() },
     private val nonceGenerator: OfflineNoteIdGenerator = UuidOfflineNoteIdGenerator(),
-) : OfflineNoteIssuerClient {
+) : OfflineNoteIssuerClient, KagemushaTopUpClient {
     private val defaultHeaders: Map<String, String> =
         Collections.unmodifiableMap(stripRetiredCanonicalBodyAuthHeaders(defaultHeaders))
     private val observers: List<ClientObserver> = observers.toList()
@@ -134,6 +158,42 @@ class ToriiOfflineNoteIssuerClient @JvmOverloads constructor(
         synchronized(this) { pendingLoads.remove(request.loadContext.operationId) }
             ?: return failedFuture(OfflineToriiException("Missing Offline Note load context for operation ${request.loadContext.operationId}."))
         return failedFuture(IllegalStateException(RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE))
+    }
+
+    override fun submitKagemushaTopUp(
+        chainId: String,
+        accountId: String,
+        assetDefinitionId: String,
+        topUpRequestArchive: ByteArray,
+    ): CompletableFuture<KagemushaTopUpResponse> {
+        require(canonicalAuth.accountId == accountId) { "canonical auth accountId must match top-up accountId" }
+        require(isExactNonEmptyText(chainId)) { "chainId must be exact non-empty text" }
+        require(isExactNonEmptyText(accountId)) { "accountId must be exact non-empty text" }
+        require(isExactNonEmptyText(assetDefinitionId)) { "assetDefinitionId must be exact non-empty text" }
+        require(topUpRequestArchive.isNotEmpty()) { "topUpRequestArchive must not be empty" }
+        val binding = deviceBindingProvider.currentDeviceBinding(chainId, accountId, assetDefinitionId)
+        val operationId = nonceGenerator.nextId("offline-kagemusha-topup")
+        val body = linkedMapOf<String, Any?>(
+            "account_id" to accountId,
+            "operation_id" to operationId,
+            "device_id" to binding.deviceId,
+            "offline_public_key" to binding.offlinePublicKey,
+            "asset_definition_id" to assetDefinitionId,
+            "device_binding" to binding.deviceBinding(),
+            "topup_request_norito_base64" to Base64.getEncoder().encodeToString(topUpRequestArchive.copyOf()),
+        )
+        return executePost(KAGEMUSHA_TOPUP_PATH, body) { payload ->
+            val response = expectObject(parseJson(payload), "kagemusha top-up response")
+            KagemushaTopUpResponse(
+                operationId = requiredString(response, "operation_id"),
+                chainTxHash = requiredString(response, "chain_tx_hash"),
+                assetDefinitionId = requiredString(response, "asset_definition_id"),
+                amount = requiredString(response, "amount"),
+                topupAnchorNullifiers = requiredStringList(response, "topup_anchor_nullifiers"),
+                outputCommitments = requiredStringList(response, "output_commitments"),
+                rootHint = requiredString(response, "root_hint"),
+            )
+        }
     }
 
     private fun refillKeys(
@@ -315,6 +375,7 @@ class ToriiOfflineNoteIssuerClient @JvmOverloads constructor(
         const val RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE: String =
             "Classic Offline Note issue transactions are retired; use Kagemusha online-to-offline top-up flows."
         private const val KEYS_REFILL_PATH = "/v1/offline/v2/keys/refill"
+        private const val KAGEMUSHA_TOPUP_PATH = "/v1/offline/v2/kagemusha/topup"
         private const val HEADER_WITNESS = "X-Iroha-Witness"
 
         private val RETIRED_CANONICAL_BODY_AUTH_HEADERS = setOf(
@@ -375,6 +436,19 @@ private fun requiredValue(value: Map<String, Any?>, field: String): Any? =
 private fun requiredString(value: Map<String, Any?>, field: String): String =
     optionalString(requiredValue(value, field))
         ?: throw IllegalStateException("$field must be a string")
+
+private fun requiredStringList(value: Map<String, Any?>, field: String): List<String> {
+    val list = requiredValue(value, field) as? List<*>
+        ?: throw IllegalStateException("$field must be an array")
+    return list.mapIndexed { index, item ->
+        val string = item as? String
+            ?: throw IllegalStateException("$field[$index] must be a string")
+        if (!isExactNonEmptyText(string)) {
+            throw IllegalStateException("$field[$index] must be exact non-empty text")
+        }
+        string
+    }
+}
 
 private fun optionalString(value: Any?): String? = value as? String
 

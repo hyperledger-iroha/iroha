@@ -86,7 +86,8 @@ public struct CounterpartyOfflineProofVerifier: CounterpartyOfflineProofVerifyin
             throw error
         }
         switch value {
-        case OfflineNoteV2Constants.iosPlatform, OfflineNoteV2Constants.androidPlatform:
+        case OfflineNoteV2Constants.iosPlatform,
+             OfflineNoteV2Constants.androidPlatform:
             return value
         default:
             throw error
@@ -122,7 +123,7 @@ public struct IosOfflineProofVerifier {
         binding: ToriiOfflineDeviceBinding,
         expectedChallengeHashHex: String
     ) throws {
-        guard Self.isSupportedBindingPlatform(binding.platform) else {
+        guard binding.platform == Self.platform else {
             throw OfflineProofVerifierError.invalidBinding("Unsupported offline device binding platform.")
         }
         #if targetEnvironment(simulator)
@@ -186,10 +187,10 @@ public struct IosOfflineProofVerifier {
         binding: ToriiOfflineDeviceBinding,
         proof: ToriiOfflineDeviceProof
     ) throws {
-        guard Self.isSupportedBindingPlatform(binding.platform) else {
+        guard binding.platform == Self.platform else {
             throw OfflineProofVerifierError.invalidProof("Unsupported offline device proof platform.")
         }
-        guard Self.isSupportedProofPlatform(proof.platform) else {
+        guard proof.platform == Self.platform else {
             throw OfflineProofVerifierError.invalidProof("Unsupported offline device proof platform.")
         }
         #if targetEnvironment(simulator)
@@ -645,7 +646,6 @@ public struct IosOfflineProofVerifier {
     """
 
     private static let platform = OfflineNoteV2Constants.iosPlatform
-    private static let appAttestPlatform = OfflineNoteV2Constants.iosAppAttestPlatform
     private static let formatAppleAppAttest = "apple-appattest"
     private static let keyFormat = "fmt"
     private static let keyAuthData = "authData"
@@ -665,13 +665,6 @@ public struct IosOfflineProofVerifier {
     private static let assertionAuthDataSize = 37
     private static let flagAttestedCredentialData = 0x40
 
-    private static func isSupportedBindingPlatform(_ platform: String) -> Bool {
-        platform == Self.platform
-    }
-
-    private static func isSupportedProofPlatform(_ platform: String) -> Bool {
-        platform == Self.platform || platform == Self.appAttestPlatform
-    }
 }
 
 public extension IosOfflineProofVerifier {

@@ -6,6 +6,8 @@
 
 use std::{io, io::Write};
 
+#[cfg(feature = "zk-halo2-ipa")]
+use halo2_proofs::plonk::ConstraintSystem;
 use halo2_proofs::{
     SerdeFormat,
     circuit::{AssignedCell, Region, Value},
@@ -47,6 +49,57 @@ pub(crate) type VerifyingKey = Halo2VerifyingKey<Curve>;
 pub(crate) type ProvingKey = Halo2ProvingKey<Curve>;
 /// Plonk error emitted by the Pasta backend.
 pub(crate) type Error = PlonkError;
+
+/// Keygen-relevant circuit dimensions gathered after Halo2 configuration.
+#[cfg(feature = "zk-halo2-ipa")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CircuitShape {
+    /// Number of advice columns allocated by the circuit.
+    pub(crate) advice_columns: usize,
+    /// Number of fixed columns allocated by the circuit.
+    pub(crate) fixed_columns: usize,
+    /// Number of instance columns allocated by the circuit.
+    pub(crate) instance_columns: usize,
+    /// Number of selector columns allocated by the circuit.
+    pub(crate) selectors: usize,
+    /// Number of configured gates.
+    pub(crate) gates: usize,
+    /// Number of unique advice queries.
+    pub(crate) advice_queries: usize,
+    /// Number of unique fixed queries.
+    pub(crate) fixed_queries: usize,
+    /// Number of unique instance queries.
+    pub(crate) instance_queries: usize,
+    /// Number of columns participating in the permutation argument.
+    pub(crate) permutation_columns: usize,
+    /// Number of lookup arguments.
+    pub(crate) lookups: usize,
+    /// Minimum rows required by the configured argument shape.
+    pub(crate) minimum_rows: usize,
+}
+
+/// Configure a circuit and return its keygen-relevant dimensions.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) fn circuit_shape<C>() -> CircuitShape
+where
+    C: Circuit<Scalar>,
+{
+    let mut constraint_system = ConstraintSystem::<Scalar>::default();
+    let _config = C::configure(&mut constraint_system);
+    CircuitShape {
+        advice_columns: constraint_system.num_advice_columns(),
+        fixed_columns: constraint_system.num_fixed_columns(),
+        instance_columns: constraint_system.num_instance_columns(),
+        selectors: constraint_system.num_selectors(),
+        gates: constraint_system.gates().len(),
+        advice_queries: constraint_system.advice_queries().len(),
+        fixed_queries: constraint_system.fixed_queries().len(),
+        instance_queries: constraint_system.instance_queries().len(),
+        permutation_columns: constraint_system.permutation().get_columns().len(),
+        lookups: constraint_system.lookups().len(),
+        minimum_rows: constraint_system.minimum_rows(),
+    }
+}
 
 /// Construct deterministic Pasta IPA parameters for a domain size exponent.
 pub(crate) fn params_new(k: u32) -> PastaParams {

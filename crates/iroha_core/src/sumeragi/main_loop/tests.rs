@@ -102079,6 +102079,67 @@ async fn proposal_gated_by_missing_dependencies_allows_empty_frontier_local_lead
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn proposal_gated_by_missing_dependencies_allows_queued_empty_frontier_nonleader() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.resilience.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push tx");
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = (0_u64..64)
+        .find(|candidate| !actor.local_is_round_leader(height, *candidate))
+        .expect("test harness should find a non-leader view");
+    let now = Instant::now();
+    actor.phase_tracker.on_view_change(height, view, now);
+
+    let block_hash = insert_unresolved_missing_request_for_tests(actor, 0xEB, height, 1, now, now);
+    actor.note_missing_block_height_attempt(
+        block_hash,
+        height,
+        view,
+        super::MissingBlockRecoveryStage::RangePullFromAnchor,
+        None,
+        now,
+    );
+    let key = actor.missing_block_recovery_key_for_height(height);
+    assert!(
+        actor.missing_block_height_recovery.contains_key(&key),
+        "test setup should create a fresh same-height range-pull dependency"
+    );
+    assert!(
+        actor.missing_qc_height_has_unresolved_dependency_at_height(height),
+        "test setup should activate missing-QC dependency gating"
+    );
+    assert_eq!(
+        actor.pending_block_count_for_height(height),
+        0,
+        "test setup should model an empty contiguous frontier"
+    );
+    assert!(
+        !actor.slot_has_round_liveness(height, view),
+        "test setup should start before any local proposal evidence exists"
+    );
+
+    assert!(
+        !actor.proposal_gated_by_missing_dependencies(height),
+        "queued work at an empty frontier must reach leader/non-leader liveness handling instead of being hidden by stale recovery"
+    );
+    assert!(
+        !actor.missing_block_height_recovery.contains_key(&key),
+        "bypassing the gate should clear the stale range-pull budget"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn proposal_gated_by_missing_dependencies_clears_authoritative_local_payload() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -159302,6 +159363,94 @@ async fn pacemaker_does_not_fallback_to_view_zero_after_view_change() {
             .is_none(),
         "view 0 proposal must not be assembled after the view advances"
     );
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pacemaker_uses_committed_qc_frontier_fallback_for_queued_high_view() {
+    use std::borrow::Cow;
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.resilience.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    seed_genesis_block_for_state(&harness.actor.state);
+    while harness.background_rx.try_recv().is_ok() {}
+    let actor = &mut harness.actor;
+
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
+    actor.subsystems.propose.forced_view_after_timeout = None;
+    actor.subsystems.propose.proposal_liveness = None;
+    actor.pending.pending_blocks.clear();
+    actor.pending.missing_block_requests.clear();
+
+    let committed_qc = actor.latest_committed_qc().expect("committed QC seeded");
+    actor.highest_qc = Some(committed_qc);
+    actor.locked_qc = Some(committed_qc);
+    super::status::set_highest_qc(committed_qc.height, committed_qc.view);
+    super::status::set_highest_qc_hash(committed_qc.subject_block_hash);
+    super::status::set_locked_qc(
+        committed_qc.height,
+        committed_qc.view,
+        Some(committed_qc.subject_block_hash),
+    );
+
+    let committed_height = actor.committed_height_snapshot();
+    let tracked_height = committed_height.saturating_add(1);
+    let search_limit = u64::try_from(actor.effective_commit_topology().len().saturating_mul(8))
+        .unwrap_or(0)
+        .max(2);
+    let view = (1..search_limit)
+        .find(|candidate| actor.local_is_round_leader(tracked_height, *candidate))
+        .expect("test harness should find a high view owned by the local validator");
+    let now = Instant::now();
+    let start = now
+        .checked_sub(
+            actor
+                .commit_quorum_timeout()
+                .saturating_add(Duration::from_millis(1)),
+        )
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(tracked_height, view, start);
+
+    assert_eq!(
+        actor
+            .subsystems
+            .propose
+            .new_view_tracker
+            .count(tracked_height, view),
+        0,
+        "test setup must not provide a NEW_VIEW quorum"
+    );
+    assert!(
+        !actor.frontier_missing_qc_liveness_active(tracked_height, view),
+        "test setup must exercise the queued-work fallback without missing-QC liveness state"
+    );
+
+    let proposed = actor.on_pacemaker_propose_ready(now);
+    assert!(
+        proposed,
+        "queued work at the committed frontier must assemble a proposal in a high view even without NEW_VIEW quorum"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(tracked_height, view)
+            .is_some(),
+        "proposal should be cached for the high-view frontier slot"
+    );
+
     harness.shutdown.send();
 }
 

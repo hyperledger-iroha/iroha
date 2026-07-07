@@ -157,6 +157,52 @@ public final class KagemushaInstructionArchives {
         metadata);
   }
 
+  public static TransactionPayload topUpTransactionPayloadFromInitRequest(
+      final byte[] initRequestArchive,
+      final String chainId,
+      final String authority,
+      final long creationTimeMs,
+      final Long timeToLiveMs,
+      final Integer nonce,
+      final Map<String, ?> metadata) {
+    final String exactChainId = requireNonBlankUnpadded(chainId, "chainId");
+    final String exactAuthority = requireNonBlankUnpadded(authority, "authority");
+    final byte[] topUpRequestArchive =
+        KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendTopUpRequestFromInitRequest(
+            exactAuthority, initRequestArchive);
+    return topUpTransactionPayloadFromRequest(
+        topUpRequestArchive,
+        exactChainId,
+        exactAuthority,
+        creationTimeMs,
+        timeToLiveMs,
+        nonce,
+        metadata);
+  }
+
+  public static TransactionPayload topUpTransactionPayloadFromInitRequest(
+      final String assetId,
+      final String amount,
+      final byte[] initRequestArchive,
+      final String chainId,
+      final String authority,
+      final long creationTimeMs,
+      final Long timeToLiveMs,
+      final Integer nonce,
+      final Map<String, ?> metadata) {
+    final byte[] topUpRequestArchive =
+        KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendTopUpRequest(
+            assetId, amount, initRequestArchive);
+    return topUpTransactionPayloadFromRequest(
+        topUpRequestArchive,
+        chainId,
+        authority,
+        creationTimeMs,
+        timeToLiveMs,
+        nonce,
+        metadata);
+  }
+
   public static TransactionPayload recursiveRedeemTransactionPayloadFromRequest(
       final byte[] redeemRequestArchive,
       final String chainId,

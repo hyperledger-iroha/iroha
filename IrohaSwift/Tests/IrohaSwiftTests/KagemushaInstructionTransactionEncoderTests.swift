@@ -81,6 +81,40 @@ final class KagemushaInstructionTransactionEncoderTests: XCTestCase {
         )
     }
 
+    func testKagemushaRecursiveRequestArchiveEnvelopePreflightDefersSchemaAdmission() throws {
+        let redeemRequest = Self.redeemRequestArchive(payload: Data([0x01]))
+        let topUpRequest = Self.topUpRequestArchive(payload: Data([0x02]))
+        XCTAssertNoThrow(try KagemushaRecursiveRedeemRequestArchive.validateEnvelope(redeemRequest))
+        XCTAssertNoThrow(try KagemushaRecursiveTopUpRequestArchive.validateEnvelope(topUpRequest))
+
+        let wrongRedeemSchema = Self.instructionArchive(type: .redeemRecursive, payload: Data([0x03]))
+        XCTAssertNoThrow(try KagemushaRecursiveRedeemRequestArchive.validateEnvelope(wrongRedeemSchema))
+        XCTAssertThrowsError(
+            try KagemushaRecursiveRedeemRequestArchive.validate(wrongRedeemSchema)
+        ) { error in
+            XCTAssertEqual(error as? KagemushaRecursiveRedeemRequestArchiveError, .unsupportedRequestArchiveType)
+        }
+
+        let wrongTopUpSchema = Self.instructionArchive(type: .transfer, payload: Data([0x04]))
+        XCTAssertNoThrow(try KagemushaRecursiveTopUpRequestArchive.validateEnvelope(wrongTopUpSchema))
+        XCTAssertThrowsError(
+            try KagemushaRecursiveTopUpRequestArchive.validate(wrongTopUpSchema)
+        ) { error in
+            XCTAssertEqual(error as? KagemushaRecursiveTopUpRequestArchiveError, .unsupportedRequestArchiveType)
+        }
+
+        XCTAssertThrowsError(
+            try KagemushaRecursiveRedeemRequestArchive.validateEnvelope(Data())
+        ) { error in
+            XCTAssertEqual(error as? KagemushaRecursiveRedeemRequestArchiveError, .emptyRequestArchive)
+        }
+        XCTAssertThrowsError(
+            try KagemushaRecursiveTopUpRequestArchive.validateEnvelope(Data([0x01, 0x02]))
+        ) { error in
+            XCTAssertEqual(error as? KagemushaRecursiveTopUpRequestArchiveError, .invalidRequestArchive)
+        }
+    }
+
     func testBuildKagemushaRecursiveRedeemTransactionDerivesInstructionBeforeSigning() throws {
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 0x44, count: 32))
         let authority = try Self.canonicalAuthorityLiteral(from: signingKey)
