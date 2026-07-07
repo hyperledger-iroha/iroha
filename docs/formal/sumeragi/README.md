@@ -31804,15 +31804,27 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   modules, undefined operators, action-shaped targets, parameterized targets,
   recursive aliases, or uninspectable targets behind local helper aliases
   inside onward alias targets reached from nested module-alias helper targets.
+  Source and top-level progress Init aliases must inherit nested module-alias target helper alias onward target helper alias resolution behind imported module-alias helpers,
+  so source and top-level liveness wrappers cannot import `Init` predicates
+  that hide bad target aliases behind local helper aliases inside onward
+  alias targets reached from nested module-alias helper targets.
   Progress Init aliases must inherit nested module-alias target helper alias onward target helper alias onward resolution behind imported module-alias helpers,
   so imported Init aliases cannot hide missing instance aliases, missing
   modules, undefined operators, action-shaped targets, parameterized targets,
   recursive onward aliases, or uninspectable targets behind second-hop
   onward aliases from local helper alias targets.
+  Source and top-level progress Init aliases must inherit nested module-alias target helper alias onward target helper alias onward resolution behind imported module-alias helpers,
+  so source and top-level liveness wrappers cannot import `Init` predicates
+  that hide bad second-hop onward aliases behind local helper alias targets
+  reached from nested module-alias helper targets.
   Progress Init aliases must inherit multi-hop recursive helper guards behind imported module-alias chains,
   so imported Init aliases cannot hide action-shaped, parameterized,
   recursive, or uninspectable helper operands after several alternating
   module-alias and local-alias hops.
+  Source and top-level progress Init aliases must inherit multi-hop recursive helper guards behind imported module-alias chains,
+  so source and top-level liveness wrappers cannot import `Init` predicates
+  that hide bad helper operands after several alternating module-alias and
+  local-alias hops.
   Progress Init aliases must resolve to local modules with defined zero-arity initial-state predicates,
   so imported Init aliases cannot point at missing modules, undefined
   operators, or parameterized helpers.
@@ -31828,6 +31840,9 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   Progress Init helper conjuncts must resolve to initial-state predicates, so
   composed Init formulas cannot bury action-only or temporal syntax in named
   helper operands.
+  Source and top-level progress Init helper conjuncts must resolve to initial-state predicates,
+  so source and top-level liveness wrappers cannot bury action-only or
+  temporal syntax in named helper operands.
   Progress Init helpers must be acyclic, so composed Init formulas cannot
   satisfy the initial-state boundary through recursive local helper operands.
   Progress Init helper conjuncts must inherit recursive resolution for onward aliases inside named helper operands,
