@@ -27617,7 +27617,7 @@ mod kagemusha_non_native_limb_circuit_tests {
             .name("non-native-vesta-affine-windowed-shared-table-msm-test".to_owned())
             .stack_size(1536 * 1024 * 1024)
             .spawn(move || {
-                MockProver::run(8, &circuit, instances)
+                MockProver::run(9, &circuit, instances)
                     .expect("non-native Vesta affine windowed shared-table MSM mock prover")
                     .verify()
                     .is_ok()
@@ -27666,7 +27666,7 @@ mod kagemusha_non_native_limb_circuit_tests {
             .name("non-native-vesta-affine-ipa-final-windowed-shared-table-msm-test".to_owned())
             .stack_size(1536 * 1024 * 1024)
             .spawn(move || {
-                MockProver::run(8, &circuit, instances)
+                MockProver::run(9, &circuit, instances)
                     .expect("non-native Vesta affine IPA final windowed shared-table MSM prover")
                     .verify()
                     .is_ok()
@@ -28356,7 +28356,7 @@ mod kagemusha_non_native_limb_circuit_tests {
         >,
         instances: Vec<Vec<Scalar>>,
     ) -> bool {
-        MockProver::run(8, &circuit, instances)
+        MockProver::run(9, &circuit, instances)
             .expect("non-native Vesta IPA shared-table round accumulator mock prover")
             .verify()
             .is_ok()
@@ -28463,7 +28463,7 @@ mod kagemusha_non_native_limb_circuit_tests {
         >,
         instances: Vec<Vec<Scalar>>,
     ) -> bool {
-        MockProver::run(8, &circuit, instances)
+        MockProver::run(9, &circuit, instances)
             .expect("non-native Vesta IPA shared-table generator fold mock prover")
             .verify()
             .is_ok()
@@ -28628,7 +28628,7 @@ mod kagemusha_non_native_limb_circuit_tests {
         >,
         instances: Vec<Vec<Scalar>>,
     ) -> bool {
-        MockProver::run(8, &circuit, instances)
+        MockProver::run(9, &circuit, instances)
             .expect("non-native Vesta shared-table multi-round IPA verifier mock prover")
             .verify()
             .is_ok()
@@ -28654,7 +28654,7 @@ mod kagemusha_non_native_limb_circuit_tests {
         >,
     ) -> bool {
         let instances = vesta_affine_ipa_one_round_shared_table_instances(&circuit);
-        MockProver::run(8, &circuit, instances)
+        MockProver::run(9, &circuit, instances)
             .expect("non-native Vesta shared-table one-round IPA verifier mock prover")
             .verify()
             .is_ok()
@@ -29023,7 +29023,7 @@ mod kagemusha_non_native_limb_circuit_tests {
         >,
         instances: Vec<Vec<Scalar>>,
     ) -> bool {
-        MockProver::run(8, &circuit, instances)
+        MockProver::run(9, &circuit, instances)
             .expect("append recursive verifier slice mock prover")
             .verify()
             .is_ok()
@@ -29041,7 +29041,7 @@ mod kagemusha_non_native_limb_circuit_tests {
         >,
         instances: Vec<Vec<Scalar>>,
     ) -> bool {
-        MockProver::run(8, &circuit, instances)
+        MockProver::run(9, &circuit, instances)
             .expect("one-hop recursive verifier slice mock prover")
             .verify()
             .is_ok()
@@ -31855,6 +31855,117 @@ mod kagemusha_non_native_limb_circuit_tests {
         ));
     }
 
+    fn vesta_fixed_window_adapter_table_witness(
+        table: &[(
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            [u64; pasta_tiny::NON_NATIVE_PASTA_FIELD_LIMBS],
+            bool,
+        )],
+    ) -> pasta_tiny::NonNativeVestaAffineFixedWindowTable<2> {
+        pasta_tiny::NonNativeVestaAffineFixedWindowTable::<2> {
+            table: table
+                .iter()
+                .copied()
+                .map(|point| {
+                    pasta_tiny::NonNativeVestaAffineMaybeIdentity::try_from_limbs(
+                        point.0, point.1, point.2,
+                    )
+                    .expect("valid adapter table point")
+                })
+                .collect(),
+            adds: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_select_from_table_rows_converts_existing_witness()
+     {
+        let table = vesta_fixed_window_select_table();
+        let table_witness = vesta_fixed_window_adapter_table_witness(&table);
+        let selection_witness =
+            pasta_tiny::NonNativeVestaAffineFixedWindowSelectFromTable::<2>::try_from_table(
+                2,
+                table.clone(),
+                table[2],
+            )
+            .expect("valid selection witness");
+        let rows =
+            pasta_tiny::NonNativeVestaAffineFixedWindowSelectFromTableRows::<2>::try_from_table_selection_witness(
+                &table_witness,
+                &selection_witness,
+            )
+            .expect("row selector adapter accepts valid witnesses");
+
+        assert_eq!(rows.digit_bits, selection_witness.digit_bits);
+        assert_eq!(rows.nodes.len(), 7);
+        assert_eq!(
+            rows.nodes[2],
+            vesta_maybe_identity_witness_scalars(&table_witness.table[2])
+        );
+        assert_eq!(
+            *rows.selected,
+            vesta_maybe_identity_witness_scalars(selection_witness.selected.as_ref())
+        );
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_fixed_window_select_from_table_rows_rejects_malformed_existing_witnesses()
+     {
+        let table = vesta_fixed_window_select_table();
+        let table_witness = vesta_fixed_window_adapter_table_witness(&table);
+        let selection_witness =
+            pasta_tiny::NonNativeVestaAffineFixedWindowSelectFromTable::<2>::try_from_table(
+                2,
+                table.clone(),
+                table[2],
+            )
+            .expect("valid selection witness");
+
+        let mut truncated_table = table_witness.clone();
+        truncated_table.table.pop();
+        let err =
+            pasta_tiny::NonNativeVestaAffineFixedWindowSelectFromTableRows::<2>::try_from_table_selection_witness(
+                &truncated_table,
+                &selection_witness,
+            )
+            .err()
+            .expect("adapter must reject truncated table witness");
+        assert!(err.contains("table witness length mismatch"));
+
+        let mut short_bits = selection_witness.clone();
+        short_bits.digit_bits.pop();
+        let err =
+            pasta_tiny::NonNativeVestaAffineFixedWindowSelectFromTableRows::<2>::try_from_table_selection_witness(
+                &table_witness,
+                &short_bits,
+            )
+            .err()
+            .expect("adapter must reject truncated digit bits");
+        assert!(err.contains("digit-bit length mismatch"));
+
+        let mut short_levels = selection_witness.clone();
+        short_levels.selection_levels.pop();
+        let err =
+            pasta_tiny::NonNativeVestaAffineFixedWindowSelectFromTableRows::<2>::try_from_table_selection_witness(
+                &table_witness,
+                &short_levels,
+            )
+            .err()
+            .expect("adapter must reject truncated selection levels");
+        assert!(err.contains("selection-level length mismatch"));
+
+        let mut narrow_level = selection_witness.clone();
+        narrow_level.selection_levels[0].pop();
+        let err =
+            pasta_tiny::NonNativeVestaAffineFixedWindowSelectFromTableRows::<2>::try_from_table_selection_witness(
+                &table_witness,
+                &narrow_level,
+            )
+            .err()
+            .expect("adapter must reject malformed level width");
+        assert!(err.contains("selection level 0 length mismatch"));
+    }
+
     #[test]
     fn kagemusha_non_native_vesta_affine_fixed_window_select_from_table_rows_reduces_advice_columns()
      {
@@ -32594,6 +32705,128 @@ mod kagemusha_non_native_limb_circuit_tests {
                 vesta_affine_windowed_scalar_mul_shared_table_native_scalar_instances(&witnessless);
             MockProver::run(8, &witnessless, instances)
                 .expect("direct-mode witnessless shared-table scalar-mul synthesis");
+        });
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_uses_row_scalar_config() {
+        pasta_tiny::assert_shared_table_scalar_mul_uses_row_scalar_config::<
+            { KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS },
+            { KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS },
+        >();
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_uses_row_table_and_selector_configs()
+     {
+        pasta_tiny::assert_shared_table_scalar_mul_uses_row_table_and_selector_configs::<
+            { KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS },
+            { KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS },
+        >();
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_uses_row_double_and_accumulator_configs()
+     {
+        pasta_tiny::assert_shared_table_scalar_mul_uses_row_double_and_accumulator_configs::<
+            { KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS },
+            { KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS },
+        >();
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_shared_table_msm_uses_row_sum_config() {
+        std::thread::Builder::new()
+            .name("kagemusha-shared-msm-row-sum-config".to_owned())
+            .stack_size(128 * 1024 * 1024)
+            .spawn(|| {
+                pasta_tiny::assert_shared_table_msm_uses_row_sum_config::<
+                    3,
+                    { KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS },
+                    { KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS },
+                >();
+            })
+            .expect("spawn shared MSM row-sum config worker")
+            .join()
+            .expect("shared MSM row-sum config worker");
+    }
+
+    #[test]
+    fn kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_rejects_selector_leaf_splice()
+     {
+        run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
+            let derived_base = VestaAffine::generator();
+            let selector_base = vesta_generator_multiple(2);
+            let table_for_base = |base: VestaAffine| {
+                let base_curve = base.to_curve();
+                (0..2)
+                    .map(|index| {
+                        vesta_maybe_identity_limbs(
+                            (base_curve * Scalar::from(index as u64)).to_affine(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let derived_table = table_for_base(derived_base);
+            let selector_table = table_for_base(selector_base);
+            let forged_output = selector_table[1];
+            let inner =
+                pasta_tiny::NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalar::<1, 1> {
+                    scalar: Box::new(
+                        pasta_tiny::NativePastaFpFixedWindowDecomposition::<1, 1>::try_from_scalar(
+                            Scalar::from(1),
+                        )
+                        .expect("valid one-bit scalar decomposition"),
+                    ),
+                    tables: vec![
+                        pasta_tiny::NonNativeVestaAffineFixedWindowTable::<1>::try_from_base(
+                            vesta_non_identity_limbs(derived_base),
+                            derived_table,
+                        )
+                        .expect("valid derived table"),
+                    ],
+                    selections: vec![
+                        pasta_tiny::NonNativeVestaAffineFixedWindowSelectFromTable::<1>::try_from_table(
+                            1,
+                            selector_table.clone(),
+                            forged_output,
+                        )
+                        .expect("valid selector-only table"),
+                    ],
+                    window_base_doubles: Vec::new(),
+                    sum_adds: vec![
+                        pasta_tiny::NonNativeVestaAffineCompleteAdd::try_from_limbs(
+                            vesta_identity_limbs(),
+                            forged_output,
+                            forged_output,
+                        )
+                        .expect("identity plus forged output"),
+                    ],
+                };
+            let circuit =
+                pasta_tiny::NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalarSelectorLeafSplice::<
+                    1,
+                    1,
+                > {
+                    inner,
+                    selector_tables: vec![
+                        pasta_tiny::NonNativeVestaAffineFixedWindowTable::<1>::try_from_base(
+                            vesta_non_identity_limbs(selector_base),
+                            selector_table,
+                        )
+                        .expect("valid selector leaf table"),
+                    ],
+                };
+            let mut instances = vesta_point_instances(vesta_non_identity_limbs(derived_base));
+            instances.extend(vesta_point_instances(forged_output));
+
+            assert!(
+                MockProver::run(8, &circuit, instances)
+                    .expect("selector leaf-splice mock prover")
+                    .verify()
+                    .is_err(),
+                "selector leaves must be constrained to the derived shared table rows"
+            );
         });
     }
 
@@ -56885,8 +57118,12 @@ mod pasta_tiny {
                 WINDOW_BITS,
             >(region, term_config)?;
         }
-        for sum_config in &config.sum_adds {
-            enable_non_native_vesta_affine_complete_add_keygen_region(region, sum_config)?;
+        for term_index in 0..config.term_muls.len() {
+            enable_non_native_vesta_affine_complete_add_keygen_region_at_offset(
+                region,
+                &config.sum_add,
+                vesta_msm_sum_add_row(term_index),
+            )?;
         }
         Ok(())
     }
@@ -56899,31 +57136,38 @@ mod pasta_tiny {
         config: &NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalarConfig,
     ) -> Result<(), PlonkError> {
         config.link.enable(region, 0)?;
-        enable_native_pasta_fp_fixed_window_decomposition_keygen_region::<WINDOWS, WINDOW_BITS>(
+        enable_native_pasta_fp_fixed_window_decomposition_rows_keygen_region::<WINDOWS, WINDOW_BITS>(
             region,
             &config.scalar,
         )?;
         for table_config in &config.tables {
-            enable_non_native_vesta_affine_fixed_window_table_keygen_region::<WINDOW_BITS>(
+            enable_non_native_vesta_affine_fixed_window_table_rows_keygen_region::<WINDOW_BITS>(
                 region,
                 table_config,
             )?;
         }
         for selection_config in &config.selections {
-            enable_non_native_vesta_affine_fixed_window_select_from_table_keygen_region::<
+            enable_non_native_vesta_affine_fixed_window_select_from_table_rows_keygen_region::<
                 WINDOW_BITS,
             >(region, selection_config)?;
         }
-        for transition_configs in &config.window_base_doubles {
-            for double_config in transition_configs {
-                enable_non_native_vesta_affine_double_or_identity_keygen_region(
-                    region,
-                    double_config,
-                )?;
+        if let Some(double_config) = &config.window_base_double {
+            for window_index in 0..WINDOWS.saturating_sub(1) {
+                for double_index in 0..WINDOW_BITS {
+                    enable_non_native_vesta_affine_double_or_identity_keygen_region_at_offset(
+                        region,
+                        double_config,
+                        vesta_window_base_double_row::<WINDOW_BITS>(window_index, double_index),
+                    )?;
+                }
             }
         }
-        for sum_config in &config.sum_adds {
-            enable_non_native_vesta_affine_accumulator_add_keygen_region(region, sum_config)?;
+        for window_index in 0..WINDOWS {
+            enable_non_native_vesta_affine_accumulator_add_keygen_region_at_offset(
+                region,
+                &config.sum_add,
+                vesta_window_sum_add_row(window_index),
+            )?;
         }
         Ok(())
     }
@@ -60431,14 +60675,6 @@ mod pasta_tiny {
             vec![s * (value - lo - Expression::Constant(scalar_two_pow_64()) * hi)]
         });
         NonNativeU128RangeConfig { value, limbs, bind }
-    }
-
-    fn assign_non_native_u128_range_region(
-        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
-        config: &NonNativeU128RangeConfig,
-        witness: &NonNativeU128Range,
-    ) -> Result<(), PlonkError> {
-        assign_non_native_u128_range_region_at_offset(region, config, witness, 0)
     }
 
     fn assign_non_native_u128_range_region_at_offset(
@@ -64579,6 +64815,67 @@ mod pasta_tiny {
                 selected: Box::new(vesta_point_encoding_to_scalars(selected)),
             })
         }
+
+        /// Convert the existing shared-table selection witness into row form.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error when the table or selection witness shape does not
+        /// match the configured fixed-window width.
+        pub fn try_from_table_selection_witness(
+            table: &NonNativeVestaAffineFixedWindowTable<WINDOW_BITS>,
+            selection: &NonNativeVestaAffineFixedWindowSelectFromTable<WINDOW_BITS>,
+        ) -> Result<Self, String> {
+            validate_vesta_fixed_window_select_shape::<WINDOW_BITS>()?;
+            let table_len = 1usize << WINDOW_BITS;
+            if table.table.len() != table_len {
+                return Err(format!(
+                    "Vesta row shared-table fixed-window table witness length mismatch: expected {table_len}, found {}",
+                    table.table.len()
+                ));
+            }
+            if selection.digit_bits.len() != WINDOW_BITS {
+                return Err(format!(
+                    "Vesta row shared-table digit-bit length mismatch: expected {WINDOW_BITS}, found {}",
+                    selection.digit_bits.len()
+                ));
+            }
+            if selection.selection_levels.len() != WINDOW_BITS {
+                return Err(format!(
+                    "Vesta row shared-table selection-level length mismatch: expected {WINDOW_BITS}, found {}",
+                    selection.selection_levels.len()
+                ));
+            }
+
+            let mut nodes = vec![
+                vesta_identity_point_scalars();
+                vesta_fixed_window_select_tree_rows::<WINDOW_BITS>()
+            ];
+            for (index, point) in table.table.iter().enumerate() {
+                nodes[index] = non_native_vesta_maybe_identity_scalars(point);
+            }
+            for level in 0..WINDOW_BITS {
+                let width = table_len >> (level + 1);
+                if selection.selection_levels[level].len() != width {
+                    return Err(format!(
+                        "Vesta row shared-table selection level {level} length mismatch: expected {width}, found {}",
+                        selection.selection_levels[level].len()
+                    ));
+                }
+                let level_start = vesta_fixed_window_select_tree_level_start(table_len, level);
+                for index in 0..width {
+                    nodes[level_start + index] = selection.selection_levels[level][index];
+                }
+            }
+
+            Ok(Self {
+                digit_bits: selection.digit_bits.clone(),
+                nodes,
+                selected: Box::new(non_native_vesta_maybe_identity_scalars(
+                    selection.selected.as_ref(),
+                )),
+            })
+        }
     }
 
     fn configure_non_native_vesta_affine_fixed_window_select_from_table_rows<
@@ -64621,6 +64918,8 @@ mod pasta_tiny {
                     - i32::try_from(parent_row).expect("row fits i32");
                 let right_rotation = i32::try_from(right_row).expect("row fits i32")
                     - i32::try_from(parent_row).expect("row fits i32");
+                let level_bit_rotation = i32::try_from(level_start).expect("row fits i32")
+                    - i32::try_from(parent_row).expect("row fits i32");
                 meta.create_gate(
                     format!(
                         "non_native_vesta_affine_fixed_window_select_from_table_rows_level{level}_node{index}"
@@ -64628,6 +64927,7 @@ mod pasta_tiny {
                     move |meta| {
                         let s = meta.query_selector(selector);
                         let bit = meta.query_advice(digit_bit, Rotation::cur());
+                        let level_bit = meta.query_advice(digit_bit, Rotation(level_bit_rotation));
                         let left = query_non_native_vesta_point_advice(
                             meta,
                             &node_for_gate,
@@ -64641,12 +64941,13 @@ mod pasta_tiny {
                         let out =
                             query_non_native_vesta_point_advice(meta, &node_for_gate, Rotation::cur());
                         let mut constraints =
-                            Vec::with_capacity(2 + 2 * NON_NATIVE_PASTA_FIELD_LIMBS + 1);
+                            Vec::with_capacity(3 + 2 * NON_NATIVE_PASTA_FIELD_LIMBS + 1);
                         constraints.push(
                             s.clone()
                                 * bit.clone()
                                 * (bit.clone() - Expression::Constant(Scalar::from(1))),
                         );
+                        constraints.push(s.clone() * (bit.clone() - level_bit));
                         push_non_native_vesta_point_select_constraints(
                             &mut constraints,
                             &s,
@@ -64743,6 +65044,24 @@ mod pasta_tiny {
             }
         }
         Ok(())
+    }
+
+    fn assign_non_native_vesta_affine_fixed_window_select_from_table_rows_witness_region<
+        const WINDOW_BITS: usize,
+    >(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineFixedWindowSelectFromTableRowsConfig,
+        table: &NonNativeVestaAffineFixedWindowTable<WINDOW_BITS>,
+        selection: &NonNativeVestaAffineFixedWindowSelectFromTable<WINDOW_BITS>,
+    ) -> Result<(), PlonkError> {
+        let witness =
+            NonNativeVestaAffineFixedWindowSelectFromTableRows::try_from_table_selection_witness(
+                table, selection,
+            )
+            .map_err(|_| PlonkError::Synthesis)?;
+        assign_non_native_vesta_affine_fixed_window_select_from_table_rows_region(
+            region, config, &witness,
+        )
     }
 
     impl<const WINDOW_BITS: usize> Circuit<Scalar>
@@ -65033,10 +65352,8 @@ mod pasta_tiny {
     pub struct NonNativeVestaAffineFixedWindowTableRowsConfig {
         entry: NonNativeVestaAffineMaybeIdentityConfig,
         add: NonNativeVestaAffineCompleteAddConfig,
-        base_instances: [halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>;
-            2 * NON_NATIVE_PASTA_FIELD_LIMBS + 1],
         identity_link: Selector,
-        base_link: Selector,
+        base_link: Option<Selector>,
         add_links: Vec<Selector>,
     }
 
@@ -65081,6 +65398,17 @@ mod pasta_tiny {
     fn configure_non_native_vesta_affine_fixed_window_table_rows<const WINDOW_BITS: usize>(
         meta: &mut ConstraintSystem<Scalar>,
     ) -> NonNativeVestaAffineFixedWindowTableRowsConfig {
+        configure_non_native_vesta_affine_fixed_window_table_rows_with_public_base::<WINDOW_BITS>(
+            meta, true,
+        )
+    }
+
+    fn configure_non_native_vesta_affine_fixed_window_table_rows_with_public_base<
+        const WINDOW_BITS: usize,
+    >(
+        meta: &mut ConstraintSystem<Scalar>,
+        public_base: bool,
+    ) -> NonNativeVestaAffineFixedWindowTableRowsConfig {
         validate_vesta_fixed_window_select_shape::<WINDOW_BITS>()
             .expect("invalid Vesta fixed-window row table shape");
         let table_len = 1usize << WINDOW_BITS;
@@ -65088,9 +65416,9 @@ mod pasta_tiny {
             configure_non_native_vesta_affine_maybe_identity_with_exposure(meta, false, false);
         let add =
             configure_non_native_vesta_affine_complete_add_with_exposure(meta, false, false, false);
-        let base_instances = std::array::from_fn(|_| meta.instance_column());
+        let base_instances = public_base.then(|| std::array::from_fn(|_| meta.instance_column()));
         let identity_link = meta.selector();
-        let base_link = meta.selector();
+        let base_link = public_base.then(|| meta.selector());
         let add_links = (2..table_len).map(|_| meta.selector()).collect::<Vec<_>>();
 
         meta.create_gate(
@@ -65108,34 +65436,36 @@ mod pasta_tiny {
             },
         );
 
-        let entry_for_base = entry.clone();
-        meta.create_gate(
-            "non_native_vesta_affine_fixed_window_table_rows_base_link",
-            move |meta| {
-                let s = meta.query_selector(base_link);
-                let table_base = query_non_native_vesta_affine_maybe_identity_point(
-                    meta,
-                    &entry_for_base,
-                    Rotation(
-                        i32::try_from(NON_NATIVE_VESTA_ROW_ARITHMETIC_STRIDE)
-                            .expect("row stride fits i32"),
-                    ),
-                );
-                let public_base = query_non_native_vesta_affine_point_instances(
-                    meta,
-                    &base_instances,
-                    Rotation::cur(),
-                );
-                let mut constraints = Vec::with_capacity(2 * NON_NATIVE_PASTA_FIELD_LIMBS + 1);
-                push_non_native_vesta_point_equality_constraints(
-                    &mut constraints,
-                    &s,
-                    &table_base,
-                    &public_base,
-                );
-                constraints
-            },
-        );
+        if let (Some(base_link), Some(base_instances)) = (base_link, base_instances) {
+            let entry_for_base = entry.clone();
+            meta.create_gate(
+                "non_native_vesta_affine_fixed_window_table_rows_base_link",
+                move |meta| {
+                    let s = meta.query_selector(base_link);
+                    let table_base = query_non_native_vesta_affine_maybe_identity_point(
+                        meta,
+                        &entry_for_base,
+                        Rotation(
+                            i32::try_from(NON_NATIVE_VESTA_ROW_ARITHMETIC_STRIDE)
+                                .expect("row stride fits i32"),
+                        ),
+                    );
+                    let public_base = query_non_native_vesta_affine_point_instances(
+                        meta,
+                        &base_instances,
+                        Rotation::cur(),
+                    );
+                    let mut constraints = Vec::with_capacity(2 * NON_NATIVE_PASTA_FIELD_LIMBS + 1);
+                    push_non_native_vesta_point_equality_constraints(
+                        &mut constraints,
+                        &s,
+                        &table_base,
+                        &public_base,
+                    );
+                    constraints
+                },
+            );
+        }
 
         for index in 2..table_len {
             let selector = add_links[index - 2];
@@ -65213,7 +65543,6 @@ mod pasta_tiny {
         NonNativeVestaAffineFixedWindowTableRowsConfig {
             entry,
             add,
-            base_instances,
             identity_link,
             base_link,
             add_links,
@@ -65225,15 +65554,31 @@ mod pasta_tiny {
         config: &NonNativeVestaAffineFixedWindowTableRowsConfig,
         witness: &NonNativeVestaAffineFixedWindowTableRows<WINDOW_BITS>,
     ) -> Result<(), PlonkError> {
+        assign_non_native_vesta_affine_fixed_window_table_rows_witness_region(
+            region,
+            config,
+            &witness.table,
+        )
+    }
+
+    fn assign_non_native_vesta_affine_fixed_window_table_rows_witness_region<
+        const WINDOW_BITS: usize,
+    >(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineFixedWindowTableRowsConfig,
+        witness: &NonNativeVestaAffineFixedWindowTable<WINDOW_BITS>,
+    ) -> Result<(), PlonkError> {
         validate_vesta_fixed_window_select_shape::<WINDOW_BITS>()
             .map_err(|_| PlonkError::Synthesis)?;
         let table_len = 1usize << WINDOW_BITS;
-        ensure_witness_vector_len(table_len, witness.table.table.len())?;
-        ensure_witness_vector_len(table_len.saturating_sub(2), witness.table.adds.len())?;
+        ensure_witness_vector_len(table_len, witness.table.len())?;
+        ensure_witness_vector_len(table_len.saturating_sub(2), witness.adds.len())?;
 
         config.identity_link.enable(region, 0)?;
-        config.base_link.enable(region, 0)?;
-        for (index, entry) in witness.table.table.iter().enumerate() {
+        if let Some(base_link) = config.base_link {
+            base_link.enable(region, 0)?;
+        }
+        for (index, entry) in witness.table.iter().enumerate() {
             assign_non_native_vesta_affine_maybe_identity_region_at_offset(
                 region,
                 &config.entry,
@@ -65241,7 +65586,7 @@ mod pasta_tiny {
                 index * NON_NATIVE_VESTA_ROW_ARITHMETIC_STRIDE,
             )?;
         }
-        for (add_index, add) in witness.table.adds.iter().enumerate() {
+        for (add_index, add) in witness.adds.iter().enumerate() {
             let row = (table_len + add_index) * NON_NATIVE_VESTA_ROW_ARITHMETIC_STRIDE;
             config.add_links[add_index].enable(region, row)?;
             assign_non_native_vesta_affine_complete_add_region_at_offset(
@@ -65904,11 +66249,11 @@ mod pasta_tiny {
     /// Config for fixed-window native-scalar Vesta multiplication with shared table selection.
     #[derive(Clone)]
     pub struct NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalarConfig {
-        scalar: NativePastaFpFixedWindowDecompositionConfig,
-        tables: Vec<NonNativeVestaAffineFixedWindowTableConfig>,
-        selections: Vec<NonNativeVestaAffineFixedWindowSelectFromTableConfig>,
-        window_base_doubles: Vec<Vec<NonNativeVestaAffineDoubleOrIdentityConfig>>,
-        sum_adds: Vec<NonNativeVestaAffineAccumulatorAddConfig>,
+        scalar: NativePastaFpFixedWindowDecompositionRowsConfig,
+        tables: Vec<NonNativeVestaAffineFixedWindowTableRowsConfig>,
+        selections: Vec<NonNativeVestaAffineFixedWindowSelectFromTableRowsConfig>,
+        window_base_double: Option<NonNativeVestaAffineDoubleOrIdentityConfig>,
+        sum_add: NonNativeVestaAffineAccumulatorAddConfig,
         link: Selector,
     }
 
@@ -66083,6 +66428,29 @@ mod pasta_tiny {
         >(meta, true, true)
     }
 
+    fn vesta_window_base_double_row<const WINDOW_BITS: usize>(
+        window_index: usize,
+        double_index: usize,
+    ) -> usize {
+        (window_index * WINDOW_BITS + double_index) * NON_NATIVE_VESTA_ROW_ARITHMETIC_STRIDE
+    }
+
+    fn vesta_window_sum_add_row(window_index: usize) -> usize {
+        window_index * NON_NATIVE_VESTA_ROW_ARITHMETIC_STRIDE
+    }
+
+    fn vesta_msm_sum_add_row(term_index: usize) -> usize {
+        term_index * NON_NATIVE_VESTA_ROW_ARITHMETIC_STRIDE
+    }
+
+    fn vesta_row_rotation(row: usize) -> Rotation {
+        Rotation(i32::try_from(row).expect("row fits i32"))
+    }
+
+    fn vesta_offset_rotation(rotation: Rotation, row: usize) -> Rotation {
+        Rotation(rotation.0 + i32::try_from(row).expect("row fits i32"))
+    }
+
     fn configure_non_native_vesta_affine_windowed_scalar_mul_shared_table_native_scalar_with_public_io<
         const WINDOWS: usize,
         const WINDOW_BITS: usize,
@@ -66095,13 +66463,13 @@ mod pasta_tiny {
             .expect("invalid Vesta shared-table windowed native-scalar mul shape");
         let one_bit_direct_select = WINDOW_BITS == 1 && WINDOWS > 1;
         let scalar =
-            configure_native_pasta_fp_fixed_window_decomposition::<WINDOWS, WINDOW_BITS>(meta);
+            configure_native_pasta_fp_fixed_window_decomposition_rows::<WINDOWS, WINDOW_BITS>(meta);
         let tables = if one_bit_direct_select {
             Vec::new()
         } else {
             (0..WINDOWS)
                 .map(|_| {
-                    configure_non_native_vesta_affine_fixed_window_table_with_public_base::<
+                    configure_non_native_vesta_affine_fixed_window_table_rows_with_public_base::<
                         WINDOW_BITS,
                     >(meta, false)
                 })
@@ -66110,34 +66478,20 @@ mod pasta_tiny {
         let selections = if one_bit_direct_select {
             Vec::new()
         } else {
-            tables
-                .iter()
-                .map(|table| {
-                    configure_non_native_vesta_affine_fixed_window_select_from_table::<WINDOW_BITS>(
-                        meta,
-                        table.table.clone(),
-                    )
+            (0..WINDOWS)
+                .map(|_| {
+                    configure_non_native_vesta_affine_fixed_window_select_from_table_rows::<
+                        WINDOW_BITS,
+                    >(meta)
                 })
                 .collect::<Vec<_>>()
         };
-        let window_base_doubles = (0..WINDOWS.saturating_sub(1))
-            .map(|_| {
-                (0..WINDOW_BITS)
-                    .map(|_| {
-                        configure_non_native_vesta_affine_double_or_identity_with_exposure(
-                            meta, false, false,
-                        )
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-        let sum_adds = (0..WINDOWS)
-            .map(|_| {
-                configure_non_native_vesta_affine_accumulator_add_with_exposure(
-                    meta, false, false, false,
-                )
-            })
-            .collect::<Vec<_>>();
+        let window_base_double = (WINDOWS > 1).then(|| {
+            configure_non_native_vesta_affine_double_or_identity_with_exposure(meta, false, false)
+        });
+        let sum_add = configure_non_native_vesta_affine_accumulator_add_with_exposure(
+            meta, false, false, false,
+        );
         let base_instances = public_base.then(|| std::array::from_fn(|_| meta.instance_column()));
         let output_instances =
             public_output.then(|| std::array::from_fn(|_| meta.instance_column()));
@@ -66150,13 +66504,17 @@ mod pasta_tiny {
                 let mut constraints = Vec::with_capacity(if one_bit_direct_select {
                     WINDOWS * (4 * (2 * NON_NATIVE_PASTA_FIELD_LIMBS + 1) + 1)
                 } else {
+                    let table_len = 1usize << WINDOW_BITS;
                     WINDOWS
                         * (WINDOW_BITS
-                            + 2 * WINDOW_BITS * (2 * NON_NATIVE_PASTA_FIELD_LIMBS + 1)
+                            + table_len * (2 * NON_NATIVE_PASTA_FIELD_LIMBS + 1)
                             + 3 * (2 * NON_NATIVE_PASTA_FIELD_LIMBS + 1))
                 });
 
                 if one_bit_direct_select {
+                    let double_config = window_base_double
+                        .as_ref()
+                        .expect("direct shared-table scalar mul has window-base doubles");
                     if let Some(base_instances) = &base_instances {
                         let base_public = query_non_native_vesta_affine_point_instances(
                             meta,
@@ -66165,7 +66523,7 @@ mod pasta_tiny {
                         );
                         let first_base = query_non_native_vesta_affine_maybe_identity_point(
                             meta,
-                            &window_base_doubles[0][0].p,
+                            &double_config.p,
                             Rotation::cur(),
                         );
                         push_non_native_vesta_point_equality_constraints(
@@ -66178,25 +66536,30 @@ mod pasta_tiny {
 
                     let one = Expression::Constant(Scalar::from(1));
                     for window_index in 0..WINDOWS {
-                        let scalar_bit =
-                            meta.query_advice(scalar.digit_bits[window_index][0], Rotation::cur());
+                        let sum_row = vesta_window_sum_add_row(window_index);
+                        let scalar_bit = meta.query_advice(
+                            scalar.digit_bits[0],
+                            Rotation(i32::try_from(window_index).expect("window row fits i32")),
+                        );
                         let current_base = if window_index == 0 {
                             query_non_native_vesta_affine_maybe_identity_point(
                                 meta,
-                                &window_base_doubles[0][0].p,
+                                &double_config.p,
                                 Rotation::cur(),
                             )
                         } else {
+                            let previous_double_row =
+                                vesta_window_base_double_row::<WINDOW_BITS>(window_index - 1, 0);
                             query_non_native_vesta_affine_maybe_identity_point(
                                 meta,
-                                &window_base_doubles[window_index - 1][0].r,
-                                Rotation::cur(),
+                                &double_config.r,
+                                vesta_row_rotation(previous_double_row),
                             )
                         };
                         let sum_q = query_non_native_vesta_affine_maybe_identity_point(
                             meta,
-                            &sum_adds[window_index].q,
-                            Rotation::cur(),
+                            &sum_add.q,
+                            vesta_row_rotation(sum_row),
                         );
                         constraints.push(
                             s.clone()
@@ -66220,8 +66583,8 @@ mod pasta_tiny {
                         if window_index == 0 {
                             let first_acc = query_non_native_vesta_affine_maybe_identity_point(
                                 meta,
-                                &sum_adds[0].p,
-                                Rotation::cur(),
+                                &sum_add.p,
+                                vesta_row_rotation(sum_row),
                             );
                             push_non_native_vesta_identity_constraints(
                                 &mut constraints,
@@ -66229,15 +66592,16 @@ mod pasta_tiny {
                                 &first_acc,
                             );
                         } else {
+                            let previous_sum_row = vesta_window_sum_add_row(window_index - 1);
                             let previous = query_non_native_vesta_affine_maybe_identity_point(
                                 meta,
-                                &sum_adds[window_index - 1].r,
-                                Rotation::cur(),
+                                &sum_add.r,
+                                vesta_row_rotation(previous_sum_row),
                             );
                             let current = query_non_native_vesta_affine_maybe_identity_point(
                                 meta,
-                                &sum_adds[window_index].p,
-                                Rotation::cur(),
+                                &sum_add.p,
+                                vesta_row_rotation(sum_row),
                             );
                             push_non_native_vesta_point_equality_constraints(
                                 &mut constraints,
@@ -66248,10 +66612,12 @@ mod pasta_tiny {
                         }
 
                         if window_index + 1 < WINDOWS {
+                            let double_row =
+                                vesta_window_base_double_row::<WINDOW_BITS>(window_index, 0);
                             let double_p = query_non_native_vesta_affine_maybe_identity_point(
                                 meta,
-                                &window_base_doubles[window_index][0].p,
-                                Rotation::cur(),
+                                &double_config.p,
+                                vesta_row_rotation(double_row),
                             );
                             push_non_native_vesta_point_equality_constraints(
                                 &mut constraints,
@@ -66268,10 +66634,11 @@ mod pasta_tiny {
                             output_instances,
                             Rotation::cur(),
                         );
+                        let final_sum_row = vesta_window_sum_add_row(WINDOWS - 1);
                         let final_sum = query_non_native_vesta_affine_maybe_identity_point(
                             meta,
-                            &sum_adds[WINDOWS - 1].r,
-                            Rotation::cur(),
+                            &sum_add.r,
+                            vesta_row_rotation(final_sum_row),
                         );
                         push_non_native_vesta_point_equality_constraints(
                             &mut constraints,
@@ -66285,6 +66652,8 @@ mod pasta_tiny {
                 }
 
                 if let Some(base_instances) = &base_instances {
+                    let stride = i32::try_from(NON_NATIVE_VESTA_ROW_ARITHMETIC_STRIDE)
+                        .expect("row stride fits i32");
                     let base_public = query_non_native_vesta_affine_point_instances(
                         meta,
                         base_instances,
@@ -66292,8 +66661,8 @@ mod pasta_tiny {
                     );
                     let first_base = query_non_native_vesta_affine_maybe_identity_point(
                         meta,
-                        &tables[0].table[1],
-                        Rotation::cur(),
+                        &tables[0].entry,
+                        Rotation(stride),
                     );
                     push_non_native_vesta_point_equality_constraints(
                         &mut constraints,
@@ -66303,28 +66672,55 @@ mod pasta_tiny {
                     );
                 }
 
+                let table_len = 1usize << WINDOW_BITS;
+                let selected_row = vesta_fixed_window_select_tree_rows::<WINDOW_BITS>() - 1;
+                let selected_rotation =
+                    Rotation(i32::try_from(selected_row).expect("selected row fits i32"));
                 for window_index in 0..WINDOWS {
+                    let sum_row = vesta_window_sum_add_row(window_index);
                     for local_bit in 0..WINDOW_BITS {
+                        let level_start =
+                            vesta_fixed_window_select_tree_level_start(table_len, local_bit);
                         let selection_bit = meta.query_advice(
                             selections[window_index].digit_bits[local_bit],
-                            Rotation::cur(),
+                            Rotation(i32::try_from(level_start).expect("level row fits i32")),
                         );
                         let scalar_bit = meta.query_advice(
-                            scalar.digit_bits[window_index][local_bit],
-                            Rotation::cur(),
+                            scalar.digit_bits[local_bit],
+                            Rotation(i32::try_from(window_index).expect("window row fits i32")),
                         );
                         constraints.push(s.clone() * (selection_bit - scalar_bit));
                     }
 
-                    let selected = query_non_native_vesta_affine_maybe_identity_point(
+                    for table_index in 0..table_len {
+                        let table_row = table_index * NON_NATIVE_VESTA_ROW_ARITHMETIC_STRIDE;
+                        let table_entry = query_non_native_vesta_affine_maybe_identity_point(
+                            meta,
+                            &tables[window_index].entry,
+                            Rotation(i32::try_from(table_row).expect("table row fits i32")),
+                        );
+                        let selector_leaf = query_non_native_vesta_point_advice(
+                            meta,
+                            &selections[window_index].node,
+                            Rotation(i32::try_from(table_index).expect("selector row fits i32")),
+                        );
+                        push_non_native_vesta_point_equality_constraints(
+                            &mut constraints,
+                            &s,
+                            &table_entry,
+                            &selector_leaf,
+                        );
+                    }
+
+                    let selected = query_non_native_vesta_point_advice(
                         meta,
                         &selections[window_index].selected,
-                        Rotation::cur(),
+                        selected_rotation,
                     );
                     let sum_q = query_non_native_vesta_affine_maybe_identity_point(
                         meta,
-                        &sum_adds[window_index].q,
-                        Rotation::cur(),
+                        &sum_add.q,
+                        vesta_row_rotation(sum_row),
                     );
                     push_non_native_vesta_point_equality_constraints(
                         &mut constraints,
@@ -66335,8 +66731,8 @@ mod pasta_tiny {
                     if window_index == 0 {
                         let first_acc = query_non_native_vesta_affine_maybe_identity_point(
                             meta,
-                            &sum_adds[0].p,
-                            Rotation::cur(),
+                            &sum_add.p,
+                            vesta_row_rotation(sum_row),
                         );
                         push_non_native_vesta_identity_constraints(
                             &mut constraints,
@@ -66344,15 +66740,16 @@ mod pasta_tiny {
                             &first_acc,
                         );
                     } else {
+                        let previous_sum_row = vesta_window_sum_add_row(window_index - 1);
                         let previous = query_non_native_vesta_affine_maybe_identity_point(
                             meta,
-                            &sum_adds[window_index - 1].r,
-                            Rotation::cur(),
+                            &sum_add.r,
+                            vesta_row_rotation(previous_sum_row),
                         );
                         let current = query_non_native_vesta_affine_maybe_identity_point(
                             meta,
-                            &sum_adds[window_index].p,
-                            Rotation::cur(),
+                            &sum_add.p,
+                            vesta_row_rotation(sum_row),
                         );
                         push_non_native_vesta_point_equality_constraints(
                             &mut constraints,
@@ -66363,26 +66760,39 @@ mod pasta_tiny {
                     }
                 }
 
-                for window_index in 0..WINDOWS.saturating_sub(1) {
-                    for double_index in 0..WINDOW_BITS {
-                        let double = &window_base_doubles[window_index][double_index];
+                if let Some(double_config) = &window_base_double {
+                    for window_index in 0..WINDOWS.saturating_sub(1) {
+                        for double_index in 0..WINDOW_BITS {
+                            let double_row =
+                                vesta_window_base_double_row::<WINDOW_BITS>(
+                                    window_index,
+                                    double_index,
+                                );
                         let source = if double_index == 0 {
                             query_non_native_vesta_affine_maybe_identity_point(
                                 meta,
-                                &tables[window_index].table[1],
-                                Rotation::cur(),
+                                &tables[window_index].entry,
+                                Rotation(
+                                    i32::try_from(NON_NATIVE_VESTA_ROW_ARITHMETIC_STRIDE)
+                                        .expect("row stride fits i32"),
+                                ),
                             )
                         } else {
+                            let previous_double_row =
+                                vesta_window_base_double_row::<WINDOW_BITS>(
+                                    window_index,
+                                    double_index - 1,
+                                );
                             query_non_native_vesta_affine_maybe_identity_point(
                                 meta,
-                                &window_base_doubles[window_index][double_index - 1].r,
-                                Rotation::cur(),
+                                &double_config.r,
+                                vesta_row_rotation(previous_double_row),
                             )
                         };
                         let double_p = query_non_native_vesta_affine_maybe_identity_point(
                             meta,
-                            &double.p,
-                            Rotation::cur(),
+                            &double_config.p,
+                            vesta_row_rotation(double_row),
                         );
                         push_non_native_vesta_point_equality_constraints(
                             &mut constraints,
@@ -66391,15 +66801,23 @@ mod pasta_tiny {
                             &double_p,
                         );
                     }
+                        let transition_output_row =
+                            vesta_window_base_double_row::<WINDOW_BITS>(
+                                window_index,
+                                WINDOW_BITS - 1,
+                            );
                     let transition_output = query_non_native_vesta_affine_maybe_identity_point(
                         meta,
-                        &window_base_doubles[window_index][WINDOW_BITS - 1].r,
-                        Rotation::cur(),
+                        &double_config.r,
+                        vesta_row_rotation(transition_output_row),
                     );
                     let next_base = query_non_native_vesta_affine_maybe_identity_point(
                         meta,
-                        &tables[window_index + 1].table[1],
-                        Rotation::cur(),
+                        &tables[window_index + 1].entry,
+                        Rotation(
+                            i32::try_from(NON_NATIVE_VESTA_ROW_ARITHMETIC_STRIDE)
+                                .expect("row stride fits i32"),
+                        ),
                     );
                     push_non_native_vesta_point_equality_constraints(
                         &mut constraints,
@@ -66407,6 +66825,7 @@ mod pasta_tiny {
                         &transition_output,
                         &next_base,
                     );
+                    }
                 }
 
                 if let Some(output_instances) = &output_instances {
@@ -66415,10 +66834,11 @@ mod pasta_tiny {
                         output_instances,
                         Rotation::cur(),
                     );
+                    let final_sum_row = vesta_window_sum_add_row(WINDOWS - 1);
                     let final_sum = query_non_native_vesta_affine_maybe_identity_point(
                         meta,
-                        &sum_adds[WINDOWS - 1].r,
-                        Rotation::cur(),
+                        &sum_add.r,
+                        vesta_row_rotation(final_sum_row),
                     );
                     push_non_native_vesta_point_equality_constraints(
                         &mut constraints,
@@ -66435,8 +66855,8 @@ mod pasta_tiny {
             scalar,
             tables,
             selections,
-            window_base_doubles,
-            sum_adds,
+            window_base_double,
+            sum_add,
             link,
         }
     }
@@ -66454,43 +66874,58 @@ mod pasta_tiny {
     ) -> Result<(), PlonkError> {
         ensure_witness_vector_len(config.tables.len(), witness.tables.len())?;
         ensure_witness_vector_len(config.selections.len(), witness.selections.len())?;
-        ensure_nested_witness_vector_lens(
-            &config.window_base_doubles,
-            &witness.window_base_doubles,
-        )?;
-        ensure_witness_vector_len(config.sum_adds.len(), witness.sum_adds.len())?;
+        ensure_witness_vector_len(WINDOWS.saturating_sub(1), witness.window_base_doubles.len())?;
+        for doubles in &witness.window_base_doubles {
+            ensure_witness_vector_len(WINDOW_BITS, doubles.len())?;
+        }
+        ensure_witness_vector_len(WINDOWS, witness.sum_adds.len())?;
         config.link.enable(region, 0)?;
-        assign_native_pasta_fp_fixed_window_decomposition_region(
+        assign_native_pasta_fp_fixed_window_decomposition_rows_region(
             region,
             &config.scalar,
             witness.scalar.as_ref(),
         )?;
         for (table_config, table) in config.tables.iter().zip(witness.tables.iter()) {
-            assign_non_native_vesta_affine_fixed_window_table_region(region, table_config, table)?;
+            assign_non_native_vesta_affine_fixed_window_table_rows_witness_region(
+                region,
+                table_config,
+                table,
+            )?;
         }
-        for (selection_config, selection) in config.selections.iter().zip(witness.selections.iter())
+        for ((selection_config, selection), table) in config
+            .selections
+            .iter()
+            .zip(witness.selections.iter())
+            .zip(witness.tables.iter())
         {
-            assign_non_native_vesta_affine_fixed_window_select_from_table_region(
+            assign_non_native_vesta_affine_fixed_window_select_from_table_rows_witness_region(
                 region,
                 selection_config,
+                table,
                 selection,
             )?;
         }
-        for (transition_configs, transition_witnesses) in config
-            .window_base_doubles
-            .iter()
-            .zip(witness.window_base_doubles.iter())
-        {
-            for (double_config, double) in transition_configs.iter().zip(transition_witnesses) {
-                assign_non_native_vesta_affine_double_or_identity_region(
-                    region,
-                    double_config,
-                    double,
-                )?;
+        if let Some(double_config) = &config.window_base_double {
+            for (window_index, transition_witnesses) in
+                witness.window_base_doubles.iter().enumerate()
+            {
+                for (double_index, double) in transition_witnesses.iter().enumerate() {
+                    assign_non_native_vesta_affine_double_or_identity_region_at_offset(
+                        region,
+                        double_config,
+                        double,
+                        vesta_window_base_double_row::<WINDOW_BITS>(window_index, double_index),
+                    )?;
+                }
             }
         }
-        for (sum_config, sum) in config.sum_adds.iter().zip(witness.sum_adds.iter()) {
-            assign_non_native_vesta_affine_accumulator_add_region(region, sum_config, sum)?;
+        for (window_index, sum) in witness.sum_adds.iter().enumerate() {
+            assign_non_native_vesta_affine_accumulator_add_region_at_offset(
+                region,
+                &config.sum_add,
+                sum,
+                vesta_window_sum_add_row(window_index),
+            )?;
         }
         Ok(())
     }
@@ -66529,11 +66964,214 @@ mod pasta_tiny {
         }
     }
 
+    /// Test-only circuit that assigns selector leaves from a different table witness.
+    ///
+    /// This represents the malicious assignment a raw prover could use if the
+    /// shared-table wrapper did not constrain row-selector leaves equal to the
+    /// derived fixed-window table rows.
+    #[cfg(test)]
+    #[derive(Clone)]
+    pub(super) struct NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalarSelectorLeafSplice<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    > {
+        /// Shared-table scalar-multiplication witness with the derived table.
+        pub inner:
+            NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalar<WINDOWS, WINDOW_BITS>,
+        /// Table witness used only when assigning row-selector leaves.
+        pub selector_tables: Vec<NonNativeVestaAffineFixedWindowTable<WINDOW_BITS>>,
+    }
+
+    #[cfg(test)]
+    impl<const WINDOWS: usize, const WINDOW_BITS: usize> Circuit<Scalar>
+        for NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalarSelectorLeafSplice<
+            WINDOWS,
+            WINDOW_BITS,
+        >
+    {
+        type Config = NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalarConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            let one_bit_direct_select = WINDOW_BITS == 1 && WINDOWS > 1;
+            Self {
+                inner: NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalar::default(),
+                selector_tables: if one_bit_direct_select {
+                    Vec::new()
+                } else {
+                    vec![NonNativeVestaAffineFixedWindowTable::default(); WINDOWS]
+                },
+            }
+        }
+
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            configure_non_native_vesta_affine_windowed_scalar_mul_shared_table_native_scalar::<
+                WINDOWS,
+                WINDOW_BITS,
+            >(meta)
+        }
+
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            layouter.assign_region(
+                || "non_native_vesta_affine_windowed_scalar_mul_shared_table_native_scalar_selector_leaf_splice",
+                |mut region| {
+                    ensure_witness_vector_len(config.tables.len(), self.inner.tables.len())?;
+                    ensure_witness_vector_len(config.tables.len(), self.selector_tables.len())?;
+                    ensure_witness_vector_len(config.selections.len(), self.inner.selections.len())?;
+                    ensure_witness_vector_len(
+                        WINDOWS.saturating_sub(1),
+                        self.inner.window_base_doubles.len(),
+                    )?;
+                    for doubles in &self.inner.window_base_doubles {
+                        ensure_witness_vector_len(WINDOW_BITS, doubles.len())?;
+                    }
+                    ensure_witness_vector_len(WINDOWS, self.inner.sum_adds.len())?;
+                    config.link.enable(&mut region, 0)?;
+                    assign_native_pasta_fp_fixed_window_decomposition_rows_region(
+                        &mut region,
+                        &config.scalar,
+                        self.inner.scalar.as_ref(),
+                    )?;
+                    for (table_config, table) in config.tables.iter().zip(self.inner.tables.iter()) {
+                        assign_non_native_vesta_affine_fixed_window_table_rows_witness_region(
+                            &mut region,
+                            table_config,
+                            table,
+                        )?;
+                    }
+                    for ((selection_config, selection), selector_table) in config
+                        .selections
+                        .iter()
+                        .zip(self.inner.selections.iter())
+                        .zip(self.selector_tables.iter())
+                    {
+                        assign_non_native_vesta_affine_fixed_window_select_from_table_rows_witness_region(
+                            &mut region,
+                            selection_config,
+                            selector_table,
+                            selection,
+                        )?;
+                    }
+                    if let Some(double_config) = &config.window_base_double {
+                        for (window_index, transition_witnesses) in
+                            self.inner.window_base_doubles.iter().enumerate()
+                        {
+                            for (double_index, double) in transition_witnesses.iter().enumerate() {
+                                assign_non_native_vesta_affine_double_or_identity_region_at_offset(
+                                    &mut region,
+                                    double_config,
+                                    double,
+                                    vesta_window_base_double_row::<WINDOW_BITS>(
+                                        window_index,
+                                        double_index,
+                                    ),
+                                )?;
+                            }
+                        }
+                    }
+                    for (window_index, sum) in self.inner.sum_adds.iter().enumerate() {
+                        assign_non_native_vesta_affine_accumulator_add_region_at_offset(
+                            &mut region,
+                            &config.sum_add,
+                            sum,
+                            vesta_window_sum_add_row(window_index),
+                        )?;
+                    }
+                    Ok(())
+                },
+            )
+        }
+    }
+    #[cfg(test)]
+    pub(super) fn assert_shared_table_scalar_mul_uses_row_scalar_config<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >() {
+        fn accept_row_scalar_config(_: &NativePastaFpFixedWindowDecompositionRowsConfig) {}
+        let mut meta = ConstraintSystem::<Scalar>::default();
+        let config =
+            configure_non_native_vesta_affine_windowed_scalar_mul_shared_table_native_scalar::<
+                WINDOWS,
+                WINDOW_BITS,
+            >(&mut meta);
+        accept_row_scalar_config(&config.scalar);
+    }
+
+    #[cfg(test)]
+    pub(super) fn assert_shared_table_scalar_mul_uses_row_table_and_selector_configs<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >() {
+        fn accept_row_table_config(_: &NonNativeVestaAffineFixedWindowTableRowsConfig) {}
+        fn accept_row_selector_config(
+            _: &NonNativeVestaAffineFixedWindowSelectFromTableRowsConfig,
+        ) {
+        }
+        let mut meta = ConstraintSystem::<Scalar>::default();
+        let config =
+            configure_non_native_vesta_affine_windowed_scalar_mul_shared_table_native_scalar::<
+                WINDOWS,
+                WINDOW_BITS,
+            >(&mut meta);
+        assert_eq!(config.tables.len(), WINDOWS);
+        assert_eq!(config.selections.len(), WINDOWS);
+        accept_row_table_config(&config.tables[0]);
+        accept_row_selector_config(&config.selections[0]);
+    }
+
+    #[cfg(test)]
+    pub(super) fn assert_shared_table_scalar_mul_uses_row_double_and_accumulator_configs<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >() {
+        fn accept_row_double_config(_: &NonNativeVestaAffineDoubleOrIdentityConfig) {}
+        fn accept_row_accumulator_config(_: &NonNativeVestaAffineAccumulatorAddConfig) {}
+        let mut meta = ConstraintSystem::<Scalar>::default();
+        let config =
+            configure_non_native_vesta_affine_windowed_scalar_mul_shared_table_native_scalar::<
+                WINDOWS,
+                WINDOW_BITS,
+            >(&mut meta);
+        if WINDOWS > 1 {
+            accept_row_double_config(
+                config
+                    .window_base_double
+                    .as_ref()
+                    .expect("multi-window shared scalar mul has a row double config"),
+            );
+        } else {
+            assert!(config.window_base_double.is_none());
+        }
+        accept_row_accumulator_config(&config.sum_add);
+    }
+
+    #[cfg(test)]
+    pub(super) fn assert_shared_table_msm_uses_row_sum_config<
+        const TERMS: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >() {
+        fn accept_sum_config(_: &NonNativeVestaAffineCompleteAddConfig) {}
+        let mut meta = ConstraintSystem::<Scalar>::default();
+        let config = configure_non_native_vesta_affine_windowed_msm_shared_table_native_scalar::<
+            TERMS,
+            WINDOWS,
+            WINDOW_BITS,
+        >(&mut meta);
+        assert_eq!(config.term_muls.len(), TERMS);
+        accept_sum_config(&config.sum_add);
+    }
+
     /// Config for fixed-window native-scalar Vesta MSM with shared table selection.
     #[derive(Clone)]
     pub struct NonNativeVestaAffineWindowedMsmSharedTableNativeScalarConfig {
         term_muls: Vec<NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalarConfig>,
-        sum_adds: Vec<NonNativeVestaAffineCompleteAddConfig>,
+        sum_add: NonNativeVestaAffineCompleteAddConfig,
         link: Selector,
     }
 
@@ -66641,13 +67279,8 @@ mod pasta_tiny {
                 >(meta, false, false)
             })
             .collect::<Vec<_>>();
-        let sum_adds = (0..TERMS)
-            .map(|_| {
-                configure_non_native_vesta_affine_complete_add_with_exposure(
-                    meta, false, false, false,
-                )
-            })
-            .collect::<Vec<_>>();
+        let sum_add =
+            configure_non_native_vesta_affine_complete_add_with_exposure(meta, false, false, false);
         let base_instances = (0..TERMS)
             .map(|_| std::array::from_fn(|_| meta.instance_column()))
             .collect::<Vec<_>>();
@@ -66679,15 +67312,15 @@ mod pasta_tiny {
                         &base_public,
                     );
 
-                    let term_output = query_non_native_vesta_affine_maybe_identity_point(
-                        meta,
-                        &term_muls[term_index].sum_adds[WINDOWS - 1].r,
-                        Rotation::cur(),
-                    );
+                    let term_output =
+                        query_non_native_vesta_affine_windowed_shared_table_term_output::<
+                            WINDOWS,
+                            WINDOW_BITS,
+                        >(meta, &term_muls[term_index], Rotation::cur());
                     let sum_term = query_non_native_vesta_affine_maybe_identity_point(
                         meta,
-                        &sum_adds[term_index].q,
-                        Rotation::cur(),
+                        &sum_add.q,
+                        vesta_row_rotation(vesta_msm_sum_add_row(term_index)),
                     );
                     push_non_native_vesta_point_equality_constraints(
                         &mut constraints,
@@ -66700,8 +67333,8 @@ mod pasta_tiny {
                         let first_sum_accumulator =
                             query_non_native_vesta_affine_maybe_identity_point(
                                 meta,
-                                &sum_adds[0].p,
-                                Rotation::cur(),
+                                &sum_add.p,
+                                vesta_row_rotation(vesta_msm_sum_add_row(0)),
                             );
                         push_non_native_vesta_identity_constraints(
                             &mut constraints,
@@ -66711,13 +67344,13 @@ mod pasta_tiny {
                     } else {
                         let previous_sum = query_non_native_vesta_affine_maybe_identity_point(
                             meta,
-                            &sum_adds[term_index - 1].r,
-                            Rotation::cur(),
+                            &sum_add.r,
+                            vesta_row_rotation(vesta_msm_sum_add_row(term_index - 1)),
                         );
                         let current_sum_input = query_non_native_vesta_affine_maybe_identity_point(
                             meta,
-                            &sum_adds[term_index].p,
-                            Rotation::cur(),
+                            &sum_add.p,
+                            vesta_row_rotation(vesta_msm_sum_add_row(term_index)),
                         );
                         push_non_native_vesta_point_equality_constraints(
                             &mut constraints,
@@ -66735,8 +67368,8 @@ mod pasta_tiny {
                 );
                 let final_sum = query_non_native_vesta_affine_maybe_identity_point(
                     meta,
-                    &sum_adds[TERMS - 1].r,
-                    Rotation::cur(),
+                    &sum_add.r,
+                    vesta_row_rotation(vesta_msm_sum_add_row(TERMS - 1)),
                 );
                 push_non_native_vesta_point_equality_constraints(
                     &mut constraints,
@@ -66750,7 +67383,7 @@ mod pasta_tiny {
 
         NonNativeVestaAffineWindowedMsmSharedTableNativeScalarConfig {
             term_muls,
-            sum_adds,
+            sum_add,
             link,
         }
     }
@@ -66769,7 +67402,7 @@ mod pasta_tiny {
         >,
     ) -> Result<(), PlonkError> {
         ensure_witness_vector_len(config.term_muls.len(), witness.term_muls.len())?;
-        ensure_witness_vector_len(config.sum_adds.len(), witness.sum_adds.len())?;
+        ensure_witness_vector_len(TERMS, witness.sum_adds.len())?;
         config.link.enable(region, 0)?;
         for (term_config, term_witness) in config.term_muls.iter().zip(witness.term_muls.iter()) {
             assign_non_native_vesta_affine_windowed_scalar_mul_shared_table_native_scalar_region(
@@ -66778,8 +67411,13 @@ mod pasta_tiny {
                 term_witness,
             )?;
         }
-        for (sum_config, sum) in config.sum_adds.iter().zip(witness.sum_adds.iter()) {
-            assign_non_native_vesta_affine_complete_add_region(region, sum_config, sum)?;
+        for (term_index, sum) in witness.sum_adds.iter().enumerate() {
+            assign_non_native_vesta_affine_complete_add_region_at_offset(
+                region,
+                &config.sum_add,
+                sum,
+                vesta_msm_sum_add_row(term_index),
+            )?;
         }
         Ok(())
     }
@@ -66828,18 +67466,46 @@ mod pasta_tiny {
         rotation: Rotation,
     ) -> VestaPointExpressions {
         if WINDOW_BITS == 1 && WINDOWS > 1 {
-            query_non_native_vesta_affine_maybe_identity_point(
-                meta,
-                &term.window_base_doubles[0][0].p,
-                rotation,
-            )
+            let double_config = term
+                .window_base_double
+                .as_ref()
+                .expect("direct shared-table scalar mul has window-base doubles");
+            query_non_native_vesta_affine_maybe_identity_point(meta, &double_config.p, rotation)
         } else {
             query_non_native_vesta_affine_maybe_identity_point(
                 meta,
-                &term.tables[0].table[1],
-                rotation,
+                &term.tables[0].entry,
+                vesta_offset_rotation(rotation, NON_NATIVE_VESTA_ROW_ARITHMETIC_STRIDE),
             )
         }
+    }
+
+    fn query_non_native_vesta_affine_windowed_shared_table_term_output<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        meta: &mut halo2_proofs::plonk::VirtualCells<'_, Scalar>,
+        term: &NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalarConfig,
+        rotation: Rotation,
+    ) -> VestaPointExpressions {
+        let final_sum_row = vesta_window_sum_add_row(WINDOWS - 1);
+        query_non_native_vesta_affine_maybe_identity_point(
+            meta,
+            &term.sum_add.r,
+            vesta_offset_rotation(rotation, final_sum_row),
+        )
+    }
+
+    fn query_non_native_vesta_affine_windowed_shared_table_msm_output<const TERMS: usize>(
+        meta: &mut halo2_proofs::plonk::VirtualCells<'_, Scalar>,
+        msm: &NonNativeVestaAffineWindowedMsmSharedTableNativeScalarConfig,
+        rotation: Rotation,
+    ) -> VestaPointExpressions {
+        query_non_native_vesta_affine_maybe_identity_point(
+            meta,
+            &msm.sum_add.r,
+            vesta_offset_rotation(rotation, vesta_msm_sum_add_row(TERMS - 1)),
+        )
     }
 
     /// Config for the shared-table fixed-window final IPA verifier MSM comparison.
@@ -67611,10 +68277,20 @@ mod pasta_tiny {
         region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
         config: &NonNativeU64LimbRangeConfig,
     ) -> Result<(), PlonkError> {
-        config.start.enable(region, 0)?;
-        config.finish.enable(region, NON_NATIVE_U64_LIMB_BITS)?;
+        enable_non_native_u64_limb_range_keygen_region_at_offset(region, config, 0)
+    }
+
+    fn enable_non_native_u64_limb_range_keygen_region_at_offset(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeU64LimbRangeConfig,
+        offset: usize,
+    ) -> Result<(), PlonkError> {
+        config.start.enable(region, offset)?;
+        config
+            .finish
+            .enable(region, offset + NON_NATIVE_U64_LIMB_BITS)?;
         for row in 0..NON_NATIVE_U64_LIMB_BITS {
-            config.step.enable(region, row)?;
+            config.step.enable(region, offset + row)?;
         }
         Ok(())
     }
@@ -67648,6 +68324,21 @@ mod pasta_tiny {
         enable_native_pasta_fp_scalar_keygen_region(region, &config.scalar, false)
     }
 
+    fn enable_native_pasta_fp_fixed_window_decomposition_rows_keygen_region<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NativePastaFpFixedWindowDecompositionRowsConfig,
+    ) -> Result<(), PlonkError> {
+        config.aggregate.enable(region, 0)?;
+        enable_native_pasta_fp_scalar_keygen_region(region, &config.scalar, false)?;
+        for window_index in 0..WINDOWS {
+            config.windows[window_index].enable(region, window_index)?;
+        }
+        Ok(())
+    }
+
     fn enable_native_pasta_fp_ipa_transcript_binding_keygen_region(
         region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
         config: &NativePastaFpIpaTranscriptBindingConfig,
@@ -67679,94 +68370,125 @@ mod pasta_tiny {
         Ok(())
     }
 
-    fn enable_non_native_vesta_fq_canonical_range_keygen_region(
+    fn enable_non_native_vesta_fq_canonical_range_keygen_region_at_offset(
         region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
         config: &NonNativeVestaFqCanonicalRangeConfig,
         expose_public: bool,
+        offset: usize,
     ) -> Result<(), PlonkError> {
         if expose_public {
             let public = config
                 .public
                 .as_ref()
                 .expect("public non-native range config");
-            public.expose.enable(region, 0)?;
+            public.expose.enable(region, offset)?;
         }
-        config.subtract.enable(region, 0)?;
+        config.subtract.enable(region, offset)?;
         for index in 0..NON_NATIVE_PASTA_FIELD_LIMBS {
-            enable_non_native_u64_limb_range_keygen_region(region, &config.limbs[index])?;
-            enable_non_native_u64_limb_range_keygen_region(region, &config.slack_limbs[index])?;
+            enable_non_native_u64_limb_range_keygen_region_at_offset(
+                region,
+                &config.limbs[index],
+                offset,
+            )?;
+            enable_non_native_u64_limb_range_keygen_region_at_offset(
+                region,
+                &config.slack_limbs[index],
+                offset,
+            )?;
         }
         Ok(())
     }
 
-    fn enable_non_native_u128_range_keygen_region(
+    fn enable_non_native_u128_range_keygen_region_at_offset(
         region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
         config: &NonNativeU128RangeConfig,
+        offset: usize,
     ) -> Result<(), PlonkError> {
-        config.bind.enable(region, 0)?;
+        config.bind.enable(region, offset)?;
         for limb_config in &config.limbs {
-            enable_non_native_u64_limb_range_keygen_region(region, limb_config)?;
+            enable_non_native_u64_limb_range_keygen_region_at_offset(region, limb_config, offset)?;
         }
         Ok(())
     }
 
-    fn enable_non_native_vesta_fq_add_keygen_region(
+    fn enable_non_native_vesta_fq_add_keygen_region_at_offset(
         region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
         config: &NonNativeVestaFqAddConfig,
         exposure: NonNativeVestaFqBinaryExposure,
+        offset: usize,
     ) -> Result<(), PlonkError> {
-        config.add.enable(region, 0)?;
-        enable_non_native_vesta_fq_canonical_range_keygen_region(
+        config.add.enable(region, offset)?;
+        enable_non_native_vesta_fq_canonical_range_keygen_region_at_offset(
             region,
             &config.lhs,
             exposure.lhs,
+            offset,
         )?;
-        enable_non_native_vesta_fq_canonical_range_keygen_region(
+        enable_non_native_vesta_fq_canonical_range_keygen_region_at_offset(
             region,
             &config.rhs,
             exposure.rhs,
+            offset,
         )?;
-        enable_non_native_vesta_fq_canonical_range_keygen_region(
+        enable_non_native_vesta_fq_canonical_range_keygen_region_at_offset(
             region,
             &config.out,
             exposure.out,
+            offset,
         )?;
         for sum_limb_config in &config.sum_limbs {
-            enable_non_native_u64_limb_range_keygen_region(region, sum_limb_config)?;
+            enable_non_native_u64_limb_range_keygen_region_at_offset(
+                region,
+                sum_limb_config,
+                offset,
+            )?;
         }
         Ok(())
     }
 
-    fn enable_non_native_vesta_fq_mul_keygen_region(
+    fn enable_non_native_vesta_fq_mul_keygen_region_at_offset(
         region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
         config: &NonNativeVestaFqMulConfig,
         exposure: NonNativeVestaFqBinaryExposure,
+        offset: usize,
     ) -> Result<(), PlonkError> {
-        config.mul.enable(region, 0)?;
-        enable_non_native_vesta_fq_canonical_range_keygen_region(
+        config.mul.enable(region, offset)?;
+        enable_non_native_vesta_fq_canonical_range_keygen_region_at_offset(
             region,
             &config.lhs,
             exposure.lhs,
+            offset,
         )?;
-        enable_non_native_vesta_fq_canonical_range_keygen_region(
+        enable_non_native_vesta_fq_canonical_range_keygen_region_at_offset(
             region,
             &config.rhs,
             exposure.rhs,
+            offset,
         )?;
-        enable_non_native_vesta_fq_canonical_range_keygen_region(
+        enable_non_native_vesta_fq_canonical_range_keygen_region_at_offset(
             region,
             &config.out,
             exposure.out,
+            offset,
         )?;
-        enable_non_native_vesta_fq_canonical_range_keygen_region(region, &config.quotient, false)?;
+        enable_non_native_vesta_fq_canonical_range_keygen_region_at_offset(
+            region,
+            &config.quotient,
+            false,
+            offset,
+        )?;
         for product_limb_config in &config.product_limbs {
-            enable_non_native_u64_limb_range_keygen_region(region, product_limb_config)?;
+            enable_non_native_u64_limb_range_keygen_region_at_offset(
+                region,
+                product_limb_config,
+                offset,
+            )?;
         }
         for carry_config in &config.product_carries {
-            enable_non_native_u128_range_keygen_region(region, carry_config)?;
+            enable_non_native_u128_range_keygen_region_at_offset(region, carry_config, offset)?;
         }
         for carry_config in &config.reduction_carries {
-            enable_non_native_u128_range_keygen_region(region, carry_config)?;
+            enable_non_native_u128_range_keygen_region_at_offset(region, carry_config, offset)?;
         }
         Ok(())
     }
@@ -67775,31 +68497,43 @@ mod pasta_tiny {
         region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
         config: &NonNativeVestaAffineMaybeIdentityConfig,
     ) -> Result<(), PlonkError> {
-        config.link.enable(region, 0)?;
+        enable_non_native_vesta_affine_maybe_identity_keygen_region_at_offset(region, config, 0)
+    }
+
+    fn enable_non_native_vesta_affine_maybe_identity_keygen_region_at_offset(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineMaybeIdentityConfig,
+        offset: usize,
+    ) -> Result<(), PlonkError> {
+        config.link.enable(region, offset)?;
         let lhs_private_rhs_out = NonNativeVestaFqBinaryExposure {
             lhs: config.public_coordinates,
             rhs: false,
             out: false,
         };
-        enable_non_native_vesta_fq_mul_keygen_region(
+        enable_non_native_vesta_fq_mul_keygen_region_at_offset(
             region,
             &config.x_squared,
             lhs_private_rhs_out,
+            offset,
         )?;
-        enable_non_native_vesta_fq_mul_keygen_region(
+        enable_non_native_vesta_fq_mul_keygen_region_at_offset(
             region,
             &config.y_squared,
             lhs_private_rhs_out,
+            offset,
         )?;
-        enable_non_native_vesta_fq_mul_keygen_region(
+        enable_non_native_vesta_fq_mul_keygen_region_at_offset(
             region,
             &config.x_cubed,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_add_keygen_region(
+        enable_non_native_vesta_fq_add_keygen_region_at_offset(
             region,
             &config.rhs,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )
     }
 
@@ -67813,16 +68547,6 @@ mod pasta_tiny {
         for point_config in &config.table {
             enable_non_native_vesta_affine_maybe_identity_keygen_region(region, point_config)?;
         }
-        enable_non_native_vesta_affine_maybe_identity_keygen_region(region, &config.selected)
-    }
-
-    fn enable_non_native_vesta_affine_fixed_window_select_from_table_keygen_region<
-        const WINDOW_BITS: usize,
-    >(
-        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
-        config: &NonNativeVestaAffineFixedWindowSelectFromTableConfig,
-    ) -> Result<(), PlonkError> {
-        config.link.enable(region, 0)?;
         enable_non_native_vesta_affine_maybe_identity_keygen_region(region, &config.selected)
     }
 
@@ -67840,128 +68564,218 @@ mod pasta_tiny {
         Ok(())
     }
 
+    fn enable_non_native_vesta_affine_fixed_window_select_from_table_rows_keygen_region<
+        const WINDOW_BITS: usize,
+    >(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineFixedWindowSelectFromTableRowsConfig,
+    ) -> Result<(), PlonkError> {
+        validate_vesta_fixed_window_select_shape::<WINDOW_BITS>()
+            .map_err(|_| PlonkError::Synthesis)?;
+        let table_len = 1usize << WINDOW_BITS;
+        let total_rows = vesta_fixed_window_select_tree_rows::<WINDOW_BITS>();
+        config.selected_link.enable(region, total_rows - 1)?;
+        for level in 0..WINDOW_BITS {
+            let level_start = vesta_fixed_window_select_tree_level_start(table_len, level);
+            let width = table_len >> (level + 1);
+            for index in 0..width {
+                config.selection_links[level][index].enable(region, level_start + index)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn enable_non_native_vesta_affine_fixed_window_table_rows_keygen_region<
+        const WINDOW_BITS: usize,
+    >(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineFixedWindowTableRowsConfig,
+    ) -> Result<(), PlonkError> {
+        validate_vesta_fixed_window_select_shape::<WINDOW_BITS>()
+            .map_err(|_| PlonkError::Synthesis)?;
+        let table_len = 1usize << WINDOW_BITS;
+        config.identity_link.enable(region, 0)?;
+        if let Some(base_link) = config.base_link {
+            base_link.enable(region, 0)?;
+        }
+        for index in 0..table_len {
+            enable_non_native_vesta_affine_maybe_identity_keygen_region_at_offset(
+                region,
+                &config.entry,
+                index * NON_NATIVE_VESTA_ROW_ARITHMETIC_STRIDE,
+            )?;
+        }
+        for add_index in 0..table_len.saturating_sub(2) {
+            let row = (table_len + add_index) * NON_NATIVE_VESTA_ROW_ARITHMETIC_STRIDE;
+            config.add_links[add_index].enable(region, row)?;
+            enable_non_native_vesta_affine_complete_add_keygen_region_at_offset(
+                region,
+                &config.add,
+                row,
+            )?;
+        }
+        Ok(())
+    }
+
     fn enable_non_native_vesta_affine_complete_add_keygen_region(
         region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
         config: &NonNativeVestaAffineCompleteAddConfig,
     ) -> Result<(), PlonkError> {
-        config.link.enable(region, 0)?;
-        enable_non_native_vesta_affine_maybe_identity_keygen_region(region, &config.p)?;
-        enable_non_native_vesta_affine_maybe_identity_keygen_region(region, &config.q)?;
-        enable_non_native_vesta_affine_maybe_identity_keygen_region(region, &config.r)?;
-        enable_non_native_vesta_fq_add_keygen_region(
+        enable_non_native_vesta_affine_complete_add_keygen_region_at_offset(region, config, 0)
+    }
+
+    fn enable_non_native_vesta_affine_complete_add_keygen_region_at_offset(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineCompleteAddConfig,
+        offset: usize,
+    ) -> Result<(), PlonkError> {
+        config.link.enable(region, offset)?;
+        enable_non_native_vesta_affine_maybe_identity_keygen_region_at_offset(
+            region, &config.p, offset,
+        )?;
+        enable_non_native_vesta_affine_maybe_identity_keygen_region_at_offset(
+            region, &config.q, offset,
+        )?;
+        enable_non_native_vesta_affine_maybe_identity_keygen_region_at_offset(
+            region, &config.r, offset,
+        )?;
+        enable_non_native_vesta_fq_add_keygen_region_at_offset(
             region,
             &config.inverse_y_sum,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_add_keygen_region(
+        enable_non_native_vesta_fq_add_keygen_region_at_offset(
             region,
             &config.distinct_x_delta,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_add_keygen_region(
+        enable_non_native_vesta_fq_add_keygen_region_at_offset(
             region,
             &config.distinct_y_delta,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_mul_keygen_region(
+        enable_non_native_vesta_fq_mul_keygen_region_at_offset(
             region,
             &config.distinct_lambda_times_x_delta,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_mul_keygen_region(
+        enable_non_native_vesta_fq_mul_keygen_region_at_offset(
             region,
             &config.distinct_x_delta_inverse,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_mul_keygen_region(
+        enable_non_native_vesta_fq_mul_keygen_region_at_offset(
             region,
             &config.distinct_lambda_squared,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_add_keygen_region(
+        enable_non_native_vesta_fq_add_keygen_region_at_offset(
             region,
             &config.distinct_x3_plus_x1,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_add_keygen_region(
+        enable_non_native_vesta_fq_add_keygen_region_at_offset(
             region,
             &config.distinct_x_sum_plus_x2,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_add_keygen_region(
+        enable_non_native_vesta_fq_add_keygen_region_at_offset(
             region,
             &config.distinct_x3_plus_x_diff,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_mul_keygen_region(
+        enable_non_native_vesta_fq_mul_keygen_region_at_offset(
             region,
             &config.distinct_lambda_times_x_diff,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_add_keygen_region(
+        enable_non_native_vesta_fq_add_keygen_region_at_offset(
             region,
             &config.distinct_y3_plus_y1,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_add_keygen_region(
+        enable_non_native_vesta_fq_add_keygen_region_at_offset(
             region,
             &config.double_y_denominator,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_mul_keygen_region(
+        enable_non_native_vesta_fq_mul_keygen_region_at_offset(
             region,
             &config.double_x_squared,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_add_keygen_region(
+        enable_non_native_vesta_fq_add_keygen_region_at_offset(
             region,
             &config.double_two_x_squared,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_add_keygen_region(
+        enable_non_native_vesta_fq_add_keygen_region_at_offset(
             region,
             &config.double_three_x_squared,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_mul_keygen_region(
+        enable_non_native_vesta_fq_mul_keygen_region_at_offset(
             region,
             &config.double_lambda_times_denominator,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_mul_keygen_region(
+        enable_non_native_vesta_fq_mul_keygen_region_at_offset(
             region,
             &config.double_denominator_inverse,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_mul_keygen_region(
+        enable_non_native_vesta_fq_mul_keygen_region_at_offset(
             region,
             &config.double_lambda_squared,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_add_keygen_region(
+        enable_non_native_vesta_fq_add_keygen_region_at_offset(
             region,
             &config.double_x3_plus_x1,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_add_keygen_region(
+        enable_non_native_vesta_fq_add_keygen_region_at_offset(
             region,
             &config.double_x_sum_plus_x1,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_add_keygen_region(
+        enable_non_native_vesta_fq_add_keygen_region_at_offset(
             region,
             &config.double_x3_plus_x_diff,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_mul_keygen_region(
+        enable_non_native_vesta_fq_mul_keygen_region_at_offset(
             region,
             &config.double_lambda_times_x_diff,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_add_keygen_region(
+        enable_non_native_vesta_fq_add_keygen_region_at_offset(
             region,
             &config.double_y3_plus_y1,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )
     }
 
@@ -68258,177 +69072,209 @@ mod pasta_tiny {
         }
     }
 
-    fn assign_non_native_vesta_affine_double_or_identity_region(
+    fn assign_non_native_vesta_affine_double_or_identity_region_at_offset(
         region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
         config: &NonNativeVestaAffineDoubleOrIdentityConfig,
         witness: &NonNativeVestaAffineCompleteAdd,
+        offset: usize,
     ) -> Result<(), PlonkError> {
-        config.link.enable(region, 0)?;
-        assign_non_native_vesta_affine_maybe_identity_region(
+        config.link.enable(region, offset)?;
+        assign_non_native_vesta_affine_maybe_identity_region_at_offset(
             region,
             &config.p,
             witness.p.as_ref(),
+            offset,
         )?;
-        assign_non_native_vesta_affine_maybe_identity_region(
+        assign_non_native_vesta_affine_maybe_identity_region_at_offset(
             region,
             &config.r,
             witness.r.as_ref(),
+            offset,
         )?;
-        assign_non_native_vesta_fq_add_region(
+        assign_non_native_vesta_fq_add_region_at_offset(
             region,
             &config.double_y_denominator,
             witness.double_y_denominator.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_mul_region(
+        assign_non_native_vesta_fq_mul_region_at_offset(
             region,
             &config.double_x_squared,
             witness.double_x_squared.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_add_region(
+        assign_non_native_vesta_fq_add_region_at_offset(
             region,
             &config.double_two_x_squared,
             witness.double_two_x_squared.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_add_region(
+        assign_non_native_vesta_fq_add_region_at_offset(
             region,
             &config.double_three_x_squared,
             witness.double_three_x_squared.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_mul_region(
+        assign_non_native_vesta_fq_mul_region_at_offset(
             region,
             &config.double_lambda_times_denominator,
             witness.double_lambda_times_denominator.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_mul_region(
+        assign_non_native_vesta_fq_mul_region_at_offset(
             region,
             &config.double_denominator_inverse,
             witness.double_denominator_inverse.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_mul_region(
+        assign_non_native_vesta_fq_mul_region_at_offset(
             region,
             &config.double_lambda_squared,
             witness.double_lambda_squared.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_add_region(
+        assign_non_native_vesta_fq_add_region_at_offset(
             region,
             &config.double_x3_plus_x1,
             witness.double_x3_plus_x1.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_add_region(
+        assign_non_native_vesta_fq_add_region_at_offset(
             region,
             &config.double_x_sum_plus_x1,
             witness.double_x_sum_plus_x1.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_add_region(
+        assign_non_native_vesta_fq_add_region_at_offset(
             region,
             &config.double_x3_plus_x_diff,
             witness.double_x3_plus_x_diff.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_mul_region(
+        assign_non_native_vesta_fq_mul_region_at_offset(
             region,
             &config.double_lambda_times_x_diff,
             witness.double_lambda_times_x_diff.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_add_region(
+        assign_non_native_vesta_fq_add_region_at_offset(
             region,
             &config.double_y3_plus_y1,
             witness.double_y3_plus_y1.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
         crate::zk::assign_advice_compat(
             region,
             || "case_identity",
             config.case_identity,
-            0,
+            offset,
             || Value::known(witness.case_p_identity + witness.case_q_identity),
         )?;
         crate::zk::assign_advice_compat(
             region,
             || "case_double",
             config.case_double,
-            0,
+            offset,
             || Value::known(witness.case_double),
         )?;
         Ok(())
     }
 
-    fn enable_non_native_vesta_affine_double_or_identity_keygen_region(
+    fn enable_non_native_vesta_affine_double_or_identity_keygen_region_at_offset(
         region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
         config: &NonNativeVestaAffineDoubleOrIdentityConfig,
+        offset: usize,
     ) -> Result<(), PlonkError> {
-        config.link.enable(region, 0)?;
-        enable_non_native_vesta_affine_maybe_identity_keygen_region(region, &config.p)?;
-        enable_non_native_vesta_affine_maybe_identity_keygen_region(region, &config.r)?;
-        enable_non_native_vesta_fq_add_keygen_region(
+        config.link.enable(region, offset)?;
+        enable_non_native_vesta_affine_maybe_identity_keygen_region_at_offset(
+            region, &config.p, offset,
+        )?;
+        enable_non_native_vesta_affine_maybe_identity_keygen_region_at_offset(
+            region, &config.r, offset,
+        )?;
+        enable_non_native_vesta_fq_add_keygen_region_at_offset(
             region,
             &config.double_y_denominator,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_mul_keygen_region(
+        enable_non_native_vesta_fq_mul_keygen_region_at_offset(
             region,
             &config.double_x_squared,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_add_keygen_region(
+        enable_non_native_vesta_fq_add_keygen_region_at_offset(
             region,
             &config.double_two_x_squared,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_add_keygen_region(
+        enable_non_native_vesta_fq_add_keygen_region_at_offset(
             region,
             &config.double_three_x_squared,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_mul_keygen_region(
+        enable_non_native_vesta_fq_mul_keygen_region_at_offset(
             region,
             &config.double_lambda_times_denominator,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_mul_keygen_region(
+        enable_non_native_vesta_fq_mul_keygen_region_at_offset(
             region,
             &config.double_denominator_inverse,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_mul_keygen_region(
+        enable_non_native_vesta_fq_mul_keygen_region_at_offset(
             region,
             &config.double_lambda_squared,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_add_keygen_region(
+        enable_non_native_vesta_fq_add_keygen_region_at_offset(
             region,
             &config.double_x3_plus_x1,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_add_keygen_region(
+        enable_non_native_vesta_fq_add_keygen_region_at_offset(
             region,
             &config.double_x_sum_plus_x1,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_add_keygen_region(
+        enable_non_native_vesta_fq_add_keygen_region_at_offset(
             region,
             &config.double_x3_plus_x_diff,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_mul_keygen_region(
+        enable_non_native_vesta_fq_mul_keygen_region_at_offset(
             region,
             &config.double_lambda_times_x_diff,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_add_keygen_region(
+        enable_non_native_vesta_fq_add_keygen_region_at_offset(
             region,
             &config.double_y3_plus_y1,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )
     }
 
@@ -68735,86 +69581,100 @@ mod pasta_tiny {
         }
     }
 
-    fn assign_non_native_vesta_affine_accumulator_add_region(
+    fn assign_non_native_vesta_affine_accumulator_add_region_at_offset(
         region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
         config: &NonNativeVestaAffineAccumulatorAddConfig,
         witness: &NonNativeVestaAffineCompleteAdd,
+        offset: usize,
     ) -> Result<(), PlonkError> {
-        config.link.enable(region, 0)?;
-        assign_non_native_vesta_affine_maybe_identity_region(
+        config.link.enable(region, offset)?;
+        assign_non_native_vesta_affine_maybe_identity_region_at_offset(
             region,
             &config.p,
             witness.p.as_ref(),
+            offset,
         )?;
-        assign_non_native_vesta_affine_maybe_identity_region(
+        assign_non_native_vesta_affine_maybe_identity_region_at_offset(
             region,
             &config.q,
             witness.q.as_ref(),
+            offset,
         )?;
-        assign_non_native_vesta_affine_maybe_identity_region(
+        assign_non_native_vesta_affine_maybe_identity_region_at_offset(
             region,
             &config.r,
             witness.r.as_ref(),
+            offset,
         )?;
-        assign_non_native_vesta_fq_add_region(
+        assign_non_native_vesta_fq_add_region_at_offset(
             region,
             &config.distinct_x_delta,
             witness.distinct_x_delta.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_add_region(
+        assign_non_native_vesta_fq_add_region_at_offset(
             region,
             &config.distinct_y_delta,
             witness.distinct_y_delta.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_mul_region(
+        assign_non_native_vesta_fq_mul_region_at_offset(
             region,
             &config.distinct_lambda_times_x_delta,
             witness.distinct_lambda_times_x_delta.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_mul_region(
+        assign_non_native_vesta_fq_mul_region_at_offset(
             region,
             &config.distinct_x_delta_inverse,
             witness.distinct_x_delta_inverse.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_mul_region(
+        assign_non_native_vesta_fq_mul_region_at_offset(
             region,
             &config.distinct_lambda_squared,
             witness.distinct_lambda_squared.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_add_region(
+        assign_non_native_vesta_fq_add_region_at_offset(
             region,
             &config.distinct_x3_plus_x1,
             witness.distinct_x3_plus_x1.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_add_region(
+        assign_non_native_vesta_fq_add_region_at_offset(
             region,
             &config.distinct_x_sum_plus_x2,
             witness.distinct_x_sum_plus_x2.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_add_region(
+        assign_non_native_vesta_fq_add_region_at_offset(
             region,
             &config.distinct_x3_plus_x_diff,
             witness.distinct_x3_plus_x_diff.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_mul_region(
+        assign_non_native_vesta_fq_mul_region_at_offset(
             region,
             &config.distinct_lambda_times_x_diff,
             witness.distinct_lambda_times_x_diff.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        assign_non_native_vesta_fq_add_region(
+        assign_non_native_vesta_fq_add_region_at_offset(
             region,
             &config.distinct_y3_plus_y1,
             witness.distinct_y3_plus_y1.as_ref(),
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
         for (label, column, value) in [
             (
@@ -68829,68 +69689,91 @@ mod pasta_tiny {
             ),
             ("case_distinct", config.case_distinct, witness.case_distinct),
         ] {
-            crate::zk::assign_advice_compat(region, || label, column, 0, || Value::known(value))?;
+            crate::zk::assign_advice_compat(
+                region,
+                || label,
+                column,
+                offset,
+                || Value::known(value),
+            )?;
         }
         Ok(())
     }
 
-    fn enable_non_native_vesta_affine_accumulator_add_keygen_region(
+    fn enable_non_native_vesta_affine_accumulator_add_keygen_region_at_offset(
         region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
         config: &NonNativeVestaAffineAccumulatorAddConfig,
+        offset: usize,
     ) -> Result<(), PlonkError> {
-        config.link.enable(region, 0)?;
-        enable_non_native_vesta_affine_maybe_identity_keygen_region(region, &config.p)?;
-        enable_non_native_vesta_affine_maybe_identity_keygen_region(region, &config.q)?;
-        enable_non_native_vesta_affine_maybe_identity_keygen_region(region, &config.r)?;
-        enable_non_native_vesta_fq_add_keygen_region(
+        config.link.enable(region, offset)?;
+        enable_non_native_vesta_affine_maybe_identity_keygen_region_at_offset(
+            region, &config.p, offset,
+        )?;
+        enable_non_native_vesta_affine_maybe_identity_keygen_region_at_offset(
+            region, &config.q, offset,
+        )?;
+        enable_non_native_vesta_affine_maybe_identity_keygen_region_at_offset(
+            region, &config.r, offset,
+        )?;
+        enable_non_native_vesta_fq_add_keygen_region_at_offset(
             region,
             &config.distinct_x_delta,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_add_keygen_region(
+        enable_non_native_vesta_fq_add_keygen_region_at_offset(
             region,
             &config.distinct_y_delta,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_mul_keygen_region(
+        enable_non_native_vesta_fq_mul_keygen_region_at_offset(
             region,
             &config.distinct_lambda_times_x_delta,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_mul_keygen_region(
+        enable_non_native_vesta_fq_mul_keygen_region_at_offset(
             region,
             &config.distinct_x_delta_inverse,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_mul_keygen_region(
+        enable_non_native_vesta_fq_mul_keygen_region_at_offset(
             region,
             &config.distinct_lambda_squared,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_add_keygen_region(
+        enable_non_native_vesta_fq_add_keygen_region_at_offset(
             region,
             &config.distinct_x3_plus_x1,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_add_keygen_region(
+        enable_non_native_vesta_fq_add_keygen_region_at_offset(
             region,
             &config.distinct_x_sum_plus_x2,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_add_keygen_region(
+        enable_non_native_vesta_fq_add_keygen_region_at_offset(
             region,
             &config.distinct_x3_plus_x_diff,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_mul_keygen_region(
+        enable_non_native_vesta_fq_mul_keygen_region_at_offset(
             region,
             &config.distinct_lambda_times_x_diff,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )?;
-        enable_non_native_vesta_fq_add_keygen_region(
+        enable_non_native_vesta_fq_add_keygen_region_at_offset(
             region,
             &config.distinct_y3_plus_y1,
             NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+            offset,
         )
     }
 
@@ -71550,16 +72433,18 @@ mod pasta_tiny {
                 );
                 constraints.push(s.clone() * (b_final - final_msm_b));
 
-                let round_q_after = query_non_native_vesta_affine_maybe_identity_point(
-                    meta,
-                    &round_accumulator.msm.sum_adds[2].r,
-                    Rotation::cur(),
-                );
-                let final_output = query_non_native_vesta_affine_maybe_identity_point(
-                    meta,
-                    &final_msm.msm.sum_adds[2].r,
-                    Rotation::cur(),
-                );
+                let round_q_after =
+                    query_non_native_vesta_affine_windowed_shared_table_msm_output::<3>(
+                        meta,
+                        &round_accumulator.msm,
+                        Rotation::cur(),
+                    );
+                let final_output =
+                    query_non_native_vesta_affine_windowed_shared_table_msm_output::<3>(
+                        meta,
+                        &final_msm.msm,
+                        Rotation::cur(),
+                    );
                 push_non_native_vesta_point_equality_constraints(
                     &mut constraints,
                     &s,
@@ -71567,11 +72452,12 @@ mod pasta_tiny {
                     &final_output,
                 );
 
-                let folded_g = query_non_native_vesta_affine_maybe_identity_point(
-                    meta,
-                    &generator_fold.g_msm.sum_adds[1].r,
-                    Rotation::cur(),
-                );
+                let folded_g =
+                    query_non_native_vesta_affine_windowed_shared_table_msm_output::<2>(
+                        meta,
+                        &generator_fold.g_msm,
+                        Rotation::cur(),
+                    );
                 let final_g_base =
                     query_non_native_vesta_affine_windowed_shared_table_term_base::<
                         WINDOWS,
@@ -71584,11 +72470,12 @@ mod pasta_tiny {
                     &final_g_base,
                 );
 
-                let folded_h = query_non_native_vesta_affine_maybe_identity_point(
-                    meta,
-                    &generator_fold.h_msm.sum_adds[1].r,
-                    Rotation::cur(),
-                );
+                let folded_h =
+                    query_non_native_vesta_affine_windowed_shared_table_msm_output::<2>(
+                        meta,
+                        &generator_fold.h_msm,
+                        Rotation::cur(),
+                    );
                 let final_h_base =
                     query_non_native_vesta_affine_windowed_shared_table_term_base::<
                         WINDOWS,
@@ -73582,9 +74469,9 @@ mod pasta_tiny {
             constraints.push(s.clone() * (b_final - final_msm_b));
 
             for round_index in 0..rounds {
-                let q_after = query_non_native_vesta_affine_maybe_identity_point(
+                let q_after = query_non_native_vesta_affine_windowed_shared_table_msm_output::<3>(
                     meta,
-                    &round_accumulators[round_index].msm.sum_adds[2].r,
+                    &round_accumulators[round_index].msm,
                     Rotation::cur(),
                 );
                 if round_index + 1 < rounds {
@@ -73604,11 +74491,12 @@ mod pasta_tiny {
                         &next_q_before,
                     );
                 } else {
-                    let final_output = query_non_native_vesta_affine_maybe_identity_point(
-                        meta,
-                        &final_msm.msm.sum_adds[2].r,
-                        Rotation::cur(),
-                    );
+                    let final_output =
+                        query_non_native_vesta_affine_windowed_shared_table_msm_output::<3>(
+                            meta,
+                            &final_msm.msm,
+                            Rotation::cur(),
+                        );
                     push_non_native_vesta_point_equality_constraints(
                         &mut constraints,
                         &s,
@@ -73620,16 +74508,18 @@ mod pasta_tiny {
 
             for round_index in 0..rounds {
                 for pair_index in 0..generator_folds[round_index].len() {
-                    let folded_g = query_non_native_vesta_affine_maybe_identity_point(
-                        meta,
-                        &generator_folds[round_index][pair_index].g_msm.sum_adds[1].r,
-                        Rotation::cur(),
-                    );
-                    let folded_h = query_non_native_vesta_affine_maybe_identity_point(
-                        meta,
-                        &generator_folds[round_index][pair_index].h_msm.sum_adds[1].r,
-                        Rotation::cur(),
-                    );
+                    let folded_g =
+                        query_non_native_vesta_affine_windowed_shared_table_msm_output::<2>(
+                            meta,
+                            &generator_folds[round_index][pair_index].g_msm,
+                            Rotation::cur(),
+                        );
+                    let folded_h =
+                        query_non_native_vesta_affine_windowed_shared_table_msm_output::<2>(
+                            meta,
+                            &generator_folds[round_index][pair_index].h_msm,
+                            Rotation::cur(),
+                        );
                     if round_index + 1 < rounds {
                         let next_half = generator_folds[round_index].len() / 2;
                         let (next_pair, next_term) = if pair_index < next_half {

@@ -138,10 +138,19 @@ final class OfflineProofVerifierTests: XCTestCase {
 
     func testCounterpartyVerifierRejectsRemovedPlatformAliasesBeforeDispatch() throws {
         for platform in ["ios-appattest"] {
-            let binding = try ToriiOfflineDeviceBinding(
+            XCTAssertThrowsError(try ToriiOfflineDeviceBinding(
                 platform: platform,
                 attestationKeyId: "attestation-key",
                 deviceId: "ios-alias-device",
+                offlinePublicKey: "offline-public-key",
+                attestationReportBase64: ""
+            )) { error in
+                XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("platform"))
+            }
+            let binding = try ToriiOfflineDeviceBinding(
+                platform: "ios",
+                attestationKeyId: "attestation-key",
+                deviceId: "ios-device",
                 offlinePublicKey: "offline-public-key",
                 attestationReportBase64: ""
             )
@@ -154,7 +163,7 @@ final class OfflineProofVerifierTests: XCTestCase {
             ) { error in
                 XCTAssertEqual(
                     (error as? OfflineProofVerifierError)?.errorDescription,
-                    "Unsupported offline device binding platform."
+                    "Offline device binding iOS metadata is incomplete."
                 )
             }
             let proof = try ToriiOfflineDeviceProof(

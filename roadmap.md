@@ -28,12 +28,19 @@ fixed-window layout estimates exceed the memory guard, instead of silently
 entering unbounded configure/keygen on laptops. The next implementation step is
 a full row-oriented verifier-slice layout, followed by signed release artifact
 generation for the init and append profiles. The first reusable row primitive
-for scalar fixed-window decomposition is in place, and a row-oriented
-shared-table selector primitive now proves fixed-window table selection without
-per-tree-node advice columns. Remaining work is to migrate the fixed-window
-point table, complete-add/MSM, and IPA verifier composition configs onto the
-same row-oriented model, wire the row selector into those production
-compositions, and then remove the artifact-generation guard as a hard stop.
+for scalar fixed-window decomposition is now wired into the production
+shared-table scalar-mul/MSM/IPA verifier-slice path. The production
+shared-table path now also uses the row-oriented fixed-window table and
+selector configs: table derivation reuses one table-entry config and one
+complete-add config across row strides, and selection reuses one point column
+set for leaves and internal tree nodes instead of per-tree-node advice columns.
+The shared scalar-mul config now also reuses one deterministic doubling config
+across all window-base transition rows and one accumulator-add config across
+all selected-point accumulation rows. Remaining work is to finish the
+higher-level row-oriented MSM and IPA verifier-slice aggregation reuse where
+those wrappers still allocate per-operation configs, revalidate full
+init/append artifact generation on release-builder hardware, and then remove
+the artifact-generation guard as a hard stop.
 
 Public NPoS XOR handling is pinned to canonical asset-definition bindings:
 `xor#universal` is only an alias selector, Taira binds it to

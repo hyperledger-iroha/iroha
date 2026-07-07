@@ -312,15 +312,20 @@ high-memory release artifact builder after reviewing the printed shape. If the
 guard trips, the current verifier-slice layout still needs a row-oriented
 keygen redesign before release artifact generation can be treated as
 workstation-safe.
-The row-oriented rewrite is being staged from the scalar layer upward: the
-native Pasta/Fp fixed-window decomposition now has a reusable row-based circuit
-primitive that removes per-window advice columns while preserving canonical
-scalar-bit links, and the shared-table fixed-window selector now has a
-row-based primitive that links tree nodes with fixed row rotations instead of
-allocating one point column set per tree node. The lineage artifact command
-remains guarded until the fixed-window point table, complete-add/MSM, and IPA
-verifier-slice configs migrate to the same row-oriented model and the row
-selector is wired into those production compositions.
+The row-oriented rewrite now covers the production shared-table fixed-window
+scalar path: native Pasta/Fp scalar decomposition reuses one row schedule,
+fixed-window table derivation reuses one table-entry config and one complete-add
+config across row strides, and shared-table selection reuses one point column
+set for leaves and internal tree nodes with fixed row rotations. The same
+shared scalar-multiplication config now also reuses one deterministic doubling
+config across window-base transition rows and one accumulator-add config across
+selected-point accumulation rows. The production shared-table
+scalar-mul/MSM/IPA verifier-slice path and its keygen-only shape now use those
+row scalar, table, selector, doubling, and accumulator configs. The lineage
+artifact command remains guarded until the remaining higher-level MSM and IPA
+verifier-slice aggregation configs migrate to the same row-oriented model and
+the full init/append artifact generation is revalidated on release-builder
+hardware.
 The production readiness rollup requires
 `artifacts/kagemusha/lineage-proof-evidence.json`,
 `artifacts/kagemusha/recursive-compact-key-evidence.json`, and
@@ -3670,16 +3675,21 @@ scalar decomposition gadget now proves deterministic little-endian window
 digits for the production windowed-MSM path: every digit bit is boolean and
 linked to the canonical private scalar bit at the same global offset, and all
 scalar bits above the configured window width are constrained to zero. A
+row-oriented version of that scalar decomposition is used by the production
+shared-table verifier-slice scalar multiplication path, so scalar windows reuse
+one digit column and one bit-column set across all verifier windows. A
 non-native Vesta fixed-window point selector now proves that a selected private
 point-or-identity comes from a private `2^WINDOW_BITS` table under those
 canonical window bits. The selector uses a quadratic binary selection network
 rather than a high-degree product selector. The shared-table selector also has
 a row-oriented form that stores table leaves and selection-tree nodes in one
 reusable point column set, with fixed row rotations linking every internal node
-to its two source rows. A companion table-derivation gadget
-now proves the private table is exactly `[0, B, 2B, ...]` for a public base
-point by linking entry zero to identity, entry one to the public base, and later
-entries to a complete-add chain. A fixed-window native-scalar multiplication
+to its two source rows. A companion table-derivation gadget now proves the
+private table is exactly `[0, B, 2B, ...]` for a public base point by linking
+entry zero to identity, entry one to the public base, and later entries to a
+complete-add chain; its row-oriented form reuses one table-entry config and one
+complete-add config across fixed row strides instead of allocating those
+columns per table entry. A fixed-window native-scalar multiplication
 wrapper now composes scalar windows, shifted-base tables, selectors, per-window
 base doublings, and selected-point accumulation into a public
 `output = scalar * base` statement. A fixed-window native-scalar MSM wrapper now
