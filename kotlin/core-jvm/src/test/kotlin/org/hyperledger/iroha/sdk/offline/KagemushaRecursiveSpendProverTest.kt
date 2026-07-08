@@ -62,6 +62,10 @@ class KagemushaRecursiveSpendProverTest {
             KagemushaCompactPaymentTokenProver.NATIVE_ARCHIVE_MAX_BYTES,
         )
         assertEquals(
+            KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES,
+            KagemushaRecursiveCompactPaymentTokenProver.NATIVE_ARCHIVE_MAX_BYTES,
+        )
+        assertEquals(
             "iroha:kagemusha:v1:recursive-spend-accumulator",
             KagemushaRecursiveSpendProver.RECURSIVE_SPEND_ACCUMULATOR_DOMAIN,
         )
@@ -247,7 +251,7 @@ class KagemushaRecursiveSpendProverTest {
                 KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
             ),
         )
-        assertTrue(KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForInit())
+        assertFalse(KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForInit())
         assertTrue(
             KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForAppendOutput(
                 KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
@@ -1650,10 +1654,7 @@ class KagemushaRecursiveSpendProverTest {
             manifest,
             "\"recursive_aggregation\": \"${KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1}\"",
         )
-        assertContains(
-            manifest,
-            "\"reserved_lineage\": \"${KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1}\"",
-        )
+        assertFalse(manifest.contains("\"reserved_lineage\":"))
         assertContains(
             manifest,
             "\"reserved_lineage_one_hop\": \"${KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1}\"",

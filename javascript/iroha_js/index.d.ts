@@ -15194,10 +15194,12 @@ export interface RegisterSnsNameViaConsensusResult {
 
 export type KagemushaInstructionArchiveType =
   | "KagemushaTransfer"
-  | "RedeemKagemushaRecursive";
+  | "RedeemKagemushaRecursive"
+  | "TopUpKagemushaRecursive";
 
 export const KAGEMUSHA_TRANSFER_INSTRUCTION_WIRE_NAME: "iroha_data_model::isi::offline::KagemushaTransfer";
 export const KAGEMUSHA_REDEEM_RECURSIVE_INSTRUCTION_WIRE_NAME: "iroha_data_model::isi::offline::RedeemKagemushaRecursive";
+export const KAGEMUSHA_TOPUP_RECURSIVE_INSTRUCTION_WIRE_NAME: "iroha_data_model::isi::offline::TopUpKagemushaRecursive";
 export const KAGEMUSHA_RECURSIVE_REDEEM_REQUEST_WIRE_NAME: "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV1";
 
 export const OFFLINE_CASH_TRANSPORT_QR: "qr";
@@ -19801,9 +19803,9 @@ export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1: true
 export const KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1: 1;
 export const KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES: 8388608;
 export const KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES: 128;
-export const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: 67108864;
+export const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: 268435456;
 export const KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN: "iroha:kagemusha:v1:recursive-spend-accumulator";
-export const KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME: "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1";
+export const KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME: "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpRequestV1";
 export const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN: "iroha:kagemusha:v1:recursive-spend-transition-profile";
 export const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DIGEST_DOMAIN: "iroha:kagemusha:v1:recursive-spend-transition-profile-digest";
 export const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_BINDING_DIGEST_DOMAIN: "iroha:kagemusha:v1:recursive-spend-transition-profile-binding-digest";

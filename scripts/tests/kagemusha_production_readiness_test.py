@@ -1542,6 +1542,82 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(run.call_args_list[1].kwargs["encoding"], "utf-8")
         self.assertEqual(run.call_args_list[1].kwargs["errors"], "replace")
 
+    def test_staged_resource_guard_uses_physical_footprint_when_larger_than_rss(
+        self,
+    ) -> None:
+        resource_guard = compact_key_staged_runner.resource_guard
+        process_tree = resource_guard.subprocess.CompletedProcess(
+            ["ps"],
+            0,
+            stdout=(
+                " 10 1 10 100\n"
+                " 11 10 10 200\n"
+                " 12 1 12 400\n"
+            ),
+        )
+        root_footprint = resource_guard.subprocess.CompletedProcess(
+            ["footprint"],
+            0,
+            stdout=" 9 GB    TOTAL\n",
+        )
+        child_footprint = resource_guard.subprocess.CompletedProcess(
+            ["footprint"],
+            0,
+            stdout="phys_footprint: 512 MB\n",
+        )
+
+        with mock.patch.object(
+            resource_guard,
+            "FOOTPRINT_COMMAND",
+            "/usr/bin/footprint",
+        ), mock.patch.object(
+            resource_guard.subprocess,
+            "run",
+            side_effect=[process_tree, root_footprint, child_footprint],
+        ) as run:
+            memory_bytes = resource_guard.rss_bytes_for_pid(10)
+
+        self.assertEqual(
+            memory_bytes,
+            9 * resource_guard.BYTES_PER_GIB + 512 * 1024 * 1024,
+        )
+        self.assertEqual(
+            run.call_args_list[1].args[0],
+            ["/usr/bin/footprint", "10"],
+        )
+        self.assertEqual(
+            run.call_args_list[2].args[0],
+            ["/usr/bin/footprint", "11"],
+        )
+
+    def test_staged_resource_guard_ignores_malformed_physical_footprint(
+        self,
+    ) -> None:
+        resource_guard = compact_key_staged_runner.resource_guard
+        process_tree = resource_guard.subprocess.CompletedProcess(
+            ["ps"],
+            0,
+            stdout=" 10 1 10 100\n",
+        )
+        malformed_footprint = resource_guard.subprocess.CompletedProcess(
+            ["footprint"],
+            0,
+            stdout="TOTAL without a parseable byte value\n",
+        )
+
+        with mock.patch.object(
+            resource_guard,
+            "FOOTPRINT_COMMAND",
+            "/usr/bin/footprint",
+        ), mock.patch.object(
+            resource_guard.subprocess,
+            "run",
+            side_effect=[process_tree, malformed_footprint],
+        ):
+            memory_bytes = resource_guard.rss_bytes_for_pid(10)
+
+        self.assertEqual(memory_bytes, 100 * 1024)
+
     def test_staged_resource_guard_terminates_owned_process_group(self) -> None:
         resource_guard = compact_key_staged_runner.resource_guard
         killpg_calls: list[tuple[int, int]] = []
@@ -2392,6 +2468,20 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
 
         self.assertIn(expected_assignment, data_model)
         self.assertNotIn("vesta-recursive-fixed-window-85x3", data_model)
+
+    def test_abi6_native_archive_limit_matches_checked_in_manifest(self) -> None:
+        manifest = json.loads(
+            (REPO_ROOT / readiness.ABI6_MANIFEST_PATH).read_text(encoding="utf-8")
+        )
+
+        self.assertEqual(
+            256 * 1024 * 1024,
+            readiness.EXPECTED_ABI6_LIMIT_VALUES["native_archive_max_bytes"],
+        )
+        self.assertEqual(
+            readiness.EXPECTED_ABI6_LIMIT_VALUES["native_archive_max_bytes"],
+            manifest["limits"]["native_archive_max_bytes"],
+        )
 
     def test_staged_path_validators_reject_control_directory_paths_before_metadata(
         self,
@@ -26025,7 +26115,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "schema"
             ] = "token=abi6-archive-value-secret"
             manifest["proof_circuit_ids"][
-                "reserved_lineage"
+                "reserved_lineage_one_hop"
             ] = "token=abi6-proof-value-secret"
             manifest["limits"]["previous_proof_open_envelopes_max_bytes"] = 1
             manifest["domains"][

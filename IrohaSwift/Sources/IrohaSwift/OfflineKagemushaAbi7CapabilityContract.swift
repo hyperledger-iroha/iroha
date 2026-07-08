@@ -33,6 +33,7 @@ public enum OfflineKagemushaAbi7CapabilityContract {
     public static let mode = KagemushaOfflineSpendMode.recursiveCompactV1.rawValue
     public static let nativeBridgeAbiVersion = KagemushaRecursiveCompactPaymentTokenProver.requiredNativeBridgeAbiVersion
     public static let circuitId = KagemushaRecursiveCompactPaymentTokenProver.recursiveCompactCircuitIdV1
+    public static let nativeArchiveMaxBytes = KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes
 
     public static func isSupported(
         offlinePayments: Bool,

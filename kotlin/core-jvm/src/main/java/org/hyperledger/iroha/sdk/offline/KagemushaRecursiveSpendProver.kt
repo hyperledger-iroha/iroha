@@ -587,7 +587,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         }
 
         @JvmStatic
-        fun requiresLineageKeyArtifactsForInit(): Boolean = true
+        fun requiresLineageKeyArtifactsForInit(): Boolean = false
 
         @JvmStatic
         fun requiresLineageWitnessForRedeem(circuitId: String?, hopCount: Int): Boolean =

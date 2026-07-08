@@ -555,7 +555,7 @@ public enum KagemushaRecursiveSpendProver {
     }
 
     public static func requiresLineageKeyArtifactsForInit() -> Bool {
-        true
+        false
     }
 
     public static func requiresLineageWitnessForRedeem(circuitId: String, hopCount: UInt32) -> Bool {

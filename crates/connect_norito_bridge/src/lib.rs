@@ -8324,7 +8324,12 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_compact_paymen
     bridge_result_to_code(result)
 }
 
-/// Initialize production recursive Kagemusha spendable offline cash.
+/// Initialize recursive Kagemusha spendable offline cash.
+///
+/// Requests with Reserved-lineage key artifacts produce a witnessless
+/// Reserved-lineage bundle. Requests without those artifacts produce the
+/// semantic recursive aggregation bundle, which is offline-valid and requires a
+/// record-backed lineage witness for online redemption.
 ///
 /// Input is Norito archive bytes of
 /// `iroha_data_model::offline::KagemushaRecursiveSpendInitRequestV1`.
@@ -8352,6 +8357,9 @@ fn kagemusha_recursive_spend_init_from_request_archive(
     request_archive: &[u8],
 ) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1> {
     use iroha_core::zk::{
+        KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID, kagemusha_recursive_aggregation_proof_vk_box,
+        prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive,
+        prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive_at_height,
         prove_kagemusha_recursive_spend_lineage_init_from_record_bundle_and_pallas_open_envelope_archive_with_key_artifacts,
         prove_kagemusha_recursive_spend_lineage_init_from_record_bundle_and_pallas_open_envelope_archive_with_key_artifacts_at_height,
     };
@@ -8363,34 +8371,67 @@ fn kagemusha_recursive_spend_init_from_request_archive(
     request
         .validate_public_binding()
         .map_err(|_| BridgeError::KagemushaProve)?;
-    let lineage_verifier_key = request
-        .lineage_verifier_key
-        .as_ref()
-        .ok_or(BridgeError::KagemushaProve)?;
-    let lineage_proving_key_archive = request
-        .lineage_proving_key_archive
-        .as_deref()
-        .ok_or(BridgeError::KagemushaProve)?;
-    match request.block_height {
-        Some(block_height) => {
-            prove_kagemusha_recursive_spend_lineage_init_from_record_bundle_and_pallas_open_envelope_archive_with_key_artifacts_at_height(
-                &request.record_bundle,
-                &request.pallas_open_envelopes_archive,
-                request.current_note,
-                lineage_verifier_key,
-                lineage_proving_key_archive,
-                block_height,
-            )
+    let KagemushaRecursiveSpendInitRequestV1 {
+        record_bundle,
+        pallas_open_envelopes_archive,
+        current_note,
+        lineage_verifier_key,
+        lineage_proving_key_archive,
+        block_height,
+    } = request;
+    match (
+        lineage_verifier_key.as_ref(),
+        lineage_proving_key_archive.as_deref(),
+    ) {
+        (Some(lineage_verifier_key), Some(lineage_proving_key_archive)) => {
+            match block_height {
+                Some(block_height) => {
+                    prove_kagemusha_recursive_spend_lineage_init_from_record_bundle_and_pallas_open_envelope_archive_with_key_artifacts_at_height(
+                        &record_bundle,
+                        &pallas_open_envelopes_archive,
+                        current_note,
+                        lineage_verifier_key,
+                        lineage_proving_key_archive,
+                        block_height,
+                    )
+                }
+                None => {
+                    prove_kagemusha_recursive_spend_lineage_init_from_record_bundle_and_pallas_open_envelope_archive_with_key_artifacts(
+                        &record_bundle,
+                        &pallas_open_envelopes_archive,
+                        current_note,
+                        lineage_verifier_key,
+                        lineage_proving_key_archive,
+                    )
+                }
+            }
         }
-        None => {
-            prove_kagemusha_recursive_spend_lineage_init_from_record_bundle_and_pallas_open_envelope_archive_with_key_artifacts(
-                &request.record_bundle,
-                &request.pallas_open_envelopes_archive,
-                request.current_note,
-                lineage_verifier_key,
-                lineage_proving_key_archive,
-            )
-        }
+        (None, None) => kagemusha_recursive_aggregation_proof_vk_box().and_then(|vk_box| {
+            match block_height {
+                Some(block_height) => {
+                    prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+                        &record_bundle,
+                        &pallas_open_envelopes_archive,
+                        current_note,
+                        KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                        &vk_box,
+                        None,
+                        block_height,
+                    )
+                }
+                None => {
+                    prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive(
+                        &record_bundle,
+                        &pallas_open_envelopes_archive,
+                        current_note,
+                        KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                        &vk_box,
+                        None,
+                    )
+                }
+            }
+        }),
+        _ => Err("Kagemusha recursive spend init lineage key artifacts must be both present or both absent".to_owned()),
     }
     .map_err(|_| BridgeError::KagemushaProve)
 }
@@ -9569,7 +9610,7 @@ mod offline_note_prover_tests {
         let verifier_key = VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), vec![0xC7; 48]);
         let mut record = VerifyingKeyRecord::new_with_owner(
             1,
-            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
             Some("bridge-recursive-spend-lineage".to_owned()),
             iroha_core::zk::KAGEMUSHA_VERIFIER_NAMESPACE,
             BackendTag::Halo2IpaPasta,
@@ -9744,7 +9785,7 @@ mod offline_note_prover_tests {
             .first_mut()
             .expect("two-hop fast lineage witness has previous proof");
         previous_proof.verifier_key_id.name =
-            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.to_owned();
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1.to_owned();
         previous_proof
             .public_inputs
             .recursive_verifier_scalar_projection_digest =
@@ -9808,7 +9849,7 @@ mod offline_note_prover_tests {
         include_lineage_slice: bool,
     ) {
         request.bundle.recursive_proof.verifier_key_id.name =
-            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.to_owned();
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1.to_owned();
         request
             .bundle
             .recursive_proof
@@ -9840,7 +9881,7 @@ mod offline_note_prover_tests {
         append_zk1_raw_instance_columns(&mut proof_bytes, instance_columns);
         let envelope = OpenVerifyEnvelope {
             backend: BackendTag::Halo2IpaPasta,
-            circuit_id: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.to_owned(),
+            circuit_id: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1.to_owned(),
             vk_hash: fixed_bytes(b"bridge-recursive-lineage-envelope-vk"),
             public_inputs:
                 iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_SCHEMA
@@ -10383,6 +10424,16 @@ mod offline_note_prover_tests {
         let out = unsafe { slice::from_raw_parts(out_ptr, out_len as usize).to_vec() };
         connect_norito_free(out_ptr);
         norito::decode_from_bytes(&out).expect("decode Kagemusha recursive spend lineage witness")
+    }
+
+    fn decode_kagemusha_recursive_spend_bundle(
+        out_ptr: *mut c_uchar,
+        out_len: c_ulong,
+    ) -> KagemushaRecursiveSpendBundleV1 {
+        assert!(!out_ptr.is_null(), "prover output pointer must be set");
+        let out = unsafe { slice::from_raw_parts(out_ptr, out_len as usize).to_vec() };
+        connect_norito_free(out_ptr);
+        norito::decode_from_bytes(&out).expect("decode Kagemusha recursive spend bundle")
     }
 
     fn decode_kagemusha_topup_instruction(
@@ -12127,7 +12178,7 @@ mod offline_note_prover_tests {
     }
 
     #[test]
-    fn kagemusha_recursive_spend_init_ffi_rejects_missing_lineage_key_artifacts() {
+    fn kagemusha_recursive_spend_init_ffi_accepts_semantic_init_without_lineage_key_artifacts() {
         let (bundle, witness) = sample_verifying_semantic_recursive_spend_lineage_fixture();
         let request = KagemushaRecursiveSpendInitRequestV1 {
             record_bundle: witness.record_bundle,
@@ -12150,12 +12201,54 @@ mod offline_note_prover_tests {
             )
         };
 
-        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
-        assert!(
-            out_ptr.is_null(),
-            "missing Reserved-lineage key artifacts must not return bytes"
+        assert_eq!(status, 0);
+        let bundle = decode_kagemusha_recursive_spend_bundle(out_ptr, out_len);
+        assert_eq!(
+            bundle.recursive_proof.verifier_key_id.name.as_str(),
+            KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
         );
-        assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_init_ffi_rejects_partial_lineage_key_artifacts() {
+        for (case, verifier_key, proving_key_archive) in [
+            (
+                "missing proving key archive",
+                Some(VerifyingKeyBox::new("halo2/ipa".into(), vec![0xAB; 32])),
+                None,
+            ),
+            ("missing verifier key", None, Some(vec![0xAC; 32])),
+        ] {
+            let (bundle, witness) = sample_verifying_semantic_recursive_spend_lineage_fixture();
+            let request = KagemushaRecursiveSpendInitRequestV1 {
+                record_bundle: witness.record_bundle,
+                pallas_open_envelopes_archive: witness.pallas_open_envelopes_archive,
+                current_note: bundle.accumulator.current_note,
+                lineage_verifier_key: verifier_key,
+                lineage_proving_key_archive: proving_key_archive,
+                block_height: None,
+            };
+            let archive =
+                norito::to_bytes(&request).expect("encode partial-artifacts init request");
+            let mut out_ptr: *mut c_uchar = ptr::null_mut();
+            let mut out_len: c_ulong = 0;
+
+            let status = unsafe {
+                connect_norito_kagemusha_recursive_spend_init(
+                    archive.as_ptr(),
+                    archive.len() as c_ulong,
+                    &mut out_ptr,
+                    &mut out_len,
+                )
+            };
+
+            assert_eq!(status, ERR_KAGEMUSHA_PROVE, "{case}");
+            assert!(
+                out_ptr.is_null(),
+                "{case} must not return recursive spend init bytes"
+            );
+            assert_eq!(out_len, 0, "{case}");
+        }
     }
 
     fn sample_recursive_spend_topup_request_for_bridge() -> KagemushaRecursiveSpendTopUpRequestV1 {
@@ -12669,7 +12762,7 @@ mod offline_note_prover_tests {
     fn sample_reserved_lineage_previous_bundle() -> KagemushaRecursiveSpendBundleV1 {
         let mut previous_bundle = sample_kagemusha_recursive_spend_bundle();
         previous_bundle.recursive_proof.verifier_key_id.name =
-            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.to_owned();
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1.to_owned();
         previous_bundle
             .recursive_proof
             .public_inputs
@@ -12941,7 +13034,7 @@ mod offline_note_prover_tests {
             amount: Numeric::new(7, 0),
         };
         previous_bundle.recursive_proof.verifier_key_id.name =
-            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.to_owned();
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1.to_owned();
         refresh_reserved_lineage_previous_bundle_public_inputs(&mut previous_bundle);
         attach_recursive_spend_previous_proof_open_verify_envelope(
             &mut previous_bundle,
@@ -13128,7 +13221,7 @@ mod offline_note_prover_tests {
             .expect("sample append record bundle has one hop");
         let mut previous_bundle = sample_verifying_semantic_recursive_spend_bundle();
         previous_bundle.recursive_proof.verifier_key_id.name =
-            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.to_owned();
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1.to_owned();
         previous_bundle.accumulator.chain_id = record_bundle.bundle.chain_id.clone();
         previous_bundle.accumulator.asset = record_bundle.bundle.asset.clone();
         if previous_bundle.accumulator.initial_root == step.root_before {
@@ -13387,7 +13480,7 @@ mod offline_note_prover_tests {
                 b"bridge-recursive-spend-append-previous-proof-envelope-vk",
             );
             request.output_proof_circuit_id =
-                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.to_owned();
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.to_owned();
 
             let archive = sample_previous_recursive_proof_open_envelopes_archive(
                 &request.previous_bundle,
@@ -13474,7 +13567,7 @@ mod offline_note_prover_tests {
                 Some(sample_recursive_spend_lineage_verifier_record()),
             );
             request.output_proof_circuit_id =
-                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.to_owned();
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.to_owned();
             request.previous_recursive_proof_open_envelopes_archive = previous_proof_open_archive;
 
             let (status, out_ptr, out_len) = call_recursive_spend_append_ffi(&request);
@@ -13508,7 +13601,7 @@ mod offline_note_prover_tests {
             Some(sample_recursive_spend_lineage_verifier_record()),
         );
         request.output_proof_circuit_id =
-            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.to_owned();
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.to_owned();
         request.previous_recursive_proof_open_envelopes_archive = previous_proof_open_archive;
 
         let (status, out_ptr, out_len) = call_recursive_spend_append_ffi(&request);
@@ -13545,7 +13638,7 @@ mod offline_note_prover_tests {
             Some(sample_recursive_spend_lineage_verifier_record()),
         );
         request.output_proof_circuit_id =
-            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.to_owned();
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.to_owned();
         request.previous_recursive_proof_open_envelopes_archive = previous_proof_open_archive;
 
         let (status, out_ptr, out_len) = call_recursive_spend_append_ffi(&request);
@@ -13579,7 +13672,7 @@ mod offline_note_prover_tests {
         let mut request =
             sample_recursive_spend_append_request(sample_kagemusha_recursive_spend_bundle(), None);
         request.output_proof_circuit_id =
-            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.to_owned();
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.to_owned();
         let (status, out_ptr, out_len) = call_recursive_spend_append_ffi(&request);
 
         assert_eq!(status, ERR_KAGEMUSHA_PROVE);
@@ -13628,7 +13721,7 @@ mod offline_note_prover_tests {
         );
         let mut request = sample_recursive_spend_append_request(previous_bundle, None);
         request.output_proof_circuit_id =
-            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.to_owned();
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.to_owned();
         request.previous_recursive_proof_open_envelopes_archive = previous_proof_open_archive;
 
         let (status, out_ptr, out_len) = call_recursive_spend_append_ffi(&request);
@@ -13660,7 +13753,7 @@ mod offline_note_prover_tests {
             Some(sample_recursive_spend_lineage_verifier_record()),
         );
         request.output_proof_circuit_id =
-            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.to_owned();
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.to_owned();
         request.previous_recursive_proof_open_envelopes_archive = previous_proof_open_archive;
 
         let (status, out_ptr, out_len) = call_recursive_spend_append_ffi(&request);

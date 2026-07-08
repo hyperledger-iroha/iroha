@@ -3286,10 +3286,7 @@ def test_recursive_kagemusha_shared_abi6_fixture_matches_sdk_surface() -> None:
         circuit_ids["recursive_aggregation"]
         == kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
     )
-    assert (
-        circuit_ids["reserved_lineage"]
-        == kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
-    )
+    assert "reserved_lineage" not in circuit_ids
     assert (
         circuit_ids["reserved_lineage_one_hop"]
         == kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
@@ -3422,7 +3419,7 @@ def test_recursive_kagemusha_shared_abi6_fixture_matches_sdk_surface() -> None:
     assert redeem_archive["norito_type"] == "KagemushaRecursiveSpendRedeemRequestV1"
     assert (
         redeem_archive["sha256_hex"]
-        == "1fe949217c8bbe26957cf2a2510d79894e15b20fc5143dee2c3a1ff8678d3a5d"
+        == "703128068fa36897c952640cb77006af29a8aa802d67da82c97e73c8e0ef1864"
     )
     assert redeem_archive["byte_len"] > 0
     assert len(base64.b64decode(redeem_archive["bytes_base64"])) > 0
@@ -3432,7 +3429,7 @@ def test_recursive_kagemusha_shared_abi6_fixture_matches_sdk_surface() -> None:
     assert redeem_instruction_archive["norito_type"] == "RedeemKagemushaRecursive"
     assert (
         redeem_instruction_archive["sha256_hex"]
-        == "dd7bcb5ab602696be67028e03578933a93e9396057a5decefe8cc9058662bf85"
+        == "e05fb3ebb3a3e823f65403e09d1aa6e5deab0145f7aa0827f66a371ad633cc3e"
     )
 
     assert (
@@ -4514,6 +4511,17 @@ def test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures() -
         kagemusha.encode_kagemusha_recursive_spend_init_request(init_request),
         kagemusha.KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME,
     )
+    semantic_init_request = kagemusha.KagemushaRecursiveSpendInitRequest(
+        record_bundle=record_bundle,
+        pallas_open_envelopes=pallas,
+        current_note=note,
+    )
+    assert semantic_init_request.lineage_verifier_key is None
+    assert semantic_init_request.lineage_proving_key_archive is None
+    _assert_kagemusha_archive_schema(
+        kagemusha.encode_kagemusha_recursive_spend_init_request(semantic_init_request),
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME,
+    )
 
     append_request = kagemusha.KagemushaRecursiveSpendAppendRequest(
         previous_bundle=_shared_recursive_spend_archive("init_bundle"),
@@ -5071,13 +5079,23 @@ def test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs() -> N
             )
     with pytest.raises(
         ValueError,
-        match="lineage_verifier_key is required for recursive spend lineage proving",
+        match="lineage_verifier_key is required when lineage_proving_key_archive is present",
     ):
         kagemusha.KagemushaRecursiveSpendInitRequest(
             record_bundle=record_bundle,
             pallas_open_envelopes=pallas,
             current_note=note,
             lineage_proving_key_archive=_synthetic_kagemusha_archive("test::Key", 0x73),
+        )
+    with pytest.raises(
+        ValueError,
+        match="lineage_proving_key_archive is required when lineage_verifier_key is present",
+    ):
+        kagemusha.KagemushaRecursiveSpendInitRequest(
+            record_bundle=record_bundle,
+            pallas_open_envelopes=pallas,
+            current_note=note,
+            lineage_verifier_key=init_artifacts.lineage_verifier_key,
         )
     with pytest.raises(
         ValueError,
@@ -6714,7 +6732,7 @@ def test_recursive_kagemusha_exports_stable_circuit_ids() -> None:
         kagemusha.KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES
         == 128
     )
-    assert kagemusha.KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES == 64 * 1024 * 1024
+    assert kagemusha.KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES == 256 * 1024 * 1024
     assert "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES" in kagemusha.__all__
     assert (
         kagemusha.KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN
@@ -6825,7 +6843,7 @@ def test_recursive_kagemusha_exports_stable_circuit_ids() -> None:
     assert kagemusha.is_kagemusha_recursive_spend_lineage_append_output_circuit_id(
         kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
     )
-    assert kagemusha.requires_kagemusha_recursive_spend_lineage_key_artifacts_for_init()
+    assert not kagemusha.requires_kagemusha_recursive_spend_lineage_key_artifacts_for_init()
     for output_circuit_id in (
         kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
     ):

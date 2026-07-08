@@ -8742,6 +8742,14 @@ public final class NoritoNativeBridge: @unchecked Sendable {
 
     func mldsaVerify(suiteId: UInt8, publicKey: Data, message: Data, signature: Data) -> Bool? {
         #if canImport(Darwin)
+        if let detachedResult = verifyDetached(
+            algorithm: .mlDsa,
+            publicKey: publicKey,
+            message: message,
+            signature: signature
+        ) {
+            return detachedResult
+        }
         guard let mldsaVerifyFn else { return nil }
         let status = publicKey.withUnsafeBytes { pkBuffer -> Int32 in
             guard let pkBase = pkBuffer.bindMemory(to: UInt8.self).baseAddress else { return -1 }

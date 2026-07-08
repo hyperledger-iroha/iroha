@@ -566,10 +566,7 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
             circuitIds["recursive_aggregation"] as? String,
             KagemushaRecursiveSpendProver.recursiveAggregationProofCircuitIdV1
         )
-        XCTAssertEqual(
-            circuitIds["reserved_lineage"] as? String,
-            KagemushaRecursiveSpendProver.recursiveSpendLineageProofCircuitIdV1
-        )
+        XCTAssertNil(circuitIds["reserved_lineage"])
         XCTAssertEqual(
             circuitIds["reserved_lineage_one_hop"] as? String,
             KagemushaRecursiveSpendProver.recursiveSpendLineageOneHopProofCircuitIdV1
@@ -1146,7 +1143,7 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
                 KagemushaRecursiveSpendProver.recursiveSpendLineageAppendProofCircuitIdV1
             )
         )
-        XCTAssertTrue(KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForInit())
+        XCTAssertFalse(KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForInit())
         XCTAssertFalse(
             KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForAppendOutput(
                 outputCircuitId: KagemushaRecursiveSpendProver.recursiveSpendLineageProofCircuitIdV1

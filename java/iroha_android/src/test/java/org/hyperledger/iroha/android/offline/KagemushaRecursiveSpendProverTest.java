@@ -106,6 +106,8 @@ public final class KagemushaRecursiveSpendProverTest {
         == 128;
     assert KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES == 256 * 1024 * 1024;
     assert KagemushaCompactPaymentTokenProver.NATIVE_ARCHIVE_MAX_BYTES == 256 * 1024 * 1024;
+    assert KagemushaRecursiveCompactPaymentTokenProver.NATIVE_ARCHIVE_MAX_BYTES
+        == KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES;
     assert "iroha:kagemusha:v1:recursive-spend-accumulator"
         .equals(KagemushaRecursiveSpendProver.RECURSIVE_SPEND_ACCUMULATOR_DOMAIN);
     assert "iroha:kagemusha:v1:recursive-spend-transition-profile"
@@ -218,7 +220,7 @@ public final class KagemushaRecursiveSpendProverTest {
         KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1);
     assert KagemushaRecursiveSpendProver.isLineageAppendOutputCircuitId(
         KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1);
-    assert KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForInit();
+    assert !KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForInit();
     assert !KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForAppendOutput(
         KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1);
     assert KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForAppendOutput(
@@ -455,7 +457,7 @@ public final class KagemushaRecursiveSpendProverTest {
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
                     validRecursiveCompactInput, validRecursiveCompactInput, new byte[0]));
     assertThrows(
-        "recordBundleArchive must not exceed 67108864 bytes",
+        "recordBundleArchive must not exceed 268435456 bytes",
         () ->
             KagemushaRecursiveCompactPaymentTokenProver
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
@@ -463,7 +465,7 @@ public final class KagemushaRecursiveSpendProverTest {
                     validRecursiveCompactInput,
                     validRecursiveCompactKeyArtifacts));
     assertThrows(
-        "pallasOpenEnvelopesArchive must not exceed 67108864 bytes",
+        "pallasOpenEnvelopesArchive must not exceed 268435456 bytes",
         () ->
             KagemushaRecursiveCompactPaymentTokenProver
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
@@ -471,7 +473,7 @@ public final class KagemushaRecursiveSpendProverTest {
                     oversizedRecursiveCompactInput,
                     validRecursiveCompactKeyArtifacts));
     assertThrows(
-        "recursiveCompactKeyArtifactsArchive must not exceed 67108864 bytes",
+        "recursiveCompactKeyArtifactsArchive must not exceed 268435456 bytes",
         () ->
             KagemushaRecursiveCompactPaymentTokenProver
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
@@ -530,7 +532,7 @@ public final class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveCompactPaymentTokenProver
                 .recursiveSpendCompactPaymentTokenFromBundle(new byte[0]));
     assertThrows(
-        "bundleArchive must not exceed 67108864 bytes",
+        "bundleArchive must not exceed 268435456 bytes",
         () ->
             KagemushaRecursiveCompactPaymentTokenProver
                 .recursiveSpendCompactPaymentTokenFromBundle(oversizedRecursiveCompactInput));
@@ -550,7 +552,7 @@ public final class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(
                 new byte[0], validRecursiveCompactVerifierKeys));
     assertThrows(
-        "compactTokenArchive must not exceed 67108864 bytes",
+        "compactTokenArchive must not exceed 268435456 bytes",
         () ->
             KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(
                 oversizedRecursiveCompactInput, validRecursiveCompactVerifierKeys));
@@ -570,7 +572,7 @@ public final class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(
                 validRecursiveCompactInput, new byte[0]));
     assertThrows(
-        "recursiveCompactVerifierKeysArchive must not exceed 67108864 bytes",
+        "recursiveCompactVerifierKeysArchive must not exceed 268435456 bytes",
         () ->
             KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(
                 validRecursiveCompactInput, oversizedRecursiveCompactInput));
@@ -591,7 +593,7 @@ public final class KagemushaRecursiveSpendProverTest {
                 .verifyRecursiveSpendCompactPaymentTokenProjection(
                     validRecursiveCompactInput, new byte[0]));
     assertThrows(
-        "verifierRecordArchive must not exceed 67108864 bytes",
+        "verifierRecordArchive must not exceed 268435456 bytes",
         () ->
             KagemushaRecursiveCompactPaymentTokenProver
                 .verifyRecursiveSpendCompactPaymentTokenProjection(
@@ -1142,11 +1144,9 @@ public final class KagemushaRecursiveSpendProverTest {
         "\"recursive_aggregation\": \""
             + KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
             + "\"");
-    assertContains(
-        manifest,
-        "\"reserved_lineage\": \""
-            + KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
-            + "\"");
+    if (manifest.contains("\"reserved_lineage\":")) {
+      throw new AssertionError("generic Reserved-lineage family id must not be a manifest proof id");
+    }
     assertContains(
         manifest,
         "\"reserved_lineage_one_hop\": \""
@@ -2463,11 +2463,11 @@ public final class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendTopUpRequestFromInitRequest(
                 sampleRecipient(), lineageInit));
 
-    assertThrows(
-        "lineageVerifierKey is required for recursive spend init",
-        () ->
-            new KagemushaRecursiveSpendRequestCodecs.InitSpendRequest(
-                recordBundle, pallasOpenEnvelopes, note, null, null, null));
+    final KagemushaRecursiveSpendRequestCodecs.InitSpendRequest semanticInit =
+        new KagemushaRecursiveSpendRequestCodecs.InitSpendRequest(
+            recordBundle, pallasOpenEnvelopes, note, null, null, null);
+    assert semanticInit.lineageVerifierKey() == null;
+    assert semanticInit.lineageProvingKeyArchive() == null;
     assertThrows(
         "top-up init request must contain exactly one checked hop",
         () ->
@@ -2743,7 +2743,7 @@ public final class KagemushaRecursiveSpendProverTest {
                     null,
                     initLineageArtifacts.provingKeyArchive,
                     12L));
-    assert "lineageVerifierKey is required for recursive spend init"
+    assert "lineageVerifierKey is required when lineageProvingKeyArchive is present"
         .equals(autoInitPallasMissingLineageKey.getMessage());
 
     final IllegalArgumentException autoInitPallasWrongProfile =
@@ -3292,16 +3292,26 @@ public final class KagemushaRecursiveSpendProverTest {
 
     final SampleLineageArtifacts initLineageArtifacts = sampleInitLineageArtifacts((byte) 0x6a);
     final SampleLineageArtifacts appendLineageArtifacts = sampleAppendLineageArtifacts((byte) 0x6b);
-    final String missingInitLineageVerifierKeyMessage =
-        "lineageVerifierKey is required for recursive spend init";
+    final String partialInitLineageVerifierKeyMessage =
+        "lineageVerifierKey is required when lineageProvingKeyArchive is present";
     assertThrows(
-        missingInitLineageVerifierKeyMessage,
+        partialInitLineageVerifierKeyMessage,
         () ->
             new KagemushaRecursiveSpendRequestCodecs.InitSpendRequest(
                 sampleRecordBundle(),
                 pallasOpenEnvelopeVectorArchive(),
                 sampleNote(),
                 null,
+                initLineageArtifacts.provingKeyArchive,
+                null));
+    assertThrows(
+        "lineageProvingKeyArchive is required when lineageVerifierKey is present",
+        () ->
+            new KagemushaRecursiveSpendRequestCodecs.InitSpendRequest(
+                sampleRecordBundle(),
+                pallasOpenEnvelopeVectorArchive(),
+                sampleNote(),
+                initLineageArtifacts.verifierKey,
                 null,
                 null));
     final String initWrongRecordBundleMessage =
@@ -3901,7 +3911,7 @@ public final class KagemushaRecursiveSpendProverTest {
         "requestArchive must not be empty",
         () -> KagemushaRecursiveSpendProver.ownedNativeInput(new byte[0], "requestArchive"));
     assertThrows(
-        "requestArchive must not exceed 67108864 bytes",
+        "requestArchive must not exceed 268435456 bytes",
         () ->
             KagemushaRecursiveSpendProver.ownedNativeInput(
                 new byte[KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES + 1],
@@ -3919,7 +3929,7 @@ public final class KagemushaRecursiveSpendProverTest {
         new byte[KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES + 1];
 
     assertThrows(
-        "requestArchive must not exceed 67108864 bytes",
+        "requestArchive must not exceed 268435456 bytes",
         () -> KagemushaRecursiveSpendProver.initSpend(oversizedArchive));
     assertThrows(
         "requestArchive must be a valid Norito archive",
@@ -3958,7 +3968,7 @@ public final class KagemushaRecursiveSpendProverTest {
         "profileArchive must contain a non-empty Norito payload",
         () -> KagemushaRecursiveSpendProver.lineageAppendBoundary(emptyPayloadArchive));
     assertThrows(
-        "profileArchive must not exceed 67108864 bytes",
+        "profileArchive must not exceed 268435456 bytes",
         () -> KagemushaRecursiveSpendProver.lineageAppendBoundary(oversizedArchive));
 
     assertThrows(
@@ -3968,7 +3978,7 @@ public final class KagemushaRecursiveSpendProverTest {
         "recordBundleArchive must contain a non-empty Norito payload",
         () -> KagemushaRecursiveSpendProver.buildPallasOpenEnvelopesArchive(emptyPayloadArchive));
     assertThrows(
-        "recordBundleArchive must not exceed 67108864 bytes",
+        "recordBundleArchive must not exceed 268435456 bytes",
         () -> KagemushaRecursiveSpendProver.buildPallasOpenEnvelopesArchive(oversizedArchive));
     assertThrows(
         "previousBundleArchive must be a valid Norito archive",
@@ -3981,7 +3991,7 @@ public final class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveSpendProver.buildPreviousProofOpenEnvelopesArchive(
                 emptyPayloadArchive));
     assertThrows(
-        "previousBundleArchive must not exceed 67108864 bytes",
+        "previousBundleArchive must not exceed 268435456 bytes",
         () ->
             KagemushaRecursiveSpendProver.buildPreviousProofOpenEnvelopesArchive(
                 oversizedArchive));
@@ -4020,12 +4030,12 @@ public final class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(
                 validArchive, emptyPayloadArchive));
     assertThrows(
-        "requestArchive must not exceed 67108864 bytes",
+        "requestArchive must not exceed 268435456 bytes",
         () ->
             KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(
                 oversizedArchive, validArchive));
     assertThrows(
-        "bundleArchive must not exceed 67108864 bytes",
+        "bundleArchive must not exceed 268435456 bytes",
         () ->
             KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(
                 validArchive, oversizedArchive));
@@ -4061,17 +4071,17 @@ public final class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
                 validArchive, validArchive, emptyPayloadArchive));
     assertThrows(
-        "previousWitnessArchive must not exceed 67108864 bytes",
+        "previousWitnessArchive must not exceed 268435456 bytes",
         () ->
             KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
                 oversizedArchive, validArchive, validArchive));
     assertThrows(
-        "requestArchive must not exceed 67108864 bytes",
+        "requestArchive must not exceed 268435456 bytes",
         () ->
             KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
                 validArchive, oversizedArchive, validArchive));
     assertThrows(
-        "bundleArchive must not exceed 67108864 bytes",
+        "bundleArchive must not exceed 268435456 bytes",
         () ->
             KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
                 validArchive, validArchive, oversizedArchive));

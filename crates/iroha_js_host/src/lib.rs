@@ -2736,7 +2736,7 @@ pub fn build_confidential_unshield_proof_v3(
     })
 }
 
-const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 64 * 1024 * 1024;
+const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 256 * 1024 * 1024;
 
 fn ensure_kagemusha_recursive_archive_len(
     archive_len: usize,
@@ -3170,42 +3170,67 @@ pub fn kagemusha_recursive_spend_init(request_archive: Uint8Array) -> napi::Resu
     request
         .validate_public_binding()
         .map_err(|err| napi::Error::new(napi::Status::GenericFailure, err.to_string()))?;
-    let lineage_verifier_key = request.lineage_verifier_key.as_ref().ok_or_else(|| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            "Kagemusha Reserved-lineage init requires lineage_verifier_key",
-        )
-    })?;
-    let lineage_proving_key_archive =
-        request
-            .lineage_proving_key_archive
-            .as_deref()
-            .ok_or_else(|| {
-                napi::Error::new(
-                    napi::Status::InvalidArg,
-                    "Kagemusha Reserved-lineage init requires lineage_proving_key_archive",
+    let iroha_data_model::offline::KagemushaRecursiveSpendInitRequestV1 {
+        record_bundle,
+        pallas_open_envelopes_archive,
+        current_note,
+        lineage_verifier_key,
+        lineage_proving_key_archive,
+        block_height,
+    } = request;
+    let bundle = match (
+        lineage_verifier_key.as_ref(),
+        lineage_proving_key_archive.as_deref(),
+    ) {
+        (Some(lineage_verifier_key), Some(lineage_proving_key_archive)) => match block_height {
+            Some(block_height) => {
+                iroha_core::zk::prove_kagemusha_recursive_spend_lineage_init_from_record_bundle_and_pallas_open_envelope_archive_with_key_artifacts_at_height(
+                    &record_bundle,
+                    &pallas_open_envelopes_archive,
+                    current_note,
+                    lineage_verifier_key,
+                    lineage_proving_key_archive,
+                    block_height,
                 )
-            })?;
-    let bundle = match request.block_height {
-        Some(block_height) => {
-            iroha_core::zk::prove_kagemusha_recursive_spend_lineage_init_from_record_bundle_and_pallas_open_envelope_archive_with_key_artifacts_at_height(
-                &request.record_bundle,
-                &request.pallas_open_envelopes_archive,
-                request.current_note,
-                lineage_verifier_key,
-                lineage_proving_key_archive,
-                block_height,
-            )
+            }
+            None => {
+                iroha_core::zk::prove_kagemusha_recursive_spend_lineage_init_from_record_bundle_and_pallas_open_envelope_archive_with_key_artifacts(
+                    &record_bundle,
+                    &pallas_open_envelopes_archive,
+                    current_note,
+                    lineage_verifier_key,
+                    lineage_proving_key_archive,
+                )
+            }
+        },
+        (None, None) => {
+            iroha_core::zk::kagemusha_recursive_aggregation_proof_vk_box().and_then(|vk_box| {
+                match block_height {
+                    Some(block_height) => {
+                        iroha_core::zk::prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+                            &record_bundle,
+                            &pallas_open_envelopes_archive,
+                            current_note,
+                            iroha_core::zk::KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                            &vk_box,
+                            None,
+                            block_height,
+                        )
+                    }
+                    None => {
+                        iroha_core::zk::prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive(
+                            &record_bundle,
+                            &pallas_open_envelopes_archive,
+                            current_note,
+                            iroha_core::zk::KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                            &vk_box,
+                            None,
+                        )
+                    }
+                }
+            })
         }
-        None => {
-            iroha_core::zk::prove_kagemusha_recursive_spend_lineage_init_from_record_bundle_and_pallas_open_envelope_archive_with_key_artifacts(
-                &request.record_bundle,
-                &request.pallas_open_envelopes_archive,
-                request.current_note,
-                lineage_verifier_key,
-                lineage_proving_key_archive,
-            )
-        }
+        _ => Err("Kagemusha recursive spend init lineage key artifacts must be both present or both absent".to_owned()),
     }
     .map_err(|err| napi::Error::new(napi::Status::GenericFailure, err))?;
     encode_kagemusha_recursive_archive(
@@ -20448,7 +20473,7 @@ mod tests {
     fn kagemusha_recursive_spend_verify_requires_lineage_record_for_reserved_lineage() {
         let mut bundle = sample_kagemusha_recursive_spend_bundle_for_js_host();
         bundle.recursive_proof.verifier_key_id.name =
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
                 .to_owned();
         bundle
             .recursive_proof
@@ -20671,17 +20696,18 @@ mod tests {
     }
 
     #[test]
-    fn kagemusha_recursive_spend_init_rejects_missing_lineage_key_artifacts() {
+    fn kagemusha_recursive_spend_init_accepts_semantic_init_without_lineage_key_artifacts() {
         let request = sample_kagemusha_recursive_spend_init_request_for_js_host();
         let archive = norito::to_bytes(&request).expect("encode JS host init request");
 
-        let err = match kagemusha_recursive_spend_init(Uint8Array::from(archive)) {
-            Ok(_) => panic!("JS host must reject missing Reserved-lineage key artifacts"),
-            Err(err) => err,
-        };
-        assert!(
-            err.reason.contains("lineage_verifier_key"),
-            "missing lineage key artifacts returned unexpected error: {err}"
+        let bundle_archive = kagemusha_recursive_spend_init(Uint8Array::from(archive))
+            .expect("JS host must accept semantic init without lineage key artifacts");
+        let bundle: iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 =
+            norito::decode_from_bytes(bundle_archive.as_ref())
+                .expect("decode JS host semantic init bundle");
+        assert_eq!(
+            bundle.recursive_proof.verifier_key_id.name.as_str(),
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
         );
     }
 
@@ -22037,86 +22063,21 @@ mod tests {
 
     fn sample_kagemusha_recursive_spend_init_request_for_js_host()
     -> iroha_data_model::offline::KagemushaRecursiveSpendInitRequestV1 {
-        let chain_id: iroha_data_model::ChainId =
-            "kagemusha-js-host-current-hop".parse().expect("chain id");
-        let asset = AssetDefinitionId::new(
-            DomainId::try_new("offline", "universal").expect("domain id"),
-            "kgm-js-current-hop".parse().expect("asset definition name"),
-        );
-        let vk_id = VerifyingKeyId::new("halo2/ipa", "js-host-current-hop");
-        let verifier_key =
-            iroha_data_model::proof::VerifyingKeyBox::new("halo2/ipa".to_owned(), vec![0xC4; 48]);
-        let vk_commitment = iroha_core::zk::hash_vk(&verifier_key);
-        let proof_schema = b"js-host-current-hop-public-inputs-v1".to_vec();
-        let proof_envelope = iroha_data_model::zk::OpenVerifyEnvelope {
-            backend: iroha_data_model::zk::BackendTag::Halo2IpaPasta,
-            circuit_id: "js-host-current-hop-circuit".to_owned(),
-            vk_hash: vk_commitment,
-            public_inputs: proof_schema.clone(),
-            proof_bytes: vec![0xA1; 16],
-            aux: Vec::new(),
-        };
-        let mut attachment = ProofAttachment::new_ref(
-            "halo2/ipa".to_owned(),
-            iroha_data_model::proof::ProofBox::new(
-                "halo2/ipa".to_owned(),
-                norito::to_bytes(&proof_envelope).expect("encode JS host hop proof envelope"),
-            ),
-            vk_id.clone(),
-        );
-        attachment.vk_commitment = Some(vk_commitment);
-        let output_commitment = sample_hash(0xE4);
-        let step = iroha_data_model::offline::KagemushaVerifiedFoldStep {
-            root_before: sample_hash(0xE1),
-            input_nullifiers: vec![sample_hash(0xE2)],
-            output_commitments: vec![output_commitment],
-            root_after: sample_hash(0xE3),
-            attachment,
-            verifier_key: verifier_key.clone(),
-        };
-        let mut record = iroha_data_model::proof::VerifyingKeyRecord::new(
-            1,
-            "js-host-current-hop-circuit",
-            iroha_data_model::zk::BackendTag::Halo2IpaPasta,
-            "pallas",
-            Hash::new(proof_schema.as_slice()).into(),
-            vk_commitment,
-        );
-        record.namespace = iroha_core::zk::KAGEMUSHA_VERIFIER_NAMESPACE.to_owned();
-        record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
-        record.max_proof_bytes = 4096;
-        record.vk_len = u32::try_from(verifier_key.bytes.len()).expect("vk length fits");
-        record.key = Some(verifier_key);
-        let record_bundle = iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle {
-            bundle: iroha_data_model::offline::KagemushaVerifiedFoldBundle {
-                chain_id,
-                asset,
-                steps: vec![step],
-            },
-            verifier_records: vec![
-                iroha_data_model::offline::KagemushaVerifiedFoldVerifierRecord {
-                    id: vk_id,
-                    record,
-                },
-            ],
-        };
-        let mut envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> = norito::decode_from_bytes(
-            &sample_kagemusha_recursive_spend_pallas_archive_for_js_host(1),
-        )
-        .expect("decode JS host Pallas archive");
-        let envelope = envelopes
-            .first_mut()
-            .expect("Pallas archive contains one envelope");
-        envelope.vk_commitment = Some(vk_commitment);
-        envelope.public_inputs_schema_hash = Some(Hash::new(proof_schema.as_slice()).into());
+        let (record_bundle, pallas_open_envelopes_archive) =
+            sample_real_current_hop_record_bundle_for_js_host();
+        let step = record_bundle
+            .bundle
+            .steps
+            .first()
+            .expect("real JS host current-hop fixture has one step");
+        let output_commitment = step.output_commitments[0];
         iroha_data_model::offline::KagemushaRecursiveSpendInitRequestV1 {
             record_bundle,
-            pallas_open_envelopes_archive: norito::to_bytes(&envelopes)
-                .expect("encode JS host current-hop Pallas archive"),
+            pallas_open_envelopes_archive,
             current_note: iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1 {
                 note_commitment: output_commitment,
                 spend_nullifier: sample_hash(0xE5),
-                amount: Numeric::new(42, 0),
+                amount: Numeric::new(7, 0),
             },
             lineage_verifier_key: None,
             lineage_proving_key_archive: None,
@@ -22224,7 +22185,7 @@ mod tests {
     -> iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
         let mut previous_bundle = sample_kagemusha_recursive_spend_bundle_for_js_host();
         previous_bundle.recursive_proof.verifier_key_id.name =
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
                 .to_owned();
         refresh_reserved_lineage_previous_bundle_public_inputs_for_js_host(&mut previous_bundle);
         attach_recursive_spend_previous_proof_open_verify_envelope_for_js_host(
@@ -22281,7 +22242,7 @@ mod tests {
                 amount: Numeric::new(42, 0),
             },
             output_proof_circuit_id:
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
                     .to_owned(),
             previous_recursive_proof_open_envelopes_archive,
             lineage_verifier_key: None,
@@ -22342,7 +22303,7 @@ mod tests {
             iroha_data_model::proof::VerifyingKeyBox::new("halo2/ipa".to_owned(), vec![0xC7; 48]);
         let mut record = iroha_data_model::proof::VerifyingKeyRecord::new(
             1,
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
             iroha_data_model::zk::BackendTag::Halo2IpaPasta,
             "pallas",
             iroha_data_model::offline::kagemusha_recursive_aggregation_proof_public_inputs_schema_hash(),
@@ -22563,7 +22524,7 @@ mod tests {
             iroha_data_model::offline::KagemushaRecursiveAggregationProof {
                 verifier_key_id: VerifyingKeyId::new(
                     "halo2/ipa",
-                    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+                    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
                 ),
                 public_inputs: previous_public_inputs,
                 public_inputs_hash: previous_public_inputs_hash,
@@ -22644,7 +22605,7 @@ mod tests {
         include_lineage_slice: bool,
     ) {
         request.bundle.recursive_proof.verifier_key_id.name =
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
                 .to_owned();
         request
             .bundle
@@ -22678,7 +22639,7 @@ mod tests {
         let envelope = iroha_data_model::zk::OpenVerifyEnvelope {
             backend: iroha_data_model::zk::BackendTag::Halo2IpaPasta,
             circuit_id:
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
                     .to_owned(),
             vk_hash: sample_hash(0xC2),
             public_inputs:

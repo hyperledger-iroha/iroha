@@ -2053,8 +2053,6 @@ test("Kagemusha JavaScript instruction transaction builder stays wired", () => {
       "buildKagemushaRecursiveTopUpTransaction",
       "topUpRequestArchive: BinaryLike;",
       "top_up_request_archive: BinaryLike;",
-      "initRequestArchive: BinaryLike;",
-      "init_request_archive: BinaryLike;",
       "redeemRequestArchive: BinaryLike;",
       "redeem_request_archive: BinaryLike;",
       "requestArchive: BinaryLike;",
@@ -3748,7 +3746,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
   const androidRawPuller = source("scripts/kagemusha_pull_android_device_lab_raw_slot.py");
   const dataModel = source("crates/iroha_data_model/src/offline/mod.rs");
   const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
-  const verifierWitnessProfile = "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4";
+  const verifierWitnessProfile = "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-255x1";
   const expectedModes = [
     "--negative-control-abi6-manifest",
     "--negative-control-abi6-manifest-direct-invalid-json",
@@ -5147,8 +5145,8 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     readiness,
     [
       verifierWitnessProfile,
-      "64-by-4 scalar coverage",
-      "64-by-4 fixed-window Vesta verifier witness profile",
+      "direct `255 x 1` fixed",
+      "direct `255 x 1` verifier profile",
     ],
     "Kagemusha readiness verifier witness profile docs requirements",
   );
@@ -5333,7 +5331,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-offline-doc-verifier-profile-exactness",
-      /pallas-ipa-transparent-v1\/vesta-recursive-fixed-window-64x4[\s\S]*?pallas-ipa-transparent-v1\/vesta-recursive-fixed-window-85x3[\s\S]*?64-by-4 scalar coverage[\s\S]*?85-by-3 scalar coverage/u,
+      /direct `255 x 1` verifier profile[\s\S]*?direct `85 x 3` verifier profile[\s\S]*?direct `255 x 1` fixed[\s\S]*?direct `85 x 3` fixed/u,
       "offline Kagemusha verifier-witness profile exactness",
     ],
     [
@@ -10477,9 +10475,8 @@ test("recursive Kagemusha active marker scan covers workflow-backed and C# test 
     "active Kagemusha marker negative control must mutate each workflow-backed and C# test surface",
   );
   assert.ok(
-    activeTodoBranch.includes(
-      `${markerName}: bypass Kagemusha C# SDK matrix native-output certification`,
-    ),
+    activeTodoBranch.includes('todo_prefix = "TO" "DO:"') &&
+      activeTodoBranch.includes("bypass Kagemusha C# SDK matrix native-output certification"),
     "active marker negative control must mutate a roadmap matrix requirement",
   );
   assert.doesNotMatch(
@@ -11310,6 +11307,7 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
     "--negative-control-core-append-cap-boundary",
     "--negative-control-core-lineage-profile-split",
     "--negative-control-roadmap-current-profile-staleness",
+    "--negative-control-roadmap-semantic-init-lineage-key-wording",
     "--negative-control-core-proof-chain-accumulator",
     "--negative-control-core-fixed-window-table-base-accumulator",
     "--negative-control-core-shared-table-identity-base-selection",
@@ -11367,12 +11365,15 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
     guard,
     [
       "KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1",
-      "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4",
-      "pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS: usize = 64;",
-      "pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS: usize = 4;",
+      "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-255x1",
+      "pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS: usize = 255;",
+      "pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS: usize = 1;",
       "CURRENT_ROADMAP_PROFILE_NEEDLES",
       "STALE_ROADMAP_PROFILE_MARKERS",
+      "CURRENT_ROADMAP_SEMANTIC_INIT_NEEDLES",
+      "STALE_ROADMAP_SEMANTIC_INIT_MARKERS",
       "roadmap.md still references stale Kagemusha verifier-witness profile marker",
+      "roadmap.md contains stale Kagemusha semantic-init lineage-key wording",
     ],
     "Kagemusha policy verifier witness profile source pins",
   );
@@ -12651,7 +12652,7 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
       "kagemusha_non_native_vesta_affine_native_scalar_msm_synthesis_rejects_truncated_term_shape",
       "if !one_bit_direct_select {",
       "kagemusha_vesta_affine_windowed_shared_table_term_base(term),",
-      "&term.window_base_doubles[0][0].p,",
+      ".and_then(|doubles| doubles.first())",
       "query_non_native_vesta_affine_windowed_shared_table_term_base::<",
       "ensure_witness_vector_len(config.conditional_adds.len(), self.conditional_adds.len())?;",
       "ensure_witness_vector_len(config.scalars.len(), witness.scalars.len())?;",
@@ -12730,7 +12731,7 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
     sharedTableDirectBaseBranch,
     [
       "kagemusha_vesta_affine_windowed_shared_table_term_base(term),",
-      "&term.window_base_doubles[0][0].p,",
+      ".and_then(|doubles| doubles.first())",
       "shared-table direct-base helper drift was rejected for the wrong reason",
     ],
     "shared-table direct-base helper negative control must mutate assigned-base helper coverage",
@@ -15270,6 +15271,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-unanchored-compact-token-symbol-removal",
     "--negative-control-mobile-halo2-vk-hash",
     "--negative-control-mobile-open-verify-public-input-hash-exactness",
+    "--negative-control-ton-sccp-public-input-validation-ordering",
     "--negative-control-rust-recursive-compact-unavailable-classifier",
     "--negative-control-rust-kagemusha-hop-public-instance-shape",
     "--negative-control-rust-kagemusha-fold-root-transition",
@@ -24203,17 +24205,17 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkInitLineageKeyAutoPreflightBranch,
-    /Kotlin typed recursive spend init auto Pallas lineage-key preflight[\s\S]*?Kotlin typed recursive spend init typed-artifact preflight before auto Pallas[\s\S]*?Android Java typed recursive spend init auto Pallas lineage-key preflight[\s\S]*?Android Java typed recursive spend init typed-artifact preflight before auto Pallas/u,
+    /Kotlin typed recursive spend init optional lineage-key preflight[\s\S]*?Kotlin typed recursive spend init typed-artifact preflight before auto Pallas[\s\S]*?Android Java typed recursive spend init optional lineage-key preflight[\s\S]*?Android Java typed recursive spend init typed-artifact preflight before auto Pallas/u,
     "SDK init lineage-key auto-preflight negative control must cover raw and typed JVM/Android init helpers",
   );
   assert.match(
     sdkInitLineageKeyAutoPreflightBranch,
-    /buildPallasOpenEnvelopesArchiveForRecordBundle\(recordBundle\)\\n"\s*[\s\S]*?preflightInitLineageKeyMaterialForAutoGeneration[\s\S]*?buildPallasOpenEnvelopesArchiveForRecordBundle\(recordBundle\)\\n"\s*[\s\S]*?requireInitLineageKeyArtifacts\(lineageKeyArtifacts\)/u,
+    /buildPallasOpenEnvelopesArchiveForRecordBundle\(recordBundle\)\\n"\s*[\s\S]*?validateOptionalInitLineageKeyMaterial[\s\S]*?buildPallasOpenEnvelopesArchiveForRecordBundle\(recordBundle\)\\n"\s*[\s\S]*?requireInitLineageKeyArtifacts\(lineageKeyArtifacts\)/u,
     "SDK init lineage-key auto-preflight negative control must move JVM init checks after auto Pallas generation",
   );
   assert.match(
     sdkInitLineageKeyAutoPreflightBranch,
-    /autoInitPallasMissingLineageKey[\s\S]*?generatedInitPallasMissingLineageKey[\s\S]*?autoInitPallasWrongProfile[\s\S]*?generatedInitPallasWrongProfile[\s\S]*?lineage_verifier_key is required for recursive spend lineage proving/u,
+    /autoInitPallasMissingLineageKey[\s\S]*?generatedInitPallasMissingLineageKey[\s\S]*?autoInitPallasWrongProfile[\s\S]*?generatedInitPallasWrongProfile[\s\S]*?lineage_verifier_key is required when lineage_proving_key_archive is present/u,
     "SDK init lineage-key auto-preflight negative control must mutate focused regression markers and Python exact diagnostics",
   );
   assert.doesNotMatch(
@@ -24223,14 +24225,14 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkInitLineageKeyAutoPreflightBranch,
-    /def expected_init_lineage_key_auto_preflight_label\(target, old, label\):[\s\S]*?Kotlin typed recursive spend init auto Pallas lineage-key preflight[\s\S]*?Android Java typed recursive spend init typed-artifact preflight before auto Pallas[\s\S]*?missingInitLineageVerifierKey[\s\S]*?expected_label = expected_init_lineage_key_auto_preflight_label\(target, old, label\)[\s\S]*?if expected_label not in message:[\s\S]*?SDK init lineage key auto preflight drift was rejected for the wrong reason/u,
+    /def expected_init_lineage_key_auto_preflight_label\(target, old, label\):[\s\S]*?Kotlin typed recursive spend init optional lineage-key preflight[\s\S]*?Android Java typed recursive spend init typed-artifact preflight before auto Pallas[\s\S]*?autoInitPallasMissingLineageKey[\s\S]*?expected_label = expected_init_lineage_key_auto_preflight_label\(target, old, label\)[\s\S]*?if expected_label not in message:[\s\S]*?SDK init lineage key auto preflight drift was rejected for the wrong reason/u,
     "SDK init lineage-key auto-preflight negative control must require every exact JVM/Android drift marker",
   );
   assertContainsAll(
     sdkInitLineageKeyAutoPreflightBranch,
     [
       "Python typed recursive spend request codec tests",
-      "lineage_verifier_key is required for recursive spend lineage proving",
+      "lineage_verifier_key is required when lineage_proving_key_archive is present",
     ],
     "SDK init lineage-key auto-preflight negative control must mutate the Python exact verifier-key diagnostic",
   );
@@ -28682,7 +28684,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     swiftRecursiveCompactNativeArchiveCapBranch,
-    /nativeArchiveMaxBytes = 256 \* 1024 \* 1024[\s\S]*?nativeArchiveMaxBytes = 1024 \* 1024 \* 1024[\s\S]*?testNativeArchiveLimitMatchesSharedKagemushaCap[\s\S]*?testNativeArchiveLimitAllowsIndependentKagemushaCap[\s\S]*?256 \* 1024 \* 1024[\s\S]*?1024 \* 1024 \* 1024/u,
+    /nativeArchiveMaxBytes = KagemushaRecursiveSpendProver\.nativeArchiveMaxBytes[\s\S]*?nativeArchiveMaxBytes = 1024 \* 1024 \* 1024[\s\S]*?testNativeArchiveLimitMatchesSharedKagemushaCap[\s\S]*?testNativeArchiveLimitAllowsIndependentKagemushaCap[\s\S]*?256 \* 1024 \* 1024[\s\S]*?1024 \* 1024 \* 1024/u,
     "Swift recursive compact native archive cap negative control must mutate the wrapper cap and shared-cap test",
   );
   assert.match(
@@ -28692,7 +28694,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     swiftRecursiveCompactNativeArchiveCapBranch,
-    /expected_labels\s*=\s*\([\s\S]*?Swift recursive compact wrapper missing nativeArchiveMaxBytes = 256 \* 1024 \* 1024[\s\S]*?Swift recursive compact verifier tests missing testNativeArchiveLimitMatchesSharedKagemushaCap[\s\S]*?Swift recursive compact verifier tests missing 256 \* 1024 \* 1024[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    /expected_labels\s*=\s*\([\s\S]*?Swift recursive compact wrapper missing nativeArchiveMaxBytes = KagemushaRecursiveSpendProver\.nativeArchiveMaxBytes[\s\S]*?Swift recursive compact verifier tests missing testNativeArchiveLimitMatchesSharedKagemushaCap[\s\S]*?Swift recursive compact verifier tests missing 256 \* 1024 \* 1024[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
     "Swift recursive compact native archive cap negative control must require source and test diagnostics",
   );
   assert.match(
@@ -29004,8 +29006,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     guard,
-    /require_regex\([\s\S]*?request_codecs_test[\s\S]*?lineageVerifierKey: nil,[\s\S]*?lineageProvingKeyArchive: nil[\s\S]*?invalidField\\\("lineageVerifierKey"\\\)[\s\S]*?Swift typed recursive spend init lineage-key exact diagnostics/u,
-    "SDK parity guard must pin Swift nil init lineage-key exact diagnostics with a scoped regex",
+    /require_regex\([\s\S]*?request_codecs_test[\s\S]*?lineageVerifierKey: Data\\\(\\\),[\s\S]*?lineageProvingKeyArchive: lineageProvingKeyArchive[\s\S]*?invalidField\\\("lineageVerifierKey"\\\)[\s\S]*?Swift typed recursive spend init lineage-key exact diagnostics/u,
+    "SDK parity guard must pin Swift partial init lineage-key exact diagnostics with a scoped regex",
   );
   assert.match(
     swiftNoteAmountVectorBranch,
@@ -29510,8 +29512,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "value.isBlank()",
       "rejectCode.trim().isEmpty()",
       "rejectCode.isBlank()",
-      "kind.trim().isEmpty()",
-      "kind.isBlank()",
+      "value.equals(value.trim())",
       "wireName.trim().isEmpty()",
       "wireName.isBlank()",
       "try (InputStream responseBody = stream;",
