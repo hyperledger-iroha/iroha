@@ -10,7 +10,7 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
         )
         XCTAssertEqual(
             KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes,
-            64 * 1024 * 1024
+            256 * 1024 * 1024
         )
     }
 

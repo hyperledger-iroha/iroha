@@ -50,6 +50,36 @@ is_positive_integer() {
   [[ "$1" =~ ^[1-9][0-9]*$ ]]
 }
 
+normalize_torii_ports_csv() {
+  local value="$1"
+  local port trimmed port_number normalized
+  local -a ports
+  declare -A seen_ports=()
+
+  if [[ -z "$value" ]]; then
+    printf '\n'
+    return 0
+  fi
+
+  [[ "$value" != ,* && "$value" != *, ]] || die "--torii-ports contains an empty port entry"
+  IFS=',' read -r -a ports <<<"$value"
+  for port in "${ports[@]}"; do
+    trimmed="${port//[[:space:]]/}"
+    [[ -n "$trimmed" ]] || die "--torii-ports contains an empty port entry"
+    [[ "$trimmed" =~ ^[0-9]+$ ]] || die "--torii-ports must be a comma-separated list of numeric ports"
+    port_number=$((10#$trimmed))
+    (( port_number >= 1 && port_number <= 65535 )) || die "--torii-ports contains out-of-range port ${trimmed}; expected 1..65535"
+    [[ -z "${seen_ports[$port_number]:-}" ]] || die "--torii-ports contains duplicate port ${port_number}"
+    seen_ports[$port_number]=1
+    if [[ -z "${normalized:-}" ]]; then
+      normalized="$port_number"
+    else
+      normalized="${normalized},${port_number}"
+    fi
+  done
+  printf '%s\n' "$normalized"
+}
+
 sha256_file() {
   if command -v shasum >/dev/null 2>&1; then
     shasum -a 256 "$1" | awk '{print $1}'
@@ -240,6 +270,7 @@ done
 [[ -n "$DIST" ]] || die "--dist is required"
 [[ -d "$DIST" ]] || die "dist directory not found: $DIST"
 is_positive_integer "$STOP_TIMEOUT_SECONDS" || die "--stop-timeout-seconds must be a positive integer"
+TORII_PORTS="$(normalize_torii_ports_csv "$TORII_PORTS")"
 if [[ $START_AFTER -eq 1 ]]; then
   [[ -x "$DIST/start.sh" ]] || die "start script is not executable: $DIST/start.sh"
 fi

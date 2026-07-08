@@ -86,8 +86,7 @@ public struct CounterpartyOfflineProofVerifier: CounterpartyOfflineProofVerifyin
             throw error
         }
         switch value {
-        case OfflineNoteV2Constants.iosPlatform,
-             OfflineNoteV2Constants.androidPlatform:
+        case OfflineNoteV2Constants.iosPlatform, OfflineNoteV2Constants.androidPlatform:
             return value
         default:
             throw error

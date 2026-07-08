@@ -122,6 +122,33 @@ run_sha_mismatch_fails_before_mutation_case() {
   test -f "${dist}/peer0.log"
 }
 
+run_invalid_torii_ports_fail_before_mutation_case() {
+  local root dist output port_value expected_message
+  port_value="$1"
+  expected_message="$2"
+  root="$(make_case_root)"
+  cleanup_paths+=("$root")
+  dist="${root}/dist"
+  output="${root}/invalid-torii-ports.log"
+
+  if "${root}/clear_volatile_consensus_state.sh" \
+    --dist "$dist" \
+    --apply \
+    --runtime-bin "${root}/bin/irohad" \
+    --torii-ports "$port_value" \
+    >"$output" 2>&1; then
+    echo "invalid Torii ports case unexpectedly succeeded: $port_value" >&2
+    sed -n '1,120p' "$output" >&2 || true
+    return 1
+  fi
+
+  grep -q -- "$expected_message" "$output"
+  test -f "${dist}/peer0.pid"
+  test -f "${dist}/storage/peer0/queue_plan_journal"
+  test -d "${dist}/storage/peer0/rbc_sessions"
+  test -f "${dist}/peer0.log"
+}
+
 run_apply_ignores_reused_pidfile_for_unrelated_live_pid_case() {
   local root dist output
   root="$(make_case_root)"
@@ -353,6 +380,11 @@ SH
 run_dry_run_preserves_state_case
 run_apply_quarantines_only_volatile_state_case
 run_sha_mismatch_fails_before_mutation_case
+run_invalid_torii_ports_fail_before_mutation_case "29080,/tmp/29081" "--torii-ports must be a comma-separated list of numeric ports"
+run_invalid_torii_ports_fail_before_mutation_case "29080," "--torii-ports contains an empty port entry"
+run_invalid_torii_ports_fail_before_mutation_case "65536" "--torii-ports contains out-of-range port 65536"
+run_invalid_torii_ports_fail_before_mutation_case "29080, 29080" "--torii-ports contains duplicate port 29080"
+run_invalid_torii_ports_fail_before_mutation_case "29080, 029080" "--torii-ports contains duplicate port 29080"
 run_apply_ignores_reused_pidfile_for_unrelated_live_pid_case
 run_apply_ignores_config_suffix_collision_pidfile_case
 run_apply_ignores_config_suffix_collision_ps_scan_case
