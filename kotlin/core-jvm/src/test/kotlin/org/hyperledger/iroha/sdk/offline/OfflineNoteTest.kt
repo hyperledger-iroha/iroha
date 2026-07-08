@@ -3416,6 +3416,119 @@ class OfflineNoteTest {
     }
 
     @Test
+    fun kagemushaTopUpResponseRejectsInvalidExactText() {
+        fun response(
+            operationId: String = "operation-topup-1",
+            chainTxHash: String = "topup-chain-tx-hash",
+            assetDefinitionId: String = "xor#wonderland",
+            amount: String = "5",
+            topupAnchorNullifiers: List<String> = listOf("hash-1"),
+            outputCommitments: List<String> = listOf("commitment-1"),
+            rootHint: String = "root-hint",
+        ) = KagemushaTopUpResponse(
+            operationId = operationId,
+            chainTxHash = chainTxHash,
+            assetDefinitionId = assetDefinitionId,
+            amount = amount,
+            topupAnchorNullifiers = topupAnchorNullifiers,
+            outputCommitments = outputCommitments,
+            rootHint = rootHint,
+        )
+
+        assertEquals(
+            "operationId must be exact non-empty text",
+            assertFailsWith<IllegalArgumentException> { response(operationId = "") }.message,
+        )
+        assertEquals(
+            "chainTxHash must be exact non-empty text",
+            assertFailsWith<IllegalArgumentException> { response(chainTxHash = " topup-chain-tx-hash") }.message,
+        )
+        assertEquals(
+            "assetDefinitionId must be exact non-empty text",
+            assertFailsWith<IllegalArgumentException> { response(assetDefinitionId = "xor#wonderland\n") }.message,
+        )
+        assertEquals(
+            "amount must be exact non-empty text",
+            assertFailsWith<IllegalArgumentException> { response(amount = " ") }.message,
+        )
+        assertEquals(
+            "rootHint must be exact non-empty text",
+            assertFailsWith<IllegalArgumentException> { response(rootHint = "root-hint ") }.message,
+        )
+        assertEquals(
+            "topupAnchorNullifiers[0] must be exact non-empty text",
+            assertFailsWith<IllegalArgumentException> { response(topupAnchorNullifiers = listOf(" hash-1")) }.message,
+        )
+        assertEquals(
+            "outputCommitments[0] must be exact non-empty text",
+            assertFailsWith<IllegalArgumentException> { response(outputCommitments = listOf("")) }.message,
+        )
+    }
+
+    @Test
+    fun toriiIssuerClientRejectsInvalidKagemushaTopUpResponseScalars() {
+        val fixture = loadFixture()
+        val certificateJson = currentIssuerCertificateJson(obj(obj(fixture, "payment_token"), "sender_key_certificate"))
+        val accountId = string(certificateJson, "account_id")
+        val assetDefinitionId = assetDefinitionFromAssetId(string(obj(obj(fixture, "chain_vectors"), "issue"), "asset_id"))
+        val offlinePublicKey = "a5".repeat(32)
+        val deviceBinding = OfflineNoteIssuerDeviceBinding(
+            deviceId = "device-1",
+            offlinePublicKey = offlinePublicKey,
+            deviceBinding = linkedMapOf(
+                "device_id" to "device-1",
+                "attestation_key_id" to "attestation-key-1",
+                "offline_public_key" to offlinePublicKey,
+            ),
+        )
+        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+
+        fun assertInvalidResponseField(field: String, value: String, expectedCause: String) {
+            val executor = OfflineIssuerExecutor(
+                certificateJson = certificateJson,
+                topUpResponseMutator = { response ->
+                    response[field] = value
+                    response
+                },
+            )
+            val client = ToriiOfflineNoteIssuerClient(
+                canonicalAuth = ToriiCanonicalRequestAuth(accountId, keyPair.private),
+                deviceBindingProvider = object : OfflineNoteIssuerDeviceBindingProvider {
+                    override fun currentDeviceBinding(
+                        chainId: String,
+                        accountId: String,
+                        assetDefinitionId: String,
+                    ): OfflineNoteIssuerDeviceBinding = deviceBinding
+                },
+                executor = executor,
+                baseUri = URI.create("https://torii.example"),
+                clock = java.util.function.LongSupplier { 1_700_000_000_000L },
+                nonceGenerator = SequenceIdGenerator("operation-topup-bad", "auth-topup-bad"),
+            )
+
+            val failure = assertFailsWith<CompletionException> {
+                client.submitKagemushaTopUp(
+                    "chain-1",
+                    accountId,
+                    assetDefinitionId,
+                    byteArrayOf(0x4b, 0x54),
+                ).join()
+            }
+            val error = assertNotNull(failure.cause as? OfflineToriiException)
+            assertTrue(error.message?.contains("Failed to parse Offline Note issuer response") == true)
+            assertTrue(
+                error.cause?.message?.contains(expectedCause) == true,
+                "expected cause to contain `$expectedCause`, got `${error.cause?.message}`",
+            )
+            assertEquals(1, executor.requests.size)
+        }
+
+        assertInvalidResponseField("chain_tx_hash", "", "chainTxHash must be exact non-empty text")
+        assertInvalidResponseField("amount", " 5", "amount must be exact non-empty text")
+        assertInvalidResponseField("root_hint", "root-hint ", "rootHint must be exact non-empty text")
+    }
+
+    @Test
     fun toriiIssuerDeviceBindingRejectsRetiredAssertionPublicKeyAliases() {
         val offlinePublicKey = "a5".repeat(32)
         for (retiredKey in listOf("device_public_key", "app_attest_public_key_base64")) {
@@ -6099,6 +6212,7 @@ class OfflineNoteTest {
     private inner class OfflineIssuerExecutor(
         private val certificateJson: Map<String, Any?>,
         private val serverStateHash: String? = null,
+        private val topUpResponseMutator: (MutableMap<String, Any?>) -> Map<String, Any?> = { it },
     ) : HttpTransportExecutor {
         val requests = ArrayList<TransportRequest>()
 
@@ -6124,14 +6238,16 @@ class OfflineNoteTest {
                     "key_certificate" to certificateWithExpiry(),
                     "key_certificates" to listOf(certificateWithExpiry()),
                 )
-                "/v1/offline/v2/kagemusha/topup" -> linkedMapOf<String, Any?>(
-                    "operation_id" to string(body, "operation_id"),
-                    "chain_tx_hash" to "topup-chain-tx-hash",
-                    "asset_definition_id" to string(body, "asset_definition_id"),
-                    "amount" to "5",
-                    "topup_anchor_nullifiers" to listOf("hash-1", "hash-2"),
-                    "output_commitments" to listOf("commitment-1"),
-                    "root_hint" to "root-hint",
+                "/v1/offline/v2/kagemusha/topup" -> topUpResponseMutator(
+                    linkedMapOf(
+                        "operation_id" to string(body, "operation_id"),
+                        "chain_tx_hash" to "topup-chain-tx-hash",
+                        "asset_definition_id" to string(body, "asset_definition_id"),
+                        "amount" to "5",
+                        "topup_anchor_nullifiers" to listOf("hash-1", "hash-2"),
+                        "output_commitments" to listOf("commitment-1"),
+                        "root_hint" to "root-hint",
+                    ),
                 )
                 else -> throw IllegalStateException("unexpected path ${request.uri.path}")
             }

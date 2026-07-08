@@ -101,8 +101,27 @@ class KagemushaTopUpResponse(
     outputCommitments: List<String>,
     val rootHint: String,
 ) {
-    val topupAnchorNullifiers: List<String> = Collections.unmodifiableList(topupAnchorNullifiers.toList())
-    val outputCommitments: List<String> = Collections.unmodifiableList(outputCommitments.toList())
+    init {
+        require(isExactNonEmptyText(operationId)) { "operationId must be exact non-empty text" }
+        require(isExactNonEmptyText(chainTxHash)) { "chainTxHash must be exact non-empty text" }
+        require(isExactNonEmptyText(assetDefinitionId)) { "assetDefinitionId must be exact non-empty text" }
+        require(isExactNonEmptyText(amount)) { "amount must be exact non-empty text" }
+        require(isExactNonEmptyText(rootHint)) { "rootHint must be exact non-empty text" }
+    }
+
+    val topupAnchorNullifiers: List<String> =
+        Collections.unmodifiableList(requireExactStringList(topupAnchorNullifiers, "topupAnchorNullifiers"))
+    val outputCommitments: List<String> =
+        Collections.unmodifiableList(requireExactStringList(outputCommitments, "outputCommitments"))
+}
+
+private fun requireExactStringList(values: List<String>, field: String): List<String> {
+    val copy = ArrayList<String>(values.size)
+    for ((index, value) in values.withIndex()) {
+        require(isExactNonEmptyText(value)) { "$field[$index] must be exact non-empty text" }
+        copy.add(value)
+    }
+    return copy
 }
 
 /** Torii-backed issuer client for Offline Note wallet loads. */
