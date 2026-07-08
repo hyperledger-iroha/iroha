@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-07-07
+Last updated: 2026-07-08
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -611,17 +611,65 @@ bound `u64` ABI, SSZ, TON, Solana, and source-proof transcript fields before
 byte emission. Swift's BSC helper surface is now pinned to reject duplicate
 validator addresses, zero powers, and aggregate `UInt64` commit-seal overflow
 before Parlia quorum transcript bytes are emitted. The .NET SDK now also exposes
-the BSC validator-set canonical payload/hash helpers and commit-seal
-canonicalization/hash helpers, rejecting malformed validator-set payloads,
-non-canonical secp256k1 keys or signatures, signer/quorum drift, bitmap
-padding, and validator-set hash mismatches before deriving verifier-side hashes.
-BSC validator-set payload and commit-seal overflow or signer/quorum regressions
+the BSC validator-set canonical payload/hash helpers, commit-message
+canonical/hash helpers, and commit-seal canonicalization/hash helpers, rejecting
+malformed validator-set payloads, non-canonical secp256k1 keys or signatures,
+signer/quorum drift, bitmap padding, and validator-set hash mismatches before
+deriving verifier-side hashes.
+BSC validator-set payload, commit-message, and commit-seal overflow or signer/quorum regressions
 are pinned in Python, Swift, mobile, and C# helper tests, with release
 inventories guarding the Python/Swift/Kotlin/Java/C# marker set. The C# BSC
 mainnet SCCP test filters now pass with a temporary .NET SDK installed outside
 the repository. The focused Kotlin/JVM and Java Android SCCP helper tests now
 also pass with a temporary JDK 21 installed outside the repository, closing the
-local SDK validation gap for this slice.
+local SDK validation gap for this slice. ETH source-adapter deployment coverage
+now mirrors the BSC coherent replay matrix for trust-anchor, verifier-role,
+bridge-emitter, code-hash, and deployment-receipt drift, and the EVM
+source-adapter release inventory pins those markers. BSC and ETH
+local-admission recovery now also fails closed for coherent replayed
+source-material and deployment descriptors, with those markers pinned in the EVM
+source-adapter deployment inventory. Solana and TON audited deployment coverage
+now also proves local-admission artifacts and recovery fail
+closed when coherent audit-role or full-light-client deployment descriptors are
+replayed, with the source-material role-validation inventory pinning those
+markers. TRON deployment replay coverage now also exercises local-admission
+artifact verification and recovery for trust-anchor, verifier-role,
+source-bridge, finality-policy, and deployment-receipt drift, with those markers
+pinned in the same source-material role-validation inventory. Source-proof byte
+recovery now also rejects exact proof bytes paired with coherent replayed
+Solana, TON, TRON, BSC, or Ethereum source material/deployment descriptors, and
+the release inventories pin those recovery markers alongside the production and
+local-admission replay gates. Serialized source-proof bytes with deployment
+evidence spliced after OpenVerify binding now also fail source-proof recovery
+when paired with replayed Solana, TON, TRON, BSC, or Ethereum deployment
+descriptors, and the same release inventories pin those spliced-proof recovery
+markers. Full message bundles carrying those spliced source-proof bytes now also
+fail domain-specific bundle admission against the replayed deployment
+descriptors, with the same release inventories pinning the spliced
+bundle-admission markers. The transparent/local-admission proof builder now also
+refuses to package those spliced bundles against replayed Solana, TON, TRON,
+BSC, or Ethereum deployment descriptors, with matching release inventory
+markers. The source-material extractor now also refuses to relabel exact
+deployment-bound or spliced deployment-evidence bundles as standalone production
+source material without an explicit source-adapter deployment descriptor, and
+those extractor rejection markers are release-pinned. Deployment-bound bundle
+encoding, public-input derivation, production build gates, and transparent
+inner-proof construction now also reject deployment-only source context when the
+matching source verifier material is absent, with matching release inventory
+markers. Proof-job, platform-submission, and transparent-artifact packaging paths
+now apply the same deployment-only source-context rejection even on diagnostic
+allow-unready paths, with release inventory markers. Source-context-free
+EVM/BSC Groth16, TRON Groth16, and Solana/TON native-recursive public-input,
+submission-package, transparent-artifact, and proof-job paths now also reject
+deployment-bound foreign-target source proofs, with source-adapter and
+proof-request inventory markers. Source-aware EVM/BSC Groth16, TRON Groth16,
+and Solana/TON native-recursive packaging now also refuse to use explicit source
+material or source-adapter deployment context for remote-to-remote destination
+packaging; source context is packagable only for inbound remote -> SORA proofs.
+Transparent-proof verification now applies the same source-context packaging
+guard, and adversarial EVM/BSC plus TRON artifacts prove diagnostic
+source-aware verification rejects remote-to-remote deployment-bound source
+proofs.
 
 TON source-adapter readiness now stays aligned with the governed
 full-light-client audit policy: readiness-positive test fixtures use the
@@ -24879,7 +24927,7 @@ operator-provided rollout bundles.
   cannot diverge from the values submitted on-chain. Rust commit-seal transcript
   hashing now uses the same BSC validator-set, signer-bitmap, recovered-address,
   total/signed-power, and strict `> 2/3` quorum checks as the verifier; Python,
-  JavaScript plus `dist`, Swift, Kotlin, and Java Android expose matching
+  JavaScript plus `dist`, Swift, Kotlin, Java Android, and .NET expose matching
   BSC commit-message and commit-seal helpers so portal and mobile UI provers
   derive the seal hash locally before submitting source proofs on-chain.
   The JavaScript TypeScript declarations now publish a shared
@@ -30926,86 +30974,158 @@ validation path.
   so source and top-level liveness wrappers cannot bury action-only or
   temporal syntax in named helper operands. Progress Init helpers must be acyclic, so
   composed Init formulas cannot satisfy the initial-state boundary through
+  recursive local helper operands. Source and top-level progress Init helpers must be acyclic, so source and
+  top-level liveness wrappers cannot satisfy the initial-state boundary through
   recursive local helper operands. Progress Init helper conjuncts must inherit recursive resolution for onward aliases inside named helper operands,
   so composed Init formulas cannot hide a missing, undefined, parameterized,
   recursive, or uninspectable inner initial-state predicate behind a local
-  helper name. Progress Init boolean helper operands must resolve to initial-state predicates,
+  helper name. Source and top-level progress Init helper conjuncts must inherit recursive resolution for onward aliases inside named helper operands,
+  so source and top-level liveness wrappers cannot hide bad inner
+  initial-state predicates behind local helper names. Progress Init boolean helper operands must resolve to initial-state predicates,
   so disjunctive or otherwise boolean Init formulas cannot bury action-only or
-  temporal syntax in named helper operands. Progress Init boolean helper operands must resolve to defined zero-arity initial-state predicates,
+  temporal syntax in named helper operands. Source and top-level progress Init boolean helper operands must resolve to initial-state predicates,
+  so source and top-level liveness wrappers cannot bury action-only or
+  temporal syntax in boolean helper operands. Progress Init boolean helper operands must resolve to defined zero-arity initial-state predicates,
   so disjunctive or otherwise boolean Init formulas cannot hide
-  parameterized helper predicates. Progress Init boolean helper operands must resolve to inspectable initial-state predicates,
+  parameterized helper predicates. Source and top-level progress Init boolean helper operands must resolve to defined zero-arity initial-state predicates,
+  so source and top-level liveness wrappers cannot hide parameterized boolean
+  helper predicates. Progress Init boolean helper operands must resolve to inspectable initial-state predicates,
   so disjunctive or otherwise boolean Init formulas cannot hide empty or
-  otherwise uninspectable helper predicates. Progress Init boolean helper operands must inherit recursive resolution for onward aliases inside named helper operands,
+  otherwise uninspectable helper predicates. Source and top-level progress Init boolean helper operands must resolve to inspectable initial-state predicates,
+  so source and top-level liveness wrappers cannot hide empty or otherwise
+  uninspectable boolean helper predicates. Progress Init boolean helper operands must inherit recursive resolution for onward aliases inside named helper operands,
   so disjunctive or otherwise boolean Init formulas cannot hide a missing,
   undefined, parameterized, recursive, or uninspectable inner initial-state
-  predicate behind a local helper name. Progress Init module-alias helper operands must resolve to initial-state predicates,
+  predicate behind a local helper name. Source and top-level progress Init boolean helper operands must inherit recursive resolution for onward aliases inside named helper operands,
+  so source and top-level liveness wrappers cannot hide bad inner
+  initial-state predicates behind boolean helper names. Progress Init module-alias helper operands must resolve to initial-state predicates,
   so composed Init formulas cannot bury action-only or temporal syntax behind
-  imported helper operands. Progress Init module-alias helpers must be
+  imported helper operands. Source and top-level progress Init module-alias helper operands must resolve to initial-state predicates,
+  so source and top-level liveness wrappers cannot bury action-only or
+  temporal syntax behind imported helper operands. Progress Init module-alias helpers must be
   acyclic, so composed Init formulas cannot satisfy the initial-state boundary
-  through recursive imported helper operands. Progress Init module-alias helper operands must resolve through named local INSTANCE declarations,
+  through recursive imported helper operands. Source and top-level progress Init module-alias helpers must be acyclic,
+  so source and top-level liveness wrappers cannot satisfy the initial-state
+  boundary through recursive imported helper operands. Progress Init module-alias helper operands must resolve through named local INSTANCE declarations,
   so composed Init formulas cannot rely on implicit or misspelled imported
-  helper aliases. Progress Init module-alias boolean helper operands must resolve through named local INSTANCE declarations,
+  helper aliases. Source and top-level progress Init module-alias helper operands must resolve through named local INSTANCE declarations,
+  so source and top-level liveness wrappers cannot rely on implicit or
+  misspelled imported helper aliases. Progress Init module-alias boolean helper operands must resolve through named local INSTANCE declarations,
   so disjunctive or otherwise boolean Init formulas cannot rely on implicit
-  or misspelled imported helper aliases. Progress Init module-alias helper operands must inherit recursive resolution for onward aliases inside imported helper targets,
+  or misspelled imported helper aliases. Source and top-level progress Init module-alias boolean helper operands must resolve through named local INSTANCE declarations,
+  so source and top-level liveness wrappers cannot rely on implicit or
+  misspelled imported helper aliases inside boolean Init formulas. Progress Init module-alias helper operands must inherit recursive resolution for onward aliases inside imported helper targets,
   so composed Init formulas cannot hide a missing, undefined, parameterized,
   recursive, or uninspectable inner initial-state predicate behind an imported
-  helper. Progress Init module-alias boolean helper operands must inherit recursive resolution for onward aliases inside imported helper targets,
+  helper. Source and top-level progress Init module-alias helper operands must inherit recursive resolution for onward aliases inside imported helper targets,
+  so source and top-level liveness wrappers cannot hide a missing, undefined,
+  parameterized, recursive, or uninspectable inner initial-state predicate
+  behind an imported helper. Progress Init module-alias boolean helper operands must inherit recursive resolution for onward aliases inside imported helper targets,
   so disjunctive or otherwise boolean Init formulas cannot hide a missing,
   undefined, parameterized, recursive, or uninspectable inner initial-state
-  predicate behind an imported helper. Progress Init module-alias boolean helper operands must resolve to local modules with defined zero-arity initial-state predicates,
+  predicate behind an imported helper. Source and top-level progress Init module-alias boolean helper operands must inherit recursive resolution for onward aliases inside imported helper targets,
+  so source and top-level liveness wrappers cannot hide a missing, undefined,
+  parameterized, recursive, or uninspectable inner initial-state predicate
+  behind an imported helper inside boolean Init formulas. Progress Init module-alias boolean helper operands must resolve to local modules with defined zero-arity initial-state predicates,
   so disjunctive or otherwise boolean Init formulas cannot point at missing
   modules, undefined operators, or parameterized helpers behind imported
-  operands. Progress Init module-alias boolean helper operands must resolve to inspectable initial-state predicates,
+  operands. Source and top-level progress Init module-alias boolean helper operands must resolve to local modules with defined zero-arity initial-state predicates,
+  so source and top-level liveness wrappers cannot point at missing modules,
+  undefined operators, or parameterized helpers behind imported operands
+  inside boolean Init formulas. Progress Init module-alias boolean helper operands must resolve to inspectable initial-state predicates,
   so disjunctive or otherwise boolean Init formulas cannot point at empty or
-  otherwise uninspectable imported helper predicates. Progress Init module-alias helper operands must resolve to local modules with defined zero-arity initial-state predicates,
+  otherwise uninspectable imported helper predicates. Source and top-level progress Init module-alias boolean helper operands must resolve to inspectable initial-state predicates,
+  so source and top-level liveness wrappers cannot point at empty or
+  otherwise uninspectable imported helper predicates inside boolean Init
+  formulas. Progress Init module-alias helper operands must resolve to local modules with defined zero-arity initial-state predicates,
   so composed Init formulas cannot point at missing modules, undefined
-  operators, or parameterized helpers behind imported operands. Progress Init
+  operators, or parameterized helpers behind imported operands. Source and top-level progress Init module-alias helper operands must resolve to local modules with defined zero-arity initial-state predicates,
+  so source and top-level liveness wrappers cannot point at missing modules,
+  undefined operators, or parameterized helpers behind imported operands. Progress Init
   module-alias helper operands must resolve to inspectable initial-state
   predicates, so composed Init formulas cannot point at empty or otherwise
-  uninspectable imported helper predicates. Progress
+  uninspectable imported helper predicates. Source and top-level progress Init module-alias helper operands must resolve to inspectable initial-state predicates,
+  so source and top-level liveness wrappers cannot point at empty or
+  otherwise uninspectable imported helper predicates. Progress
   transition disjuncts must resolve to named action-shaped operators, so the
   checked `[][Next]_vars` closure cannot hide literal, temporal, or static
   helper branches outside real transition actions, including inside direct
-  imported `Next` aliases. Progress transition
+  imported `Next` aliases. Source and top-level progress transition disjuncts must resolve to named action-shaped operators,
+  so source and top-level liveness wrappers cannot hide literal, temporal,
+  or static helper branches outside real transition actions. Progress transition
   disjuncts must stay single-branch action
   predicates, so one apparent transition branch cannot hide nested disjunction
   alternatives, fairness clauses, or temporal operators beside a valid action
-  witness, including inside direct imported `Next` aliases. Progress transition
+  witness, including inside direct imported `Next` aliases. Source and top-level progress transition disjuncts must stay single-branch action predicates,
+  so source and top-level liveness wrappers cannot hide nested disjunction
+  alternatives, fairness clauses, or temporal operators beside a valid action
+  witness. Progress transition
   disjuncts must stay bare named action or aggregate references, so progress `Next` branches cannot hide literal or static
   conjuncts beside a valid action witness, including inside direct imported
   `Next` aliases. Guarded transition disjuncts must not mix multiple action
   witnesses, so branch guards cannot conjoin two
   reviewed transition actions into one ambiguous proof branch, including inside
-  direct imported `Next` aliases. Nested progress
+  direct imported `Next` aliases. Source and top-level guarded transition disjuncts must not mix multiple action witnesses,
+  so source and top-level liveness wrappers cannot conjoin two reviewed
+  transition actions into one ambiguous proof branch. Nested progress
   transition aggregates must recursively obey the same branch contract, so
   helper `Next` aggregates cannot hide literal, temporal, or static branches
-  beneath a top-level action witness. Single-reference progress transition
+  beneath a top-level action witness.
+  Source and top-level nested progress transition aggregates must recursively obey the same branch contract,
+  so source and top-level liveness wrappers cannot hide literal, temporal, or
+  static branches inside helper `Next` aggregates. Single-reference progress transition
   wrappers must expose nested aggregate contracts, so helper aliases cannot
   hide malformed aggregate branches from recursive transition-shape checks or
   guarded action expressions behind a bare wrapper name, including when reached
   through direct imported `Next` aliases.
+  Source and top-level single-reference progress transition wrappers must expose nested aggregate contracts,
+  so source and top-level helper aliases cannot hide malformed aggregate
+  branches from recursive transition-shape checks behind a bare wrapper name.
   Progress transition action witness inventories must stay duplicate-free, so
   wrapper helpers cannot duplicate the same reachable action while keeping
   textual disjunct labels distinct, including through bare module-alias
   disjuncts, direct imported `Next` aliases, and direct or transitive imported
   action aliases.
+  Source and top-level progress transition action witness inventories must stay duplicate-free,
+  so source and top-level imported `Next` wrappers cannot duplicate the same
+  reachable action while keeping textual disjunct labels distinct.
   Progress transition aliases must be acyclic, so imported `Next` wrappers
   cannot satisfy the transition closure without resolving to inspectable
   transition operators, and direct imported `Next` wrappers still satisfy
   same-name imported fair-action reachability when they resolve to
-  action-shaped targets. Progress transition aliases must resolve through named
+  action-shaped targets.
+  Source and top-level progress transition aliases must be acyclic, so source
+  and top-level imported `Next` wrappers cannot satisfy the transition closure
+  through recursive imported transition operators.
+  Source and top-level progress transition aliases must inherit recursive resolution for onward aliases inside imported transition targets,
+  so source and top-level imported `Next` wrappers cannot hide missing,
+  undefined, parameterized, recursive, or uninspectable inner transition
+  aliases behind imported transition operators. Progress transition aliases must resolve through named
   local INSTANCE declarations, so imported `Next` wrappers cannot rely on
   implicit or misspelled module aliases, including onward aliases inside
-  imported transition targets. Progress transition aliases must
+  imported transition targets.
+  Source and top-level progress transition aliases must resolve through named local INSTANCE declarations,
+  so source and top-level imported `Next` wrappers cannot rely on implicit or
+  misspelled module aliases.
+  Progress transition aliases must
   resolve to local modules, so imported `Next` wrappers cannot point at missing
   modules, including onward aliases inside imported transition targets.
+  Source and top-level progress transition aliases must resolve to local modules,
+  so source and top-level imported `Next` wrappers cannot point at missing
+  modules.
   Progress transition aliases must resolve to defined zero-arity
   transition operators, so imported `Next` wrappers cannot point at undefined
   or parameterized transition operators, including onward aliases inside
-  imported transition targets. Progress transition aliases must
+  imported transition targets.
+  Source and top-level progress transition aliases must resolve to defined zero-arity
+  transition operators, so source and top-level imported `Next` wrappers cannot
+  point at undefined or parameterized transition operators. Progress transition aliases must
   resolve to inspectable transition operators, so imported `Next` wrappers
   cannot point at empty or otherwise uninspectable transition operators,
-  including onward aliases inside imported transition targets. The regression
+  including onward aliases inside imported transition targets.
+  Source and top-level progress transition aliases must resolve to inspectable transition operators,
+  so source and top-level imported `Next` wrappers cannot point at empty or
+  otherwise uninspectable transition operators. The regression
   suite pins each direct transition-alias resolution stage: missing `INSTANCE`
   aliases, missing target modules, undefined targets, parameterized targets,
   and uninspectable target definitions, including onward aliases, all fail
@@ -31013,36 +31133,99 @@ validation path.
   Progress transition helper wrappers must be acyclic, so local wrapper chains
   cannot satisfy transition disjunct resolution without reaching an inspectable
   action or aggregate.
+  Source and top-level progress transition helper wrappers must be acyclic, so
+  source and top-level liveness wrappers cannot satisfy transition disjunct
+  resolution through recursive helper cycles.
   Progress transition boolean-gated helper wrappers must be acyclic, so
   identity-literal boolean structure cannot obscure recursive wrapper chains.
+  Source and top-level progress transition boolean-gated helper wrappers must be acyclic,
+  so source and top-level identity-literal boolean gates cannot obscure
+  recursive transition helper cycles.
   Progress transition identity-gated helper wrappers must be acyclic, so
   identity-literal conjunction, disjunction, implication, or equivalence gates
   cannot downgrade recursive helper chains into generic non-bare branch
   diagnostics.
+  Source and top-level progress transition identity-gated helper wrappers must be acyclic,
+  so source and top-level identity-literal conjunctions, disjunctions,
+  implications, and equivalences cannot downgrade recursive helper chains into
+  generic non-bare branch diagnostics.
   Progress transition helper cycle diagnostics must precede nested aggregate expansion,
   so recursive wrappers fail with the proof-cycle diagnostic before identity
   gates are expanded into literal transition branches.
+  Source and top-level progress transition helper cycle diagnostics must precede nested aggregate expansion,
+  so source and top-level recursive helper wrappers fail with the proof-cycle
+  diagnostic before same-branch nested aggregate helpers are expanded.
+  Source and top-level progress transition module-alias helper wrappers must be acyclic,
+  so source and top-level imported helper aliases cannot satisfy transition
+  disjunct resolution through recursive imported helper targets.
   Progress transition module-alias helper wrappers must resolve through named local INSTANCE declarations,
   so imported helper aliases cannot rely on implicit or misspelled module
   aliases.
+  Source and top-level progress transition module-alias helper wrappers must resolve through named local INSTANCE declarations,
+  so source and top-level imported helper aliases cannot rely on implicit or
+  misspelled module aliases.
+  Source and top-level progress transition module-alias helper wrappers must resolve to local modules with defined zero-arity transition operators,
+  so source and top-level imported helper aliases cannot point at missing
+  transition modules.
+  Source and top-level progress transition module-alias helper wrappers must inherit helper-wrapper resolution for onward aliases inside imported helper targets,
+  so source and top-level imported helper aliases cannot hide missing,
+  undefined, parameterized, or uninspectable onward aliases.
+  Source and top-level progress transition module-alias helper onward aliases must resolve to defined zero-arity transition operators,
+  so source and top-level imported helper aliases cannot hide undefined or
+  parameterized onward transition aliases.
+  Source and top-level progress transition module-alias helper onward aliases must resolve to inspectable transition operators,
+  so source and top-level imported helper aliases cannot hide empty or
+  otherwise uninspectable onward transition aliases.
   Progress transition module-alias helper wrappers must inherit helper-wrapper resolution for onward aliases inside imported helper targets,
   so local helper aliases cannot hide a missing, undefined, parameterized, or
   uninspectable inner imported target.
   Progress transition module-alias helper wrappers must inherit multi-hop recursive helper guards behind imported module-alias chains,
   so imported transition helper wrappers cannot hide bad terminal helper
   targets after alternating module-alias and local-helper hops.
+  Source and top-level progress transition module-alias helper wrappers must inherit multi-hop recursive helper guards behind imported module-alias chains,
+  so source and top-level imported transition helper wrappers cannot hide bad
+  terminal helper targets after alternating module-alias and local-helper
+  hops.
   Progress transition module-alias helper wrappers must resolve to defined zero-arity transition operators,
   so imported helper aliases cannot point at missing modules, undefined
-  operators, or parameterized helpers. Progress transition module-alias helper
+  operators, or parameterized helpers.
+  Source and top-level progress transition module-alias helper wrappers must resolve to defined zero-arity transition operators,
+  so source and top-level imported helper aliases cannot point at undefined or
+  parameterized transition operators. Progress transition module-alias helper
   wrappers must resolve to inspectable transition operators, so imported
   helper aliases cannot point at empty or otherwise uninspectable transition
   operators.
+  Source and top-level progress transition module-alias helper wrappers must resolve to inspectable transition operators,
+  so source and top-level imported helper aliases cannot point at empty or
+  otherwise uninspectable transition operators.
   Progress transition identity-gated module-alias helper wrappers must be acyclic,
   so imported helper aliases hidden behind identity-literal gates cannot recurse
   without surfacing the transition-helper cycle.
+  Source and top-level progress transition identity-gated module-alias helper wrappers must be acyclic,
+  so source and top-level imported helper aliases hidden behind
+  identity-literal gates cannot satisfy transition disjunct resolution through
+  recursive imported helper targets.
   Progress transition identity-gated module-alias helper wrappers must resolve through named local INSTANCE declarations,
   so imported helper aliases hidden behind identity-literal gates cannot rely on
   implicit or misspelled module aliases.
+  Source and top-level progress transition identity-gated module-alias helper wrappers must resolve through named local INSTANCE declarations,
+  so source and top-level imported helper aliases hidden behind
+  identity-literal gates cannot rely on implicit or misspelled module aliases.
+  Source and top-level progress transition identity-gated module-alias helper wrappers must resolve to local modules with defined zero-arity transition operators,
+  so source and top-level imported helper aliases hidden behind
+  identity-literal gates cannot point at missing transition modules.
+  Source and top-level progress transition identity-gated module-alias helper wrappers must inherit helper-wrapper resolution for onward aliases inside imported helper targets,
+  so source and top-level imported helper aliases hidden behind
+  identity-literal gates cannot hide missing, undefined, parameterized, or
+  uninspectable onward aliases.
+  Source and top-level progress transition identity-gated module-alias helper onward aliases must resolve to defined zero-arity transition operators,
+  so source and top-level imported helper aliases hidden behind
+  identity-literal gates cannot hide undefined or parameterized onward
+  transition aliases.
+  Source and top-level progress transition identity-gated module-alias helper onward aliases must resolve to inspectable transition operators,
+  so source and top-level imported helper aliases hidden behind
+  identity-literal gates cannot hide empty or otherwise uninspectable onward
+  transition aliases.
   Progress transition identity-gated module-alias helper wrappers must inherit helper-wrapper resolution for onward aliases inside imported helper targets,
   so identity-gated local helper aliases cannot hide a missing, undefined,
   parameterized, or uninspectable inner imported target.
@@ -31050,47 +31233,118 @@ validation path.
   so identity-gated imported transition helper wrappers cannot hide bad
   terminal helper targets after alternating module-alias and local-helper
   hops.
+  Source and top-level progress transition identity-gated module-alias helper wrappers must inherit multi-hop recursive helper guards behind imported module-alias chains,
+  so source and top-level identity-gated imported transition helper wrappers
+  cannot hide bad terminal helper targets after alternating module-alias and
+  local-helper hops.
   Progress transition identity-gated module-alias helper wrappers must resolve to defined zero-arity transition operators,
   so imported helper aliases hidden behind identity-literal gates cannot point
-  at missing modules, undefined operators, or parameterized helpers. Progress
+  at missing modules, undefined operators, or parameterized helpers.
+  Source and top-level progress transition identity-gated module-alias helper wrappers must resolve to defined zero-arity transition operators,
+  so source and top-level imported helper aliases hidden behind
+  identity-literal gates cannot point at undefined or parameterized transition
+  operators. Progress
   transition identity-gated module-alias helper wrappers must resolve to
   inspectable transition operators, so imported helper aliases hidden behind
+  identity-literal gates cannot point at empty or otherwise uninspectable
+  transition operators.
+  Source and top-level progress transition identity-gated module-alias helper wrappers must resolve to inspectable transition operators,
+  so source and top-level imported helper aliases hidden behind
   identity-literal gates cannot point at empty or otherwise uninspectable
   transition operators.
   Progress transition module-alias disjuncts must be acyclic, so imported
   transition branches cannot recurse without surfacing the transition-helper
   cycle.
+  Source and top-level progress transition module-alias disjuncts must be acyclic,
+  so source and top-level imported transition branches cannot recurse without
+  surfacing the transition-helper cycle.
   Progress transition module-alias disjuncts must resolve through named local INSTANCE declarations,
   so imported transition branches cannot rely on
   implicit or misspelled module aliases.
+  Source and top-level progress transition module-alias disjuncts must resolve through named local INSTANCE declarations,
+  so source and top-level imported transition branches cannot rely on
+  implicit or misspelled module aliases.
+  Source and top-level progress transition module-alias disjuncts must resolve to local modules with defined zero-arity transition operators,
+  so source and top-level imported transition branches cannot point at missing
+  transition modules.
   Bare module-alias transition disjuncts remain valid when they resolve to
   inspectable action-shaped zero-arity imported transition operators.
   Bare module-alias transition disjuncts must inherit helper-wrapper
   resolution for onward aliases inside imported transition branches, so a
   valid top-level imported branch cannot hide a missing, undefined,
   parameterized, or uninspectable inner imported target.
+  Source and top-level progress transition module-alias disjuncts must inherit helper-wrapper resolution for onward aliases inside imported transition branches,
+  so source and top-level imported transition branches cannot hide missing,
+  undefined, parameterized, or uninspectable onward aliases.
+  Source and top-level progress transition module-alias disjunct onward aliases must resolve to defined zero-arity transition operators,
+  so source and top-level imported transition branches cannot hide undefined
+  or parameterized onward transition aliases.
+  Source and top-level progress transition module-alias disjunct onward aliases must resolve to inspectable transition operators,
+  so source and top-level imported transition branches cannot hide empty or
+  otherwise uninspectable onward transition aliases.
   Progress transition module-alias disjuncts must inherit multi-hop recursive helper guards behind imported module-alias chains,
   so imported transition branches cannot hide bad terminal helper targets
   after alternating module-alias and local-helper hops.
+  Source and top-level progress transition module-alias disjuncts must inherit multi-hop recursive helper guards behind imported module-alias chains,
+  so source and top-level imported transition branches cannot hide bad
+  terminal helper targets after alternating module-alias and local-helper
+  hops.
   Progress transition module-alias disjuncts must resolve to defined zero-arity transition operators,
   so imported transition branches cannot point at missing modules, undefined
-  operators, or parameterized helpers. Progress transition module-alias
-  disjuncts must resolve to inspectable transition operators, so imported
-  transition branches cannot point at empty or otherwise uninspectable
-  transition operators.
+  operators, or parameterized helpers.
+  Source and top-level progress transition module-alias disjuncts must resolve to defined zero-arity transition operators,
+  so source and top-level imported transition branches cannot point at
+  undefined or parameterized imported transition operators.
+  Progress transition module-alias disjuncts must resolve to inspectable transition operators,
+  so imported transition branches cannot point at empty or otherwise
+  uninspectable transition operators.
+  Source and top-level progress transition module-alias disjuncts must resolve to inspectable transition operators,
+  so source and top-level imported transition branches cannot point at empty
+  or otherwise uninspectable imported transition operators.
   Progress transition identity-gated module-alias disjuncts must be acyclic,
   so imported transition branches hidden behind identity-literal gates cannot
   recurse without surfacing the transition-helper cycle.
+  Source and top-level progress transition identity-gated module-alias disjuncts must be acyclic,
+  so source and top-level imported transition branches hidden behind
+  identity-literal gates cannot recurse without surfacing the
+  transition-helper cycle.
   Progress transition identity-gated module-alias disjuncts must resolve through named local INSTANCE declarations,
   so imported transition branches hidden behind identity-literal gates cannot
   rely on implicit or misspelled module aliases.
+  Source and top-level progress transition identity-gated module-alias disjuncts must resolve through named local INSTANCE declarations,
+  so source and top-level imported transition branches hidden behind
+  identity-literal gates cannot rely on implicit or misspelled module aliases.
+  Source and top-level progress transition identity-gated module-alias disjuncts must resolve to local modules with defined zero-arity transition operators,
+  so source and top-level imported transition branches hidden behind
+  identity-literal gates cannot point at missing transition modules.
+  Source and top-level progress transition identity-gated module-alias disjuncts must resolve to defined zero-arity transition operators,
+  so source and top-level imported transition branches hidden behind
+  identity-literal gates cannot point at undefined or parameterized imported
+  transition operators.
+  Source and top-level progress transition identity-gated module-alias disjuncts must resolve to inspectable transition operators,
+  so source and top-level imported transition branches hidden behind
+  identity-literal gates cannot point at empty or otherwise uninspectable
+  imported transition operators.
   Identity-gated module-alias transition disjuncts must inherit
   helper-wrapper resolution for onward aliases inside imported transition
   branches, so a valid top-level identity-gated imported branch cannot hide a
   missing, undefined, parameterized, or uninspectable inner imported target.
+  Source and top-level progress transition identity-gated module-alias disjuncts must inherit helper-wrapper resolution for onward aliases inside imported transition branches,
+  so source and top-level identity-gated imported transition branches cannot
+  hide missing, undefined, parameterized, or uninspectable onward aliases.
+  Source and top-level progress transition identity-gated module-alias disjunct onward aliases must resolve to defined zero-arity transition operators,
+  so source and top-level identity-gated imported transition branches cannot
+  hide undefined or parameterized onward transition aliases.
+  Source and top-level progress transition identity-gated module-alias disjunct onward aliases must resolve to inspectable transition operators,
+  so source and top-level identity-gated imported transition branches cannot
+  hide empty or otherwise uninspectable onward transition aliases.
   Progress transition identity-gated module-alias disjuncts must inherit multi-hop recursive helper guards behind imported module-alias chains,
   so identity-gated imported transition branches cannot hide bad terminal
   helper targets after alternating module-alias and local-helper hops.
+  Source and top-level progress transition identity-gated module-alias disjuncts must inherit multi-hop recursive helper guards behind imported module-alias chains,
+  so source and top-level identity-gated imported transition branches cannot
+  hide bad terminal helper targets after alternating module-alias and
+  local-helper hops.
   Progress transition identity-gated module-alias disjuncts must resolve to defined zero-arity transition operators,
   so imported transition branches hidden behind identity-literal gates cannot
   point at missing modules, undefined operators, or parameterized helpers.
@@ -31103,7 +31357,10 @@ validation path.
   and uninspectable targets.
   Progress transition disjunct inventories must stay duplicate-free, so
   repeated action or helper branches, including inside direct imported `Next`
-  aliases, cannot collapse before transition-shape checks run. `WF_vars`
+  aliases, cannot collapse before transition-shape checks run.
+  Source and top-level progress transition disjunct inventories must stay duplicate-free,
+  so source and top-level liveness wrappers cannot repeat the same action or
+  helper branch inside `[][Next]_vars`. `WF_vars`
   fairness operands must stay named zero-arity
   operators, so raw compound fairness clauses cannot hide outside the named
   progress-spec fairness aggregates.
@@ -31119,20 +31376,38 @@ validation path.
   compositions. Progress fairness action definitions must be action-shaped
   transition definitions, so fair action names cannot resolve to static
   predicates or hide nested fairness clauses behind action aliases.
+  Source and top-level progress fairness action definitions must be action-shaped transition definitions,
+  so source and top-level fair action names cannot resolve to static
+  predicates.
   Progress fairness action definitions must not contain fairness or temporal
   operators, so fair action names cannot smuggle liveness assumptions or
-  temporal eventualities into the transition-action surface. Progress fairness
+  temporal eventualities into the transition-action surface.
+  Source and top-level progress fairness action definitions must not contain fairness or temporal operators,
+  so source and top-level fair action names cannot smuggle liveness
+  assumptions or temporal eventualities into the transition-action surface. Progress fairness
   action definitions must not compose other fair actions, so one fair action
   cannot smuggle another reviewed transition action behind an action-shaped
-  wrapper. Progress fairness action definitions must not hide other fair
+  wrapper.
+  Source and top-level progress fairness action definitions must not compose other fair actions,
+  so source and top-level fair action names cannot smuggle another reviewed
+  transition action behind an action-shaped wrapper. Progress fairness action definitions must not hide other fair
   actions in boolean structure, so one fair action cannot bury another reviewed
   transition action behind disjunction, implication, equivalence, or negation.
+  Source and top-level progress fairness action definitions must not hide other fair actions in boolean structure,
+  so source and top-level fair action names cannot bury another reviewed
+  transition action behind boolean structure.
   Progress fairness action helper references must resolve to defined
   zero-arity helper definitions, so declared helpers used by fairness actions
   cannot be parameterized operators that static traversal cannot inspect as
-  named action predicates. Progress fairness action helper references must
+  named action predicates.
+  Source and top-level progress fairness action helper references must resolve to defined zero-arity helper definitions,
+  so source and top-level fairness actions cannot hide parameterized helper
+  references. Progress fairness action helper references must
   resolve to inspectable helper definitions, so declared helpers used by
   fairness actions cannot be empty or otherwise uninspectable operator bodies.
+  Source and top-level progress fairness action helper references must resolve to inspectable helper definitions,
+  so source and top-level fairness actions cannot hide empty or otherwise
+  uninspectable helper references.
   Progress fairness action helper references must inherit multi-hop recursive
   local-helper guards, so local fairness action bodies cannot hide
   parameterized or uninspectable helper definitions behind several local helper
@@ -31140,75 +31415,130 @@ validation path.
   Progress fairness action helper wrappers must not hide composed fair actions,
   so local static helper chains cannot obscure the same cross-action
   composition from the fairness-action review, even when helper bodies use
-  boolean structure. Progress fairness action helper wrappers must inherit
+  boolean structure. Source and top-level progress fairness action helper wrappers must not hide composed fair actions,
+  so source and top-level fairness action bodies cannot hide composed fair
+  actions behind local static helper wrappers. Progress fairness action helper wrappers must inherit
   multi-hop local-helper composed-action guards, so local static helper chains
   cannot hide composed fair actions several helper-wrapper hops below a
-  reviewed fair action. Progress fairness action helper wrappers must be acyclic,
+  reviewed fair action. Source and top-level progress fairness action helper wrappers must inherit multi-hop local-helper composed-action guards,
+  so source and top-level fairness action bodies cannot hide composed fair
+  actions several local helper-wrapper hops below a reviewed fair action. Progress fairness action helper wrappers must be acyclic,
   so local static helper chains cannot satisfy the fairness-action review by
-  recursing instead of reaching inspectable helper definitions. Progress
+  recursing instead of reaching inspectable helper definitions. Source and top-level progress fairness action helper wrappers must be acyclic,
+  so source and top-level fairness action bodies cannot satisfy the
+  fairness-action review through recursive local static helper wrappers. Progress
   fairness action helper wrappers must inherit multi-hop local-helper cycle
   guards, so local static helper chains cannot hide recursive helper-wrapper
-  loops several hops below a reviewed fair action. Progress fairness action helper wrappers must inspect boolean operands,
+  loops several hops below a reviewed fair action. Source and top-level progress fairness action helper wrappers must inherit multi-hop local-helper cycle guards,
+  so source and top-level fairness action bodies cannot hide recursive
+  helper-wrapper loops several hops below a reviewed fair action. Progress fairness action helper wrappers must inspect boolean operands,
   so local static helper names used outside direct conjunctions cannot hide
   composed fair actions, including through helper bodies that use boolean
-  structure. Progress fairness action helper actions must not hide
+  structure. Source and top-level progress fairness action helper wrappers must inspect boolean operands,
+  so source and top-level fairness action bodies cannot hide composed fair
+  actions behind local static helper names reached through boolean operands. Progress fairness action helper actions must not hide
   composed fair actions, so local action-shaped helper chains cannot obscure the
   same cross-action composition from the fairness-action review, even when
-  helper bodies use boolean structure. Progress fairness action helper actions
+  helper bodies use boolean structure. Source and top-level progress fairness action helper actions must not hide composed fair actions,
+  so source and top-level fairness action bodies cannot hide composed fair
+  actions behind local action-shaped helper chains. Progress fairness action helper actions
   must inherit multi-hop local-helper composed-action guards, so local
   action-shaped helper chains cannot hide composed fair actions several
-  helper-action hops below a reviewed fair action. Progress fairness action helper actions must be acyclic,
+  helper-action hops below a reviewed fair action. Source and top-level progress fairness action helper actions must inherit multi-hop local-helper composed-action guards,
+  so source and top-level fairness action bodies cannot hide composed fair
+  actions several action-helper hops below a reviewed fair action. Progress fairness action helper actions must be acyclic,
   so recursive action-shaped helper chains cannot satisfy the fairness-action
-  review without reaching inspectable helper definitions. Progress fairness
+  review without reaching inspectable helper definitions. Source and top-level progress fairness action helper actions must be acyclic,
+  so source and top-level fairness action bodies cannot satisfy the
+  fairness-action review through recursive local action-shaped helper chains. Progress fairness
   action helper actions must inherit multi-hop local-helper cycle guards, so
   local action-shaped helper chains cannot hide recursive helper-action loops
-  several hops below a reviewed fair action. Progress fairness action helper actions must inspect boolean operands,
+  several hops below a reviewed fair action. Source and top-level progress fairness action helper actions must inherit multi-hop local-helper cycle guards,
+  so source and top-level fairness action bodies cannot hide recursive
+  helper-action loops several hops below a reviewed fair action. Progress fairness action helper actions must inspect boolean operands,
   so local action-shaped helper names used outside direct conjunctions cannot
   hide composed fair actions, including through helper bodies that use boolean
-  structure. Progress fairness action helper aliases
+  structure. Source and top-level progress fairness action helper actions must inspect boolean operands,
+  so source and top-level fairness action bodies cannot hide composed fair
+  actions behind local action-shaped helper names reached through boolean
+  operands. Progress fairness action helper aliases
   must not hide composed fair actions, so local helper chains cannot import a
   composed fair action through a module-instance alias, alias onward through
   nested module aliases, point directly at an imported fair-action target, or
-  hide it behind boolean structure in the imported helper body. Progress fairness action helper aliases must be acyclic,
+  hide it behind boolean structure in the imported helper body. Source and top-level progress fairness action helper aliases must not hide composed fair actions,
+  so source and top-level fairness action bodies cannot import composed fair
+  actions through local module-instance helper aliases. Progress fairness action helper aliases must be acyclic,
   so helper chains that traverse module-instance aliases cannot satisfy the
-  fairness-action review by recursing back to an already visited helper. Progress fairness action helper aliases must inherit multi-hop module-alias cycle guards behind imported helper targets,
+  fairness-action review by recursing back to an already visited helper. Source and top-level progress fairness action helper aliases must be acyclic,
+  so source and top-level fairness action bodies cannot satisfy the
+  fairness-action review through recursive module-instance helper aliases. Progress fairness action helper aliases must inherit multi-hop module-alias cycle guards behind imported helper targets,
   so local fairness helper aliases cannot hide recursive module-alias loops
-  after several imported and local helper hops. Progress fairness action helper aliases must inspect boolean operands,
+  after several imported and local helper hops. Source and top-level progress fairness action helper aliases must inherit multi-hop module-alias cycle guards behind imported helper targets,
+  so source and top-level fairness action bodies cannot hide recursive
+  module-alias loops several imported and local helper hops below a reviewed
+  fair action. Progress fairness action helper aliases must inspect boolean operands,
   so local helper aliases used outside direct conjunctions cannot bypass
   resolution or composed-action checks for direct imported fair-action composition,
   boolean-structured imported fair-action composition, nested module-alias
   fair-action composition, missing modules, undefined targets, parameterized
   imported targets, uninspectable imported targets, or imported helper
   references with invalid arity or opaque
-  definitions. Progress fairness action helper aliases must inherit multi-hop recursive helper guards behind imported module-alias chains,
+  definitions. Source and top-level progress fairness action helper aliases must inspect boolean operands,
+  so source and top-level fairness action bodies cannot bypass imported helper
+  alias checks when local helper aliases are reached through boolean operands. Progress fairness action helper aliases must inherit multi-hop recursive helper guards behind imported module-alias chains,
   so local fairness helper aliases cannot hide bad terminal helper targets
-  after alternating module-alias and local-helper hops. Progress fairness action helper aliases must resolve through named local INSTANCE declarations,
+  after alternating module-alias and local-helper hops. Source and top-level progress fairness action helper aliases must inherit multi-hop recursive helper guards behind imported module-alias chains,
+  so source and top-level fairness action bodies cannot hide bad terminal
+  helper targets after alternating module-alias and local-helper hops. Progress fairness action helper aliases must resolve through named local INSTANCE declarations,
   so local helper chains cannot rely on implicit or misspelled module aliases.
+  Source and top-level progress fairness action helper aliases must resolve through named local INSTANCE declarations,
+  so source and top-level fairness action bodies cannot rely on implicit or
+  misspelled imported helper aliases.
   Progress fairness action helper aliases must resolve to local action modules,
   so local helper chains cannot point at missing imported action modules.
+  Source and top-level progress fairness action helper aliases must resolve to local action modules,
+  so source and top-level fairness action bodies cannot point helper aliases at
+  missing imported action modules.
   Progress fairness action helper aliases must resolve to defined zero-arity actions,
   so local helper chains cannot point at undefined or parameterized imported
-  action operators. Progress fairness action helper aliases must resolve
+  action operators. Source and top-level progress fairness action helper aliases must resolve to defined zero-arity actions,
+  so source and top-level fairness action bodies cannot point helper aliases at
+  undefined or parameterized imported action operators. Progress fairness action helper aliases must resolve
   imported helper references to defined zero-arity helper definitions, so
   imported helper bodies reached through module-instance aliases cannot hide
   parameterized local helper operators from the fairness-action review.
+  Source and top-level progress fairness action helper aliases must resolve imported helper references to defined zero-arity helper definitions,
+  so source and top-level fairness action bodies cannot hide parameterized
+  imported helper operators behind module-instance helper aliases.
   Progress fairness action helper aliases must resolve imported helper
   references to inspectable helper definitions, so imported helper bodies
   reached through module-instance aliases cannot hide empty or otherwise
   uninspectable local helper operators, including the helper alias target
-  itself. Progress fairness action module-alias conjuncts must not
+  itself. Source and top-level progress fairness action helper aliases must resolve imported helper references to inspectable helper definitions,
+  so source and top-level fairness action bodies cannot hide empty or
+  otherwise uninspectable imported helper operators behind module-instance
+  helper aliases. Progress fairness action module-alias conjuncts must not
   hide composed fair actions, so local action bodies cannot compose imported
   fair-action helpers directly beside their own action update, even when the
   imported operand aliases onward through nested module aliases or reaches
-  boolean helper bodies. Progress
+  boolean helper bodies. Source and top-level progress fairness action module-alias conjuncts must not hide composed fair actions,
+  so source and top-level fairness action bodies cannot compose imported
+  fair-action helpers directly beside their own action update. Progress
   fairness action module-alias conjuncts must be acyclic, so imported action
   operands cannot recurse through local or imported helpers without surfacing a
-  fairness-action cycle diagnostic. Progress fairness action module-alias conjuncts must inherit multi-hop recursive helper guards behind imported module-alias chains,
+  fairness-action cycle diagnostic. Source and top-level progress fairness action module-alias conjuncts must be acyclic,
+  so source and top-level imported conjunct operands cannot recurse through
+  local or imported action helpers without surfacing a fairness-action cycle
+  diagnostic. Progress fairness action module-alias conjuncts must inherit multi-hop recursive helper guards behind imported module-alias chains,
   so imported conjunct operands cannot hide bad terminal helper targets after
-  alternating module-alias and local-helper hops. Progress
+  alternating module-alias and local-helper hops. Source and top-level progress fairness action module-alias conjuncts must inherit multi-hop recursive helper guards behind imported module-alias chains,
+  so source and top-level imported conjunct operands cannot hide bad terminal
+  helper targets after alternating module-alias and local-helper hops. Progress
   fairness action module-alias conjuncts must resolve through named local INSTANCE declarations,
   so local action bodies cannot rely on implicit or misspelled imported
-  conjunct aliases. Progress fairness action module-alias conjuncts must resolve to local action modules,
+  conjunct aliases. Source and top-level progress fairness action module-alias conjuncts must resolve through named local INSTANCE declarations,
+  so source and top-level fairness action bodies cannot rely on implicit or
+  misspelled imported conjunct aliases. Progress fairness action module-alias conjuncts must resolve to local action modules,
   so local action bodies cannot reference missing imported action modules.
   Progress fairness action module-alias conjuncts must resolve to defined zero-arity actions,
   so local action bodies cannot reference undefined or parameterized imported

@@ -67547,7 +67547,7 @@ def test_release_bundle_verifier_guards_evm_source_adapter_deployment_gate(
     assert any(
         "Ethereum mainnet EVM source-adapter deployment gate source inventory "
         "missing active launch lane coverage for eth" in error
-        and "ETH facade must reject replayed deployment receipts" in error
+        and "ETH source proofs must be bound to the exact {label} deployment" in error
         and "Ethereum mainnet source-adapter deployment" in error
         for error in verified["errors"]
     )
