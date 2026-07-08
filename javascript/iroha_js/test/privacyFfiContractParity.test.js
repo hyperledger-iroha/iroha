@@ -7289,8 +7289,18 @@ test("privacy native availability proof probes use shared Norito request archive
       "internal static byte[] PrivacyNativeAvailabilityProbeArchive",
       "C# privacy native probe result",
     ),
-    /finally[\s\S]*Array\.Clear\(output,\s*0,\s*output\.Length\)[\s\S]*ClearNativeBuffer\(outPtr,\s*outLen\)/,
+    /finally[\s\S]*Clear\(output\)[\s\S]*ClearNativeBuffer\(outPtr,\s*outLen\)/,
     "C# privacy availability probes must clear managed and native output buffers after validation",
+  );
+  assert.match(
+    sliceBetween(
+      csharpBridge,
+      "private static void Clear(byte[]? buffer)",
+      "private static bool ConsumeProbeResult",
+      "C# privacy managed buffer clear helper",
+    ),
+    /CryptographicOperations\.ZeroMemory\(buffer\)/,
+    "C# privacy managed buffer clear helper must use cryptographic zeroing",
   );
   assert.match(
     sliceBetween(
@@ -7578,7 +7588,7 @@ test("privacy native availability proof probes use shared Norito request archive
       "private static void RequireAbi",
       "C# privacy native request call",
     ),
-    /var\s+request\s*=\s*requestArchive\.ToArray\(\);[\s\S]*IsNoritoV1Archive\(request\)[\s\S]*Array\.Clear\(request,\s*0,\s*request\.Length\)/,
+    /var\s+request\s*=\s*requestArchive\.ToArray\(\);[\s\S]*IsNoritoV1Archive\(request\)[\s\S]*Clear\(request\)/,
     "C# privacy bridge must validate request Norito frame headers before native dispatch",
   );
   assert.match(

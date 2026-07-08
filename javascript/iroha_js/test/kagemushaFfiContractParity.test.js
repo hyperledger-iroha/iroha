@@ -2053,8 +2053,6 @@ test("Kagemusha JavaScript instruction transaction builder stays wired", () => {
       "buildKagemushaRecursiveTopUpTransaction",
       "topUpRequestArchive: BinaryLike;",
       "top_up_request_archive: BinaryLike;",
-      "initRequestArchive: BinaryLike;",
-      "init_request_archive: BinaryLike;",
       "redeemRequestArchive: BinaryLike;",
       "redeem_request_archive: BinaryLike;",
       "requestArchive: BinaryLike;",
@@ -10477,10 +10475,17 @@ test("recursive Kagemusha active marker scan covers workflow-backed and C# test 
     "active Kagemusha marker negative control must mutate each workflow-backed and C# test surface",
   );
   assert.ok(
-    activeTodoBranch.includes(
+    new RegExp(
+      `f"\\{todo_prefix\\} bypass Kagemusha C# SDK matrix native-output certification\\\\n"[\\s\\S]*?The Ubuntu/Windows C# SDK matrix must keep matching exact C# native-output`,
+      "u",
+    ).test(activeTodoBranch),
+    "active marker negative control must mutate a roadmap matrix requirement",
+  );
+  assert.ok(
+    !activeTodoBranch.includes(
       `${markerName}: bypass Kagemusha C# SDK matrix native-output certification`,
     ),
-    "active marker negative control must mutate a roadmap matrix requirement",
+    "active marker negative control must keep active marker text split in source",
   );
   assert.doesNotMatch(
     guard,
@@ -11050,7 +11055,7 @@ test("recursive Kagemusha policy negative controls pin non-C# native output guar
     branch,
     [
       "javascript/iroha_js/src/crypto.js",
-      "export const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 256 * 1024 * 1024;",
+      "export const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;",
       "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaCompactPaymentTokenProver.java",
       "static void requireNativeInput(final byte[] archive, final String archiveName)",
       "static boolean isValidNoritoArchive(final byte[] output)",
@@ -15418,6 +15423,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-jvm-sdk-java-home-reject-script",
     "--negative-control-jvm-recursive-compact-verifier-availability",
     "--negative-control-jvm-recursive-compact-shape-classifier",
+    "--negative-control-ton-sccp-public-input-validation-ordering",
     "--negative-control-mobile-recursive-spend-native-output-headers",
     "--negative-control-mobile-privacy-production-gate-exactness",
     "--negative-control-mobile-privacy-audit-hash-uniqueness",
@@ -16948,7 +16954,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jvmAndroidCompactProjectionArchivePreflightBranch,
-    /KagemushaRecursiveSpendProverTest\.kt[\s\S]*?bundleArchive must not exceed[\s\S]*?bundleArchive may exceed[\s\S]*?verifierRecordArchive must not exceed[\s\S]*?verifierRecordArchive may exceed[\s\S]*?KagemushaRecursiveSpendProverTest\.java[\s\S]*?bundleArchive must not exceed 268435456 bytes[\s\S]*?bundleArchive may exceed 268435456 bytes[\s\S]*?verifierRecordArchive must not exceed 268435456 bytes[\s\S]*?verifierRecordArchive may exceed 268435456 bytes[\s\S]*?run_checks\(mutated_texts\)/u,
+    /KagemushaRecursiveSpendProverTest\.kt[\s\S]*?bundleArchive must not exceed[\s\S]*?bundleArchive may exceed[\s\S]*?verifierRecordArchive must not exceed[\s\S]*?verifierRecordArchive may exceed[\s\S]*?KagemushaRecursiveSpendProverTest\.java[\s\S]*?bundleArchive must not exceed 67108864 bytes[\s\S]*?bundleArchive may exceed 67108864 bytes[\s\S]*?verifierRecordArchive must not exceed 67108864 bytes[\s\S]*?verifierRecordArchive may exceed 67108864 bytes[\s\S]*?run_checks\(mutated_texts\)/u,
     "JVM/Android compact projection archive-preflight negative control must mutate Kotlin and Android Java oversized archive rows",
   );
   assertContainsAll(
@@ -16956,8 +16962,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     [
       "Kotlin compact projection archive preflight test vectors missing bundleArchive must not exceed",
       "Kotlin compact projection archive preflight test vectors missing verifierRecordArchive must not exceed",
-      "Android Java compact projection archive preflight test vectors missing bundleArchive must not exceed 268435456 bytes",
-      "Android Java compact projection archive preflight test vectors missing verifierRecordArchive must not exceed 268435456 bytes",
+      "Android Java compact projection archive preflight test vectors missing bundleArchive must not exceed 67108864 bytes",
+      "Android Java compact projection archive preflight test vectors missing verifierRecordArchive must not exceed 67108864 bytes",
       "if expected_label not in message:",
       "JVM/Android compact projection archive preflight drift was rejected",
       "run_checks(mutated_texts)",
@@ -16972,7 +16978,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       ".recursiveSpendCompactPaymentTokenFromBundle(oversizedRecursiveCompactInput)",
       ".recursiveSpendCompactPaymentTokenFromBundle(oversizedRecursiveCompactInput));",
       "verifierRecordArchive must not exceed",
-      "verifierRecordArchive must not exceed 268435456 bytes",
+      "verifierRecordArchive must not exceed 67108864 bytes",
       ".verifyRecursiveSpendCompactPaymentTokenProjection(validRecursiveCompactInput, ByteArray(0))",
       "validRecursiveCompactInput, new byte[0]));",
     ],
@@ -29002,10 +29008,25 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     ],
     "SDK parity guard must pin Swift malformed note amount vector inventory",
   );
-  assert.match(
-    guard,
-    /require_regex\([\s\S]*?request_codecs_test[\s\S]*?lineageVerifierKey: nil,[\s\S]*?lineageProvingKeyArchive: nil[\s\S]*?invalidField\\\("lineageVerifierKey"\\\)[\s\S]*?Swift typed recursive spend init lineage-key exact diagnostics/u,
-    "SDK parity guard must pin Swift nil init lineage-key exact diagnostics with a scoped regex",
+  const swiftRequestCodecGuardSection = guard.slice(
+    guard.indexOf(
+      'request_codecs_test = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift"',
+    ),
+    guard.indexOf(
+      'kotlin_request_codecs_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt"',
+    ),
+  );
+  assertContainsAll(
+    swiftRequestCodecGuardSection,
+    [
+      "require_regex(",
+      "request_codecs_test",
+      String.raw`r'lineageVerifierKey: Data\(\),[\s\S]*?lineageProvingKeyArchive: lineageProvingKeyArchive[\s\S]*?\.invalidField\("lineageVerifierKey"\)'`,
+      "Swift typed recursive spend init lineage-key exact diagnostics",
+      String.raw`r'lineageVerifierKey: nil,[\s\S]*?lineageProvingKeyArchive: nil[\s\S]*?\.invalidField\("lineageVerifierKey"\)'`,
+      "Swift typed recursive spend append lineage-key exact diagnostics",
+    ],
+    "SDK parity guard must pin Swift init and nil append lineage-key exact diagnostics with scoped regexes",
   );
   assert.match(
     swiftNoteAmountVectorBranch,
@@ -29510,8 +29531,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "value.isBlank()",
       "rejectCode.trim().isEmpty()",
       "rejectCode.isBlank()",
-      "kind.trim().isEmpty()",
-      "kind.isBlank()",
+      "value.equals(value.trim())",
       "wireName.trim().isEmpty()",
       "wireName.isBlank()",
       "try (InputStream responseBody = stream;",

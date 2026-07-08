@@ -22011,7 +22011,7 @@ fn privacy_expected_public_inputs_schema(entry: &PrivacyAlgorithmEntry) -> Optio
             "identity_commitment,tx_digest,chain_id,domain_separator,action_class,replay_nullifier,policy_hash,from,to,asset,amount,verifier_key_id",
         ),
         "anonymous-pgc-k-out-of-n-v1" => Some(
-            "anonymity_set_root,tx_digest,balance_commitments,receiver_set_commitment,receiver_ciphertext_commitments,receiver_threshold,receiver_count,link_tag,range_commitments,chain_id,domain_separator",
+            "anonymity_set_root,tx_digest,balance_commitments,receiver_set_commitment,receiver_ciphertext_commitments,receiver_threshold,receiver_count,link_tag,range_commitments,payment_binding_hash,chain_id,domain_separator",
         ),
         "verange-transparent-range-v1" => {
             Some("commitments,range_parameters,aggregation_count,domain_separator,payload_digest")

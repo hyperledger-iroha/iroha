@@ -5639,7 +5639,11 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
   assert.equal(KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION, 15);
   assert.equal(
     KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME,
+    "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpRequestV1",
+  );
+  assert.equal(
     KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME,
+    "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1",
   );
   assert.equal(
     KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,

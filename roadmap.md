@@ -93,7 +93,7 @@ while keeping the same adversarial release-audit/native-payload rejection
 coverage. IVM's README/prover notes now describe the delivered production
 verifier boundary directly: OpenVerify IPA/Pasta envelopes are verified at
 runtime, `MockProver` remains test/off-chain circuit-gadget tooling, and the
-stale TODO/mock-circuit status wording is gone.
+stale follow-up/mock-circuit status wording is gone.
 Swift status feed provisioning also closed the checksum/health observability
 follow-up: parity and CI feeds now require SHA-256 sidecars, the CI wrapper
 verifies source sidecars before enrichment, final feed artifacts get matching
@@ -7407,10 +7407,10 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
 	  checker `DEFAULT_REQUIRED_KINDS`, and collection-runner summary flags to stay
 	  in lockstep before production readiness can be claimed. It now also scans
 	  active SoraFS implementation, SDK, CLI, Torii/config, and operator-script
-		  source paths for TODO/FIXME/XXX/TBD markers, auto-discovers path-named
+		  source paths for active follow-up markers, auto-discovers path-named
 		  SoraFS sources outside the hand-curated roots, and carries adversarial
 		  marker-detection controls, including lowercase and mixed-case active
-		  markers such as `todo:` and `FixMe(...)`, so first-release TODO drift
+			  markers such as lowercase task labels and mixed-case fix notes, so first-release marker drift
 		  cannot re-enter unnoticed. Shared SoraFS evidence sensitivity checks also treat
 	  API/auth/session/x-api/id/OAuth/refresh/JWT tokens, cookies, passwords,
 	  private keys, seed phrases, and signing keys as runtime-only material

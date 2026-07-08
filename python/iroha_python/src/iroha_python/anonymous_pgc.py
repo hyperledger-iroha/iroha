@@ -114,11 +114,16 @@ def _normalize_payload_digest(source: Mapping[str, Any], context: str) -> bytes:
             _canonical_json_bytes(payload_value, f"{context}.payloadJson")
         ).digest()
     else:
+        _max_payload_key, max_payload_value = _read_single_alias(
+            source,
+            ("maxPayloadBytes", "max_payload_bytes"),
+            f"{context}.maxPayloadBytes",
+            "max payload byte limit",
+        )
         max_payload_bytes = _positive_u32(
-            source.get(
-                "maxPayloadBytes",
-                source.get("max_payload_bytes", VERANGE_MAX_PAYLOAD_BYTES),
-            ),
+            VERANGE_MAX_PAYLOAD_BYTES
+            if max_payload_value is _MISSING
+            else max_payload_value,
             f"{context}.maxPayloadBytes",
         )
         payload_digest = hashlib.sha256(
@@ -435,6 +440,14 @@ def _normalize_receiver_set_from_source(
         "receiver set",
     )
     if receiver_set_value is not _MISSING:
+        inline_fields = [
+            key for key in ("version", "threshold", "k", "receivers") if key in source
+        ]
+        if inline_fields:
+            raise ValueError(
+                f"{context}.receiverSet must not be combined with inline receiver-set fields: "
+                + ", ".join(inline_fields)
+            )
         return _normalize_receiver_set(receiver_set_value, f"{context}.receiverSet")
     return build_anonymous_pgc_receiver_set(
         {
@@ -470,6 +483,8 @@ def _normalize_public_inputs(value: Any, context: str) -> dict[str, Any]:
             "linkTag",
             "range_commitments",
             "rangeCommitments",
+            "payment_binding_hash",
+            "paymentBindingHash",
             "chain_id",
             "chainId",
             "domain_separator",
@@ -530,6 +545,12 @@ def _normalize_public_inputs(value: Any, context: str) -> dict[str, Any]:
         ("range_commitments", "rangeCommitments"),
         f"{context}.rangeCommitments",
         "range commitments",
+    )
+    _payment_key, payment_value = _read_single_alias(
+        source,
+        ("payment_binding_hash", "paymentBindingHash"),
+        f"{context}.paymentBindingHash",
+        "payment binding hash",
     )
     _chain_key, chain_value = _read_single_alias(
         source,
@@ -606,6 +627,12 @@ def _normalize_public_inputs(value: Any, context: str) -> dict[str, Any]:
                 ANONYMOUS_PGC_MAX_RANGE_COMMITMENTS,
             )
         ],
+        "payment_binding_hash": _fixed_bytes(
+            payment_value,
+            f"{context}.paymentBindingHash",
+            32,
+            nonzero=True,
+        ).hex(),
         "chain_id": _require_non_blank_string(chain_value, f"{context}.chainId"),
         "domain_separator": _require_non_blank_string(
             domain_value,
@@ -670,6 +697,12 @@ def _normalize_proof_parts(
         f"{context}.rangeCommitments",
         "range commitments",
     )
+    _payment_key, payment_value = _read_single_alias(
+        source,
+        ("paymentBindingHash", "payment_binding_hash"),
+        f"{context}.paymentBindingHash",
+        "payment binding hash",
+    )
     _chain_key, chain_value = _read_single_alias(
         source,
         ("chainId", "chain_id"),
@@ -716,6 +749,12 @@ def _normalize_proof_parts(
             nonzero=True,
         ).hex(),
         "range_commitments": [entry.hex() for entry in range_commitments],
+        "payment_binding_hash": _fixed_bytes(
+            payment_value,
+            f"{context}.paymentBindingHash",
+            32,
+            nonzero=True,
+        ).hex(),
         "chain_id": _require_non_blank_string(
             chain_value,
             f"{context}.chainId",
@@ -727,9 +766,29 @@ def _normalize_proof_parts(
             f"{context}.domainSeparator",
         ),
     }
-    max_proof_bytes = _positive_u32(
-        source.get("maxProofBytes", source.get("max_proof_bytes", DEFAULT_PRIVACY_MAX_PROOF_BYTES)),
+    _max_proof_key, max_proof_value = _read_single_alias(
+        source,
+        ("maxProofBytes", "max_proof_bytes"),
         f"{context}.maxProofBytes",
+        "max proof byte limit",
+    )
+    _max_public_input_key, max_public_input_value = _read_single_alias(
+        source,
+        ("maxPublicInputBytes", "max_public_input_bytes"),
+        f"{context}.maxPublicInputBytes",
+        "max public input byte limit",
+    )
+    max_proof_bytes = _positive_u32(
+        DEFAULT_PRIVACY_MAX_PROOF_BYTES
+        if max_proof_value is _MISSING
+        else max_proof_value,
+        f"{context}.maxProofBytes",
+    )
+    max_public_input_bytes = _positive_u32(
+        DEFAULT_PRIVACY_MAX_PUBLIC_INPUT_BYTES
+        if max_public_input_value is _MISSING
+        else max_public_input_value,
+        f"{context}.maxPublicInputBytes",
     )
     return {
         "backend": _normalize_anonymous_pgc_backend(
@@ -754,10 +813,7 @@ def _normalize_proof_parts(
             )
         ),
         "max_proof_bytes": max_proof_bytes,
-        "max_public_input_bytes": source.get(
-            "maxPublicInputBytes",
-            source.get("max_public_input_bytes", DEFAULT_PRIVACY_MAX_PUBLIC_INPUT_BYTES),
-        ),
+        "max_public_input_bytes": max_public_input_bytes,
     }
 
 
@@ -812,6 +868,8 @@ def _anonymous_pgc_proof_allowed_fields() -> set[str]:
         "link_tag",
         "rangeCommitments",
         "range_commitments",
+        "paymentBindingHash",
+        "payment_binding_hash",
         "chainId",
         "chain_id",
         "domainSeparator",
@@ -911,6 +969,8 @@ def build_anonymous_pgc_dev_proof_fixture(options: Mapping[str, Any]) -> dict[st
             "link_tag",
             "rangeCommitments",
             "range_commitments",
+            "paymentBindingHash",
+            "payment_binding_hash",
             "chainId",
             "chain_id",
             "domainSeparator",
@@ -1101,6 +1161,17 @@ def _ensure_verification_expectations(
             ).hex(),
             public_inputs["link_tag"],
         ),
+        (
+            ("paymentBindingHash", "payment_binding_hash"),
+            "paymentBindingHash",
+            lambda value: _fixed_bytes(
+                value,
+                f"{context}.paymentBindingHash",
+                32,
+                nonzero=True,
+            ).hex(),
+            public_inputs["payment_binding_hash"],
+        ),
     ):
         _key, value = _read_single_alias(source, fields, f"{context}.{path}", path)
         if value is not _MISSING and normalize(value) != actual:
@@ -1215,6 +1286,8 @@ def verify_anonymous_pgc_k_out_of_n_proof_v1(options: Any) -> dict[str, Any]:
             "link_tag",
             "rangeCommitments",
             "range_commitments",
+            "paymentBindingHash",
+            "payment_binding_hash",
             "chainId",
             "chain_id",
             "domainSeparator",
@@ -1314,6 +1387,8 @@ def verify_anonymous_pgc_dev_proof_locally(options: Any) -> dict[str, Any]:
             "link_tag",
             "rangeCommitments",
             "range_commitments",
+            "paymentBindingHash",
+            "payment_binding_hash",
             "chainId",
             "chain_id",
             "domainSeparator",
@@ -1408,6 +1483,8 @@ def build_anonymous_pgc_transfer_instruction(options: Mapping[str, Any]) -> dict
             "link_tag",
             "rangeCommitments",
             "range_commitments",
+            "paymentBindingHash",
+            "payment_binding_hash",
             "chainId",
             "chain_id",
             "domainSeparator",
@@ -1415,6 +1492,14 @@ def build_anonymous_pgc_transfer_instruction(options: Mapping[str, Any]) -> dict
         },
         "anonymousPgcTransferInstruction",
     )
+    _payment_key, payment_binding_value = _read_single_alias(
+        source,
+        ("paymentBindingHash", "payment_binding_hash"),
+        "anonymousPgcTransferInstruction.paymentBindingHash",
+        "payment binding hash",
+    )
+    if payment_binding_value is _MISSING:
+        raise ValueError("anonymousPgcTransferInstruction.paymentBindingHash is required")
     verified = verify_anonymous_pgc_k_out_of_n_proof_v1(source)
     public_inputs = verified["public_inputs"]
     _envelope_key, envelope_value = _read_single_alias(
@@ -1438,6 +1523,7 @@ def build_anonymous_pgc_transfer_instruction(options: Mapping[str, Any]) -> dict
         "receiver_threshold": public_inputs["receiver_threshold"],
         "receiver_count": public_inputs["receiver_count"],
         "link_tag": public_inputs["link_tag"],
+        "payment_binding_hash": public_inputs["payment_binding_hash"],
         "chain_id": public_inputs["chain_id"],
         "domain_separator": public_inputs["domain_separator"],
     }

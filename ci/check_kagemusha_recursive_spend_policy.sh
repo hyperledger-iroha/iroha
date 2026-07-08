@@ -1570,7 +1570,7 @@ SDK_APPEND_CAP_BINDING_COVERAGE = {
 
 NATIVE_OUTPUT_CAP_COVERAGE = {
     "crates/connect_norito_bridge/src/lib.rs": (
-        "const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 64 * 1024 * 1024;",
+        "const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 256 * 1024 * 1024;",
         "fn kagemusha_archive_out_of_bounds(len: usize) -> bool",
         "len == 0 || len > KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES",
         "unsafe fn write_kagemusha_archive_bridge",
@@ -1641,7 +1641,7 @@ NATIVE_OUTPUT_CAP_COVERAGE = {
         "case oversizedNativeOutput",
         "case invalidNativeOutput",
         "case emptyNativeOutputPayload",
-        "public static let nativeArchiveMaxBytes = 64 * 1024 * 1024",
+        "public static let nativeArchiveMaxBytes = 256 * 1024 * 1024",
         "try archives.forEach(requireValidInputArchive)",
         "try requireValidOutputArchive(archive)",
         "noritoDecodeFrame(archive)",
@@ -1661,7 +1661,7 @@ NATIVE_OUTPUT_CAP_COVERAGE = {
         ".emptyInputPayload",
         ".invalidNativeOutput",
         ".emptyNativeOutputPayload",
-        "KagemushaRecursiveSpendProver.nativeArchiveMaxBytes, 64 * 1024 * 1024",
+        "KagemushaRecursiveSpendProver.nativeArchiveMaxBytes, 256 * 1024 * 1024",
         "KagemushaRecursiveSpendProver.nativeArchiveMaxBytes + 1",
         "validKagemushaNoritoArchive",
         "emptyPayloadKagemushaNoritoArchive",
@@ -1689,7 +1689,7 @@ NATIVE_OUTPUT_CAP_COVERAGE = {
         "emptyPayloadKagemushaNoritoArchive",
     ),
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaCompactPaymentTokenProver.java": (
-        "public static final int NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;",
+        "public static final int NATIVE_ARCHIVE_MAX_BYTES = 256 * 1024 * 1024;",
         "static void requireNativeInput(final byte[] archive, final String archiveName)",
         "isValidNoritoArchive(archive)",
         "hasNonEmptyNoritoPayload(archive)",
@@ -1760,7 +1760,7 @@ NATIVE_OUTPUT_CAP_COVERAGE = {
         "kagemushaNoritoFrameWithPayload",
     ),
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaCompactPaymentTokenProver.kt": (
-        "const val NATIVE_ARCHIVE_MAX_BYTES: Int = 64 * 1024 * 1024",
+        "const val NATIVE_ARCHIVE_MAX_BYTES: Int = 256 * 1024 * 1024",
         "internal fun requireNativeInput(archive: ByteArray?, archiveName: String): ByteArray",
         "isValidNoritoArchive(archive)",
         "hasNonEmptyNoritoPayload(archive)",
@@ -2162,6 +2162,7 @@ ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS = (
     "crates/iroha_torii/src/zk_prover.rs",
     "crates/iroha_torii/tests/offline_kagemusha_only_smoke.rs",
     "crates/iroha_torii/tests/offline_v2_kagemusha_redeem_smoke.rs",
+    "crates/iroha_torii/tests/offline_v2_kagemusha_topup_smoke.rs",
     "ci/check_kagemusha_production_readiness.sh",
     "ci/check_kagemusha_recursive_spend_jvm_sdk.sh",
     "ci/check_kagemusha_recursive_spend_js_sdk.sh",
@@ -2306,6 +2307,8 @@ ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS = (
     "crates/iroha_data_model/src/isi/mod.rs",
     "crates/iroha_data_model/src/isi/registry.rs",
     "crates/iroha_data_model/src/proof.rs",
+    "crates/iroha_torii/src/account_activity.rs",
+    "crates/iroha_torii/src/explorer.rs",
     "crates/iroha_torii/src/offline_issuer.rs",
     "crates/iroha_torii/src/lib.rs",
     "csharp/README.md",

@@ -397,6 +397,10 @@ test("browser crypto exposes native-only helpers as safe stubs", () => {
       "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1",
     );
     assert.equal(
+      crypto.KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME,
+      "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpRequestV1",
+    );
+    assert.equal(
       crypto.KAGEMUSHA_RECURSIVE_SPEND_VERIFY_RESULT_WIRE_NAME,
       "iroha_data_model::offline::model::KagemushaRecursiveSpendVerifyResultV1",
     );

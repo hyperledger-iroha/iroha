@@ -3376,6 +3376,17 @@ impl Actor {
                         now,
                         "exhausted_vote_locked_same_height",
                     );
+                let all_validator_vote_lock_new_view_requested = lock.candidate_possible_votes == 0
+                    && !qc_observed
+                    && proposal_height == self.committed_height_snapshot().saturating_add(1);
+                if all_validator_vote_lock_new_view_requested {
+                    self.maybe_rebroadcast_new_view_votes(proposal_height, now);
+                    self.trigger_view_change_with_cause(
+                        proposal_height,
+                        view,
+                        ViewChangeCause::MissingQc,
+                    );
+                }
                 warn!(
                     height = proposal_height,
                     view,
@@ -3395,6 +3406,7 @@ impl Actor {
                     highest_qc_view = highest_qc.view,
                     highest_qc_block = %highest_qc.subject_block_hash,
                     stale_vote_locked_recovery_requested,
+                    all_validator_vote_lock_new_view_requested,
                     "deferring proposal assembly: same-height vote history makes a fresh branch non-viable"
                 );
                 return Ok(false);
@@ -5949,13 +5961,21 @@ impl Actor {
         epoch: u64,
         now: Instant,
         precommit_votes_at_view: usize,
+        pending_queue_len: usize,
         highest_qc: crate::sumeragi::consensus::QcHeaderRef,
     ) -> Option<(Duration, Duration)> {
-        let stale_window = self
+        let full_stale_window = self
             .quorum_timeout(self.runtime_da_enabled())
             .max(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
             .max(self.frontier_slot_lag_window())
             .max(Duration::from_millis(1));
+        let stale_window = if pending_queue_len > 0 && precommit_votes_at_view == 0 {
+            self.cap_active_block_production_gap(full_stale_window, true)
+                .max(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
+                .max(Duration::from_millis(1))
+        } else {
+            full_stale_window
+        };
         if !self.config.resilience.enabled
             || height != self.committed_height_snapshot().saturating_add(1)
             || view == 0
@@ -7778,6 +7798,7 @@ impl Actor {
                         epoch,
                         now,
                         precommit_votes_at_view,
+                        pending_queue_len,
                         highest_qc,
                     )
                 {

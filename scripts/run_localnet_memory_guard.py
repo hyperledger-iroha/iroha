@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -32,6 +33,7 @@ DEFAULT_POST_LOAD_SAMPLE_SECONDS = 30.0
 DEFAULT_LOAD_RUNS = 1
 DEFAULT_DEPLOY_QUEUE_CAPACITY = 4_096
 DEFAULT_KURA_BLOCKS_IN_MEMORY = 16
+EXISTING_IROHAD_EXIT_CODE = 4
 
 
 @dataclass(frozen=True)
@@ -40,6 +42,15 @@ class PeerProcess:
 
     pid: int
     config_path: Path
+    command: str
+
+
+@dataclass(frozen=True)
+class ExistingIrohadProcess:
+    """An irohad process already running outside the guarded run directory."""
+
+    pid: int
+    rss_bytes: int
     command: str
 
 
@@ -145,6 +156,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--capture-diagnostics",
         action="store_true",
         help="Capture vmmap/heap diagnostic snapshots from live peers before shutdown.",
+    )
+    parser.add_argument(
+        "--allow-existing-irohad",
+        action="store_true",
+        help=(
+            "Run even when unrelated irohad processes are already live. Their RSS is "
+            "reported separately and is not counted against this run's guard limit."
+        ),
     )
     parser.add_argument(
         "--diagnostic-timeout-seconds",
@@ -306,11 +325,37 @@ def command_for_pid(pid: int) -> str:
     return ps_output(["-o", "command=", "-p", str(pid)])
 
 
+def command_binary_name(command: str) -> str:
+    """Return the executable basename from a ps command line."""
+    stripped = command.strip()
+    if not stripped:
+        return ""
+    return Path(stripped.split(None, 1)[0]).name
+
+
+def command_is_irohad(command: str) -> bool:
+    """Return whether a ps command line starts with the irohad executable."""
+    return command_binary_name(command) == binary_name("irohad")
+
+
 def command_owns_peer(command: str, config_path: Path) -> bool:
     if not command:
         return False
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        argv = command.split()
     config = str(config_path)
-    return "--config" in command and config in command
+    for index, argument in enumerate(argv):
+        if argument == "--config" and index + 1 < len(argv):
+            if argv[index + 1] == config:
+                return True
+        elif (
+            argument.startswith("--config=")
+            and argument.removeprefix("--config=") == config
+        ):
+            return True
+    return False
 
 
 def peer_processes(out_dir: Path) -> list[PeerProcess]:
@@ -325,6 +370,53 @@ def peer_processes(out_dir: Path) -> list[PeerProcess]:
         if command_owns_peer(command, config_path):
             processes.append(PeerProcess(pid=pid, config_path=config_path, command=command))
     return processes
+
+
+def irohad_processes() -> list[ExistingIrohadProcess]:
+    """Return live irohad processes with their current RSS."""
+    processes: list[ExistingIrohadProcess] = []
+    raw = ps_output(["-axo", "pid=,rss=,command="])
+    for line in raw.splitlines():
+        parts = line.strip().split(None, 2)
+        if len(parts) != 3:
+            continue
+        pid_raw, rss_raw, command = parts
+        if not command_is_irohad(command):
+            continue
+        try:
+            pid = int(pid_raw)
+            rss_bytes = int(rss_raw) * 1024
+        except ValueError:
+            continue
+        processes.append(ExistingIrohadProcess(pid=pid, rss_bytes=rss_bytes, command=command))
+    return processes
+
+
+def unrelated_irohad_processes(out_dir: Path) -> list[ExistingIrohadProcess]:
+    """Return irohad processes not owned by the localnet run directory."""
+    owned_peer_pids = {process.pid for process in peer_processes(out_dir)}
+    return [process for process in irohad_processes() if process.pid not in owned_peer_pids]
+
+
+def existing_irohad_total_rss(processes: Sequence[ExistingIrohadProcess]) -> int:
+    """Return aggregate RSS for already-running unrelated irohad processes."""
+    return sum(process.rss_bytes for process in processes)
+
+
+def existing_irohad_preflight_message(processes: Sequence[ExistingIrohadProcess]) -> str:
+    """Return the message shown when unrelated irohad processes block a guard run."""
+    total_rss = existing_irohad_total_rss(processes)
+    preview = ", ".join(
+        f"pid {process.pid} rss {process.rss_bytes} bytes" for process in processes[:5]
+    )
+    if len(processes) > 5:
+        preview = f"{preview}, ..."
+    return (
+        "refusing to start guarded localnet because unrelated irohad processes "
+        f"are already running ({len(processes)} process(es), {total_rss} bytes RSS: "
+        f"{preview}). Stop the old localnets first, or pass --allow-existing-irohad "
+        "to record them separately while guarding only this run."
+    )
 
 
 def rss_bytes_for_pid(pid: int) -> int:
@@ -564,6 +656,8 @@ def write_report(
     post_load_sample_seconds: float,
     status_snapshots: Sequence[StatusSnapshot] = (),
     diagnostic_artifacts: Sequence[DiagnosticArtifact] = (),
+    existing_irohad_processes: Sequence[ExistingIrohadProcess] = (),
+    preflight_error: str | None = None,
     load_runs: int = DEFAULT_LOAD_RUNS,
     tx_returncodes: Sequence[int | None] | None = None,
 ) -> None:
@@ -574,6 +668,13 @@ def write_report(
         "load_runs": load_runs,
         "memory_limit_bytes": memory_limit_bytes,
         "post_load_sample_seconds": post_load_sample_seconds,
+        "preflight_error": preflight_error,
+        "existing_irohad_total_rss_bytes": existing_irohad_total_rss(
+            existing_irohad_processes
+        ),
+        "existing_irohad_processes": [
+            process.__dict__ for process in existing_irohad_processes
+        ],
         "peak_total_rss_bytes": max((sample.total_rss_bytes for sample in samples), default=0),
         "peak_peer_rss_bytes": max((sample.max_peer_rss_bytes for sample in samples), default=0),
         "last_total_rss_bytes": samples[-1].total_rss_bytes if samples else 0,
@@ -612,6 +713,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     env = None
     profile = "debug" if args.debug else "release"
     target_dir = args.target_dir if args.target_dir is not None else args.iroha_dir / "target"
+    existing_processes = unrelated_irohad_processes(args.out_dir)
+    if existing_processes and not args.allow_existing_irohad:
+        preflight_error = existing_irohad_preflight_message(existing_processes)
+        write_report(
+            report,
+            [],
+            None,
+            memory_limit_bytes=limit_bytes,
+            post_load_sample_seconds=args.post_load_sample_seconds,
+            existing_irohad_processes=existing_processes,
+            preflight_error=preflight_error,
+            load_runs=args.load_runs,
+            tx_returncodes=[],
+        )
+        print(preflight_error, file=sys.stderr)
+        return EXISTING_IROHAD_EXIT_CODE
     can_skip_build = all(
         profile_binary_exists(target_dir, profile, binary)
         for binary in ["kagami", "irohad", "iroha"]
@@ -641,6 +758,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             post_load_sample_seconds=args.post_load_sample_seconds,
             status_snapshots=status_snapshots,
             diagnostic_artifacts=diagnostic_artifacts,
+            existing_irohad_processes=existing_processes,
             load_runs=args.load_runs,
             tx_returncodes=tx_returncodes,
         )

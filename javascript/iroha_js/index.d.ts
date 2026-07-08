@@ -9905,28 +9905,98 @@ export interface SisHintsAnonymousCredentialVerificationResult {
   parameter_hash: string;
 }
 
-export interface AnonymousPgcReceiverInput {
-  accountCommitment?: BinaryLike;
-  account_commitment?: BinaryLike;
-  receiverCommitment?: BinaryLike;
-  receiver_commitment?: BinaryLike;
-  ciphertextCommitment?: BinaryLike;
-  ciphertext_commitment?: BinaryLike;
-  receiverCiphertextCommitment?: BinaryLike;
-  receiver_ciphertext_commitment?: BinaryLike;
-  ciphertext?: BinaryLike;
-  receiverCiphertext?: BinaryLike;
-  receiver_ciphertext?: BinaryLike;
-  encryptedNote?: BinaryLike;
-  encrypted_note?: BinaryLike;
-}
+export type AnonymousPgcOptionalAlias2<
+  A extends string,
+  B extends string,
+  Value,
+> =
+  | ({ [Key in A]?: Value } & { [Key in B]?: never })
+  | ({ [Key in A]?: never } & { [Key in B]?: Value });
 
-export interface AnonymousPgcReceiverSetInput {
+export type AnonymousPgcRequiredAlias2<
+  A extends string,
+  B extends string,
+  Value,
+> =
+  | ({ [Key in A]: Value } & { [Key in B]?: never })
+  | ({ [Key in A]?: never } & { [Key in B]: Value });
+
+export type AnonymousPgcOptionalAlias3<
+  A extends string,
+  B extends string,
+  C extends string,
+  Value,
+> =
+  | ({ [Key in A]?: Value } & { [Key in B | C]?: never })
+  | ({ [Key in B]?: Value } & { [Key in A | C]?: never })
+  | ({ [Key in C]?: Value } & { [Key in A | B]?: never });
+
+export type AnonymousPgcOptionalAlias4<
+  A extends string,
+  B extends string,
+  C extends string,
+  D extends string,
+  Value,
+> =
+  | ({ [Key in A]?: Value } & { [Key in B | C | D]?: never })
+  | ({ [Key in B]?: Value } & { [Key in A | C | D]?: never })
+  | ({ [Key in C]?: Value } & { [Key in A | B | D]?: never })
+  | ({ [Key in D]?: Value } & { [Key in A | B | C]?: never });
+
+export type AnonymousPgcRequiredAlias4<
+  A extends string,
+  B extends string,
+  C extends string,
+  D extends string,
+  Value,
+> =
+  | ({ [Key in A]: Value } & { [Key in B | C | D]?: never })
+  | ({ [Key in B]: Value } & { [Key in A | C | D]?: never })
+  | ({ [Key in C]: Value } & { [Key in A | B | D]?: never })
+  | ({ [Key in D]: Value } & { [Key in A | B | C]?: never });
+
+export type AnonymousPgcOptionalAlias5<
+  A extends string,
+  B extends string,
+  C extends string,
+  D extends string,
+  E extends string,
+  Value,
+> =
+  | ({ [Key in A]?: Value } & { [Key in B | C | D | E]?: never })
+  | ({ [Key in B]?: Value } & { [Key in A | C | D | E]?: never })
+  | ({ [Key in C]?: Value } & { [Key in A | B | D | E]?: never })
+  | ({ [Key in D]?: Value } & { [Key in A | B | C | E]?: never })
+  | ({ [Key in E]?: Value } & { [Key in A | B | C | D]?: never });
+
+export type AnonymousPgcReceiverInput =
+  AnonymousPgcRequiredAlias4<
+    "accountCommitment",
+    "account_commitment",
+    "receiverCommitment",
+    "receiver_commitment",
+    BinaryLike
+  > &
+  AnonymousPgcRequiredAlias4<
+    "ciphertextCommitment",
+    "ciphertext_commitment",
+    "receiverCiphertextCommitment",
+    "receiver_ciphertext_commitment",
+    BinaryLike
+  > &
+  AnonymousPgcOptionalAlias5<
+    "ciphertext",
+    "receiverCiphertext",
+    "receiver_ciphertext",
+    "encryptedNote",
+    "encrypted_note",
+    BinaryLike
+  >;
+
+export type AnonymousPgcReceiverSetInput = {
   version?: NumericLike;
-  threshold?: NumericLike;
-  k?: NumericLike;
   receivers: ReadonlyArray<AnonymousPgcReceiverInput>;
-}
+} & AnonymousPgcRequiredAlias2<"threshold", "k", NumericLike>;
 
 export interface AnonymousPgcReceiverSet {
   version: 1;
@@ -9940,69 +10010,149 @@ export interface AnonymousPgcReceiverSet {
   receiver_set_commitment: number[];
 }
 
-export interface AnonymousPgcDevProofFixtureInput {
-  backend?: PrivacyBackendTag;
-  backendTag?: PrivacyBackendTag;
-  backend_tag?: PrivacyBackendTag;
-  circuitId?: string;
-  circuit_id?: string;
-  vkHash?: BinaryLike;
-  vk_hash?: BinaryLike;
-  verifierKeyHash?: BinaryLike;
-  verifyingKeyHash?: BinaryLike;
-  receiverSet?: AnonymousPgcReceiverSetInput | AnonymousPgcReceiverSet;
-  receiver_set?: AnonymousPgcReceiverSetInput | AnonymousPgcReceiverSet;
-  version?: NumericLike;
-  threshold?: NumericLike;
-  k?: NumericLike;
-  receivers?: ReadonlyArray<AnonymousPgcReceiverInput>;
-  anonymitySetRoot?: BinaryLike;
-  anonymity_set_root?: BinaryLike;
-  txDigest?: BinaryLike;
-  tx_digest?: BinaryLike;
-  payloadDigest?: BinaryLike;
-  payload_digest?: BinaryLike;
-  payload?: BinaryLike;
-  payloadBytes?: BinaryLike;
-  payload_bytes?: BinaryLike;
-  payloadJson?: unknown;
-  payload_json?: unknown;
-  balanceCommitments?: ReadonlyArray<BinaryLike | { commitment?: BinaryLike }>;
-  balance_commitments?: ReadonlyArray<BinaryLike | { commitment?: BinaryLike }>;
-  linkTag?: BinaryLike;
-  link_tag?: BinaryLike;
-  rangeCommitments?: ReadonlyArray<BinaryLike | RangeCommitmentInput>;
-  range_commitments?: ReadonlyArray<BinaryLike | RangeCommitmentInput>;
-  chainId?: string;
-  chain_id?: string;
-  domainSeparator?: string;
-  domain_separator?: string;
+export type AnonymousPgcReceiverSetMaterialInput =
+  | {
+      receiverSet?: AnonymousPgcReceiverSetInput | AnonymousPgcReceiverSet;
+      receiver_set?: never;
+      version?: never;
+      threshold?: never;
+      k?: never;
+      receivers?: never;
+    }
+  | {
+      receiverSet?: never;
+      receiver_set?: AnonymousPgcReceiverSetInput | AnonymousPgcReceiverSet;
+      version?: never;
+      threshold?: never;
+      k?: never;
+      receivers?: never;
+    }
+  | ({
+      receiverSet?: never;
+      receiver_set?: never;
+      version?: NumericLike;
+      receivers?: ReadonlyArray<AnonymousPgcReceiverInput>;
+    } & AnonymousPgcOptionalAlias2<"threshold", "k", NumericLike>);
+
+export type AnonymousPgcPayloadInput =
+  | {
+      payload?: BinaryLike;
+      payloadBytes?: never;
+      payload_bytes?: never;
+      payloadJson?: never;
+      payload_json?: never;
+    }
+  | {
+      payload?: never;
+      payloadBytes?: BinaryLike;
+      payload_bytes?: never;
+      payloadJson?: never;
+      payload_json?: never;
+    }
+  | {
+      payload?: never;
+      payloadBytes?: never;
+      payload_bytes?: BinaryLike;
+      payloadJson?: never;
+      payload_json?: never;
+    }
+  | {
+      payload?: never;
+      payloadBytes?: never;
+      payload_bytes?: never;
+      payloadJson?: unknown;
+      payload_json?: never;
+    }
+  | {
+      payload?: never;
+      payloadBytes?: never;
+      payload_bytes?: never;
+      payloadJson?: never;
+      payload_json?: unknown;
+    };
+
+export interface AnonymousPgcProofMaterialBaseInput {
   aux?: BinaryLike;
-  maxProofBytes?: NumericLike;
-  max_proof_bytes?: NumericLike;
-  maxPublicInputBytes?: NumericLike;
-  max_public_input_bytes?: NumericLike;
-  maxPayloadBytes?: NumericLike;
-  max_payload_bytes?: NumericLike;
 }
 
-export interface AnonymousPgcProofV1Input
-  extends AnonymousPgcDevProofFixtureInput {
-  proofBytes: BinaryLike;
-  proof_bytes?: BinaryLike;
-  proof?: BinaryLike;
-}
+export type AnonymousPgcProofMaterialInput =
+  AnonymousPgcProofMaterialBaseInput &
+  AnonymousPgcOptionalAlias3<
+    "backend",
+    "backendTag",
+    "backend_tag",
+    PrivacyBackendTag
+  > &
+  AnonymousPgcOptionalAlias2<"circuitId", "circuit_id", string> &
+  AnonymousPgcOptionalAlias4<
+    "vkHash",
+    "vk_hash",
+    "verifierKeyHash",
+    "verifyingKeyHash",
+    BinaryLike
+  > &
+  AnonymousPgcReceiverSetMaterialInput &
+  AnonymousPgcOptionalAlias2<"anonymitySetRoot", "anonymity_set_root", BinaryLike> &
+  AnonymousPgcOptionalAlias4<
+    "txDigest",
+    "tx_digest",
+    "payloadDigest",
+    "payload_digest",
+    BinaryLike
+  > &
+  AnonymousPgcPayloadInput &
+  AnonymousPgcOptionalAlias2<
+    "balanceCommitments",
+    "balance_commitments",
+    ReadonlyArray<BinaryLike | { commitment?: BinaryLike }>
+  > &
+  AnonymousPgcOptionalAlias2<"linkTag", "link_tag", BinaryLike> &
+  AnonymousPgcOptionalAlias2<
+    "rangeCommitments",
+    "range_commitments",
+    ReadonlyArray<BinaryLike | RangeCommitmentInput>
+  > &
+  AnonymousPgcOptionalAlias2<"chainId", "chain_id", string> &
+  AnonymousPgcOptionalAlias2<"domainSeparator", "domain_separator", string> &
+  AnonymousPgcOptionalAlias2<"maxProofBytes", "max_proof_bytes", NumericLike> &
+  AnonymousPgcOptionalAlias2<
+    "maxPublicInputBytes",
+    "max_public_input_bytes",
+    NumericLike
+  > &
+  AnonymousPgcOptionalAlias2<"maxPayloadBytes", "max_payload_bytes", NumericLike>;
 
-export interface AnonymousPgcAccountCommitmentInstructionInput {
-  accountCommitment?: BinaryLike;
-  account_commitment?: BinaryLike;
-  anonymitySetRoot?: BinaryLike;
-  anonymity_set_root?: BinaryLike;
-  chainId?: string;
-  chain_id?: string;
-  domainSeparator?: string;
-  domain_separator?: string;
-}
+export type AnonymousPgcPaymentBindingHashInput =
+  | { paymentBindingHash: BinaryLike; payment_binding_hash?: never }
+  | { paymentBindingHash?: never; payment_binding_hash: BinaryLike };
+
+export type AnonymousPgcOptionalPaymentBindingHashInput =
+  AnonymousPgcOptionalAlias2<"paymentBindingHash", "payment_binding_hash", BinaryLike>;
+
+export type AnonymousPgcDevProofFixtureInput =
+  AnonymousPgcProofMaterialInput & AnonymousPgcPaymentBindingHashInput;
+
+export type AnonymousPgcProofBytesInput =
+  | { proofBytes: BinaryLike; proof_bytes?: never; proof?: never }
+  | { proofBytes?: never; proof_bytes: BinaryLike; proof?: never }
+  | { proofBytes?: never; proof_bytes?: never; proof: BinaryLike };
+
+export type AnonymousPgcProofV1Input =
+  AnonymousPgcDevProofFixtureInput & AnonymousPgcProofBytesInput;
+
+export type AnonymousPgcAccountCommitmentInstructionInput =
+  AnonymousPgcRequiredAlias2<
+    "accountCommitment",
+    "account_commitment",
+    BinaryLike
+  > &
+  AnonymousPgcRequiredAlias2<
+    "anonymitySetRoot",
+    "anonymity_set_root",
+    BinaryLike
+  > &
+  AnonymousPgcRequiredAlias2<"chainId", "chain_id", string> &
+  AnonymousPgcOptionalAlias2<"domainSeparator", "domain_separator", string>;
 
 export interface AnonymousPgcAccountCommitmentInstruction {
   kind: "zk::RegisterAnonymousPgcAccountCommitment";
@@ -10025,6 +10175,7 @@ export interface AnonymousPgcPublicInputs {
   receiver_count: number;
   link_tag: string;
   range_commitments: string[];
+  payment_binding_hash: string;
   chain_id: string;
   domain_separator: string;
 }
@@ -10036,17 +10187,23 @@ export interface AnonymousPgcDevProofFixture {
   proofBytes: Buffer;
   receiver_set: AnonymousPgcReceiverSet;
   public_inputs: AnonymousPgcPublicInputs;
+  public_input_bytes: Buffer;
   publicInputBytes: Buffer;
   envelope: Buffer;
 }
 
-export interface AnonymousPgcDevProofLocalVerificationInput
-  extends AnonymousPgcDevProofFixtureInput {
-  envelope?: BinaryLike;
-  proofEnvelope?: BinaryLike;
-  proof_envelope?: BinaryLike;
-  bytes?: BinaryLike;
-}
+export type AnonymousPgcProofEnvelopeInput = AnonymousPgcOptionalAlias4<
+  "envelope",
+  "proofEnvelope",
+  "proof_envelope",
+  "bytes",
+  BinaryLike
+>;
+
+export type AnonymousPgcDevProofLocalVerificationInput =
+  AnonymousPgcProofMaterialInput &
+  AnonymousPgcProofEnvelopeInput &
+  AnonymousPgcOptionalPaymentBindingHashInput;
 
 export interface AnonymousPgcDevProofLocalVerificationResult {
   ok: true;
@@ -10063,13 +10220,10 @@ export interface AnonymousPgcDevProofLocalVerificationResult {
   receiver_threshold: number;
 }
 
-export interface AnonymousPgcProofV1VerificationInput
-  extends AnonymousPgcDevProofFixtureInput {
-  envelope?: BinaryLike;
-  proofEnvelope?: BinaryLike;
-  proof_envelope?: BinaryLike;
-  bytes?: BinaryLike;
-}
+export type AnonymousPgcProofV1VerificationInput =
+  AnonymousPgcProofMaterialInput &
+  AnonymousPgcProofEnvelopeInput &
+  AnonymousPgcOptionalPaymentBindingHashInput;
 
 export interface AnonymousPgcProofV1VerificationResult {
   ok: true;
@@ -10086,8 +10240,8 @@ export interface AnonymousPgcProofV1VerificationResult {
   receiver_threshold: number;
 }
 
-export interface AnonymousPgcTransferInstructionInput
-  extends AnonymousPgcProofV1VerificationInput {}
+export type AnonymousPgcTransferInstructionInput =
+  AnonymousPgcProofV1VerificationInput & AnonymousPgcPaymentBindingHashInput;
 
 export interface AnonymousPgcTransferInstruction {
   kind: "zk::SubmitAnonymousPgcTransfer";
@@ -10099,6 +10253,7 @@ export interface AnonymousPgcTransferInstruction {
   receiver_threshold: number;
   receiver_count: number;
   link_tag: string;
+  payment_binding_hash: string;
   chain_id: string;
   domain_separator: string;
   instruction_digest: string;
@@ -15194,10 +15349,12 @@ export interface RegisterSnsNameViaConsensusResult {
 
 export type KagemushaInstructionArchiveType =
   | "KagemushaTransfer"
-  | "RedeemKagemushaRecursive";
+  | "RedeemKagemushaRecursive"
+  | "TopUpKagemushaRecursive";
 
 export const KAGEMUSHA_TRANSFER_INSTRUCTION_WIRE_NAME: "iroha_data_model::isi::offline::KagemushaTransfer";
 export const KAGEMUSHA_REDEEM_RECURSIVE_INSTRUCTION_WIRE_NAME: "iroha_data_model::isi::offline::RedeemKagemushaRecursive";
+export const KAGEMUSHA_TOP_UP_RECURSIVE_INSTRUCTION_WIRE_NAME: "iroha_data_model::isi::offline::TopUpKagemushaRecursive";
 export const KAGEMUSHA_RECURSIVE_REDEEM_REQUEST_WIRE_NAME: "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV1";
 
 export const OFFLINE_CASH_TRANSPORT_QR: "qr";
@@ -19803,7 +19960,7 @@ export const KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES: 838860
 export const KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES: 128;
 export const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: 67108864;
 export const KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN: "iroha:kagemusha:v1:recursive-spend-accumulator";
-export const KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME: "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1";
+export const KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME: "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpRequestV1";
 export const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN: "iroha:kagemusha:v1:recursive-spend-transition-profile";
 export const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DIGEST_DOMAIN: "iroha:kagemusha:v1:recursive-spend-transition-profile-digest";
 export const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_BINDING_DIGEST_DOMAIN: "iroha:kagemusha:v1:recursive-spend-transition-profile-binding-digest";

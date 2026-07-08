@@ -5516,7 +5516,7 @@ def check_recursive_compact_surface(texts, errors):
             "oversizedPallasOpenEnvelopesArchive",
             "Kagemusha verified fold record bundle archive must not exceed",
             "Kagemusha Pallas open-envelope archive must not exceed",
-            "nativeArchiveMaxBytes = 64 * 1024 * 1024",
+            "nativeArchiveMaxBytes = 256 * 1024 * 1024",
             "try requireValidInputArchive(",
             "try requireValidRecursiveCompactTokenArchive(token)",
             "requireValidRecursiveCompactTokenArchive(compactTokenArchive)",
@@ -5597,7 +5597,7 @@ def check_recursive_compact_surface(texts, errors):
             "Data(repeating: 0, count: 65)",
             "KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes",
             "KagemushaRecursiveSpendProver.nativeArchiveMaxBytes",
-            "64 * 1024 * 1024",
+            "256 * 1024 * 1024",
             ".oversizedRecordBundleArchive",
             ".oversizedPallasOpenEnvelopesArchive",
             ".oversizedCompactTokenArchive",
@@ -16783,7 +16783,10 @@ def check_javascript(texts, errors):
     require_contains(
         texts,
         "javascript/iroha_js/test/package_dist.test.js",
-        REQUIRED_RECURSIVE_SPEND_REQUEST_CODEC_JS_PUBLIC_EXPORTS,
+        (
+            *REQUIRED_RECURSIVE_SPEND_REQUEST_CODEC_JS_PUBLIC_EXPORTS,
+            "KagemushaRecursiveSpendTopUpRequestV1",
+        ),
         "JavaScript package dist typed recursive spend request codec exports",
         errors,
     )
@@ -16792,6 +16795,8 @@ def check_javascript(texts, errors):
         "javascript/iroha_js/test/crypto.browser.test.js",
         (
             "KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME",
+            "KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME",
+            "KagemushaRecursiveSpendTopUpRequestV1",
             "KAGEMUSHA_RECURSIVE_SPEND_VERIFY_RESULT_WIRE_NAME",
             "KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME",
             "encodeKagemushaRecursiveSpendInitRequest",
@@ -22212,7 +22217,7 @@ def check_swift(texts, errors):
         (
             "private static func supportedPlatform(",
             "switch value {",
-            "case OfflineNoteV2Constants.iosPlatform,\n             OfflineNoteV2Constants.androidPlatform:",
+            "case OfflineNoteV2Constants.iosPlatform, OfflineNoteV2Constants.androidPlatform:",
             "return value",
             "guard binding.platform == Self.platform else",
             "guard proof.platform == Self.platform else",
@@ -22626,6 +22631,14 @@ def check_swift(texts, errors):
         request_codecs_test,
         r'lineageVerifierKey: Data\(\),[\s\S]*?lineageProvingKeyArchive: lineageProvingKeyArchive[\s\S]*?\.invalidField\("lineageVerifierKey"\)',
         "Swift typed recursive spend init lineage-key exact diagnostics",
+        errors,
+        flags=re.S,
+    )
+    require_regex(
+        texts,
+        request_codecs_test,
+        r'lineageVerifierKey: nil,[\s\S]*?lineageProvingKeyArchive: nil[\s\S]*?\.invalidField\("lineageVerifierKey"\)',
+        "Swift typed recursive spend append lineage-key exact diagnostics",
         errors,
         flags=re.S,
     )
@@ -44964,7 +44977,7 @@ if mode == "--negative-control-swift-recursive-compact-native-archive-cap":
     wrapper = "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift"
     test_path = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift"
     mutated_wrapper = texts[wrapper].replace(
-        "nativeArchiveMaxBytes = 64 * 1024 * 1024",
+        "nativeArchiveMaxBytes = 256 * 1024 * 1024",
         "nativeArchiveMaxBytes = 1024 * 1024 * 1024",
         1,
     )
@@ -44973,7 +44986,7 @@ if mode == "--negative-control-swift-recursive-compact-native-archive-cap":
         "testNativeArchiveLimitAllowsIndependentKagemushaCap",
         1,
     ).replace(
-        "64 * 1024 * 1024",
+        "256 * 1024 * 1024",
         "1024 * 1024 * 1024",
         1,
     )
@@ -44986,9 +44999,9 @@ if mode == "--negative-control-swift-recursive-compact-native-archive-cap":
     except ParityError as error:
         message = str(error)
         expected_labels = (
-            "Swift recursive compact wrapper missing nativeArchiveMaxBytes = 64 * 1024 * 1024",
+            "Swift recursive compact wrapper missing nativeArchiveMaxBytes = 256 * 1024 * 1024",
             "Swift recursive compact verifier tests missing testNativeArchiveLimitMatchesSharedKagemushaCap",
-            "Swift recursive compact verifier tests missing 64 * 1024 * 1024",
+            "Swift recursive compact verifier tests missing 256 * 1024 * 1024",
         )
         missing = [label for label in expected_labels if label not in message]
         if missing:
@@ -67252,12 +67265,10 @@ if mode == "--negative-control-swift-offline-proof-platform-exactness":
     source_replacements = (
         (
             '        switch value {\n'
-            '        case OfflineNoteV2Constants.iosPlatform,\n'
-            '             OfflineNoteV2Constants.androidPlatform:\n'
+            '        case OfflineNoteV2Constants.iosPlatform, OfflineNoteV2Constants.androidPlatform:\n'
             "            return value\n",
             '        switch value.lowercased() {\n'
-            '        case OfflineNoteV2Constants.iosPlatform,\n'
-            '             OfflineNoteV2Constants.androidPlatform:\n'
+            '        case OfflineNoteV2Constants.iosPlatform, OfflineNoteV2Constants.androidPlatform:\n'
             "            return value.lowercased()\n",
         ),
         (
