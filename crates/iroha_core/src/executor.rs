@@ -18,7 +18,7 @@ use iroha_data_model::{
     account::{AccountId, address::AccountAddress},
     asset::{
         AssetBalancePolicy, AssetDefinition,
-        id::{AssetDefinitionId, AssetId},
+        id::{AssetBalanceScope, AssetDefinitionId, AssetId},
         value::Asset,
     },
     block::{BlockHeader, consensus::NexusFeeScheduleInputs},
@@ -477,15 +477,11 @@ fn execute_system_fee_instruction(
 }
 
 fn execute_gas_fee_transfer_instruction(
-    asset_definition_id: &AssetDefinitionId,
+    definition: &AssetDefinition,
     instr: DMInstructionBox,
     authority: &AccountId,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), InstructionExecutionError> {
-    let definition = state_transaction
-        .world
-        .asset_definition(asset_definition_id)
-        .map_err(InstructionExecutionError::from)?;
     if definition.balance_scope_policy() == AssetBalancePolicy::Global {
         execute_system_fee_instruction(instr, authority, state_transaction)
     } else {
@@ -2009,6 +2005,7 @@ pub(crate) fn charge_fees_for_applied_overlay_with_encoded_len(
         state_transaction.record_confidential_gas_delta(confidential_delta);
     }
     state_transaction.last_tx_gas_used = gas_used;
+    Executor::enforce_transaction_gas_fits_block(state_transaction, gas_used)?;
 
     let tx_hash = transaction.hash();
     let settlement_source_id = {
@@ -2024,161 +2021,16 @@ pub(crate) fn charge_fees_for_applied_overlay_with_encoded_len(
         &gas_asset_opt,
     ) && let Some(gas_asset_id_str) = gas_asset_opt
     {
-        let (units_per_gas, twap_local_per_xor, volatility_bucket, liquidity_profile) = {
-            let gas_rate = state_transaction
-                .pipeline
-                .gas
-                .units_per_gas
-                .iter()
-                .find(|r| r.asset == gas_asset_id_str)
-                .ok_or_else(|| {
-                    ValidationFail::NotPermitted(format!(
-                        "missing units_per_gas mapping for `{gas_asset_id_str}`"
-                    ))
-                })?;
-            let volatility_bucket = convert_volatility_bucket(gas_rate.volatility);
-            let liquidity_profile = match gas_rate.liquidity {
-                GasLiquidity::Tier1 => LiquidityProfile::Tier1,
-                GasLiquidity::Tier2 => LiquidityProfile::Tier2,
-                GasLiquidity::Tier3 => LiquidityProfile::Tier3,
-            };
-            (
-                gas_rate.units_per_gas,
-                gas_rate.twap_local_per_xor,
-                volatility_bucket,
-                liquidity_profile,
-            )
-        };
-
-        if gas_used > 0 && units_per_gas > 0 {
-            let tech_account: AccountId = parse_account_id_literal(
-                &state_transaction.world,
-                &state_transaction.nexus.dataspace_catalog,
-                &state_transaction.pipeline.gas.tech_account_id,
-            )
-            .ok_or_else(|| {
-                ValidationFail::InternalError(
-                    "invalid pipeline.gas.tech_account_id; expected canonical I105 account id or on-chain alias"
-                        .to_owned(),
-                )
-            })?;
-
-            let asset_def =
-                AssetDefinitionId::parse_address_literal(&gas_asset_id_str).map_err(|_| {
-                    ValidationFail::NotPermitted(
-                        "invalid gas_asset_id; expected an unprefixed Base58 asset definition id"
-                            .to_owned(),
-                    )
-                })?;
-
-            let fee_u128 = u128::from(gas_used).saturating_mul(u128::from(units_per_gas));
-            if fee_u128 > 0 {
-                let payer = if let Some(sponsor) =
-                    fee_sponsor.as_ref().filter(|sponsor| *sponsor != authority)
-                {
-                    if !state_transaction.nexus.fees.sponsorship_enabled {
-                        return Err(ValidationFail::NotPermitted(
-                            "fee sponsorship is disabled".to_owned(),
-                        ));
-                    }
-                    let sponsorship_fee = Numeric::try_new(fee_u128, 0).map_err(|_| {
-                        ValidationFail::NotPermitted(
-                            "fee amount exceeds supported numeric bounds".to_owned(),
-                        )
-                    })?;
-                    authorize_fee_sponsor_policy_for_state_transaction(
-                        state_transaction,
-                        authority,
-                        sponsor,
-                        transaction,
-                        &sponsorship_fee,
-                    )?;
-                    sponsor.clone()
-                } else {
-                    authority.clone()
-                };
-                let payer_asset = AssetId::new(asset_def.clone(), payer.clone());
-                let qty = Numeric::try_new(fee_u128, 0).map_err(|_| {
-                    ValidationFail::NotPermitted(
-                        "fee amount exceeds supported numeric bounds".to_owned(),
-                    )
-                })?;
-                let transfer = iroha_data_model::isi::Transfer::<
-                    Asset,
-                    Numeric,
-                    iroha_data_model::account::Account,
-                >::asset_numeric(payer_asset, qty, tech_account);
-                let instr: DMInstructionBox = transfer.into();
-                execute_gas_fee_transfer_instruction(
-                    &asset_def,
-                    instr,
-                    authority,
-                    state_transaction,
-                )
-                .map_err(|err| {
-                    iroha_logger::debug!(
-                        ?err,
-                        authority = %authority,
-                        "gas fee transfer failed to apply"
-                    );
-                    ValidationFail::from(err)
-                })?;
-                #[cfg(feature = "telemetry")]
-                {
-                    let delta =
-                        u64::try_from(fee_u128.min(u128::from(u64::MAX))).unwrap_or(u64::MAX);
-                    state_transaction.stage_block_fee_amount(Numeric::from(delta));
-                }
-
-                let block_timestamp_ms_u128 =
-                    state_transaction._curr_block.creation_time().as_millis();
-                let block_timestamp_ms = u64::try_from(block_timestamp_ms_u128).unwrap_or(u64::MAX);
-                let quote = state_transaction
-                    .settlement_engine()
-                    .quote(
-                        settlement_source_id,
-                        fee_u128,
-                        twap_local_per_xor,
-                        liquidity_profile,
-                        volatility_bucket,
-                        block_timestamp_ms,
-                    )
-                    .map_err(|err| match err {
-                        QuoteError::LocalAmountOverflow(amount) => ValidationFail::NotPermitted(
-                            format!("local gas amount {amount} exceeds Decimal range"),
-                        ),
-                        QuoteError::ZeroTwap => {
-                            ValidationFail::NotPermitted("gas TWAP must be non-zero".to_owned())
-                        }
-                    })?;
-                let config_snapshot = state_transaction.settlement_engine().config();
-                let twap_window_seconds = config_snapshot.twap_window.whole_seconds().max(0);
-                let twap_window_seconds = u32::try_from(twap_window_seconds).unwrap_or(u32::MAX);
-                let xor_due_micro =
-                    Executor::decimal_to_micro_u128(*quote.receipt.xor_due, "xor_due amount")?;
-                let xor_after_haircut_micro = Executor::decimal_to_micro_u128(
-                    *quote.receipt.xor_with_haircut,
-                    "xor_after_haircut amount",
-                )?;
-                let xor_variance_micro = xor_due_micro.saturating_sub(xor_after_haircut_micro);
-                let pending = PendingSettlement {
-                    source_id: settlement_source_id,
-                    asset_definition_id: asset_def,
-                    local_amount_micro: quote.receipt.local_amount_micro,
-                    xor_due_micro,
-                    xor_after_haircut_micro,
-                    xor_variance_micro,
-                    timestamp_ms: block_timestamp_ms,
-                    liquidity_profile,
-                    volatility_bucket,
-                    twap_local_per_xor,
-                    epsilon_bps: quote.effective_epsilon_bps,
-                    twap_window_seconds,
-                    oracle_timestamp_ms: block_timestamp_ms,
-                };
-                state_transaction.record_settlement_receipt(tx_hash, pending);
-            }
-        }
+        Executor::charge_pipeline_gas_asset_fee(
+            state_transaction,
+            authority,
+            transaction,
+            tx_hash,
+            settlement_source_id,
+            &gas_asset_id_str,
+            gas_used,
+            fee_sponsor.as_ref(),
+        )?;
     }
 
     if !skip_nexus_fee {
@@ -2235,6 +2087,232 @@ pub(crate) fn charge_fees_for_applied_overlay_with_encoded_len(
 }
 
 impl Executor {
+    fn resolve_pipeline_gas_asset_definition(
+        state_transaction: &StateTransaction<'_, '_>,
+        gas_asset_id_str: &str,
+    ) -> Result<(AssetDefinitionId, AssetDefinition), ValidationFail> {
+        let parsed = AssetDefinitionId::parse_address_literal(gas_asset_id_str).map_err(|_| {
+            ValidationFail::NotPermitted(
+                "invalid gas_asset_id; expected an unprefixed Base58 asset definition id"
+                    .to_owned(),
+            )
+        })?;
+
+        if let Ok(definition) = state_transaction.world.asset_definition(&parsed) {
+            return Ok((definition.id().clone(), definition));
+        }
+
+        state_transaction
+            .world
+            .asset_definitions()
+            .iter()
+            .find(|(id, _)| id.canonical_address() == gas_asset_id_str)
+            .map(|(id, definition)| (id.clone(), definition.clone()))
+            .ok_or_else(|| {
+                ValidationFail::NotPermitted(format!(
+                    "gas asset `{gas_asset_id_str}` is not registered"
+                ))
+            })
+    }
+
+    fn enforce_transaction_gas_fits_block(
+        state_transaction: &StateTransaction<'_, '_>,
+        gas_used: u64,
+    ) -> Result<(), ValidationFail> {
+        if gas_used == 0 || state_transaction.gas_limit_per_block == 0 {
+            return Ok(());
+        }
+        let total = state_transaction
+            .gas_used_in_block_so_far
+            .saturating_add(gas_used);
+        if total > state_transaction.gas_limit_per_block {
+            return Err(ValidationFail::NotPermitted(format!(
+                "block gas limit exceeded: {total} > {}",
+                state_transaction.gas_limit_per_block
+            )));
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record_pipeline_gas_settlement_receipt(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        tx_hash: iroha_crypto::HashOf<SignedTransaction>,
+        source_id: [u8; iroha_crypto::Hash::LENGTH],
+        asset_definition_id: AssetDefinitionId,
+        local_amount_micro: u128,
+        twap_local_per_xor: Decimal,
+        liquidity_profile: LiquidityProfile,
+        volatility_bucket: VolatilityBucket,
+    ) -> Result<(), ValidationFail> {
+        let block_timestamp_ms_u128 = state_transaction._curr_block.creation_time().as_millis();
+        let block_timestamp_ms = u64::try_from(block_timestamp_ms_u128).unwrap_or(u64::MAX);
+        let quote = state_transaction
+            .settlement_engine()
+            .quote(
+                source_id,
+                local_amount_micro,
+                twap_local_per_xor,
+                liquidity_profile,
+                volatility_bucket,
+                block_timestamp_ms,
+            )
+            .map_err(|err| match err {
+                QuoteError::LocalAmountOverflow(amount) => ValidationFail::NotPermitted(format!(
+                    "local gas amount {amount} exceeds Decimal range"
+                )),
+                QuoteError::ZeroTwap => {
+                    ValidationFail::NotPermitted("gas TWAP must be non-zero".to_owned())
+                }
+            })?;
+        let config_snapshot = state_transaction.settlement_engine().config();
+        let twap_window_seconds = config_snapshot.twap_window.whole_seconds().max(0);
+        let twap_window_seconds = u32::try_from(twap_window_seconds).unwrap_or(u32::MAX);
+        let xor_due_micro = Self::decimal_to_micro_u128(*quote.receipt.xor_due, "xor_due amount")?;
+        let xor_after_haircut_micro = Self::decimal_to_micro_u128(
+            *quote.receipt.xor_with_haircut,
+            "xor_after_haircut amount",
+        )?;
+        let xor_variance_micro = xor_due_micro.saturating_sub(xor_after_haircut_micro);
+        let pending = PendingSettlement {
+            source_id,
+            asset_definition_id,
+            local_amount_micro: quote.receipt.local_amount_micro,
+            xor_due_micro,
+            xor_after_haircut_micro,
+            xor_variance_micro,
+            timestamp_ms: block_timestamp_ms,
+            liquidity_profile,
+            volatility_bucket,
+            twap_local_per_xor,
+            epsilon_bps: quote.effective_epsilon_bps,
+            twap_window_seconds,
+            oracle_timestamp_ms: block_timestamp_ms,
+        };
+        state_transaction.record_settlement_receipt(tx_hash, pending);
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn charge_pipeline_gas_asset_fee(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        transaction: &SignedTransaction,
+        tx_hash: iroha_crypto::HashOf<SignedTransaction>,
+        settlement_source_id: [u8; iroha_crypto::Hash::LENGTH],
+        gas_asset_id_str: &str,
+        gas_used: u64,
+        fee_sponsor: Option<&AccountId>,
+    ) -> Result<(), ValidationFail> {
+        let gas_rate = state_transaction
+            .pipeline
+            .gas
+            .units_per_gas
+            .iter()
+            .find(|rate| rate.asset == gas_asset_id_str)
+            .ok_or_else(|| {
+                ValidationFail::NotPermitted(format!(
+                    "missing units_per_gas mapping for `{gas_asset_id_str}`"
+                ))
+            })?;
+        let units_per_gas = gas_rate.units_per_gas;
+        let twap_local_per_xor = gas_rate.twap_local_per_xor;
+        let volatility_bucket = convert_volatility_bucket(gas_rate.volatility);
+        let liquidity_profile = match gas_rate.liquidity {
+            GasLiquidity::Tier1 => LiquidityProfile::Tier1,
+            GasLiquidity::Tier2 => LiquidityProfile::Tier2,
+            GasLiquidity::Tier3 => LiquidityProfile::Tier3,
+        };
+
+        if gas_used == 0 || units_per_gas == 0 {
+            return Ok(());
+        }
+
+        let tech_account: AccountId = parse_account_id_literal(
+            &state_transaction.world,
+            &state_transaction.nexus.dataspace_catalog,
+            &state_transaction.pipeline.gas.tech_account_id,
+        )
+        .ok_or_else(|| {
+            ValidationFail::InternalError(
+                "invalid pipeline.gas.tech_account_id; expected canonical I105 account id or on-chain alias"
+                    .to_owned(),
+            )
+        })?;
+        let (asset_definition_id, definition) =
+            Self::resolve_pipeline_gas_asset_definition(state_transaction, gas_asset_id_str)?;
+
+        let fee_u128 = u128::from(gas_used).saturating_mul(u128::from(units_per_gas));
+        if fee_u128 == 0 {
+            return Ok(());
+        }
+        let payer = if let Some(sponsor) = fee_sponsor.filter(|sponsor| *sponsor != authority) {
+            if !state_transaction.nexus.fees.sponsorship_enabled {
+                return Err(ValidationFail::NotPermitted(
+                    "fee sponsorship is disabled".to_owned(),
+                ));
+            }
+            let sponsorship_fee = Numeric::try_new(fee_u128, 0).map_err(|_| {
+                ValidationFail::NotPermitted(
+                    "fee amount exceeds supported numeric bounds".to_owned(),
+                )
+            })?;
+            authorize_fee_sponsor_policy_for_state_transaction(
+                state_transaction,
+                authority,
+                sponsor,
+                transaction,
+                &sponsorship_fee,
+            )?;
+            sponsor.clone()
+        } else {
+            authority.clone()
+        };
+        let payer_scope = match definition.balance_scope_policy() {
+            AssetBalancePolicy::Global => AssetBalanceScope::Global,
+            AssetBalancePolicy::DataspaceRestricted => AssetBalanceScope::Dataspace(
+                state_transaction
+                    .current_dataspace_id
+                    .unwrap_or(DataSpaceId::UNIVERSAL),
+            ),
+        };
+        let payer_asset = AssetId::with_scope(asset_definition_id.clone(), payer, payer_scope);
+        let qty = Numeric::try_new(fee_u128, 0).map_err(|_| {
+            ValidationFail::NotPermitted("fee amount exceeds supported numeric bounds".to_owned())
+        })?;
+        let transfer = iroha_data_model::isi::Transfer::<
+            Asset,
+            Numeric,
+            iroha_data_model::account::Account,
+        >::asset_numeric(payer_asset, qty, tech_account);
+        let instr: DMInstructionBox = transfer.into();
+        execute_gas_fee_transfer_instruction(&definition, instr, authority, state_transaction)
+            .map_err(|err| {
+                iroha_logger::debug!(
+                    ?err,
+                    authority = %authority,
+                    "gas fee transfer failed to apply"
+                );
+                ValidationFail::from(err)
+            })?;
+        #[cfg(feature = "telemetry")]
+        {
+            let delta = u64::try_from(fee_u128.min(u128::from(u64::MAX))).unwrap_or(u64::MAX);
+            state_transaction.stage_block_fee_amount(Numeric::from(delta));
+        }
+
+        Self::record_pipeline_gas_settlement_receipt(
+            state_transaction,
+            tx_hash,
+            settlement_source_id,
+            asset_definition_id,
+            fee_u128,
+            twap_local_per_xor,
+            liquidity_profile,
+            volatility_bucket,
+        )
+    }
+
     fn decimal_to_micro_u128(
         value: Decimal,
         context: &'static str,
@@ -2631,6 +2709,7 @@ impl Executor {
                 "out of gas: used {used} > limit {limit}"
             )));
         }
+        Self::enforce_transaction_gas_fits_block(state_transaction, used)?;
 
         let instruction_count = instructions.len();
         let confidential_delta = instructions
@@ -2666,168 +2745,16 @@ impl Executor {
             &gas_asset_opt,
         ) && let Some(gas_asset_id_str) = gas_asset_opt
         {
-            // Determine rate; require explicit mapping for determinism
-            let gas_rate = state_transaction
-                .pipeline
-                .gas
-                .units_per_gas
-                .iter()
-                .find(|r| r.asset == gas_asset_id_str)
-                .ok_or_else(|| {
-                    ValidationFail::NotPermitted(format!(
-                        "missing units_per_gas mapping for `{gas_asset_id_str}`"
-                    ))
-                })?;
-
-            let units_per_gas = gas_rate.units_per_gas;
-            let twap_local_per_xor = gas_rate.twap_local_per_xor;
-            let volatility_bucket = convert_volatility_bucket(gas_rate.volatility);
-            let liquidity_profile = match gas_rate.liquidity {
-                GasLiquidity::Tier1 => LiquidityProfile::Tier1,
-                GasLiquidity::Tier2 => LiquidityProfile::Tier2,
-                GasLiquidity::Tier3 => LiquidityProfile::Tier3,
-            };
-
-            if used > 0 && units_per_gas > 0 {
-                // Parse tech account id
-                let tech_account: AccountId = parse_account_id_literal(
-                    &state_transaction.world,
-                    &state_transaction.nexus.dataspace_catalog,
-                    &state_transaction.pipeline.gas.tech_account_id,
-                )
-                .ok_or_else(|| {
-                    ValidationFail::InternalError(
-                        "invalid pipeline.gas.tech_account_id; expected canonical I105 account id or on-chain alias"
-                            .to_owned(),
-                    )
-                })?;
-
-                // Parse gas asset definition id
-                let asset_def = AssetDefinitionId::parse_address_literal(&gas_asset_id_str)
-                    .map_err(|_| {
-                        ValidationFail::NotPermitted(
-                        "invalid gas_asset_id; expected an unprefixed Base58 asset definition id"
-                            .to_owned(),
-                    )
-                    })?;
-
-                // Compute fee amount deterministically and guard Numeric bounds
-                let fee_u128 = u128::from(used).saturating_mul(u128::from(units_per_gas));
-                if fee_u128 > 0 {
-                    // Build payer asset id and transfer instruction
-                    let payer = if let Some(sponsor) =
-                        fee_sponsor.as_ref().filter(|sponsor| *sponsor != authority)
-                    {
-                        if !state_transaction.nexus.fees.sponsorship_enabled {
-                            return Err(ValidationFail::NotPermitted(
-                                "fee sponsorship is disabled".to_owned(),
-                            ));
-                        }
-                        let sponsorship_fee = Numeric::try_new(fee_u128, 0).map_err(|_| {
-                            ValidationFail::NotPermitted(
-                                "fee amount exceeds supported numeric bounds".to_owned(),
-                            )
-                        })?;
-                        authorize_fee_sponsor_policy_for_state_transaction(
-                            state_transaction,
-                            authority,
-                            sponsor,
-                            &transaction,
-                            &sponsorship_fee,
-                        )?;
-                        sponsor.clone()
-                    } else {
-                        authority.clone()
-                    };
-                    let payer_asset = AssetId::new(asset_def.clone(), payer.clone());
-                    let qty = Numeric::try_new(fee_u128, 0).map_err(|_| {
-                        ValidationFail::NotPermitted(
-                            "fee amount exceeds supported numeric bounds".to_owned(),
-                        )
-                    })?;
-                    let transfer =
-                        iroha_data_model::isi::Transfer::<
-                            Asset,
-                            Numeric,
-                            iroha_data_model::account::Account,
-                        >::asset_numeric(payer_asset, qty, tech_account);
-                    let instr: DMInstructionBox = transfer.into();
-                    execute_gas_fee_transfer_instruction(
-                        &asset_def,
-                        instr,
-                        authority,
-                        state_transaction,
-                    )
-                    .map_err(|err| {
-                        iroha_logger::debug!(
-                            ?err,
-                            authority = %authority,
-                            "gas fee transfer failed to apply"
-                        );
-                        ValidationFail::from(err)
-                    })?;
-                    #[cfg(feature = "telemetry")]
-                    {
-                        let delta =
-                            u64::try_from(fee_u128.min(u128::from(u64::MAX))).unwrap_or(u64::MAX);
-                        state_transaction.stage_block_fee_amount(Numeric::from(delta));
-                    }
-
-                    // Capture deterministic settlement receipt once the transfer succeeds.
-                    let source_id = settlement_source_id;
-                    let block_timestamp_ms_u128 =
-                        state_transaction._curr_block.creation_time().as_millis();
-                    let block_timestamp_ms =
-                        u64::try_from(block_timestamp_ms_u128).unwrap_or(u64::MAX);
-                    let quote = state_transaction
-                        .settlement_engine()
-                        .quote(
-                            source_id,
-                            fee_u128,
-                            twap_local_per_xor,
-                            liquidity_profile,
-                            volatility_bucket,
-                            block_timestamp_ms,
-                        )
-                        .map_err(|err| match err {
-                            QuoteError::LocalAmountOverflow(amount) => {
-                                ValidationFail::NotPermitted(format!(
-                                    "local gas amount {amount} exceeds Decimal range"
-                                ))
-                            }
-                            QuoteError::ZeroTwap => {
-                                ValidationFail::NotPermitted("gas TWAP must be non-zero".to_owned())
-                            }
-                        })?;
-                    let config_snapshot = state_transaction.settlement_engine().config();
-                    let twap_window_seconds = config_snapshot.twap_window.whole_seconds().max(0);
-                    let twap_window_seconds =
-                        u32::try_from(twap_window_seconds).unwrap_or(u32::MAX);
-                    let xor_due_micro =
-                        Self::decimal_to_micro_u128(*quote.receipt.xor_due, "xor_due amount")?;
-                    let xor_after_haircut_micro = Self::decimal_to_micro_u128(
-                        *quote.receipt.xor_with_haircut,
-                        "xor_after_haircut amount",
-                    )?;
-                    let xor_variance_micro = xor_due_micro.saturating_sub(xor_after_haircut_micro);
-                    let pending = PendingSettlement {
-                        source_id,
-                        asset_definition_id: asset_def,
-                        local_amount_micro: quote.receipt.local_amount_micro,
-                        xor_due_micro,
-                        xor_after_haircut_micro,
-                        xor_variance_micro,
-                        timestamp_ms: block_timestamp_ms,
-                        liquidity_profile,
-                        volatility_bucket,
-                        twap_local_per_xor,
-                        epsilon_bps: quote.effective_epsilon_bps,
-                        twap_window_seconds,
-                        oracle_timestamp_ms: block_timestamp_ms,
-                    };
-                    state_transaction.record_settlement_receipt(tx_hash, pending);
-                }
-            }
+            Self::charge_pipeline_gas_asset_fee(
+                state_transaction,
+                authority,
+                transaction,
+                tx_hash,
+                settlement_source_id,
+                &gas_asset_id_str,
+                used,
+                fee_sponsor.as_ref(),
+            )?;
         }
 
         if !skip_nexus_fee {
@@ -3452,6 +3379,7 @@ impl Executor {
                 let artifacts = host.into_execution_artifacts(contract_runtime_context)?;
                 let _executed = artifacts.apply_to_transaction(state_transaction, authority)?;
                 state_transaction.last_tx_gas_used = gas_used;
+                Self::enforce_transaction_gas_fits_block(state_transaction, gas_used)?;
 
                 if should_charge_pipeline_gas_asset(
                     skip_nexus_fee,
@@ -3460,165 +3388,16 @@ impl Executor {
                     &gas_asset_opt,
                 ) && let Some(gas_asset_id_str) = gas_asset_opt
                 {
-                    let gas_rate = state_transaction
-                        .pipeline
-                        .gas
-                        .units_per_gas
-                        .iter()
-                        .find(|r| r.asset == gas_asset_id_str)
-                        .ok_or_else(|| {
-                            ValidationFail::NotPermitted(format!(
-                                "missing units_per_gas mapping for `{gas_asset_id_str}`"
-                            ))
-                        })?;
-                    let rate = gas_rate.units_per_gas;
-                    let twap_local_per_xor = gas_rate.twap_local_per_xor;
-                    let volatility_bucket = convert_volatility_bucket(gas_rate.volatility);
-                    let liquidity_profile = match gas_rate.liquidity {
-                        GasLiquidity::Tier1 => LiquidityProfile::Tier1,
-                        GasLiquidity::Tier2 => LiquidityProfile::Tier2,
-                        GasLiquidity::Tier3 => LiquidityProfile::Tier3,
-                    };
-                    let tech_account: AccountId = parse_account_id_literal(
-                        &state_transaction.world,
-                        &state_transaction.nexus.dataspace_catalog,
-                        &state_transaction.pipeline.gas.tech_account_id,
-                    )
-                    .ok_or_else(|| {
-                        ValidationFail::InternalError(
-                            "invalid pipeline.gas.tech_account_id; expected canonical I105 account id or on-chain alias"
-                                .to_owned(),
-                        )
-                    })?;
-                    let asset_def =
-                        AssetDefinitionId::parse_address_literal(&gas_asset_id_str).map_err(|_| {
-                            ValidationFail::NotPermitted(
-                                "invalid gas_asset_id; expected an unprefixed Base58 asset definition id"
-                                    .to_owned(),
-                            )
-                        })?;
-                    if gas_used > 0 && rate > 0 {
-                        let fee_u128 = u128::from(gas_used).saturating_mul(u128::from(rate));
-                        if fee_u128 > 0 {
-                            let payer = if let Some(sponsor) =
-                                fee_sponsor.as_ref().filter(|sponsor| *sponsor != authority)
-                            {
-                                if !state_transaction.nexus.fees.sponsorship_enabled {
-                                    return Err(ValidationFail::NotPermitted(
-                                        "fee sponsorship is disabled".to_owned(),
-                                    ));
-                                }
-                                let sponsorship_fee =
-                                    Numeric::try_new(fee_u128, 0).map_err(|_| {
-                                        ValidationFail::NotPermitted(
-                                            "fee amount exceeds supported numeric bounds"
-                                                .to_owned(),
-                                        )
-                                    })?;
-                                authorize_fee_sponsor_policy_for_state_transaction(
-                                    state_transaction,
-                                    authority,
-                                    sponsor,
-                                    &transaction_for_fee,
-                                    &sponsorship_fee,
-                                )?;
-                                sponsor.clone()
-                            } else {
-                                authority.clone()
-                            };
-                            let payer_asset = AssetId::new(asset_def.clone(), payer);
-                            let qty = Numeric::try_new(fee_u128, 0).map_err(|_| {
-                                ValidationFail::NotPermitted(
-                                    "fee amount exceeds supported numeric bounds".to_owned(),
-                                )
-                            })?;
-                            let transfer = iroha_data_model::isi::Transfer::<
-                                Asset,
-                                Numeric,
-                                iroha_data_model::account::Account,
-                            >::asset_numeric(
-                                payer_asset, qty, tech_account
-                            );
-                            let instr: DMInstructionBox = transfer.into();
-                            execute_gas_fee_transfer_instruction(
-                                &asset_def,
-                                instr,
-                                authority,
-                                state_transaction,
-                            )
-                            .map_err(|err| {
-                                iroha_logger::debug!(
-                                    ?err,
-                                    authority = %authority,
-                                    "gas fee transfer failed to apply"
-                                );
-                                ValidationFail::from(err)
-                            })?;
-                            #[cfg(feature = "telemetry")]
-                            {
-                                let delta = u64::try_from(fee_u128.min(u128::from(u64::MAX)))
-                                    .unwrap_or(u64::MAX);
-                                state_transaction.stage_block_fee_amount(Numeric::from(delta));
-                            }
-
-                            let source_id = settlement_source_id;
-                            let block_timestamp_ms_u128 =
-                                state_transaction._curr_block.creation_time().as_millis();
-                            let block_timestamp_ms =
-                                u64::try_from(block_timestamp_ms_u128).unwrap_or(u64::MAX);
-                            let quote = state_transaction
-                                .settlement_engine()
-                                .quote(
-                                    source_id,
-                                    fee_u128,
-                                    twap_local_per_xor,
-                                    liquidity_profile,
-                                    volatility_bucket,
-                                    block_timestamp_ms,
-                                )
-                                .map_err(|err| match err {
-                                    QuoteError::LocalAmountOverflow(amount) => {
-                                        ValidationFail::NotPermitted(format!(
-                                            "local gas amount {amount} exceeds Decimal range"
-                                        ))
-                                    }
-                                    QuoteError::ZeroTwap => ValidationFail::NotPermitted(
-                                        "gas TWAP must be non-zero".to_owned(),
-                                    ),
-                                })?;
-                            let config_snapshot = state_transaction.settlement_engine().config();
-                            let twap_window_seconds =
-                                config_snapshot.twap_window.whole_seconds().max(0);
-                            let twap_window_seconds =
-                                u32::try_from(twap_window_seconds).unwrap_or(u32::MAX);
-                            let xor_due_micro = Self::decimal_to_micro_u128(
-                                *quote.receipt.xor_due,
-                                "xor_due amount",
-                            )?;
-                            let xor_after_haircut_micro = Self::decimal_to_micro_u128(
-                                *quote.receipt.xor_with_haircut,
-                                "xor_after_haircut amount",
-                            )?;
-                            let xor_variance_micro =
-                                xor_due_micro.saturating_sub(xor_after_haircut_micro);
-                            let pending = PendingSettlement {
-                                source_id,
-                                asset_definition_id: asset_def,
-                                local_amount_micro: quote.receipt.local_amount_micro,
-                                xor_due_micro,
-                                xor_after_haircut_micro,
-                                xor_variance_micro,
-                                timestamp_ms: block_timestamp_ms,
-                                liquidity_profile,
-                                volatility_bucket,
-                                twap_local_per_xor,
-                                epsilon_bps: quote.effective_epsilon_bps,
-                                twap_window_seconds,
-                                oracle_timestamp_ms: block_timestamp_ms,
-                            };
-                            state_transaction.record_settlement_receipt(tx_hash, pending);
-                        }
-                    }
+                    Self::charge_pipeline_gas_asset_fee(
+                        state_transaction,
+                        authority,
+                        &transaction_for_fee,
+                        tx_hash,
+                        settlement_source_id,
+                        &gas_asset_id_str,
+                        gas_used,
+                        fee_sponsor.as_ref(),
+                    )?;
                 }
 
                 Ok(())
@@ -3710,6 +3489,7 @@ impl Executor {
                 let artifacts = host.into_execution_artifacts(contract_runtime_context)?;
                 let _executed = artifacts.apply_to_transaction(state_transaction, authority)?;
                 state_transaction.last_tx_gas_used = gas_used;
+                Self::enforce_transaction_gas_fits_block(state_transaction, gas_used)?;
 
                 // Charge gas fees: if a gas asset was provided and accepted by policy.
                 if should_charge_pipeline_gas_asset(
@@ -3719,170 +3499,16 @@ impl Executor {
                     &gas_asset_opt,
                 ) && let Some(gas_asset_id_str) = gas_asset_opt
                 {
-                    // Determine rate; require explicit mapping for determinism
-                    let gas_rate = state_transaction
-                        .pipeline
-                        .gas
-                        .units_per_gas
-                        .iter()
-                        .find(|r| r.asset == gas_asset_id_str)
-                        .ok_or_else(|| {
-                            ValidationFail::NotPermitted(format!(
-                                "missing units_per_gas mapping for `{gas_asset_id_str}`"
-                            ))
-                        })?;
-                    let rate = gas_rate.units_per_gas;
-                    let twap_local_per_xor = gas_rate.twap_local_per_xor;
-                    let volatility_bucket = convert_volatility_bucket(gas_rate.volatility);
-                    let liquidity_profile = match gas_rate.liquidity {
-                        GasLiquidity::Tier1 => LiquidityProfile::Tier1,
-                        GasLiquidity::Tier2 => LiquidityProfile::Tier2,
-                        GasLiquidity::Tier3 => LiquidityProfile::Tier3,
-                    };
-                    // Parse tech account id
-                    let tech_account: AccountId = parse_account_id_literal(
-                        &state_transaction.world,
-                        &state_transaction.nexus.dataspace_catalog,
-                        &state_transaction.pipeline.gas.tech_account_id,
-                    )
-                    .ok_or_else(|| {
-                        ValidationFail::InternalError(
-                            "invalid pipeline.gas.tech_account_id; expected canonical I105 account id or on-chain alias"
-                                .to_owned(),
-                        )
-                    })?;
-                    // Parse gas asset definition id
-                    let asset_def =
-                        AssetDefinitionId::parse_address_literal(&gas_asset_id_str).map_err(|_| {
-                        ValidationFail::NotPermitted(
-                            "invalid gas_asset_id; expected an unprefixed Base58 asset definition id"
-                                .to_owned(),
-                        )
-                    })?;
-                    // Compute fee amount deterministically
-                    if gas_used > 0 && rate > 0 {
-                        let fee_u128 = u128::from(gas_used).saturating_mul(u128::from(rate));
-                        // Build payer asset id and transfer instruction, guarding Numeric bounds
-                        if fee_u128 > 0 {
-                            let payer = if let Some(sponsor) =
-                                fee_sponsor.as_ref().filter(|sponsor| *sponsor != authority)
-                            {
-                                if !state_transaction.nexus.fees.sponsorship_enabled {
-                                    return Err(ValidationFail::NotPermitted(
-                                        "fee sponsorship is disabled".to_owned(),
-                                    ));
-                                }
-                                let sponsorship_fee =
-                                    Numeric::try_new(fee_u128, 0).map_err(|_| {
-                                        ValidationFail::NotPermitted(
-                                            "fee amount exceeds supported numeric bounds"
-                                                .to_owned(),
-                                        )
-                                    })?;
-                                authorize_fee_sponsor_policy_for_state_transaction(
-                                    state_transaction,
-                                    authority,
-                                    sponsor,
-                                    &transaction_for_fee,
-                                    &sponsorship_fee,
-                                )?;
-                                sponsor.clone()
-                            } else {
-                                authority.clone()
-                            };
-                            let payer_asset = AssetId::new(asset_def.clone(), payer);
-                            let qty = Numeric::try_new(fee_u128, 0).map_err(|_| {
-                                ValidationFail::NotPermitted(
-                                    "fee amount exceeds supported numeric bounds".to_owned(),
-                                )
-                            })?;
-                            let transfer = iroha_data_model::isi::Transfer::<
-                                Asset,
-                                Numeric,
-                                iroha_data_model::account::Account,
-                            >::asset_numeric(
-                                payer_asset, qty, tech_account
-                            );
-                            let instr: DMInstructionBox = transfer.into();
-                            execute_gas_fee_transfer_instruction(
-                                &asset_def,
-                                instr,
-                                authority,
-                                state_transaction,
-                            )
-                            .map_err(|err| {
-                                iroha_logger::debug!(
-                                    ?err,
-                                    authority = %authority,
-                                    "gas fee transfer failed to apply"
-                                );
-                                ValidationFail::from(err)
-                            })?;
-                            #[cfg(feature = "telemetry")]
-                            {
-                                let delta = u64::try_from(fee_u128.min(u128::from(u64::MAX)))
-                                    .unwrap_or(u64::MAX);
-                                state_transaction.stage_block_fee_amount(Numeric::from(delta));
-                            }
-
-                            let source_id = settlement_source_id;
-                            let block_timestamp_ms_u128 =
-                                state_transaction._curr_block.creation_time().as_millis();
-                            let block_timestamp_ms =
-                                u64::try_from(block_timestamp_ms_u128).unwrap_or(u64::MAX);
-                            let quote = state_transaction
-                                .settlement_engine()
-                                .quote(
-                                    source_id,
-                                    fee_u128,
-                                    twap_local_per_xor,
-                                    liquidity_profile,
-                                    volatility_bucket,
-                                    block_timestamp_ms,
-                                )
-                                .map_err(|err| match err {
-                                    QuoteError::LocalAmountOverflow(amount) => {
-                                        ValidationFail::NotPermitted(format!(
-                                            "local gas amount {amount} exceeds Decimal range"
-                                        ))
-                                    }
-                                    QuoteError::ZeroTwap => ValidationFail::NotPermitted(
-                                        "gas TWAP must be non-zero".to_owned(),
-                                    ),
-                                })?;
-                            let config_snapshot = state_transaction.settlement_engine().config();
-                            let twap_window_seconds =
-                                config_snapshot.twap_window.whole_seconds().max(0);
-                            let twap_window_seconds =
-                                u32::try_from(twap_window_seconds).unwrap_or(u32::MAX);
-                            let xor_due_micro = Self::decimal_to_micro_u128(
-                                *quote.receipt.xor_due,
-                                "xor_due amount",
-                            )?;
-                            let xor_after_haircut_micro = Self::decimal_to_micro_u128(
-                                *quote.receipt.xor_with_haircut,
-                                "xor_after_haircut amount",
-                            )?;
-                            let xor_variance_micro =
-                                xor_due_micro.saturating_sub(xor_after_haircut_micro);
-                            let pending = PendingSettlement {
-                                source_id,
-                                asset_definition_id: asset_def,
-                                local_amount_micro: quote.receipt.local_amount_micro,
-                                xor_due_micro,
-                                xor_after_haircut_micro,
-                                xor_variance_micro,
-                                timestamp_ms: block_timestamp_ms,
-                                liquidity_profile,
-                                volatility_bucket,
-                                twap_local_per_xor,
-                                epsilon_bps: quote.effective_epsilon_bps,
-                                twap_window_seconds,
-                                oracle_timestamp_ms: block_timestamp_ms,
-                            };
-                            state_transaction.record_settlement_receipt(tx_hash, pending);
-                        }
-                    }
+                    Self::charge_pipeline_gas_asset_fee(
+                        state_transaction,
+                        authority,
+                        &transaction_for_fee,
+                        tx_hash,
+                        settlement_source_id,
+                        &gas_asset_id_str,
+                        gas_used,
+                        fee_sponsor.as_ref(),
+                    )?;
                 }
                 Self::charge_nexus_fees(
                     state_transaction,
