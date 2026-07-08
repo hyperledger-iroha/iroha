@@ -4,7 +4,7 @@ import XCTest
 
 final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
     func testNativeArchiveLimitMatchesSharedKagemushaCap() {
-        XCTAssertLessThanOrEqual(
+        XCTAssertEqual(
             KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes,
             KagemushaRecursiveSpendProver.nativeArchiveMaxBytes
         )

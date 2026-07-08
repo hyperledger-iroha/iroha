@@ -491,7 +491,7 @@ public static class KagemushaRecursiveSpendNative
     public const int RecursivePreviousProofOpenEnvelopesRequiredCountV1 = 1;
     public const int RecursivePreviousProofOpenEnvelopesMaxBytes = 8 * 1024 * 1024;
     public const int RecursivePallasOpenEnvelopeMaxTranscriptLabelBytes = 128;
-    public const int NativeArchiveMaxBytes = 64 * 1024 * 1024;
+    public const int NativeArchiveMaxBytes = 256 * 1024 * 1024;
     private const string MaxU128Decimal = "340282366920938463463374607431768211455";
     private static readonly BigInteger MaxU128 = (BigInteger.One << 128) - BigInteger.One;
     private static readonly byte[] PallasOpenEnvelopesSchemaHash = new byte[]
@@ -1392,7 +1392,7 @@ public static class KagemushaRecursiveSpendNative
 
     public static bool RequiresLineageKeyArtifactsForInit()
     {
-        return true;
+        return false;
     }
 
     public static bool RequiresLineageWitnessForRedeem(string? circuitId, uint hopCount)
@@ -3917,6 +3917,21 @@ public static class KagemushaRecursiveSpendNative
         ReadOnlySpan<byte> recordBundleArchive,
         ReadOnlySpan<byte> pallasOpenEnvelopesArchive,
         KagemushaRecursiveSpendableNoteDescriptor currentNote,
+        ulong? blockHeight = null)
+    {
+        return EncodeInitRequestCore(
+            recordBundleArchive,
+            pallasOpenEnvelopesArchive,
+            currentNote,
+            null,
+            null,
+            blockHeight);
+    }
+
+    public static byte[] EncodeInitRequest(
+        ReadOnlySpan<byte> recordBundleArchive,
+        ReadOnlySpan<byte> pallasOpenEnvelopesArchive,
+        KagemushaRecursiveSpendableNoteDescriptor currentNote,
         KagemushaRecursiveSpendLineageKeyArtifacts lineageKeyArtifacts,
         ulong? blockHeight = null)
     {
@@ -3953,6 +3968,22 @@ public static class KagemushaRecursiveSpendNative
             currentNote,
             artifacts.LineageVerifierKey(),
             artifacts.LineageProvingKeyArchive(),
+            blockHeight);
+    }
+
+    public static byte[] EncodeInitRequestWithGeneratedPallas(
+        ReadOnlySpan<byte> recordBundleArchive,
+        KagemushaRecursiveSpendableNoteDescriptor currentNote,
+        ulong? blockHeight = null)
+    {
+        ArgumentNullException.ThrowIfNull(currentNote);
+        var pallasOpenEnvelopes = BuildPallasOpenEnvelopesArchive(recordBundleArchive).NoritoBytes;
+        return EncodeInitRequestCore(
+            recordBundleArchive,
+            pallasOpenEnvelopes,
+            currentNote,
+            null,
+            null,
             blockHeight);
     }
 
@@ -4849,8 +4880,8 @@ public static class KagemushaRecursiveSpendNative
         ReadOnlySpan<byte> recordBundleArchive,
         ReadOnlySpan<byte> pallasOpenEnvelopesArchive,
         KagemushaRecursiveSpendableNoteDescriptor currentNote,
-        byte[] lineageVerifierKey,
-        byte[] lineageProvingKeyArchive,
+        byte[]? lineageVerifierKey,
+        byte[]? lineageProvingKeyArchive,
         ulong? blockHeight)
     {
         ArgumentNullException.ThrowIfNull(currentNote);
@@ -4866,7 +4897,9 @@ public static class KagemushaRecursiveSpendNative
             VerifiedFoldRecordBundleWireName,
             "recordBundle",
             nameof(recordBundleArchive));
-        var lineageVerifierKeyPayload = EncodeVerifyingKeyBoxPayload(lineageVerifierKey);
+        var lineageVerifierKeyPayload = lineageVerifierKey is null
+            ? null
+            : EncodeVerifyingKeyBoxPayload(lineageVerifierKey);
 
         return NoritoCodec.Encode(
             RecursiveSpendInitRequestWireName,

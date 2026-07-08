@@ -555,7 +555,7 @@ public final class KagemushaRecursiveSpendProver {
   }
 
   public static boolean requiresLineageKeyArtifactsForInit() {
-    return true;
+    return false;
   }
 
   public static boolean requiresLineageWitnessForRedeem(

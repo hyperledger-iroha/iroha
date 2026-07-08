@@ -2821,6 +2821,69 @@ mod tests {
         assert!(!runtime_roots.allows_fallback_config());
     }
 
+    fn assert_lineage_key_artifacts_len4_fails_before_writing_outputs(
+        profile: KagemushaLineageKeyProfile,
+    ) {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let label = profile.label();
+        let out = temp.path().join(format!("lineage-{label}-len4.norito"));
+        let vk_out = temp.path().join(format!("lineage-{label}-len4.vk"));
+        let pk_out = temp.path().join(format!("lineage-{label}-len4.pk"));
+        let record_out = temp
+            .path()
+            .join(format!("lineage-{label}-len4.record.norito"));
+        let mut context = TestContext::new();
+
+        let err = match (KagemushaLineageKeyArtifactsArgs {
+            profile,
+            opening_len: 4,
+            out: out.clone(),
+            vk_out: Some(vk_out.clone()),
+            pk_out: Some(pk_out.clone()),
+            record_out: Some(record_out.clone()),
+            record_namespace: "offline_kagemusha".to_owned(),
+            record_version: 1,
+        }
+        .run(&mut context))
+        {
+            Ok(()) => panic!("len4 {label} lineage keygen must fail before expensive keygen"),
+            Err(err) => err,
+        };
+        let message = format!("{err:#}");
+
+        assert!(
+            message.contains(&format!(
+                "failed to generate {label} Reserved-lineage verifier key"
+            )),
+            "unexpected lineage keygen error: {message}"
+        );
+        assert!(
+            message.contains("preconfigure estimate") || message.contains("layout requires"),
+            "lineage keygen must fail through the configured keygen guards: {message}"
+        );
+        for path in [out, vk_out, pk_out, record_out] {
+            assert!(
+                !path.exists(),
+                "failed lineage keygen must not leave partial artifact output at {}",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn lineage_key_artifacts_init_len4_fails_before_writing_outputs() {
+        assert_lineage_key_artifacts_len4_fails_before_writing_outputs(
+            KagemushaLineageKeyProfile::Init,
+        );
+    }
+
+    #[test]
+    fn lineage_key_artifacts_append_len4_fails_before_writing_outputs() {
+        assert_lineage_key_artifacts_len4_fails_before_writing_outputs(
+            KagemushaLineageKeyProfile::Append,
+        );
+    }
+
     #[test]
     fn recursive_compact_key_artifacts_summary_matches_readiness_evidence_gate() {
         let summary = kagemusha_recursive_compact_key_artifacts_summary(

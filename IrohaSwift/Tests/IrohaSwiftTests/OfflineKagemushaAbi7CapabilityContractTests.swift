@@ -9,6 +9,11 @@ final class OfflineKagemushaAbi7CapabilityContractTests: XCTestCase {
             OfflineKagemushaAbi7CapabilityContract.circuitId,
             KagemushaRecursiveCompactPaymentTokenProver.recursiveCompactCircuitIdV1
         )
+        XCTAssertEqual(
+            OfflineKagemushaAbi7CapabilityContract.nativeArchiveMaxBytes,
+            KagemushaRecursiveSpendProver.nativeArchiveMaxBytes
+        )
+        XCTAssertEqual(OfflineKagemushaAbi7CapabilityContract.nativeArchiveMaxBytes, 256 * 1024 * 1024)
 
         XCTAssertTrue(
             OfflineKagemushaAbi7CapabilityContract.isSupported(

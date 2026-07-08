@@ -224,10 +224,13 @@ semantic bundles must omit it, and unsupported proof attachments are rejected
 as malformed requests rather than soft invalid proof results.
 Decoded verify results expose only `lineageWitnessRequiredForRedeem` for the
 redeem decision.
-Production init requests and Reserved-lineage append-output requests must also
-include packaged lineage key artifacts in the raw Norito request:
-`lineage_verifier_key` and `lineage_proving_key_archive`. Missing artifacts are
-rejected before runtime key generation.
+Init requests may omit both packaged lineage key artifacts to select the
+semantic recursive aggregation path. That bundle is valid for offline
+acceptance and re-spending, while online redemption must carry the
+record-backed lineage witness. Supplying exactly one of `lineage_verifier_key`
+or `lineage_proving_key_archive` is rejected. Reserved-lineage append-output
+requests must still include the append lineage key artifacts in the raw Norito
+request.
 Reserved-lineage append output is valid only when the previous bundle is
 already Reserved-lineage; semantic previous bundles keep using semantic append
 plus a record-backed lineage witness.

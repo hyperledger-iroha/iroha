@@ -2027,8 +2027,8 @@ test("Kagemusha recursive spend shared ABI-6 fixture matches SDK surface", () =>
     KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
   );
   assert.equal(
-    manifest.proof_circuit_ids.reserved_lineage,
-    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+    Object.hasOwn(manifest.proof_circuit_ids, "reserved_lineage"),
+    false,
   );
   assert.equal(
     manifest.proof_circuit_ids.reserved_lineage_one_hop,
@@ -2172,7 +2172,7 @@ test("Kagemusha recursive spend shared ABI-6 fixture matches SDK surface", () =>
   assert.equal(redeemArchive.norito_type, "KagemushaRecursiveSpendRedeemRequestV1");
   assert.equal(
     redeemArchive.sha256_hex,
-    "1fe949217c8bbe26957cf2a2510d79894e15b20fc5143dee2c3a1ff8678d3a5d",
+    "703128068fa36897c952640cb77006af29a8aa802d67da82c97e73c8e0ef1864",
   );
   assert.ok(redeemArchive.byte_len > 0);
   assert.ok(Buffer.from(redeemArchive.bytes_base64, "base64").length > 0);
@@ -2182,7 +2182,7 @@ test("Kagemusha recursive spend shared ABI-6 fixture matches SDK surface", () =>
   assert.equal(redeemInstructionArchive.norito_type, "RedeemKagemushaRecursive");
   assert.equal(
     redeemInstructionArchive.sha256_hex,
-    "dd7bcb5ab602696be67028e03578933a93e9396057a5decefe8cc9058662bf85",
+    "e05fb3ebb3a3e823f65403e09d1aa6e5deab0145f7aa0827f66a371ad633cc3e",
   );
   assert.equal(
     preferredKagemushaRecursiveSpendAppendOutputProofCircuitId(1),
@@ -3890,6 +3890,32 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
         lineageProvingKeyArchive: syntheticKagemushaArchive("test::Key", 0x73),
       }),
     kagemushaRequestCodecError("field", "lineageVerifierKey", null),
+  );
+  const semanticInitRequest = encodeKagemushaRecursiveSpendInitRequest({
+    recordBundle,
+    pallasOpenEnvelopes,
+    currentNote: note,
+  });
+  assert.ok(Buffer.isBuffer(semanticInitRequest));
+  assert.equal(semanticInitRequest.length > 0, true);
+  const semanticNullInitRequest = encodeKagemushaRecursiveSpendInitRequest({
+    recordBundle,
+    pallasOpenEnvelopes,
+    currentNote: note,
+    lineageVerifierKey: null,
+    lineageProvingKeyArchive: null,
+  });
+  assert.ok(Buffer.isBuffer(semanticNullInitRequest));
+  assert.equal(semanticNullInitRequest.length > 0, true);
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendInitRequest({
+        recordBundle,
+        pallasOpenEnvelopes,
+        currentNote: note,
+        lineageVerifierKey: initLineageVerifierKey,
+      }),
+    kagemushaRequestCodecError("archive", "lineageProvingKeyArchive", null),
   );
   assert.throws(
     () =>
@@ -5667,7 +5693,7 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
   assert.equal(KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1, 1);
   assert.equal(KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES, 8 * 1024 * 1024);
   assert.equal(KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES, 128);
-  assert.equal(KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES, 64 * 1024 * 1024);
+  assert.equal(KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES, 256 * 1024 * 1024);
   assert.equal(
     KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN,
     "iroha:kagemusha:v1:recursive-spend-transition-profile",
@@ -5782,7 +5808,7 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
     ),
     true,
   );
-  assert.equal(requiresKagemushaRecursiveSpendLineageKeyArtifactsForInit(), true);
+  assert.equal(requiresKagemushaRecursiveSpendLineageKeyArtifactsForInit(), false);
   assert.equal(
     requiresKagemushaRecursiveSpendLineageKeyArtifactsForAppendOutput(
       KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,

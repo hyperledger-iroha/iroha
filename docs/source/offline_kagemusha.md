@@ -132,11 +132,15 @@ scalar-projection splices, prefix-spliced folded public-input hashes, and
 out-of-order hop counts fail before expensive Pallas replay. Chain execution also requires
 every supplied record snapshot to equal the currently registered WSV verifier
 record. Without that witness, semantic v1 accumulator proofs remain
-admission-neutral. The reserved `kagemusha-recursive-spend-lineage-v1` profile
-is the witnessless chain-admission path inside the 64-hop cap: its strict
-envelope/profile shape, active verifier-record binding, inline lineage key
-material, backend proof preverification, private hop chain, and accumulator
-transition bindings must all verify before redemption proceeds. Once admitted,
+admission-neutral. The profile-specific
+`kagemusha-recursive-spend-lineage-onehop-v1` and
+`kagemusha-recursive-spend-lineage-append-v1` proof ids are the witnessless
+chain-admission path inside the 64-hop cap; the generic
+`kagemusha-recursive-spend-lineage-v1` family label is not a proof or dispatch
+id in the first release. Strict envelope/profile shape, active verifier-record
+binding, inline lineage key material, backend proof preverification, private
+hop chain, and accumulator transition bindings must all verify before
+redemption proceeds. Once admitted,
 redemption
 consumes every top-up anchor nullifier plus the current spendable note nullifier
 before minting the public amount, so two hidden branches from the same top-up
@@ -215,20 +219,29 @@ uses the one-hop verifier-slice profile. Later offline hops use the append
 profile, which proves both the previous recursive proof opening and the next
 confidential-transfer hop opening while emitting a single new recursive spend
 bundle.
-Production init requests and Reserved-lineage append-output requests must carry
-packaged lineage key artifacts. Release tooling can distribute the portable
-Norito `KagemushaRecursiveSpendLineageKeyArtifactsV1` package, which binds a
+Init requests can run in two first-release modes. When the request carries the
+one-hop `KagemushaRecursiveSpendLineageKeyArtifactsV1` package, the native
+bridge produces a witnessless Reserved-lineage bundle. When both
+`lineage_verifier_key` and `lineage_proving_key_archive` are absent, the bridge
+uses the semantic `kagemusha-recursive-aggregation-v1` circuit instead; that
+bundle is valid for receiver-side offline acceptance and re-spending, but
+online redemption must attach the record-backed lineage witness. Half-present
+init artifacts still fail before native proving. Reserved-lineage append-output
+requests must carry the append lineage key artifact package.
+
+Release tooling can distribute the portable Norito
+`KagemushaRecursiveSpendLineageKeyArtifactsV1` package, which binds a
 profile-specific lineage circuit id, supported Pallas verifier opening length,
 `lineage_verifier_key`, and `lineage_proving_key_archive`. Init builders accept
-only the one-hop package and append builders accept only the append package;
-unknown profiles, unsupported opening lengths, wrong verifier backends, empty
-verifier keys, empty proving archives, and attempts to attach lineage artifacts
-to semantic append output fail during request construction. The bridge validates
-the proving-key archive against that verifier key before proving. Runtime
-verifier-slice key generation is developer-only and available only behind the
-explicit artifact-generation environment override, so SDKs should treat missing
-artifacts as a deterministic request-construction error rather than a fallback
-to runtime keygen. Release key-artifact generation
+only the one-hop package when artifacts are supplied, and append builders accept
+only the append package; unknown profiles, unsupported opening lengths, wrong
+verifier backends, empty verifier keys, empty proving archives, and attempts to
+attach lineage artifacts to semantic append output fail during request
+construction. The bridge validates the proving-key archive against that verifier
+key before proving. Runtime verifier-slice key generation is developer-only and
+available only behind the explicit artifact-generation environment override, so
+SDKs should not fall back to runtime Reserved-lineage keygen. Release
+key-artifact generation
 derives the one-hop and append verifier/proving keys through key-generation-only
 verifier-slice shapes whose verifier-key commitments are regression-checked
 against the full recursive verifier circuits, reducing keygen witness memory
@@ -256,7 +269,7 @@ invalid UTF-8 circuit family fields before native bridge loading, so overlong,
 over-cap, or overflowing varints cannot smuggle otherwise valid lineage metadata
 through the SDK guard.
 
-Release tooling can produce the portable Norito packages with:
+Release tooling is intended to produce the portable Norito packages with:
 
 ```bash
 iroha app zk kagemusha lineage-key-artifacts \
@@ -285,7 +298,16 @@ iroha app zk kagemusha recursive-compact-key-artifacts \
   --record-version 1
 ```
 
-For lineage commands, the primary `.norito` package is the SDK input.
+For lineage commands, the primary `.norito` package is the SDK input once
+artifact generation is revalidated. As of 2026-07-07, the first-release
+direct `255 x 1` verifier profile no longer hangs in Halo2 configure, but the
+LEN=4 one-hop verifier-slice keygen layout still requires 49,725 usable rows
+while canonical `k = 12` provides only 3,838 usable rows after Halo2 blinding
+rows. The command therefore fails before Halo2 keygen with the required rows
+and minimum compatible `k = 16`; raising `k` with the current column-heavy
+layout would move the keygen memory model from 26.28 GiB at `k = 12` into
+hundreds of GiB, so the verifier-slice layout still needs another redesign
+before release lineage artifacts can be produced.
 `--record-out` writes the governance/WSV `VerifyingKeyRecord` bound to `offline_kagemusha`;
 use `--record-namespace` and `--record-version` when an
 operator needs a different namespace or governance version. The separate `.vk`
@@ -304,28 +326,38 @@ preparation, not on payment devices or inside request handling.
 Before invoking Halo2 verifier/proving key generation, lineage artifact
 builders first run a deterministic pre-configuration estimate from the
 fixed-window verifier layout, then print any configured verifier-slice shape
-that is still within budget. The default guard rejects shapes whose estimated
-footprint exceeds the workstation-sized budget before the expensive Halo2
-constraint system is built. Set
+that is still within budget. They also check the actual direct-profile row
+footprint against the usable rows left by the canonical Halo2 `k` after
+blinding rows, so a layout/domain mismatch fails before Halo2 keygen instead
+of surfacing as an opaque `k is too small` error or an out-of-memory kill. The
+default guard rejects shapes whose estimated footprint exceeds the
+workstation-sized budget before the expensive Halo2 constraint system is built.
+Core Kagemusha verifier-key and proving-key builders also emit start/done lines
+around the actual Halo2 keygen calls, including circuit id, opening length where
+applicable, `k`, fixed-window profile, and elapsed milliseconds, so staged logs
+show where long artifact generation is spending time.
+Set
 `IROHA_KAGEMUSHA_LINEAGE_KEYGEN_MAX_ESTIMATED_GIB=0` only on a dedicated
 high-memory release artifact builder after reviewing the printed shape. If the
 guard trips, the current verifier-slice layout still needs a row-oriented
 keygen redesign before release artifact generation can be treated as
 workstation-safe.
-The row-oriented rewrite now covers the production shared-table fixed-window
-scalar path: native Pasta/Fp scalar decomposition reuses one row schedule,
+The row-oriented rewrite now covers the shared-table fixed-window scalar path:
+native Pasta/Fp scalar decomposition reuses one row schedule, non-direct
 fixed-window table derivation reuses one table-entry config and one complete-add
-config across row strides, and shared-table selection reuses one point column
-set for leaves and internal tree nodes with fixed row rotations. The same
-shared scalar-multiplication config now also reuses one deterministic doubling
-config across window-base transition rows and one accumulator-add config across
-selected-point accumulation rows. The production shared-table
-scalar-mul/MSM/IPA verifier-slice path and its keygen-only shape now use those
-row scalar, table, selector, doubling, and accumulator configs. The lineage
-artifact command remains guarded until the remaining higher-level MSM and IPA
-verifier-slice aggregation configs migrate to the same row-oriented model and
-the full init/append artifact generation is revalidated on release-builder
-hardware.
+config across row strides, and non-direct selection reuses one point column set
+for leaves and internal tree nodes with fixed row rotations. Production uses the
+direct `255 x 1` fixed-window profile instead: it assigns window bases directly,
+omits duplicate table/selection witnesses, and publishes zero shared table
+families in the fixed-window manifest. The same shared scalar-multiplication
+config reuses one deterministic doubling config across window-base transition
+rows and one accumulator-add config across selected-point accumulation rows,
+while the shared-table MSM wrapper reuses one complete-add config across
+deterministic running-sum rows. This removes the original million-column
+configure bottleneck but still leaves LEN=4 one-hop keygen row pressure above
+canonical `k = 12`; the lineage artifact command remains guarded until the
+verifier-slice layout is made both row- and memory-feasible and full
+init/append artifact generation is revalidated.
 The production readiness rollup requires
 `artifacts/kagemusha/lineage-proof-evidence.json`,
 `artifacts/kagemusha/recursive-compact-key-evidence.json`, and
@@ -1191,6 +1223,11 @@ supervisor interruption does not make child output depend on a Python-owned
 pipe. Long-running proof and compact-key children also emit periodic fsynced
 heartbeat lines into those same staged logs while waiting, so an operator can
 distinguish a healthy silent prover from a dead or abandoned temporary output.
+The shared staged resource guard samples the whole child process group; on
+macOS it prefers summed `footprint` physical-footprint values when available
+and falls back to `ps` RSS only when footprint data is unavailable or malformed.
+This prevents compressed/dirty Halo2 keygen memory from being under-reported
+as a small RSS sample while the kernel is already close to killing the process.
 The runner also creates or tightens its staged root, `artifacts`
 directory, and `artifacts/kagemusha` directory to `0700`, and writes staged
 child logs, execution reports, run reports, elapsed-time files, and exit
@@ -2150,9 +2187,11 @@ when it is routed to the retired structured parser: it requires the canonical
 `verifier_key_backend`, and `proof_backend` are rejected as unknown fields, and
 version-2 key-certificate envelopes no longer bypass the
 `OFFLINE_NOTE_KEY_CERTIFICATE_VERSION` check.
-The reserved `kagemusha-recursive-spend-lineage-v1` profile is the enabled
+The profile-specific `kagemusha-recursive-spend-lineage-onehop-v1` and
+`kagemusha-recursive-spend-lineage-append-v1` proof ids are the enabled
 witnessless chain-admission path for constant-size lineage proofs inside the
-64-hop cap. Its
+64-hop cap. The generic `kagemusha-recursive-spend-lineage-v1` family label is
+not accepted as a verifier-record proof id. The Reserved-lineage
 preflight requires the proof and verifier key to stay in the transparent
 `halo2/ipa`
 corridor, rejects empty proof bytes, recomputes the recursive public-input
@@ -2638,7 +2677,7 @@ semantic output path, while
 `kagemusha-recursive-spend-lineage-append-v1` selects the guarded
 Reserved-lineage append output path. Missing, empty, and Reserved-lineage
 family selectors are rejected before proving. ABI-6 `init` produces the current
-`kagemusha-recursive-spend-lineage-v1` one-hop verifier-slice proof: the core
+`kagemusha-recursive-spend-lineage-onehop-v1` verifier-slice proof: the core
 helper decodes the supplied Pallas open-envelope archive, derives the opening
 length, selects the matching lineage verifier key, and returns a
 reserved-lineage recursive spend bundle. ABI-6 `append` verifies semantic
@@ -2910,11 +2949,11 @@ preflight, and an in-circuit combined scalar-projection digest over both
 verifier slices without adding per-hop projection public columns. Heavyweight
 ignored MockProver coverage exercises the honest two-opening profile plus
 scalar-projection, append-boundary, and current-verifier transcript splices.
-The Halo2 IPA backend profile classifier now distinguishes one-hop and append
-Reserved-lineage instance layouts under the same reserved circuit-family id:
-one-hop layouts continue to dispatch to the one-hop verifier slice, while
-append-shaped layouts dispatch to the append verifier-slice circuit only when
-the supplied verifier key matches that append circuit.
+The Halo2 IPA backend now dispatches only on the profile-specific one-hop and
+append Reserved-lineage circuit ids. One-hop layouts dispatch to the one-hop
+verifier slice, while append-shaped layouts dispatch to the append verifier-slice
+circuit only when the supplied verifier key matches that append circuit; the
+generic family id is rejected before native verification.
 The append proof constructor now has a concrete append-circuit target: it revalidates the previous
 recursive proof opening against its detached preflight, revalidates the current
 hop opening against the hop-bound preflight, builds the two-verifier append
@@ -3445,7 +3484,7 @@ Swift, Kotlin/JVM, Java Android, JavaScript/Node, Python, and C# compact-token, 
 recursive compact, and recursive spend wrappers also reject oversized caller
 archives with explicit `must not exceed` diagnostics before owned byte copies,
 Norito parsing, native availability checks, or native dispatch; the Node NAPI
-and Python PyO3 hosts enforce the same 64 MiB cap for direct native-host
+and Python PyO3 hosts enforce the same 256 MiB cap for direct native-host
 entrypoints that bypass the high-level SDK wrappers. ABI-7 recursive-spend host
 regressions now cover oversized init, append, transition-profile,
 lineage-boundary, verify, redeem, and lineage witness archives before Norito
@@ -3801,7 +3840,7 @@ That batch summary is the host-side evidence surface feeding the private-hop
 recursive compact proof path. The data model now also has a recursive
 aggregation evidence statement that Norito/Poseidon-binds that batch digest and parameter
 fingerprint to the same ordered hop transcript and to the canonical
-`pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4` verifier-witness
+`pallas-ipa-transparent-v1/vesta-recursive-fixed-window-255x1` verifier-witness
 profile. It validates mode `2` evidence shape, hop continuity, witness count,
 profile, verifier opening length, fixed-window table schedule/base digests, and
 non-zero batch fields before reserved compact-token projection checks. The Poseidon2
@@ -3849,8 +3888,8 @@ hop: verifier-key commitment, the confidential transfer v2 schema hash, and a
 Poseidon2 hop-domain tag over chain, asset, hop index, roots, nullifiers, output
 commitments, proof hash, public-input digest, and verifier-key binding. The
 helper accepts at most 64 witnesses, matching the compact-token hop cap, and
-uses the 64-by-4 fixed-window Vesta verifier witness profile that covers the
-255-bit Pasta scalar width without a trusted setup. Its aggregate digest is
+uses the direct `255 x 1` fixed-window Vesta verifier witness profile that
+covers the 255-bit Pasta scalar width without a trusted setup. Its aggregate digest is
 Poseidon2-backed rather than a generic hash transcript, so the host-side
 reserved evidence path stays aligned with the field-friendly no-trusted-setup
 Kagemusha transcript surface. Native preflight exposes and the native batch

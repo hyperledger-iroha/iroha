@@ -9,6 +9,7 @@ class KagemushaRecursiveCompactPaymentTokenProver private constructor() {
         private val MAX_U64 = BigInteger("18446744073709551615")
         private val UNSIGNED_DECIMAL = Regex("0|[1-9][0-9]*")
         const val REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 7
+        const val NATIVE_ARCHIVE_MAX_BYTES: Int = KagemushaCompactPaymentTokenProver.NATIVE_ARCHIVE_MAX_BYTES
         const val RECURSIVE_COMPACT_CIRCUIT_ID_V1: String =
             "kagemusha-recursive-compact-v1"
         private const val RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT =

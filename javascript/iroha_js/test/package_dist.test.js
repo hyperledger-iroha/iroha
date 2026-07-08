@@ -3009,7 +3009,15 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES,
     128,
   );
-  assert.equal(KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES, 64 * 1024 * 1024);
+  assert.equal(KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES, 256 * 1024 * 1024);
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: 268435456;/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export const KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME: "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpRequestV1";/u,
+  );
   assert.equal(
     KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN,
     "iroha:kagemusha:v1:recursive-spend-accumulator",
@@ -3176,7 +3184,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   );
   assert.equal(
     requiresKagemushaRecursiveSpendLineageKeyArtifactsForInit(),
-    true,
+    false,
   );
   for (const openingLen of [2, 4, 8, 16, 32, 64, 128]) {
     assert.equal(
@@ -5530,6 +5538,22 @@ test("package dist Kagemusha recursive spend typed requests reject malformed raw
     kagemushaRequestCodecError("field", "lineageVerifierKey", null),
     "package dist accepted init raw lineage proving key without verifier key",
   );
+  const semanticInitRequest = encodeKagemushaRecursiveSpendInitRequest({
+    recordBundle,
+    pallasOpenEnvelopes,
+    currentNote,
+  });
+  assert.ok(Buffer.isBuffer(semanticInitRequest));
+  assert.equal(semanticInitRequest.length > 0, true);
+  const semanticNullInitRequest = encodeKagemushaRecursiveSpendInitRequest({
+    recordBundle,
+    pallasOpenEnvelopes,
+    currentNote,
+    lineageVerifierKey: null,
+    lineageProvingKeyArchive: null,
+  });
+  assert.ok(Buffer.isBuffer(semanticNullInitRequest));
+  assert.equal(semanticNullInitRequest.length > 0, true);
   assert.throws(
     () =>
       encodeKagemushaRecursiveSpendInitRequest({

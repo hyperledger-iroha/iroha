@@ -21,26 +21,29 @@ Remaining launch work should focus on end-to-end operator/mobile rollout
 validation rather than reviving the retired Offline V2 `/notes/issue`
 construction path.
 
-Kagemusha Reserved-lineage key artifact generation remains the active launch
-blocker for offline transfer verification. The `lineage-key-artifacts` command
-now fails before Halo2 verifier-slice configuration when deterministic
-fixed-window layout estimates exceed the memory guard, instead of silently
-entering unbounded configure/keygen on laptops. The next implementation step is
-a full row-oriented verifier-slice layout, followed by signed release artifact
-generation for the init and append profiles. The first reusable row primitive
-for scalar fixed-window decomposition is now wired into the production
-shared-table scalar-mul/MSM/IPA verifier-slice path. The production
-shared-table path now also uses the row-oriented fixed-window table and
-selector configs: table derivation reuses one table-entry config and one
-complete-add config across row strides, and selection reuses one point column
-set for leaves and internal tree nodes instead of per-tree-node advice columns.
-The shared scalar-mul config now also reuses one deterministic doubling config
-across all window-base transition rows and one accumulator-add config across
-all selected-point accumulation rows. Remaining work is to finish the
-higher-level row-oriented MSM and IPA verifier-slice aggregation reuse where
-those wrappers still allocate per-operation configs, revalidate full
-init/append artifact generation on release-builder hardware, and then remove
-the artifact-generation guard as a hard stop.
+Kagemusha mobile offline transfer now has a practical first-release path that
+does not depend on packaged Reserved-lineage init artifacts: SDK init requests
+may omit both lineage key fields, the native bridge emits a semantic
+`kagemusha-recursive-aggregation-v1` bundle, and redemption carries the
+record-backed lineage witness. Reserved-lineage key artifact generation remains
+the active blocker for witnessless lineage packages and Reserved-lineage append
+output. The `lineage-key-artifacts` command now fails before Halo2 keygen when
+deterministic fixed-window layout estimates exceed the memory guard or when the
+direct verifier-slice row footprint cannot fit the canonical Halo2 domain,
+instead of silently entering unbounded configure/keygen on laptops. The
+production verifier profile has been realigned to direct `255 x 1` fixed
+windows, so the recursive verifier assigns window bases directly and the
+fixed-window manifest carries zero shared table families. A measured LEN=4
+one-hop run now reports 49,725 required usable rows against 3,838 usable rows at
+canonical `k = 12`; the minimum compatible domain would be `k = 16`, which is
+not acceptable with the current column-heavy shape. The row-oriented primitives
+still cover non-direct profiles: scalar decomposition, table derivation,
+selector trees, deterministic doubling, selected-point accumulation, and MSM
+running sums all reuse row configs instead of rebuilding per-window/per-term
+columns. Remaining work is to redesign the verifier-slice layout so it is both
+row- and memory-feasible, then revalidate full init/append artifact generation
+and remove the artifact-generation guard as a hard stop for witnessless
+Reserved-lineage artifacts.
 
 Public NPoS XOR handling is pinned to canonical asset-definition bindings:
 `xor#universal` is only an alias selector, Taira binds it to
@@ -2864,12 +2867,12 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   The non-C# SDK gates now also consume a regenerated checked-in ABI-7
   recursive-spend archive fixture after aligning data-model/core reserved
   recursive verifier evidence to
-  `pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4`. The Python
+  `pallas-ipa-transparent-v1/vesta-recursive-fixed-window-255x1`. The Python
   native generator derives `verify_result` from the same typed verify request
   context used by the committed fixture, and the policy guard pins the
   refreshed archive hashes plus an ABI-7 archive-drift negative control. The
   same policy guard rejects stale current-profile roadmap prose so release
-  handoffs keep naming the active `64x4` profile source and binary instead of
+  handoffs keep naming the active `255x1` profile source and binary instead of
   retired verifier-witness profiles.
   Those same SDK decoders now also include trailing-field vectors that append a
   valid extra Norito field to the nested `verifierKeyId`, recursive-proof, and
@@ -3257,11 +3260,13 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   `--negative-control-csharp-init-append-request-codecs`, and the 2026-06-29
   Windows `.NET 8.0.422` C# pass certifies those typed request vectors.
   Swift, Kotlin/JVM, and Android Java typed init/verifier request constructors
-  now also assert exact diagnostics for missing init lineage verifier keys,
+  now also assert exact diagnostics for partial init lineage key material,
   wrong-schema record bundles, and wrong-schema verifier-record archives before
-  native dispatch; the SDK parity guard mutates those exact assertion markers
-  under the init-lineage negative control and pins Swift's nil-key case with a
-  scoped regex. Kotlin/JVM and Android Java append request coverage now also
+  native dispatch; nil/nil init lineage key material selects the semantic
+  recursive-aggregation path instead of Reserved-lineage. The SDK parity guard
+  mutates those exact assertion markers under the init-lineage negative control
+  and pins Swift's partial-key case with a scoped regex. Kotlin/JVM and Android
+  Java append request coverage now also
   pins the exact wrong-record-bundle message so append-side archive preflight
   cannot regress to a broad exception assertion. Kotlin/JVM and Android Java
   redeem lineage preflight coverage also pins the exact
@@ -3269,20 +3274,23 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   witness archives, so malformed-witness vectors cannot fall back to broad
   exception assertions.
   The Ubuntu/Windows C# SDK matrix must keep the typed init/verifier request path
-  carrying the same exact missing-lineage-key and wrong-schema archive
+  carrying the same exact partial-lineage-key and wrong-schema archive
   diagnostics.
   The 2026-06-29 Windows `.NET 8.0.422` C# pass confirms the C# typed
-  init/verifier request path carries the same exact missing-lineage-key and
+  init/verifier request path carries the same exact partial-lineage-key and
   wrong-schema archive diagnostics on `win-x64`.
-  Init and lineage-append requests must also keep lineage verifier/proving-key
-  artifacts bound to the expected one-hop or append circuit and verifier-key
-  commitment before serialization; wallet-facing constructors should prefer
-  validated `LineageKeyArtifacts` packages over manually split raw key bytes,
-  including through the high-level recursive-spend request helper overloads.
+  When init requests choose Reserved-lineage by supplying lineage material, and
+  when lineage-append requests require Reserved-lineage output, verifier/proving-key
+  artifacts must stay bound to the expected one-hop or append circuit and
+  verifier-key commitment before serialization; wallet-facing constructors
+  should prefer validated `LineageKeyArtifacts` packages over manually split raw
+  key bytes, including through the high-level recursive-spend request helper
+  overloads.
   Kotlin/JVM and Android Java init helper overloads that auto-generate Pallas
-  openings now preflight raw lineage key material and typed init
+  openings now allow absent init lineage key material for semantic init, and
+  preflight partial raw lineage key material plus typed init
   `LineageKeyArtifacts` before invoking the current-hop Pallas builder, so a
-  missing key or append-profile artifact cannot be masked by native bridge
+  half-present key or append-profile artifact cannot be masked by native bridge
   availability or builder failures.
   Kotlin/JVM and Android Java append helper overloads that auto-generate Pallas
   openings now also preflight raw lineage key material and typed append
@@ -4199,9 +4207,9 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
     transition-profile append hash
     `8152ec1d4df4fe8df290d3b049108260f57d9014b8f551065073c17f6523fb7e`,
     redeem request hash
-    `1fe949217c8bbe26957cf2a2510d79894e15b20fc5143dee2c3a1ff8678d3a5d`,
+    `703128068fa36897c952640cb77006af29a8aa802d67da82c97e73c8e0ef1864`,
     and redeem instruction hash
-    `dd7bcb5ab602696be67028e03578933a93e9396057a5decefe8cc9058662bf85`,
+    `e05fb3ebb3a3e823f65403e09d1aa6e5deab0145f7aa0827f66a371ad633cc3e`,
     with Linux native-backed C# gate coverage; Windows `.NET 8` corridor/TRX
     certification remains on the Windows-machine handoff path.
   - C# source-level typed redeem preflight support now accepts the trailing
@@ -4211,7 +4219,7 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
     The Windows-machine `.NET 8` follow-up must certify multi-profile
     record-backed lineage-witness redeem cases.
   - C# source-level shared ABI-7 archive fixture assertions now pin the
-    regenerated current `64x4` profile hashes:
+    regenerated current `255x1` profile hashes:
     append-bundle
     `e43ab6640942e2298c260556175c216eb652da5a79ab0454b4cc5e31bb7fecb0`,
     verify-request
@@ -5419,7 +5427,7 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   partial/exact redeem planning are runtime-checked instead of only parsed.
   Swift recursive compact native archive validation must keep
   `KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes` equal to
-  the shared `KagemushaRecursiveSpendProver.nativeArchiveMaxBytes` 64 MiB cap,
+  the shared `KagemushaRecursiveSpendProver.nativeArchiveMaxBytes` 256 MiB cap,
   with the focused Swift test, SDK parity inventory, and
   `--negative-control-swift-recursive-compact-native-archive-cap` mode proving
   the cap cannot drift upward before native bridge calls allocate or copy
@@ -6542,7 +6550,7 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   verifier-key bytes have been checked against the full circuits in explicit
   expensive equivalence tests, and the release CLI has been rebuilt with that
   path. The current replacement run must use a freshly rebuilt
-  `target/release/iroha` from the `64x4` profile source, passed explicitly
+  `target/release/iroha` from the `255x1` profile source, passed explicitly
   with `--iroha-bin`, before its evidence can satisfy the release gate.
   A replacement production-width staged run is in progress; the remaining
   lineage release blocker is successful init/append key-artifact generation plus
@@ -6583,7 +6591,7 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   after about 9h26m with no artifacts. A detached replacement retry is in
   progress, but 2026-06-25 stale logs showed mixed binary provenance on some
   attempts; the current replacement must use the freshly rebuilt
-  `target/release/iroha` `64x4` binary through `--iroha-bin`. The remaining
+  `target/release/iroha` `255x1` binary through `--iroha-bin`. The remaining
   compact-key release blocker is a successful rerun that
   produces artifacts and is finalized into `artifacts/kagemusha`.
 - Continue reducing local/CI compile memory after the WSL cargo-test hardening
@@ -15467,7 +15475,7 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   recursive compact, and recursive spend validators also reject over-cap caller
   archives with explicit `must not exceed` diagnostics before owned byte copies,
   Norito parsing, native availability checks, or native dispatch. The Node NAPI
-  and Python PyO3 native hosts also enforce the same 64 MiB archive cap for
+  and Python PyO3 native hosts also enforce the same 256 MiB archive cap for
   direct native-host entrypoints that bypass the high-level SDK wrappers, with
   ABI-7 recursive-spend regressions covering the single-archive operations and
   every multi-archive lineage witness input slot before Norito decode. Those
@@ -23000,7 +23008,7 @@ digest-bound pending-XSD source probe summaries for reviewed
   each witness passes preflight. The data model now exposes a
   reserved-mode recursive aggregation evidence statement that
   Norito/Poseidon-binds that batch digest, parameter fingerprint, and canonical
-  `pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4` verifier-witness
+  `pallas-ipa-transparent-v1/vesta-recursive-fixed-window-255x1` verifier-witness
   profile plus the declared verifier opening length to the same ordered hop
   transcript. Reserved compact projection checks validate mode `2` against that
   recursive evidence and the compact token's folded public inputs, but public
@@ -23056,7 +23064,7 @@ digest-bound pending-XSD source probe summaries for reviewed
   recursive circuit work. A cheap
   production-layout guard now pins
   the `n = 128` recursive verifier shape (seven rounds, `[64, 32, 16, 8, 4, 2,
-  1]` generator-fold layers, 64-by-4 scalar coverage, and 262 represented
+  1]` generator-fold layers, direct `255 x 1` scalar coverage, and 262 represented
   windowed MSM gadgets), and a fixed-window table plan pins the shared-table
   target at 532 table families versus 90,440 naive point-table copies
   (723,520 duplicated point rows) with `trusted_setup_required = false`. Both
@@ -23580,18 +23588,20 @@ digest-bound pending-XSD source probe summaries for reviewed
   before nullifier consumption or public minting. Semantic v1 spend proofs
   without that witness still fail closed as admission-neutral, because they do
   not prove every private hop and accumulator
-  transition in-circuit. The reserved chain-admission circuit id for the
-  witnessless constant-size proof is
-  `kagemusha-recursive-spend-lineage-v1`; profile attempts under that id must
-  stay in the transparent `halo2/ipa` corridor, carry non-empty proof bytes,
-  bind the accumulator-derived recursive public inputs through a fresh
-  public-input hash, include a non-zero recursive verifier scalar-projection
-  digest, and expose an inner `OpenVerifyEnvelope` whose backend tag, lineage
-  circuit id, schema, empty auxiliary metadata, non-zero verifier-key hash, and
-  public instance columns match that reserved profile. Those instance columns
-  must now come from a strict ZK1 no-trusted-setup inner proof envelope. The
-  generic Halo2 proof-envelope parser is scoped to current semantic v1
-  preverification and is rejected under the reserved lineage id.
+  transition in-circuit. The witnessless constant-size proof path uses the
+  profile-specific `kagemusha-recursive-spend-lineage-onehop-v1` and
+  `kagemusha-recursive-spend-lineage-append-v1` proof ids; the generic
+  `kagemusha-recursive-spend-lineage-v1` family label is not accepted as a
+  verifier-record proof id or native Halo2 dispatch id. Reserved-lineage proof
+  attempts must stay in the transparent `halo2/ipa` corridor, carry non-empty
+  proof bytes, bind the accumulator-derived recursive public inputs through a
+  fresh public-input hash, include a non-zero recursive verifier
+  scalar-projection digest, and expose an inner `OpenVerifyEnvelope` whose
+  backend tag, lineage circuit id, schema, empty auxiliary metadata, non-zero
+  verifier-key hash, and public instance columns match that reserved profile.
+  Those instance columns must now come from a strict ZK1 no-trusted-setup inner
+  proof envelope. The generic Halo2 proof-envelope parser is scoped to current
+  semantic v1 preverification and is rejected under Reserved-lineage profile ids.
   Record-backed preverification
   also requires the inline verifier-key envelope to be a strict
   no-trusted-setup Halo2 IPA ZK1 key container: exactly one matching lineage
@@ -23642,8 +23652,9 @@ digest-bound pending-XSD source probe summaries for reviewed
   discontinuity, amount drift, missing previous-note nullifier consumption, and
   top-up-anchor output reuse before Halo2 proving starts.
   Rust-facing recursive spend init wrappers and ABI-6 native spend init now
-  default to the reserved `kagemusha-recursive-spend-lineage-v1` first-hop
-  prover in core, the native bridge, JavaScript host, and Python PyO3 host. The
+  use the reserved `kagemusha-recursive-spend-lineage-onehop-v1` first-hop
+  prover when one-hop lineage key material is supplied in core, the native
+  bridge, JavaScript host, and Python PyO3 host. The
   core wrapper derives the Pallas open-envelope width from the raw Norito
   archive, selects the matching no-trusted-setup one-hop lineage verifier key,
   and emits bundles whose public scalar-projection digest is bound to the

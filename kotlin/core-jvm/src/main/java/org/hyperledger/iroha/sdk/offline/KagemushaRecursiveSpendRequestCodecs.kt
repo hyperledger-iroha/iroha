@@ -162,16 +162,7 @@ class InitSpendRequest @JvmOverloads constructor(
 
     init {
         requireNonNegativeHeight(blockHeight)
-        require(lineageVerifierKeyBytes != null) {
-            "lineageVerifierKey is required for recursive spend init"
-        }
-        require(lineageProvingKeyArchiveBytes != null) {
-            "lineageProvingKeyArchive is required for recursive spend init"
-        }
-        require(lineageVerifierKeyBytes.isNotEmpty()) { "lineageVerifierKey must not be empty" }
-        require(lineageProvingKeyArchiveBytes.isNotEmpty()) {
-            "lineageProvingKeyArchive must not be empty"
-        }
+        validateOptionalInitLineageKeyMaterial(lineageVerifierKeyBytes, lineageProvingKeyArchiveBytes)
         val recordBundlePayload = KagemushaRecursiveSpendRequestCodecs.compactPayloadForRequest(
             recordBundleArchive,
             KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE,
@@ -188,7 +179,6 @@ class InitSpendRequest @JvmOverloads constructor(
             field = "pallasOpenEnvelopes",
             maxBytes = KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES,
         )
-        validateLineageKeyArtifactsForInit(lineageVerifierKeyBytes, lineageProvingKeyArchiveBytes)
     }
 
     val recordBundle: ByteArray get() = recordBundleArchive.copyOf()
@@ -882,7 +872,7 @@ object KagemushaRecursiveSpendRequestCodecs {
         require(hop != null) { "hop is required" }
         require(spendableNote != null) { "spendableNote is required" }
         val recordBundle = buildVerifiedFoldRecordBundle(listOf(hop))
-        preflightInitLineageKeyMaterialForAutoGeneration(
+        validateOptionalInitLineageKeyMaterial(
             lineageVerifierKey,
             lineageProvingKeyArchive,
         )
@@ -1287,23 +1277,6 @@ object KagemushaRecursiveSpendRequestCodecs {
                 "Pallas open-envelopes archive; privacy proof outputs alone do not carry " +
                 "Pallas IPA opening envelopes, chainId, asset, or rootAfter",
         )
-    }
-
-    private fun preflightInitLineageKeyMaterialForAutoGeneration(
-        lineageVerifierKey: ByteArray?,
-        lineageProvingKeyArchive: ByteArray?,
-    ) {
-        require(lineageVerifierKey != null) {
-            "lineageVerifierKey is required for recursive spend init"
-        }
-        require(lineageProvingKeyArchive != null) {
-            "lineageProvingKeyArchive is required for recursive spend init"
-        }
-        require(lineageVerifierKey.isNotEmpty()) { "lineageVerifierKey must not be empty" }
-        require(lineageProvingKeyArchive.isNotEmpty()) {
-            "lineageProvingKeyArchive must not be empty"
-        }
-        validateLineageKeyArtifactsForInit(lineageVerifierKey, lineageProvingKeyArchive)
     }
 
     private fun preflightAppendPreviousLineageForAutoGeneration(
@@ -2187,6 +2160,26 @@ private fun validateLineageKeyArtifactsForInit(
     } catch (ex: IllegalArgumentException) {
         throw IllegalArgumentException("lineage key artifacts are invalid for recursive spend init", ex)
     }
+}
+
+private fun validateOptionalInitLineageKeyMaterial(
+    lineageVerifierKey: ByteArray?,
+    lineageProvingKeyArchive: ByteArray?,
+) {
+    if (lineageVerifierKey == null && lineageProvingKeyArchive == null) {
+        return
+    }
+    require(lineageVerifierKey != null) {
+        "lineageVerifierKey is required when lineageProvingKeyArchive is present"
+    }
+    require(lineageProvingKeyArchive != null) {
+        "lineageProvingKeyArchive is required when lineageVerifierKey is present"
+    }
+    require(lineageVerifierKey.isNotEmpty()) { "lineageVerifierKey must not be empty" }
+    require(lineageProvingKeyArchive.isNotEmpty()) {
+        "lineageProvingKeyArchive must not be empty"
+    }
+    validateLineageKeyArtifactsForInit(lineageVerifierKey, lineageProvingKeyArchive)
 }
 
 private data class LineageKeyMaterial(

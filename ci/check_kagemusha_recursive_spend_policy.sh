@@ -79,8 +79,8 @@ SHARED_FIXTURE_COVERAGE = {
         '"RedeemKagemushaRecursive"',
         '"sha256_hex": "c5402b3ea6aeb35ce12607344304b858273f8589e2b3887708a86cb19665ce68"',
         '"sha256_hex": "60acfd543978123d6bc23904859683ed64d44930a4b74bd1bba635199c60fa57"',
-        '"sha256_hex": "1fe949217c8bbe26957cf2a2510d79894e15b20fc5143dee2c3a1ff8678d3a5d"',
-        '"sha256_hex": "dd7bcb5ab602696be67028e03578933a93e9396057a5decefe8cc9058662bf85"',
+        '"sha256_hex": "703128068fa36897c952640cb77006af29a8aa802d67da82c97e73c8e0ef1864"',
+        '"sha256_hex": "e05fb3ebb3a3e823f65403e09d1aa6e5deab0145f7aa0827f66a371ad633cc3e"',
     ),
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift": (
         "testSharedRecursiveSpendAbi6FixtureMatchesSdkSurface",
@@ -319,7 +319,7 @@ ADVERSARIAL_COVERAGE = {
         "fn kagemusha_recursive_spend_lineage_witness_helpers_append_record_backed_material",
         "KagemushaRecursiveSpendLineageKeyArtifactsV1",
         "KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1",
-        "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4",
+        "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-255x1",
         "is_supported_kagemusha_recursive_spend_lineage_verifier_opening_len",
         "validate_kagemusha_recursive_spend_lineage_key_artifact_pair",
         "KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_VERSION_V1",
@@ -579,8 +579,8 @@ ADVERSARIAL_COVERAGE = {
         "previous_proof_count_mismatch",
     ),
     "crates/iroha_core/src/zk.rs": (
-        "pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS: usize = 64;",
-        "pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS: usize = 4;",
+        "pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS: usize = 255;",
+        "pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS: usize = 1;",
         "pub const KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1: &str =",
         "fn kagemusha_recursive_spend_chain_admission_validates_enabled_lineage_profile",
         "fn kagemusha_recursive_spend_instance_values_expose_proof_chain_digest",
@@ -607,7 +607,7 @@ ADVERSARIAL_COVERAGE = {
         "kagemusha_non_native_vesta_affine_native_scalar_msm_synthesis_rejects_truncated_term_shape",
         "if !one_bit_direct_select {",
         "kagemusha_vesta_affine_windowed_shared_table_term_base(term),",
-        "&term.window_base_doubles[0][0].p,",
+        ".and_then(|doubles| doubles.first())",
         "query_non_native_vesta_affine_windowed_shared_table_term_base::<",
         "ensure_witness_vector_len(config.conditional_adds.len(), self.conditional_adds.len())?;",
         "ensure_witness_vector_len(config.scalars.len(), witness.scalars.len())?;",
@@ -1024,8 +1024,9 @@ ADVERSARIAL_COVERAGE = {
         "current-hop Pallas metadata splice must not return bytes",
         "fn kagemusha_recursive_spend_init_ffi_rejects_forged_current_hop_proof_circuit_id",
         "current-hop proof circuit-id splice must not return bytes",
-        "fn kagemusha_recursive_spend_init_ffi_rejects_missing_lineage_key_artifacts",
-        "missing Reserved-lineage key artifacts must not return bytes",
+        "fn kagemusha_recursive_spend_init_ffi_accepts_semantic_init_without_lineage_key_artifacts",
+        "fn kagemusha_recursive_spend_init_ffi_rejects_partial_lineage_key_artifacts",
+        "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1",
         "bridge-fast-lineage-hop-public-inputs-v1",
         "encode first fast lineage hop proof",
         "encode second fast lineage hop proof",
@@ -1040,7 +1041,7 @@ ADVERSARIAL_COVERAGE = {
     ),
     "crates/iroha_js_host/src/lib.rs": (
         "kagemusha_recursive_compact_payment_token_js_host_rejects_malformed_inputs",
-        "const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 64 * 1024 * 1024;",
+        "const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 256 * 1024 * 1024;",
         "ensure_kagemusha_recursive_archive_len",
         "archive_len > KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES",
         "encoded Kagemusha archive exceeds",
@@ -1138,8 +1139,9 @@ ADVERSARIAL_COVERAGE = {
         "fn kagemusha_recursive_spend_init_rejects_forged_current_hop_proof_circuit_id",
         "JS host must reject forged current-hop proof circuit id",
         "current-hop proof circuit-id splice returned unexpected error",
-        "fn kagemusha_recursive_spend_init_rejects_missing_lineage_key_artifacts",
-        'err.reason.contains("lineage_verifier_key")',
+        "fn kagemusha_recursive_spend_init_accepts_semantic_init_without_lineage_key_artifacts",
+        "JS host must accept semantic init without lineage key artifacts",
+        "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1",
         "js-host-recursive-lineage-hop-public-inputs-v1",
         "encode JS host lineage hop proof",
         "js-host-mixed-lineage-hop-public-inputs-v1",
@@ -1158,7 +1160,7 @@ ADVERSARIAL_COVERAGE = {
     ),
     "python/iroha_python/iroha_python_rs/src/lib.rs": (
         "kagemusha_recursive_compact_python_function_rejects_malformed_record_bundle",
-        "const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 64 * 1024 * 1024;",
+        "const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 256 * 1024 * 1024;",
         "ensure_kagemusha_recursive_archive_len",
         "archive_len > KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES",
         "encoded Kagemusha archive exceeds",
@@ -1269,8 +1271,9 @@ ADVERSARIAL_COVERAGE = {
         "fn kagemusha_recursive_spend_init_python_rejects_forged_current_hop_proof_circuit_id",
         "Python host must reject forged current-hop proof circuit id",
         "current-hop proof circuit-id splice returned unexpected error",
-        "fn kagemusha_recursive_spend_init_python_rejects_missing_lineage_key_artifacts",
-        'err.contains("lineage_verifier_key")',
+        "fn kagemusha_recursive_spend_init_python_accepts_semantic_init_without_lineage_key_artifacts",
+        "Python host must accept semantic init without lineage key artifacts",
+        "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1",
         "fn kagemusha_recursive_spend_redeem_python_native_accepts_witnessless_reserved_lineage_public_binding",
         "witnessless reserved-lineage redeem validates before backend proof verification",
         "Python native redeem builder must reject final lineage verifier-record circuit mismatch",
@@ -1831,7 +1834,7 @@ NATIVE_OUTPUT_CAP_COVERAGE = {
         "kagemushaNoritoFrameWithPayload",
     ),
     "javascript/iroha_js/src/crypto.js": (
-        "export const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;",
+        "export const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 256 * 1024 * 1024;",
         "toKagemushaArchiveView(value, name)",
         "toOwnedKagemushaArchiveBuffer(value, name)",
         "view.length > KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES",
@@ -1846,7 +1849,7 @@ NATIVE_OUTPUT_CAP_COVERAGE = {
         "native ${operation} returned empty Norito payload",
     ),
     "javascript/iroha_js/dist/crypto.js": (
-        "export const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;",
+        "export const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 256 * 1024 * 1024;",
         "toKagemushaArchiveView(value, name)",
         "toOwnedKagemushaArchiveBuffer(value, name)",
         "view.length > KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES",
@@ -1861,13 +1864,13 @@ NATIVE_OUTPUT_CAP_COVERAGE = {
         "native ${operation} returned empty Norito payload",
     ),
     "javascript/iroha_js/src/crypto.browser.js": (
-        "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024",
+        "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 256 * 1024 * 1024",
     ),
     "javascript/iroha_js/dist/crypto.browser.js": (
-        "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024",
+        "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 256 * 1024 * 1024",
     ),
     "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js": (
-        "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES, 64 * 1024 * 1024",
+        "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES, 256 * 1024 * 1024",
         "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES + 1",
         "native kagemushaRecursiveSpendRedeem returned oversized output",
         "Kagemusha recursive spend helpers reject oversized request archives before native calls",
@@ -1891,10 +1894,10 @@ NATIVE_OUTPUT_CAP_COVERAGE = {
     ),
     "javascript/iroha_js/test/package_dist.test.js": (
         "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES",
-        "64 * 1024 * 1024",
+        "256 * 1024 * 1024",
     ),
     "python/iroha_python/src/iroha_python/kagemusha.py": (
-        "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024",
+        "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 256 * 1024 * 1024",
         '"KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES"',
         "def _archive_bytes_named(archive: BytesLike, name: str) -> bytes:",
         "view = memoryview(archive)",
@@ -1917,7 +1920,7 @@ NATIVE_OUTPUT_CAP_COVERAGE = {
         "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES",
     ),
     "python/iroha_python/tests/kagemusha_test.py": (
-        "kagemusha.KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES == 64 * 1024 * 1024",
+        "kagemusha.KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES == 256 * 1024 * 1024",
         "monkeypatch.setattr(kagemusha, \"KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES\", 48)",
         "test_recursive_kagemusha_helpers_reject_oversized_inputs_before_copy_and_native",
         "oversized Kagemusha input reached native loading",
@@ -1941,7 +1944,7 @@ NATIVE_OUTPUT_CAP_COVERAGE = {
         "_kagemusha_norito_frame_with_payload",
     ),
     "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs": (
-        "public const int NativeArchiveMaxBytes = 64 * 1024 * 1024;",
+        "public const int NativeArchiveMaxBytes = 256 * 1024 * 1024;",
         "rawLength > NativeArchiveMaxBytes",
         "RequireValidInputArchive",
         "Request archive",
@@ -1992,12 +1995,16 @@ RESERVED_LINEAGE_PROFILE_SPLIT_COVERAGE = {
         "is_kagemusha_recursive_spend_lineage_proof_circuit_id",
         "is_kagemusha_recursive_spend_lineage_append_output_circuit_id",
         "normalize_kagemusha_recursive_spend_append_output_proof_circuit_id",
-        "proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1\n        || proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1",
+        "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1\n            | KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1",
+        "requires_kagemusha_recursive_spend_lineage_witness_for_redeem(\n                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,",
+        "the Reserved-lineage family id is not an accepted proof id",
         "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1 => {\n            can_append_kagemusha_recursive_spend_lineage_witnessless(previous_hop_count)",
     ),
     "crates/iroha_core/src/zk.rs": (
         "pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID: &str =",
         "pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID: &str =",
+        "let lineage_init_selected = circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID;",
+        "generic lineage family id must not be accepted as a proof id",
         "kagemusha_recursive_spend_lineage_vk_record_from_box",
         "kagemusha_recursive_spend_lineage_append_vk_record_from_box",
         "pub fn kagemusha_recursive_spend_lineage_append_vk_record(",
@@ -2009,6 +2016,7 @@ RESERVED_LINEAGE_PROFILE_SPLIT_COVERAGE = {
         "lineage_proving_key_archive_helpers_reject_profile_mismatch_and_malformed_inputs",
         "lineage_vk_record_from_box_canonicalizes_profiles_without_keygen",
         "kagemusha_recursive_spend_lineage_init_rejects_missing_key_artifacts_before_runtime_keygen",
+        "kagemusha_append_keygen_row_guard_rejects_k12_direct_profile_before_halo2_keygen",
         "fn kagemusha_recursive_fixed_window_shared_table_manifest_digest_rejects_layout_splices",
         "kagemusha_recursive_fixed_window_shared_table_manifest_digest_from_parts",
         "manifest schedule digest splice must change digest",
@@ -2032,6 +2040,8 @@ RESERVED_LINEAGE_PROFILE_SPLIT_COVERAGE = {
         "std::fs::read(&self.vk)",
         "kagemusha_recursive_compact_record_from_existing_vk_bytes_rejects_adversarial_inputs",
         "kagemusha_lineage_record_run_writes_norito_record_from_existing_vk_file",
+        "lineage_key_artifacts_init_len4_fails_before_writing_outputs",
+        "lineage_key_artifacts_append_len4_fails_before_writing_outputs",
         "record_out",
         "record_namespace",
         "record_version",
@@ -2216,6 +2226,8 @@ ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS = (
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaTopUpClient.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaTopUpResponse.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
     "kotlin/README.md",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaCompactPaymentTokenProver.kt",
@@ -3101,8 +3113,16 @@ POLICY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-lineage-profile-split",
     ),
     (
+        "generic Reserved-lineage proof-id rejection negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-generic-lineage-proof-id-rejection",
+    ),
+    (
         "roadmap current verifier-profile staleness negative control",
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-roadmap-current-profile-staleness",
+    ),
+    (
+        "roadmap semantic-init lineage-key wording negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-roadmap-semantic-init-lineage-key-wording",
     ),
     (
         "core lineage append helper exactness negative control",
@@ -5650,12 +5670,13 @@ def check_shared_fixture_manifest():
     proof_circuit_ids = manifest.get("proof_circuit_ids", {})
     for key, expected in (
         ("recursive_aggregation", "kagemusha-recursive-aggregation-v1"),
-        ("reserved_lineage", "kagemusha-recursive-spend-lineage-v1"),
         ("reserved_lineage_one_hop", "kagemusha-recursive-spend-lineage-onehop-v1"),
         ("reserved_lineage_append", "kagemusha-recursive-spend-lineage-append-v1"),
     ):
         if proof_circuit_ids.get(key) != expected:
             fail(f"{SHARED_FIXTURE_PATH} circuit id {key} drifted")
+    if "reserved_lineage" in proof_circuit_ids:
+        fail(f"{SHARED_FIXTURE_PATH} exposes generic lineage family id as a proof id")
 
     limits = manifest.get("limits", {})
     expected_limits = {
@@ -5664,7 +5685,7 @@ def check_shared_fixture_manifest():
         "previous_proof_open_envelopes_required_count": 1,
         "previous_proof_open_envelopes_max_bytes": 8 * 1024 * 1024,
         "pallas_open_envelope_max_transcript_label_bytes": 128,
-        "native_archive_max_bytes": 64 * 1024 * 1024,
+        "native_archive_max_bytes": 256 * 1024 * 1024,
     }
     for key, expected in expected_limits.items():
         if limits.get(key) != expected:
@@ -6064,13 +6085,22 @@ def check_payload_benchmark_source_coverage():
 TODO_MARKER_RE = re.compile(r"\b(?:TODO|FIXME|XXX|TBD)\b")
 KAGEMUSHA_CONTENT_RE = re.compile(r"kagemusha", re.IGNORECASE)
 CURRENT_ROADMAP_PROFILE_NEEDLES = (
-    "`64x4` profile source",
-    "`64x4` binary through `--iroha-bin`",
-    "regenerated current `64x4` profile hashes",
+    "`255x1` profile source",
+    "`255x1` binary through `--iroha-bin`",
+    "regenerated current `255x1` profile hashes",
 )
 STALE_ROADMAP_PROFILE_MARKERS = (
-    "`255x1`",
-    "fixed-window-255x1",
+    "`64x4`",
+    "fixed-window-64x4",
+)
+CURRENT_ROADMAP_SEMANTIC_INIT_NEEDLES = (
+    "nil/nil init lineage key material selects the semantic recursive-aggregation path instead of Reserved-lineage",
+    "When init requests choose Reserved-lineage by supplying lineage material",
+    "allow absent init lineage key material for semantic init",
+)
+STALE_ROADMAP_SEMANTIC_INIT_MARKERS = (
+    "missing init lineage verifier keys",
+    "Init and lineage-append requests must also keep lineage verifier/proving-key artifacts",
 )
 
 
@@ -6201,6 +6231,22 @@ def check_current_roadmap_profile_is_fresh():
             )
 
 
+def check_current_roadmap_semantic_init_is_fresh():
+    roadmap = re.sub(r"\s+", " ", read("roadmap.md"))
+    for marker in STALE_ROADMAP_SEMANTIC_INIT_MARKERS:
+        if marker in roadmap:
+            fail(
+                "roadmap.md contains stale Kagemusha semantic-init lineage-key wording: "
+                + marker
+            )
+    for needle in CURRENT_ROADMAP_SEMANTIC_INIT_NEEDLES:
+        if needle not in roadmap:
+            fail(
+                "roadmap.md is missing current Kagemusha semantic-init lineage-key wording: "
+                + needle
+            )
+
+
 def run_checks():
     check_workflow_paths_cover_policy_sources()
     check_workflow_preserves_in_progress_runs()
@@ -6236,6 +6282,7 @@ def run_checks():
     check_native_output_cap_coverage()
     check_reserved_lineage_profile_split_coverage()
     check_current_roadmap_profile_is_fresh()
+    check_current_roadmap_semantic_init_is_fresh()
     check_verify_result_fail_closed_coverage()
     check_payload_benchmark_source_coverage()
     check_torii_offline_v2_kagemusha_redeem_coverage()
@@ -6598,9 +6645,9 @@ if mode == "--negative-control-native-output-cap":
     cases = (
         (
             "javascript/iroha_js/src/crypto.js",
-            "export const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;",
+            "export const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 256 * 1024 * 1024;",
             "export const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024;",
-            "export const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;",
+            "export const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 256 * 1024 * 1024;",
         ),
         (
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaCompactPaymentTokenProver.java",
@@ -10064,10 +10111,59 @@ if mode == "--negative-control-core-lineage-profile-split":
     print(first_message.splitlines()[0])
     raise SystemExit(0)
 
+if mode == "--negative-control-core-generic-lineage-proof-id-rejection":
+    cases = (
+        (
+            "crates/iroha_core/src/zk.rs",
+            "generic lineage family id must not be accepted as a proof id",
+            "generic lineage family id is accepted as a proof id",
+            "generic lineage family id must not be accepted as a proof id",
+        ),
+        (
+            "crates/iroha_core/src/zk.rs",
+            "let lineage_init_selected = circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID;",
+            "let lineage_init_selected = matches!(\n        circuit_id,\n        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID\n            | KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID\n    );",
+            "let lineage_init_selected = circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID;",
+        ),
+        (
+            "crates/iroha_data_model/src/offline/mod.rs",
+            "the Reserved-lineage family id is not an accepted proof id",
+            "the Reserved-lineage family id is accepted as a proof id",
+            "the Reserved-lineage family id is not an accepted proof id",
+        ),
+    )
+    first_message = None
+    for target, before, after, label in cases:
+        source = read(target)
+        mutated = source.replace(before, after, 1)
+        if mutated == source:
+            raise SystemExit(f"negative control failed: unable to mutate generic lineage proof-id rejection coverage in {target}: {before}")
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            if label not in message:
+                raise SystemExit(
+                    "negative control failed: generic lineage proof-id drift was not detected for "
+                    + target
+                    + f": {message}"
+                )
+            first_message = first_message or message
+        else:
+            raise SystemExit(
+                "negative control failed: generic lineage proof-id drift passed for "
+                + target
+            )
+        finally:
+            text_overrides.pop(target, None)
+    print(first_message)
+    raise SystemExit(0)
+
 if mode == "--negative-control-roadmap-current-profile-staleness":
     target = "roadmap.md"
     source = read(target)
-    mutated = source.replace("`64x4` profile source", "`255x1` profile source", 1)
+    mutated = source.replace("`255x1` profile source", "`64x4` profile source", 1)
     if mutated == source:
         raise SystemExit("negative control failed: unable to mutate roadmap current profile prose")
     text_overrides[target] = mutated
@@ -10075,7 +10171,7 @@ if mode == "--negative-control-roadmap-current-profile-staleness":
         run_checks()
     except PolicyError as error:
         message = str(error)
-        expected = "roadmap.md still references stale Kagemusha verifier-witness profile marker: `255x1`"
+        expected = "roadmap.md still references stale Kagemusha verifier-witness profile marker: `64x4`"
         if expected not in message:
             raise SystemExit(
                 "negative control failed: roadmap current profile staleness was rejected for the wrong reason: "
@@ -10085,6 +10181,43 @@ if mode == "--negative-control-roadmap-current-profile-staleness":
         print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: roadmap current profile staleness was not detected")
+
+if mode == "--negative-control-roadmap-semantic-init-lineage-key-wording":
+    target = "roadmap.md"
+    source = read(target)
+    old = (
+        "nil/nil init lineage key material selects the semantic\n"
+        "  recursive-aggregation path instead of Reserved-lineage"
+    )
+    new = (
+        "missing init lineage verifier keys remain required before\n"
+        "  native dispatch"
+    )
+    mutated = source.replace(old, new, 1)
+    if mutated == source:
+        raise SystemExit(
+            "negative control failed: unable to mutate roadmap semantic-init lineage-key prose"
+        )
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        message = str(error)
+        expected = (
+            "roadmap.md contains stale Kagemusha semantic-init lineage-key wording: "
+            "missing init lineage verifier keys"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: roadmap semantic-init lineage-key wording was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
+        print("negative control rejected roadmap semantic-init lineage-key wording drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: roadmap semantic-init lineage-key wording drift was not detected"
+    )
 
 if mode == "--negative-control-core-lineage-append-helper-exactness":
     target = "crates/iroha_core/src/zk.rs"
@@ -10387,8 +10520,8 @@ if mode == "--negative-control-core-shared-table-direct-base-helper":
             '&term.tables.first().expect("shared-table windowed MSM term has a first table").table[1],',
         ),
         (
-            "&term.window_base_doubles[0][0].p,",
-            "&term.tables[0].table[1],",
+            ".and_then(|doubles| doubles.first())",
+            ".and_then(|doubles| doubles.get(1))",
         ),
     )
     mutated = source

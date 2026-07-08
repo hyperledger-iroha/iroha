@@ -45,18 +45,18 @@ final class ConnectSessionTests: XCTestCase {
         let sessionID = Data(repeating: 0xAA, count: 32)
         let session = ConnectSession(sessionID: sessionID, client: client)
 
-        Task {
+        let emitTask = Task {
             while stub.pendingReceives.isEmpty {
                 try await Task.sleep(nanoseconds: 1_000_000)
             }
             let accountID = AccountId.make(publicKey: Data(repeating: 0x11, count: 32))
+            let walletSignature = try Self.validEd25519Signature(message: "connect approve")
             let approve = ConnectApprove(walletPublicKey: Data(repeating: 0xBB, count: 32),
                                          accountID: accountID,
                                          permissions: nil,
                                          proof: nil,
                                          walletSignature: ConnectWalletSignature(algorithm: "ed25519",
-                                                                                 signature: Data(repeating: 0x99,
-                                                                                                 count: 64)),
+                                                                                 signature: walletSignature),
                                          walletMetadata: nil)
             let frame = ConnectFrame(sessionID: sessionID,
                                      direction: .walletToApp,
@@ -67,11 +67,17 @@ final class ConnectSessionTests: XCTestCase {
         }
 
         let control = try await session.nextControlFrame()
+        try await emitTask.value
         if case .approve(let approve) = control {
             XCTAssertEqual(approve.accountID, AccountId.make(publicKey: Data(repeating: 0x11, count: 32)))
         } else {
             XCTFail("expected approve frame")
         }
+    }
+
+    private static func validEd25519Signature(message: String) throws -> Data {
+        let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 0x63, count: 32))
+        return try signingKey.sign(Data(message.utf8))
     }
 
     func testNextControlFrameDecryptsCiphertextControl() async throws {

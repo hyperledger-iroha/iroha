@@ -317,7 +317,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
             128,
             KagemushaRecursiveSpendNative.RecursivePallasOpenEnvelopeMaxTranscriptLabelBytes);
         Assert.Equal(
-            64 * 1024 * 1024,
+            256 * 1024 * 1024,
             KagemushaRecursiveSpendNative.NativeArchiveMaxBytes);
         Assert.Equal(
             "iroha:kagemusha:v1:recursive-spend-transition-profile",
@@ -378,7 +378,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
             KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1));
         Assert.True(KagemushaRecursiveSpendNative.IsLineageAppendOutputCircuitId(
             KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1));
-        Assert.True(KagemushaRecursiveSpendNative.RequiresLineageKeyArtifactsForInit());
+        Assert.False(KagemushaRecursiveSpendNative.RequiresLineageKeyArtifactsForInit());
         foreach (var openingLen in new[] { 2, 4, 8, 16, 32, 64, 128 })
         {
             Assert.True(
@@ -1662,9 +1662,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
         Assert.Equal(
             KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
             circuitIds.GetProperty("recursive_aggregation").GetString());
-        Assert.Equal(
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
-            circuitIds.GetProperty("reserved_lineage").GetString());
+        Assert.False(circuitIds.TryGetProperty("reserved_lineage", out _));
         Assert.Equal(
             KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1,
             circuitIds.GetProperty("reserved_lineage_one_hop").GetString());
@@ -1871,7 +1869,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
             "KagemushaRecursiveSpendRedeemRequestV1",
             redeemArchive.GetProperty("norito_type").GetString());
         Assert.Equal(
-            "1fe949217c8bbe26957cf2a2510d79894e15b20fc5143dee2c3a1ff8678d3a5d",
+            "703128068fa36897c952640cb77006af29a8aa802d67da82c97e73c8e0ef1864",
             redeemArchive.GetProperty("sha256_hex").GetString());
         Assert.True(redeemArchive.GetProperty("byte_len").GetInt32() > 0);
         Assert.NotEmpty(Convert.FromBase64String(
@@ -1881,7 +1879,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
             "RedeemKagemushaRecursive",
             redeemInstructionArchive.GetProperty("norito_type").GetString());
         Assert.Equal(
-            "dd7bcb5ab602696be67028e03578933a93e9396057a5decefe8cc9058662bf85",
+            "e05fb3ebb3a3e823f65403e09d1aa6e5deab0145f7aa0827f66a371ad633cc3e",
             redeemInstructionArchive.GetProperty("sha256_hex").GetString());
         Assert.True(redeemInstructionArchive.GetProperty("byte_len").GetInt32() > 0);
         Assert.NotEmpty(Convert.FromBase64String(
@@ -2876,6 +2874,19 @@ public sealed class KagemushaRecursiveSpendNativeTests
         Assert.Equal(0x01, fields[3][0]);
         Assert.Equal(0x01, fields[4][0]);
         Assert.Equal(0x01, fields[5][0]);
+
+        var semanticRequest = KagemushaRecursiveSpendNative.EncodeInitRequest(
+            recordBundle,
+            pallasOpenEnvelopes,
+            currentNote,
+            blockHeight: 43);
+        var semanticFields = KagemushaNoritoReadFieldPayloads(
+            KagemushaNoritoPayload(semanticRequest),
+            KagemushaNoritoCompactLenFlag);
+        Assert.Equal(6, semanticFields.Count);
+        Assert.Equal(0x00, semanticFields[3][0]);
+        Assert.Equal(0x00, semanticFields[4][0]);
+        Assert.Equal(0x01, semanticFields[5][0]);
 
         var wrongArtifactProfile = Assert.Throws<ArgumentException>(() =>
             KagemushaRecursiveSpendNative.EncodeInitRequest(

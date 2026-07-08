@@ -96,7 +96,7 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_BINDING_DIGEST_DOMAIN: &s
     "iroha:kagemusha:v1:recursive-spend-transition-profile-binding-digest";
 /// Canonical verifier-witness profile for reserved Kagemusha recursive aggregation evidence.
 pub const KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1: &str =
-    "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4";
+    "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-255x1";
 /// Canonical circuit id for proof-carrying Kagemusha recursive aggregation evidence.
 pub const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1: &str =
     "kagemusha-recursive-aggregation-v1";
@@ -211,13 +211,8 @@ pub fn can_redeem_kagemusha_recursive_spend_witnessless(
     proof_circuit_id: &str,
     hop_count: u32,
 ) -> bool {
-    let is_reserved_lineage_circuit = proof_circuit_id
-        == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
-        || proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
-        || proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1;
     KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1
         && is_kagemusha_recursive_spend_lineage_proof_circuit_id(proof_circuit_id)
-        && is_reserved_lineage_circuit
         && hop_count >= 1
         && hop_count <= KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1
 }
@@ -227,8 +222,7 @@ pub fn can_redeem_kagemusha_recursive_spend_witnessless(
 pub fn is_kagemusha_recursive_spend_lineage_proof_circuit_id(proof_circuit_id: &str) -> bool {
     matches!(
         proof_circuit_id,
-        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
-            | KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
             | KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
     )
 }
@@ -2401,18 +2395,17 @@ mod model {
         pub current_note: KagemushaSpendableNoteDescriptorV1,
         /// Optional packaged Reserved-lineage verifier key.
         ///
-        /// Production SDKs should supply this key instead of asking the native
-        /// bridge to synthesize the large recursive verifier-slice key at
-        /// runtime. First-release archives must encode this field explicitly;
-        /// use `None` only when the request is intentionally missing lineage key
-        /// material.
+        /// `Some` selects the witnessless Reserved-lineage init circuit and
+        /// must be paired with `lineage_proving_key_archive`. `None` selects
+        /// the semantic recursive aggregation init circuit; the resulting
+        /// spend bundle is offline-valid but needs a record-backed lineage
+        /// witness for online redemption.
         pub lineage_verifier_key: Option<VerifyingKeyBox>,
         /// Optional packaged Reserved-lineage proving key archive.
         ///
-        /// The archive is circuit-family and verifier-key-commitment bound by
-        /// the core prover before use. First-release archives must encode this
-        /// field explicitly; use `None` only when the request is intentionally
-        /// missing lineage key material.
+        /// Must be present exactly when `lineage_verifier_key` is present. The
+        /// archive is circuit-family and verifier-key-commitment bound by the
+        /// core prover before use.
         pub lineage_proving_key_archive: Option<Vec<u8>>,
         /// Optional chain height used for verifier-record activation windows.
         ///
@@ -7641,7 +7634,12 @@ impl KagemushaRecursiveSpendLineageKeyArtifactsV1 {
 }
 
 impl KagemushaRecursiveSpendInitRequestV1 {
-    /// Build and validate the first-hop recursive spend init request.
+    /// Build and validate a semantic first-hop recursive spend init request.
+    ///
+    /// Semantic init does not require Reserved-lineage key artifacts. The
+    /// resulting spend bundle is suitable for offline acceptance and
+    /// re-spending, while online redemption must include a record-backed
+    /// lineage witness.
     ///
     /// # Errors
     ///
@@ -11291,7 +11289,8 @@ mod offline_note_tests {
         scalar_projection_label: &[u8],
     ) -> KagemushaRecursiveAggregationProof {
         let mut proof = kagemusha_recursive_spend_proof(accumulator);
-        proof.verifier_key_id.name = KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.into();
+        proof.verifier_key_id.name =
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1.into();
         proof
             .public_inputs
             .recursive_verifier_scalar_projection_digest = fixed_hash(scalar_projection_label);
@@ -11469,7 +11468,7 @@ mod offline_note_tests {
         let verifier_key = VerifyingKeyBox::new("halo2/ipa".into(), vec![0x69; 96]);
         let mut record = VerifyingKeyRecord::new_with_owner(
             3,
-            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
             Some("kagemusha-recursive-spend-lineage-test".to_owned()),
             KAGEMUSHA_VERIFIER_NAMESPACE,
             BackendTag::Halo2IpaPasta,
@@ -12331,7 +12330,7 @@ mod offline_note_tests {
             KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1, 1,
             "each Reserved-lineage append binds exactly one previous recursive proof opening envelope"
         );
-        assert!(can_redeem_kagemusha_recursive_spend_witnessless(
+        assert!(!can_redeem_kagemusha_recursive_spend_witnessless(
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
             1
         ));
@@ -12344,7 +12343,7 @@ mod offline_note_tests {
             2
         ));
         assert!(can_redeem_kagemusha_recursive_spend_witnessless(
-            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1
         ));
         assert!(!can_redeem_kagemusha_recursive_spend_witnessless(
@@ -12376,7 +12375,7 @@ mod offline_note_tests {
             u32::MAX
         ));
         assert!(
-            !requires_kagemusha_recursive_spend_lineage_witness_for_redeem(
+            requires_kagemusha_recursive_spend_lineage_witness_for_redeem(
                 KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
                 1
             )
@@ -12389,7 +12388,7 @@ mod offline_note_tests {
         );
         assert!(
             !requires_kagemusha_recursive_spend_lineage_witness_for_redeem(
-                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
                 2
             )
         );
@@ -12480,9 +12479,10 @@ mod offline_note_tests {
             )
         );
         assert!(
-            is_supported_kagemusha_recursive_spend_previous_proof_circuit_id(
+            !is_supported_kagemusha_recursive_spend_previous_proof_circuit_id(
                 KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
-            )
+            ),
+            "the Reserved-lineage family id is not an accepted proof id"
         );
         assert!(
             is_supported_kagemusha_recursive_spend_previous_proof_circuit_id(
@@ -12505,8 +12505,14 @@ mod offline_note_tests {
             )
         );
         assert!(
-            requires_kagemusha_recursive_spend_previous_lineage_verifier_record_for_append(
+            !requires_kagemusha_recursive_spend_previous_lineage_verifier_record_for_append(
                 KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+            ),
+            "the Reserved-lineage family id is not an accepted previous proof id"
+        );
+        assert!(
+            requires_kagemusha_recursive_spend_previous_lineage_verifier_record_for_append(
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
             )
         );
         assert!(
@@ -12527,8 +12533,15 @@ mod offline_note_tests {
             )
         );
         assert!(
-            is_supported_kagemusha_recursive_spend_append_proof_transition(
+            !is_supported_kagemusha_recursive_spend_append_proof_transition(
                 KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+                KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+            ),
+            "the Reserved-lineage family id is not an accepted previous proof id"
+        );
+        assert!(
+            is_supported_kagemusha_recursive_spend_append_proof_transition(
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
                 KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
             )
         );
@@ -12541,7 +12554,7 @@ mod offline_note_tests {
         );
         assert!(
             is_supported_kagemusha_recursive_spend_append_proof_transition(
-                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
                 KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
             ),
             "Reserved-lineage to append-specific Reserved-lineage is the enabled structural append transition"
@@ -12660,11 +12673,20 @@ mod offline_note_tests {
             )
         );
         assert!(
-            can_select_kagemusha_recursive_spend_append_output_proof_circuit_id(
+            !can_select_kagemusha_recursive_spend_append_output_proof_circuit_id(
                 KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
                 KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
                 1
-            )
+            ),
+            "the Reserved-lineage family id is not an accepted previous proof id"
+        );
+        assert!(
+            can_select_kagemusha_recursive_spend_append_output_proof_circuit_id(
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+                KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                1
+            ),
+            "one-hop Reserved-lineage proofs can select semantic append output"
         );
         assert!(
             !can_select_kagemusha_recursive_spend_append_output_proof_circuit_id(
@@ -17163,7 +17185,7 @@ mod offline_note_tests {
             witness_from_reserved_previous.previous_recursive_proofs[0]
                 .verifier_key_id
                 .name,
-            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
         );
         assert_ne!(
             witness_from_reserved_previous.previous_recursive_proofs[0]

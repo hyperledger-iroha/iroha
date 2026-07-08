@@ -1167,14 +1167,13 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             topUpLineageInit.message,
         )
 
-        val missingLineage = assertFailsWith<IllegalArgumentException> {
-            InitSpendRequest(
-                recordBundle = recordBundle,
-                pallasOpenEnvelopes = pallasOpenEnvelopes,
-                currentNote = note,
-            )
-        }
-        assertEquals("lineageVerifierKey is required for recursive spend init", missingLineage.message)
+        val semanticInit = InitSpendRequest(
+            recordBundle = recordBundle,
+            pallasOpenEnvelopes = pallasOpenEnvelopes,
+            currentNote = note,
+        )
+        assertEquals(null, semanticInit.lineageVerifierKey)
+        assertEquals(null, semanticInit.lineageProvingKeyArchive)
         val topUpInitMultiHop = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendTopUpInitRequest(
                 recordBundle = sampleRecordBundle(hopCount = 2),
@@ -1599,7 +1598,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             )
         }
         assertEquals(
-            "lineageVerifierKey is required for recursive spend init",
+            "lineageVerifierKey is required when lineageProvingKeyArchive is present",
             autoInitPallasMissingLineageKey.message,
         )
         val autoInitPallasWrongProfile = assertFailsWith<IllegalArgumentException> {
@@ -2075,16 +2074,31 @@ class KagemushaRecursiveSpendRequestCodecsTest {
     fun `typed requests reject malformed archives heights and lineage gaps before native dispatch`() {
         val initLineageArtifacts = sampleInitLineageArtifacts(seed = 0x6a)
         val appendLineageArtifacts = sampleAppendLineageArtifacts(seed = 0x6b)
-        val missingInitLineageVerifierKey = assertFailsWith<IllegalArgumentException> {
+        val partialInitLineageVerifierKey = assertFailsWith<IllegalArgumentException> {
             InitSpendRequest(
                 recordBundle = sampleRecordBundle(),
                 pallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive(),
                 currentNote = sampleNote(),
+                lineageVerifierKey = null,
+                lineageProvingKeyArchive = initLineageArtifacts.provingKeyArchive,
             )
         }
         assertEquals(
-            "lineageVerifierKey is required for recursive spend init",
-            missingInitLineageVerifierKey.message,
+            "lineageVerifierKey is required when lineageProvingKeyArchive is present",
+            partialInitLineageVerifierKey.message,
+        )
+        val partialInitLineageProvingKey = assertFailsWith<IllegalArgumentException> {
+            InitSpendRequest(
+                recordBundle = sampleRecordBundle(),
+                pallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive(),
+                currentNote = sampleNote(),
+                lineageVerifierKey = initLineageArtifacts.verifierKey,
+                lineageProvingKeyArchive = null,
+            )
+        }
+        assertEquals(
+            "lineageProvingKeyArchive is required when lineageVerifierKey is present",
+            partialInitLineageProvingKey.message,
         )
         val initWrongRecordBundle = assertFailsWith<IllegalArgumentException> {
             InitSpendRequest(

@@ -1937,6 +1937,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-open-verify-public-input-hash-exactness",
     ),
     (
+        "TON SCCP public-input validation-order negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-ton-sccp-public-input-validation-ordering",
+    ),
+    (
         "Rust recursive compact unavailable classifier negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-rust-recursive-compact-unavailable-classifier",
     ),
@@ -5516,7 +5520,7 @@ def check_recursive_compact_surface(texts, errors):
             "oversizedPallasOpenEnvelopesArchive",
             "Kagemusha verified fold record bundle archive must not exceed",
             "Kagemusha Pallas open-envelope archive must not exceed",
-            "nativeArchiveMaxBytes = 256 * 1024 * 1024",
+            "nativeArchiveMaxBytes = KagemushaRecursiveSpendProver.nativeArchiveMaxBytes",
             "try requireValidInputArchive(",
             "try requireValidRecursiveCompactTokenArchive(token)",
             "requireValidRecursiveCompactTokenArchive(compactTokenArchive)",
@@ -5939,7 +5943,7 @@ def check_recursive_compact_surface(texts, errors):
         (
             "bundleArchive must not be empty",
             ".recursiveSpendCompactPaymentTokenFromBundle(new byte[0]));",
-            "bundleArchive must not exceed 67108864 bytes",
+            "bundleArchive must not exceed 268435456 bytes",
             ".recursiveSpendCompactPaymentTokenFromBundle(oversizedRecursiveCompactInput));",
             "bundleArchive must be a valid Norito archive",
             ".recursiveSpendCompactPaymentTokenFromBundle(new byte[] {1, 2}));",
@@ -5947,7 +5951,7 @@ def check_recursive_compact_surface(texts, errors):
             ".recursiveSpendCompactPaymentTokenFromBundle(kagemushaNoritoFrame(0x4b)));",
             "verifierRecordArchive must not be empty",
             "validRecursiveCompactInput, new byte[0]));",
-            "verifierRecordArchive must not exceed 67108864 bytes",
+            "verifierRecordArchive must not exceed 268435456 bytes",
             "validRecursiveCompactInput, oversizedRecursiveCompactInput));",
             "verifierRecordArchive must be a valid Norito archive",
             "validRecursiveCompactInput, new byte[] {1, 2}));",
@@ -6028,7 +6032,7 @@ def check_recursive_compact_surface(texts, errors):
         "        () ->\n"
         "            KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(",
         "    assertThrows(\n"
-        '        "compactTokenArchive must not exceed 67108864 bytes",',
+        '        "compactTokenArchive must not exceed 268435456 bytes",',
         (
             "compactTokenArchive must not be empty",
             "new byte[0], validRecursiveCompactVerifierKeys));",
@@ -7542,11 +7546,10 @@ def check_rust_policy_constants(texts, errors):
         texts,
         relative,
         (
-            "let is_reserved_lineage_circuit = proof_circuit_id",
-            "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1",
+            "is_kagemusha_recursive_spend_lineage_proof_circuit_id(proof_circuit_id)",
+            "pub fn is_kagemusha_recursive_spend_lineage_proof_circuit_id",
             "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1",
             "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1",
-            "is_reserved_lineage_circuit",
             "hop_count >= 1",
             "hop_count <= KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1",
             "previous_hop_count >= 1",
@@ -19876,6 +19879,8 @@ def check_python(texts, errors):
             "previous_proof_open_envelopes is required for lineage append output",
             "_kagemusha_lineage_key_artifacts_for_init_request",
             "lineage_key_artifacts must be init artifacts",
+            "lineage_verifier_key is required when lineage_proving_key_archive is present",
+            "lineage_proving_key_archive is required when lineage_verifier_key is present",
             "_kagemusha_lineage_key_artifacts_for_append_request",
             "lineage_key_artifacts must be append artifacts",
             "lineage_key_artifacts are only valid for lineage append output",
@@ -20061,10 +20066,14 @@ def check_python(texts, errors):
             "previous_proof_open_envelopes are only valid for lineage append output",
             "previous_proof_open_envelopes requires exactly 1 envelope\\(s\\)",
             "lineage_key_artifacts must be init artifacts",
+            "semantic_init_request = kagemusha.KagemushaRecursiveSpendInitRequest(",
+            "assert semantic_init_request.lineage_verifier_key is None",
+            "lineage_verifier_key is required when lineage_proving_key_archive is present",
+            "lineage_proving_key_archive is required when lineage_verifier_key is present",
             "lineage_key_artifacts must be append artifacts",
             "lineage_key_artifacts must not be combined with raw key fields",
             "lineage_key_artifacts are only valid for lineage append output",
-            "lineage_verifier_key is required for recursive spend lineage proving",
+            "assert not kagemusha.requires_kagemusha_recursive_spend_lineage_key_artifacts_for_init()",
             "bundle must be a valid iroha_data_model::offline::model::KagemushaRecursiveSpendBundleV1 Norito archive",
             "_recursive_spend_bundle_with_accumulator_field",
             "_recursive_spend_bundle_with_proof_circuit_id",
@@ -20756,7 +20765,7 @@ def check_python(texts, errors):
         texts,
         "python/iroha_python/tests/kagemusha_test.py",
         "change_output=bytes([0x42]) * 32",
-        'match="lineage_verifier_key is required for recursive spend lineage proving"',
+        'match="lineage_verifier_key is required when lineage_proving_key_archive is present"',
         (
             'with pytest.raises(ValueError, match="lineage_witness is required for this bundle"):\n'
             '        kagemusha.KagemushaRecursiveSpendRedeemRequest(\n'
@@ -24615,11 +24624,12 @@ def check_java_kotlin(texts, errors):
         "buildRecursiveSpendTopUpInitRequest",
         "buildRecursiveSpendTopUpRequestFromInitRequest",
         "top-up init request lineageVerifierKey must be absent",
+        "semanticInit",
         "top-up init request must contain exactly one checked hop",
         "pallasOpenEnvelopes requires exactly 1 envelope(s)",
         "top-up request asset definition must match the nested init request",
         "top-up request amount must match the nested current note",
-        "lineageVerifierKey is required for recursive spend init",
+        "lineageVerifierKey is required when lineageProvingKeyArchive is present",
     )
     require_contains(
         texts,
@@ -24940,9 +24950,9 @@ def check_java_kotlin(texts, errors):
         texts,
         kotlin_request_codecs,
         (
-            "preflightInitLineageKeyMaterialForAutoGeneration(",
-            "lineageVerifierKey is required for recursive spend init",
-            "lineageProvingKeyArchive is required for recursive spend init",
+            "validateOptionalInitLineageKeyMaterial(",
+            "lineageVerifierKey is required when lineageProvingKeyArchive is present",
+            "lineageProvingKeyArchive is required when lineageVerifierKey is present",
             "validateLineageKeyArtifactsForInit(lineageVerifierKey, lineageProvingKeyArchive)",
             "val checkedLineageKeyArtifacts = requireInitLineageKeyArtifacts(lineageKeyArtifacts)",
             "preflightAppendLineageKeyMaterialForAutoGeneration(",
@@ -24962,8 +24972,8 @@ def check_java_kotlin(texts, errors):
         kotlin_request_codecs,
         "    fun buildRecursiveSpendInitRequest(\n        hop: VerifiedFoldHopEvidence?,\n        spendableNote: SpendableNoteDescriptor?,\n        lineageVerifierKey: ByteArray? = null,",
         "    @JvmStatic\n    @JvmOverloads\n    fun buildRecursiveSpendInitRequest(\n        hop: VerifiedFoldHopEvidence?,\n        pallasOpenEnvelopes: ByteArray?,\n        spendableNote: SpendableNoteDescriptor?,\n        lineageKeyArtifacts:",
-        r"val recordBundle = buildVerifiedFoldRecordBundle\(listOf\(hop\)\)[\s\S]*?preflightInitLineageKeyMaterialForAutoGeneration\([\s\S]*?lineageVerifierKey,[\s\S]*?lineageProvingKeyArchive,[\s\S]*?\)[\s\S]*?val pallasOpenEnvelopes = buildPallasOpenEnvelopesArchiveForRecordBundle\(recordBundle\)",
-        "Kotlin typed recursive spend init auto Pallas lineage-key preflight",
+        r"val recordBundle = buildVerifiedFoldRecordBundle\(listOf\(hop\)\)[\s\S]*?validateOptionalInitLineageKeyMaterial\([\s\S]*?lineageVerifierKey,[\s\S]*?lineageProvingKeyArchive,[\s\S]*?\)[\s\S]*?val pallasOpenEnvelopes = buildPallasOpenEnvelopesArchiveForRecordBundle\(recordBundle\)",
+        "Kotlin typed recursive spend init optional lineage-key preflight",
         errors,
         flags=re.S,
     )
@@ -25110,7 +25120,7 @@ def check_java_kotlin(texts, errors):
             "autoInitPallasWrongProfile",
             "autoAppendLineageArtifactsOnAggregation",
             "autoAppendWrongProfile",
-            "lineageVerifierKey is required for recursive spend init",
+            "lineageVerifierKey is required when lineageProvingKeyArchive is present",
             "appendLineageArtifactsOnAggregation",
             "malformedLineageProvingKeyOnAggregation",
             "lineageKeyArtifacts are only valid for lineage append output",
@@ -25179,8 +25189,8 @@ def check_java_kotlin(texts, errors):
         texts,
         kotlin_request_codecs_test,
         (
-            "val missingInitLineageVerifierKey = assertFailsWith<IllegalArgumentException>",
-            '"lineageVerifierKey is required for recursive spend init"',
+            "val autoInitPallasMissingLineageKey = assertFailsWith<IllegalArgumentException>",
+            '"lineageVerifierKey is required when lineageProvingKeyArchive is present"',
             "val initWrongRecordBundle = assertFailsWith<IllegalArgumentException>",
             '"recordBundle must be a valid ${KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE} Norito archive"',
             "val appendWrongRecordBundle = assertFailsWith<IllegalArgumentException>",
@@ -25467,9 +25477,9 @@ def check_java_kotlin(texts, errors):
         texts,
         java_request_codecs,
         (
-            "preflightInitLineageKeyMaterialForAutoGeneration(",
-            "lineageVerifierKey is required for recursive spend init",
-            "lineageProvingKeyArchive is required for recursive spend init",
+            "validateOptionalInitLineageKeyMaterial(",
+            "lineageVerifierKey is required when lineageProvingKeyArchive is present",
+            "lineageProvingKeyArchive is required when lineageVerifierKey is present",
             "validateLineageKeyArtifactsForInit(lineageVerifierKey, lineageProvingKeyArchive);",
             "requireInitLineageKeyArtifacts(lineageKeyArtifacts);",
             "preflightAppendLineageKeyMaterialForAutoGeneration(",
@@ -25489,8 +25499,8 @@ def check_java_kotlin(texts, errors):
         java_request_codecs,
         "  public static byte[] buildRecursiveSpendInitRequest(\n      final VerifiedFoldHopEvidence hop,\n      final SpendableNoteDescriptor spendableNote,\n      final byte[] lineageVerifierKey,",
         "  public static byte[] buildRecursiveSpendInitRequest(\n      final VerifiedFoldHopEvidence hop,\n      final byte[] pallasOpenEnvelopes,\n      final SpendableNoteDescriptor spendableNote,\n      final KagemushaRecursiveSpendProver.LineageKeyArtifacts",
-        r"final byte\[\] recordBundle = buildVerifiedFoldRecordBundle\(Arrays\.asList\(hop\)\);[\s\S]*?preflightInitLineageKeyMaterialForAutoGeneration\([\s\S]*?lineageVerifierKey, lineageProvingKeyArchive\);[\s\S]*?buildPallasOpenEnvelopesArchiveForRecordBundle\(recordBundle\)",
-        "Android Java typed recursive spend init auto Pallas lineage-key preflight",
+        r"final byte\[\] recordBundle = buildVerifiedFoldRecordBundle\(Arrays\.asList\(hop\)\);[\s\S]*?validateOptionalInitLineageKeyMaterial\([\s\S]*?lineageVerifierKey, lineageProvingKeyArchive\);[\s\S]*?buildPallasOpenEnvelopesArchiveForRecordBundle\(recordBundle\)",
+        "Android Java typed recursive spend init optional lineage-key preflight",
         errors,
         flags=re.S,
     )
@@ -25645,7 +25655,7 @@ def check_java_kotlin(texts, errors):
             "autoInitPallasWrongProfile",
             "autoAppendLineageArtifactsOnAggregation",
             "autoAppendWrongProfile",
-            "lineageVerifierKey is required for recursive spend init",
+            "lineageVerifierKey is required when lineageProvingKeyArchive is present",
             "lineageKeyArtifacts are only valid for lineage append output",
             "malformedLineageProvingKeyOnAggregation",
             "new byte[] {0}",
@@ -25662,9 +25672,9 @@ def check_java_kotlin(texts, errors):
         texts,
         java_test,
         (
-            "final String missingInitLineageVerifierKeyMessage =",
-            '"lineageVerifierKey is required for recursive spend init"',
-            "assertThrows(\n        missingInitLineageVerifierKeyMessage,",
+            "final IllegalArgumentException autoInitPallasMissingLineageKey =",
+            '"lineageVerifierKey is required when lineageProvingKeyArchive is present"',
+            ".equals(autoInitPallasMissingLineageKey.getMessage())",
             "final String initWrongRecordBundleMessage =",
             '"recordBundle must be a valid "\n            + KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE',
             "assertThrows(\n        initWrongRecordBundleMessage,",
@@ -44977,7 +44987,7 @@ if mode == "--negative-control-swift-recursive-compact-native-archive-cap":
     wrapper = "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift"
     test_path = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift"
     mutated_wrapper = texts[wrapper].replace(
-        "nativeArchiveMaxBytes = 256 * 1024 * 1024",
+        "nativeArchiveMaxBytes = KagemushaRecursiveSpendProver.nativeArchiveMaxBytes",
         "nativeArchiveMaxBytes = 1024 * 1024 * 1024",
         1,
     )
@@ -44999,7 +45009,7 @@ if mode == "--negative-control-swift-recursive-compact-native-archive-cap":
     except ParityError as error:
         message = str(error)
         expected_labels = (
-            "Swift recursive compact wrapper missing nativeArchiveMaxBytes = 256 * 1024 * 1024",
+            "Swift recursive compact wrapper missing nativeArchiveMaxBytes = KagemushaRecursiveSpendProver.nativeArchiveMaxBytes",
             "Swift recursive compact verifier tests missing testNativeArchiveLimitMatchesSharedKagemushaCap",
             "Swift recursive compact verifier tests missing 256 * 1024 * 1024",
         )
@@ -64106,17 +64116,17 @@ if mode == "--negative-control-sdk-init-lineage-key-auto-preflight":
     replacements = (
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
-            "        preflightInitLineageKeyMaterialForAutoGeneration(\n"
+            "        validateOptionalInitLineageKeyMaterial(\n"
             "            lineageVerifierKey,\n"
             "            lineageProvingKeyArchive,\n"
             "        )\n"
             "        val pallasOpenEnvelopes = buildPallasOpenEnvelopesArchiveForRecordBundle(recordBundle)",
             "        val pallasOpenEnvelopes = buildPallasOpenEnvelopesArchiveForRecordBundle(recordBundle)\n"
-            "        preflightInitLineageKeyMaterialForAutoGeneration(\n"
+            "        validateOptionalInitLineageKeyMaterial(\n"
             "            lineageVerifierKey,\n"
             "            lineageProvingKeyArchive,\n"
             "        )",
-            "Kotlin typed recursive spend init auto Pallas lineage-key preflight",
+            "Kotlin typed recursive spend init optional lineage-key preflight",
         ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
@@ -64146,14 +64156,14 @@ if mode == "--negative-control-sdk-init-lineage-key-auto-preflight":
         ),
         (
             "python/iroha_python/tests/kagemusha_test.py",
-            "lineage_verifier_key is required for recursive spend lineage proving",
-            "lineage_verifier_key is optional for recursive spend lineage proving",
+            "lineage_verifier_key is required when lineage_proving_key_archive is present",
+            "lineage_verifier_key is optional when lineage_proving_key_archive is present",
             "Python typed recursive spend request codec tests",
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
-            "missingInitLineageVerifierKey",
-            "missingInitLineageVerifierKeyOptional",
+            "autoInitPallasMissingLineageKey",
+            "autoInitPallasMissingLineageKeyOptional",
             "Kotlin typed recursive spend init/verifier archive preflight tests",
         ),
         (
@@ -64170,15 +64180,15 @@ if mode == "--negative-control-sdk-init-lineage-key-auto-preflight":
         ),
         (
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
-            "    preflightInitLineageKeyMaterialForAutoGeneration(\n"
+            "    validateOptionalInitLineageKeyMaterial(\n"
             "        lineageVerifierKey, lineageProvingKeyArchive);\n"
             "    final byte[] pallasOpenEnvelopes =\n"
             "        buildPallasOpenEnvelopesArchiveForRecordBundle(recordBundle);",
             "    final byte[] pallasOpenEnvelopes =\n"
             "        buildPallasOpenEnvelopesArchiveForRecordBundle(recordBundle);\n"
-            "    preflightInitLineageKeyMaterialForAutoGeneration(\n"
+            "    validateOptionalInitLineageKeyMaterial(\n"
             "        lineageVerifierKey, lineageProvingKeyArchive);",
-            "Android Java typed recursive spend init auto Pallas lineage-key preflight",
+            "Android Java typed recursive spend init optional lineage-key preflight",
         ),
         (
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
@@ -64212,8 +64222,8 @@ if mode == "--negative-control-sdk-init-lineage-key-auto-preflight":
         ),
         (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
-            "missingInitLineageVerifierKeyMessage",
-            "missingInitLineageVerifierKeyOptionalMessage",
+            "autoInitPallasMissingLineageKey",
+            "autoInitPallasMissingLineageKeyOptional",
             "Android Java typed recursive spend init/verifier archive preflight tests",
         ),
         (
@@ -64230,10 +64240,10 @@ if mode == "--negative-control-sdk-init-lineage-key-auto-preflight":
         ),
     )
     def expected_init_lineage_key_auto_preflight_label(target, old, label):
-        if label == "Kotlin typed recursive spend init auto Pallas lineage-key preflight":
+        if label == "Kotlin typed recursive spend init optional lineage-key preflight":
             marker = (
                 r"pattern val recordBundle = buildVerifiedFoldRecordBundle\(listOf\(hop\)\)"
-                r"[\s\S]*?preflightInitLineageKeyMaterialForAutoGeneration\("
+                r"[\s\S]*?validateOptionalInitLineageKeyMaterial\("
                 r"[\s\S]*?lineageVerifierKey,[\s\S]*?lineageProvingKeyArchive,"
                 r"[\s\S]*?\)[\s\S]*?val pallasOpenEnvelopes = "
                 r"buildPallasOpenEnvelopesArchiveForRecordBundle\(recordBundle\)"
@@ -64247,10 +64257,10 @@ if mode == "--negative-control-sdk-init-lineage-key-auto-preflight":
                 r"buildPallasOpenEnvelopesArchiveForRecordBundle\(recordBundle\)"
                 r"[\s\S]*?lineageKeyArtifacts = checkedLineageKeyArtifacts"
             )
-        elif label == "Android Java typed recursive spend init auto Pallas lineage-key preflight":
+        elif label == "Android Java typed recursive spend init optional lineage-key preflight":
             marker = (
                 r"pattern final byte\[\] recordBundle = buildVerifiedFoldRecordBundle\(Arrays\.asList\(hop\)\);"
-                r"[\s\S]*?preflightInitLineageKeyMaterialForAutoGeneration\("
+                r"[\s\S]*?validateOptionalInitLineageKeyMaterial\("
                 r"[\s\S]*?lineageVerifierKey, lineageProvingKeyArchive\);"
                 r"[\s\S]*?buildPallasOpenEnvelopesArchiveForRecordBundle\(recordBundle\)"
             )
@@ -64266,11 +64276,13 @@ if mode == "--negative-control-sdk-init-lineage-key-auto-preflight":
             marker = old.splitlines()[0]
             if target.endswith(".kt"):
                 kotlin_archive_markers = {
-                    "missingInitLineageVerifierKey": "val missingInitLineageVerifierKey = assertFailsWith<IllegalArgumentException>",
+                    "autoInitPallasMissingLineageKey": "val autoInitPallasMissingLineageKey = assertFailsWith<IllegalArgumentException>",
                     "initWrongRecordBundle": "val initWrongRecordBundle = assertFailsWith<IllegalArgumentException>",
                     "verifierRecordWrongArchive": "val verifierRecordWrongArchive = assertFailsWith<IllegalArgumentException>",
                 }
                 marker = kotlin_archive_markers.get(marker, marker)
+            elif target.endswith(".java") and marker == "autoInitPallasMissingLineageKey":
+                marker = "final IllegalArgumentException autoInitPallasMissingLineageKey ="
             elif target.endswith(".java") and marker.endswith("Message"):
                 marker = f"final String {marker} ="
         return f"{label} missing {marker}"
@@ -69423,15 +69435,15 @@ if mode == "--negative-control-jvm-android-compact-projection-archive-preflight"
         ),
         (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
-            "bundleArchive must not exceed 67108864 bytes",
-            "bundleArchive may exceed 67108864 bytes",
-            "Android Java compact projection archive preflight test vectors missing bundleArchive must not exceed 67108864 bytes",
+            "bundleArchive must not exceed 268435456 bytes",
+            "bundleArchive may exceed 268435456 bytes",
+            "Android Java compact projection archive preflight test vectors missing bundleArchive must not exceed 268435456 bytes",
         ),
         (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
-            "verifierRecordArchive must not exceed 67108864 bytes",
-            "verifierRecordArchive may exceed 67108864 bytes",
-            "Android Java compact projection archive preflight test vectors missing verifierRecordArchive must not exceed 67108864 bytes",
+            "verifierRecordArchive must not exceed 268435456 bytes",
+            "verifierRecordArchive may exceed 268435456 bytes",
+            "Android Java compact projection archive preflight test vectors missing verifierRecordArchive must not exceed 268435456 bytes",
         ),
     )
     detected_messages = []
