@@ -2674,33 +2674,40 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   missing-runner-input diagnostics when any path drifts out of the scan.
 - ZK asset light-client readiness now has a Torii `POST /v1/zk/merkle-path`
   endpoint for current confidential-v2 commitment inclusion paths, and the
-  Kotlin/JVM plus Android Java Torii Merkle providers call it directly.
+  Kotlin/JVM, Android Java, and Swift Torii Merkle providers call it directly.
+  Swift also has a local audited-frontier provider for offline callers.
   Torii-backed providers verify returned sibling paths against requested
   commitments and roots, and SDK path models enforce leaf-index direction
   consistency before wallet or prover code receives paths. The SDK Torii
   clients also reject quoted or fractional numeric fields in zk roots/path
   responses so wallet code sees the same integer shapes the node emits. SDK
   response parsers must also keep node-supplied Merkle paths structurally
-  exact: duplicate keys, overflowing counters, depth/array mismatches, root
-  mismatches, direction-bit mismatches, and `leaf_index >= frontier_len` fail
-  before wallet code can consume proof material. Keep local providers limited
-  to audited caller-supplied frontier material. The SDK parity guard now pins
-  the Kotlin/JVM and Android Java Torii parser-shape tests so duplicate-key and
-  non-canonical numeric regressions cannot be dropped from the focused JVM
-  lane.
+  exact: duplicate keys, overflowing counters, non-lowercase fixed32 hex,
+  missing witness nodes, depth/array mismatches, root mismatches,
+  direction-bit mismatches, reordered commitment responses, and
+  `leaf_index >= frontier_len` fail before wallet code can consume proof
+  material. Keep local providers limited to audited caller-supplied frontier
+  material and rejecting duplicate commitments or mismatched root history. The
+  SDK parity guard now pins the Kotlin/JVM, Android Java, and Swift Torii
+  parser-shape tests so duplicate-key and non-canonical numeric regressions
+  cannot be dropped from the focused SDK lanes.
 - Confidential-v2 SDK note derivation and encrypted note payload handling now
-  exist for Kotlin/JVM and Android Java, with Rust-vector parity for owner tags,
-  note commitments, nullifiers, asset tags, and chain tags, Rust-fixture parity
-  for the `ConfidentialEncryptedPayload` wire envelope, low-order X25519
-  public-key rejection parity, canonical ciphertext-length rejection parity,
-  a 64 KiB encrypted-note ciphertext cap, and a shared deterministic
-  X25519/HKDF-SHA256/XChaCha20-Poly1305 plaintext vector. Default decryption
-  binds the plaintext owner tag to the supplied spend key, while diversified
-  notes must use the explicit expected-owner-tag overload. Keep the
-  higher-level wallet flows pinned to this contract when wiring shield-note
-  recovery into production clients. The focused JVM SDK runner and SDK parity
-  guard now execute and pin both the encrypted-payload model tests and
-  confidential-note contract tests for Kotlin/JVM and Android Java.
+  exist for Kotlin/JVM, Android Java, and Swift, with Rust-vector parity for
+  owner tags, note commitments, nullifiers, asset tags, and chain tags,
+  Rust-fixture parity for the `ConfidentialEncryptedPayload` wire envelope,
+  low-order X25519 public-key rejection parity, canonical ciphertext-length
+  rejection parity, a 64 KiB encrypted-note ciphertext cap, and a shared
+  deterministic X25519/HKDF-SHA256/XChaCha20-Poly1305 plaintext vector. Swift
+  now also exposes the typed confidential transfer witness/request builders
+  and verified-fold top-up bundle builders, including the
+  confidential-transfer-v2 verifier-record archive with its 32-bit `status`
+  field. Default decryption binds the plaintext owner tag to the supplied spend
+  key, while diversified notes must use the explicit expected-owner-tag
+  overload. Keep the higher-level wallet flows pinned to this contract when
+  wiring shield-note recovery into production clients. The focused JVM and
+  Swift SDK runners plus SDK parity guard now execute and pin the
+  encrypted-payload model tests, confidential-note contract tests, Merkle-path
+  parser tests, witness/request builder tests, and verified-fold top-up tests.
 - Kagemusha SDK parity must keep ABI-7 compact projection verifier surfaces
   aligned across package roots and native hosts. Python now exposes both the
   optional-height verifier and the explicit
@@ -5339,15 +5346,18 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   The 2026-06-29 Windows `.NET 8.0.422` C# pass confirms the C# typed
   init/Pallas archive path reports the same structured checksum and malformed
   archive diagnostics on `win-x64`.
-  Kotlin/JVM and Android Java proof-output-only and evidence-builder tests must
-  also keep exact diagnostics for empty hop lists, proof-only recursive spend
-  helper rejection, rejected privacy build results, inactive unshield verifier
-  records, and unshield proofs used as transfer hops; the JVM Pallas-builder
-  negative control now mutates the exact Kotlin/JVM init/append proof-only
-  helper assertions plus the Android Java proof-only init/append assertion
-  call sites, alongside the rejected-proof, inactive-record, and unshield-hop
-  message markers, so helper rejections cannot collapse to variable-presence
-  checks or broad message containment.
+  Kotlin/JVM and Android Java proof-only request-helper and evidence-builder
+  tests must also keep exact diagnostics for empty hop lists, proof-only
+  recursive spend helper rejection, rejected privacy build results, inactive
+  unshield verifier records, and unshield proofs used as transfer hops; the
+  first-release fold-bundle API accepts only typed hop evidence, and the SDK
+  source guards must keep the retired proof-output-only fold-builder overloads
+  from reappearing. The JVM Pallas-builder negative control now mutates the
+  exact Kotlin/JVM init/append proof-only helper assertions plus the Android
+  Java proof-only init/append assertion call sites, alongside the
+  rejected-proof, inactive-record, and unshield-hop message markers, so helper
+  rejections cannot collapse to variable-presence checks or broad message
+  containment.
   The Ubuntu/Windows C# SDK matrix must keep the C# proof-output/evidence-helper
   path carrying the same rejected privacy result and inactive verifier-record
   diagnostics.

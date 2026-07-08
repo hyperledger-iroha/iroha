@@ -2365,7 +2365,6 @@ descriptorTest("privacy proof envelopes preserve pending production backend tags
     ["Halo2IpaPasta", "Halo2IpaPasta"],
     ["halo2/pasta/kagemusha-recursive-aggregation-v1", "Halo2IpaPasta"],
     ["halo2/pasta/kagemusha-recursive-compact-v1", "Halo2IpaPasta"],
-    ["halo2/pasta/kagemusha-recursive-spend-lineage-v1", "Halo2IpaPasta"],
     ["halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1", "Halo2IpaPasta"],
     ["halo2/pasta/kagemusha-recursive-spend-lineage-append-v1", "Halo2IpaPasta"],
     ["stark/fri", "Stark"],
