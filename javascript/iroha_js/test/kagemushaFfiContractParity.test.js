@@ -10475,9 +10475,17 @@ test("recursive Kagemusha active marker scan covers workflow-backed and C# test 
     "active Kagemusha marker negative control must mutate each workflow-backed and C# test surface",
   );
   assert.ok(
-    activeTodoBranch.includes('todo_prefix = "TO" "DO:"') &&
-      activeTodoBranch.includes("bypass Kagemusha C# SDK matrix native-output certification"),
+    new RegExp(
+      `f"\\{todo_prefix\\} bypass Kagemusha C# SDK matrix native-output certification\\\\n"[\\s\\S]*?The Ubuntu/Windows C# SDK matrix must keep matching exact C# native-output`,
+      "u",
+    ).test(activeTodoBranch),
     "active marker negative control must mutate a roadmap matrix requirement",
+  );
+  assert.ok(
+    !activeTodoBranch.includes(
+      `${markerName}: bypass Kagemusha C# SDK matrix native-output certification`,
+    ),
+    "active marker negative control must keep active marker text split in source",
   );
   assert.doesNotMatch(
     guard,
@@ -29004,10 +29012,25 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     ],
     "SDK parity guard must pin Swift malformed note amount vector inventory",
   );
-  assert.match(
-    guard,
-    /require_regex\([\s\S]*?request_codecs_test[\s\S]*?lineageVerifierKey: Data\\\(\\\),[\s\S]*?lineageProvingKeyArchive: lineageProvingKeyArchive[\s\S]*?invalidField\\\("lineageVerifierKey"\\\)[\s\S]*?Swift typed recursive spend init lineage-key exact diagnostics/u,
-    "SDK parity guard must pin Swift partial init lineage-key exact diagnostics with a scoped regex",
+  const swiftRequestCodecGuardSection = guard.slice(
+    guard.indexOf(
+      'request_codecs_test = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift"',
+    ),
+    guard.indexOf(
+      'kotlin_request_codecs_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt"',
+    ),
+  );
+  assertContainsAll(
+    swiftRequestCodecGuardSection,
+    [
+      "require_regex(",
+      "request_codecs_test",
+      String.raw`r'lineageVerifierKey: Data\(\),[\s\S]*?lineageProvingKeyArchive: lineageProvingKeyArchive[\s\S]*?\.invalidField\("lineageVerifierKey"\)'`,
+      "Swift typed recursive spend init lineage-key exact diagnostics",
+      String.raw`r'lineageVerifierKey: nil,[\s\S]*?lineageProvingKeyArchive: nil[\s\S]*?\.invalidField\("lineageVerifierKey"\)'`,
+      "Swift typed recursive spend append lineage-key exact diagnostics",
+    ],
+    "SDK parity guard must pin Swift init and nil append lineage-key exact diagnostics with scoped regexes",
   );
   assert.match(
     swiftNoteAmountVectorBranch,

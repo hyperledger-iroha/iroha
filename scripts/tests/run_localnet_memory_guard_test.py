@@ -27,6 +27,7 @@ def test_defaults_are_guarded_for_localnet_repro():
     assert args.kura_blocks_in_memory == 16
     assert not args.no_status_snapshots
     assert not args.capture_diagnostics
+    assert not args.allow_existing_irohad
     assert args.diagnostic_timeout_seconds == 30.0
 
 
@@ -169,6 +170,13 @@ def test_write_report_records_limit_last_sample_and_phase(tmp_path):
                 ok=True,
             )
         ],
+        existing_irohad_processes=[
+            MODULE.ExistingIrohadProcess(
+                pid=456,
+                rss_bytes=2048,
+                command="/tmp/irohad --config /tmp/other/peer0.toml",
+            )
+        ],
         load_runs=2,
         tx_returncodes=[0, 0],
     )
@@ -178,6 +186,9 @@ def test_write_report_records_limit_last_sample_and_phase(tmp_path):
     assert payload["tx_returncodes"] == [0, 0]
     assert payload["memory_limit_bytes"] == 100
     assert payload["post_load_sample_seconds"] == 30.0
+    assert payload["preflight_error"] is None
+    assert payload["existing_irohad_total_rss_bytes"] == 2048
+    assert payload["existing_irohad_processes"][0]["pid"] == 456
     assert payload["peak_total_rss_bytes"] == 10
     assert payload["last_total_rss_bytes"] == 8
     assert payload["samples"][0]["phase"] == "load"
@@ -314,8 +325,211 @@ def test_capture_peer_diagnostics_records_missing_tools(tmp_path, monkeypatch):
 def test_command_ownership_requires_matching_config_path(tmp_path):
     config = tmp_path / "peer0.toml"
     assert MODULE.command_owns_peer(f"/bin/irohad --config {config}", config)
+    assert MODULE.command_owns_peer(f"/bin/irohad --config={config}", config)
+    spaced_config = tmp_path / "run with spaces" / "peer0.toml"
+    assert MODULE.command_owns_peer(f"/bin/irohad --config '{spaced_config}'", spaced_config)
     assert not MODULE.command_owns_peer("/bin/irohad --config /tmp/other/peer0.toml", config)
+    assert not MODULE.command_owns_peer(f"/bin/irohad --config {config}.bak", config)
+    assert not MODULE.command_owns_peer(
+        f"/bin/irohad --config {tmp_path / 'peer0.toml.old' / 'peer0.toml'}",
+        config,
+    )
     assert not MODULE.command_owns_peer("", config)
+
+
+def test_irohad_process_discovery_reads_ps_rows(monkeypatch):
+    def fake_ps_output(args):
+        assert args == ["-axo", "pid=,rss=,command="]
+        return (
+            "101 2048 /tmp/irohad --config /tmp/a/peer0.toml\n"
+            "102 512 /tmp/not-irohad --config /tmp/a/peer1.toml\n"
+            "bad 1 /tmp/irohad --config /tmp/a/peer2.toml\n"
+        )
+
+    monkeypatch.setattr(MODULE, "ps_output", fake_ps_output)
+
+    processes = MODULE.irohad_processes()
+
+    assert processes == [
+        MODULE.ExistingIrohadProcess(
+            pid=101,
+            rss_bytes=2048 * 1024,
+            command="/tmp/irohad --config /tmp/a/peer0.toml",
+        )
+    ]
+
+
+def test_unrelated_irohad_processes_excludes_owned_out_dir_peers(tmp_path, monkeypatch):
+    out_dir = tmp_path / "run"
+    out_dir.mkdir()
+    config = out_dir / "peer0.toml"
+    (out_dir / "peer0.pid").write_text("101\n", encoding="utf-8")
+
+    def fake_ps_output(args):
+        if args == ["-o", "command=", "-p", "101"]:
+            return f"/tmp/irohad --config {config}"
+        if args == ["-axo", "pid=,rss=,command="]:
+            return (
+                f"101 2048 /tmp/irohad --config {config}\n"
+                "202 4096 /tmp/irohad --config /tmp/other/peer0.toml\n"
+            )
+        raise AssertionError(f"unexpected ps args: {args}")
+
+    monkeypatch.setattr(MODULE, "ps_output", fake_ps_output)
+
+    processes = MODULE.unrelated_irohad_processes(out_dir)
+
+    assert processes == [
+        MODULE.ExistingIrohadProcess(
+            pid=202,
+            rss_bytes=4096 * 1024,
+            command="/tmp/irohad --config /tmp/other/peer0.toml",
+        )
+    ]
+
+
+def test_unrelated_irohad_processes_treats_config_prefix_collision_as_unowned(
+    tmp_path, monkeypatch
+):
+    out_dir = tmp_path / "run"
+    out_dir.mkdir()
+    config = out_dir / "peer0.toml"
+    (out_dir / "peer0.pid").write_text("101\n", encoding="utf-8")
+
+    def fake_ps_output(args):
+        if args == ["-o", "command=", "-p", "101"]:
+            return f"/tmp/irohad --config {config}.bak"
+        if args == ["-axo", "pid=,rss=,command="]:
+            return f"101 2048 /tmp/irohad --config {config}.bak\n"
+        raise AssertionError(f"unexpected ps args: {args}")
+
+    monkeypatch.setattr(MODULE, "ps_output", fake_ps_output)
+
+    processes = MODULE.unrelated_irohad_processes(out_dir)
+
+    assert processes == [
+        MODULE.ExistingIrohadProcess(
+            pid=101,
+            rss_bytes=2048 * 1024,
+            command=f"/tmp/irohad --config {config}.bak",
+        )
+    ]
+
+
+def test_existing_irohad_preflight_writes_report_and_blocks(tmp_path, monkeypatch):
+    out_dir = tmp_path / "run"
+    report = tmp_path / "blocked.json"
+
+    monkeypatch.setattr(
+        MODULE,
+        "unrelated_irohad_processes",
+        lambda _out_dir: [
+            MODULE.ExistingIrohadProcess(
+                pid=303,
+                rss_bytes=8192,
+                command="/tmp/irohad --config /tmp/old/peer0.toml",
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "run_checked",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("deploy should not run after preflight block")
+        ),
+    )
+
+    rc = MODULE.main(
+        [
+            "--iroha-dir",
+            str(tmp_path),
+            "--out-dir",
+            str(out_dir),
+            "--report",
+            str(report),
+        ]
+    )
+
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert rc == MODULE.EXISTING_IROHAD_EXIT_CODE
+    assert payload["preflight_error"].startswith("refusing to start guarded localnet")
+    assert payload["existing_irohad_total_rss_bytes"] == 8192
+    assert payload["existing_irohad_processes"][0]["pid"] == 303
+    assert payload["samples"] == []
+
+
+def test_allow_existing_irohad_allows_deploy_and_records_processes(tmp_path, monkeypatch):
+    out_dir = tmp_path / "run"
+    out_dir.mkdir()
+    (out_dir / "client.toml").write_text(
+        'torii_url = "http://127.0.0.1:48080/"\n',
+        encoding="utf-8",
+    )
+    report = tmp_path / "allowed.json"
+    deployed = []
+    stopped = []
+
+    monkeypatch.setattr(
+        MODULE,
+        "unrelated_irohad_processes",
+        lambda _out_dir: [
+            MODULE.ExistingIrohadProcess(
+                pid=404,
+                rss_bytes=16384,
+                command="/tmp/irohad --config /tmp/old/peer0.toml",
+            )
+        ],
+    )
+    monkeypatch.setattr(MODULE, "profile_binary_exists", lambda *_args: True)
+    monkeypatch.setattr(MODULE, "run_checked", lambda *_args, **_kwargs: deployed.append(True))
+    monkeypatch.setattr(MODULE, "stop_localnet", lambda _out_dir: stopped.append(True))
+    monkeypatch.setattr(MODULE, "peer_processes", lambda _out_dir: [])
+    monkeypatch.setattr(MODULE, "sample_statuses", lambda *_args: [])
+
+    class FakePopen:
+        returncode = 0
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            raise AssertionError("completed fake process should not be terminated")
+
+        def wait(self, **_kwargs):
+            return self.returncode
+
+        def kill(self):
+            raise AssertionError("completed fake process should not be killed")
+
+    monkeypatch.setattr(MODULE.subprocess, "Popen", FakePopen)
+
+    rc = MODULE.main(
+        [
+            "--iroha-dir",
+            str(tmp_path),
+            "--out-dir",
+            str(out_dir),
+            "--report",
+            str(report),
+            "--allow-existing-irohad",
+            "--count",
+            "1",
+            "--post-load-sample-seconds",
+            "0",
+            "--no-status-snapshots",
+        ]
+    )
+
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert rc == 0
+    assert deployed == [True]
+    assert stopped == [True]
+    assert payload["preflight_error"] is None
+    assert payload["existing_irohad_total_rss_bytes"] == 16384
+    assert payload["existing_irohad_processes"][0]["pid"] == 404
 
 
 def test_guard_source_avoids_broad_process_kills():

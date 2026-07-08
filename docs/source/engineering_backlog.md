@@ -1,6 +1,6 @@
 # Engineering Backlog (Detailed Open Work)
 
-Last updated: 2026-07-07
+Last updated: 2026-07-08
 
 The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
 history lives in [`../../status.md`](../../status.md). This file should only
@@ -124,17 +124,66 @@ ABI, SSZ, TON, Solana, and source-proof transcript fields before byte emission.
 Swift's BSC helper surface now also rejects duplicate validator addresses, zero
 powers, and aggregate `UInt64` commit-seal overflow before Parlia quorum
 transcript bytes are emitted. The .NET SDK now exposes the BSC validator-set
-canonical payload/hash helpers and commit-seal canonicalization/hash helpers,
-rejecting malformed validator-set payloads, non-canonical secp256k1 keys or
-signatures, signer/quorum drift, bitmap padding, and validator-set hash
-mismatches before deriving verifier-side hashes. BSC validator-set payload and
-commit-seal overflow or signer/quorum regressions are pinned across Python,
-Swift, mobile, and C# helper tests, while the release inventory now guards the
+canonical payload/hash helpers, commit-message canonical/hash helpers, and
+commit-seal canonicalization/hash helpers, rejecting malformed validator-set
+payloads, non-canonical secp256k1 keys or signatures, signer/quorum drift,
+bitmap padding, and validator-set hash mismatches before deriving verifier-side
+hashes. BSC validator-set payload, commit-message, and commit-seal overflow or
+signer/quorum regressions are pinned across Python, Swift, mobile, and C# helper
+tests, while the release inventory now guards the
 Python/Swift/Kotlin/Java/C# marker set. The focused C# BSC mainnet SCCP test
 filters now pass with a temporary .NET SDK installed outside the repository.
 The focused Kotlin/JVM and Java Android SCCP helper tests now also pass with a
 temporary JDK 21 installed outside the repository, closing the local SDK
-validation gap for this slice. Checked
+validation gap for this slice. ETH source-adapter deployment coverage now
+mirrors the BSC coherent replay matrix for trust-anchor, verifier-role,
+bridge-emitter, code-hash, and deployment-receipt drift, and the EVM
+source-adapter release inventory pins those markers. BSC and ETH
+local-admission recovery now also fails closed for coherent replayed
+source-material and deployment descriptors, with those markers pinned in the EVM
+source-adapter deployment inventory. Solana and TON audited deployment coverage
+now also proves local-admission artifacts and recovery fail
+closed when coherent audit-role or full-light-client deployment descriptors are
+replayed, with the source-material role-validation inventory pinning those
+markers. TRON deployment replay coverage now also exercises local-admission
+artifact verification and recovery for trust-anchor, verifier-role,
+source-bridge, finality-policy, and deployment-receipt drift, with those markers
+pinned in the same source-material role-validation inventory. Source-proof byte
+recovery now also rejects exact proof bytes paired with coherent replayed
+Solana, TON, TRON, BSC, or Ethereum source material/deployment descriptors, and
+the release inventories pin those recovery markers alongside the production and
+local-admission replay gates. Serialized source-proof bytes with deployment
+evidence spliced after OpenVerify binding now also fail source-proof recovery
+when paired with replayed Solana, TON, TRON, BSC, or Ethereum deployment
+descriptors, and the same release inventories pin those spliced-proof recovery
+markers. Full message bundles carrying those spliced source-proof bytes now also
+fail domain-specific bundle admission against the replayed deployment
+descriptors, with the same release inventories pinning the spliced
+bundle-admission markers. The transparent/local-admission proof builder now also
+refuses to package those spliced bundles against replayed Solana, TON, TRON,
+BSC, or Ethereum deployment descriptors, with matching release inventory
+markers. The source-material extractor now also refuses to relabel exact
+deployment-bound or spliced deployment-evidence bundles as standalone production
+source material without an explicit source-adapter deployment descriptor, and
+those extractor rejection markers are release-pinned. Deployment-bound bundle
+encoding, public-input derivation, production build gates, and transparent
+inner-proof construction now also reject deployment-only source context when the
+matching source verifier material is absent, with matching release inventory
+markers. Proof-job, platform-submission, and transparent-artifact packaging paths
+now apply the same deployment-only source-context rejection even on diagnostic
+allow-unready paths, with release inventory markers. Source-context-free
+EVM/BSC Groth16, TRON Groth16, and Solana/TON native-recursive public-input,
+submission-package, transparent-artifact, and proof-job paths now also reject
+deployment-bound foreign-target source proofs, with source-adapter and
+proof-request inventory markers. Source-aware EVM/BSC Groth16, TRON Groth16,
+and Solana/TON native-recursive packaging now also refuse to use explicit source
+material or source-adapter deployment context for remote-to-remote destination
+packaging; source context is packagable only for inbound remote -> SORA proofs.
+Transparent-proof verification now applies the same source-context packaging
+guard, and adversarial EVM/BSC plus TRON artifacts prove diagnostic
+source-aware verification rejects remote-to-remote deployment-bound source
+proofs.
+Checked
 source-proof envelope serialization now requires that same base wrapper shape
 before canonical bytes or hashes are emitted. TON live-account destination
 rollout readiness and route-canary evidence now also reject replay between the

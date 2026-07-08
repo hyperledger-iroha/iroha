@@ -2040,6 +2040,22 @@ function declarationInterface(name) {
   return match[0];
 }
 
+function declarationInterfaceOrType(name) {
+  const interfaceMatch = DECLARATIONS_TEXT.match(
+    new RegExp(
+      `export interface ${name}(?:\\s+extends\\s+[^{]+)?\\s*\\{[\\s\\S]*?\\n\\}`,
+    ),
+  );
+  if (interfaceMatch) {
+    return interfaceMatch[0];
+  }
+  const typeMatch = DECLARATIONS_TEXT.match(
+    new RegExp(`export type ${name}\\s*=\\s*[\\s\\S]*?;\\n`, "u"),
+  );
+  assert.ok(typeMatch, `missing declaration interface or type ${name}`);
+  return typeMatch[0];
+}
+
 function declarationClass(name) {
   const start = DECLARATIONS_TEXT.indexOf(`export class ${name} {`);
   assert.notEqual(start, -1, `missing declaration class ${name}`);
@@ -3033,6 +3049,14 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   assert.equal(
     KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1,
     "iroha:kagemusha:recursive-spend-lineage-append-boundary-final-note:v1",
+  );
+  assert.equal(
+    KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME,
+    "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpRequestV1",
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export const KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME: "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpRequestV1";/u,
   );
   assert.equal(
     isSupportedKagemushaRecursiveSpendAppendProofTransition(
@@ -8454,6 +8478,173 @@ test("package dist entrypoint exports production component privacy helpers", () 
     DECLARATIONS_TEXT,
     /export interface AnonymousPgcProofV1VerificationResult[\s\S]*production: true;[\s\S]*kind: "anonymous-pgc-k-out-of-n-v1";[\s\S]*backend: "Stark";/u,
   );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type AnonymousPgcPaymentBindingHashInput =[\s\S]*\{ paymentBindingHash: BinaryLike; payment_binding_hash\?: never \}[\s\S]*\{ paymentBindingHash\?: never; payment_binding_hash: BinaryLike \};/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type AnonymousPgcReceiverSetMaterialInput =[\s\S]*receiverSet\?: AnonymousPgcReceiverSetInput \| AnonymousPgcReceiverSet;[\s\S]*receivers\?: never;[\s\S]*receiver_set\?: AnonymousPgcReceiverSetInput \| AnonymousPgcReceiverSet;[\s\S]*receiverSet\?: never;[\s\S]*receivers\?: ReadonlyArray<AnonymousPgcReceiverInput>;/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type AnonymousPgcAccountCommitmentInstructionInput =[\s\S]*AnonymousPgcRequiredAlias2<[\s\S]*"accountCommitment"[\s\S]*"account_commitment"[\s\S]*BinaryLike[\s\S]*AnonymousPgcRequiredAlias2<[\s\S]*"anonymitySetRoot"[\s\S]*"anonymity_set_root"[\s\S]*BinaryLike[\s\S]*AnonymousPgcRequiredAlias2<"chainId", "chain_id", string>/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type AnonymousPgcDevProofFixtureInput =\s*AnonymousPgcProofMaterialInput & AnonymousPgcPaymentBindingHashInput;/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type AnonymousPgcProofV1Input =\s*AnonymousPgcDevProofFixtureInput & AnonymousPgcProofBytesInput;/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type AnonymousPgcProofV1VerificationInput =[\s\S]*AnonymousPgcProofMaterialInput &[\s\S]*AnonymousPgcProofEnvelopeInput &[\s\S]*AnonymousPgcOptionalPaymentBindingHashInput;/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type AnonymousPgcTransferInstructionInput =\s*AnonymousPgcProofV1VerificationInput & AnonymousPgcPaymentBindingHashInput;/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface AnonymousPgcDevProofFixture[\s\S]*public_input_bytes: Buffer;[\s\S]*publicInputBytes: Buffer;/u,
+  );
+});
+
+test("package dist Anonymous PGC transfer instruction requires explicit payment binding", () => {
+  const receiverSet = buildAnonymousPgcReceiverSet({
+    threshold: 1,
+    receivers: [
+      {
+        accountCommitment: Buffer.alloc(32, 0x21),
+        ciphertextCommitment: Buffer.alloc(32, 0x31),
+      },
+      {
+        accountCommitment: Buffer.alloc(32, 0x22),
+        ciphertextCommitment: Buffer.alloc(32, 0x32),
+      },
+    ],
+  });
+  const base = {
+    receiverSet,
+    anonymitySetRoot: Buffer.alloc(32, 0x41),
+    payload: Buffer.from("anonymous-pgc:alice:bob:42"),
+    balanceCommitments: [Buffer.alloc(32, 0x51), Buffer.alloc(32, 0x52)],
+    linkTag: Buffer.alloc(32, 0x61),
+    rangeCommitments: [Buffer.alloc(32, 0x71)],
+    paymentBindingHash: Buffer.alloc(32, 0x62),
+    chainId: "boi-localnet",
+    domainSeparator: "boi:anonymous-pgc:v1",
+    vkHash: Buffer.alloc(32, 0x55),
+  };
+  const envelope = buildAnonymousPgcKOutOfNProofV1({
+    ...base,
+    proofBytes: Buffer.from("external-anonymous-pgc-proof-v1"),
+  });
+  const devFixture = buildAnonymousPgcDevProofFixture(base);
+  const decodedDevFixture = noritoDecodePrivacyProofEnvelope(devFixture.envelope);
+  assert.equal(Buffer.isBuffer(devFixture.public_input_bytes), true);
+  assert.equal(Buffer.isBuffer(devFixture.publicInputBytes), true);
+  assert.equal(devFixture.public_input_bytes.equals(devFixture.publicInputBytes), true);
+  assert.equal(
+    devFixture.public_input_bytes.equals(Buffer.from(decodedDevFixture.public_inputs)),
+    true,
+  );
+  const transferInput = {
+    proofEnvelope: envelope,
+    receiverSet,
+    payload: base.payload,
+    anonymitySetRoot: base.anonymitySetRoot,
+    balanceCommitments: base.balanceCommitments,
+    linkTag: base.linkTag,
+    rangeCommitments: base.rangeCommitments,
+    paymentBindingHash: base.paymentBindingHash,
+    chainId: base.chainId,
+    domainSeparator: base.domainSeparator,
+  };
+  const transferInputWithoutPaymentBinding = { ...transferInput };
+  delete transferInputWithoutPaymentBinding.paymentBindingHash;
+
+  assert.equal(
+    verifyAnonymousPgcKOutOfNProofV1(transferInputWithoutPaymentBinding).ok,
+    true,
+  );
+  assert.throws(
+    () => buildAnonymousPgcTransferInstruction(transferInputWithoutPaymentBinding),
+    /paymentBindingHash is required/,
+  );
+  assert.throws(
+    () =>
+      buildAnonymousPgcTransferInstruction({
+        ...transferInput,
+        paymentBindingHash: Buffer.alloc(32, 0x63),
+      }),
+    /paymentBindingHash must match the envelope public inputs/,
+  );
+  assert.throws(
+    () =>
+      buildAnonymousPgcKOutOfNProofV1({
+        ...base,
+        payment_binding_hash: base.paymentBindingHash,
+        proofBytes: Buffer.from("external-anonymous-pgc-proof-v1"),
+      }),
+    /multiple payment binding hash aliases/,
+  );
+  assert.throws(
+    () =>
+      buildAnonymousPgcKOutOfNProofV1({
+        ...base,
+        receivers: [
+          {
+            accountCommitment: Buffer.alloc(32, 0x21),
+            ciphertextCommitment: Buffer.alloc(32, 0x31),
+          },
+          {
+            accountCommitment: Buffer.alloc(32, 0x22),
+            ciphertextCommitment: Buffer.alloc(32, 0x32),
+          },
+        ],
+        proofBytes: Buffer.from("external-anonymous-pgc-proof-v1"),
+      }),
+    /receiverSet must not be combined with inline receiver-set fields/,
+  );
+  assert.throws(
+    () =>
+      buildAnonymousPgcKOutOfNProofV1({
+        ...base,
+        maxPayloadBytes: 1024,
+        max_payload_bytes: 1024,
+        proofBytes: Buffer.from("external-anonymous-pgc-proof-v1"),
+      }),
+    /multiple max payload byte limit aliases/,
+  );
+  assert.throws(
+    () =>
+      verifyAnonymousPgcKOutOfNProofV1({
+        ...transferInput,
+        payment_binding_hash: base.paymentBindingHash,
+      }),
+    /multiple paymentBindingHash aliases/,
+  );
+  assert.throws(
+    () =>
+      buildAnonymousPgcTransferInstruction({
+        ...transferInput,
+        payment_binding_hash: base.paymentBindingHash,
+      }),
+    /multiple payment binding hash aliases/,
+  );
+  assert.throws(
+    () =>
+      buildAnonymousPgcAccountCommitmentInstruction({
+        accountCommitment: Buffer.alloc(32, 0x21),
+        account_commitment: Buffer.alloc(32, 0x21),
+        anonymitySetRoot: Buffer.alloc(32, 0x41),
+        chainId: "boi-localnet",
+      }),
+    /multiple account commitment aliases/,
+  );
 });
 
 test("package dist ZK-AMS production helpers reject dev fixture bytes", () => {
@@ -9265,6 +9456,7 @@ test("package dist privacy dev proof fixtures reject production metadata claims"
         balanceCommitments: [Buffer.alloc(32, 0x51), Buffer.alloc(32, 0x52)],
         linkTag: Buffer.alloc(32, 0x61),
         rangeCommitments: [Buffer.alloc(32, 0x71)],
+        paymentBindingHash: Buffer.alloc(32, 0x62),
         chainId: "boi-localnet",
         domainSeparator: "boi:anonymous-pgc:v1",
         vkHash: Buffer.alloc(32, 0x55),
@@ -10842,12 +11034,13 @@ test("package declarations do not advertise privacy production metadata inputs",
     "ZkX509IdentityEnvelopeInput",
     "JindoLatticeProofEnvelopeInput",
     "SisHintsCredentialEnvelopeInput",
+    "AnonymousPgcProofMaterialInput",
     "AnonymousPgcDevProofFixtureInput",
     "VeRangeProofEnvelopeInput",
     "VeRangeProofV1Input",
     "VeRangeDevProofFixtureInput",
   ]) {
-    const declaration = declarationInterface(name);
+    const declaration = declarationInterfaceOrType(name);
     assert.doesNotMatch(
       declaration,
       /\bproduction\b/u,

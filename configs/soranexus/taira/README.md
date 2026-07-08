@@ -706,7 +706,10 @@ bash configs/soranexus/taira/clear_volatile_consensus_state.sh \
 ```
 
 Run it without `--apply` first to inspect the planned stop/quarantine/archive
-operations. The script intentionally leaves durable ledger storage in place.
+operations. If the dry run warns that matched peer processes cannot be
+signalled, rerun it as the peer process owner or with sudo before applying; the
+apply path refuses to touch pidfiles or storage in that state. The script
+intentionally leaves durable ledger storage in place.
 
 ## Governance mode
 

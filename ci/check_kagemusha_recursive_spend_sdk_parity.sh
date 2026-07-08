@@ -16786,7 +16786,10 @@ def check_javascript(texts, errors):
     require_contains(
         texts,
         "javascript/iroha_js/test/package_dist.test.js",
-        REQUIRED_RECURSIVE_SPEND_REQUEST_CODEC_JS_PUBLIC_EXPORTS,
+        (
+            *REQUIRED_RECURSIVE_SPEND_REQUEST_CODEC_JS_PUBLIC_EXPORTS,
+            "KagemushaRecursiveSpendTopUpRequestV1",
+        ),
         "JavaScript package dist typed recursive spend request codec exports",
         errors,
     )
@@ -16795,6 +16798,8 @@ def check_javascript(texts, errors):
         "javascript/iroha_js/test/crypto.browser.test.js",
         (
             "KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME",
+            "KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME",
+            "KagemushaRecursiveSpendTopUpRequestV1",
             "KAGEMUSHA_RECURSIVE_SPEND_VERIFY_RESULT_WIRE_NAME",
             "KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME",
             "encodeKagemushaRecursiveSpendInitRequest",
@@ -22221,7 +22226,7 @@ def check_swift(texts, errors):
         (
             "private static func supportedPlatform(",
             "switch value {",
-            "case OfflineNoteV2Constants.iosPlatform,\n             OfflineNoteV2Constants.androidPlatform:",
+            "case OfflineNoteV2Constants.iosPlatform, OfflineNoteV2Constants.androidPlatform:",
             "return value",
             "guard binding.platform == Self.platform else",
             "guard proof.platform == Self.platform else",
@@ -22635,6 +22640,14 @@ def check_swift(texts, errors):
         request_codecs_test,
         r'lineageVerifierKey: Data\(\),[\s\S]*?lineageProvingKeyArchive: lineageProvingKeyArchive[\s\S]*?\.invalidField\("lineageVerifierKey"\)',
         "Swift typed recursive spend init lineage-key exact diagnostics",
+        errors,
+        flags=re.S,
+    )
+    require_regex(
+        texts,
+        request_codecs_test,
+        r'lineageVerifierKey: nil,[\s\S]*?lineageProvingKeyArchive: nil[\s\S]*?\.invalidField\("lineageVerifierKey"\)',
+        "Swift typed recursive spend append lineage-key exact diagnostics",
         errors,
         flags=re.S,
     )
@@ -67264,12 +67277,10 @@ if mode == "--negative-control-swift-offline-proof-platform-exactness":
     source_replacements = (
         (
             '        switch value {\n'
-            '        case OfflineNoteV2Constants.iosPlatform,\n'
-            '             OfflineNoteV2Constants.androidPlatform:\n'
+            '        case OfflineNoteV2Constants.iosPlatform, OfflineNoteV2Constants.androidPlatform:\n'
             "            return value\n",
             '        switch value.lowercased() {\n'
-            '        case OfflineNoteV2Constants.iosPlatform,\n'
-            '             OfflineNoteV2Constants.androidPlatform:\n'
+            '        case OfflineNoteV2Constants.iosPlatform, OfflineNoteV2Constants.androidPlatform:\n'
             "            return value.lowercased()\n",
         ),
         (

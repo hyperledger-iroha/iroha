@@ -5668,6 +5668,10 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
     "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpRequestV1",
   );
   assert.equal(
+    KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME,
+    "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1",
+  );
+  assert.equal(
     KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
     "kagemusha-recursive-aggregation-v1",
   );

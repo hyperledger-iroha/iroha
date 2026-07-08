@@ -148132,6 +148132,127 @@ async fn pacemaker_rotates_stale_exact_slot_proposal_evidence_after_no_progress(
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn pacemaker_rotates_stale_exact_slot_proposal_evidence_on_active_backlog_gap() {
+    use std::borrow::Cow;
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.resilience.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let committed_block = sample_block(1, 0, None);
+    actor
+        .kura
+        .store_block(committed_block.clone())
+        .expect("store committed block");
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(committed_block.hash());
+    widen_sumeragi_timing_for_heavy_proposal_test(actor);
+
+    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
+    let committed_height = actor.state.view().height() as u64;
+    let tracked_height = committed_height.saturating_add(1);
+    let mut committed_qc = actor
+        .latest_committed_qc()
+        .unwrap_or_else(|| sample_qc_ref(committed_height, 0));
+    committed_qc.phase = Phase::Commit;
+    actor.highest_qc = Some(committed_qc);
+
+    let search_limit = u64::try_from(actor.effective_commit_topology().len().saturating_mul(8))
+        .unwrap_or(0)
+        .max(2);
+    let view = (1..search_limit)
+        .find(|candidate_view| actor.local_is_round_leader(tracked_height, *candidate_view))
+        .expect("find non-zero view where local peer is leader");
+
+    let block = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
+        tracked_height,
+        view,
+        Some(committed_block.hash()),
+    );
+    let block_hash = insert_validated_pending(actor, block);
+    actor
+        .pending
+        .pending_blocks
+        .get_mut(&block_hash)
+        .expect("pending block exists")
+        .note_local_commit_vote_emitted();
+    assert!(
+        actor.slot_has_proposal_evidence(tracked_height, view),
+        "test setup requires exact-view proposal evidence with no remaining local vote progress"
+    );
+
+    let full_stale_window = actor
+        .quorum_timeout(actor.runtime_da_enabled())
+        .max(super::PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
+        .max(actor.frontier_slot_lag_window())
+        .max(Duration::from_millis(1));
+    let active_gap = actor
+        .cap_active_block_production_gap(full_stale_window, true)
+        .max(super::PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
+        .max(Duration::from_millis(1));
+    assert!(
+        active_gap < full_stale_window,
+        "test requires an active-production gap shorter than the full stale evidence window"
+    );
+
+    let now = Instant::now();
+    let stale_start = now
+        .checked_sub(active_gap.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(tracked_height, view, stale_start);
+    actor.mark_proposal_liveness_state(
+        tracked_height,
+        view,
+        super::ProposalLivenessState::AwaitingProposalAfterMissingQc,
+        stale_start,
+    );
+    assert!(
+        actor
+            .phase_tracker
+            .view_age(tracked_height, now)
+            .is_some_and(|age| age < full_stale_window),
+        "regression must cover evidence younger than the previous full quorum window"
+    );
+
+    let proposed = actor.on_pacemaker_propose_ready(now);
+    assert!(
+        !proposed,
+        "stale exact-slot evidence should rotate instead of holding an active transaction backlog"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(tracked_height),
+        Some(view.saturating_add(1)),
+        "active backlog should use the capped production gap for exhausted evidence"
+    );
+    assert!(
+        !actor
+            .slot_tracker
+            .proposals_seen
+            .contains(&(tracked_height, view)),
+        "rotation should clear the exhausted proposal-seen marker"
+    );
+    assert!(
+        actor.pending.pending_blocks.contains_key(&block_hash),
+        "rotation should preserve the pending body for ordinary recovery paths"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn pacemaker_allows_committed_qc_fallback_while_compatible_partial_new_view_support_converges()
  {
     use std::borrow::Cow;
@@ -150111,6 +150232,7 @@ async fn stale_slot_proposal_evidence_defers_recent_pending_validation() {
                 actor.epoch_for_height(height),
                 now,
                 0,
+                0,
                 actor
                     .latest_committed_qc()
                     .expect("seeded genesis commit QC should exist"),
@@ -150202,6 +150324,7 @@ async fn stale_slot_proposal_evidence_waits_for_validation_inflight() {
                 view,
                 actor.epoch_for_height(height),
                 now,
+                0,
                 0,
                 actor
                     .latest_committed_qc()
@@ -150897,6 +151020,8 @@ async fn fresh_proposal_defers_when_split_same_height_votes_make_new_branch_non_
 
     let _commit_history_guard = isolate_commit_history_state();
     let mut harness = test_actor_harness(4).await;
+    let _cause_guard = super::status::view_change_cause_test_guard();
+    super::status::reset_view_change_cause_counters_for_tests();
     let actor = &mut harness.actor;
     install_active_single_lane_nexus(actor.state.as_ref());
 
@@ -151020,7 +151145,244 @@ async fn fresh_proposal_defers_when_split_same_height_votes_make_new_branch_non_
         !proposed,
         "fresh branch cannot collect quorum once split same-height votes consume too many validators"
     );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        None,
+        "partial split vote locks should defer without forcing an immediate view change"
+    );
+    assert_eq!(
+        super::status::snapshot()
+            .view_change_causes
+            .missing_qc_total,
+        0,
+        "partial split vote locks still have possible voters and must not use the all-validator MissingQc fast path"
+    );
 
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+struct AllValidatorSplitVoteLockSetup {
+    height: u64,
+    second_view: u64,
+    fresh_view: u64,
+    second_hash: HashOf<BlockHeader>,
+    roster: Vec<PeerId>,
+}
+
+fn seed_all_validator_split_same_height_commit_votes(
+    actor: &mut Actor,
+    key_pairs: &[KeyPair],
+) -> AllValidatorSplitVoteLockSetup {
+    let parent = actor.state.view().latest_block_hash();
+    let height = actor.state.view().height() as u64 + 1;
+    let first_view = 2_u64;
+    let second_view = first_view.saturating_add(1);
+    let roster = actor.effective_commit_topology();
+    assert_eq!(roster.len(), 4, "test setup expects four validators");
+    let fresh_view =
+        second_view.saturating_add(u64::try_from(roster.len()).expect("roster length fits u64"));
+    assert!(
+        !actor.same_height_vote_recovery_escalation_view_gap_exhausted(
+            second_view,
+            fresh_view,
+            roster.len(),
+        ),
+        "test setup must stay below the generic exact-recovery escalation threshold"
+    );
+
+    let first_hash = sample_block(height, first_view, parent).hash();
+    let second_hash = sample_block(height, second_view, parent).hash();
+    assert_ne!(first_hash, second_hash);
+
+    for (peer, block_hash, view_idx) in [
+        (roster[0].clone(), first_hash, first_view),
+        (roster[1].clone(), first_hash, first_view),
+        (roster[2].clone(), second_hash, second_view),
+        (roster[3].clone(), second_hash, second_view),
+    ] {
+        let topology = super::network_topology::Topology::new(roster.clone());
+        let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+        let signature_topology =
+            super::topology_for_view(&topology, height, view_idx, mode_tag, prf_seed);
+        let signer_idx = signature_topology
+            .as_ref()
+            .iter()
+            .position(|candidate| candidate == &peer)
+            .expect("peer present in view topology");
+        let signer = ValidatorIndex::try_from(signer_idx).expect("signer fits u32");
+        let keypair = key_pairs
+            .iter()
+            .find(|kp| kp.public_key() == peer.public_key())
+            .expect("matching signer keypair");
+        let mut vote = crate::sumeragi::consensus::Vote {
+            phase: Phase::Commit,
+            block_hash,
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height,
+            view: view_idx,
+            epoch: actor.epoch_for_height(height),
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            highest_qc: None,
+            signer,
+            bls_sig: Vec::new(),
+        };
+        bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
+        let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
+        let signature = checked_signature(keypair.private_key(), &preimage);
+        vote.bls_sig = signature.payload().to_vec();
+        insert_test_vote_with_roster(actor, vote, &roster);
+    }
+
+    AllValidatorSplitVoteLockSetup {
+        height,
+        second_view,
+        fresh_view,
+        second_hash,
+        roster,
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn fresh_proposal_rotates_new_view_when_all_validators_are_vote_locked() {
+    let _commit_history_guard = isolate_commit_history_state();
+    let mut harness = test_actor_harness(4).await;
+    let _cause_guard = super::status::view_change_cause_test_guard();
+    super::status::reset_view_change_cause_counters_for_tests();
+    let actor = &mut harness.actor;
+    let AllValidatorSplitVoteLockSetup {
+        height,
+        second_view,
+        fresh_view,
+        roster,
+        ..
+    } = seed_all_validator_split_same_height_commit_votes(actor, &harness.key_pairs);
+
+    let lock = actor
+        .same_height_vote_lock_blocking_candidate(height, fresh_view, None)
+        .expect("all validators consumed by same-height votes should lock out a fresh branch");
+    assert_eq!(lock.conflicting_voters, roster.len());
+    assert_eq!(lock.candidate_possible_votes, 0);
+    assert_eq!(lock.required, 3);
+    assert_eq!(
+        lock.view, second_view,
+        "test setup expects the later split branch to be the exact recovery target"
+    );
+
+    let mut topology = super::network_topology::Topology::new(roster.clone());
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology =
+        super::topology_for_view(&topology, height, fresh_view, mode_tag, prf_seed);
+    let local_idx = actor
+        .local_validator_index_for_topology(&signature_topology)
+        .expect("local validator index");
+    let now = Instant::now();
+    actor.phase_tracker.on_view_change(height, fresh_view, now);
+    let proposed = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            fresh_view,
+            sample_qc_ref(height.saturating_sub(1), 0),
+            &mut topology,
+            0,
+            local_idx,
+            None,
+            now,
+        )
+        .expect("proposal assembly should not fail");
+    assert!(
+        !proposed,
+        "fresh proposal assembly must still refuse the uncommittable branch"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(fresh_view.saturating_add(1)),
+        "an all-validator same-height vote split should force NEW_VIEW progress instead of waiting below the generic escape window"
+    );
+    let snapshot = super::status::snapshot();
+    assert_eq!(
+        snapshot.view_change_causes.missing_qc_total, 1,
+        "all-validator same-height vote lockout should record a MissingQc view change"
+    );
+    assert_eq!(
+        snapshot.view_change_causes.last_cause.as_deref(),
+        Some("missing_qc"),
+        "all-validator same-height vote lockout should preserve the MissingQc cause"
+    );
+
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn fresh_proposal_does_not_rotate_new_view_when_all_validator_vote_lock_has_qc() {
+    let _commit_history_guard = isolate_commit_history_state();
+    let mut harness = test_actor_harness(4).await;
+    let _cause_guard = super::status::view_change_cause_test_guard();
+    super::status::reset_view_change_cause_counters_for_tests();
+    let actor = &mut harness.actor;
+    let AllValidatorSplitVoteLockSetup {
+        height,
+        second_view,
+        fresh_view,
+        second_hash,
+        roster,
+    } = seed_all_validator_split_same_height_commit_votes(actor, &harness.key_pairs);
+
+    let lock = actor
+        .same_height_vote_lock_blocking_candidate(height, fresh_view, None)
+        .expect("all validators consumed by same-height votes should lock out a fresh branch");
+    assert_eq!(lock.block_hash, second_hash);
+    assert_eq!(lock.conflicting_voters, roster.len());
+    assert_eq!(lock.candidate_possible_votes, 0);
+
+    cache_prepare_qc_for_block(actor, &harness.key_pairs, second_hash, height, second_view);
+    assert!(
+        actor.same_height_block_has_observed_qc(second_hash, height, second_view),
+        "test setup requires observed QC on the selected vote-locked branch"
+    );
+
+    let mut topology = super::network_topology::Topology::new(roster.clone());
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology =
+        super::topology_for_view(&topology, height, fresh_view, mode_tag, prf_seed);
+    let local_idx = actor
+        .local_validator_index_for_topology(&signature_topology)
+        .expect("local validator index");
+    let now = Instant::now();
+    actor.phase_tracker.on_view_change(height, fresh_view, now);
+    let proposed = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            fresh_view,
+            sample_qc_ref(height.saturating_sub(1), 0),
+            &mut topology,
+            0,
+            local_idx,
+            None,
+            now,
+        )
+        .expect("proposal assembly should not fail");
+    assert!(
+        !proposed,
+        "fresh proposal assembly must still refuse the uncommittable branch"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(fresh_view),
+        "observed QC on the vote-locked branch must suppress the all-validator MissingQc fast path"
+    );
+    assert_eq!(
+        super::status::snapshot()
+            .view_change_causes
+            .missing_qc_total,
+        0,
+        "observed QC on the vote-locked branch must not record a MissingQc rotation"
+    );
+
+    super::status::reset_view_change_cause_counters_for_tests();
     harness.shutdown.send();
 }
 
