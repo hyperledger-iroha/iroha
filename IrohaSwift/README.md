@@ -965,8 +965,9 @@ if #available(iOS 15, macOS 12, *) {
 
 `IrohaSDK.deriveConfidentialKeyset` is a local convenience wrapper around
 `ConfidentialKeyset.derive`. No Torii request is made. Provide either
-`seedHex` or `seedBase64`; inputs are trimmed automatically, and invalid encodings surface
-as `ConfidentialKeyDerivationError`.
+`seedHex` or `seedBase64`; inputs are trimmed automatically, all-zero spend keys are
+rejected as inert material, and invalid encodings surface as
+`ConfidentialKeyDerivationError`.
 
 ### Confidential encrypted payloads
 
