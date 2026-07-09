@@ -892,6 +892,7 @@ public struct ToriiOfflineAuditRequest: Codable, Equatable, Sendable {
     public let accountId: String
     public let deviceId: String
     public let lineageId: String
+    public let assetDefinitionId: String
     public let localRevision: UInt64
     public let localStateHash: String
     public let receipts: [ToriiOfflineTransferReceipt]
@@ -905,6 +906,7 @@ public struct ToriiOfflineAuditRequest: Codable, Equatable, Sendable {
         accountId: String,
         deviceId: String,
         lineageId: String,
+        assetDefinitionId: String,
         localRevision: UInt64,
         localStateHash: String,
         receipts: [ToriiOfflineTransferReceipt],
@@ -920,6 +922,10 @@ public struct ToriiOfflineAuditRequest: Codable, Equatable, Sendable {
         try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(accountId, field: "account_id")
         try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(deviceId, field: "device_id")
         try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(lineageId, field: "lineage_id")
+        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
+            assetDefinitionId,
+            field: "asset_definition_id"
+        )
         _ = try OfflineNoteTextPayloadEncoding.requireHashHex(
             localStateHash,
             field: "local_state_hash"
@@ -928,6 +934,7 @@ public struct ToriiOfflineAuditRequest: Codable, Equatable, Sendable {
         self.accountId = accountId
         self.deviceId = deviceId
         self.lineageId = lineageId
+        self.assetDefinitionId = assetDefinitionId
         self.localRevision = localRevision
         self.localStateHash = localStateHash
         self.receipts = receipts
@@ -944,6 +951,7 @@ public struct ToriiOfflineAuditRequest: Codable, Equatable, Sendable {
             accountId: container.decode(String.self, forKey: .accountId),
             deviceId: container.decode(String.self, forKey: .deviceId),
             lineageId: container.decode(String.self, forKey: .lineageId),
+            assetDefinitionId: container.decode(String.self, forKey: .assetDefinitionId),
             localRevision: container.decode(UInt64.self, forKey: .localRevision),
             localStateHash: container.decode(String.self, forKey: .localStateHash),
             receipts: container.decode([ToriiOfflineTransferReceipt].self, forKey: .receipts),
@@ -965,6 +973,7 @@ public struct ToriiOfflineAuditRequest: Codable, Equatable, Sendable {
         case accountId = "account_id"
         case deviceId = "device_id"
         case lineageId = "lineage_id"
+        case assetDefinitionId = "asset_definition_id"
         case localRevision = "local_revision"
         case localStateHash = "local_state_hash"
         case receipts

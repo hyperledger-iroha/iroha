@@ -136,6 +136,8 @@ applicable, reviewed staging provider names using
 `gateway-load-provider-*` labels whose unique inventory matches
 `--provider-count`, reviewed `gateway-load-hardware-*` hardware-profile labels,
 reviewed cache-state modes,
+rejects `--http3-endpoint-committed` until a reviewed SoraFS HTTP/3 gateway
+endpoint is committed,
 generated `gateway-load-stream-*` per-stream inventory labels matching
 `--stream-count`, suite/staging
 digest bindings, SLO threshold facts, and
@@ -167,7 +169,10 @@ promotion can report ready. Aggregate promotion also rechecks the lane-proven
 digest relationships: suite-bound artifact fingerprints must match
 `valid_suite_report_digests`, staging-bound artifact fingerprints must match
 `valid_staging_report_digests`, and policy-bound artifact fingerprints must
-match `valid_policy_digests`.
+match `valid_policy_digests`. Gateway-load rollout summaries must expose
+exactly one active local conformance suite digest, one active staging-load
+report digest, and one active policy digest; mixed valid anchors fail closed
+before final promotion can report ready.
 
 ## Failure Injection Coverage
 

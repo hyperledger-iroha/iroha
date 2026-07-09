@@ -68,8 +68,9 @@ I18NF0000008X
 
 I18NF0000009X
 
-`--manifest` གསལ་སྟོན་འདི་ ཡུ་ཨར་ཨེལ་སོ་སོ་ཅིག་ནང་སྡོད་པ་ཅིན་ བརྒྱུད་དེ་འགྱོཝ་ཨིན། མཚན་རྟགས་མེད་པའི་ཡིག་ཤུབས་ཚུ།
-`--allow-unsigned` འདི་ས་གནས་ཀྱི་དུ་ཁ་གི་དོན་ལུ་གཞི་སྒྲིག་མ་འབད་ཚུན་ཚོད་ ངོས་ལེན་མ་འབད་བས།
+Pass `--manifest` if the manifest lives at a different URL or path. The
+command refuses unsigned envelopes; use the Parliament-published envelope or a
+locally generated council-signed envelope for smoke runs.
 
 - གནས་རིམ་གྱི་སྒོ་ར་བརྒྱུད་དེ་ གསལ་སྟོན་ཅིག་ བདེན་དཔྱད་འབད་བའི་སྐབས་ དམིགས་གཏད་ I18NT0000007X གི་ཚབ་ལུ་ དེ་གི་ཚབ་ལུ་ཨིན།
   ས་གནས་ཀྱི་ གླ་ཆ་ཚུ།

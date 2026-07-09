@@ -12,7 +12,7 @@ use iroha_core::telemetry::StateTelemetry;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
-    smartcontracts::ivm::host::CoreHost,
+    smartcontracts::ivm::host::{CoreHost, CoreHostImpl},
     state::{State, World, WorldReadOnly},
 };
 use iroha_crypto::{Algorithm, KeyPair};
@@ -234,26 +234,6 @@ fn host_rejects_insufficient_asset_transfer() {
         PointerType::DataSpaceId as u16,
     );
 
-    let mut vm = IVM::new(50_000);
-    vm.set_host(CoreHost::new(from.clone()));
-    let mut cursor = 0;
-    let ptr_from = load_input_blob(&mut vm, &mut cursor, &from_tlv);
-    let ptr_to = load_input_blob(&mut vm, &mut cursor, &to_tlv);
-    let ptr_asset = load_input_blob(&mut vm, &mut cursor, &asset_tlv);
-    let ptr_amount = load_input_blob(&mut vm, &mut cursor, &amount_tlv);
-    let ptr_dataspace = load_input_blob(&mut vm, &mut cursor, &dataspace_tlv);
-    run_syscall(
-        &mut vm,
-        ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED,
-        &[
-            (10, ptr_from),
-            (11, ptr_to),
-            (12, ptr_asset),
-            (13, ptr_amount),
-            (14, ptr_dataspace),
-        ],
-    );
-
     // Setup world: domain, accounts, asset def, mint only 100
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -293,9 +273,45 @@ fn host_rejects_insufficient_asset_transfer() {
     ] {
         executor.execute_instruction(&mut tx, &from, instr).unwrap();
     }
+    tx.apply();
+    block.commit().unwrap();
+
+    let mut vm = IVM::new(50_000);
+    let mut cursor = 0;
+    let ptr_from = load_input_blob(&mut vm, &mut cursor, &from_tlv);
+    let ptr_to = load_input_blob(&mut vm, &mut cursor, &to_tlv);
+    let ptr_asset = load_input_blob(&mut vm, &mut cursor, &asset_tlv);
+    let ptr_amount = load_input_blob(&mut vm, &mut cursor, &amount_tlv);
+    let ptr_dataspace = load_input_blob(&mut vm, &mut cursor, &dataspace_tlv);
+    vm.load_program(&scall_program(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED))
+        .expect("load program");
+    for (register, value) in [
+        (10, ptr_from),
+        (11, ptr_to),
+        (12, ptr_asset),
+        (13, ptr_amount),
+        (14, ptr_dataspace),
+    ] {
+        vm.set_register(register, value);
+    }
+    let mut host = CoreHostImpl::new(from.clone());
+    let view = state.view();
+    host.set_query_state(&view);
+    vm.run_with_host(&mut host)
+        .unwrap_or_else(|err| panic!("run syscall 0x2C: {err:?}"));
 
     // Apply queued transfer: should be rejected due to insufficient funds
-    let result = with_core_host(&mut vm, |host| host.apply_queued(&mut tx, &from));
+    let header = iroha_data_model::block::BlockHeader::new(
+        core::num::NonZeroU64::new(2).unwrap(),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = state.block(header);
+    let mut tx = block.transaction();
+    let result = host.apply_queued(&mut tx, &from);
     result.expect_err("should reject");
     // We don't assert exact error kind to avoid tight coupling, just that it rejects.
 }

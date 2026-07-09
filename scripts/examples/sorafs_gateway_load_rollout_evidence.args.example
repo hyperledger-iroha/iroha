@@ -4,7 +4,9 @@
 # raw reports, response bodies, fixtures, and payload bytes in runtime-only
 # locations.
 --evidence-dir /var/tmp/sorafs/gateway-load-rollout
---summary-out /var/tmp/sorafs/gateway-load-rollout-summary.json
+--summary-out /var/tmp/sorafs/gateway-load-rollout/rollout-summary.json
+--require-kind local_conformance,staging_load,telemetry_slo,transport_scope,governance_approval
+--now-unix 1800400000
 --max-evidence-age-secs 604800
 --min-staging-duration-secs 3600
 --min-streams 1000

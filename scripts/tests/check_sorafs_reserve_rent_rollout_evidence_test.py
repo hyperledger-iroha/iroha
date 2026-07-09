@@ -654,6 +654,59 @@ def test_all_ledger_bound_artifacts_reject_ledger_digest_mismatch(
         ) in artifact["errors"]
 
 
+def test_multiple_valid_policy_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = policy_config()
+    payload["policy_digest_hex"] = ALT_LEDGER_DIGEST
+    write_json(tmp_path / "policy-config-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_policy_digests"] == []
+    assert (
+        "valid_policy_digests must contain exactly one active digest"
+        in result["errors"]
+    )
+
+
+def test_multiple_valid_policy_matrix_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = quote_matrix()
+    payload["matrix_digest_hex"] = ALT_LEDGER_DIGEST
+    write_json(tmp_path / "quote-matrix-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_policy_matrix_bindings"] == []
+    assert (
+        "valid_policy_matrix_bindings must contain exactly one active binding"
+        in result["errors"]
+    )
+
+
+def test_multiple_valid_policy_matrix_ledger_anchors_fail_closed(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = ledger_digest()
+    payload["ledger_digest_hex"] = ALT_LEDGER_DIGEST
+    write_json(tmp_path / "ledger-digest-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_policy_matrix_ledger_bindings"] == []
+    assert (
+        "valid_policy_matrix_ledger_bindings must contain exactly one active binding"
+        in result["errors"]
+    )
+
+
 def test_payload_safety_flags_are_required(tmp_path: Path) -> None:
     cases = (
         (
@@ -823,6 +876,30 @@ def test_quote_matrix_dimensions_must_not_include_unknown_values(
         artifact = result["required"]["quote_matrix"]["artifacts"][0]
         assert artifact["valid"] is False
         assert f"{field} must not include unknown values" in artifact["errors"]
+
+
+def test_unique_scalar_inventory_count_rejects_unicode_controls_before_counting() -> None:
+    for value in ("hot ", "hot\u200d", "hot\u202e", "hot\ue000"):
+        errors: list[str] = []
+
+        count = MODULE.unique_scalar_inventory_count(
+            {"storage_classes": ["hot", value]},
+            "storage_classes",
+            errors,
+        )
+
+        assert count == 0
+        assert errors == []
+
+    errors = []
+    count = MODULE.unique_scalar_inventory_count(
+        {"storage_classes": ["hot", "hot"]},
+        "storage_classes",
+        errors,
+    )
+
+    assert count == 1
+    assert errors == ["storage_classes must not contain duplicate values"]
 
 
 def test_route_count_must_match_unique_routes_for_route_artifacts(
@@ -1284,7 +1361,7 @@ def test_policy_config_requires_policy_digest(tmp_path: Path) -> None:
     payload = json.loads(summary.read_text(encoding="utf-8"))
     artifact = payload["required"]["policy_config"]["artifacts"][0]
     assert artifact["valid"] is False
-    assert "policy_digest_hex must be 64 hex characters" in artifact["errors"]
+    assert "policy_digest_hex must be 64 lowercase hex characters" in artifact["errors"]
 
 
 def test_policy_config_requires_generated_at_for_aggregate_freshness(

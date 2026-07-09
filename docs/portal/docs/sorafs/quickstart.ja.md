@@ -26,18 +26,19 @@ translation_last_reviewed: 2026-01-30
 
 ## 1. 決定的フィクスチャを更新
 
-正規の SF-1 チャンクベクトルを再生成します。`--signing-key` を指定すると署名済み
-マニフェスト封筒も生成されます。ローカル開発時のみ `--allow-unsigned` を使用してください。
+Regenerate the canonical SF-1 chunking vectors. The command verifies the
+existing council signature file, or appends a signature when `--signing-key` is
+supplied.
 
 ```bash
-cargo run -p sorafs_chunker --bin export_vectors -- --allow-unsigned
+cargo run -p sorafs_chunker --bin export_vectors -- --signing-key=<ed25519-private-key-hex>
 ```
 
 出力:
 
 - `fixtures/sorafs_chunker/sf1_profile_v1.{json,rs,ts,go}`
 - `fixtures/sorafs_chunker/manifest_blake3.json`
-- `fixtures/sorafs_chunker/manifest_signatures.json`（署名ありの場合）
+- `fixtures/sorafs_chunker/manifest_signatures.json`
 - `fuzz/sorafs_chunker/sf1_profile_v1_{input,backpressure}.json`
 
 ## 2. ペイロードをチャンク化して計画を確認
@@ -75,7 +76,7 @@ cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   --manifest-out=/tmp/docs.manifest \
   --manifest-signatures-out=/tmp/docs.manifest_signatures.json \
   --json-out=/tmp/docs.report.json \
-  --allow-unsigned
+  --council-signature=<signerhex>:<signaturehex>
 ```
 
 `/tmp/docs.report.json` を確認するポイント:
@@ -85,8 +86,9 @@ cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
 - `manifest.manifest_blake3` – マニフェスト封筒で署名される BLAKE3 ダイジェストです。
 - `chunk_fetch_specs[]` – オーケストレーター向けの順序付き取得指示です。
 
-実署名を入れる準備ができたら `--signing-key` と `--signer` を追加します。
-コマンドは封筒を書き込む前にすべての Ed25519 署名を検証します。
+The `--council-signature` value must be a reviewed council signer public key and
+Ed25519 signature pair. The command verifies every Ed25519 signature before
+writing the envelope.
 
 ## 4. 複数プロバイダ取得をシミュレート
 

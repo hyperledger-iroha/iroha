@@ -13,6 +13,7 @@ SCCP readiness public crypto direct-helper exact-key hardening was completed on
 SCCP source-inventory Markdown exact-key hardening was completed on 2026-07-09.
 SCCP strict release-checklist Markdown exact-key hardening was completed on
 2026-07-09.
+SCCP user-prover Markdown exact-key hardening was completed on 2026-07-09.
 BFV full-bootstrap adversarial placeholder samples preserve marker bytes via
 escaped literals so release-audit and native-payload rejection coverage stays
 intact without presenting as open source follow-up markers.
@@ -63,7 +64,8 @@ SCCP all-lanes placeholder-material exact-boolean hardening was completed on
 2026-07-07.
 SCCP Solana immutable boolean/comment exactness was completed on 2026-07-07.
 SCCP Solana route-canary immutable-comment exactness was completed on 2026-07-07.
-SCCP all-lanes route-canary actual-boolean exactness was completed on 2026-07-07.
+SCCP all-lanes route-canary actual-boolean exactness was completed on
+2026-07-07.
 SCCP release CLI placeholder-aware redaction was completed on 2026-07-07.
 SCCP helper transport-redaction inventory exactness was completed on 2026-07-07.
 SCCP duplicate-JSON context-suppression inventory exactness was completed on

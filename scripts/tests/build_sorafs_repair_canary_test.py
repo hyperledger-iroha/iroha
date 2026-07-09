@@ -233,6 +233,22 @@ def test_builds_payload_free_failure_capture_canary(tmp_path: Path) -> None:
     assert errors == []
 
 
+def test_default_failure_event_count_matches_required_sources(tmp_path: Path) -> None:
+    args = args_for("failure_capture", tmp_path)
+    count_index = args.index("--failure-event-count")
+    del args[count_index : count_index + 2]
+    parsed = MODULE.parse_args(args)
+
+    assert parsed.failure_event_count == len(MODULE.REQUIRED_FAILURE_SOURCES)
+    assert MODULE.main(args) == 0
+
+    payload = json.loads(canary_path(tmp_path, "failure_capture").read_text("utf-8"))
+    assert payload["failure_event_count"] == len(MODULE.REQUIRED_FAILURE_SOURCES)
+    assert {event["source"] for event in payload["failure_events"]} == set(
+        MODULE.REQUIRED_FAILURE_SOURCES
+    )
+
+
 def test_auditor_roster_inventory_must_match_auditor_count(
     tmp_path: Path,
     capsys,
@@ -299,6 +315,31 @@ def test_auditor_roster_inventory_rejects_placeholder_marker(
     assert not canary_path(tmp_path, "auditor_roster").exists()
 
 
+@pytest.mark.parametrize(
+    "auditor_value",
+    (
+        "repair-auditor-00, repair-auditor-01",
+        "repair-auditor-00,,repair-auditor-01",
+    ),
+)
+def test_auditor_csv_rejects_padded_or_empty_components(
+    auditor_value: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("auditor_roster", tmp_path)
+    first_auditor = args.index("--auditor") + 1
+    args[first_auditor] = auditor_value
+
+    assert_rejected_without_artifact(
+        args,
+        kind="auditor_roster",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error="--auditor[1] must be a non-empty canonical string",
+    )
+
+
 def test_failure_event_inventory_must_match_failure_event_count(
     tmp_path: Path,
     capsys,
@@ -359,6 +400,44 @@ def test_failure_event_inventory_rejects_unknown_source(
 
     captured = capsys.readouterr()
     assert "--failure-event source must be a reviewed failure source" in captured.err
+    assert not canary_path(tmp_path, "failure_capture").exists()
+
+
+@pytest.mark.parametrize(
+    ("event_value", "diagnostic"),
+    (
+        (
+            " por:repair-failure-event-por-00",
+            "argument must be a non-empty canonical string",
+        ),
+        (
+            "por :repair-failure-event-por-00",
+            "--failure-event[0].source must be a non-empty canonical string",
+        ),
+        (
+            "por: repair-failure-event-por-00",
+            "--failure-event[0].name must be a non-empty canonical string",
+        ),
+        (
+            "por:repair-failure-event-por-00 ",
+            "argument must be a non-empty canonical string",
+        ),
+    ),
+)
+def test_failure_event_inventory_rejects_padded_tuple_components(
+    event_value: str,
+    diagnostic: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("failure_capture", tmp_path)
+    first_event = args.index("--failure-event") + 1
+    args[first_event] = event_value
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert diagnostic in captured.err
     assert not canary_path(tmp_path, "failure_capture").exists()
 
 

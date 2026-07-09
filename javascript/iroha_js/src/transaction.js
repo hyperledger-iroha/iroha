@@ -152,7 +152,7 @@ const KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES = new Map([
     "iroha_data_model::isi::offline::TopUpKagemushaRecursive",
   ],
 ]);
-const KAGEMUSHA_INSTRUCTION_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;
+const KAGEMUSHA_INSTRUCTION_ARCHIVE_MAX_BYTES = 256 * 1024 * 1024;
 const NORITO_HEADER_BYTES = 40;
 const NORITO_MAX_HEADER_PADDING_BYTES = 64;
 const NORITO_MAGIC = Buffer.from("NRT0", "ascii");

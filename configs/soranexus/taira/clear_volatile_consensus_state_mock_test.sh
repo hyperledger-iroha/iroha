@@ -60,6 +60,8 @@ run_dry_run_preserves_state_case() {
     >"$output" 2>&1
 
   grep -q 'dry-run: pass --apply' "$output"
+  grep -q 'volatile consensus quarantine dry-run completed.' "$output"
+  ! grep -q '^volatile consensus quarantine completed\.$' "$output"
   test -f "${dist}/storage/peer0/queue_plan_journal"
   test -d "${dist}/storage/peer0/rbc_sessions"
   test -f "${dist}/peer0.log"
@@ -120,8 +122,274 @@ run_sha_mismatch_fails_before_mutation_case() {
   test -f "${dist}/peer0.log"
 }
 
+run_invalid_torii_ports_fail_before_mutation_case() {
+  local root dist output port_value expected_message
+  port_value="$1"
+  expected_message="$2"
+  root="$(make_case_root)"
+  cleanup_paths+=("$root")
+  dist="${root}/dist"
+  output="${root}/invalid-torii-ports.log"
+
+  if "${root}/clear_volatile_consensus_state.sh" \
+    --dist "$dist" \
+    --apply \
+    --runtime-bin "${root}/bin/irohad" \
+    --torii-ports "$port_value" \
+    >"$output" 2>&1; then
+    echo "invalid Torii ports case unexpectedly succeeded: $port_value" >&2
+    sed -n '1,120p' "$output" >&2 || true
+    return 1
+  fi
+
+  grep -q -- "$expected_message" "$output"
+  test -f "${dist}/peer0.pid"
+  test -f "${dist}/storage/peer0/queue_plan_journal"
+  test -d "${dist}/storage/peer0/rbc_sessions"
+  test -f "${dist}/peer0.log"
+}
+
+run_apply_ignores_reused_pidfile_for_unrelated_live_pid_case() {
+  local root dist output
+  root="$(make_case_root)"
+  cleanup_paths+=("$root")
+  dist="${root}/dist"
+  output="${root}/reused-pidfile.log"
+  printf '%s\n' "$$" >"${dist}/peer0.pid"
+
+  "${root}/clear_volatile_consensus_state.sh" \
+    --dist "$dist" \
+    --apply \
+    --runtime-bin "${root}/bin/irohad" \
+    --torii-ports "" \
+    >"$output" 2>&1
+
+  grep -q 'ignoring stale or reused pidfile' "$output"
+  grep -q 'volatile consensus quarantine completed.' "$output"
+  test ! -e "${dist}/peer0.pid"
+  test ! -e "${dist}/storage/peer0/queue_plan_journal"
+  test ! -d "${dist}/storage/peer0/rbc_sessions"
+  test -n "$(find "${dist}/logs" -type f -name 'peer0.log.pre-volatile-clear-*' -print -quit)"
+}
+
+run_apply_ignores_config_suffix_collision_pidfile_case() {
+  local root dist output bash_env
+  root="$(make_case_root)"
+  cleanup_paths+=("$root")
+  dist="${root}/dist"
+  output="${root}/suffix-collision-pidfile.log"
+  bash_env="${root}/bash-env.sh"
+  printf '%s\n' "$$" >"${dist}/peer0.pid"
+  cat >"$bash_env" <<'SH'
+ps() {
+  if [[ "${1:-}" == "-p" && "${2:-}" == "${TAIRA_TEST_PID:-}" && "${3:-}" == "-o" && "${4:-}" == "command=" ]]; then
+    printf '/tmp/irohad --config %s/peer0.toml.bak\n' "${TAIRA_TEST_DIST:?}"
+    return 0
+  fi
+  command ps "$@"
+}
+SH
+
+  TAIRA_TEST_PID="$$" TAIRA_TEST_DIST="$dist" BASH_ENV="$bash_env" \
+    "${root}/clear_volatile_consensus_state.sh" \
+    --dist "$dist" \
+    --apply \
+    --runtime-bin "${root}/bin/irohad" \
+    --torii-ports "" \
+    >"$output" 2>&1
+
+  grep -q 'ignoring stale or reused pidfile' "$output"
+  grep -q 'volatile consensus quarantine completed.' "$output"
+  test ! -e "${dist}/peer0.pid"
+  test ! -e "${dist}/storage/peer0/queue_plan_journal"
+  test ! -d "${dist}/storage/peer0/rbc_sessions"
+}
+
+run_apply_ignores_config_suffix_collision_ps_scan_case() {
+  local root dist output bash_env
+  root="$(make_case_root)"
+  cleanup_paths+=("$root")
+  dist="${root}/dist"
+  output="${root}/suffix-collision-ps-scan.log"
+  bash_env="${root}/bash-env.sh"
+  rm -f "${dist}/peer0.pid"
+  cat >"$bash_env" <<'SH'
+kill() {
+  if [[ "${1:-}" == "${TAIRA_TEST_FAKE_PID:-}" || "${2:-}" == "${TAIRA_TEST_FAKE_PID:-}" ]]; then
+    echo "unexpected kill of suffix-collision ps row" >&2
+    return 42
+  fi
+  command kill "$@"
+}
+ps() {
+  if [[ "${1:-}" == "-axo" ]]; then
+    printf '%s /tmp/irohad --config %s/peer0.toml.bak\n' "${TAIRA_TEST_FAKE_PID:?}" "${TAIRA_TEST_DIST:?}"
+    return 0
+  fi
+  command ps "$@"
+}
+SH
+
+  TAIRA_TEST_FAKE_PID="424242" TAIRA_TEST_DIST="$dist" BASH_ENV="$bash_env" \
+    "${root}/clear_volatile_consensus_state.sh" \
+    --dist "$dist" \
+    --apply \
+    --runtime-bin "${root}/bin/irohad" \
+    --torii-ports "" \
+    >"$output" 2>&1
+
+  ! grep -q 'unexpected kill of suffix-collision ps row' "$output"
+  grep -q 'no running peer processes matched' "$output"
+  grep -q 'volatile consensus quarantine completed.' "$output"
+  test ! -e "${dist}/storage/peer0/queue_plan_journal"
+  test ! -d "${dist}/storage/peer0/rbc_sessions"
+}
+
+run_dry_run_detects_exact_ps_config_peer_case() {
+  local root dist output bash_env status
+  root="$(make_case_root)"
+  cleanup_paths+=("$root")
+  dist="${root}/dist"
+  output="${root}/exact-ps-scan.log"
+  bash_env="${root}/bash-env.sh"
+  rm -f "${dist}/peer0.pid"
+  cat >"$bash_env" <<'SH'
+kill() {
+  if [[ "${1:-}" == "-0" && "${2:-}" == "${TAIRA_TEST_FAKE_PID:-}" ]]; then
+    return 1
+  fi
+  command kill "$@"
+}
+ps() {
+  if [[ "${1:-}" == "-axo" ]]; then
+    printf '%s /tmp/irohad --config=%s/peer2.toml\n' "${TAIRA_TEST_FAKE_PID:?}" "${TAIRA_TEST_DIST:?}"
+    return 0
+  fi
+  if [[ "${1:-}" == "-p" && "${2:-}" == "${TAIRA_TEST_FAKE_PID:-}" ]]; then
+    return 0
+  fi
+  command ps "$@"
+}
+SH
+
+  status=0
+  TAIRA_TEST_FAKE_PID="424242" TAIRA_TEST_DIST="$dist" BASH_ENV="$bash_env" \
+    "${root}/clear_volatile_consensus_state.sh" \
+    --dist "$dist" \
+    --runtime-bin "${root}/bin/irohad" \
+    >"$output" 2>&1 || status="$?"
+
+  [[ "$status" == "2" ]]
+  grep -q 'stopping 1 peer process' "$output"
+  grep -q 'cannot signal.*quarantining volatile consensus state' "$output"
+  grep -q 'volatile consensus quarantine dry-run completed with warnings' "$output"
+  test -f "${dist}/storage/peer0/queue_plan_journal"
+  test -d "${dist}/storage/peer0/rbc_sessions"
+}
+
+run_dry_run_warns_for_unsignalable_live_peer_case() {
+  local root dist output bash_env status
+  root="$(make_case_root)"
+  cleanup_paths+=("$root")
+  dist="${root}/dist"
+  output="${root}/unsignalable-peer-dry-run.log"
+  bash_env="${root}/bash-env.sh"
+  printf '%s\n' "$$" >"${dist}/peer0.pid"
+  cat >"$bash_env" <<'SH'
+kill() {
+  if [[ "${1:-}" == "-0" ]]; then
+    return 1
+  fi
+  command kill "$@"
+}
+ps() {
+  if [[ "${1:-}" == "-p" && "${2:-}" == "${TAIRA_TEST_PID:-}" && "${3:-}" == "-o" && "${4:-}" == "command=" ]]; then
+    printf '/tmp/irohad --config %s/peer0.toml\n' "${TAIRA_TEST_DIST:?}"
+    return 0
+  fi
+  if [[ "${1:-}" == "-p" && "${2:-}" == "${TAIRA_TEST_PID:-}" ]]; then
+    return 0
+  fi
+  command ps "$@"
+}
+SH
+
+  status=0
+  TAIRA_TEST_PID="$$" TAIRA_TEST_DIST="$dist" BASH_ENV="$bash_env" \
+    "${root}/clear_volatile_consensus_state.sh" \
+    --dist "$dist" \
+    --runtime-bin "${root}/bin/irohad" \
+    >"$output" 2>&1 || status="$?"
+
+  [[ "$status" == "2" ]]
+  grep -q 'cannot signal.*quarantining volatile consensus state' "$output"
+  grep -q 'volatile consensus quarantine dry-run completed with warnings' "$output"
+  ! grep -q '^volatile consensus quarantine completed\.$' "$output"
+  test -f "${dist}/peer0.pid"
+  test -f "${dist}/storage/peer0/queue_plan_journal"
+  test -d "${dist}/storage/peer0/rbc_sessions"
+  test -f "${dist}/peer0.log"
+}
+
+run_apply_refuses_unsignalable_live_peer_case() {
+  local root dist output bash_env
+  root="$(make_case_root)"
+  cleanup_paths+=("$root")
+  dist="${root}/dist"
+  output="${root}/unsignalable-peer.log"
+  bash_env="${root}/bash-env.sh"
+  printf '%s\n' "$$" >"${dist}/peer0.pid"
+  cat >"$bash_env" <<'SH'
+kill() {
+  if [[ "${1:-}" == "-0" ]]; then
+    return 1
+  fi
+  command kill "$@"
+}
+ps() {
+  if [[ "${1:-}" == "-p" && "${2:-}" == "${TAIRA_TEST_PID:-}" && "${3:-}" == "-o" && "${4:-}" == "command=" ]]; then
+    printf '/tmp/irohad --config %s/peer0.toml\n' "${TAIRA_TEST_DIST:?}"
+    return 0
+  fi
+  if [[ "${1:-}" == "-p" && "${2:-}" == "${TAIRA_TEST_PID:-}" ]]; then
+    return 0
+  fi
+  command ps "$@"
+}
+SH
+
+  if TAIRA_TEST_PID="$$" TAIRA_TEST_DIST="$dist" BASH_ENV="$bash_env" \
+    "${root}/clear_volatile_consensus_state.sh" \
+    --dist "$dist" \
+    --apply \
+    --runtime-bin "${root}/bin/irohad" \
+    >"$output" 2>&1; then
+    echo "unsignalable peer case unexpectedly succeeded" >&2
+    sed -n '1,120p' "$output" >&2 || true
+    return 1
+  fi
+
+  grep -q 'cannot signal.*quarantining volatile consensus state' "$output"
+  ! grep -q '^volatile consensus quarantine completed\.$' "$output"
+  test -f "${dist}/peer0.pid"
+  test -f "${dist}/storage/peer0/queue_plan_journal"
+  test -d "${dist}/storage/peer0/rbc_sessions"
+  test -f "${dist}/peer0.log"
+}
+
 run_dry_run_preserves_state_case
 run_apply_quarantines_only_volatile_state_case
 run_sha_mismatch_fails_before_mutation_case
+run_invalid_torii_ports_fail_before_mutation_case "29080,/tmp/29081" "--torii-ports must be a comma-separated list of numeric ports"
+run_invalid_torii_ports_fail_before_mutation_case "29080," "--torii-ports contains an empty port entry"
+run_invalid_torii_ports_fail_before_mutation_case "65536" "--torii-ports contains out-of-range port 65536"
+run_invalid_torii_ports_fail_before_mutation_case "29080, 29080" "--torii-ports contains duplicate port 29080"
+run_invalid_torii_ports_fail_before_mutation_case "29080, 029080" "--torii-ports contains duplicate port 29080"
+run_apply_ignores_reused_pidfile_for_unrelated_live_pid_case
+run_apply_ignores_config_suffix_collision_pidfile_case
+run_apply_ignores_config_suffix_collision_ps_scan_case
+run_dry_run_detects_exact_ps_config_peer_case
+run_dry_run_warns_for_unsignalable_live_peer_case
+run_apply_refuses_unsignalable_live_peer_case
 
 echo "clear_volatile_consensus_state mock tests passed."

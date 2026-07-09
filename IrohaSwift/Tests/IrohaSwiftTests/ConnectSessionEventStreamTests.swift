@@ -33,9 +33,11 @@ final class ConnectSessionEventStreamTests: XCTestCase {
             expectation.fulfill()
         }
 
-        let frameBytes = try XCTUnwrap(makeEncryptedSignResultFrame(sequence: 9,
-                                                                    sessionID: sessionID,
-                                                                    key: walletKey))
+        let expectedSignature = try Self.validEd25519Signature(message: "connect event stream")
+        let frameBytes = try makeEncryptedSignResultFrame(sequence: 9,
+                                                          sessionID: sessionID,
+                                                          key: walletKey,
+                                                          signature: expectedSignature)
         stub.emit(frameBytes)
 
         await fulfillment(of: [expectation], timeout: 2)
@@ -44,7 +46,7 @@ final class ConnectSessionEventStreamTests: XCTestCase {
         if case .signResultOk(let signature) = event.payload {
             XCTAssertEqual(event.sequence, 9)
             XCTAssertEqual(event.direction, .walletToApp)
-            XCTAssertEqual(signature.signature, Data([0xAA, 0xBB]))
+            XCTAssertEqual(signature.signature, expectedSignature)
         } else {
             XCTFail("Expected sign result event")
         }
@@ -54,14 +56,20 @@ final class ConnectSessionEventStreamTests: XCTestCase {
 @available(iOS 15.0, macOS 12.0, *)
 private func makeEncryptedSignResultFrame(sequence: UInt64,
                                           sessionID: Data,
-                                          key: Data) -> Data? {
-    guard let envelope = NoritoNativeBridge.shared.encodeEnvelopeSignResultOk(sequence: sequence,
-                                                                              algorithm: "ed25519",
-                                                                              signature: Data([0xAA, 0xBB])) else {
-        return nil
+                                          key: Data,
+                                          signature: Data) throws -> Data {
+    try ConnectEnvelopeCodec.encryptSignResultOk(sequence: sequence,
+                                                 signature: signature,
+                                                 algorithm: "ed25519",
+                                                 key: key,
+                                                 sessionID: sessionID,
+                                                 direction: .walletToApp)
+}
+
+@available(iOS 15.0, macOS 12.0, *)
+private extension ConnectSessionEventStreamTests {
+    static func validEd25519Signature(message: String) throws -> Data {
+        let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 0x63, count: 32))
+        return try signingKey.sign(Data(message.utf8))
     }
-    return NoritoNativeBridge.shared.connectEncryptEnvelope(key: key,
-                                                            sessionID: sessionID,
-                                                            direction: .walletToApp,
-                                                            envelope: envelope)
 }

@@ -74,8 +74,9 @@ cargo xtask sorafs-fetch-fixture \
   --out fixtures/sorafs_chunker
 ```
 
-Manifest başqa URL-də yaşayırsa, `--manifest` keçin. İmzasız zərflər
-yerli tüstü axını üçün `--allow-unsigned` təyin edilmədiyi halda rədd edilir.
+Pass `--manifest` if the manifest lives at a different URL or path. The
+command refuses unsigned envelopes; use the Parliament-published envelope or a
+locally generated council-signed envelope for smoke runs.
 
 - Təhlil şlüzü vasitəsilə manifest təsdiq edərkən, əvəzinə Torii hədəf alın
   yerli yüklər:

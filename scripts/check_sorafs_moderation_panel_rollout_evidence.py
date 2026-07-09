@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import re
 import sys
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -32,6 +31,7 @@ from sorafs_evidence_json import (  # noqa: E402
 )
 from sorafs_evidence_validation import (  # noqa: E402
     archive_artifact_path_label,
+    forbidden_non_production_markers,
     build_evidence_artifact,
     count_evidence_artifacts,
     recognized_evidence_artifacts,
@@ -347,7 +347,7 @@ def require_only_required_values(
             value = item.get(field)
         else:
             value = item
-        if not isinstance(value, str) or value.strip() not in allowed:
+        if not isinstance(value, str) or value not in allowed:
             errors.append(f"{array_field} must not include unknown values")
             return
 
@@ -782,11 +782,7 @@ def require_inventory_label(
     if pattern.fullmatch(value) is None:
         errors.append(label_error)
         return value
-    forbidden = sorted(
-        marker
-        for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
-        if marker in value.split("-")
-    )
+    forbidden = forbidden_non_production_markers(value, FORBIDDEN_INVENTORY_LABEL_MARKERS)
     if forbidden:
         errors.append(f"{path} must not contain non-production markers {forbidden}")
     return value
@@ -1544,6 +1540,33 @@ def validate_evidence_payload(
     )
 
 
+def require_single_active_digest(
+    digests: set[str],
+    errors: list[str],
+    *,
+    label: str,
+) -> set[str]:
+    """Return one active rollout digest or fail closed on mixed anchors."""
+
+    if len(digests) <= 1:
+        return digests
+    errors.append(f"{label} must contain exactly one active digest")
+    return set()
+
+
+def require_single_active_binding(
+    bindings: set[Any],
+    errors: list[str],
+    *,
+    label: str,
+) -> set[Any]:
+    """Return one active rollout binding or fail closed on mixed anchors."""
+
+    if len(bindings) <= 1:
+        return bindings
+    errors.append(f"{label} must contain exactly one active binding")
+    return set()
+
 
 def build_summary(
     evidence_dirs: list[Path],
@@ -1617,7 +1640,7 @@ def build_summary(
             roster_hash = fingerprint.get("roster_hash_hex")
             tally_digest = fingerprint.get("tally_digest_hex")
             if kind_name == "appeal_intake" and isinstance(case_digest, str):
-                valid_case_digests.add(case_digest.lower())
+                valid_case_digests.add(case_digest)
             elif kind_name in CASE_BOUND_KINDS:
                 case_bound_artifacts.append((kind_name, artifact))
             if kind_name == "metrics_alerts":
@@ -1649,7 +1672,11 @@ def build_summary(
         record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         record_evidence_validation_errors(path, validation_errors, errors)
 
-
+    valid_case_digests = require_single_active_digest(
+        valid_case_digests,
+        errors,
+        label="valid_case_digests",
+    )
     validate_bound_evidence_digest_references(
         required_kinds=required_kinds,
         missing_anchor_required_kinds=tuple(KIND_BY_NAME),
@@ -1673,8 +1700,13 @@ def build_summary(
             case_digest = fingerprint.get("case_digest_hex")
             roster_hash = fingerprint.get("roster_hash_hex")
             if isinstance(case_digest, str) and isinstance(roster_hash, str):
-                valid_roster_bindings.add((case_digest.lower(), roster_hash.lower()))
+                valid_roster_bindings.add((case_digest, roster_hash))
 
+    valid_roster_bindings = require_single_active_binding(
+        valid_roster_bindings,
+        errors,
+        label="valid_roster_bindings",
+    )
     validate_bound_evidence_tuple_references(
         required_kinds=required_kinds,
         missing_anchor_required_kinds=tuple(KIND_BY_NAME),
@@ -1704,9 +1736,14 @@ def build_summary(
                 and isinstance(tally_digest, str)
             ):
                 valid_tally_bindings.add(
-                    (case_digest.lower(), roster_hash.lower(), tally_digest.lower())
+                    (case_digest, roster_hash, tally_digest)
                 )
 
+    valid_tally_bindings = require_single_active_binding(
+        valid_tally_bindings,
+        errors,
+        label="valid_tally_bindings",
+    )
     validate_bound_evidence_tuple_references(
         required_kinds=required_kinds,
         missing_anchor_required_kinds=tuple(KIND_BY_NAME),
@@ -1730,8 +1767,13 @@ def build_summary(
                 "policy_digest_hex"
             )
             if isinstance(policy_digest, str):
-                valid_policy_digests.add(policy_digest.lower())
+                valid_policy_digests.add(policy_digest)
 
+    valid_policy_digests = require_single_active_digest(
+        valid_policy_digests,
+        errors,
+        label="valid_policy_digests",
+    )
     validate_bound_evidence_digest_references(
         required_kinds=required_kinds,
         missing_anchor_required_kinds=("e2e_panel",) + POLICY_BOUND_KINDS,
@@ -1848,8 +1890,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--now-unix",
         type=positive_int_arg,
-        default=int(time.time()),
-        help="Validator clock used for age checks. Defaults to current Unix time.",
+        required=True,
+        help="Required reviewed validator clock used for age checks.",
     )
     parser.add_argument(
         "--max-canary-age-secs",

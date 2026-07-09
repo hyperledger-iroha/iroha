@@ -134,27 +134,57 @@ const MODERATION_COMMITTEE_DEFAULT_LISTEN: &str = "127.0.0.1:9196";
 const MODERATION_REGISTRY_DEFAULT_LISTEN: &str = "127.0.0.1:9198";
 
 fn parse_u32_arg(flag: &str, raw: &str, context: &str) -> Result<u32, String> {
-    raw.trim()
+    require_canonical_unsigned_decimal(flag, raw, context)?;
+    raw
         .parse::<u32>()
         .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
 }
 
 fn parse_u64_arg(flag: &str, raw: &str, context: &str) -> Result<u64, String> {
-    raw.trim()
+    require_canonical_unsigned_decimal(flag, raw, context)?;
+    raw
         .parse::<u64>()
         .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
 }
 
 fn parse_u16_arg(flag: &str, raw: &str, context: &str) -> Result<u16, String> {
-    raw.trim()
+    require_canonical_unsigned_decimal(flag, raw, context)?;
+    raw
         .parse::<u16>()
         .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
 }
 
 fn parse_decimal_arg(flag: &str, raw: &str, context: &str) -> Result<Decimal, String> {
-    raw.trim()
+    require_canonical_decimal_token(flag, raw, context)?;
+    raw
         .parse::<Decimal>()
         .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
+}
+
+fn require_canonical_unsigned_decimal(
+    flag: &str,
+    raw: &str,
+    context: &str,
+) -> Result<(), String> {
+    let digits = raw.as_bytes();
+    if digits.is_empty()
+        || !digits.iter().all(u8::is_ascii_digit)
+        || (digits.len() > 1 && digits[0] == b'0')
+    {
+        return Err(format!(
+            "failed to parse `{flag}` for `{context}`: value must be a canonical unsigned decimal integer"
+        ));
+    }
+    Ok(())
+}
+
+fn require_canonical_decimal_token(flag: &str, raw: &str, context: &str) -> Result<(), String> {
+    if raw.is_empty() || raw.trim() != raw || raw.starts_with('+') {
+        return Err(format!(
+            "failed to parse `{flag}` for `{context}`: value must be a canonical decimal"
+        ));
+    }
+    Ok(())
 }
 
 fn infer_i105_network_prefix(raw: &str) -> Option<u16> {
@@ -3855,7 +3885,6 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
         return Err("provide at least one `--provider` entry".to_string());
     }
 
-    let has_manifest_report = manifest_report_source.is_some();
     let manifest_report = if let Some(source) = manifest_report_source.take() {
         Some(source.read()?)
     } else {
@@ -4135,16 +4164,6 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
     if let Some(budget) = retry_budget {
         fetch_options.per_chunk_retry_limit = Some(budget);
     }
-    // Preserve legacy CLI behaviour for tests and offline flows: unless callers explicitly
-    // request manifest verification inputs, do not require the gateway manifest endpoint.
-    let explicit_manifest_verification = manifest_envelope.is_some()
-        || manifest_cid_hex.is_some()
-        || expected_cache_version.is_some();
-    if has_manifest_report || !explicit_manifest_verification {
-        fetch_options.verify_lengths = false;
-        fetch_options.verify_digests = false;
-    }
-
     if let Some(limit) = max_peers {
         let limit = limit.max(1);
         orchestrator_config.max_providers = std::num::NonZeroUsize::new(limit);

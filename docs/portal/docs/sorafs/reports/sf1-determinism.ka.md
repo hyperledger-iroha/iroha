@@ -26,7 +26,7 @@ translator: machine-google-reviewed
 | 1 | `cargo test -p sorafs_chunker` | ყველა ტესტი გადის; `vectors` პარიტეტის ტესტი წარმატებით დასრულდა. | ადასტურებს კანონიკური მოწყობილობების შედგენას და შეესაბამება Rust-ის განხორციელებას. |
 | 2 | `ci/check_sorafs_fixtures.sh` | სკრიპტი გადის 0; იტყობინება მანიფესტი დაიჯესტები ქვემოთ. | ამოწმებს მოწყობილობების რეგენერაციას სუფთად და ხელმოწერები რჩება მიმაგრებული. |
 | 3 | `cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles` | ჩანაწერი `sorafs.sf1@1.0.0` შეესაბამება რეესტრის აღმწერს (`profile_id=1`). | უზრუნველყოფს რეესტრის მეტამონაცემების სინქრონიზაციას. |
-| 4 | `cargo run --locked -p sorafs_chunker --bin export_vectors` | რეგენერაცია წარმატებულია `--allow-unsigned`-ის გარეშე; manifest და ხელმოწერის ფაილები უცვლელი. | უზრუნველყოფს დეტერმინიზმის მტკიცებულებას ნაწილაკების საზღვრებისთვის და მანიფესტებისთვის. |
+| 4 | `cargo run --locked -p sorafs_chunker --bin export_vectors` | Regeneration succeeds with verified council signatures; manifest and signature files unchanged. | Provides determinism proof for chunk boundaries and manifests. |
 | 5 | `node scripts/check_sf1_vectors.mjs` | არ იტყობინება განსხვავება TypeScript-ის მოწყობილობებსა და Rust JSON-ს შორის. | სურვილისამებრ დამხმარე; უზრუნველყოს პარიტეტი გაშვების დროს (სკრიპტი შენახულია Tooling WG-ის მიერ). |
 
 ## მოსალოდნელი დაიჯესტები

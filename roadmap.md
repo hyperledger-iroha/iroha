@@ -7,6 +7,548 @@ The detailed engineering backlog lives in
 [`docs/source/engineering_backlog.md`](./docs/source/engineering_backlog.md),
 and completed history lives in [`status.md`](./status.md).
 
+SoraNet handshake admission for the first release now has a single production
+policy: PoW is mandatory, the Argon2 puzzle gate stays enabled, and SM helper /
+OpenSSL-preview matching stays strict. Startup configuration no longer exposes
+the unsafe `pow.required` or `pow.puzzle.enabled` knobs, live `/v1/config`
+updates reject attempts to disable PoW, clear puzzle admission, or allow SM
+mismatches, and the `iroha app sorafs handshake update` CLI no longer carries
+the retired relaxation flags. The SoraFS rollout contract pins the CLI, Kiso,
+config defaults, negative tests, and stale-doc scans for that fail-closed
+surface.
+
+SoraNet signed-ticket admission now also fails closed. Relays that configure a
+`pow.signed_ticket_public_key_hex` verifier reject raw 74-byte PoW frames
+instead of falling back to unsigned-ticket verification; raw PoW frames remain
+valid only for relays without a signed-ticket verifier key. The P2P verifier,
+negative regression, puzzle-service operations guide, and rollout static
+contract pin that first-release policy.
+
+SoraFS/SoraNet orchestrator circuits no longer carry the validator MASQUE/obfs
+bypass fast path. Path hints, guard metadata, persisted guard records, circuit
+snapshots, and config JSON do not expose bypass eligibility; `config_from_json`
+rejects `circuit_manager.validator_masque_bypass=true` before constructing a
+circuit manager. Validator-lane hints still bias relay selection, but all
+first-release circuits keep the MASQUE/obfs wrapper requirement.
+
+SoraFS chunker fixture regeneration now requires council signatures. The
+`export_vectors` binary no longer accepts an unsigned-regeneration flag, missing
+`manifest_signatures.json` fails with a signing-key requirement, and existing
+signature files must contain at least one verified council signature. The
+architecture RFC, chunker conformance guide, signing ceremony guide, SF-1
+determinism report, quickstart examples, and rollout contract pin the
+mandatory-signature behavior so the first-release fixture supply chain cannot
+return to unsigned local output.
+
+SoraFS fetch integrity verification is mandatory for the first release.
+`sorafs_fetch` no longer exposes `--allow-insecure`, `--no-verify-digest`, or
+`--no-verify-length`; local fetch and orchestrator JSON reject disabled digest
+or length verification before runtime construction; and gateway fetch always
+retrieves the manifest and verifies the assembled payload against it. The
+orchestrator tuning docs, plan docs, signed gateway-fetch fixtures, and rollout
+contract pin the fail-closed fetch path.
+
+SoraFS governance node CID binding is mandatory on public reference-validator
+paths. The C FFI no longer treats `expected_cid_len = 0` as a request to skip
+exact node-CID binding, and `sorafs-validate governance --node` now requires
+`--cid <node-cid>` before it validates node bytes. The FFI, CLI, reference SDK
+plan, and rollout contract pin the required CID binding.
+
+SoraFS direct-mode rollout smoke tests now keep adoption reports mandatory for
+regulated runs. `scripts/sorafs_direct_mode_smoke.sh --skip-adoption-check`
+fails unless `SORAFS_DIRECT_MODE_ALLOW_ADOPTION_SKIP=local-diagnostic` is set,
+so the only remaining skip path is an explicit local-diagnostic escape.
+Forwarded adoption-check relaxation flags now also fail in both the direct-mode
+smoke wrapper and CI adoption helper unless
+`SORAFS_ADOPTION_OVERRIDE_ID=<incident-or-approval-id>` is present, keeping
+single-source and zero-weight exceptions tied to a concrete operator record;
+the direct `cargo xtask sorafs-adoption-check` parser enforces the same
+requirement with `--adoption-override-id <incident-or-approval-id>`. Wrapper
+tests, xtask parser tests, direct-mode/orchestrator rollout docs, and the
+rollout static contract pin those guards.
+
+SoraFS SFM-4b3 evidence-viewer canary generation now requires an explicit
+`--now-unix` review timestamp and validates the generated artifact against that
+clock before writing JSON. Future or stale `--generated-at-unix` values can no
+longer self-validate by omitting `--now-unix`; the builder tests and rollout
+static contract pin missing, future, and stale timestamp rejection before
+payload-free canary artifacts are written.
+
+All checked-in SoraFS canary builders now follow the same first-release clock
+rule: `--now-unix` is required, generated payloads are validated against that
+explicit review clock, and checked-in argfile examples fail before writing if
+the review timestamp is missing or malformed. The rollout contract rejects any
+builder that falls back to `generated_at_unix` as its own validation clock.
+The SFM-4a AI pre-screen and SFM-4c transparency rollout checkers now enforce
+the same stale/future generated-artifact freshness gate directly, so hand-built
+or externally supplied evidence cannot bypass builder prevalidation.
+Their collection runners expose and forward explicit `--now-unix` and
+`--max-evidence-age-secs` verifier controls, so dry-run plans and live
+collection runs use the same reviewed freshness window.
+Checked-in SoraFS collection argfile examples that expose verifier freshness
+controls now pin those reviewed clocks too, and the rollout contract rejects
+runner examples that omit parser-exposed freshness controls.
+The same reviewed collection examples now also pin parser-exposed
+`--summary-out` paths, and the rollout contract requires each collection
+runner exposing the option to parse a concrete summary artifact path from its
+argfile.
+The SFM-3 reputation collection runner now also exposes and forwards the
+checker freshness clock plus snapshot-age and ingest-lag ceilings, so live
+collection cannot silently depend on verifier defaults for those rollout
+thresholds.
+Direct SoraFS rollout/release checker argfile examples now pin their
+parser-exposed freshness clocks and age windows too, and the rollout contract
+rejects checker examples that omit those reviewed controls.
+Direct checker argfiles also keep `--summary-out` paths inside their reviewed
+`--evidence-dir`, and when the direct checker reads the same directory written
+by its collection runner, both examples must name the same summary artifact.
+Direct checker argfiles now also pin their complete `--require-kind` scope
+instead of relying on verifier defaults, and the rollout contract compares that
+scope against each verifier's current `DEFAULT_REQUIRED_KINDS`.
+Collection runner argfiles that expose `--require-kind` now pin those scopes as
+well, and aggregate production-readiness argfiles pin `--require-gate`; the
+rollout contract keeps both checked-in scopes synchronized with current
+gate/kind inventories.
+Shared SoraFS runner preflight now also requires a reviewed `--now-unix` before
+plan rendering for runners exposing `now_unix`, so collection execution cannot
+silently fall back to verifier wall-clock defaults.
+The same contract mutates checked-in checker and collection argfile examples
+with invalid `--now-unix` values and requires parser-time failure before
+evidence loading or dry-run plan rendering.
+Direct SoraFS rollout/release checkers now require reviewed `--now-unix` at
+their own CLI boundary as well, with no verifier wall-clock fallback; the
+rollout contract rejects reintroduced `time.time()` fallback paths and removes
+`--now-unix` from every checked-in direct checker argfile to verify parser-time
+failure before evidence loading.
+The Android SoraFS codegen replay fixture now derives its `generated_at`
+metadata from the reviewed fixture `now_unix_secs` instead of process wall
+clock time, so replayed tracked SDK fixture examples are deterministic across
+operator hosts.
+
+SoraFS aggregate production-readiness metadata checks now keep their
+adversarial anchor matrices tied to the configured owner-kind maps. Every
+configured `valid_*` hex-list or tuple-binding metadata field must appear in
+the mismatch test matrix before the test runs, object-list digest checks derive
+all configured digest fields automatically, object-list required-count checks
+derive from the configured source-kind/count maps, object-list non-digest
+detail checks derive all configured non-deployment string and positive-integer
+fields, object-list domain-identity duplicate checks derive from each configured
+schema/source-kind pair, object-list identity-label policy checks derive
+forbidden-marker and pattern-mismatch cases from configured lane policies,
+object-list source-kind tether failure checks derive from every configured
+object-list source-kind binding, non-object-list metadata tether failure checks
+derive from every configured scalar, list, string-array, positive-integer, and
+binding source-kind map, hex-list entry-shape checks derive from every
+configured digest/CID list field, hex-binding entry-shape checks derive from
+every configured binding field/key, positive-integer list entry-shape checks
+derive from every configured count-list field, string-list and string-array
+entry-shape checks derive from every configured string metadata list, scalar
+hex entry-shape checks derive from every configured scalar hex field, and
+top-level object metadata entry-shape checks derive from every configured
+object metadata field, and required/allowed string-list plus companion
+count-binding checks derive from their configured value maps. Ordered list
+uniqueness/sort checks derive from
+every configured ordered metadata field, required metadata presence and list
+shape checks plus cross-lane disallowed-field checks derive from the gate
+metadata contract, final-production deployment-context rejection checks derive
+from configured object and object-list metadata fields, deployment-context
+metadata/artifact consistency checks derive from every configured object or
+object-list deployment-context surface, artifact fingerprint
+deployment-context production checks derive from every configured required
+artifact kind, required-row and artifact schema binding checks derive from
+every configured required artifact kind, required and recognized artifact
+digest-shape checks derive from every configured required artifact kind,
+malformed artifact digest-shape checks derive from every configured required
+artifact kind,
+required-kind and required-row inventory checks derive from every configured
+gate,
+recognized-artifact inventory shape and count checks derive from every
+configured gate,
+required-artifact inventory shape and count checks derive from every
+configured required artifact kind,
+non-object artifact aggregate-count checks derive from every configured gate
+and required artifact kind,
+malformed required-artifact inventory aggregate-count checks derive from every
+configured required artifact kind,
+top-level count invariant checks derive from every configured gate,
+aggregate output row contract checks derive from every configured gate,
+aggregate summary envelope contract checks derive from every configured gate,
+duplicate and explicit-unrequired summary input diagnostics derive from every
+configured gate,
+unknown-schema summary input diagnostics derive from every configured gate,
+missing-summary row diagnostics derive from every configured gate,
+evidence-source conflict diagnostics derive from every configured gate,
+lane status and load-error checks derive from every configured gate,
+lane threshold shape checks derive from every configured gate,
+payload-free lane summary envelope checks derive from every configured gate,
+artifact freshness timestamp checks derive from every configured required
+artifact kind,
+artifact generated-at timestamp shape checks derive from every configured
+required artifact kind,
+artifact fingerprint shape and sensitive-key checks derive from every
+configured required artifact kind,
+artifact fingerprint deployment-context shape checks derive from every
+configured required artifact kind,
+artifact deployment-context required-field checks derive from every configured
+required artifact kind,
+artifact deployment-context reviewed-marker shape checks derive from every
+configured required artifact kind,
+artifact optional label canonicality checks derive from every configured
+required artifact kind,
+artifact schema-shape checks derive from every configured required artifact
+kind,
+artifact status-shape checks derive from every configured required artifact
+kind,
+recognized-artifact per-kind count-binding checks derive from every
+configured required artifact kind,
+recognized-artifact canonical identity-drift checks derive from every
+configured required artifact kind,
+required-artifact duplicate path checks derive from every configured required
+artifact kind,
+recognized-artifact duplicate path checks derive from every configured
+required artifact kind,
+required-artifact duplicate identity checks derive from every configured
+required artifact kind,
+required-row state checks derive from every configured required artifact kind,
+required-row presence and shape checks derive from every configured required
+artifact kind,
+required-row schema canonicality checks derive from every configured required
+artifact kind,
+required-row and artifact error-list checks derive from every configured
+required artifact kind,
+malformed required-row and artifact error-list shape checks derive from every
+configured required artifact kind,
+missing and object-shaped error-list checks derive from every configured
+required artifact kind,
+required and recognized artifact field-closure checks derive from every
+configured required artifact kind,
+path-portability checks derive from every configured required artifact kind,
+artifact path-shape checks derive from every configured required artifact kind,
+path-portability variant checks derive from every configured required artifact
+kind,
+URI-scheme and current-segment path checks derive from every configured
+required artifact kind,
+unsafe recognized-path evidence-count checks derive from every configured
+required artifact kind,
+kind canonicality checks derive from every configured required artifact kind,
+kind-label checks derive from every configured required artifact kind,
+recognized-artifact metadata binding checks derive from every configured
+required artifact kind,
+status rejection checks derive from every configured required artifact kind,
+required and recognized artifact valid-marker checks derive from every
+configured required artifact kind, malformed artifact valid-marker shape checks
+derive from every configured required artifact kind, object-list schema validation and
+duplicate-entry checks derive from every configured object-list schema, and
+string-list, string-array list,
+positive-integer list, and scalar hex checks derive from their configured
+source-kind maps while scalar hex entry-shape checks derive from every
+configured scalar hex field and top-level object metadata entry-shape checks
+derive from every configured object metadata field. The recovered coverage
+includes PDP repair-handoff, PoR governance archive handoff, reputation
+weight-digest anchors, archive backend metadata, release signature algorithms,
+provider ids, metrics, metric counts, reputation provider counts, and
+reputation snapshot scalars.
+
+SoraFS SF-8b repair rollout summaries now reject mixed active repair anchors.
+The repair evidence gate requires exactly one valid auditor-roster digest, one
+valid PoR/PoTR failure-capture bundle digest, one valid governance handoff
+digest, and one valid handoff policy digest before roster-bound, failure-bound,
+handoff-bound, or policy-bound artifacts can satisfy final promotion.
+
+SoraFS SF-9 PoR rollout summaries now reject mixed active randomness and
+archive-handoff anchors. The PoR evidence gate requires exactly one valid seed
+replay digest, one valid policy digest, and one valid governance archive
+handoff digest before seed-replay-bound, policy-bound, or archive-handoff
+metadata can satisfy final promotion, while still preserving reviewed
+archive-backend inventory reporting.
+
+SoraFS SF-14 PoTR rollout summaries now reject mixed active deadline-proof
+anchors. The PoTR evidence gate requires exactly one valid receipt-summary
+digest, one valid PQ key-roster digest, one valid reputation-weight policy
+digest, and one valid governance policy digest before receipt-summary-bound,
+PQ-key-roster-bound, reputation-weight-bound, or aggregate governance-policy
+metadata can satisfy final promotion.
+
+SoraFS SFM-4b2 appeal-finance rollout summaries now reject mixed active pricing
+anchors. The appeal-finance evidence gate requires exactly one valid
+pricing-config digest and one valid pricing policy digest before config-bound,
+policy-bound, or multi-peer reconciliation metadata can satisfy final
+promotion.
+
+SoraFS reserve-rent rollout summaries now reject mixed active
+policy/matrix/ledger chains. The reserve-rent evidence gate requires exactly
+one valid policy digest, one valid policy/matrix binding, and one valid
+policy/matrix/ledger binding before policy-bound, matrix-bound, ledger-bound,
+or provider-bake metadata can satisfy final promotion.
+
+SoraFS SFM-2 orderbook rollout summaries now fail closed on mixed active
+contract-surface anchors. The orderbook evidence gate requires exactly one
+valid contract digest and exactly one valid policy digest before downstream
+contract-bound or policy-bound artifacts can satisfy final promotion, and the
+plan docs plus static rollout contract pin the singleton-anchor behavior.
+
+SoraFS SFM-4 gateway-compliance rollout summaries now also reject mixed active
+feed-promotion anchors. The gateway-compliance evidence gate requires exactly
+one valid feed-promotion bundle digest and exactly one valid policy digest
+before bundle-bound or policy-bound artifacts can satisfy final promotion, and
+the plan docs plus static rollout contract pin the fail-closed singleton-anchor
+behavior.
+
+SoraFS SF-5a gateway-load rollout summaries now reject mixed active load
+promotion anchors. The gateway-load evidence gate requires exactly one valid
+local conformance suite digest, one valid staging-load report digest, and one
+valid policy digest before suite-bound, staging-bound, or policy-bound artifacts
+can satisfy final promotion, and the gateway-load plan plus static rollout
+contract pin the fail-closed singleton-anchor behavior.
+
+SoraFS SFM-4b1 PoP rollout summaries now reject mixed active moderation
+snapshot anchors. The PoP evidence gate requires exactly one active root
+digest, revocation-list digest, verifier policy digest, and moderation PoP
+snapshot digest before root-bound, revocation-bound, policy-bound,
+juror-sync-bound, or moderation-snapshot-bound artifacts can satisfy final
+promotion, and the PoP plan plus static rollout contract pin the fail-closed
+singleton-anchor behavior.
+
+SoraFS SF-12 Governance DAG rollout summaries now reject mixed active publisher
+anchors. The Governance DAG evidence gate requires exactly one valid public
+head CID, exactly one valid publisher policy digest, and exactly one valid
+checkpoint digest before public-head-bound, policy-bound, or checkpoint-bound
+artifacts can satisfy final promotion.
+
+SoraFS SF-13 PDP rollout summaries now reject mixed active proof-generation
+and repair-handoff anchors. The PDP evidence gate requires exactly one valid
+proof summary digest, one valid policy digest, one valid provider-roster digest,
+and one valid repair-handoff digest before proof-summary-bound, policy-bound,
+provider-roster-bound, or repair-handoff metadata can satisfy final promotion.
+
+Nexus autoscale scale-in now preserves certified standalone lane-block
+progress. Managed retire candidates are skipped when their current
+lane/dataspace has a valid certified lane-block sidecar without a matching
+application receipt, and committed lifecycle validation rechecks that invariant
+before publishing lane geometry so late certified progress cannot be destroyed
+by a staged scale-in. Rollout progress parsing now also treats rejected direct
+lane-block preflights as blockers, not expansion evidence, even when the
+committed lane block carries quorum-signed prepare and commit QCs; the
+Sumeragi/Torii executor-handoff flag now reports the same fail-closed state.
+Kura now centralizes the direct-applier readiness predicate, requiring
+conflict-free predecessor application, no existing receipt/conflict, and a
+clean current-tip preflight before exposing recovered execution input. Kura also
+has a direct-execution application receipt format for clean direct preflight
+evidence tied to a committed state hash, so the direct lane-state applier
+does not need to mislabel standalone effects as canonical global-block results.
+Queue-generated direct preflights now bind to the canonical committed WSV
+snapshot hash, so direct lane-state effects can invalidate stale preflight
+evidence even when the canonical block hash does not advance. Sumeragi now
+commits clean current-tip direct preflights into world state with durable
+applied markers, replays direct receipts into state on restart, and repairs
+missing direct receipts from committed markers. Those markers also participate
+in the tiered WSV snapshot segment/key-handle machinery and are pruned whenever
+lane-scoped runtime state is reset, so idempotence survives incremental
+cold-tier snapshots without leaking across retire/recreate, dataspace-migration,
+or autoscale scale-in boundaries. Direct receipt repair/replay also refuses
+inactive lane/dataspace routing evidence before touching Kura or WSV state.
+Autoscale scale-in also refuses to retire a lane while committed direct
+application markers for that lane lack matching durable direct-execution
+receipts, both during deterministic retire-candidate selection and commit-time
+staged lifecycle revalidation. Malformed marker storage keys are treated as
+unrepaired even when the marker payload has a durable direct receipt, so
+scale-in cannot prune retained-lane idempotence evidence through a forged key.
+Direct receipt repair now treats the marker storage key as part of the
+committed evidence and refuses malformed key/payload rows instead of promoting
+them into durable Kura receipts or direct transaction membership. Existing
+direct markers also cannot let durable receipts for inactive lane/dataspace
+routes backfill non-canonical transaction membership after lane retirement.
+Recovered direct execution inputs now reject duplicate entrypoints, signed
+transactions, and sealed commitments before any state execution is staged,
+matching canonical block duplicate protection for standalone lane payloads.
+Direct application also records accepted transaction hashes in a non-canonical
+membership index so duplicate admission checks see direct WSV effects without
+advancing canonical transaction height; marker repair and receipt replay
+backfill that index when durable direct-application evidence already exists.
+Partial direct-membership repair now inserts only missing hashes, preserving
+existing direct membership heights when another hash in the same receipt still
+needs backfill.
+Nexus-active lane-block queueing also prunes in-memory lane-block
+proposal/QC sessions and committed-lane execution queue entries against the
+current active `(LaneId, DataSpaceId)` routes plus lane reset watermarks before
+status publication, so retired or recreated lane sessions cannot keep stale
+slot claims or committed status alive in actor memory. Proposal planning now
+filters in-memory committed-queue lane tips through the same active-route and
+reset-watermark predicate before mutating prune runs, so stale queued
+old-incarnation sessions cannot become fresh proposal predecessors. Committed
+block-artifact tip snapshots read from Kura and cached relay envelopes also
+honor lane reset watermarks, and relay envelopes must be merge-admissible with
+a standalone lane-block descriptor hash before they can seed proposal
+predecessor tips. Historical lane payload artifacts, old-incarnation relays at
+or below the reset height, or descriptorless verified relays therefore do not
+export stale predecessor descriptor hashes or global-height compatibility
+coordinates into fresh proposal planning. Lane-block
+ingress and local broadcast preflight now perform the same Nexus-active route
+and reset-watermark checks before proposal/vote/QC caching or transport, so
+stale route or old-incarnation messages cannot seal or rebroadcast QCs, emit
+local commit votes, or enqueue committed lane-block sessions during the
+pre-prune window. Ingress also
+revalidates the embedded validator set hash/count/full set and quorum
+threshold before session insertion: shared single-routable-lane mode checks
+the live consensus roster used for lane-block planning, and proposal-lookahead
+mode checks the current authoritative lane peers. Vote ingress also requires
+the vote signer to belong to that expected committee and requires an
+authenticated sender before session insertion, so senderless votes or orphan
+votes with spoofed committee metadata fail closed before cache side effects.
+Active-route messages from self-appointed or quorum-downgraded committees fail
+closed before cache or broadcast side effects.
+The generic `SumeragiHandle::try_incoming_block_message*` paths now treat
+standalone lane-block proposal/vote/QC messages as blocking consensus evidence,
+matching network relay ingress, so block-worker queue pressure cannot
+best-effort drop lane-block evidence before route, sender, and committee
+authority validation runs.
+Final proposal assembly now also loops locally produced lane-block proposals
+and locally signed BLS prepare votes back through the same ingress handlers
+after scheduling their background broadcasts. Leaders no longer wait for
+network echo before caching their own lane-block proposal/vote evidence, while
+nonlocal or tampered prepare-vote plans still skip local vote caching.
+Local lane-block transport preflights route, committee authority, signature,
+and cache-conflict admissibility before scheduling proposal, prepare-vote,
+sealed-QC, or post-prepare-QC commit-vote broadcasts, so duplicate, same-slot
+conflicting, or stale-route locally produced artifacts are recorded as
+duplicate/invalid without reaching background transport. Active-route artifacts
+with spoofed validator-set metadata are now pinned at the same local broadcast
+boundary for both post-prepare commit votes and sealed prepare/commit QCs, so
+cached non-authoritative sessions cannot leak to peers or enqueue committed
+lane-block execution. Ingress and local transport-preflight coverage also pin
+the case where the embedded validator set is exactly the live shared committee
+but the quorum threshold is forged downward; proposal, vote, post-prepare commit
+vote, and QC paths all fail before cache, status, queue, or transport side
+effects.
+Lane consensus-domain planning now also refuses explicit committee
+`min_quorum` values that do not match the deterministic commit quorum for the
+canonical validator set, and lane-block vote planning refuses internally
+hash-consistent descriptors whose embedded quorum diverges from that same
+canonical threshold before any local validator signature is produced.
+Local commit-vote production now applies the active-route, authoritative
+committee, canonical-quorum, and local-signer checks before signing cached
+prepare-QC requests, so forged cached sessions for inactive routes,
+self-appointed committees, or quorum-downgraded live committees are skipped
+without producing a local BLS commit vote.
+Local prepare-vote production now applies the same pre-sign checks to scheduler
+vote plans, so spoofed or quorum-downgraded active-route prepare plans cannot
+create a local BLS prepare signature, orphan lane session, invalid-vote drop, or
+background broadcast.
+Committed lane-block queue hydration now revalidates certified sessions before
+bounded restart admission, rejecting invalid proposals, missing aggregate QC
+signatures, wrong prepare/commit phase slots, and proposal/QC committee drift
+before malformed durable sidecars can publish status, recover payloads, or
+consume capacity needed by a later valid certified session.
+Certified lane-block sidecar snapshots now honor lane reset watermarks too:
+stale same-lane sidecars at or below the reset height no longer seed proposal
+tips, restart execution queues, or autoscale unapplied-progress checks, while
+fresh post-reset sidecars remain visible; Sumeragi startup preloads the
+persisted DA reset journal before certified sidecar recovery.
+Direct application marker scale-in guards now apply the same reset-watermark
+boundary per queried lane, so stale key or marker evidence reintroduced after
+lifecycle cleanup cannot block fresh-lane scale-in, while fresh post-reset
+unrepaired markers and malformed key/payload rows still block destruction.
+Autoscale commit also re-prunes lane-scoped block-local cleanup state
+immediately before publishing the world block, covering AXT replay rows, DA
+pin indexes, direct application markers, public-lane validators/economics, and
+verified relay contract storage, then repeats durable cleanup in committed
+storage to prevent late inserts after lifecycle staging from surviving
+scale-in for retired lanes.
+Committed lane-block status now distinguishes direct WSV application as
+`state_applied_by_direct_execution` instead of reporting it as canonical block
+application.
+Autoscale localnet cycle summaries and soak JSONL artifacts now also record
+how many peers reported certified direct-applied committed lane blocks, so
+rollout evidence can distinguish direct WSV application from generic expansion
+signals. The rollout parser also rejects conflicting latest committed-lane
+status rows for the same lane height/view instead of choosing one by dataspace
+id, only counts default-dataspace committed-lane rows as autoscale
+expansion/direct-application/destruction evidence, treats ambiguous or
+certified elastic-lane committed-block evidence as non-idle for scale-in,
+rejects duplicate elastic-lane status rows as malformed destruction evidence,
+rejects ambiguous baseline lane evidence repairs for status, commitment,
+committed-block, and validator summaries, and counts lane-specific
+transition-log evidence by unambiguous transition height rather than raw
+matching lines. Exact duplicate
+same-height transition rows are idempotent and conflicting same-height rows are
+dropped as ambiguous; ambiguous heights remain visible and block fresh
+scale-out/scale-in delta quorum from either the baseline or current snapshot.
+Lane-relay summaries now also preserve dataspace ids, standalone descriptor
+presence, and merge-admissibility state. Autoscale expansion only counts
+default-dataspace relay rows that are both descriptor-backed and
+merge-admissible, while descriptorless or non-merge relay rows for the retiring
+elastic lane still count as lingering state and block scale-in. Wrong-dataspace
+relay rows cannot fake default-route progress or block destruction.
+Exact duplicate same-height default-dataspace relay rows are idempotent, while
+descriptor-hash drift or merge-admissibility drift in the latest relay row set
+is ambiguous, cannot prove expansion, and remains non-idle for scale-in.
+The runtime lane-relay status cache now keys entries by immutable relay
+identity, including header hash, descriptor hash, DA hash, settlement hash, RBC
+byte count, and manifest root, so descriptor drift remains visible while
+merge-admissible rows can still upgrade matching pending rows and cannot be
+downgraded by later non-merge rows. The state-side `LaneRelayStore` now uses
+the same immutable identity boundary before pending rows can be upgraded with
+QC/FastPQ material, so descriptor drift cannot overwrite pending relay evidence
+under the guise of a verified upgrade. `State::record_lane_relay` has matching
+regression coverage to keep rejected drift from replacing the state relay cache
+or Sumeragi status cache.
+Sumeragi lane-payload ownership status now validates canonical replay material
+before exposing rows or applying the status cap, so malformed subject,
+payload-ownership, RBC-instance, or descriptor hashes cannot leak as ownership
+evidence or evict valid recent rows.
+Committed-lane status now validates each row against its embedded proposal,
+prepare QC, and commit QC before exposing or capping it, reusing the
+lane-consensus committed-session validator so summary drift, malformed proposal
+hashes, QC phase drift, committee drift, missing aggregate signatures, and
+under-quorum signer bitmaps cannot leak as certified lane-block evidence.
+Default-dataspace committed-lane rows now also have to carry canonical quorum
+metadata before they can prove rollout progress: `min_quorum` must match the
+deterministic quorum for `validator_count`, the advertised validator set must
+fit the fixed localnet peer set, and prepare/commit signer counts must be in
+range while satisfying that quorum. Quorum-downgraded rows, impossible signer
+counts, or impossible validator-set sizes cannot fake expansion/direct
+execution, and malformed latest default-dataspace rows remain non-idle for
+scale-in instead of being treated as absence.
+Commit-quorum discovery in the localnet corridor now also fails closed after
+timeout when peer status reports split-brain or out-of-range explicit quorum
+values, explicit quorum values that do not match reported validator-set length
+or peer-count fallback quorum, or conflicting/out-of-range validator-set lengths,
+instead of masking that status drift with peer-count fallback.
+Expansion status and deterministic transition comparison now also require
+provided baselines to cover the same peer set as the current snapshot, so
+partial snapshots cannot count current-state lane evidence or transition deltas
+as fresh expansion/scale-in quorum.
+Elastic-lane storage fallback now requires structural growth (file count,
+total bytes, or first presence) instead of metadata-only mtime movement, and it
+requires complete peer storage snapshots plus aligned current/baseline
+elastic-storage rows before storage fallback can prove expansion. The
+rollout parser also applies the same
+latest-unambiguous rule to Sumeragi lane-commitment summaries so conflicting
+latest commitment rows cannot fake activity, post-baseline progress, or
+post-baseline declaration transitions, and ambiguous commitment rows cannot
+prove scale-in idleness. Public lane-validator summaries now fail
+closed for conflicting duplicate rows in both directions: ambiguous
+live/terminal rows do not create expansion evidence and do not prove scale-in
+idleness. Exact
+duplicate rows remain idempotent evidence. The
+lane-local session cache now also protects quorum-certified
+prepare+commit QC sessions from ordinary cache eviction until the executor
+boundary drains them, so committed-lane queue backpressure cannot silently drop
+certified lane progress. Sumeragi tick also redrives the committed-lane
+executor queue, records receipt-backed progress for already pending sessions,
+and admits protected committed cache entries once queue capacity is freed, so
+backpressure recovery no longer depends on a fresh lane-block network message.
+Same-tick committed-lane status now merges newly recorded applied-receipt
+evidence with the final post-prune queue snapshot, keeping rollout telemetry
+accurate across that recovery transition. Startup status also merges the latest
+durable application-receipted certified sidecar per active lane with the
+in-memory pending queue, so restarted peers keep publishing applied
+committed-lane evidence for both canonical block receipts and direct execution
+receipts even when already receipted sessions are skipped by execution
+hydration.
+The remaining multilane execution work is the broader independent-lane
+multi-peer rollout corridor.
+
 Kagemusha online-to-offline top-up now has a first-class
 `KagemushaRecursiveSpendTopUpRequestV1` producer path, a chain-side
 `TopUpKagemushaRecursive` instruction, and Torii
@@ -21,26 +563,29 @@ Remaining launch work should focus on end-to-end operator/mobile rollout
 validation rather than reviving the retired Offline V2 `/notes/issue`
 construction path.
 
-Kagemusha Reserved-lineage key artifact generation remains the active launch
-blocker for offline transfer verification. The `lineage-key-artifacts` command
-now fails before Halo2 verifier-slice configuration when deterministic
-fixed-window layout estimates exceed the memory guard, instead of silently
-entering unbounded configure/keygen on laptops. The next implementation step is
-a full row-oriented verifier-slice layout, followed by signed release artifact
-generation for the init and append profiles. The first reusable row primitive
-for scalar fixed-window decomposition is now wired into the production
-shared-table scalar-mul/MSM/IPA verifier-slice path. The production
-shared-table path now also uses the row-oriented fixed-window table and
-selector configs: table derivation reuses one table-entry config and one
-complete-add config across row strides, and selection reuses one point column
-set for leaves and internal tree nodes instead of per-tree-node advice columns.
-The shared scalar-mul config now also reuses one deterministic doubling config
-across all window-base transition rows and one accumulator-add config across
-all selected-point accumulation rows. Remaining work is to finish the
-higher-level row-oriented MSM and IPA verifier-slice aggregation reuse where
-those wrappers still allocate per-operation configs, revalidate full
-init/append artifact generation on release-builder hardware, and then remove
-the artifact-generation guard as a hard stop.
+Kagemusha mobile offline transfer now has a practical first-release path that
+does not depend on packaged Reserved-lineage init artifacts: SDK init requests
+may omit both lineage key fields, the native bridge emits a semantic
+`kagemusha-recursive-aggregation-v1` bundle, and redemption carries the
+record-backed lineage witness. Reserved-lineage key artifact generation remains
+the active blocker for witnessless lineage packages and Reserved-lineage append
+output. The `lineage-key-artifacts` command now fails before Halo2 keygen when
+deterministic fixed-window layout estimates exceed the memory guard or when the
+direct verifier-slice row footprint cannot fit the canonical Halo2 domain,
+instead of silently entering unbounded configure/keygen on laptops. The
+production verifier profile has been realigned to direct `255 x 1` fixed
+windows, so the recursive verifier assigns window bases directly and the
+fixed-window manifest carries zero shared table families. A measured LEN=4
+one-hop run now reports 49,725 required usable rows against 3,838 usable rows at
+canonical `k = 12`; the minimum compatible domain would be `k = 16`, which is
+not acceptable with the current column-heavy shape. The row-oriented primitives
+still cover non-direct profiles: scalar decomposition, table derivation,
+selector trees, deterministic doubling, selected-point accumulation, and MSM
+running sums all reuse row configs instead of rebuilding per-window/per-term
+columns. Remaining work is to redesign the verifier-slice layout so it is both
+row- and memory-feasible, then revalidate full init/append artifact generation
+and remove the artifact-generation guard as a hard stop for witnessless
+Reserved-lineage artifacts.
 
 Public NPoS XOR handling is pinned to canonical asset-definition bindings:
 `xor#universal` is only an alias selector, Taira binds it to
@@ -93,7 +638,7 @@ while keeping the same adversarial release-audit/native-payload rejection
 coverage. IVM's README/prover notes now describe the delivered production
 verifier boundary directly: OpenVerify IPA/Pasta envelopes are verified at
 runtime, `MockProver` remains test/off-chain circuit-gadget tooling, and the
-stale TODO/mock-circuit status wording is gone.
+stale follow-up/mock-circuit status wording is gone.
 Swift status feed provisioning also closed the checksum/health observability
 follow-up: parity and CI feeds now require SHA-256 sidecars, the CI wrapper
 verifies source sidecars before enrichment, final feed artifacts get matching
@@ -325,6 +870,11 @@ SCCP strict release-checklist Markdown exact-key hardening was completed on
 2026-07-09: strict bundle readiness Markdown release-checklist row and invariant
 helpers now normalize copied checklist roots and items through exact public
 string-key views before gate, status, or blocker diagnostics can consume them.
+SCCP user-prover Markdown exact-key hardening was completed on 2026-07-09:
+standalone readiness and strict bundle user-prover Markdown row and invariant
+helpers now normalize copied submission-surface rows through exact public
+string-key views before helper, phase, status, blocker, or invariant diagnostics
+can consume them.
 Native EVM prover bundle validation now applies the same fail-closed expected
 binding-root rule to the active lane destination-binding hash, so a locally
 canonical native bundle cannot pass when its sibling destination evidence root
@@ -3015,33 +3565,40 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   missing-runner-input diagnostics when any path drifts out of the scan.
 - ZK asset light-client readiness now has a Torii `POST /v1/zk/merkle-path`
   endpoint for current confidential-v2 commitment inclusion paths, and the
-  Kotlin/JVM plus Android Java Torii Merkle providers call it directly.
+  Kotlin/JVM, Android Java, and Swift Torii Merkle providers call it directly.
+  Swift also has a local audited-frontier provider for offline callers.
   Torii-backed providers verify returned sibling paths against requested
   commitments and roots, and SDK path models enforce leaf-index direction
   consistency before wallet or prover code receives paths. The SDK Torii
   clients also reject quoted or fractional numeric fields in zk roots/path
   responses so wallet code sees the same integer shapes the node emits. SDK
   response parsers must also keep node-supplied Merkle paths structurally
-  exact: duplicate keys, overflowing counters, depth/array mismatches, root
-  mismatches, direction-bit mismatches, and `leaf_index >= frontier_len` fail
-  before wallet code can consume proof material. Keep local providers limited
-  to audited caller-supplied frontier material. The SDK parity guard now pins
-  the Kotlin/JVM and Android Java Torii parser-shape tests so duplicate-key and
-  non-canonical numeric regressions cannot be dropped from the focused JVM
-  lane.
+  exact: duplicate keys, overflowing counters, non-lowercase fixed32 hex,
+  missing witness nodes, depth/array mismatches, root mismatches,
+  direction-bit mismatches, reordered commitment responses, and
+  `leaf_index >= frontier_len` fail before wallet code can consume proof
+  material. Keep local providers limited to audited caller-supplied frontier
+  material and rejecting duplicate commitments or mismatched root history. The
+  SDK parity guard now pins the Kotlin/JVM, Android Java, and Swift Torii
+  parser-shape tests so duplicate-key and non-canonical numeric regressions
+  cannot be dropped from the focused SDK lanes.
 - Confidential-v2 SDK note derivation and encrypted note payload handling now
-  exist for Kotlin/JVM and Android Java, with Rust-vector parity for owner tags,
-  note commitments, nullifiers, asset tags, and chain tags, Rust-fixture parity
-  for the `ConfidentialEncryptedPayload` wire envelope, low-order X25519
-  public-key rejection parity, canonical ciphertext-length rejection parity,
-  a 64 KiB encrypted-note ciphertext cap, and a shared deterministic
-  X25519/HKDF-SHA256/XChaCha20-Poly1305 plaintext vector. Default decryption
-  binds the plaintext owner tag to the supplied spend key, while diversified
-  notes must use the explicit expected-owner-tag overload. Keep the
-  higher-level wallet flows pinned to this contract when wiring shield-note
-  recovery into production clients. The focused JVM SDK runner and SDK parity
-  guard now execute and pin both the encrypted-payload model tests and
-  confidential-note contract tests for Kotlin/JVM and Android Java.
+  exist for Kotlin/JVM, Android Java, and Swift, with Rust-vector parity for
+  owner tags, note commitments, nullifiers, asset tags, and chain tags,
+  Rust-fixture parity for the `ConfidentialEncryptedPayload` wire envelope,
+  low-order X25519 public-key rejection parity, canonical ciphertext-length
+  rejection parity, a 64 KiB encrypted-note ciphertext cap, and a shared
+  deterministic X25519/HKDF-SHA256/XChaCha20-Poly1305 plaintext vector. Swift
+  now also exposes the typed confidential transfer witness/request builders
+  and verified-fold top-up bundle builders, including the
+  confidential-transfer-v2 verifier-record archive with its 32-bit `status`
+  field. Default decryption binds the plaintext owner tag to the supplied spend
+  key, while diversified notes must use the explicit expected-owner-tag
+  overload. Keep the higher-level wallet flows pinned to this contract when
+  wiring shield-note recovery into production clients. The focused JVM and
+  Swift SDK runners plus SDK parity guard now execute and pin the
+  encrypted-payload model tests, confidential-note contract tests, Merkle-path
+  parser tests, witness/request builder tests, and verified-fold top-up tests.
 - Kagemusha SDK parity must keep ABI-7 compact projection verifier surfaces
   aligned across package roots and native hosts. Python now exposes both the
   optional-height verifier and the explicit
@@ -3208,12 +3765,12 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   The non-C# SDK gates now also consume a regenerated checked-in ABI-7
   recursive-spend archive fixture after aligning data-model/core reserved
   recursive verifier evidence to
-  `pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4`. The Python
+  `pallas-ipa-transparent-v1/vesta-recursive-fixed-window-255x1`. The Python
   native generator derives `verify_result` from the same typed verify request
   context used by the committed fixture, and the policy guard pins the
   refreshed archive hashes plus an ABI-7 archive-drift negative control. The
   same policy guard rejects stale current-profile roadmap prose so release
-  handoffs keep naming the active `64x4` profile source and binary instead of
+  handoffs keep naming the active `255x1` profile source and binary instead of
   retired verifier-witness profiles.
   Those same SDK decoders now also include trailing-field vectors that append a
   valid extra Norito field to the nested `verifierKeyId`, recursive-proof, and
@@ -3601,11 +4158,13 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   `--negative-control-csharp-init-append-request-codecs`, and the 2026-06-29
   Windows `.NET 8.0.422` C# pass certifies those typed request vectors.
   Swift, Kotlin/JVM, and Android Java typed init/verifier request constructors
-  now also assert exact diagnostics for missing init lineage verifier keys,
+  now also assert exact diagnostics for partial init lineage key material,
   wrong-schema record bundles, and wrong-schema verifier-record archives before
-  native dispatch; the SDK parity guard mutates those exact assertion markers
-  under the init-lineage negative control and pins Swift's nil-key case with a
-  scoped regex. Kotlin/JVM and Android Java append request coverage now also
+  native dispatch; nil/nil init lineage key material selects the semantic
+  recursive-aggregation path instead of Reserved-lineage. The SDK parity guard
+  mutates those exact assertion markers under the init-lineage negative control
+  and pins Swift's partial-key case with a scoped regex. Kotlin/JVM and Android
+  Java append request coverage now also
   pins the exact wrong-record-bundle message so append-side archive preflight
   cannot regress to a broad exception assertion. Kotlin/JVM and Android Java
   redeem lineage preflight coverage also pins the exact
@@ -3613,20 +4172,23 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   witness archives, so malformed-witness vectors cannot fall back to broad
   exception assertions.
   The Ubuntu/Windows C# SDK matrix must keep the typed init/verifier request path
-  carrying the same exact missing-lineage-key and wrong-schema archive
+  carrying the same exact partial-lineage-key and wrong-schema archive
   diagnostics.
   The 2026-06-29 Windows `.NET 8.0.422` C# pass confirms the C# typed
-  init/verifier request path carries the same exact missing-lineage-key and
+  init/verifier request path carries the same exact partial-lineage-key and
   wrong-schema archive diagnostics on `win-x64`.
-  Init and lineage-append requests must also keep lineage verifier/proving-key
-  artifacts bound to the expected one-hop or append circuit and verifier-key
-  commitment before serialization; wallet-facing constructors should prefer
-  validated `LineageKeyArtifacts` packages over manually split raw key bytes,
-  including through the high-level recursive-spend request helper overloads.
+  When init requests choose Reserved-lineage by supplying lineage material, and
+  when lineage-append requests require Reserved-lineage output, verifier/proving-key
+  artifacts must stay bound to the expected one-hop or append circuit and
+  verifier-key commitment before serialization; wallet-facing constructors
+  should prefer validated `LineageKeyArtifacts` packages over manually split raw
+  key bytes, including through the high-level recursive-spend request helper
+  overloads.
   Kotlin/JVM and Android Java init helper overloads that auto-generate Pallas
-  openings now preflight raw lineage key material and typed init
+  openings now allow absent init lineage key material for semantic init, and
+  preflight partial raw lineage key material plus typed init
   `LineageKeyArtifacts` before invoking the current-hop Pallas builder, so a
-  missing key or append-profile artifact cannot be masked by native bridge
+  half-present key or append-profile artifact cannot be masked by native bridge
   availability or builder failures.
   Kotlin/JVM and Android Java append helper overloads that auto-generate Pallas
   openings now also preflight raw lineage key material and typed append
@@ -4580,9 +5142,9 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
     transition-profile append hash
     `8152ec1d4df4fe8df290d3b049108260f57d9014b8f551065073c17f6523fb7e`,
     redeem request hash
-    `1fe949217c8bbe26957cf2a2510d79894e15b20fc5143dee2c3a1ff8678d3a5d`,
+    `703128068fa36897c952640cb77006af29a8aa802d67da82c97e73c8e0ef1864`,
     and redeem instruction hash
-    `dd7bcb5ab602696be67028e03578933a93e9396057a5decefe8cc9058662bf85`,
+    `e05fb3ebb3a3e823f65403e09d1aa6e5deab0145f7aa0827f66a371ad633cc3e`,
     with Linux native-backed C# gate coverage; Windows `.NET 8` corridor/TRX
     certification remains on the Windows-machine handoff path.
   - C# source-level typed redeem preflight support now accepts the trailing
@@ -4592,7 +5154,7 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
     The Windows-machine `.NET 8` follow-up must certify multi-profile
     record-backed lineage-witness redeem cases.
   - C# source-level shared ABI-7 archive fixture assertions now pin the
-    regenerated current `64x4` profile hashes:
+    regenerated current `255x1` profile hashes:
     append-bundle
     `e43ab6640942e2298c260556175c216eb652da5a79ab0454b4cc5e31bb7fecb0`,
     verify-request
@@ -5712,15 +6274,18 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   The 2026-06-29 Windows `.NET 8.0.422` C# pass confirms the C# typed
   init/Pallas archive path reports the same structured checksum and malformed
   archive diagnostics on `win-x64`.
-  Kotlin/JVM and Android Java proof-output-only and evidence-builder tests must
-  also keep exact diagnostics for empty hop lists, proof-only recursive spend
-  helper rejection, rejected privacy build results, inactive unshield verifier
-  records, and unshield proofs used as transfer hops; the JVM Pallas-builder
-  negative control now mutates the exact Kotlin/JVM init/append proof-only
-  helper assertions plus the Android Java proof-only init/append assertion
-  call sites, alongside the rejected-proof, inactive-record, and unshield-hop
-  message markers, so helper rejections cannot collapse to variable-presence
-  checks or broad message containment.
+  Kotlin/JVM and Android Java proof-only request-helper and evidence-builder
+  tests must also keep exact diagnostics for empty hop lists, proof-only
+  recursive spend helper rejection, rejected privacy build results, inactive
+  unshield verifier records, and unshield proofs used as transfer hops; the
+  first-release fold-bundle API accepts only typed hop evidence, and the SDK
+  source guards must keep the retired proof-output-only fold-builder overloads
+  from reappearing. The JVM Pallas-builder negative control now mutates the
+  exact Kotlin/JVM init/append proof-only helper assertions plus the Android
+  Java proof-only init/append assertion call sites, alongside the
+  rejected-proof, inactive-record, and unshield-hop message markers, so helper
+  rejections cannot collapse to variable-presence checks or broad message
+  containment.
   The Ubuntu/Windows C# SDK matrix must keep the C# proof-output/evidence-helper
   path carrying the same rejected privacy result and inactive verifier-record
   diagnostics.
@@ -5800,7 +6365,7 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   partial/exact redeem planning are runtime-checked instead of only parsed.
   Swift recursive compact native archive validation must keep
   `KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes` equal to
-  the shared `KagemushaRecursiveSpendProver.nativeArchiveMaxBytes` 64 MiB cap,
+  the shared `KagemushaRecursiveSpendProver.nativeArchiveMaxBytes` 256 MiB cap,
   with the focused Swift test, SDK parity inventory, and
   `--negative-control-swift-recursive-compact-native-archive-cap` mode proving
   the cap cannot drift upward before native bridge calls allocate or copy
@@ -6923,7 +7488,7 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   verifier-key bytes have been checked against the full circuits in explicit
   expensive equivalence tests, and the release CLI has been rebuilt with that
   path. The current replacement run must use a freshly rebuilt
-  `target/release/iroha` from the `64x4` profile source, passed explicitly
+  `target/release/iroha` from the `255x1` profile source, passed explicitly
   with `--iroha-bin`, before its evidence can satisfy the release gate.
   A replacement production-width staged run is in progress; the remaining
   lineage release blocker is successful init/append key-artifact generation plus
@@ -6964,7 +7529,7 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   after about 9h26m with no artifacts. A detached replacement retry is in
   progress, but 2026-06-25 stale logs showed mixed binary provenance on some
   attempts; the current replacement must use the freshly rebuilt
-  `target/release/iroha` `64x4` binary through `--iroha-bin`. The remaining
+  `target/release/iroha` `255x1` binary through `--iroha-bin`. The remaining
   compact-key release blocker is a successful rerun that
   produces artifacts and is finalized into `artifacts/kagemusha`.
 - Continue reducing local/CI compile memory after the WSL cargo-test hardening
@@ -7660,6 +8225,22 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   suite labels/IDs are intentionally rejected. Keep future fixture and SDK work
   aligned with the regenerated `snnet-interop-nk{2,3}-v1.json` contents rather
   than adding compatibility aliases.
+- The SoraFS gateway DNS owner runbook family now uses governed cutover
+  runtime tokens and reviewed sample ticket IDs instead of fixed March 2025
+  command examples; the rollout static contract scans canonical and localized
+  copies for stale `OPS-XXXX`/`SNS-DF-XXXX` tickets, dated 2025 cutover
+  examples, date-coded DNS tags, and reopened kickoff wording.
+- SoraFS gateway denylist update removals now fail closed when a requested
+  descriptor is absent from the reviewed base bundle; the former
+  `--allow-missing-removals` patching waiver is removed from the CLI/docs, and
+  the rollout static contract plus Rust negative test pin that missing-removal
+  descriptors abort before any output bundle is written.
+- SoraFS gateway direct-mode enable now keeps `require_manifest_envelope`,
+  `enforce_admission`, and `enforce_capabilities` enabled in the emitted Torii
+  snippet, validates canonical provider/manifest digests, recomputes expected
+  hostnames and HTTPS direct-CAR URLs before printing config, rejects plans that
+  omit manifest-envelope or direct-CAR capability evidence, and escapes TOML
+  strings so tampered plan JSON cannot inject additional settings.
 - SoraFS SF1 chunker fixture parity now includes the documented Node helper:
   `scripts/check_sf1_vectors.mjs` compares generated TypeScript, Rust, and Go
   bindings against `sf1_profile_v1.json`, checks manifest metadata/file sizes,
@@ -7721,9 +8302,10 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   proof-only coverage cannot satisfy readiness.
   Event-watch artifacts now also bind `count` to
   duplicate-free `events[].sequence` values in addition to `events[]` length
-  and `limit` checks, and transport artifacts bind `sse_event_count` and
-  `websocket_event_count` to reviewed `sse_events[].name` and
-  `websocket_events[].name` inventories, require
+  and `limit` checks, and require every V1 event row in the batch to carry the
+  same snapshot id, Merkle root, and provider count. Transport artifacts bind
+  `sse_event_count` and `websocket_event_count` to reviewed
+  `sse_events[].name` and `websocket_events[].name` inventories, require
   `reputation-sse-event-*` and `reputation-websocket-event-*` production labels
   without non-production markers, so malformed or repeated event/transport rows
   cannot inflate readiness. Snapshot
@@ -7741,6 +8323,11 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   fields as `EVIDENCE_REQUIRED_FIELDS`, and the collection harness includes the
   checker-backed `evidence_contract` map in dry-run output for publish/latest,
   provider, events, verify, metrics, transport, and consumption artifacts.
+  Schema-less directory evidence kind inference now uses only exact reviewed
+  filename stems and exact `provider-`/`verify-` prefixes, rejecting uppercase,
+  underscore, `fetch`, `proof`, `watch`, `sse`, `prometheus`, and loose routing
+  aliases so untyped files cannot satisfy required rows by filename
+  normalization.
   Standard artifact summaries sanitize malformed `schema`/`status` fields and
   fail otherwise-clean artifacts before those fields can enter rollout reports.
   Required evidence summaries now also reject artifact buckets containing
@@ -7788,11 +8375,36 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
 	  checker `DEFAULT_REQUIRED_KINDS`, and collection-runner summary flags to stay
 	  in lockstep before production readiness can be claimed. It now also scans
 	  active SoraFS implementation, SDK, CLI, Torii/config, and operator-script
-		  source paths for TODO/FIXME/XXX/TBD markers, auto-discovers path-named
+		  source paths for active follow-up markers, auto-discovers path-named
 		  SoraFS sources outside the hand-curated roots, and carries adversarial
 		  marker-detection controls, including lowercase and mixed-case active
-		  markers such as `todo:` and `FixMe(...)`, so first-release TODO drift
-		  cannot re-enter unnoticed. Shared SoraFS evidence sensitivity checks also treat
+		  markers such as `todo:` and `FixMe(...)`. The scanner now also treats
+		  Swift as a first-release SoraFS source type, pins the Swift SoraFS
+		  Torii client, native bridge, orchestrator client, options, and
+		  reference-validator entry points into the active sweep, pins Python,
+		  JavaScript/TypeScript declaration, Java Android, Kotlin/JVM, and C#
+		  SoraFS client/instruction entry points that do not carry `sorafs` in
+		  their path names, includes the SoraFS reference and shared Norito bridge
+		  C headers, includes the SF1 vector checker and extensionless
+		  `sorafs-gateway` operator wrapper, sweeps every checked-in SoraFS
+		  argfile example under `scripts/examples`, auto-discovers SoraFS-bearing
+		  Python and shell operator/support scripts under `scripts/` by content,
+		  explicitly sweeps SoraFS-adjacent CI gates for the Norito bridge header,
+		  docs portal, AGENTS dependency/privacy guardrails, and SoraNet/SoraFS
+		  auth guard, explicitly covers the Taira SoraFS rollout smoke and mock
+		  test shell entry points, self-audits that configured scan roots/files still exist,
+		  and now inventories tracked active-marker lines that explicitly mention
+		  SoraFS so only the contract test's negative controls may retain those
+		  literals. The tracked `todo_list.txt` inventory now has stale closed
+		  SoraFS rows removed and a contract guard preventing active-marker rows
+		  for SoraFS from reappearing. Completed localized root-roadmap
+		  SoraFS/SoraNet portal translation rows use `Completed:` instead of
+		  `TODO:`, and the stale
+		  rollout-gate wording guard now scans canonical plus localized SoraFS
+		  plan mirrors before any `Add fail-closed ... rollout evidence gate`
+		  wording can reappear, so
+		  first-release unfinished-work drift cannot re-enter unnoticed. Shared SoraFS
+		  evidence sensitivity checks also treat
 	  API/auth/session/x-api/id/OAuth/refresh/JWT tokens, cookies, passwords,
 	  private keys, seed phrases, and signing keys as runtime-only material
 	  across payload scans, archive labels, runner URLs, passthrough arguments,
@@ -7929,31 +8541,87 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   constants so schema maps, default required kinds, required-field tables,
   evidence-viewer digest fields, enforcement-route defaults, payload-kind
   thresholds, manual-trigger state, and hedging fixture status/name inventories
-  cannot drift from local tests; every dry-run `evidence_contract` schema
-  must be a canonical SoraFS v1 identifier, every dry-run plan must use only
-  reviewed top-level keys, any dry-run `deployment_context` must match the
-  parsed deployment id, normalized environment, and reviewed marker, and rendered
+  cannot drift from local tests; every checked-in SoraFS canary builder now also
+  calls the shared reviewed deployment-id and rollout-environment validators
+  before canary JSON writes or checker prevalidation, so dev/test/mock markers,
+  `stg`/staging deployment-id aliases, and other unreviewed deployment aliases
+  cannot be promoted by builder-generated evidence; the static rollout contract
+  also executes every checked-in canary `@ARGFILE` example with redirected
+  output to prove reviewed examples still build canonical sorted SoraFS v1 JSON
+  artifacts with reviewed deployment context, recursively false payload, raw,
+  debug, divergence, rollback, and disclosure flags while passing the
+  shared sensitive-field visitor, then replays every example with a forged
+  deployment id and forged environment to prove example-driven builder runs fail
+  before writing artifacts, with noncanonical
+  plus nonpositive `--generated-at-unix` overrides, and with invalid
+  `--now-unix` overrides for builders that expose the option, plus noncanonical
+  overrides for non-timestamp positive/non-negative integer options, negative
+  overrides for shared non-negative integer options, and nonpositive overrides
+  for non-timestamp positive integer options, to prove the shared integer parser
+  rejects operator argfile input before writes; every dry-run
+  `evidence_contract` schema must be a canonical SoraFS v1 identifier, every
+  dry-run plan must use only reviewed top-level keys, any dry-run
+  `deployment_context` must match the parsed deployment id, normalized
+  environment, and reviewed marker, and rendered
   dry-run `steps` must exactly match the command plan built from the reviewed
   argfile, with the verifier
   gate step remaining the final dry-run step and its rendered artifact matching
   the sole verifier `--summary-out` target while the gate command invokes the
   parser-selected checker path, and every dry-run threshold value must match
   the verifier gate command option of the same name,
+  every checked-in rollout collection `@ARGFILE` example now also executes as
+  a negative dry-run in the static contract and must fail closed before
+  emitting stdout when its runtime evidence is absent, with only stable
+  `ERROR:`/bullet diagnostics and no traceback, raw exception-class, or
+  secret-looking token leakage,
+  every checked-in rollout/release checker `@ARGFILE` example plus the
+  production-readiness checker example now executes against absent runtime
+  evidence in the same static contract and must fail closed without stdout,
+  tracebacks, raw exception-class leakage, or secret-looking diagnostics, and
+  gateway-compliance plus reputation invalid summaries now emit shared
+  fail-closed checker error blocks instead of silent nonzero exits,
   every checked-in SoraFS argfile example must expand through the shared
   bounded response parser, with argfile resolve, stat, read, UTF-8, parse,
   recursion, size, depth, and expansion-limit failures reported as stable
   operator diagnostics instead of tracebacks, argfile leaves and parent chains
   must be symlink-free before parsing, descriptor reads must use no-follow
   final-component flags where available, and argfile stat/read/UTF-8 plus
-  response-line parser exception text must route through the shared
-  path/error-label sanitizer so malformed multi-line diagnostics cannot leak
-  through reviewed `@ARGFILE` expansion; every checked-in SoraFS canary builder
+	  response-line parser exception text must route through the shared
+	  path/error-label sanitizer so malformed multi-line diagnostics cannot leak
+	  through reviewed `@ARGFILE` expansion, while direct and parser-returned
+	  non-string argument values now collapse to a constant diagnostic so
+	  secret-looking bytes or object representations cannot be echoed, and shared
+	  sensitive-key normalization now folds Unicode compatibility forms before
+	  punctuation-insensitive matching so fullwidth private-key or bearer-token
+	  names are rejected and redacted by payload scans and duplicate-key JSON
+	  loader diagnostics, while the shared secret-looking scalar scanner now
+	  checks decoded NFKC value aliases so fullwidth bearer headers,
+	  assignment-style secret names, and secret-bearing URLs cannot bypass
+	  payload-free evidence scans; runner preflight path, URL, and passthrough
+	  argument safety now applies the same decoded NFKC alias boundary so
+	  fullwidth sensitive components, slash separators, and drive/scheme tokens
+	  fail before entering dry-run plans or subprocess arguments, and archive
+	  artifact path labels now apply decoded NFKC aliases before accepting
+	  bundle-relative paths so fullwidth separators, drive/scheme markers, and
+	  sensitive labels cannot enter release bundles through compatibility-form
+	  spellings, and checker `--evidence` parsing now treats URL/HTML-encoded
+	  or compatibility-form `=` separators as malformed `KIND=PATH` specs
+	  instead of rendering attacker-controlled path diagnostics. AI pre-screen and transparency
+  collection runners now require exact `--iroha-arg=VALUE` passthrough spelling
+  in direct argv and checked-in argfile examples, so split `--iroha-arg VALUE`
+  forms cannot consume runner flags or leak secret-looking passthrough values;
+  every checked-in SoraFS canary builder
   that accepts required route, metric, claim, role, target, package, or other
   name-set options now rejects duplicate operator values before writing canary
-  evidence, so repeated comma-separated or repeated-flag inputs cannot silently
-  collapse into valid coverage, and the shared static contract now imports
-  every name-set canary builder to exercise duplicate, unknown, and missing
-  required-value diagnostics directly; the orderbook canary builder now also has
+	  evidence, so repeated comma-separated or repeated-flag inputs cannot silently
+	  collapse into valid coverage, every checked-in canary builder now preserves
+	  exact comma-separated components so padded or empty CSV items fail validation
+	  instead of being trimmed or dropped, every checked-in canary builder's
+	  canonical-string helper now reuses the shared diagnostic text predicate so
+	  Unicode control/format text fails before canary JSON is built, and the
+	  shared static contract now imports
+	  every name-set canary builder to exercise duplicate, unknown, missing
+	  required-value, and exact CSV diagnostics directly; the orderbook canary builder now also has
   focused direct regressions for duplicate and unknown verified-claim, route,
   stream, SDK language, metric, and reconciliation-source inputs before any
   canary JSON is written, and the gateway-load canary builder has direct
@@ -7962,14 +8630,20 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   duplicate/unknown verified-claim, feed, toggle, denial-reason, and metric
   regressions before any canary JSON is written. The reputation canary builder
   now has direct duplicate/unknown metric regressions and malformed or
-  placeholder SSE/WebSocket transport-event regressions before any canary JSON
+  placeholder SSE/WebSocket transport-event regressions, plus exact provider
+  proof sibling digest duplicate tracking that ignores malformed uppercase
+  siblings instead of lowercasing them into the seen set, before any canary JSON
   is written. The governance-DAG canary builder now has direct duplicate/unknown
   verified-claim, payload-kind, dashboard-route, and metric regressions before
   any canary JSON is written, and
-  the AI prescreen canary builder now has direct duplicate/unknown operator-route,
-  transparency-source-kind, Governance DAG producer, and workflow-step
-  regressions plus malformed or placeholder committee-result and Governance
-  edge-label regressions before any canary JSON is written. The moderation panel canary
+	  the AI prescreen canary builder now has direct duplicate/unknown operator-route,
+	  transparency-source-kind, Governance DAG producer, and workflow-step
+	  regressions plus malformed or placeholder committee-result and Governance
+	  edge-label regressions, padded Governance-edge tuple component regressions,
+	  trailing-slash runner, committee, and operator base URL regressions,
+	  and Unicode control/format regressions for notification case/round ids plus
+	  executor bundle directories
+	  before any canary JSON is written. The moderation panel canary
   builder now has direct duplicate/unknown verified-claim, route, viewer role,
   viewer security-control, viewer event-kind, viewer export-target, scenario,
   outcome, publication-target, and metric regressions before any canary JSON is
@@ -7998,6 +8672,7 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   regressions plus provider-bake cycle duplicate regressions before any canary
   JSON is written, and the repair canary builder now has direct duplicate/unknown
   failure-source, route, lifecycle-status, handoff-target, and metric regressions
+  plus padded failure-event tuple component regressions
   plus explicit `--route-body-blake3-hex` evidence for signed repair routes
   before any canary JSON is written; a shared static contract also imports every
   checked-in SoraFS canary builder and verifies existing output directories plus
@@ -8101,11 +8776,15 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   containers or duplicate-identity maps, resolver failures, filesystem
   inspection failures, and malformed preflight diagnostic containers, existing
   diagnostic text, or labels failing before filesystem inspection; runner
-  stderr error emitters must reject malformed diagnostic containers and
-  noncanonical diagnostic text before printing partial headings or
-  character-split errors, and runner stderr notices must reject malformed or
-  multi-line messages before writing partial operator output; runner and
-  checker collected validation errors from caught malformed spec parsers must
+	  stderr error emitters must reject malformed diagnostic containers and
+	  noncanonical diagnostic text before printing partial headings or
+	  character-split errors, and runner stderr notices must reject malformed or
+	  multi-line messages before writing partial operator output; runner URL and
+	  passthrough argument preflights now use the shared diagnostic-text predicate
+	  before URL parsing or passthrough splitting, and command-plan executable
+	  validation uses the same predicate before subprocess plans can report ready;
+	  runner and
+	  checker collected validation errors from caught malformed spec parsers must
   route through the shared error diagnostic sanitizer before entering stderr or
   rollout summaries, so raw multi-line exception text cannot be appended to
   gate diagnostics, and transparency runner generated-artifact annotation
@@ -8149,8 +8828,27 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   closed before filesystem inspection, and checker stderr error emitters reject
   malformed diagnostic containers before printing partial headings or
   character-split errors,
-  checker stderr notices reject malformed or multi-line messages before partial
-  operator output, rollout/release plus aggregate checker evidence input
+	  shared evidence-validation artifact builders, validation-error recorders,
+	  gate-status checks, required-row artifact error collectors, and path labels
+		  plus release-archive artifact labels now reuse the canonical diagnostic-text
+		  predicate so zero-width, bidi, and other Unicode control/format text fails
+		  closed before summary or artifact errors can be rendered or archived,
+		  artifact kind names, explicit fingerprint value keys, and shared canonical
+		  payload string fields now delegate to the same validation-label predicate
+		  instead of helper-local strip-only prechecks,
+		  shared artifact fingerprint field names and generated hedging fixture
+		  inventory labels now use the same diagnostic-text predicate before any
+		  fingerprint lookup or safe-path rendering, so empty, padded, zero-width, or
+		  bidi labels collapse to stable no-echo diagnostics instead of local
+				  strip-only checks, rollout checker, canary-builder, and final
+				  aggregate production-readiness metadata non-production marker
+				  checks now share the same numbered- and
+					  compact-alias helper, so values such as `placeholder1`, `mock01`,
+					  `stub2`, `placeholderreview`, `prodstub`, `devproduction`, or
+					  sandwiched aliases like `prodplaceholderreview` fail wherever the
+					  bare marker would fail instead of bypassing local exact-token scans,
+		  checker stderr notices reject malformed or multi-line messages before partial
+	  operator output, rollout/release plus aggregate checker evidence input
   preflight rejects malformed
   `--evidence`/`--evidence-dir` containers, non-Path `--evidence-dir` entries,
   and non-Path/non-spec `--evidence` entries before they can satisfy the
@@ -8168,10 +8866,61 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   provider IDs, hedging billing-cycle IDs, reserve-rent bake IDs, and PoR
   archive backend labels plus reference SDK signature algorithms are omitted
   from fingerprints and stdout summaries after canonical ID or closed-set
-  validation, while aggregate production-readiness `provider_ids`,
-  `valid_billing_cycles[].cycle_id`, and `valid_provider_bakes[].bake_id`
-  metadata now replay the SFM-3/SFM-5/SFM-6 canonical label and
-  non-production marker policies before final promotion can accept
+	  validation, while aggregate production-readiness `provider_ids`,
+	  `valid_billing_cycles[].cycle_id`, and `valid_provider_bakes[].bake_id`
+	  metadata now replay the SFM-3/SFM-5/SFM-6 canonical label and shared
+	  compact-alias non-production marker policies, final production
+	  deployment-id validation applies the same compact-alias policy to
+	  stage/staging markers such as `stagingready`, and final-production
+	  validation now rechecks
+  payload-free `deployment_context`, object-list deployment metadata, and
+  artifact fingerprint deployment context against the reviewed production
+  deployment policy, while artifact fingerprint shape/freshness failures now
+  use single-source sanitized diagnostics, name
+  `fingerprint.generated_at_unix`, and reject sensitive fingerprint keys without
+  echoing attacker-controlled key names or values, and shared evidence JSON
+  duplicate-key load failures now collapse every current SoraFS checker
+  `SENSITIVE_KEYS` entry before aggregate diagnostics can record those names,
+  while the SoraFS orchestrator fixture generator and Android codegen replay
+  fixture reader reuse the same strict duplicate-key/non-standard-number parser
+  so encoded sensitive-key shadowing cannot enter SDK parity vectors,
+  and both fixture utilities now reject secret-looking, control-character,
+  parent/current, drive-prefix, or platform-specific path components before
+  diagnostics can render those paths,
+  and Android codegen replay now requires fixture metadata `payload_path` and
+  `plan_file` entries to be safe relative paths before resolving files or
+  launching manifest replay, with metadata `fixture` names constrained to safe
+  single-component filenames before report paths are constructed,
+  all Android fixture display file labels normalized as safe relative POSIX
+  paths before generated examples can preserve them,
+  and Android replay validates profile handles, storage classes, and numeric
+  subprocess fields before building `sorafs_manifest_stub` arguments,
+  while the hedging fixture-manifest checker rejects unsafe rendered
+  `--manifest` paths before loading manifests or writing summaries,
+  and hedging fixture entry names/paths reject secret-looking or unsafe
+  components before skipped-entry summaries, generated-byte reads, or
+  validation-command checks can echo them,
+  and generated hedging JSON sidecar diagnostics sanitize unexpected
+  top-level/nested field names and duplicate nested line IDs before summaries
+  can echo attacker-controlled values,
+  and hedging validator-command token drift now reports only a constant
+  diagnostic before validator execution,
+  while unmanifested generated hedging fixture inventory reports keep safe
+  paths visible but collapse unsafe or secret-looking paths before summaries,
+  and hedging checker filesystem inspection labels now collapse canonical but
+  unsafe path components before symlink/read diagnostics,
+  and missing hedging validator binaries now route supplied binary labels
+  through the same unsafe-path sanitizer,
+  and Android fixture replay read failures now sanitize descriptor-open
+  filesystem paths and exception text before reporting loader failures,
+  and orchestrator fixture descriptor read, size, and write failures now use
+  sanitized path/error labels before fixture-generation diagnostics,
+  and Android/orchestrator fixture directory creation failures now sanitize
+  `mkdir` path/error diagnostics,
+  and every checked-in SoraFS canary builder atomic writer now sanitizes
+  output-parent creation and descriptor write exception details before
+  reporting generated-canary artifact failures,
+  before promotion can accept
   fingerprint-consistent forged summaries,
   including explicit evidence, evidence discovered through
   `--evidence-dir`, and reputation's
@@ -8382,9 +9131,10 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   schema recognition now uses a shared helper in standard rollout/release gates
   while preserving artifact-specific unknown-schema labels,
 	  environment-bearing rollout/release gates now use the shared reviewed
-	  environment validator so padded/control-character values plus `dev`,
-	  `test`, `mock`, `local`, and similar unreviewed labels cannot satisfy
-	  production evidence,
+	  environment validator so only exact reviewed labels are accepted; uppercase
+	  or mixed-case aliases are not normalized, and padded/control-character
+	  values plus `dev`, `test`, `mock`, `local`, and similar unreviewed labels
+	  cannot satisfy production evidence,
 	  deployment-id-bearing rollout/release gates now use the shared reviewed
 	  deployment-id validator so missing, malformed, placeholder, compact
 	  handoff-marker, compact non-production marker, padded/control-character
@@ -8430,30 +9180,41 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   timestamp freshness validation now uses a shared helper with explicit
   per-call freshness windows and canonical optional path-qualified diagnostics
   for reputation publish/latest snapshot checks,
-  hex digest validation now uses shared exact-length helpers that reject padded
-  or control-character values before lowercase normalization across every
-  rollout/release checker that binds digest fields,
+  hex digest validation now uses shared exact-length helpers that accept only
+  exact lowercase hex and reject padded, uppercase, or control-character values
+  before downstream binding across every rollout/release checker that binds
+  digest fields,
   hex-string array validation now uses a shared helper for proof sibling and
   statement digest lists with optional count and uniqueness checks, and dirty
-  arrays with malformed, duplicate, or length-mismatched rows now return no
-  normalized values for downstream binding,
+  arrays with malformed, uppercase, duplicate, or length-mismatched rows now
+  return no exact values for downstream binding,
 	  checker string coverage requirements, including AI pre-screen operator route
 	  names, now flow through a shared validation helper with canonical array,
 	  item, observed-value, and required-value labels, with the transparency
 	  checker explicitly pinned to its stricter dict-only exact-value mode, and
 	  malformed observed values, required-value containers, or required-value
 	  labels now fail closed before trimmed-value, character-wise, or mapping-key
-	  coverage checks can satisfy required labels,
+	  coverage checks can satisfy required labels; the coverage helper no longer
+	  exposes a trim mode, and the legacy string-value collector is exact by
+	  default and only trims when a caller explicitly opts in, so helper reuse
+	  cannot silently normalize padded evidence values,
 	  cross-artifact summary invalidation now uses shared artifact-error recording
 	  instead of checker-local nested helpers across every checker, including
 	  reputation snapshot-bound errors with a separate required-kind summary
 	  message, snapshot-bound anchor/bound classification now normalizes kind
 	  containers before scalar or mapping-key membership can classify artifacts,
 	  scalar and tuple binding helpers now canonicalize diagnostic messages,
-	  binding values, allowed binding values, formatter templates, missing-anchor
-	  summary errors, evidence-kind labels, digest field selectors, per-kind
-	  digest field maps, and tuple binding field lists before artifact errors can
-	  be recorded, and artifact-error summary labels now use a shared path-label helper
+	  formatter templates, missing-anchor summary errors, evidence-kind labels,
+	  digest field selectors, per-kind digest field maps, and tuple binding
+	  field lists before artifact errors can be recorded; direct scalar/tuple
+	  membership then compares canonical observed binding values with canonical
+	  allowed values exactly, so case-only drift is rejected instead of
+	  lowercased into the same binding, and shared anchor-producing digest,
+	  tuple, and snapshot-bound collectors plus checker-local `valid_*` anchor
+	  sets now preserve exact canonical values instead of lowercasing anchors
+	  before membership, so source and downstream evidence must agree byte-for-byte
+	  on case as well as content, and artifact-error summary labels now use a
+	  shared path-label helper
   and shared artifact-error recording rejects non-object artifact rows, so
   malformed artifact rows report `<unknown>` instead of raising on direct
   path indexing or mutation, while the shared artifact accessors and
@@ -8519,18 +9280,19 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   reports non-string evidence values instead of silently dropping them,
   AI pre-screen runner, SFM-5 billing-cycle reconciliation, moderation
   roster/tally, reputation snapshot, and reserve-rent policy/matrix/ledger
-  binding checks now use a shared normalized tuple helper before
-  artifact-error recording so local tuple membership predicates cannot drift,
-	  scalar cross-artifact digest/id binding checks now use a shared normalized
-	  value helper and artifact-error recorder across the rollout/release gates
-	  that anchor downstream evidence to source, config, policy, manifest, proof,
+  binding checks now use a shared exact tuple helper before artifact-error
+  recording so local tuple membership predicates cannot drift,
+	  scalar cross-artifact digest/id binding checks now use a shared exact value
+	  helper and artifact-error recorder across the rollout/release gates that
+	  anchor downstream evidence to source, config, policy, manifest, proof,
 	  receipt, roster, or workflow artifacts; shared scalar and tuple binding
-	  helpers now reject empty string components plus malformed value and allowed-set
-	  containers and normalize validated allowed values into the same lowercase
-	  membership space as observed values before substring, character-wise, or
+	  helpers now reject empty string components plus malformed value and
+	  allowed-set containers and require validated allowed values to match
+	  observed canonical values exactly before substring, character-wise, or
 	  mapping-key membership can satisfy downstream bindings, and valid artifact
-	  digest collection ignores empty, non-string, padded, or control-character
-	  fingerprint values so malformed digest anchors cannot satisfy downstream
+	  digest collection preserves exact canonical digest text while ignoring
+	  empty, non-string, padded, or control-character fingerprint values so
+	  malformed or case-drifted digest anchors cannot satisfy downstream
 	  references, while bound-reference helpers now normalize `(kind, artifact)`
 	  pair containers plus fingerprint field selectors before scalar or
 	  mapping-key iteration can classify downstream references; the shared string
@@ -8861,8 +9623,10 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   unknown reputation metric labels before promotion can report ready, so
   reviewed Merkle proof and metrics paths stay schema-closed outside the local
   canary builder. Event-watch evidence must carry a positive polling `limit`,
-  exact `count`/`events[]` length agreement, and `count <= limit` before
-  readiness can report ready. Transport canaries also
+  exact `count`/`events[]` length agreement, `count <= limit`,
+  duplicate-free sequences, and V1 event rows whose snapshot id, Merkle root,
+  and provider count agree across the whole batch before readiness can report
+  ready. Transport canaries also
   require reviewed `reputation-sse-event-*` and
   `reputation-websocket-event-*` labels without non-production markers matching
   `sse_event_count` and `websocket_event_count` before writing. Aggregate
@@ -8882,7 +9646,11 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   gateway, S3/IPFS publication, and production promotion surfaces as unshipped
   with reusable matchers and negative controls while preserving the local Torii
   reputation latest/provider/snapshot/weights, event polling, SSE/WebSocket,
-  CLI, SDK, dashboard, and evidence-gate foundations. The SF-3 node
+  CLI, SDK, dashboard, and evidence-gate foundations. The static contract now
+  also scans CLI sources for nested deployed-only reputation spellings such as
+  `reputation ingest`, `reputation publisher`, `reputation graphql`, and
+  `reputation promote`, while preserving local
+  `reputation publish|snapshot|fetch|watch|verify` and canary commands. The SF-3 node
   implementation plan, localized mirrors, and
   canonical plus localized portal mirrors now document the current
   OpenAPI-backed `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` route surface,
@@ -8989,10 +9757,14 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   live release-bundle publication, SDK-smoke publication, schema-registry or
   wire-format service promotion, and any separate `sora-proto` codec surface as
   unshipped with reusable route/CLI matchers and segment-aware negative
-  controls, while preserving the Norito-only boundary, committed `.to`
-  fixtures, JSON commentary, `ValidationOutcomeV1`, reference FFI validators,
-  `sorafs-validate bundle`, active fixture generators, and payload-free
-  proto canary/evidence labels.
+  controls. It now also scans CLI sources for nested deployed-only `sora
+  proto`, `sorafs proto`, `proto schema-service`, `schema-registry service`,
+  `schema registry service`, `wire-format service`, `wire format service`,
+  `proto release-bundle`, `fixture release-bundle`, `fixture-bundle publish`,
+  `sdk-smoke publish`, and `proto promote` spellings while preserving the
+  Norito-only boundary, committed `.to` fixtures, JSON commentary,
+  `ValidationOutcomeV1`, reference FFI validators, `sorafs-validate bundle`,
+  active fixture generators, and payload-free proto canary/evidence labels.
   `provider_admission_fixtures` now writes binary, JSON, and README artifacts
   through checked no-follow descriptor outputs, uses canonical temp roots in
   tests, and keeps its digest regression aligned with the checked-in metadata.
@@ -9007,7 +9779,7 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   validation checks
   `GovernanceLogNodeV1` structure, embedded payload policy, publisher metadata,
   signature material, Ed25519 and Dilithium3/ML-DSA publisher signatures, and
-  optional node-CID binding. Signed replication-order validation checks
+  required node-CID binding. Signed replication-order validation checks
   `SignedReplicationOrderV1` structure and verifies Ed25519 signatures over the
   `sorafs.replication_order.signature.v1` domain-separated canonical order
   signing bytes. Advert, order, and governance signing sign canonical payload
@@ -9104,7 +9876,8 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   Torii's early `BAD_REQUEST` rejection and OpenAPI reserved wording for
   `proof_kind=pdp`, and keeps unshipped `sorafs pdp ...` operator commands
   warning-only until provider-protocol CLI handlers exist with a boundary-aware
-  command matcher that preserves canary/evidence/local fixture labels. The same
+  command matcher that covers nested `pdp challenge|fetch|respond|verify|status|export`
+  spellings while preserving canary/evidence/local fixture labels. The same
   static contract now also pins PDP provider challenge/proof transport, proof
   generation, provider signature and inclusion-witness verification, Governance
   DAG archival, repair handoff, operator CLI, and SF-13 promotion routes or
@@ -9265,6 +10038,11 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
 	  manifest-bound and policy-bound artifact fingerprints against
 	  `valid_release_manifest_digests` and `valid_policy_digests` plus governance
 	  approval release-key fingerprints against `valid_release_key_fingerprints`.
+	  The release gate now also requires exactly one active signed-manifest
+	  digest, policy digest, and release-key fingerprint, clearing mixed
+	  `valid_release_manifest_digests`, `valid_policy_digests`, or
+	  `valid_release_key_fingerprints` before bound artifact or aggregate
+	  metadata can promote.
 	  The lane checker also has direct adversarial coverage that forges every
 	  manifest-bound, policy-bound, and release-key-bound SF-11 artifact kind
 	  against those signed-manifest anchors before release promotion can report
@@ -9283,18 +10061,29 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   publication, signed manifest publication, downstream package publication,
   published cookbook/live-smoke evidence, and reference-SDK promotion routes or
   subcommands as unshipped with reusable route/CLI matchers and segment-aware
-  negative controls, while preserving the local `sorafs-validate`
-  validator/signing commands, `scripts/package_sorafs_validate_release.sh`,
-  FFI/header contract checks, cookbook fixtures, release evidence gate,
-  collection planner, and payload-free canary/evidence labels. The
+  negative controls. It now also scans CLI sources for nested deployed-only
+  `reference-sdk publish`, `reference-sdk release-archives`,
+  `reference-sdk signed-manifests`, `reference-sdk downstream-packages`,
+  `reference-sdk live-smoke`, `reference-sdk published-cookbook-smoke`,
+  `reference-sdk package-publication`, `sorafs-validate publish`,
+  `sorafs-validate release-promote`, `published-archive smoke`,
+  `downstream-bindings publish`, and `release-manifest publish` spellings while
+  preserving the local `sorafs-validate` validator/signing commands,
+  `scripts/package_sorafs_validate_release.sh`, FFI/header contract checks,
+  cookbook fixtures, release evidence gate, collection planner, and
+  payload-free canary/evidence labels. The
   rollout-gate static contract now also pins SF-6 CLI/SDK signed distribution,
   Homebrew/npm/crates.io/Go-module publication, live deployment capture,
   live-governance runbook capture, and release-promotion routes or subcommands
   as unshipped with reusable route/CLI matchers and segment-aware negative
-  controls, while preserving the local `sorafs_cli` command families,
-  `scripts/release_sorafs_cli.sh`, `ci/check_sorafs_cli_release.sh`,
-  gateway self-cert tooling, SDK parity guards, release fixture smoke checks,
-  and payload-free canary/evidence labels.
+  controls. It now also scans CLI sources for nested deployed-only `release
+  distribute`, `release publish`, `distribution publish`,
+  `homebrew|npm|crates publish`, `go module publish`, `sdk distribute`,
+  `live governance capture`, `governance runbook capture`, and `release
+  promote` spellings, while preserving the local `sorafs_cli` command families,
+  `scripts/release_sorafs_cli.sh`, `ci/check_sorafs_cli_release.sh`, gateway
+  self-cert tooling, SDK parity guards, release fixture smoke checks, and
+  payload-free canary/evidence labels.
 - SoraFS SF-9 PoR coordinator runtime integration is wired locally: Torii builds
   `PorCoordinatorRuntime` from `torii.sorafs_por`, starts it when the runtime and
   embedded storage are enabled, records scheduler challenge/forced/failure and
@@ -9365,11 +10154,15 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   rollout-gate static contract now also pins live external drand/VRF/auditor
   feed deployment, production archive/warehouse handoff, proof-bundle
   inspection, and SF-9 promotion routes or subcommands as unshipped with
-  reusable matchers and segment-aware negative controls while preserving the
-  local status/export/report/ingestion routes, capacity PoR challenge/proof/
-  verdict routes, storage PoR sampling, retired manual-trigger route,
-  `sorafs_cli por` commands, `sorafs-validate por`, canary evidence labels, and
-  scheduler observability.
+  reusable matchers and segment-aware negative controls. It now also scans CLI
+  sources for nested deployed-only `por live-deployment`,
+  `por external-drand`, `por drand-feed`, `por vrf-feed`, `por auditor-feed`,
+  `por production-archive`, `por archive-handoff`, `por proof-bundle
+  fetch|show|replay`, and `por promote` spellings while preserving the local
+  status/export/report/ingestion routes, capacity PoR challenge/proof/verdict
+  routes, storage PoR sampling, retired manual-trigger route, `sorafs_cli por`
+  commands, `sorafs-validate por`, canary evidence labels, and scheduler
+  observability.
 - SoraFS SF-14 PoTR-Lite is wired locally for ranged gateway receipt capture,
   embedded-node receipt recording, `sorafs_manifest::potr` receipt validation,
   and `/v1/sorafs/proof/stream` replay with `proof_kind=potr`. The SF-14
@@ -9442,7 +10235,12 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   pins live multi-provider probe rollout, governed provider key-distribution,
   reputation-weight governance, SF-14 approval, and PoTR promotion routes or
   subcommands as unshipped with reusable matchers and segment-aware negative
-  controls while preserving ranged gateway receipt capture, `Sora-PoTR-*`
+  controls. It now also scans CLI sources for nested deployed-only
+  `potr live-probes`, `potr multi-provider-probes`, `potr live-rollout`,
+  `potr provider-key-distribution`, `potr ml-dsa-keys`,
+  `potr pq-provider-keys`, `potr reputation-weights`,
+  `potr governance-approval`, `potr promote`, and `proof stream potr live`
+  spellings while preserving ranged gateway receipt capture, `Sora-PoTR-*`
   headers, embedded-node receipt recording, local receipt validation,
   proof-stream replay through `/v1/sorafs/proof/stream` with `proof_kind=potr`,
   `sorafs_cli proof stream --proof-kind=potr`, proof-stream metrics,
@@ -9519,7 +10317,9 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   checked-in canary artifacts for each SF-5a gate kind, requires complete
   deterministic scenario and gateway metric coverage where applicable, enforces
   reviewed `gateway-load-provider-*` staging-provider inventory, reviewed
-  hardware/cache staging metadata, generated per-stream inventory,
+  hardware/cache staging metadata, rejects `--http3-endpoint-committed` until a
+  reviewed SoraFS HTTP/3 gateway endpoint is committed, and generated
+  per-stream inventory,
   suite/staging digest bindings, and SLO threshold facts before writing,
   rejects out-of-range `--success-rate-bps` values before staging-load evidence
   is written,
@@ -9532,9 +10332,11 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   static rollout contract now uses reusable route/CLI matchers with
   segment-aware negative controls to keep live gateway-load, staging-load,
   HTTP/3, soak, and promotion route/subcommand surfaces unshipped until
-  deployed evidence passes this gate, while preserving local conformance,
-  staging-canary/evidence, transport-scope canary, promotion-evidence, and
-  payload-free gateway-load canary labels.
+  deployed evidence passes this gate, now also scanning nested deployed-only
+  `gateway load live`, `gateway load staging`, `gateway load http3`,
+  `gateway load promote`, and `gateway load soak` CLI spellings while
+  preserving local conformance, staging-canary/evidence, transport-scope
+  canary, promotion-evidence, and payload-free gateway-load canary labels.
 - SoraFS Pin Registry validation policy wiring now covers the governance config
   surface exposed today: `manifest_pin_policy_constraints_from_config` maps
   replica floors/ceilings, retention ceilings, storage-class allowlists, and
@@ -9817,7 +10619,9 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   canonical `routes[].name` inventory so duplicate or unknown route rows cannot
   inflate readiness, requires reviewed `GET` methods and exact operator route
   paths for each route name and quarantine id, binds route URLs back to the
-  top-level `operator_url` plus the reviewed path, requires JSON/browser
+  slashless top-level `operator_url` plus the reviewed path without
+  normalization, requires runner, committee, and operator base URLs to be
+  slashless before derived route evidence can count, requires JSON/browser
   content types to match the reviewed route table, requires operator route
   `body_bytes` to be positive, and requires every route response to carry a
   `body_blake3_hex` digest,
@@ -9849,6 +10653,12 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   source-kind, producer, and workflow-step inputs, Governance DAG
   `--edge-count` binding to the required producer inventory, or Governance edge
   names outside the `ai-prescreen-governance-edge-*` production family,
+  notification transport evidence that lacks both shipped `submit_commit` and
+  `submit_reveal` delivery actions or supplies a `--probe-count` value too
+  small to cover them, defaulting generated notification canaries to the
+  shipped action inventory,
+  commit/reveal executor action-count breakdowns that do not sum to
+  `--action-count`,
   rejects unsupported `--verdict` labels and out-of-range `--score-bps` values
   before runner or committee evidence is written,
   runs runner/committee/operator/webhook URL inputs through the shared URL
@@ -9871,6 +10681,10 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   The lane checker also has direct adversarial coverage that forges every
   runner-bound, workflow-bound, and policy-bound SFM-4a artifact kind against
   those anchors before promotion can report ready.
+  The SFM-4a rollout checker now also requires exactly one active runner
+  binding, workflow digest, notification manifest digest, executor summary
+  digest, and policy digest before runner-bound, workflow-bound, policy-bound,
+  transport, executor, or aggregate metadata can satisfy final promotion.
   Juror notification transport
   artifacts now bind `probe_count` and `accepted_count` to the unique canonical
   `probes[].delivery_id` inventory, require reviewed
@@ -9918,13 +10732,39 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   unshipped moderation portal commands such as `sorafs moderation jury-accept`
   and `sorafs moderation open-case` warning-only in SoraFS docs until the
   corresponding service and CLI handlers exist, with the same boundary-aware
-  command matcher preserving canary/evidence labels. It now also pins deployed
-  AI pre-screening workflow promotion surfaces for deployed runner/committee
-  promotion, deployed juror notification transport, deployed commit/reveal
-  executor, end-to-end release workflow, and AI pre-screen promotion as
-  unshipped with negative controls preserving the shipped local runner,
-  committee, operator, notification, executor, transparency, Governance DAG,
-  and rollout evidence tooling. The local moderation operator service parser
+  command matcher preserving canary/evidence labels, and scans CLI sources for
+  nested `moderation open-case|panel service|jury-accept|portal` spellings so
+  those reserved operator commands cannot land as source-level subcommands by
+  accident. Doc-only unshipped operator command families are now meta-audited
+  too: every `UNSHIPPED_*_DOC_COMMANDS` constant must use the shared
+  boundary-aware matcher, including a left boundary that rejects prefixed fake
+  command tokens, have negative controls, and feed a docs exposure test with a
+  fail-closed `violations == {}` assertion. The shared doc-command matcher now
+  also runs adversarial samples for every reserved doc-only command family,
+  rejecting `x...`, `not-...`, `/...`, `/internal/...`, and canary/evidence/
+  local/fixture suffixed fragments so diagnostic command text cannot satisfy an
+  exact warning-only exposure check. Those warning-only command scans now cover
+  top-level SoraFS source docs, nested `docs/source/sorafs/**` docs,
+  portal SoraFS docs, and portal i18n SoraFS mirrors, so reserved operator
+  commands cannot be published through mirrored runbooks outside the top-level
+  plan files. It now also pins deployed AI
+  pre-screening workflow promotion
+  surfaces for deployed runner/committee promotion, deployed juror notification
+  transport, deployed commit/reveal executor, end-to-end release workflow, and
+  AI pre-screen promotion as unshipped with negative controls preserving the
+  shipped local runner, committee, operator, notification, executor,
+  transparency, Governance DAG, and rollout evidence tooling. Its route scanner
+  now uses the same reusable segment-aware matcher as the other SoraFS
+  unshipped service guards, so deployed-runner, deployed-committee, deployed
+  notification/executor, workflow, and promotion canary/evidence suffixes stay
+  local while exact deployed route stems remain blocked. The static contract now
+  also scans CLI sources for nested deployed-only spellings such as
+  `moderation runner promote`,
+  `moderation juror-notification-transport service`,
+  `moderation commit-reveal-executor service`, `ai-prescreen release workflow`,
+  and `ai-prescreen promote`, while preserving local quarantine workflow,
+  notification canary, operator canary, and `moderation ballots` executor
+  commands. The local moderation operator service parser
   now rejects POST
   mutation requests that omit `Content-Length` and rejects undeclared body bytes
   on any request; the parser and TCP reader also reject trailing bytes after a
@@ -10082,7 +10922,11 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   promotion commands as unshipped service surfaces with reusable matchers and
   segment-aware negative controls while preserving local denylist bundle
   tooling, GAR/proof-token helpers, honey-audit evidence, and rollout evidence
-  checkers;
+  checkers. The static contract now also scans CLI sources for nested
+  deployed-only compliance spellings such as `compliance controller`,
+  `compliance moderation toggle`, `compliance feed-sync`, and
+  `compliance promote`, while preserving local denylist, GAR/proof-token,
+  transparency source-entry, canary, and proof labels;
 - SFM-4c transparency ledger V1 data-model payloads are now shipped:
   `iroha_data_model::sorafs::transparency` defines
   `ModerationLedgerEntryV1`, `ModerationLedgerBlockV1`, and
@@ -10162,14 +11006,53 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   `/v1/transparency/*` and evidence-viewer `/v1/evidence/{session,manifest,log,audit}`
   route families out of Torii/OpenAPI and warning-only in SoraFS docs until the
   deployed transparency builder, public explorer, and evidence-viewer
-  authorization services exist. The same static contract now also pins the
+  authorization services exist. That public-route scanner now uses
+  segment-aware family/stem matching, so canary/evidence route labels such as
+  `/v1/transparency-canary/*` and `/v1/evidence/session-canary` stay local
+  without weakening the generic public-route block. The warning-only public
+  route scan now shares the broad SoraFS docs path inventory used by reserved
+  operator-command checks, covering top-level source docs, nested
+  `docs/source/sorafs/**` docs, portal SoraFS docs, and portal i18n SoraFS
+  mirrors before mirrored public evidence routes can be published outside the
+  reviewed warning context. The same static contract now also pins the
   deployed-only SFM-4c source-entry producer, GAR/moderation/appeal/legal-hold/
   redaction/evidence-viewer producer, publisher-identity/anchoring, public
   receipt explorer, proof-token issuance producer/explorer-linking,
   privacy-aggregate scheduler service, moderation-ledger service, and
   transparency promotion route/CLI names as unshipped while negative controls
   preserve the shipped local cycles, explorer, source-entry, privacy-aggregate,
-  token issuance, and proof-token verification surfaces.
+  token issuance, and proof-token verification surfaces. The deployed route
+  scanner now uses a reusable segment-aware matcher, with `/v1/transparency/*`
+  treated as a blocked generic family while SoraFS deployed producer,
+  explorer, proof-token, scheduler, ledger, and promotion route stems reject
+  exact deployed routes without catching canary/evidence suffixes. It also
+  scans CLI sources for nested deployed-only `transparency source-entry
+  producer-service`, `transparency public-explorer`, `transparency
+  proof-token-issuance explorer-linking`, and `transparency promote` spellings
+  without blocking shipped local readback, canary, or producer-submission
+  helpers. A rollout-contract self-audit now maps every
+	  `UNSHIPPED_*_ROUTE_PATTERNS` constant to exactly one
+	  `unshipped_*_route_matches` helper and fails if a helper stops using
+	  segment-aware `re.search(re.escape(route), ...)` matching, drops the shared
+	  left-boundary guard, or reintroduces raw `route in source` substring scans.
+	  A runtime adversarial route-matcher test now feeds every reserved route
+	  helper `x...`, `/internal...`, and `prefix-...` fake paths so prefixed
+	  internal or diagnostic strings cannot satisfy public exposure checks. The
+	  same self-audit now covers every
+	  `UNSHIPPED_*_CLI_SUBCOMMANDS` family plus its paired
+	  `UNSHIPPED_*_NESTED_CLI_COMMANDS` family, requiring quoted hyphenated-command
+	  checks and boundary-aware nested-command regex matching instead of direct
+	  `command in source` substring scans. Nested CLI command matching now treats
+	  slash-prefixed fragments as invalid command starts too, and a runtime
+	  adversarial CLI test feeds every helper quoted/backticked `x...`, `not-...`,
+	  `/...`, `/internal/...`, and `...-canary` fragments so prefixed or suffixed
+	  fake commands cannot satisfy the exact reserved command under test. A paired exposure self-audit now also
+	  requires every unshipped route/CLI matcher helper to feed a fail-closed
+  exposure test that scans real Torii/OpenAPI or CLI source and asserts the
+  exposed surface inventory remains empty. The matcher inventory now also
+  requires every unshipped route/CLI matcher helper to be exercised by an
+  adversarial negative-control test before new unshipped surface families can
+  be added.
   Torii now also exposes
   `/v1/sorafs/transparency/tokens/issuances` as a canonical-authenticated local
   proof-token issuance feed; it accepts one URL-safe base64 `SFGT` frame, the
@@ -10196,9 +11079,11 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   `iroha sorafs transparency publication-canary [--cycle-id HEX...]
   [--limit N] [--torii-url URL] [--out PATH]` now probes deployed/public cycle
   list and optional cycle-detail readback, requires publisher identity fields
-  unless waived, checks anchor metadata plus verification flags, and emits
+  unconditionally, checks anchor metadata plus verification flags, and emits
   payload-free `sorafs.transparency.publication_canary.v1` evidence with
   response sizes and BLAKE3 hashes without archiving publication bodies. The
+  former missing-publisher-identity CLI waiver is closed, and the rollout
+  static contract pins that production canary boundary. The
   CLI canary and transparency collection runner now reject non-lowercase,
   wrong-length, or otherwise malformed `--cycle-id` values before dry-run
   command plans or deployed cycle-detail probes are emitted.
@@ -10244,7 +11129,11 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   fingerprints while requiring every ready cycle digest to come from a
   source-bound publication, and now rechecks source-bound and cycle-bound
   artifact fingerprints against `valid_source_batch_digests` and
-  `valid_cycle_digests`. The lane checker also has direct adversarial
+  `valid_cycle_digests`. The gate now also requires exactly one active source
+  batch digest, publication cycle digest, and publication binding, clearing
+  mixed `valid_source_batch_digests`, `valid_cycle_digests`, or
+  `valid_publication_bindings` before bound artifact or aggregate metadata can
+  promote. The lane checker also has direct adversarial
   coverage that forges publication `source_batch_digest_hex` and every
   cycle-bound downstream `cycle_digest_hex`, so publication, privacy aggregate,
   proof-token issuance, and explorer evidence fail against detached source or
@@ -10274,7 +11163,9 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
 	  privacy-aggregate, proof-token issuance, and explorer rollout artifacts,
 	  requires complete source-kind, publication-route, cycle-detail-probe,
 	  privacy-action, and explorer-route inventories, rejects duplicate, unknown,
-	  or non-production cycle-detail probe labels before writing, and includes
+	  or non-production cycle-detail probe labels before writing, defaults
+	  `--cycle-detail-probe-count` from the reviewed cycle-detail probe
+	  inventory, and includes
 	  response-file examples for source-entry and publication canary generation
 	  plus checker-backed validation before atomic JSON writes.
   The rollout-gate static contract now pins deployed source-entry producers,
@@ -10284,7 +11175,7 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   `/v1/transparency/*` routes, and matching production-service CLI commands as
   unshipped while preserving the local `/v1/sorafs/transparency/*` readback,
   source-entry ingest, privacy aggregate, proof-token, explorer, and canary
-  surfaces.
+  surfaces, including exact nested deployed-service CLI spellings.
   The remaining rollout gap is captured live deployed evidence that passes that
   gate. The
   data-model foundation for that publisher is now shipped as
@@ -10487,7 +11378,11 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   in the SFM-2 plan with reusable matchers and segment-aware negative controls
   while preserving shipped local order/cancel/receipt/book/trade/channel/event
   APIs, local SSE/WebSocket streams, `sorafs-validate orderbook`, local
-  submit/read helpers, and payload-free canary evidence labels,
+  submit/read helpers, and payload-free canary evidence labels. It also scans
+  CLI sources for nested deployed-only `orderbook
+  matcher-service|settlement-daemon|contract-submit|dashboard-serve` spellings
+  without blocking shipped local `orderbook orders|cancel|receipts|book|trades`
+  commands,
   but still needs the on-chain contract surface, durable matcher service,
   daemonized settlement receipt service with contract/on-chain escrow custody
   mutation,
@@ -10540,7 +11435,10 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   `valid_revocation_list_digests`, requires aggregate promotion to recheck
   root-bound, revocation-bound, and policy-bound artifact fingerprints against
   `valid_root_digests`, `valid_revocation_list_digests`, and
-  `valid_policy_digests`. The lane checker also has direct adversarial coverage
+  `valid_policy_digests`, and rejects mixed-anchor rollout summaries unless
+  exactly one active root digest, revocation-list digest, verifier policy
+  digest, and moderation PoP snapshot digest are established. The lane checker
+  also has direct adversarial coverage
   that forges every root-bound, revocation-bound, and policy-bound downstream
   digest, so juror sync, verifier, moderation, metrics, and governance evidence
   all fail against detached root, registry, or verifier-policy anchors before
@@ -10619,8 +11517,11 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   docs so unshipped `sorafs pop sync|status|prove|revoke` commands can appear
   only as explicit not-shipped warnings until the service CLI/API actually
   lands, using a boundary-aware command matcher so canary/evidence/local labels
-  that share the command prefixes do not count as shipped docs. The rollout-gate
-  static contract now also pins the enrollment portal,
+  that share the command prefixes do not count as shipped docs. It also scans
+  CLI sources for nested `pop sync|status|prove|revoke` spellings so those
+  unshipped operator commands cannot be exposed as source-level subcommands
+  while local canary/evidence labels remain allowed. The rollout-gate static
+  contract now also pins the enrollment portal,
   credential issuer daemon, credential registry service, juror wallet/client,
   privacy-preserving proof generator, deployed verifier service, and PoP
   promotion routes or subcommands as unshipped with segment-aware negative
@@ -10798,7 +11699,12 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   surface as unshipped with reusable matchers and segment-aware negative
   controls while preserving local pricing config/status/quote, deposit
   lifecycle, settlement submission/reconcile, report/weekly-rollup/settlement
-  receipt APIs, rollout evidence, and payload-free canary labels. SFM-4b2 still
+  receipt APIs, rollout evidence, and payload-free canary labels. It also scans
+  CLI sources for nested deployed-only `appeals pricing daemon`, `appeals
+  finance public-dashboard`, `appeals finance reconcile multi-peer`, and
+  `appeals finance promote` spellings without blocking shipped local
+  `appeals pricing config|status|quote` or `appeals finance deposits|reports`
+  commands. SFM-4b2 still
   needs hosted live/public dashboard evidence and multi-peer
   end-to-end ledger reconciliation evidence that passes this gate;
   SFM-4b4 now has SoraFS-specific moderation ballot context/commit/reveal
@@ -10842,7 +11748,11 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   `policy_digest_hex`, valid e2e panel policy digests are published as
   `valid_policy_digests`, and governance approval `policy_digest_hex` must
   match one of those valid panel policy digests before the gate can report
-  ready. The lane checker also has direct adversarial coverage that forges every
+  ready. The gate now also requires exactly one active case digest, roster
+  binding, tally binding, and policy digest, clearing mixed
+  `valid_case_digests`, `valid_roster_bindings`, `valid_tally_bindings`, or
+  `valid_policy_digests` before bound artifact or aggregate metadata can
+  promote. The lane checker also has direct adversarial coverage that forges every
   case-bound, roster-bound, tally-bound, and policy-bound downstream digest or
   tuple, so sortition, evidence viewer, workflow, notification, voting,
   publication, settlement, transparency/reputation, metrics, end-to-end, and
@@ -10913,9 +11823,10 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   the parent SFM-4b appeal intake service,
   persisted case lifecycle, panel sortition/roster service, decision
   publication, portal/jury workflow, durable public decision trail, and
-  deployed moderation-panel promotion routes as unshipped with reusable
-  matchers and segment-aware negative controls while preserving the shipped
-  local `ballots*` lifecycle API and adjacent local operator workflow tooling.
+  deployed moderation-panel promotion routes and nested CLI spellings as
+  unshipped with reusable matchers and segment-aware negative controls while
+  preserving the shipped local `ballots*` lifecycle API and adjacent local
+  operator workflow tooling.
   A checked-in `build_sorafs_moderation_panel_canary.py` helper now
   builds payload-free appeal-intake, sortition, evidence-viewer, operator,
   juror-notification, commit/reveal, decision-publication, settlement,
@@ -10966,9 +11877,10 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   transparency report payloads, and response bodies. The new payload-free
   `evidence_viewer` canary builder now turns
   reviewed deployment facts into checker-validated digest-only canary JSON,
-  requires every positive viewer-control claim explicitly, forces raw
-  evidence/session-token/signed-URL/watermark-secret/body flags to `false`, emits
-  the checker-required role/security-control/access-event/export-target count
+  rejects unreviewed deployment ids and environments before checker
+  prevalidation, requires every positive viewer-control claim explicitly, forces
+  raw evidence/session-token/signed-URL/watermark-secret/body flags to `false`,
+  emits the checker-required role/security-control/access-event/export-target count
   fields from the reviewed inventories before prevalidation, rejects unknown or
   duplicate scalar coverage with direct duplicate/unknown verified-claim, role,
   security-control, access-event-kind, and export-target regressions before
@@ -11017,7 +11929,11 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   operator subcommands with reusable matchers and segment-aware negative
   controls while preserving digest-only canary artifacts,
   `moderation-viewer-session-*` labels, and payload-free evidence-viewer rollout
-  checks.
+  checks. It also scans CLI sources for nested deployed-only browser/streaming
+  spellings such as `moderation evidence viewer serve`,
+  `moderation viewer session`, `moderation watermark engine`, and
+  `moderation access logger`, while preserving local viewer-audit report,
+  publish-due, watermark-digest, access-log-digest, and canary labels.
   The commit/reveal canary now covers SFM-4b4-specific controls for
   commit digest recomputation, duplicate-commit rejection, mismatched-reveal
   rejection, late commit/reveal rejection, missed-quorum detection, no-show
@@ -11054,8 +11970,19 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   reusable matchers and segment-aware negative controls while preserving the
   local `ballots*` API, shipped local challenge record/API event/Governance DAG
   publication, shipped local no-show penalty planning, shipped local CLI/client
-  bridge, executor automation, and payload-free canary labels. SFM-4b4 still
-  needs production orchestration, on-chain or ledger recording, scheduled
+  bridge, executor automation, and payload-free canary labels. The static
+	  contract now also scans nested deployed-only CLI spellings such as
+	  `moderation ballots service`, `moderation commit-reveal coordinator`,
+	  `moderation juror portal`, and `sorafs juror`, while preserving local
+	  `moderation ballots list|get|no-show-plan|events|commit|reveal|tally` and
+	  executor/canary commands. The commit-reveal production-service route matcher
+	  now also requires a left boundary so prefixed internal paths cannot satisfy
+	  reserved public route checks, and the SoraFS docs warning-only scan covers
+	  the unshipped voting-contract, ballot-orchestrator, juror portal, and
+	  deployed ballot-service names across canonical, localized, nested, portal,
+	  and portal-i18n docs before those names can appear outside an explicit
+	  do-not-document-as-shipped warning. SFM-4b4 still
+	  needs production orchestration, on-chain or ledger recording, scheduled
   no-show dispatch/settlement handoff, production juror portal flows, public
   decision/challenge DAG
   rollout, end-to-end panel simulations, and deployed evidence that passes this
@@ -11111,6 +12038,10 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
 	  cannot drift from the complete staged-cycle metadata, and now rechecks
 	  cycle-bound and policy-bound artifact fingerprints against
 	  `valid_cycle_bindings` and `valid_policy_digests` before final promotion.
+	  The hedging gate now also requires exactly one active cycle tuple and one
+	  active policy digest, clearing split `valid_cycle_bindings` or
+	  `valid_policy_digests` before bound artifact or aggregate metadata can
+	  promote.
 	  The lane checker also has direct adversarial coverage that forges the cycle
 	  tuple on every cycle-bound downstream kind so statement-publication,
 	  reconciliation, metrics/alert, and governance evidence all fail against a
@@ -11219,12 +12150,22 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   automated hedge execution, and runtime metric-emission service surfaces as
   unshipped in the SFM-5 plan with reusable matchers and segment-aware negative
   controls while preserving local `sorafs-validate hedging`/`billing`, fixture
-  validation, rollout evidence, and payload-free canary labels. SFM-5
-  still needs the collector service, daemonized pricing/exposure engine, billing
-  aggregator, statement publisher, signed APIs, runtime CLI helpers, runtime
-  service emission of those metric families, released native bridge artifacts,
-  reconciliation tests, governance approval flow, and staged billing evidence
-  that passes the gate; SFM-6
+  validation, rollout evidence, and payload-free canary labels. It also scans
+  CLI sources for nested deployed-only `hedging
+  daemon|price-feed-collector|hedge-execute|status` and `billing
+  daemon|statement-publish|statement-ack|api` spellings without blocking local
+  validator, fixture, reference-price, billing-cycle, statement-publication, or
+  canary labels. The incentives service now requires a concrete reward budget
+  approval before init, process, record/replay, shadow-run, or daemon payout
+  handling; the missing-budget override and permissive reward-engine plumbing
+  are removed down to the internal validation helpers, the relay incentive docs
+  state that lab/staging fixtures must carry a signed Parliament hash, and the
+  rollout contract pins that service-wide surface. SFM-5
+  still needs the collector service, daemonized
+  pricing/exposure engine, billing aggregator, statement publisher, signed APIs,
+  runtime CLI helpers, runtime service emission of those metric families,
+  released native bridge artifacts, reconciliation tests, governance approval
+  flow, and staged billing evidence that passes the gate; SFM-6
   currently ships the
   reserve policy, quote/ledger, lifecycle projection, matrix, digest,
   dashboard, alert tooling, fail-closed rollout evidence gate, matching
@@ -11400,7 +12341,11 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   downstream governance-source application, and reserve promotion surfaces as
   unshipped while preserving the signed local reserve lifecycle, movement,
   custody, balance, credit-line, appeal, policy, scheduler, evidence-gate
-  tooling, and payload-free canary labels; SF-12 currently
+  tooling, and payload-free canary labels. It also scans CLI sources for
+  nested deployed-only `reserve
+  finality-poller|credit-line-mutator|provider-bake live|promote` spellings
+  without blocking shipped local `reserve lifecycle|top-up|withdraw|policy`
+  commands; SF-12 currently
   ships governance log schemas, reference
   validation/signing, governance DAG block/head reference CLI validation,
   filesystem publishers, PoR publication hooks, Taikai cache bundles, public
@@ -11475,7 +12420,11 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   explicitly unshipped with reusable matchers and segment-aware negative
   controls while preserving local dashboard/head, block/node, publish-index,
   CAR queue, runtime signed-DAG query routes, local `sorafs_cli governance dag`
-  commands, telemetry, and payload-free canary evidence labels, but SF-12 still
+  commands, telemetry, and payload-free canary evidence labels. It also scans
+  CLI sources for nested `governance dag
+  live-head|fetch-head|checkpoint-publish|ipfs-publish|ipns-publish` spellings
+  so live public operator commands cannot land accidentally while local
+  checkpoint/mirror commands remain allowed, but SF-12 still
   needs the always-on ingest/publisher services,
   IPFS/IPNS publication, runtime RocksDB/IPLD mirror datastore and query service,
   live-head/public-checkpoint publication and recovery operator commands,
@@ -11566,7 +12515,9 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   governance handoff and approval canaries, reviewed `repair-auditor-*`
   `--auditor` labels whose unique inventory matches `--auditor-count`,
   reviewed `repair-failure-event-*` failure-event labels whose unique inventory
-  matches `--failure-event-count`, derived status and handoff-target counts for
+  matches `--failure-event-count`, default `--failure-event-count` values
+  derived from the reviewed failure-source inventory, derived status and
+  handoff-target counts for
   reviewed lifecycle-status and handoff-target inventories, and latency threshold
   facts before writing. Remaining repair production work
   is live PoR/PoTR failure, repair, escalation, and governance handoff evidence
@@ -11579,16 +12530,45 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   fail endpoints, local status and event-stream routes, `iroha sorafs repair`,
   `iroha sorafs gc`, `sorafs-validate repair`, local repair telemetry, the
   fail-closed SF-8b rollout evidence gate, and payload-free canary evidence
-  labels.
+  labels. It also scans CLI sources for nested deployed-only `repair
+  live-operator-evidence|deployed-auditor-roster|production-handoff|promote`
+  spellings without blocking shipped local `repair list|claim|complete|fail|escalate`
+  commands.
 - SoraFS production promotion now has an aggregate readiness gate over the
   existing per-lane rollout/release evidence summaries:
   `scripts/check_sorafs_production_readiness.py` requires every selected
   SoraFS lane summary to be `ready`, payload-free, fresh at the artifact
   fingerprint layer, reviewed for deployment context, run with that lane
-  checker’s full default required-kind set, free of extra `required` rows, and
-	  carrying empty summary, artifact, and load-error diagnostics plus top-level
-	  evidence/artifact counts consistent with the validated rows, with recognized
-	  artifact totals derived from validated recognized-artifact objects, evidence
+	  checker’s full default required-kind set, free of extra `required` rows,
+	  carrying empty summary, artifact, and load-error diagnostics, rejects
+	  live or broken final-path symlinked explicit evidence, evidence-directory,
+	  and directory-discovered summary inputs, rejects live or broken
+	  parent-symlinked explicit evidence and evidence-directory inputs at both
+	  the shared evidence-path and aggregate-checker layers, applies the same
+	  fail-closed symlink policy to reserved-output conflict scans, redacts
+	  raw, encoded, format-control-obfuscated, or Unicode-normalized
+	  secret-looking canonical path components through the shared path-identity
+	  helper, treats non-secret Unicode control/format/private-use diagnostic text
+	  as non-canonical across path-identity, evidence-path, and evidence-JSON
+	  existing error sinks, labels, failure templates, duplicate-key diagnostics,
+	  checker/runner emitted messages, notices, summary keys, artifact labels,
+	  runner rendered-plan strings, reviewed response-file arguments,
+	  required-kind labels, runner rendered paths/URLs/passthrough args/command
+	  vectors, artifact-fingerprint field labels, and sensitive-field
+	  error sinks, paths, evidence labels, plus evidence-validation summary
+	  error lists, path labels, validation messages, required-row diagnostics,
+	  artifact paths/kinds, gate-status errors, and production-readiness
+	  aggregate summary/row metadata, and hedging fixture JSON sidecar field
+	  labels, requires exact reviewed closed-set inventory membership without
+	  trim-normalizing padded values, including custom Governance DAG
+	  payload-kind gates, reputation explicit evidence/provider-proof specs, and
+	  AI pre-screen/transparency source-entry specs, applies the same exact
+	  parser policy to shared checker `--evidence KIND=PATH` preflight, and
+	  excludes non-canonical scalar inventory values from product/count
+	  derivations, sanitizes matching resolver
+	  exception text before diagnostics can echo filesystem labels, and keeps
+	  evidence/artifact counts consistent with the validated rows, with
+	  recognized artifact totals derived from validated recognized-artifact objects, evidence
 	  file counts matching the distinct archive-portable recognized artifact paths, final
 	  aggregate lane rows rejecting evidence counts above recognized artifacts
 	  or recognized artifact counts that drift from artifact counts, threshold
@@ -11631,7 +12611,9 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
 	  duplicate-free, known gate names that match the requested release-review
 	  gates, ready aggregate summary file counts required to match the requested
 	  release-review gate count so no hidden summary files can be represented as
-	  ready output, and summary-level aggregate thresholds schema-closed to
+	  ready output, recognized-summary counters required not to exceed discovered
+	  summary files or requested gate count, unknown aggregate `required` row keys
+	  rejected without echoing forged labels, and summary-level aggregate thresholds schema-closed to
 	  `max_summary_artifact_age_secs` so no extra promotion knobs can be carried
 	  in final release-review output,
 	  malformed
@@ -11679,7 +12661,10 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   production-readiness runner now repeats rendered-path safety checks inside
   collection-plan envelope validation for external summaries, artifacts, and
   path-bearing command positions so validation drift cannot expose unsafe path
-  strings. The shared runner preflight now evaluates raw and repeatedly
+  strings, with adversarial coverage now pinning encoded unsafe output
+  directories, summary-output paths, verifier paths, tampered external-summary
+  entries, step artifact labels, and command-path arguments before dry-run plan
+  emission. The shared runner preflight now evaluates raw and repeatedly
   percent-decoded path, URL host/path, and passthrough argument variants before
   classifying secret-looking components, traversal, separators, drive prefixes,
   and URI-scheme-looking path components, so encoded or double-encoded bypasses
@@ -15869,7 +16854,7 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   recursive compact, and recursive spend validators also reject over-cap caller
   archives with explicit `must not exceed` diagnostics before owned byte copies,
   Norito parsing, native availability checks, or native dispatch. The Node NAPI
-  and Python PyO3 native hosts also enforce the same 64 MiB archive cap for
+  and Python PyO3 native hosts also enforce the same 256 MiB archive cap for
   direct native-host entrypoints that bypass the high-level SDK wrappers, with
   ABI-7 recursive-spend regressions covering the single-archive operations and
   every multi-archive lineage witness input slot before Norito decode. Those
@@ -23402,7 +24387,7 @@ digest-bound pending-XSD source probe summaries for reviewed
   each witness passes preflight. The data model now exposes a
   reserved-mode recursive aggregation evidence statement that
   Norito/Poseidon-binds that batch digest, parameter fingerprint, and canonical
-  `pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4` verifier-witness
+  `pallas-ipa-transparent-v1/vesta-recursive-fixed-window-255x1` verifier-witness
   profile plus the declared verifier opening length to the same ordered hop
   transcript. Reserved compact projection checks validate mode `2` against that
   recursive evidence and the compact token's folded public inputs, but public
@@ -23458,7 +24443,7 @@ digest-bound pending-XSD source probe summaries for reviewed
   recursive circuit work. A cheap
   production-layout guard now pins
   the `n = 128` recursive verifier shape (seven rounds, `[64, 32, 16, 8, 4, 2,
-  1]` generator-fold layers, 64-by-4 scalar coverage, and 262 represented
+  1]` generator-fold layers, direct `255 x 1` scalar coverage, and 262 represented
   windowed MSM gadgets), and a fixed-window table plan pins the shared-table
   target at 532 table families versus 90,440 naive point-table copies
   (723,520 duplicated point rows) with `trusted_setup_required = false`. Both
@@ -23982,18 +24967,20 @@ digest-bound pending-XSD source probe summaries for reviewed
   before nullifier consumption or public minting. Semantic v1 spend proofs
   without that witness still fail closed as admission-neutral, because they do
   not prove every private hop and accumulator
-  transition in-circuit. The reserved chain-admission circuit id for the
-  witnessless constant-size proof is
-  `kagemusha-recursive-spend-lineage-v1`; profile attempts under that id must
-  stay in the transparent `halo2/ipa` corridor, carry non-empty proof bytes,
-  bind the accumulator-derived recursive public inputs through a fresh
-  public-input hash, include a non-zero recursive verifier scalar-projection
-  digest, and expose an inner `OpenVerifyEnvelope` whose backend tag, lineage
-  circuit id, schema, empty auxiliary metadata, non-zero verifier-key hash, and
-  public instance columns match that reserved profile. Those instance columns
-  must now come from a strict ZK1 no-trusted-setup inner proof envelope. The
-  generic Halo2 proof-envelope parser is scoped to current semantic v1
-  preverification and is rejected under the reserved lineage id.
+  transition in-circuit. The witnessless constant-size proof path uses the
+  profile-specific `kagemusha-recursive-spend-lineage-onehop-v1` and
+  `kagemusha-recursive-spend-lineage-append-v1` proof ids; the generic
+  `kagemusha-recursive-spend-lineage-v1` family label is not accepted as a
+  verifier-record proof id or native Halo2 dispatch id. Reserved-lineage proof
+  attempts must stay in the transparent `halo2/ipa` corridor, carry non-empty
+  proof bytes, bind the accumulator-derived recursive public inputs through a
+  fresh public-input hash, include a non-zero recursive verifier
+  scalar-projection digest, and expose an inner `OpenVerifyEnvelope` whose
+  backend tag, lineage circuit id, schema, empty auxiliary metadata, non-zero
+  verifier-key hash, and public instance columns match that reserved profile.
+  Those instance columns must now come from a strict ZK1 no-trusted-setup inner
+  proof envelope. The generic Halo2 proof-envelope parser is scoped to current
+  semantic v1 preverification and is rejected under Reserved-lineage profile ids.
   Record-backed preverification
   also requires the inline verifier-key envelope to be a strict
   no-trusted-setup Halo2 IPA ZK1 key container: exactly one matching lineage
@@ -24044,8 +25031,9 @@ digest-bound pending-XSD source probe summaries for reviewed
   discontinuity, amount drift, missing previous-note nullifier consumption, and
   top-up-anchor output reuse before Halo2 proving starts.
   Rust-facing recursive spend init wrappers and ABI-6 native spend init now
-  default to the reserved `kagemusha-recursive-spend-lineage-v1` first-hop
-  prover in core, the native bridge, JavaScript host, and Python PyO3 host. The
+  use the reserved `kagemusha-recursive-spend-lineage-onehop-v1` first-hop
+  prover when one-hop lineage key material is supplied in core, the native
+  bridge, JavaScript host, and Python PyO3 host. The
   core wrapper derives the Pallas open-envelope width from the raw Norito
   archive, selects the matching no-trusted-setup one-hop lineage verifier key,
   and emits bundles whose public scalar-projection digest is bound to the
@@ -24343,7 +25331,121 @@ operator-provided rollout bundles.
   stale public-lane economic admission. Focused local validation has also
   rerun the previously pending routing dataspace/default-lane autoscale guards
   and mismatched public-lane validator-row filters, keeping remaining Nexus
-  validation debt concentrated on end-to-end rollout evidence.
+  validation debt concentrated on end-to-end rollout evidence. Lane-local
+  proposal, vote, and QC messages now also feed a bounded session cache that
+  deduplicates replays, rejects conflicts, verifies QC aggregates with signer
+  proof-of-possession material, seals prepare/commit QCs from cached vote
+  quorums, broadcasts locally sealed QCs once, moves proposal-plus-QC
+  committed sessions into a bounded actor-owned staging queue, publishes a
+  compact committed-lane-block status surface for rollout evidence, broadcasts
+  finalized lane-block proposals plus the local BLS prepare vote after stale
+  proposal checks pass, broadcasts the local BLS commit vote only after a
+  validated prepare QC is cached, feeds queued committed lane sessions back into
+  proposal-planning lane tips, persists certified standalone lane-block
+  sessions as Norito-framed Kura sidecars with proposal/prepare-QC/commit-QC
+  plus signer-PoP aggregate validation, reloads those certified sidecars into
+  proposal-planning lane tips and the bounded committed-session queue/status
+  surface after restart, verifies when Kura can recover every accepted
+  entrypoint from the anchoring global block body, exposes and persists the
+  recovered proposal/artifact/entrypoints as Norito-framed execution-input
+  sidecars, advertises certified-only sessions as
+  `awaiting_executable_payload`, recoverable sessions as
+  `payload_available_awaiting_executor`, and recovered handoffs as
+  `payload_recovered_awaiting_state_application`, records canonical
+  block-result receipts as durable Norito-framed application sidecars,
+  advertises those receipts as `state_applied_by_canonical_block`, defers valid
+  artifacts as `payload_unapplied`, and directly commits clean current-tip
+  direct preflights into WSV with durable idempotence markers and direct
+  execution receipts. Data-model drift tests also pin every lane
+  descriptor/proposal replay, predecessor, ownership, validator-set hash
+  version/hash, quorum, and QC-mode field in canonical identities, plus every
+  lane vote-body replay, ownership, validator-set, quorum, and QC-mode field in
+  the BLS-signed preimage. Four-peer main-loop coverage now proves one final
+  proposal emits two lane-block proposal artifacts and two local prepare votes
+  for active lanes at different lane-local heights without waiting for an idle
+  default lane, mixed-committee coverage proves that local prepare-vote
+  broadcast is limited to lanes whose validator set includes the local peer,
+  and negative coverage proves a cross-lane batch with one missing lane
+  authority is deferred atomically with stale ownership status cleared. Fresh
+  active lanes with no lane-local relay history now start predecessor planning
+  from lane-local height zero instead of inheriting a global compatibility
+  height, while reset watermarks remain the baseline for recreated lanes;
+  broader default-soak live multi-peer rollout evidence remains outstanding.
+  The 12-peer
+  cross-dataspace localnet route-probe corridor now gates DS1 and DS2 planning
+  on observable replayable lane-payload ownership with exact dataspace IDs, the
+  expected four-validator lane committees, and the deterministic three-vote
+  quorum. The route-probe parser now requires those ownership rows to pass the
+  canonical replay-material hash validator, treats same-slot ownership identity
+  drift or malformed latest ownership rows as non-progress, and keeps
+  same-height cross-peer observations from combining into quorum progress
+  unless their descriptor, subject, payload-ownership, and RBC-instance
+  identities match. Conflicting top committed-lane or ownership identities that
+  independently satisfy quorum at the same lane height/view now fail closed
+  instead of being selected by iterator order. An extra DS1 route
+  probe proves one active lane can advance beyond another in lane-local block
+  height without waiting for an idle configured lane. Committed standalone
+  lane-block summaries now ride the canonical Norito status payload too, and
+  the localnet parser requires each active lane to publish committed rows whose
+  embedded prepare and commit QC signer counts satisfy the exact lane quorum.
+  The parser also retains committed-lane
+  descriptor/proposal hashes, subject hash, payload-ownership hash,
+  RBC-instance hash, and QC-mode tag and treats same-height rows with identity
+  drift or malformed latest QC metadata as non-progress, so conflicting
+  certified payload identities cannot fake scale-out progress, combine into
+  cross-peer route progress, or prove safe scale-in contraction.
+  Runtime committed-lane status merging now also requires descriptor hash plus
+  proposal, prepare-QC, and commit-QC equality before replacing an existing
+  row, so malformed in-memory descriptor or QC drift remains visible as
+  suspicious evidence instead of overwriting the original certified status.
+  That separates independent lane-height planning evidence from standalone
+  lane-block QC evidence instead of treating operator status-row fanout as the
+  safety proof. The route-probe corridor now also requires an applied
+  certified committed-lane row with executable payload material for each active
+  dataspace, scans every peer for that self-certified QC evidence, and keeps
+  the stricter latest-row application selector under focused parser coverage
+  while the end-to-end gate accepts the highest applied certified row when
+  later rows are still awaiting predecessor application. The bounded
+  committed-session queue now releases capacity only after a durable
+  application receipt is validated, and restart hydration skips already
+  application-receipted certified sidecars so applied work cannot crowd out
+  unapplied committed lane blocks. That hydration now scans every valid
+  current-dataspace certified sidecar in deterministic lane-height order,
+  rather than only the latest tip, so restart has a complete ordered backlog
+  for the direct lane-state application boundary. The execution boundary
+  now also gates payload recovery, direct preflight, and canonical receipt
+  recording on a durable application receipt for the exact predecessor lane
+  height and descriptor hash, surfacing
+  `awaiting_predecessor_application` as a fail-closed status when a later lane
+  block has payload material but the prior lane block is not proven applied.
+  Recovered lane-block direct preflight now also validates each lane input in a
+  fresh revert-only `StateBlock` at the same committed base, so independent
+  preflights cannot observe speculative effects from other lanes before a
+  durable application receipt commits those effects. Durable direct-preflight
+  sidecars also reject result-count drift before persistence, keeping malformed
+  result vectors out of the standalone direct-application boundary.
+  Recovered execution-input sidecars are revalidated against the current
+  canonical lane payload artifact and proposal block before they are exposed
+  to standalone direct application, so stale recovered inputs cannot survive
+  canonical artifact drift, and freshly recovered canonical execution inputs
+  overwrite rejected stale/tampered execution-input sidecars so invalid old
+  handoff state cannot block executor recovery. Recovered execution inputs now
+  also run through a non-committing `StateBlock` direct preflight with
+  descriptor lane/dataspace routing and original `u64` candidate indices
+  preserved, and the current-tip results are persisted as durable Norito
+  preflight sidecars plus explicit
+  preflighted/rejected status labels. The standalone direct-application path is
+  now restart-visible through durable execution inputs, direct preflights,
+  direct receipts, and WSV idempotence markers. Canonical lane application
+  receipts also fail closed
+  when durable direct-preflight evidence for the same proposal/artifact and
+  entrypoints carries different result hashes, surfacing
+  `application_receipt_conflicts_with_preflight` instead of pruning the
+  committed-lane queue as applied. Autoscale rollout evidence now uses the
+  shared `iroha_data_model` committed-lane status classifier to allowlist only
+  audited execution labels with matching executable-payload flags, so conflict
+  or unknown future states cannot be counted as horizontal expansion/progress
+  evidence until intentionally reviewed.
   Public-lane economic cleanup and embedded-reset-lane validator exit tests
   have also been rerun across `set_nexus`, manual lifecycle, and autoscale
   scale-in paths, so local reset cleanup validation debt is closed before the
@@ -24358,13 +25460,21 @@ operator-provided rollout bundles.
   Focused non-localnet multilane integration suites for router behavior,
   pipeline setup, Kura storage layout, cross-lane adversarial isolation,
   global commit behavior, and lane-registry wiring have been refreshed after
-  these local hardening passes. Cross-dataspace localnet evidence now also
-  passes genesis pre-execution and the full 12-peer atomic-swap soak/rollback
-  test after updating the fixture to use the canonical `universal` dataspace
-  alias plus manifest-hash-derived private dataspace ids, and after making the
-  heavy localnet test allocate its own stack; the full 12-peer atomic-swap
-  fixture was refreshed on the 2026-07-03 Nexus consensus metadata snapshot
-  with a 10/10 paired-swap soak and rollback verification. The feature-gated
+  these local hardening passes. Cross-dataspace localnet route evidence now
+  passes genesis pre-execution and covers route probes, applied certified
+  evidence, stricter committed-history quorum checks, proposal-readiness
+  deferral for unapplied lane blocks, Kura sidecar recovery from local canonical
+  block bodies, and lane/dataspace-preserving ownership status. The remaining
+  blocker is DvP lane-block application liveness under the 12-peer localnet:
+  route probes can still stall before committed/applied lane-block convergence,
+  with one DS lane split between executable-payload wait and canonical
+  application while the other DS lane has no committed lane-block row. The
+  default 10-iteration paired-swap soak still remains a stress/liveness refresh
+  item; the latest default run before the quorum-history hardening exited `ok`
+  with only 3/10 soak iterations passing.
+  Historical full-soak evidence remains the 2026-07-03 Nexus consensus metadata
+  snapshot with a 10/10 paired-swap soak and rollback verification. The
+  feature-gated
   STARK cross-dataspace localnet fixture now uses the same canonical dataspace
   catalog and has non-ignored `zk-stark` genesis pre-execution coverage, while
   its native STARK/FRI proof runtime tests remain intentionally ignored until
@@ -24388,11 +25498,22 @@ operator-provided rollout bundles.
   contraction profiles across consecutive scale-in passes.
   The autoscale soak harness now also fails closed on stale prior scale-out
   logs and retry cleanup races: strict repeated cycles require fresh
-  post-baseline scale-out quorum, cooldown clearance re-checks contraction
-  before taking the cycle baseline, strict post-storage probes stop adding
-  top-up load, and the reporter rejects successful-cycle summaries with
-  scale-out or scale-in quorum misses. Hardened localnet soak evidence now
-  includes a clean 300-second run refreshed on the 2026-07-03 Nexus consensus
+	  post-baseline scale-out quorum, cooldown clearance re-checks contraction
+	  before taking the cycle baseline, strict probes stop adding top-up load once
+	  transition quorum is observed, and the reporter rejects successful-cycle summaries with
+	  scale-out or scale-in quorum misses. The reporter summary now also publishes
+	  quorum-required maxima, successful scale-out minimum peer counts, required
+	  scale-in cycle counts, required scale-in quorum minima, and optional scale-in
+	  cycle counts for rollout review. A fresh 2026-07-07 strict expand/contract
+	  localnet rerun now passes after strict expansion readiness was hardened to
+	  require fresh deterministic scale-out transition evidence and expanded-lane
+	  status evidence in one gate: the canonical strict run observes load
+	  application, deterministic scale-out/status quorum, and scale-in quorum in
+	  cycle 1, and the public-profile strict run passes the same combined evidence
+	  gate. The repeated two-cycle localnet also passes under the stop-top-up-after
+	  transition-quorum policy.
+  Hardened localnet soak evidence now includes a clean 300-second run refreshed
+  on the 2026-07-03 Nexus consensus
   metadata snapshot with 10 cycles, 0 retries, and 0 failures, plus an earlier
   clean 300-second run with 11 cycles, 0 retries, and 0 quorum
   misses, plus a full 30-minute run with 32 cycles, 0 retries, 0 attempt
@@ -24692,7 +25813,11 @@ operator-provided rollout bundles.
   previous-catalog lifecycle replay, derived lane config, and scale-out
   creation height are now revalidated again at block commit before autoscale
   storage geometry is published, so tampered staged metadata cannot
-  durable-publish a valid catalog delta. Direct queue admission and restart
+  durable-publish a valid catalog delta. Scale-in commit-revalidation coverage
+  now proves tampered pending transition metadata, survivor catalog rows,
+  preserved retired-lane catalogs, and derived lane configs abort before
+  retired-lane Kura/tiered storage or committed catalog publication, matching
+  the existing scale-out tamper boundary. Direct queue admission and restart
   queue-plan journal replay now also pin forged future-created autoscale route
   plans against the live height-aware route before they can enter the pending
   queue or local routing ledger. State-backed queue route resolution now also

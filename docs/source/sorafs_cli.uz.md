@@ -536,8 +536,8 @@ one run:
   `--allow-replacement` is supplied, and the command aborts if the resulting
   denylist would be empty.
 - Removals accept descriptors straight from the snapshot (case-insensitive for
-  provider/manifest digests). Use `--allow-missing-removals` to skip absent
-  descriptors and `--force` to overwrite an existing `--out` path.
+  provider/manifest digests). Missing removal descriptors are errors; use
+  `--force` to overwrite an existing `--out` path.
 - The command prints the BLAKE3 digest and Merkle root for the updated bundle
   and optionally writes snapshot + Norito + evidence artefacts in one call so
   governance packets and GAR/CDN rollouts can attach a single deterministic

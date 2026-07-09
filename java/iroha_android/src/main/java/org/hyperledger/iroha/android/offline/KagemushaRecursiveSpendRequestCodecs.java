@@ -135,17 +135,6 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     return KagemushaRecursiveSpendProver.buildPreviousProofOpenEnvelopesArchive(previousBundle);
   }
 
-  public static byte[] buildVerifiedFoldRecordBundle(
-      final List<byte[]> hopProofOutputArchives, final List<VerifierRecordRef> hopVerifierRecords) {
-    require(hopProofOutputArchives != null && !hopProofOutputArchives.isEmpty(),
-        "hopProofOutputArchives must not be empty");
-    require(hopVerifierRecords != null && hopVerifierRecords.size() == hopProofOutputArchives.size(),
-        "hopVerifierRecords must match hopProofOutputArchives");
-    throw new IllegalArgumentException(
-        "chainId, asset, and rootAfter are required to build KagemushaVerifiedFoldRecordBundle; "
-            + "use VerifiedFoldHopEvidence inputs instead");
-  }
-
   public static byte[] buildVerifiedFoldRecordBundle(final List<VerifiedFoldHopEvidence> hops) {
     require(hops != null && !hops.isEmpty(), "hops must not be empty");
     require(hops.size() <= KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS,
@@ -272,7 +261,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     require(hop != null, "hop is required");
     require(spendableNote != null, "spendableNote is required");
     final byte[] recordBundle = buildVerifiedFoldRecordBundle(Arrays.asList(hop));
-    preflightInitLineageKeyMaterialForAutoGeneration(
+    validateOptionalInitLineageKeyMaterial(
         lineageVerifierKey, lineageProvingKeyArchive);
     final byte[] pallasOpenEnvelopes =
         buildPallasOpenEnvelopesArchiveForRecordBundle(recordBundle);
@@ -615,11 +604,15 @@ public final class KagemushaRecursiveSpendRequestCodecs {
             + "Pallas IPA opening envelopes, chainId, asset, or rootAfter");
   }
 
-  private static void preflightInitLineageKeyMaterialForAutoGeneration(
+  private static void validateOptionalInitLineageKeyMaterial(
       final byte[] lineageVerifierKey, final byte[] lineageProvingKeyArchive) {
-    require(lineageVerifierKey != null, "lineageVerifierKey is required for recursive spend init");
+    if (lineageVerifierKey == null && lineageProvingKeyArchive == null) {
+      return;
+    }
+    require(lineageVerifierKey != null,
+        "lineageVerifierKey is required when lineageProvingKeyArchive is present");
     require(lineageProvingKeyArchive != null,
-        "lineageProvingKeyArchive is required for recursive spend init");
+        "lineageProvingKeyArchive is required when lineageVerifierKey is present");
     require(lineageVerifierKey.length > 0, "lineageVerifierKey must not be empty");
     require(lineageProvingKeyArchive.length > 0, "lineageProvingKeyArchive must not be empty");
     validateLineageKeyArtifactsForInit(lineageVerifierKey, lineageProvingKeyArchive);
@@ -943,11 +936,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
       this.lineageProvingKeyArchive = copyNullable(lineageProvingKeyArchive);
       this.blockHeight = blockHeight;
       requireNonNegativeHeight(blockHeight);
-      require(this.lineageVerifierKey != null, "lineageVerifierKey is required for recursive spend init");
-      require(this.lineageVerifierKey.length > 0, "lineageVerifierKey must not be empty");
-      require(this.lineageProvingKeyArchive != null,
-          "lineageProvingKeyArchive is required for recursive spend init");
-      require(this.lineageProvingKeyArchive.length > 0, "lineageProvingKeyArchive must not be empty");
+      validateOptionalInitLineageKeyMaterial(this.lineageVerifierKey, this.lineageProvingKeyArchive);
       final byte[] recordBundlePayload =
           compactPayloadForRequest(this.recordBundle, SCHEMA_RECORD_BUNDLE, "recordBundle");
       final int recordBundleHopCount =
@@ -957,7 +946,6 @@ public final class KagemushaRecursiveSpendRequestCodecs {
           recordBundleHopCount,
           "pallasOpenEnvelopes",
           KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES);
-      validateLineageKeyArtifactsForInit(this.lineageVerifierKey, this.lineageProvingKeyArchive);
     }
 
     public byte[] recordBundle() {

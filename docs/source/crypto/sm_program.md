@@ -69,13 +69,11 @@ Data-model consumers should treat SM4 keys and tags as transient blobs; never pe
 | Optional `sm-ffi-openssl` (preview) | Off | Platform Ops | Placeholder feature for OpenSSL/Tongsuo provider integration; remains disabled until certification & packaging SOPs land. |
 
 Network policy now exposes `network.require_sm_handshake_match` and
-`network.require_sm_openssl_preview_match` (both default to `true`). Clearing either flag allows
-mixed deployments where Ed25519-only observers connect to SM-enabled validators; mismatches are
-logged at `WARN`, but consensus nodes should keep the defaults enabled to prevent accidental
+`network.require_sm_openssl_preview_match` (both default to `true`). For the
+first release, both checks are mandatory: startup configuration normalizes to
+strict matching, live `/v1/config` rejects attempts to clear either flag, and
+the CLI only exposes the matching `--require-*` flags. This prevents accidental
 divergence between SM-aware and SM-disabled peers.
-The CLI surfaces these toggles via `iroha_cli app sorafs handshake update
---allow-sm-handshake-mismatch` and `--allow-sm-openssl-preview-mismatch`, or the matching `--require-*`
-flags to restore strict enforcement.
 
 #### OpenSSL/Tongsuo preview (`sm-ffi-openssl`)
 - **Scope.** Builds a preview-only provider shim (`OpenSslProvider`) that validates OpenSSL runtime availability and exposes OpenSSL-backed SM3 hashing, SM2 verification, and SM4-GCM encrypt/decrypt while remaining opt-in. Consensus binaries must continue using the RustCrypto path; the FFI backend is strictly opt-in for edge verification/signing pilots.

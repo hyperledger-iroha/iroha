@@ -53,10 +53,10 @@ SDK арқылы арматура тұтынушылары синхрондал�
 
 ### Қол қою саясаты
 
-Арматураны қалпына келтіру **міндетті түрде** жарамды кеңес қолын қамтуы керек. Генератор
-`--allow-unsigned` анық берілмейінше, қол қойылмаған шығысты қабылдамайды (арналған
-тек жергілікті эксперимент үшін). Қолтаңба конверттері тек қосымша және
-әр қол қоюшы үшін қайталанатын.
+Fixture regeneration **must** include a valid council signature. The generator
+rejects unsigned output in every mode; use `--signing-key` to create or append a
+council signature, or keep the existing verified `manifest_signatures.json`
+unchanged. Signature envelopes are append-only and deduplicated per signer.
 
 Кеңес қолтаңбасын қосу үшін:
 

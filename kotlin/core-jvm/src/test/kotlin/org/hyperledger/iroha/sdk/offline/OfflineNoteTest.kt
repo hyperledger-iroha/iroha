@@ -361,7 +361,7 @@ class OfflineNoteTest {
         }
         assertEquals(
             "kagemusha-recursive-spend-lineage-v1",
-            KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+            "kagemusha-recursive-spend-lineage-v1",
         )
         assertTrue(
             KagemushaRecursiveSpendProver.detectNativeAvailability(

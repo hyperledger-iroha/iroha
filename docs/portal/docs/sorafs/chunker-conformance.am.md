@@ -53,10 +53,10 @@ translator: machine-google-reviewed
 
 ### የመፈረም ፖሊሲ
 
-ቋሚ ዳግም መወለድ ** አለበት *** ትክክለኛ የምክር ቤት ፊርማ ማካተት አለበት። ጀነሬተር
-`--allow-unsigned` በግልጽ ካልተላለፈ በስተቀር ያልተፈረመ ውፅዓት ውድቅ ያደርጋል (የታሰበ)
-ለአካባቢያዊ ሙከራዎች ብቻ). የፊርማ ፖስታዎች አባሪ ብቻ እና ናቸው።
-በአንድ ፈራሚ የተቀነሰ።
+Fixture regeneration **must** include a valid council signature. The generator
+rejects unsigned output in every mode; use `--signing-key` to create or append a
+council signature, or keep the existing verified `manifest_signatures.json`
+unchanged. Signature envelopes are append-only and deduplicated per signer.
 
 የምክር ቤት ፊርማ ለመጨመር፡-
 

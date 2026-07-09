@@ -35,6 +35,7 @@ DIGEST_2 = "cd" * 32
 DEPLOYMENT_ID = "transparency-staging-a"
 ENVIRONMENT = "staging"
 GENERATED_AT = 1_800_000_120
+NOW_UNIX = GENERATED_AT
 
 
 def write_json(path: Path, payload: dict) -> Path:
@@ -239,19 +240,22 @@ CYCLE_BOUND_FIXTURES = (
 
 
 def run_gate(root: Path, *extra: str) -> int:
-    return MODULE.main(["--evidence-dir", str(root), *extra])
+    return MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(root), *extra])
 
 
 def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     summary = tmp_path / "summary.json"
 
-    assert MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)]) == 0
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 0
 
     payload = json.loads(summary.read_text(encoding="utf-8"))
     assert payload["schema"] == "sorafs.transparency.rollout_evidence_gate.v1"
     assert payload["status"] == "ready"
-    assert payload["thresholds"] == {"max_evidence_bytes": MODULE.MAX_EVIDENCE_BYTES}
+    assert payload["thresholds"] == {
+        "max_evidence_bytes": MODULE.MAX_EVIDENCE_BYTES,
+        "max_evidence_age_secs": MODULE.DEFAULT_MAX_EVIDENCE_AGE_SECS,
+    }
     assert payload["recognized_artifact_count"] == 5
     assert payload["required"]["publication"]["valid"] is True
     assert payload["valid_source_batch_digests"] == [DIGEST]
@@ -265,6 +269,34 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert payload["required"]["publication"]["artifacts"][0]["fingerprint"][
         "deployment_id"
     ] == DEPLOYMENT_ID
+
+
+def test_generated_at_unix_rejects_future_and_stale_artifacts(tmp_path: Path) -> None:
+    cases = (
+        (
+            "future",
+            NOW_UNIX + 1,
+            "generated_at_unix must not be in the future",
+        ),
+        (
+            "stale",
+            NOW_UNIX - MODULE.DEFAULT_MAX_EVIDENCE_AGE_SECS - 1,
+            f"generated_at_unix is older than {MODULE.DEFAULT_MAX_EVIDENCE_AGE_SECS} seconds",
+        ),
+    )
+
+    for label, generated_at, expected_error in cases:
+        root = tmp_path / label
+        root.mkdir()
+        payload = source_entry_evidence()
+        payload["generated_at_unix"] = generated_at
+        write_json(root / "source-entry.json", payload)
+        summary = root / "summary.json"
+
+        assert run_gate(root, "--require-kind", "source_entry", "--summary-out", str(summary)) == 1
+
+        report = json.loads(summary.read_text(encoding="utf-8"))
+        assert expected_error in json.dumps(report)
 
 
 def test_bound_fixture_tables_cover_checker_bound_kind_sets() -> None:
@@ -303,14 +335,14 @@ def test_response_file_arguments_pass(tmp_path: Path) -> None:
     args = tmp_path / "transparency.args"
     args.write_text(f"--evidence-dir {tmp_path}\n", encoding="utf-8")
 
-    assert MODULE.main([f"@{args}"]) == 0
+    assert MODULE.main(["--now-unix", str(NOW_UNIX), f"@{args}"]) == 0
 
 
 def test_missing_required_kind_fails(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     (tmp_path / "explorer.json").unlink()
 
-    assert MODULE.main(["--evidence-dir", str(tmp_path)]) == 1
+    assert MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path)]) == 1
 
 
 def test_route_count_must_match_unique_routes_for_route_artifacts(
@@ -332,7 +364,7 @@ def test_route_count_must_match_unique_routes_for_route_artifacts(
         summary = root / "summary.json"
 
         assert (
-            MODULE.main(["--evidence-dir", str(root), "--summary-out", str(summary)])
+            MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(root), "--summary-out", str(summary)])
             == 1
         )
 
@@ -359,7 +391,7 @@ def test_routes_must_not_duplicate_for_route_artifacts(tmp_path: Path) -> None:
         summary = root / "summary.json"
 
         assert (
-            MODULE.main(["--evidence-dir", str(root), "--summary-out", str(summary)])
+            MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(root), "--summary-out", str(summary)])
             == 1
         )
 
@@ -392,7 +424,7 @@ def test_routes_must_not_include_unknown_values_for_route_artifacts(
         summary = root / "summary.json"
 
         assert (
-            MODULE.main(["--evidence-dir", str(root), "--summary-out", str(summary)])
+            MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(root), "--summary-out", str(summary)])
             == 1
         )
 
@@ -411,7 +443,7 @@ def test_source_entry_probes_must_not_duplicate_source_kind(tmp_path: Path) -> N
     write_json(tmp_path / "source-entry.json", payload)
     summary = tmp_path / "summary.json"
 
-    assert MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)]) == 1
+    assert MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path), "--summary-out", str(summary)]) == 1
 
     result = json.loads(summary.read_text(encoding="utf-8"))
     artifact = result["required"]["source_entry"]["artifacts"][0]
@@ -438,7 +470,7 @@ def test_source_entry_probe_kinds_must_not_include_unknown_values(
     write_json(tmp_path / "source-entry.json", payload)
     summary = tmp_path / "summary.json"
 
-    assert MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)]) == 1
+    assert MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path), "--summary-out", str(summary)]) == 1
 
     result = json.loads(summary.read_text(encoding="utf-8"))
     artifact = result["required"]["source_entry"]["artifacts"][0]
@@ -468,7 +500,7 @@ def test_probe_count_must_match_probe_inventory_for_probe_artifacts(
         summary = root / "summary.json"
 
         assert (
-            MODULE.main(["--evidence-dir", str(root), "--summary-out", str(summary)])
+            MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(root), "--summary-out", str(summary)])
             == 1
         )
 
@@ -513,7 +545,7 @@ def test_specific_probe_counts_must_match_probe_roles(tmp_path: Path) -> None:
         summary = root / "summary.json"
 
         assert (
-            MODULE.main(["--evidence-dir", str(root), "--summary-out", str(summary)])
+            MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(root), "--summary-out", str(summary)])
             == 1
         )
 
@@ -532,7 +564,7 @@ def test_privacy_aggregate_probe_role_counts_must_sum_to_probe_count(
     write_json(tmp_path / "privacy-aggregate.json", payload)
     summary = tmp_path / "summary.json"
 
-    assert MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)]) == 1
+    assert MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path), "--summary-out", str(summary)]) == 1
 
     result = json.loads(summary.read_text(encoding="utf-8"))
     artifact = result["required"]["privacy_aggregate"]["artifacts"][0]
@@ -556,7 +588,7 @@ def test_privacy_aggregate_actions_must_not_duplicate(tmp_path: Path) -> None:
     write_json(tmp_path / "privacy-aggregate.json", payload)
     summary = tmp_path / "summary.json"
 
-    assert MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)]) == 1
+    assert MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path), "--summary-out", str(summary)]) == 1
 
     result = json.loads(summary.read_text(encoding="utf-8"))
     artifact = result["required"]["privacy_aggregate"]["artifacts"][0]
@@ -579,7 +611,7 @@ def test_privacy_aggregate_actions_must_not_include_unknown_values(
     write_json(tmp_path / "privacy-aggregate.json", payload)
     summary = tmp_path / "summary.json"
 
-    assert MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)]) == 1
+    assert MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path), "--summary-out", str(summary)]) == 1
 
     result = json.loads(summary.read_text(encoding="utf-8"))
     artifact = result["required"]["privacy_aggregate"]["artifacts"][0]
@@ -599,7 +631,7 @@ def test_proof_token_issuance_actions_must_not_duplicate(tmp_path: Path) -> None
     write_json(tmp_path / "proof-token-issuance.json", payload)
     summary = tmp_path / "summary.json"
 
-    assert MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)]) == 1
+    assert MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path), "--summary-out", str(summary)]) == 1
 
     result = json.loads(summary.read_text(encoding="utf-8"))
     artifact = result["required"]["proof_token_issuance"]["artifacts"][0]
@@ -623,7 +655,7 @@ def test_proof_token_issuance_actions_must_not_include_unknown_values(
     write_json(tmp_path / "proof-token-issuance.json", payload)
     summary = tmp_path / "summary.json"
 
-    assert MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)]) == 1
+    assert MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path), "--summary-out", str(summary)]) == 1
 
     result = json.loads(summary.read_text(encoding="utf-8"))
     artifact = result["required"]["proof_token_issuance"]["artifacts"][0]
@@ -638,7 +670,7 @@ def test_proof_token_issuance_requires_action_coverage(tmp_path: Path) -> None:
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)])
+        MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path), "--summary-out", str(summary)])
         == 1
     )
 
@@ -655,13 +687,13 @@ def test_deployment_context_is_required(tmp_path: Path) -> None:
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)])
+        MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path), "--summary-out", str(summary)])
         == 1
     )
 
     summary_payload = json.loads(summary.read_text(encoding="utf-8"))
     artifact = summary_payload["required"]["explorer"]["artifacts"][0]
-    assert "deployment_id must be a non-empty string" in artifact["errors"]
+    assert "deployment_id must be a non-empty canonical string" in artifact["errors"]
 
 
 def test_unreviewed_deployment_context_fails(tmp_path: Path) -> None:
@@ -673,7 +705,7 @@ def test_unreviewed_deployment_context_fails(tmp_path: Path) -> None:
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)])
+        MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path), "--summary-out", str(summary)])
         == 1
     )
 
@@ -696,6 +728,8 @@ def test_missing_evidence_directory_reports_directory_error(tmp_path: Path) -> N
                 str(tmp_path / "missing"),
                 "--summary-out",
                 str(summary),
+                "--now-unix",
+                str(NOW_UNIX),
             ]
         )
         == 1
@@ -712,7 +746,7 @@ def test_privacy_aggregate_requires_publish_due_probe(tmp_path: Path) -> None:
         privacy_aggregate_evidence(publish_due_count=0),
     )
 
-    assert MODULE.main(["--evidence-dir", str(tmp_path)]) == 1
+    assert MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path)]) == 1
 
 
 def test_privacy_aggregate_requires_action_coverage(tmp_path: Path) -> None:
@@ -723,7 +757,7 @@ def test_privacy_aggregate_requires_action_coverage(tmp_path: Path) -> None:
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)])
+        MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path), "--summary-out", str(summary)])
         == 1
     )
 
@@ -740,7 +774,7 @@ def test_probe_evidence_requires_request_and_response_hashes(tmp_path: Path) -> 
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)])
+        MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path), "--summary-out", str(summary)])
         == 1
     )
 
@@ -760,7 +794,7 @@ def test_route_evidence_requires_response_hashes(tmp_path: Path) -> None:
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)])
+        MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path), "--summary-out", str(summary)])
         == 1
     )
 
@@ -776,7 +810,7 @@ def test_publication_requires_publisher_identity(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     write_json(tmp_path / "publication.json", publication_evidence(publisher_identity=False))
 
-    assert MODULE.main(["--evidence-dir", str(tmp_path)]) == 1
+    assert MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path)]) == 1
 
 
 def test_publication_requires_publisher_identity_policy_flag(tmp_path: Path) -> None:
@@ -786,7 +820,7 @@ def test_publication_requires_publisher_identity_policy_flag(tmp_path: Path) -> 
     payload["publisher_identity_required"] = False
     write_json(tmp_path / "publication.json", payload)
 
-    assert MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)]) == 1
+    assert MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path), "--summary-out", str(summary)]) == 1
 
     summary_payload = json.loads(summary.read_text(encoding="utf-8"))
     artifact = summary_payload["required"]["publication"]["artifacts"][0]
@@ -799,7 +833,7 @@ def test_publication_requires_explicit_route_fields(tmp_path: Path) -> None:
     del payload["routes"][0]["publisher_identity_present"]
     write_json(tmp_path / "publication.json", payload)
 
-    assert MODULE.main(["--evidence-dir", str(tmp_path)]) == 1
+    assert MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path)]) == 1
 
 
 def test_publication_requires_cycle_detail_probe(tmp_path: Path) -> None:
@@ -808,7 +842,7 @@ def test_publication_requires_cycle_detail_probe(tmp_path: Path) -> None:
     payload["cycle_detail_probe_count"] = 0
     write_json(tmp_path / "publication.json", payload)
 
-    assert MODULE.main(["--evidence-dir", str(tmp_path)]) == 1
+    assert MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path)]) == 1
 
 
 def test_publication_cycle_detail_probes_must_not_duplicate(tmp_path: Path) -> None:
@@ -820,7 +854,7 @@ def test_publication_cycle_detail_probes_must_not_duplicate(tmp_path: Path) -> N
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)])
+        MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path), "--summary-out", str(summary)])
         == 1
     )
 
@@ -849,7 +883,7 @@ def test_publication_cycle_detail_probes_must_not_include_unknown_values(
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)])
+        MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path), "--summary-out", str(summary)])
         == 1
     )
 
@@ -870,7 +904,7 @@ def test_publication_cycle_detail_probe_names_must_use_production_family(
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)])
+        MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path), "--summary-out", str(summary)])
         == 1
     )
 
@@ -889,7 +923,7 @@ def test_publication_cycle_detail_probe_names_reject_non_production_markers(
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)])
+        MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path), "--summary-out", str(summary)])
         == 1
     )
 
@@ -909,7 +943,7 @@ def test_publication_requires_cycle_detail_probe_coverage(tmp_path: Path) -> Non
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)])
+        MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path), "--summary-out", str(summary)])
         == 1
     )
 
@@ -936,7 +970,7 @@ def test_publication_cycle_detail_probe_requires_publication_proofs(
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)])
+        MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path), "--summary-out", str(summary)])
         == 1
     )
 
@@ -958,7 +992,7 @@ def test_publication_requires_source_batch_binding(tmp_path: Path) -> None:
     payload.pop("source_batch_digest_hex")
     write_json(tmp_path / "publication.json", payload)
 
-    assert MODULE.main(["--evidence-dir", str(tmp_path)]) == 1
+    assert MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path)]) == 1
 
 
 def test_all_source_bound_artifacts_reject_source_entry_mismatch(
@@ -986,13 +1020,30 @@ def test_all_source_bound_artifacts_reject_source_entry_mismatch(
         ) in artifact["errors"]
 
 
+def test_multiple_valid_source_batch_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = source_entry_evidence()
+    payload["source_batch_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "source-entry-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_source_batch_digests"] == []
+    assert (
+        "valid_source_batch_digests must contain exactly one active digest"
+        in result["errors"]
+    )
+
+
 def test_explorer_cycle_binding_must_match_publication(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = explorer_evidence()
     payload["cycle_digest_hex"] = DIGEST_2
     write_json(tmp_path / "explorer.json", payload)
 
-    assert MODULE.main(["--evidence-dir", str(tmp_path)]) == 1
+    assert MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path)]) == 1
 
 
 def test_all_cycle_bound_artifacts_reject_publication_cycle_mismatch(
@@ -1020,6 +1071,28 @@ def test_all_cycle_bound_artifacts_reject_publication_cycle_mismatch(
         ) in artifact["errors"]
 
 
+def test_multiple_valid_publication_cycle_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = publication_evidence()
+    payload["cycle_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "publication-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_cycle_digests"] == []
+    assert result["valid_publication_bindings"] == []
+    assert (
+        "valid_cycle_digests must contain exactly one active digest"
+        in result["errors"]
+    )
+    assert (
+        "valid_publication_bindings must contain exactly one active binding"
+        in result["errors"]
+    )
+
+
 def test_invalid_publication_does_not_anchor_cycle_bound_evidence(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = publication_evidence()
@@ -1028,7 +1101,7 @@ def test_invalid_publication_does_not_anchor_cycle_bound_evidence(tmp_path: Path
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)])
+        MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path), "--summary-out", str(summary)])
         == 1
     )
 
@@ -1052,7 +1125,7 @@ def test_invalid_publication_does_not_anchor_cycle_bound_evidence(tmp_path: Path
 def test_cycle_bound_subset_requires_publication_anchor(tmp_path: Path) -> None:
     write_json(tmp_path / "explorer.json", explorer_evidence())
 
-    assert MODULE.main(["--evidence-dir", str(tmp_path), "--require-kind", "explorer"]) == 1
+    assert MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path), "--require-kind", "explorer"]) == 1
 
 
 def test_source_entry_requires_all_supported_source_kinds(tmp_path: Path) -> None:
@@ -1064,7 +1137,7 @@ def test_source_entry_requires_all_supported_source_kinds(tmp_path: Path) -> Non
     payload["source_entry_probe_count"] = len(payload["probes"])
     write_json(tmp_path / "source-entry.json", payload)
 
-    assert MODULE.main(["--evidence-dir", str(tmp_path)]) == 1
+    assert MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path)]) == 1
 
 
 def test_explorer_requires_named_route_coverage(tmp_path: Path) -> None:
@@ -1073,7 +1146,7 @@ def test_explorer_requires_named_route_coverage(tmp_path: Path) -> None:
     payload["routes"][2]["name"] = "unexpected_route"
     write_json(tmp_path / "explorer.json", payload)
 
-    assert MODULE.main(["--evidence-dir", str(tmp_path)]) == 1
+    assert MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path)]) == 1
 
 
 def test_sensitive_response_body_fails(tmp_path: Path) -> None:
@@ -1082,7 +1155,7 @@ def test_sensitive_response_body_fails(tmp_path: Path) -> None:
     payload["probes"][0]["response_body"] = {"secret": "leaked"}
     write_json(tmp_path / "source-entry.json", payload)
 
-    assert MODULE.main(["--evidence-dir", str(tmp_path)]) == 1
+    assert MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path)]) == 1
 
 
 def test_sensitive_authorization_token_fails(tmp_path: Path) -> None:
@@ -1091,10 +1164,10 @@ def test_sensitive_authorization_token_fails(tmp_path: Path) -> None:
     payload["authorization"] = "Bearer runtime-token"
     write_json(tmp_path / "publication.json", payload)
 
-    assert MODULE.main(["--evidence-dir", str(tmp_path)]) == 1
+    assert MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(tmp_path)]) == 1
 
 
 def test_explicit_unknown_schema_fails(tmp_path: Path) -> None:
     path = write_json(tmp_path / "unknown.json", {"schema": "sorafs.unknown.v1"})
 
-    assert MODULE.main(["--evidence", str(path)]) == 1
+    assert MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence", str(path)]) == 1

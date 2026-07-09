@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/sorafs/chunker_conformance.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 81b8dc9405d51c4f45c742d7072931cd2626c4aafbdf663195d64f63e19eca94
+source_hash: 45c160396c139af8b3c220487501a12af18ba1485f7315f806de6a2a3ffd296f
 source_last_modified: "2026-01-04T16:50:33.260273+00:00"
 translation_last_reviewed: 2026-01-30
 ---
@@ -51,9 +51,9 @@ fixtures and emits the following files under `fixtures/sorafs_chunker/`:
 ### Signing Policy
 
 Fixture regeneration **must** include a valid council signature. The generator
-rejects unsigned output unless `--allow-unsigned` is passed explicitly (intended
-only for local experimentation). Signature envelopes are append-only and
-deduplicated per signer.
+rejects unsigned output in every mode; use `--signing-key` to create or append a
+council signature, or keep the existing verified `manifest_signatures.json`
+unchanged. Signature envelopes are append-only and deduplicated per signer.
 
 To add a council signature:
 

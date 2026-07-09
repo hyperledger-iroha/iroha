@@ -9,6 +9,7 @@ import re
 import shlex
 import subprocess
 import sys
+import unicodedata
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from html import unescape
 from pathlib import Path
@@ -21,7 +22,11 @@ from sorafs_evidence_sensitivity import (
     PAYLOAD_FREE_SENSITIVE_REFERENCE_SUFFIXES,
     normalize_sensitive_key,
 )
-from sorafs_path_identity import error_diagnostic_label, path_diagnostic_label
+from sorafs_path_identity import (
+    diagnostic_text_is_canonical,
+    error_diagnostic_label,
+    path_diagnostic_label,
+)
 from sorafs_path_identity import resolve_path_identity
 
 
@@ -45,17 +50,24 @@ PATH_SENSITIVE_KEY_FRAGMENTS = HIGH_RISK_SENSITIVE_KEY_FRAGMENTS - frozenset(
 )
 
 
+def _contains_control_character(value: str) -> bool:
+    """Return whether text contains ASCII or Unicode control-like characters."""
+
+    return any(
+        ord(character) < 32
+        or ord(character) == 127
+        or unicodedata.category(character).startswith("C")
+        for character in value
+    )
+
+
 def _require_error_list(errors: Any) -> list[str]:
     if not isinstance(errors, list):
         raise ValueError("runner preflight errors must be a list of strings")
     for error in errors:
         if not isinstance(error, str):
             raise ValueError("runner preflight errors must be a list of strings")
-        if (
-            not error.strip()
-            or error != error.strip()
-            or any(ord(character) < 32 or ord(character) == 127 for character in error)
-        ):
+        if not diagnostic_text_is_canonical(error):
             raise ValueError(
                 "runner preflight errors must contain non-empty canonical strings"
             )
@@ -63,12 +75,7 @@ def _require_error_list(errors: Any) -> list[str]:
 
 
 def _require_label(label: Any) -> str:
-    if (
-        not isinstance(label, str)
-        or not label.strip()
-        or label != label.strip()
-        or any(ord(character) < 32 or ord(character) == 127 for character in label)
-    ):
+    if not diagnostic_text_is_canonical(label):
         raise ValueError("runner preflight label must be a non-empty canonical string")
     return label
 
@@ -91,11 +98,7 @@ def _runner_error_messages(errors: Any) -> tuple[str, ...]:
     for error in messages:
         if not isinstance(error, str):
             raise ValueError("runner error messages must be a sequence of strings")
-        if (
-            not error.strip()
-            or error != error.strip()
-            or any(ord(character) < 32 or ord(character) == 127 for character in error)
-        ):
+        if not diagnostic_text_is_canonical(error):
             raise ValueError(
                 "runner error message must be a non-empty canonical string"
             )
@@ -105,12 +108,7 @@ def _runner_error_messages(errors: Any) -> tuple[str, ...]:
 def _runner_notice_message(message: Any) -> str:
     """Return a runner notice message or reject unsafe stderr text."""
 
-    if (
-        not isinstance(message, str)
-        or not message.strip()
-        or message != message.strip()
-        or any(ord(character) < 32 or ord(character) == 127 for character in message)
-    ):
+    if not diagnostic_text_is_canonical(message):
         raise ValueError("runner notice message must be a non-empty canonical string")
     return message
 
@@ -135,17 +133,19 @@ def is_payload_free_sensitive_reference(normalized_key: str) -> bool:
 
 
 def _decoded_text_variants(value: str) -> tuple[str, ...]:
-    """Return raw plus repeatedly percent/HTML-decoded text variants."""
+    """Return raw plus decoded and Unicode-normalized text variants."""
 
-    variants = [value]
-    seen = {value}
+    variants: list[str] = []
+    seen: set[str] = set()
     current = value
-    for _ in range(4):
+    for _ in range(5):
+        for candidate in (current, unicodedata.normalize("NFKC", current)):
+            if candidate not in seen:
+                variants.append(candidate)
+                seen.add(candidate)
         decoded = unescape(unquote(current))
         if decoded == current or decoded in seen:
             break
-        variants.append(decoded)
-        seen.add(decoded)
         current = decoded
     return tuple(variants)
 
@@ -221,7 +221,7 @@ def _path_component_is_plan_safe(component: str) -> bool:
             or "\\" in variant
             or _path_component_has_windows_drive_prefix(variant)
             or _path_component_has_uri_scheme_prefix(variant)
-            or any(ord(character) < 32 or ord(character) == 127 for character in variant)
+            or _contains_control_character(variant)
             or is_sensitive_path_component(variant)
         ):
             return False
@@ -238,7 +238,7 @@ def _url_host_component_is_plan_safe(component: str) -> bool:
             or "\\" in variant
             or _path_component_has_windows_drive_prefix(variant)
             or _path_component_has_uri_scheme_prefix(variant)
-            or any(ord(character) < 32 or ord(character) == 127 for character in variant)
+            or _contains_control_character(variant)
             or is_sensitive_path_component(variant)
         ):
             return False
@@ -249,6 +249,8 @@ def _value_variants_are_passthrough_safe(value: str) -> bool:
     """Return whether raw or percent/HTML-decoded passthrough values are safe."""
 
     for variant in _decoded_text_variants(value):
+        if _contains_control_character(variant):
+            return False
         if variant.startswith(("http://", "https://")):
             if not runner_url_arg_is_plan_safe(variant):
                 return False
@@ -269,7 +271,8 @@ def _key_variants_are_passthrough_safe(value: str) -> bool:
     """Return whether raw or percent/HTML-decoded passthrough key names are safe."""
 
     return all(
-        not is_sensitive_path_component(variant)
+        not _contains_control_character(variant)
+        and not is_sensitive_path_component(variant)
         for variant in _decoded_text_variants(value)
     )
 
@@ -278,7 +281,8 @@ def _option_variants_are_passthrough_safe(value: str) -> bool:
     """Return whether raw or percent/HTML-decoded option names are safe."""
 
     return all(
-        not is_sensitive_path_component(variant.lstrip("-").replace("-", "_"))
+        not _contains_control_character(variant)
+        and not is_sensitive_path_component(variant.lstrip("-").replace("-", "_"))
         for variant in _decoded_text_variants(value)
     )
 
@@ -310,13 +314,7 @@ def validate_plan_rendered_paths(paths: Iterable[Any], errors: list[str]) -> Non
 def runner_url_arg_is_plan_safe(value: str) -> bool:
     """Return whether a URL can be rendered in runner plans."""
 
-    if (
-        not isinstance(value, str)
-        or not value.strip()
-        or value != value.strip()
-        or any(ord(character) < 32 or ord(character) == 127 for character in value)
-        or "\\" in value
-    ):
+    if not diagnostic_text_is_canonical(value) or "\\" in value:
         return False
     try:
         parsed = urlsplit(value)
@@ -359,13 +357,7 @@ def require_runner_url_args(
 def runner_passthrough_arg_is_plan_safe(value: str) -> bool:
     """Return whether a passthrough CLI argument can be rendered in plans."""
 
-    if (
-        not isinstance(value, str)
-        or not value.strip()
-        or value != value.strip()
-        or "\0" in value
-        or any(ord(character) < 32 or ord(character) == 127 for character in value)
-    ):
+    if not diagnostic_text_is_canonical(value):
         return False
     if value.startswith(("http://", "https://")):
         return runner_url_arg_is_plan_safe(value)
@@ -785,6 +777,9 @@ def validate_runner_preflight(
     if errors:
         return errors
 
+    if hasattr(args, "now_unix") and getattr(args, "now_unix") is None:
+        errors.append("--now-unix is required")
+
     if not isinstance(verifier, Path):
         errors.append(
             f"--verifier `{path_diagnostic_label(verifier)}` "
@@ -1017,16 +1012,19 @@ def _command_vector_errors(step_label: str, command: Any) -> list[str]:
     ):
         return [f"{step_label} command must be a non-empty list of strings"]
     errors: list[str] = []
-    if not command[0] or command[0] != command[0].strip():
+    executable_is_canonical = diagnostic_text_is_canonical(command[0])
+    if not executable_is_canonical:
         errors.append(
             f"{step_label} command executable must be a non-empty canonical string"
         )
     for index, part in enumerate(command):
+        if index == 0 and not executable_is_canonical:
+            continue
         if "\0" in part:
             errors.append(
                 f"{step_label} command argument {index} must not contain NUL bytes"
             )
-        elif any(ord(character) < 32 or ord(character) == 127 for character in part):
+        elif _contains_control_character(part):
             errors.append(
                 f"{step_label} command argument {index} "
                 "must not contain control characters"
@@ -1097,12 +1095,7 @@ def validate_runner_plan_steps(rendered_plan: Any, command_plan: Any) -> list[st
 def canonical_runner_plan_string(value: Any) -> str | None:
     """Return a non-empty runner-plan string without control characters."""
 
-    if (
-        not isinstance(value, str)
-        or not value.strip()
-        or value != value.strip()
-        or any(ord(character) < 32 or ord(character) == 127 for character in value)
-    ):
+    if not diagnostic_text_is_canonical(value):
         return None
     return value
 

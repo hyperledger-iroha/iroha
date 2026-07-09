@@ -238,6 +238,47 @@ def test_preflight_sanitizes_non_path_summary_out_label() -> None:
     assert errors == ["--summary-out `<non-path>` must be a path"]
 
 
+def test_preflight_sanitizes_non_path_manifest_label() -> None:
+    errors = MODULE.validate_fixture_manifest_preflight(
+        Namespace(manifest=object(), summary_out=None)
+    )
+
+    assert errors == ["--manifest `<non-path>` must be a path"]
+
+
+def test_manifest_unsafe_path_fails_before_read_without_leaking(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    manifest = tmp_path / "private%26%2395%3Bkey.json"
+    summary = tmp_path / "summary.json"
+
+    def load_manifest(*_args, **_kwargs):
+        raise AssertionError("unsafe manifest path must not be loaded")
+
+    monkeypatch.setattr(MODULE, "load_manifest", load_manifest)
+
+    rc = MODULE.main(
+        [
+            "--manifest",
+            str(manifest),
+            "--manifest-only",
+            "--summary-out",
+            str(summary),
+        ]
+    )
+
+    assert rc == 2
+    assert not summary.exists()
+    captured = capsys.readouterr()
+    assert "SoraFS checker-rendered paths must not contain secret-looking" in captured.err
+    assert "private%26%2395%3Bkey" not in captured.err
+    assert "private&#95;key" not in captured.err
+    assert "private_key" not in captured.err
+    assert captured.out == ""
+
+
 def test_summary_out_directory_fails_before_write(
     tmp_path: Path,
     capsys,
@@ -604,6 +645,37 @@ def test_validation_command_tokenize_error_is_sanitized(monkeypatch) -> None:
     ]
 
 
+def test_validation_command_token_mismatch_is_sanitized() -> None:
+    errors: list[str] = []
+    entry = {
+        "name": "bad_command",
+        "kind": "billing-statement",
+        "expected_status": "accepted",
+        "validation_command": (
+            "sorafs-validate hedging --statement "
+            "fixtures/sorafs_manifest/hedging/statement.to "
+            "--private-key runtime-secret"
+        ),
+    }
+
+    MODULE.validate_expected_status(
+        entry,
+        Path("fixtures/sorafs_manifest/hedging/statement.to"),
+        "sorafs-validate",
+        1,
+        {},
+        errors,
+    )
+
+    rendered = json.dumps(errors)
+    assert errors == [
+        f"bad_command {MODULE.VALIDATION_COMMAND_TOKENS_DIAGNOSTIC}"
+    ]
+    assert "--private-key" not in rendered
+    assert "private_key" not in rendered
+    assert "runtime-secret" not in rendered
+
+
 def test_manifest_only_rejects_negative_case_drift(tmp_path: Path) -> None:
     payload = base_manifest()
     fixture = next(
@@ -710,6 +782,64 @@ def test_full_mode_rejects_absolute_fixture_paths_before_read(
     assert not any("/tmp/sorafs-outside.to" in error for error in result["errors"])
 
 
+def test_manifest_only_rejects_secret_looking_fixture_name_without_echo(
+    tmp_path: Path,
+) -> None:
+    payload = base_manifest()
+    payload["fixtures"][0]["name"] = "private_key_v1"
+    manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
+    summary = tmp_path / "summary.json"
+
+    rc = MODULE.main(
+        [
+            "--manifest",
+            str(manifest),
+            "--manifest-only",
+            "--summary-out",
+            str(summary),
+        ]
+    )
+
+    assert rc == 1
+    rendered = summary.read_text(encoding="utf-8")
+    result = json.loads(rendered)
+    assert result["status"] == "blocked"
+    assert any("fixtures[0].name has invalid shape" in error for error in result["errors"])
+    assert "private_key_v1" not in rendered
+    assert "private_key" not in rendered
+    assert "private-key" not in rendered
+
+
+def test_manifest_only_rejects_encoded_secret_fixture_path_without_echo(
+    tmp_path: Path,
+) -> None:
+    payload = base_manifest()
+    payload["fixtures"][0]["norito_path"] = (
+        "fixtures/sorafs_manifest/hedging/private%26%2395%3Bkey.to"
+    )
+    manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
+    summary = tmp_path / "summary.json"
+
+    rc = MODULE.main(
+        [
+            "--manifest",
+            str(manifest),
+            "--manifest-only",
+            "--summary-out",
+            str(summary),
+        ]
+    )
+
+    assert rc == 1
+    rendered = summary.read_text(encoding="utf-8")
+    result = json.loads(rendered)
+    assert result["status"] == "blocked"
+    assert any(MODULE.FIXTURE_PATH_DIAGNOSTIC in error for error in result["errors"])
+    assert "private%26%2395%3Bkey" not in rendered
+    assert "private&#95;key" not in rendered
+    assert "private_key" not in rendered
+
+
 def test_full_mode_enforces_expected_validator_statuses(
     tmp_path: Path,
     monkeypatch,
@@ -806,6 +936,42 @@ def test_full_mode_resolves_repo_relative_validator_binary(
     assert {entry["validator"] for entry in result["entries"]} == {"checked"}
 
 
+def test_full_mode_sanitizes_missing_secret_validator_binary(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    payload = base_manifest()
+    repo_root = tmp_path / "repo"
+    write_generated_pairs(repo_root, payload)
+    manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
+    summary = tmp_path / "summary.json"
+    monkeypatch.setattr(MODULE, "REPO_ROOT", repo_root)
+
+    rc = MODULE.main(
+        [
+            "--manifest",
+            str(manifest),
+            "--validator-bin",
+            "private%26%2395%3Bkey",
+            "--summary-out",
+            str(summary),
+        ]
+    )
+
+    assert rc == 1
+    rendered = summary.read_text(encoding="utf-8")
+    result = json.loads(rendered)
+    assert result["status"] == "blocked"
+    assert any(
+        "validator binary not found" in error
+        and "<secret-looking-path>" in error
+        for error in result["errors"]
+    )
+    assert "private%26%2395%3Bkey" not in rendered
+    assert "private&#95;key" not in rendered
+    assert "private_key" not in rendered
+
+
 def test_validator_execution_error_is_sanitized(monkeypatch, tmp_path: Path) -> None:
     errors: list[str] = []
     result: dict = {}
@@ -865,9 +1031,47 @@ def test_full_mode_rejects_command_injection_before_validator_exec(
 
     assert rc == 1
     assert not sentinel.exists()
-    result = json.loads(summary.read_text(encoding="utf-8"))
+    rendered = summary.read_text(encoding="utf-8")
+    result = json.loads(rendered)
     assert result["status"] == "blocked"
     assert any("validation_command must be" in error for error in result["errors"])
+    assert "/tmp/sorafs-owned" not in rendered
+
+
+def test_full_mode_rejects_secret_validation_command_drift_without_echo(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    payload = base_manifest()
+    repo_root = tmp_path / "repo"
+    write_generated_pairs(repo_root, payload)
+    sentinel = tmp_path / "validator-executed.txt"
+    validator = write_sentinel_validator(tmp_path / "sorafs-validate", sentinel)
+    payload["fixtures"][0]["validation_command"] += " --private-key runtime-secret"
+    manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
+    summary = tmp_path / "summary.json"
+    monkeypatch.setattr(MODULE, "REPO_ROOT", repo_root)
+
+    rc = MODULE.main(
+        [
+            "--manifest",
+            str(manifest),
+            "--validator-bin",
+            str(validator),
+            "--summary-out",
+            str(summary),
+        ]
+    )
+
+    assert rc == 1
+    assert not sentinel.exists()
+    rendered = summary.read_text(encoding="utf-8")
+    result = json.loads(rendered)
+    assert result["status"] == "blocked"
+    assert any("validation_command must be" in error for error in result["errors"])
+    assert "--private-key" not in rendered
+    assert "private_key" not in rendered
+    assert "runtime-secret" not in rendered
 
 
 def test_full_mode_rejects_unmanifested_generated_fixtures(
@@ -903,6 +1107,59 @@ def test_full_mode_rejects_unmanifested_generated_fixtures(
         for error in result["errors"]
     )
     assert any("orphan.to" in error for error in result["errors"])
+
+
+def test_full_mode_rejects_secret_unmanifested_generated_fixture_without_echo(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    payload = base_manifest()
+    repo_root = tmp_path / "repo"
+    write_generated_pairs(repo_root, payload)
+    extra = (
+        repo_root
+        / "fixtures"
+        / "sorafs_manifest"
+        / "hedging"
+        / "private%26%2395%3Bkey.to"
+    )
+    extra.write_bytes(b"orphan")
+    validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=True)
+    manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
+    summary = tmp_path / "summary.json"
+    monkeypatch.setattr(MODULE, "REPO_ROOT", repo_root)
+
+    rc = MODULE.main(
+        [
+            "--manifest",
+            str(manifest),
+            "--validator-bin",
+            str(validator),
+            "--summary-out",
+            str(summary),
+        ]
+    )
+
+    assert rc == 1
+    rendered = summary.read_text(encoding="utf-8")
+    result = json.loads(rendered)
+    assert result["status"] == "blocked"
+    assert any(
+        "unmanifested generated hedging fixtures" in error
+        and MODULE.UNSAFE_GENERATED_FIXTURE_PATH_LABEL in error
+        for error in result["errors"]
+    )
+    assert "private%26%2395%3Bkey" not in rendered
+    assert "private&#95;key" not in rendered
+    assert "private_key" not in rendered
+
+
+def test_unmanifested_generated_fixture_label_rejects_control_path_without_echo() -> None:
+    unsafe_path = "fixtures/sorafs_manifest/hedging/orphan\u202e.to"
+
+    assert MODULE.safe_generated_fixture_path_labels([unsafe_path]) == [
+        MODULE.UNSAFE_GENERATED_FIXTURE_PATH_LABEL
+    ]
 
 
 def test_full_mode_rejects_fixture_inventory_scan_errors_without_traceback(
@@ -1058,6 +1315,52 @@ def test_full_mode_rejects_symlinked_generated_fixture_inventory_entry(
     )
 
 
+def test_full_mode_rejects_secret_symlinked_generated_fixture_without_echo(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    payload = base_manifest()
+    repo_root = tmp_path / "repo"
+    write_generated_pairs(repo_root, payload)
+    target = tmp_path / "external.to"
+    target.write_bytes(b"external")
+    symlink = (
+        repo_root
+        / MODULE.HEDGING_FIXTURE_ROOT
+        / "private%26%2395%3Bkey.to"
+    )
+    symlink.symlink_to(target)
+    validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=True)
+    manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
+    summary = tmp_path / "summary.json"
+    monkeypatch.setattr(MODULE, "REPO_ROOT", repo_root)
+
+    rc = MODULE.main(
+        [
+            "--manifest",
+            str(manifest),
+            "--validator-bin",
+            str(validator),
+            "--summary-out",
+            str(summary),
+        ]
+    )
+
+    assert rc == 1
+    rendered = summary.read_text(encoding="utf-8")
+    result = json.loads(rendered)
+    assert result["status"] == "blocked"
+    assert any(
+        "generated fixture candidate" in error
+        and "<secret-looking-path>" in error
+        and "must not be a symlink" in error
+        for error in result["errors"]
+    )
+    assert "private%26%2395%3Bkey" not in rendered
+    assert "private&#95;key" not in rendered
+    assert "private_key" not in rendered
+
+
 def test_full_mode_rejects_malformed_json_sidecar(
     tmp_path: Path,
     monkeypatch,
@@ -1092,6 +1395,107 @@ def test_full_mode_rejects_malformed_json_sidecar(
         "missing required JSON sidecar fields" in error
         for error in result["errors"]
     )
+
+
+def test_full_mode_rejects_sensitive_extra_json_sidecar_key_without_echo(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    payload = base_manifest()
+    repo_root = tmp_path / "repo"
+    write_generated_pairs(repo_root, payload)
+    sidecar_path = repo_root / payload["fixtures"][0]["json_path"]
+    sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    sidecar["private&#95;key"] = "runtime-secret"
+    sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
+    validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=True)
+    manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
+    summary = tmp_path / "summary.json"
+    monkeypatch.setattr(MODULE, "REPO_ROOT", repo_root)
+
+    rc = MODULE.main(
+        [
+            "--manifest",
+            str(manifest),
+            "--validator-bin",
+            str(validator),
+            "--summary-out",
+            str(summary),
+        ]
+    )
+
+    assert rc == 1
+    rendered = summary.read_text(encoding="utf-8")
+    result = json.loads(rendered)
+    assert result["status"] == "blocked"
+    assert any(
+        "unexpected JSON sidecar fields" in error
+        and MODULE.SENSITIVE_JSON_FIELD_LABEL in error
+        for error in result["errors"]
+    )
+    assert "private&#95;key" not in rendered
+    assert "private_key" not in rendered
+    assert "runtime-secret" not in rendered
+
+
+def test_safe_json_field_label_rejects_unicode_controls_without_echo() -> None:
+    assert MODULE.safe_json_field_label("feed_id") == "feed_id"
+
+    for field in (
+        "",
+        " feed_id",
+        "feed_id ",
+        "bad\nkey",
+        "bad\u200dkey",
+        "bad\u202ekey",
+        "bad\ue000key",
+    ):
+        assert MODULE.safe_json_field_label(field) == MODULE.NON_CANONICAL_JSON_FIELD_LABEL
+
+
+def test_full_mode_rejects_noncanonical_extra_json_sidecar_key_without_echo(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    for index, key in enumerate(("bad\nkey", "bad\u200dkey", "bad\u202ekey")):
+        payload = base_manifest()
+        repo_root = tmp_path / f"repo-{index}"
+        write_generated_pairs(repo_root, payload)
+        sidecar_path = repo_root / payload["fixtures"][0]["json_path"]
+        sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        sidecar[key] = "runtime-secret"
+        sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
+        validator = write_fake_validator(
+            tmp_path / f"sorafs-validate-{index}",
+            reject_negative=True,
+        )
+        manifest = write_manifest(tmp_path / f"fixture_manifest-{index}.json", payload)
+        summary = tmp_path / f"summary-{index}.json"
+        monkeypatch.setattr(MODULE, "REPO_ROOT", repo_root)
+
+        rc = MODULE.main(
+            [
+                "--manifest",
+                str(manifest),
+                "--validator-bin",
+                str(validator),
+                "--summary-out",
+                str(summary),
+            ]
+        )
+
+        assert rc == 1
+        rendered = summary.read_text(encoding="utf-8")
+        result = json.loads(rendered)
+        assert result["status"] == "blocked"
+        assert any(
+            "unexpected JSON sidecar fields" in error
+            and MODULE.NON_CANONICAL_JSON_FIELD_LABEL in error
+            for error in result["errors"]
+        )
+        assert key not in rendered
+        assert key.encode("unicode_escape").decode("ascii") not in rendered
+        assert "runtime-secret" not in rendered
 
 
 def test_full_mode_rejects_non_object_json_sidecar_with_shared_loader(
@@ -1237,6 +1641,50 @@ def test_full_mode_rejects_malformed_nested_json_sidecar(
     )
 
 
+def test_full_mode_rejects_sensitive_nested_json_sidecar_key_without_echo(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    payload = base_manifest()
+    repo_root = tmp_path / "repo"
+    write_generated_pairs(repo_root, payload)
+    statement_fixture = next(
+        fixture for fixture in payload["fixtures"] if fixture["name"] == "billing_statement_v1"
+    )
+    sidecar_path = repo_root / statement_fixture["json_path"]
+    sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    sidecar["reference_price"]["private%5Fkey"] = "runtime-secret"
+    sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
+    validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=True)
+    manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
+    summary = tmp_path / "summary.json"
+    monkeypatch.setattr(MODULE, "REPO_ROOT", repo_root)
+
+    rc = MODULE.main(
+        [
+            "--manifest",
+            str(manifest),
+            "--validator-bin",
+            str(validator),
+            "--summary-out",
+            str(summary),
+        ]
+    )
+
+    assert rc == 1
+    rendered = summary.read_text(encoding="utf-8")
+    result = json.loads(rendered)
+    assert result["status"] == "blocked"
+    assert any(
+        "unexpected JSON sidecar fields" in error
+        and MODULE.SENSITIVE_JSON_FIELD_LABEL in error
+        for error in result["errors"]
+    )
+    assert "private%5Fkey" not in rendered
+    assert "private_key" not in rendered
+    assert "runtime-secret" not in rendered
+
+
 def test_full_mode_rejects_json_sidecar_version_drift(
     tmp_path: Path,
     monkeypatch,
@@ -1268,6 +1716,47 @@ def test_full_mode_rejects_json_sidecar_version_drift(
     result = json.loads(summary.read_text(encoding="utf-8"))
     assert result["status"] == "blocked"
     assert any("version must be 1" in error for error in result["errors"])
+
+
+def test_full_mode_rejects_sensitive_duplicate_nested_id_without_echo(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    payload = base_manifest()
+    repo_root = tmp_path / "repo"
+    write_generated_pairs(repo_root, payload)
+    statement_fixture = next(
+        fixture for fixture in payload["fixtures"] if fixture["name"] == "billing_statement_v1"
+    )
+    sidecar_path = repo_root / statement_fixture["json_path"]
+    sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    sidecar["lines"][0]["line_id_hex"] = "private_key"
+    duplicate = dict(sidecar["lines"][0])
+    sidecar["lines"].append(duplicate)
+    sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
+    validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=True)
+    manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
+    summary = tmp_path / "summary.json"
+    monkeypatch.setattr(MODULE, "REPO_ROOT", repo_root)
+
+    rc = MODULE.main(
+        [
+            "--manifest",
+            str(manifest),
+            "--validator-bin",
+            str(validator),
+            "--summary-out",
+            str(summary),
+        ]
+    )
+
+    assert rc == 1
+    rendered = summary.read_text(encoding="utf-8")
+    result = json.loads(rendered)
+    assert result["status"] == "blocked"
+    assert any("duplicate line_id_hex values" in error for error in result["errors"])
+    assert "private_key" not in rendered
+    assert "private-key" not in rendered
 
 
 def test_full_mode_rejects_statement_sidecar_value_invariants(

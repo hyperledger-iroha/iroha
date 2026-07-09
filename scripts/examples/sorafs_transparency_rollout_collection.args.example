@@ -11,10 +11,8 @@
 
 --iroha-bin
 target/debug/iroha
---iroha-arg
---config
---iroha-arg
-/runtime/sorafs-transparency-client.toml
+--iroha-arg=--config
+--iroha-arg=/runtime/sorafs-transparency-client.toml
 --torii-url
 https://torii.example.invalid
 --deployment-id
@@ -25,6 +23,10 @@ staging
 artifacts/sorafs/transparency/staged
 --summary-out
 artifacts/sorafs/transparency/staged/rollout-summary.json
+--now-unix
+1800400000
+--max-evidence-age-secs
+604800
 --limit
 50
 --timeout-secs

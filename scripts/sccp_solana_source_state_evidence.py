@@ -2,8 +2,8 @@
 """Render SCCP Solana source-state verifier deployment evidence.
 
 This helper is offline by design. Operators pass the governed Solana
-mainnet-beta source trust anchor, verifier component hashes, AccountsDB
-source-state verifier hash, adapter verifier key hash, and deployment receipt
+source trust anchor, verifier component hashes, AccountsDB source-state
+verifier hash, adapter verifier key hash, and deployment receipt
 hash collected from governance or deployment records. The script validates that
 production evidence hashes are non-zero and not the built-in template hashes,
 then renders the matching `zk.sccp_source_verifier_materials` and
@@ -73,6 +73,66 @@ SOLANA_BANK_FORK_CHOICE_VERIFIER_ID = (
 
 SOLANA_MAINNET_GENESIS_HASH = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
 SOLANA_MAINNET_SLOTS_PER_EPOCH = 432_000
+SOLANA_TESTNET_GENESIS_HASH = "4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY"
+SOLANA_TESTNET_SLOTS_PER_EPOCH = 432_000
+SOLANA_SOURCE_NETWORK_PROFILES = {
+    "mainnet-beta": {
+        "aliases": ("mainnet-beta", "mainnet", "solana-mainnet-beta"),
+        "network_id": "solana-mainnet-beta",
+        "record_suffix": "mainnet-beta",
+        "proof_backend": "sccp-solana-recursive-mainnet-v1",
+        "genesis_hash": SOLANA_MAINNET_GENESIS_HASH,
+        "slots_per_epoch": SOLANA_MAINNET_SLOTS_PER_EPOCH,
+        "source_trust_anchor_id": SOLANA_SOURCE_TRUST_ANCHOR_ID,
+        "consensus_verifier_id": SOLANA_CONSENSUS_VERIFIER_ID,
+        "message_inclusion_verifier_id": SOLANA_MESSAGE_INCLUSION_VERIFIER_ID,
+        "source_state_verifier_id": SOLANA_SOURCE_STATE_VERIFIER_ID,
+        "finality_policy_id": SOLANA_FINALITY_POLICY_ID,
+        "tower_replay_verifier_id": SOLANA_TOWER_REPLAY_VERIFIER_ID,
+        "full_accountsdb_lattice_verifier_id": (
+            SOLANA_FULL_ACCOUNTSDB_LATTICE_VERIFIER_ID
+        ),
+        "bank_fork_choice_verifier_id": SOLANA_BANK_FORK_CHOICE_VERIFIER_ID,
+    },
+    "testnet": {
+        "aliases": ("testnet", "solana-testnet"),
+        "network_id": "solana-testnet",
+        "record_suffix": "testnet",
+        "proof_backend": "sccp-solana-recursive-testnet-v1",
+        "genesis_hash": SOLANA_TESTNET_GENESIS_HASH,
+        "slots_per_epoch": SOLANA_TESTNET_SLOTS_PER_EPOCH,
+        "source_trust_anchor_id": (
+            "sccp:sol:source-trust-anchor:solana-testnet-genesis:v1"
+        ),
+        "consensus_verifier_id": (
+            "sccp:sol:consensus-verifier:finalized-slot-bankhash-testnet:v1"
+        ),
+        "message_inclusion_verifier_id": (
+            "sccp:sol:message-inclusion-verifier:"
+            "transaction-status-root-branch-testnet:v1"
+        ),
+        "source_state_verifier_id": (
+            "sccp:sol:accounts-db-verifier:accounts-lt-hash-testnet:v1"
+        ),
+        "finality_policy_id": (
+            "sccp:sol:finality-policy:finalized-slot-testnet:v1"
+        ),
+        "tower_replay_verifier_id": (
+            "sccp:sol:light-client:tower-replay-testnet:v1"
+        ),
+        "full_accountsdb_lattice_verifier_id": (
+            "sccp:sol:light-client:full-accountsdb-lattice-testnet:v1"
+        ),
+        "bank_fork_choice_verifier_id": (
+            "sccp:sol:light-client:bank-fork-choice-testnet:v1"
+        ),
+    },
+}
+SOLANA_SOURCE_NETWORK_ALIASES = {
+    alias: key
+    for key, profile in SOLANA_SOURCE_NETWORK_PROFILES.items()
+    for alias in profile["aliases"]
+}
 SOLANA_TOWER_LOCKOUT_CONFIRMATION_DEPTH = 32
 SOLANA_TOWER_WARMUP_COOLDOWN_RATE_BPS = 900
 SOLANA_BASIS_POINTS_PER_UNIT = 10_000
@@ -251,9 +311,92 @@ def _optional_expected_record_hash(
     return _require_nonzero_fixed_bytes(value, label=label, byte_length=32)
 
 
-def solana_template_component_hash(component_id: str, component_kind: str) -> bytes:
+def parse_solana_network(value: str) -> str:
+    """Parse a supported Solana source-network profile."""
+
+    if type(value) is not str or value != value.strip():
+        raise argparse.ArgumentTypeError(
+            "solana network must be mainnet-beta or testnet"
+        )
+    normalized = value.lower()
+    profile = SOLANA_SOURCE_NETWORK_ALIASES.get(normalized)
+    if profile is None:
+        raise argparse.ArgumentTypeError(
+            "solana network must be mainnet-beta or testnet"
+        )
+    return profile
+
+
+def _solana_profile_for_network(network: object) -> dict[str, object]:
+    if type(network) is not str:
+        raise ValueError("solana_network must be a supported Solana profile")
+    profile_key = SOLANA_SOURCE_NETWORK_ALIASES.get(network.lower())
+    if profile_key is None:
+        raise ValueError("solana_network must be mainnet-beta or testnet")
+    return SOLANA_SOURCE_NETWORK_PROFILES[profile_key]
+
+
+def _solana_profile(args: argparse.Namespace | None = None) -> dict[str, object]:
+    return _solana_profile_for_network(
+        getattr(args, "solana_network", "mainnet-beta")
+    )
+
+
+def _solana_profile_string(profile: dict[str, object], key: str) -> str:
+    value = profile[key]
+    if type(value) is not str:
+        raise ValueError(f"Solana profile {key} must be a string")
+    return value
+
+
+def _solana_profile_u64(profile: dict[str, object], key: str) -> int:
+    value = profile[key]
+    if type(value) is not int or value < 0:
+        raise ValueError(f"Solana profile {key} must be an integer")
+    return value
+
+
+def _source_trust_anchor_id(profile: dict[str, object]) -> str:
+    return _solana_profile_string(profile, "source_trust_anchor_id")
+
+
+def _consensus_verifier_id(profile: dict[str, object]) -> str:
+    return _solana_profile_string(profile, "consensus_verifier_id")
+
+
+def _message_inclusion_verifier_id(profile: dict[str, object]) -> str:
+    return _solana_profile_string(profile, "message_inclusion_verifier_id")
+
+
+def _source_state_verifier_id(profile: dict[str, object]) -> str:
+    return _solana_profile_string(profile, "source_state_verifier_id")
+
+
+def _finality_policy_id(profile: dict[str, object]) -> str:
+    return _solana_profile_string(profile, "finality_policy_id")
+
+
+def _tower_replay_verifier_id(profile: dict[str, object]) -> str:
+    return _solana_profile_string(profile, "tower_replay_verifier_id")
+
+
+def _full_accountsdb_lattice_verifier_id(profile: dict[str, object]) -> str:
+    return _solana_profile_string(profile, "full_accountsdb_lattice_verifier_id")
+
+
+def _bank_fork_choice_verifier_id(profile: dict[str, object]) -> str:
+    return _solana_profile_string(profile, "bank_fork_choice_verifier_id")
+
+
+def solana_template_component_hash(
+    component_id: str,
+    component_kind: str,
+    *,
+    solana_network: str = "mainnet-beta",
+) -> bytes:
     """Return the built-in Solana mainnet source-material template hash."""
 
+    profile = _solana_profile_for_network(solana_network)
     out = bytearray()
     _push_u8(out, 1)
     _push_u32(out, SCCP_DOMAIN_SOL)
@@ -261,9 +404,9 @@ def solana_template_component_hash(component_id: str, component_kind: str) -> by
     _push_u8(out, SOURCE_PROOF_PLAN_SOLANA_FINALIZED_TRANSACTION)
     _push_u8(out, FINALITY_MODEL_SOLANA_FINALIZED_SLOT)
     _push_vec(out, SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID.encode())
-    _push_vec(out, b"sccp-solana-recursive-mainnet-v1")
-    _push_vec(out, SOLANA_MAINNET_GENESIS_HASH.encode())
-    _push_u64(out, SOLANA_MAINNET_SLOTS_PER_EPOCH)
+    _push_vec(out, _solana_profile_string(profile, "proof_backend").encode())
+    _push_vec(out, _solana_profile_string(profile, "genesis_hash").encode())
+    _push_u64(out, _solana_profile_u64(profile, "slots_per_epoch"))
     _push_u64(out, SOLANA_TOWER_LOCKOUT_CONFIRMATION_DEPTH)
     _push_u64(out, SOLANA_TOWER_WARMUP_COOLDOWN_RATE_BPS)
     _push_u64(out, SOLANA_BASIS_POINTS_PER_UNIT)
@@ -363,6 +506,7 @@ def solana_source_verifier_material_record_hash(args: argparse.Namespace) -> byt
     source_domain = _require_exact_u32(args.source_domain, "source_domain", ValueError)
     if source_domain != SCCP_DOMAIN_SOL:
         raise ValueError("source_domain must be Solana")
+    profile = _solana_profile(args)
     _reject_template_hashes(args)
     _require_source_role_hash_separation(args)
     payload = bytearray()
@@ -372,7 +516,7 @@ def solana_source_verifier_material_record_hash(args: argparse.Namespace) -> byt
     _push_u8(payload, SOURCE_PROOF_PLAN_SOLANA_FINALIZED_TRANSACTION)
     _push_u8(payload, FINALITY_MODEL_SOLANA_FINALIZED_SLOT)
     _push_vec(payload, SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID.encode("utf-8"))
-    _push_vec(payload, SOLANA_SOURCE_TRUST_ANCHOR_ID.encode("utf-8"))
+    _push_vec(payload, _source_trust_anchor_id(profile).encode("utf-8"))
     payload.extend(
         _require_nonzero_fixed_bytes(
             args.source_trust_anchor_hash,
@@ -380,7 +524,7 @@ def solana_source_verifier_material_record_hash(args: argparse.Namespace) -> byt
             byte_length=32,
         )
     )
-    _push_vec(payload, SOLANA_CONSENSUS_VERIFIER_ID.encode("utf-8"))
+    _push_vec(payload, _consensus_verifier_id(profile).encode("utf-8"))
     payload.extend(
         _require_nonzero_fixed_bytes(
             args.consensus_verifier_hash,
@@ -388,7 +532,7 @@ def solana_source_verifier_material_record_hash(args: argparse.Namespace) -> byt
             byte_length=32,
         )
     )
-    _push_vec(payload, SOLANA_MESSAGE_INCLUSION_VERIFIER_ID.encode("utf-8"))
+    _push_vec(payload, _message_inclusion_verifier_id(profile).encode("utf-8"))
     payload.extend(
         _require_nonzero_fixed_bytes(
             args.message_inclusion_verifier_hash,
@@ -396,7 +540,7 @@ def solana_source_verifier_material_record_hash(args: argparse.Namespace) -> byt
             byte_length=32,
         )
     )
-    _push_vec(payload, SOLANA_FINALITY_POLICY_ID.encode("utf-8"))
+    _push_vec(payload, _finality_policy_id(profile).encode("utf-8"))
     payload.extend(
         _require_nonzero_fixed_bytes(
             args.finality_policy_hash,
@@ -404,7 +548,7 @@ def solana_source_verifier_material_record_hash(args: argparse.Namespace) -> byt
             byte_length=32,
         )
     )
-    _push_vec(payload, SOLANA_SOURCE_STATE_VERIFIER_ID.encode("utf-8"))
+    _push_vec(payload, _source_state_verifier_id(profile).encode("utf-8"))
     payload.extend(
         _require_nonzero_fixed_bytes(
             args.source_state_verifier_hash,
@@ -436,6 +580,7 @@ def solana_source_adapter_engine_deployment_record_hash(
         raise ValueError("source_domain must be Solana")
     if target_domain != SCCP_DOMAIN_SORA:
         raise ValueError("target_domain must be SORA")
+    profile = _solana_profile(args)
     _reject_template_hashes(args)
     _require_source_role_hash_separation(args)
     adapter_verifier_vk_hash = _require_nonzero_fixed_bytes(
@@ -463,7 +608,7 @@ def solana_source_adapter_engine_deployment_record_hash(
     _push_vec(payload, SCCP_PROOF_FAMILY_STARK_FRI.encode("utf-8"))
     _push_vec(payload, SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID.encode("utf-8"))
     payload.extend(adapter_verifier_vk_hash)
-    _push_vec(payload, SOLANA_SOURCE_TRUST_ANCHOR_ID.encode("utf-8"))
+    _push_vec(payload, _source_trust_anchor_id(profile).encode("utf-8"))
     payload.extend(
         _require_nonzero_fixed_bytes(
             args.source_trust_anchor_hash,
@@ -471,7 +616,7 @@ def solana_source_adapter_engine_deployment_record_hash(
             byte_length=32,
         )
     )
-    _push_vec(payload, SOLANA_CONSENSUS_VERIFIER_ID.encode("utf-8"))
+    _push_vec(payload, _consensus_verifier_id(profile).encode("utf-8"))
     payload.extend(
         _require_nonzero_fixed_bytes(
             args.consensus_verifier_hash,
@@ -479,7 +624,7 @@ def solana_source_adapter_engine_deployment_record_hash(
             byte_length=32,
         )
     )
-    _push_vec(payload, SOLANA_MESSAGE_INCLUSION_VERIFIER_ID.encode("utf-8"))
+    _push_vec(payload, _message_inclusion_verifier_id(profile).encode("utf-8"))
     payload.extend(
         _require_nonzero_fixed_bytes(
             args.message_inclusion_verifier_hash,
@@ -487,7 +632,7 @@ def solana_source_adapter_engine_deployment_record_hash(
             byte_length=32,
         )
     )
-    _push_vec(payload, SOLANA_FINALITY_POLICY_ID.encode("utf-8"))
+    _push_vec(payload, _finality_policy_id(profile).encode("utf-8"))
     payload.extend(
         _require_nonzero_fixed_bytes(
             args.finality_policy_hash,
@@ -495,7 +640,7 @@ def solana_source_adapter_engine_deployment_record_hash(
             byte_length=32,
         )
     )
-    _push_vec(payload, SOLANA_SOURCE_STATE_VERIFIER_ID.encode("utf-8"))
+    _push_vec(payload, _source_state_verifier_id(profile).encode("utf-8"))
     payload.extend(
         _require_nonzero_fixed_bytes(
             args.source_state_verifier_hash,
@@ -519,7 +664,7 @@ def solana_source_adapter_engine_deployment_record_hash(
     supplied_light_client_hashes = _require_complete_light_client_evidence_hashes(args)
     if supplied_light_client_hashes:
         _push_u8(payload, 1)
-        for field, engine_id in _light_client_evidence_fields():
+        for field, engine_id in _light_client_evidence_fields(args):
             _push_vec(payload, engine_id.encode("utf-8"))
             payload.extend(supplied_light_client_hashes[field])
     return _prefixed_blake2b(
@@ -528,20 +673,23 @@ def solana_source_adapter_engine_deployment_record_hash(
     )
 
 
-def _light_client_evidence_fields() -> tuple[tuple[str, str], ...]:
+def _light_client_evidence_fields(
+    args: argparse.Namespace | None = None,
+) -> tuple[tuple[str, str], ...]:
+    profile = _solana_profile(args)
     return (
-        ("tower_replay_verifier_hash", SOLANA_TOWER_REPLAY_VERIFIER_ID),
+        ("tower_replay_verifier_hash", _tower_replay_verifier_id(profile)),
         (
             "full_accountsdb_lattice_verifier_hash",
-            SOLANA_FULL_ACCOUNTSDB_LATTICE_VERIFIER_ID,
+            _full_accountsdb_lattice_verifier_id(profile),
         ),
-        ("bank_fork_choice_verifier_hash", SOLANA_BANK_FORK_CHOICE_VERIFIER_ID),
+        ("bank_fork_choice_verifier_hash", _bank_fork_choice_verifier_id(profile)),
     )
 
 
 def _light_client_evidence_hashes(args: argparse.Namespace) -> dict[str, bytes]:
     hashes: dict[str, bytes] = {}
-    for field, _engine_id in _light_client_evidence_fields():
+    for field, _engine_id in _light_client_evidence_fields(args):
         value = getattr(args, field, None)
         if value is not None:
             hashes[field] = _require_nonzero_fixed_bytes(
@@ -552,10 +700,13 @@ def _light_client_evidence_hashes(args: argparse.Namespace) -> dict[str, bytes]:
     return hashes
 
 
-def _missing_light_client_evidence_ids(hashes: dict[str, bytes]) -> list[str]:
+def _missing_light_client_evidence_ids(
+    hashes: dict[str, bytes],
+    args: argparse.Namespace | None = None,
+) -> list[str]:
     return [
         engine_id
-        for field, engine_id in _light_client_evidence_fields()
+        for field, engine_id in _light_client_evidence_fields(args)
         if field not in hashes
     ]
 
@@ -564,7 +715,7 @@ def _require_complete_light_client_evidence_hashes(
     args: argparse.Namespace,
 ) -> dict[str, bytes]:
     hashes = _light_client_evidence_hashes(args)
-    missing = _missing_light_client_evidence_ids(hashes)
+    missing = _missing_light_client_evidence_ids(hashes, args)
     if hashes and missing:
         raise SystemExit(
             "Solana full light-client evidence must include all verifier hashes: "
@@ -581,7 +732,7 @@ def solana_full_light_client_gate_hash(args: argparse.Namespace) -> bytes | None
     source_domain = _require_exact_u32(args.source_domain, "source_domain", ValueError)
     target_domain = _require_exact_u32(args.target_domain, "target_domain", ValueError)
     hashes = _require_complete_light_client_evidence_hashes(args)
-    if len(hashes) != len(_light_client_evidence_fields()):
+    if len(hashes) != len(_light_client_evidence_fields(args)):
         return None
 
     payload = bytearray()
@@ -591,7 +742,10 @@ def solana_full_light_client_gate_hash(args: argparse.Namespace) -> bytes | None
     _push_vec(payload, b"sol")
     _push_u8(payload, SOURCE_PROOF_PLAN_SOLANA_FINALIZED_TRANSACTION)
     _push_u8(payload, FINALITY_MODEL_SOLANA_FINALIZED_SLOT)
-    _push_vec(payload, SOLANA_MAINNET_GENESIS_HASH.encode("utf-8"))
+    _push_vec(
+        payload,
+        _solana_profile_string(_solana_profile(args), "genesis_hash").encode("utf-8"),
+    )
     payload.extend(solana_source_verifier_material_record_hash(args))
     payload.extend(solana_source_adapter_engine_deployment_record_hash(args))
     payload.extend(
@@ -608,7 +762,7 @@ def solana_full_light_client_gate_hash(args: argparse.Namespace) -> bytes | None
             byte_length=32,
         )
     )
-    for field, engine_id in _light_client_evidence_fields():
+    for field, engine_id in _light_client_evidence_fields(args):
         _push_vec(payload, engine_id.encode("utf-8"))
         payload.extend(hashes[field])
     return _prefixed_blake2b(SOLANA_FULL_LIGHT_CLIENT_GATE_PREFIX, bytes(payload))
@@ -694,7 +848,7 @@ def _require_light_client_evidence_role_separation(
     hashes: dict[str, bytes],
 ) -> None:
     seen: dict[bytes, str] = {}
-    for field, _engine_id in _light_client_evidence_fields():
+    for field, _engine_id in _light_client_evidence_fields(args):
         value = hashes.get(field)
         if value is None:
             continue
@@ -716,7 +870,7 @@ def _require_light_client_evidence_role_separation(
                 )
         match = sccp_source_template_hash_match(
             value,
-            local_template_hashes=_template_component_hashes(),
+            local_template_hashes=_template_component_hashes(args),
         )
         if match is not None:
             lane, template_field = match
@@ -731,33 +885,51 @@ def _require_light_client_evidence_role_separation(
             )
 
 
-def _template_hash_fields() -> tuple[tuple[str, str, str], ...]:
+def _template_hash_fields(
+    args: argparse.Namespace | None = None,
+) -> tuple[tuple[str, str, str], ...]:
+    profile = _solana_profile(args)
     return (
-        ("source_trust_anchor_hash", SOLANA_SOURCE_TRUST_ANCHOR_ID, "source-trust-anchor"),
-        ("consensus_verifier_hash", SOLANA_CONSENSUS_VERIFIER_ID, "consensus-verifier"),
+        (
+            "source_trust_anchor_hash",
+            _source_trust_anchor_id(profile),
+            "source-trust-anchor",
+        ),
+        (
+            "consensus_verifier_hash",
+            _consensus_verifier_id(profile),
+            "consensus-verifier",
+        ),
         (
             "message_inclusion_verifier_hash",
-            SOLANA_MESSAGE_INCLUSION_VERIFIER_ID,
+            _message_inclusion_verifier_id(profile),
             "message-inclusion-verifier",
         ),
         (
             "source_state_verifier_hash",
-            SOLANA_SOURCE_STATE_VERIFIER_ID,
+            _source_state_verifier_id(profile),
             "source-state-verifier",
         ),
-        ("finality_policy_hash", SOLANA_FINALITY_POLICY_ID, "finality-policy"),
+        ("finality_policy_hash", _finality_policy_id(profile), "finality-policy"),
     )
 
 
-def _template_component_hashes() -> dict[str, bytes]:
+def _template_component_hashes(
+    args: argparse.Namespace | None = None,
+) -> dict[str, bytes]:
+    solana_network = _solana_profile_string(_solana_profile(args), "network_id")
     return {
-        field: solana_template_component_hash(component_id, component_kind)
-        for field, component_id, component_kind in _template_hash_fields()
+        field: solana_template_component_hash(
+            component_id,
+            component_kind,
+            solana_network=solana_network,
+        )
+        for field, component_id, component_kind in _template_hash_fields(args)
     }
 
 
 def _reject_template_hashes(args: argparse.Namespace) -> None:
-    template_hashes = _template_component_hashes()
+    template_hashes = _template_component_hashes(args)
     for field, template_hash in template_hashes.items():
         supplied_hash = _require_fixed_bytes(
             getattr(args, field),
@@ -900,58 +1072,62 @@ def _validate_solana_evidence(args: argparse.Namespace) -> None:
 
 
 def _material_lines(args: argparse.Namespace) -> Iterable[str]:
+    profile = _solana_profile(args)
     yield "[[zk.sccp_source_verifier_materials]]"
     yield _toml_line("version", 1)
     yield _toml_line("source_domain", args.source_domain)
     yield _toml_line("source_chain", "sol")
+    yield _toml_line("solana_network", _solana_profile_string(profile, "network_id"))
     yield _toml_line("source_proof_plan", "SolanaFinalizedTransactionProof")
     yield _toml_line("finality_model", "SolanaFinalizedSlot")
     yield _toml_line("adapter_circuit_id", "sccp-source-adapter-v1")
-    yield _toml_line("source_trust_anchor_id", SOLANA_SOURCE_TRUST_ANCHOR_ID)
+    yield _toml_line("source_trust_anchor_id", _source_trust_anchor_id(profile))
     yield _toml_line("source_trust_anchor_hash", _hex(args.source_trust_anchor_hash))
-    yield _toml_line("consensus_verifier_id", SOLANA_CONSENSUS_VERIFIER_ID)
+    yield _toml_line("consensus_verifier_id", _consensus_verifier_id(profile))
     yield _toml_line("consensus_verifier_hash", _hex(args.consensus_verifier_hash))
     yield _toml_line(
         "message_inclusion_verifier_id",
-        SOLANA_MESSAGE_INCLUSION_VERIFIER_ID,
+        _message_inclusion_verifier_id(profile),
     )
     yield _toml_line(
         "message_inclusion_verifier_hash",
         _hex(args.message_inclusion_verifier_hash),
     )
-    yield _toml_line("source_state_verifier_id", SOLANA_SOURCE_STATE_VERIFIER_ID)
+    yield _toml_line("source_state_verifier_id", _source_state_verifier_id(profile))
     yield _toml_line("source_state_verifier_hash", _hex(args.source_state_verifier_hash))
-    yield _toml_line("finality_policy_id", SOLANA_FINALITY_POLICY_ID)
+    yield _toml_line("finality_policy_id", _finality_policy_id(profile))
     yield _toml_line("finality_policy_hash", _hex(args.finality_policy_hash))
     yield _toml_line("placeholder_material", False)
 
 
 def _deployment_lines(args: argparse.Namespace) -> Iterable[str]:
+    profile = _solana_profile(args)
     yield "[[zk.sccp_source_adapter_engine_deployments]]"
     yield _toml_line("version", 1)
     yield _toml_line("source_domain", args.source_domain)
     yield _toml_line("target_domain", args.target_domain)
     yield _toml_line("source_chain", "sol")
+    yield _toml_line("solana_network", _solana_profile_string(profile, "network_id"))
     yield _toml_line("source_proof_plan", "SolanaFinalizedTransactionProof")
     yield _toml_line("finality_model", "SolanaFinalizedSlot")
     yield _toml_line("adapter_proof_family", SCCP_PROOF_FAMILY_STARK_FRI)
     yield _toml_line("adapter_circuit_id", "sccp-source-adapter-v1")
     yield _toml_line("adapter_verifier_vk_hash", _hex(args.adapter_verifier_vk_hash))
-    yield _toml_line("source_trust_anchor_id", SOLANA_SOURCE_TRUST_ANCHOR_ID)
+    yield _toml_line("source_trust_anchor_id", _source_trust_anchor_id(profile))
     yield _toml_line("source_trust_anchor_hash", _hex(args.source_trust_anchor_hash))
-    yield _toml_line("consensus_verifier_id", SOLANA_CONSENSUS_VERIFIER_ID)
+    yield _toml_line("consensus_verifier_id", _consensus_verifier_id(profile))
     yield _toml_line("consensus_verifier_hash", _hex(args.consensus_verifier_hash))
     yield _toml_line(
         "message_inclusion_verifier_id",
-        SOLANA_MESSAGE_INCLUSION_VERIFIER_ID,
+        _message_inclusion_verifier_id(profile),
     )
     yield _toml_line(
         "message_inclusion_verifier_hash",
         _hex(args.message_inclusion_verifier_hash),
     )
-    yield _toml_line("source_state_verifier_id", SOLANA_SOURCE_STATE_VERIFIER_ID)
+    yield _toml_line("source_state_verifier_id", _source_state_verifier_id(profile))
     yield _toml_line("source_state_verifier_hash", _hex(args.source_state_verifier_hash))
-    yield _toml_line("finality_policy_id", SOLANA_FINALITY_POLICY_ID)
+    yield _toml_line("finality_policy_id", _finality_policy_id(profile))
     yield _toml_line("finality_policy_hash", _hex(args.finality_policy_hash))
     yield _toml_line("deployment_receipt_hash", _hex(args.deployment_receipt_hash))
     supplied = _light_client_evidence_hashes(args)
@@ -982,7 +1158,7 @@ def _full_light_client_audit_lines(args: argparse.Namespace) -> Iterable[str]:
     if gate_hash is None:
         missing_ids = [
             engine_id
-            for field, engine_id in _light_client_evidence_fields()
+            for field, engine_id in _light_client_evidence_fields(args)
             if field not in supplied
         ]
         yield "# full_light_client_evidence_ready = false"
@@ -991,7 +1167,7 @@ def _full_light_client_audit_lines(args: argparse.Namespace) -> Iterable[str]:
 
     yield "# full_light_client_evidence_ready = true"
     yield "# solana_full_light_client_gate_hash = " + json.dumps(_hex(gate_hash))
-    for field, engine_id in _light_client_evidence_fields():
+    for field, engine_id in _light_client_evidence_fields(args):
         yield f"# {field.removesuffix('_hash')}_id = " + json.dumps(engine_id)
         yield f"# {field} = " + json.dumps(_hex(supplied[field]))
 
@@ -1022,6 +1198,7 @@ def render_toml(args: argparse.Namespace) -> str:
 
 def _json_summary(args: argparse.Namespace) -> dict[str, object]:
     _validate_solana_evidence(args)
+    profile = _solana_profile(args)
     material_hash = solana_source_verifier_material_record_hash(args)
     deployment_hash = solana_source_adapter_engine_deployment_record_hash(args)
     expected_material_hash = _optional_expected_record_hash(
@@ -1047,12 +1224,12 @@ def _json_summary(args: argparse.Namespace) -> dict[str, object]:
     expected_gate_matches = gate_hash is not None and expected_gate_hash == gate_hash
     light_client_hashes = {
         field: _hex(supplied[field])
-        for field, _engine_id in _light_client_evidence_fields()
+        for field, _engine_id in _light_client_evidence_fields(args)
         if field in supplied
     }
     missing_ids = [
         engine_id
-        for field, engine_id in _light_client_evidence_fields()
+        for field, engine_id in _light_client_evidence_fields(args)
         if field not in supplied
     ]
     source_adapter_gate_blockers = []
@@ -1077,9 +1254,15 @@ def _json_summary(args: argparse.Namespace) -> dict[str, object]:
         "source_domain": args.source_domain,
         "target_domain": args.target_domain,
         "source_chain": "sol",
+        "solana_network": _solana_profile_string(profile, "network_id"),
+        "solana_genesis_hash": _solana_profile_string(profile, "genesis_hash"),
         "source_proof_plan": "SolanaFinalizedTransactionProof",
         "finality_model": "SolanaFinalizedSlot",
-        "source_state_verifier_id": SOLANA_SOURCE_STATE_VERIFIER_ID,
+        "source_trust_anchor_id": _source_trust_anchor_id(profile),
+        "consensus_verifier_id": _consensus_verifier_id(profile),
+        "message_inclusion_verifier_id": _message_inclusion_verifier_id(profile),
+        "source_state_verifier_id": _source_state_verifier_id(profile),
+        "finality_policy_id": _finality_policy_id(profile),
         "source_state_verifier_hash": _hex(args.source_state_verifier_hash),
         "adapter_verifier_vk_hash": _hex(args.adapter_verifier_vk_hash),
         "deployment_receipt_hash": _hex(args.deployment_receipt_hash),
@@ -1100,7 +1283,7 @@ def _json_summary(args: argparse.Namespace) -> dict[str, object]:
         "full_light_client_gate_hash": _hex(gate_hash) if gate_hash is not None else None,
         "expected_full_light_client_gate_hash_matches": expected_gate_matches,
         "full_light_client_verifier_ids": [
-            engine_id for _field, engine_id in _light_client_evidence_fields()
+            engine_id for _field, engine_id in _light_client_evidence_fields(args)
         ],
         "full_light_client_verifier_hashes": light_client_hashes,
         "missing_full_light_client_verifier_ids": missing_ids,
@@ -1124,6 +1307,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=SCCP_DOMAIN_SORA,
         type=lambda value: parse_u32(value, label="target domain"),
         help="SCCP target domain. Defaults to SORA (0).",
+    )
+    parser.add_argument(
+        "--solana-network",
+        default="mainnet-beta",
+        type=parse_solana_network,
+        choices=tuple(SOLANA_SOURCE_NETWORK_PROFILES.keys()),
+        help=(
+            "Solana source network profile. Defaults to mainnet-beta; use "
+            "testnet for TAIRA testnet SCCP route evidence."
+        ),
     )
     for name in _component_hash_args():
         parser.add_argument(

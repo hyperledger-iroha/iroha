@@ -19,11 +19,19 @@ use iroha_data_model::consensus::{
 use iroha_data_model::events::EventFilter;
 use iroha_data_model::prelude::Repeats;
 use mv::storage::StorageReadOnly;
+use std::collections::BTreeSet;
 
 const PROPOSAL_STALE_WINDOW_TX_QUANTUM: usize = 128;
 const PROPOSAL_STALE_WINDOW_PREP_TX_QUANTUM: usize = 32;
 const PROPOSAL_STALE_WINDOW_FULL_BATCH_PREP_GRACE: usize = 2;
 const PROPOSAL_STALE_WINDOW_MAX_MULTIPLIER: u32 = 8;
+
+#[derive(Debug, Default)]
+struct FinalLanePayloadPlan {
+    ownerships: Vec<SumeragiLanePayloadOwnership>,
+    lane_block_proposal_artifacts: Vec<crate::sumeragi::consensus::LaneBlockProposalV1>,
+    lane_block_prepare_vote_plans: Vec<super::lane_scheduler::LaneBlockVotePlan>,
+}
 
 pub(super) const fn should_seed_frontier_backup_transport(
     da_enabled: bool,
@@ -316,26 +324,81 @@ fn previous_roster_evidence_for_hash_only_parent(
     })
 }
 
-fn known_lane_block_tips_for_proposal(state: &State) -> Vec<super::lane_scheduler::LaneBlockTip> {
+fn known_lane_block_tips_for_proposal(
+    state: &State,
+    proposal_height: u64,
+) -> Vec<super::lane_scheduler::LaneBlockTip> {
+    let nexus = state.nexus_snapshot();
+    let reset_heights = state.da_shard_reset_heights_snapshot_cached();
     let mut tips = state
         .lane_block_artifact_tips_snapshot_cached()
         .into_iter()
-        .map(|(lane_id, dataspace_id, latest_lane_block_height)| {
-            super::lane_scheduler::LaneBlockTip {
+        .map(
+            |(
                 lane_id,
                 dataspace_id,
                 latest_lane_block_height,
-            }
-        })
+                latest_lane_block_descriptor_hash,
+            )| {
+                super::lane_scheduler::LaneBlockTip {
+                    lane_id,
+                    dataspace_id,
+                    latest_lane_block_height,
+                    latest_lane_block_descriptor_hash,
+                }
+            },
+        )
         .collect::<Vec<_>>();
-    tips.extend(state.lane_relay_snapshot().into_iter().map(|relay| {
-        super::lane_scheduler::LaneBlockTip {
-            lane_id: relay.lane_id,
-            dataspace_id: relay.dataspace_id,
-            latest_lane_block_height: relay.block_height,
-        }
-    }));
+    tips.extend(
+        state
+            .lane_relay_snapshot()
+            .into_iter()
+            .filter(|relay| {
+                relay.is_merge_admissible()
+                    && relay.lane_block_descriptor_hash.is_some()
+                    && (!nexus.enabled
+                        || (crate::state::nexus_active_lane_dataspace_at_height(
+                            relay.lane_id,
+                            &nexus,
+                            proposal_height,
+                        ) == Some(relay.dataspace_id)))
+                    && reset_heights
+                        .get(&relay.lane_id)
+                        .is_none_or(|reset_height| relay.block_height > *reset_height)
+            })
+            .map(|relay| super::lane_scheduler::LaneBlockTip {
+                lane_id: relay.lane_id,
+                dataspace_id: relay.dataspace_id,
+                latest_lane_block_height: relay.block_height,
+                latest_lane_block_descriptor_hash: relay_tip_descriptor_hash_for_proposal(&relay),
+            }),
+    );
+    tips.extend(
+        state
+            .certified_lane_block_tips_snapshot_cached()
+            .into_iter()
+            .map(
+                |(lane_id, dataspace_id, latest_lane_block_height, descriptor_hash)| {
+                    super::lane_scheduler::LaneBlockTip {
+                        lane_id,
+                        dataspace_id,
+                        latest_lane_block_height,
+                        latest_lane_block_descriptor_hash: descriptor_hash,
+                    }
+                },
+            ),
+    );
     tips
+}
+
+fn relay_tip_descriptor_hash_for_proposal(
+    relay: &iroha_data_model::nexus::LaneRelayEnvelope,
+) -> Option<Hash> {
+    if relay.is_merge_admissible() {
+        relay.lane_block_descriptor_hash
+    } else {
+        None
+    }
 }
 
 fn next_cached_slot_timeout_streak(
@@ -1631,7 +1694,8 @@ impl Actor {
                 view, "proposal queue routing refreshed from committed Nexus state"
             );
         }
-        let known_lane_block_tips = known_lane_block_tips_for_proposal(state);
+        let known_lane_block_tips = self.known_lane_block_tips_for_proposal(height);
+        let blocked_lane_ids = self.unapplied_lane_block_lanes_for_proposal(state, height);
         let lane_reset_heights = state.da_shard_reset_heights_snapshot_cached();
 
         loop {
@@ -1688,6 +1752,10 @@ impl Actor {
                 .iter()
                 .map(crate::queue::TransactionGuard::routing)
                 .collect();
+            let fetched_hashes: Vec<_> = fetched
+                .iter()
+                .map(|guard| Hash::from(guard.hash_as_entrypoint()))
+                .collect();
             let candidates: Vec<_> = fetched
                 .iter()
                 .map(|guard| super::lane_scheduler::ProposalAdmissionCandidate {
@@ -1714,135 +1782,198 @@ impl Actor {
                 view,
             )
             .expect("fetched proposal candidates and routing decisions must align");
+            if !blocked_lane_ids.is_empty() {
+                schedule = super::lane_scheduler::defer_accepted_proposal_actions_for_lanes(
+                    &schedule,
+                    &fetched_routing,
+                    &candidates,
+                    &blocked_lane_ids,
+                    super::lane_scheduler::ProposalDeferralReason::LaneConsensus,
+                );
+            }
             let lane_consensus_deferral = !use_shared_lane_domain_committee;
             let mut defer_accepted_due_to_lane_consensus = false;
-            let lane_domain_committees =
-                super::lane_scheduler::plan_lane_consensus_committees_with_authority(
-                    &fetched_routing,
-                    &schedule,
-                    use_shared_lane_domain_committee.then_some(lane_domain_validators.as_slice()),
-                    |lane_id, _dataspace_id| {
-                        if use_shared_lane_domain_committee {
-                            Vec::new()
-                        } else {
-                            state.authoritative_lane_peer_ids(lane_id)
-                        }
-                    },
-                );
-            let lane_domains = lane_domain_committees.and_then(|committees| {
-                super::lane_scheduler::plan_lane_consensus_domains(
-                    &fetched_routing,
-                    &schedule,
-                    &committees,
-                    lane_domain_mode_tag,
-                )
-            });
-            match lane_domains {
-                Ok(domains) => {
-                    if !domains.is_empty() {
-                        match super::lane_scheduler::plan_lane_payload(
-                            &domains,
-                            &known_lane_block_tips,
-                            height.saturating_sub(1),
-                            &lane_reset_heights,
+            for planning_attempt in 0..2 {
+                let lane_domain_committees =
+                    super::lane_scheduler::plan_lane_consensus_committees_with_authority(
+                        &fetched_routing,
+                        &schedule,
+                        use_shared_lane_domain_committee
+                            .then_some(lane_domain_validators.as_slice()),
+                        |lane_id, _dataspace_id| {
+                            if use_shared_lane_domain_committee {
+                                Vec::new()
+                            } else {
+                                state.authoritative_lane_peer_ids_at_height(lane_id, height)
+                            }
+                        },
+                    );
+                let lane_domains = lane_domain_committees.and_then(|committees| {
+                    super::lane_scheduler::plan_lane_consensus_domains(
+                        &fetched_routing,
+                        &schedule,
+                        &committees,
+                        lane_domain_mode_tag,
+                    )
+                });
+                let domains = match lane_domains {
+                    Ok(domains) => domains,
+                    Err(error) => {
+                        warn!(
+                            height,
                             view,
-                        ) {
-                            Ok(lane_payload_plan) => {
-                                planned_lane_payload_ownerships.extend(
-                                    lane_payload_plan.ownerships.iter().map(|ownership| {
-                                        Self::lane_payload_ownership_to_wire(
-                                            ownership, height, view,
-                                        )
-                                    }),
-                                );
-                                trace!(
-                                    height,
-                                    view,
-                                    lane_domains = domains.len(),
-                                    lane_ids = ?domains
-                                        .iter()
-                                        .map(|domain| domain.lane_id.as_u32())
-                                        .collect::<Vec<_>>(),
-                                    dataspace_ids = ?domains
-                                        .iter()
-                                        .map(|domain| domain.dataspace_id.as_u64())
-                                        .collect::<Vec<_>>(),
-                                    accepted_lane_candidates = domains
-                                        .iter()
-                                        .map(|domain| domain.accepted_candidates)
-                                        .sum::<usize>(),
-                                    accepted_lane_candidate_indices = ?domains
-                                        .iter()
-                                        .map(|domain| domain.accepted_candidate_indices.clone())
-                                        .collect::<Vec<_>>(),
-                                    lane_tip_heights = ?lane_payload_plan
-                                        .lane_tips
-                                        .iter()
-                                        .map(|tip| tip.latest_lane_block_height)
-                                        .collect::<Vec<_>>(),
-                                    lane_slot_heights = ?lane_payload_plan
-                                        .slots
-                                        .iter()
-                                        .map(|slot| slot.lane_block_height)
-                                        .collect::<Vec<_>>(),
-                                    lane_block_subjects = lane_payload_plan.subjects.len(),
-                                    lane_block_subject_hashes = ?lane_payload_plan
-                                        .subjects
-                                        .iter()
-                                        .map(|subject| hex::encode(subject.subject_hash.as_ref()))
-                                        .collect::<Vec<_>>(),
-                                    lane_payload_ownerships = lane_payload_plan.ownerships.len(),
-                                    lane_payload_ownership_hashes = ?lane_payload_plan
-                                        .ownerships
-                                        .iter()
-                                        .map(|ownership| hex::encode(ownership.payload_ownership_hash.as_ref()))
-                                        .collect::<Vec<_>>(),
-                                    lane_rbc_instance_hashes = ?lane_payload_plan
-                                        .ownerships
-                                        .iter()
-                                        .map(|ownership| hex::encode(ownership.rbc_instance_hash.as_ref()))
-                                        .collect::<Vec<_>>(),
-                                    validator_count = domains
-                                        .iter()
-                                        .map(|domain| domain.validator_set.len())
-                                        .max()
-                                        .unwrap_or_default(),
-                                    first_quorum = domains
-                                        .first()
-                                        .map_or(0, |domain| domain.quorum.min_quorum),
-                                    first_qc_mode_tag = domains
-                                        .first()
-                                        .map_or("", |domain| domain.qc_mode_tag.as_str()),
-                                    "planned lane-local consensus domains for proposal batch"
-                                );
-                            }
-                            Err(error) => {
-                                warn!(
-                                    height,
-                                    view,
-                                    ?error,
-                                    lane_consensus_deferral,
-                                    "failed to plan lane-local payload for proposal batch"
-                                );
-                                if lane_consensus_deferral {
-                                    defer_accepted_due_to_lane_consensus = true;
-                                }
-                            }
+                            ?error,
+                            lane_consensus_deferral,
+                            "failed to plan lane-local consensus domains for proposal batch"
+                        );
+                        if lane_consensus_deferral {
+                            defer_accepted_due_to_lane_consensus = true;
                         }
+                        break;
                     }
+                };
+                if domains.is_empty() {
+                    break;
                 }
-                Err(error) => {
+
+                let lane_payload_plan = match super::lane_scheduler::plan_lane_payload(
+                    &domains,
+                    &known_lane_block_tips,
+                    &fetched_hashes,
+                    height.saturating_sub(1),
+                    &lane_reset_heights,
+                    height,
+                    view,
+                ) {
+                    Ok(lane_payload_plan) => lane_payload_plan,
+                    Err(error) => {
+                        warn!(
+                            height,
+                            view,
+                            ?error,
+                            lane_consensus_deferral,
+                            "failed to plan lane-local payload for proposal batch"
+                        );
+                        if lane_consensus_deferral {
+                            defer_accepted_due_to_lane_consensus = true;
+                        }
+                        break;
+                    }
+                };
+
+                let non_authoritative_lanes = if lane_consensus_deferral {
+                    self.lane_payload_lanes_not_authored_by_local_proposer(&lane_payload_plan)
+                } else {
+                    BTreeSet::new()
+                };
+                if !non_authoritative_lanes.is_empty() && planning_attempt == 0 {
+                    debug!(
+                        height,
+                        view,
+                        lane_ids = ?non_authoritative_lanes
+                            .iter()
+                            .map(|lane_id| lane_id.as_u32())
+                            .collect::<Vec<_>>(),
+                        "deferring lane-routed proposal work outside the local lane-slot author"
+                    );
+                    schedule = super::lane_scheduler::defer_accepted_proposal_actions_for_lanes(
+                        &schedule,
+                        &fetched_routing,
+                        &candidates,
+                        &non_authoritative_lanes,
+                        super::lane_scheduler::ProposalDeferralReason::LaneConsensus,
+                    );
+                    continue;
+                }
+                if !non_authoritative_lanes.is_empty() {
                     warn!(
                         height,
                         view,
-                        ?error,
+                        lane_ids = ?non_authoritative_lanes
+                            .iter()
+                            .map(|lane_id| lane_id.as_u32())
+                            .collect::<Vec<_>>(),
                         lane_consensus_deferral,
-                        "failed to plan lane-local consensus domains for proposal batch"
+                        "failed to remove lane-routed proposal work outside the local lane-slot author"
                     );
                     if lane_consensus_deferral {
                         defer_accepted_due_to_lane_consensus = true;
                     }
+                    break;
                 }
+
+                planned_lane_payload_ownerships.extend(
+                    lane_payload_plan
+                        .entries
+                        .iter()
+                        .map(|entry| Self::lane_payload_ownership_to_wire(entry, height, view)),
+                );
+                trace!(
+                    height,
+                    view,
+                    lane_domains = domains.len(),
+                    lane_ids = ?domains
+                        .iter()
+                        .map(|domain| domain.lane_id.as_u32())
+                        .collect::<Vec<_>>(),
+                    dataspace_ids = ?domains
+                        .iter()
+                        .map(|domain| domain.dataspace_id.as_u64())
+                        .collect::<Vec<_>>(),
+                    accepted_lane_candidates = domains
+                        .iter()
+                        .map(|domain| domain.accepted_candidates)
+                        .sum::<usize>(),
+                    accepted_lane_candidate_indices = ?domains
+                        .iter()
+                        .map(|domain| domain.accepted_candidate_indices.clone())
+                        .collect::<Vec<_>>(),
+                    lane_tip_heights = ?lane_payload_plan
+                        .entries
+                        .iter()
+                        .map(|entry| entry.tip.latest_lane_block_height)
+                        .collect::<Vec<_>>(),
+                    lane_slot_heights = ?lane_payload_plan
+                        .entries
+                        .iter()
+                        .map(|entry| entry.slot.lane_block_height)
+                        .collect::<Vec<_>>(),
+                    lane_block_subjects = lane_payload_plan.entries.len(),
+                    lane_block_subject_hashes = ?lane_payload_plan
+                        .entries
+                        .iter()
+                        .map(|entry| hex::encode(entry.subject.subject_hash.as_ref()))
+                        .collect::<Vec<_>>(),
+                    lane_payload_ownerships = lane_payload_plan.entries.len(),
+                    lane_payload_ownership_hashes = ?lane_payload_plan
+                        .entries
+                        .iter()
+                        .map(|entry| hex::encode(entry.ownership.payload_ownership_hash.as_ref()))
+                        .collect::<Vec<_>>(),
+                    lane_rbc_instance_hashes = ?lane_payload_plan
+                        .entries
+                        .iter()
+                        .map(|entry| hex::encode(entry.ownership.rbc_instance_hash.as_ref()))
+                        .collect::<Vec<_>>(),
+                    lane_block_descriptor_hashes = ?lane_payload_plan
+                        .entries
+                        .iter()
+                        .map(|entry| hex::encode(entry.block_descriptor.descriptor_hash.as_ref()))
+                        .collect::<Vec<_>>(),
+                    validator_count = domains
+                        .iter()
+                        .map(|domain| domain.validator_set.len())
+                        .max()
+                        .unwrap_or_default(),
+                    first_quorum = domains
+                        .first()
+                        .map_or(0, |domain| domain.quorum.min_quorum),
+                    first_qc_mode_tag = domains
+                        .first()
+                        .map_or("", |domain| domain.qc_mode_tag.as_str()),
+                    "planned lane-local consensus domains for proposal batch"
+                );
+                break;
             }
             if defer_accepted_due_to_lane_consensus {
                 schedule = super::lane_scheduler::defer_accepted_proposal_actions(
@@ -1924,10 +2055,11 @@ impl Actor {
     }
 
     fn lane_payload_ownership_to_wire(
-        ownership: &super::lane_scheduler::LanePayloadOwnership,
+        entry: &super::lane_scheduler::LanePayloadPlanEntry,
         proposal_height: u64,
         proposal_view: u64,
     ) -> SumeragiLanePayloadOwnership {
+        let ownership = &entry.ownership;
         SumeragiLanePayloadOwnership {
             proposal_height,
             proposal_view,
@@ -1944,20 +2076,59 @@ impl Actor {
                     u64::try_from(*index).expect("validated lane payload candidate index fits u64")
                 })
                 .collect(),
+            accepted_transaction_hashes: ownership.accepted_transaction_hashes.clone(),
+            previous_lane_block_height: entry.block_descriptor.previous_lane_block_height,
+            previous_lane_block_descriptor_hash: entry
+                .block_descriptor
+                .previous_lane_block_descriptor_hash,
+            lane_block_descriptor_hash: Some(entry.block_descriptor.descriptor_hash),
+            lane_block_descriptor_validator_set: entry.block_descriptor.validator_set.clone(),
+            lane_block_descriptor_validator_count: entry.block_descriptor.quorum.validator_count,
+            lane_block_descriptor_min_quorum: entry.block_descriptor.quorum.min_quorum,
             payload_ownership_hash: ownership.payload_ownership_hash,
             rbc_instance_hash: ownership.rbc_instance_hash,
         }
     }
 
-    fn plan_final_lane_payload_ownerships(
+    fn lane_payload_lanes_not_authored_by_local_proposer(
+        &self,
+        lane_payload_plan: &super::lane_scheduler::LanePayloadPlan,
+    ) -> BTreeSet<LaneId> {
+        let local_peer = self.common_config.peer.id();
+        lane_payload_plan
+            .entries
+            .iter()
+            .filter(|entry| {
+                Self::lane_payload_author(entry).is_none_or(|author| author != local_peer)
+            })
+            .map(|entry| entry.domain.lane_id)
+            .collect()
+    }
+
+    fn lane_payload_author(
+        entry: &super::lane_scheduler::LanePayloadPlanEntry,
+    ) -> Option<&iroha_data_model::peer::PeerId> {
+        let validator_count = u64::try_from(entry.domain.validator_set.len()).ok()?;
+        if validator_count == 0 {
+            return None;
+        }
+        let author_index = entry.slot.lane_block_height.saturating_sub(1) % validator_count;
+        entry
+            .domain
+            .validator_set
+            .get(usize::try_from(author_index).ok()?)
+    }
+
+    fn plan_final_lane_payload(
         &self,
         state: &State,
         routing_batch: &[RoutingDecision],
+        candidate_hashes: &[Hash],
         height: u64,
         view: u64,
-    ) -> Result<Vec<SumeragiLanePayloadOwnership>> {
+    ) -> Result<FinalLanePayloadPlan> {
         if routing_batch.is_empty() {
-            return Ok(Vec::new());
+            return Ok(FinalLanePayloadPlan::default());
         }
 
         let committed_nexus = state.nexus_snapshot();
@@ -1988,7 +2159,7 @@ impl Actor {
                     if use_shared_lane_domain_committee {
                         Vec::new()
                     } else {
-                        state.authoritative_lane_peer_ids(lane_id)
+                        state.authoritative_lane_peer_ids_at_height(lane_id, height)
                     }
                 },
             )
@@ -2007,27 +2178,291 @@ impl Actor {
             eyre!("failed to plan lane-local consensus domains for final proposal batch: {error:?}")
         })?;
         if lane_domains.is_empty() {
-            return Ok(Vec::new());
+            return Ok(FinalLanePayloadPlan::default());
         }
 
-        let known_lane_block_tips = known_lane_block_tips_for_proposal(state);
+        let known_lane_block_tips = self.known_lane_block_tips_for_proposal(height);
         let lane_reset_heights = state.da_shard_reset_heights_snapshot_cached();
         let lane_payload_plan = super::lane_scheduler::plan_lane_payload(
             &lane_domains,
             &known_lane_block_tips,
+            candidate_hashes,
             height.saturating_sub(1),
             &lane_reset_heights,
+            height,
             view,
         )
         .map_err(|error| {
             eyre!("failed to plan lane-local payload for final proposal batch: {error:?}")
         })?;
+        let non_authoritative_lanes = if use_shared_lane_domain_committee {
+            BTreeSet::new()
+        } else {
+            self.lane_payload_lanes_not_authored_by_local_proposer(&lane_payload_plan)
+        };
+        if !non_authoritative_lanes.is_empty() {
+            return Err(eyre!(
+                "local proposer cannot author lane-local payloads for lanes assigned to another lane-slot author: {:?}",
+                non_authoritative_lanes
+                    .iter()
+                    .map(|lane_id| lane_id.as_u32())
+                    .collect::<Vec<_>>()
+            ));
+        }
 
-        Ok(lane_payload_plan
-            .ownerships
+        let ownerships = lane_payload_plan
+            .entries
             .iter()
-            .map(|ownership| Self::lane_payload_ownership_to_wire(ownership, height, view))
-            .collect())
+            .map(|entry| Self::lane_payload_ownership_to_wire(entry, height, view))
+            .collect();
+
+        Ok(FinalLanePayloadPlan {
+            ownerships,
+            lane_block_proposal_artifacts: lane_payload_plan.lane_block_proposal_artifacts,
+            lane_block_prepare_vote_plans: lane_payload_plan.lane_block_prepare_vote_plans,
+        })
+    }
+
+    pub(super) fn known_lane_block_tips_for_proposal(
+        &self,
+        proposal_height: u64,
+    ) -> Vec<super::lane_scheduler::LaneBlockTip> {
+        let mut tips = known_lane_block_tips_for_proposal(self.state.as_ref(), proposal_height);
+        tips.extend(
+            self.subsystems
+                .committed_lane_blocks
+                .lane_block_tips_snapshot_for_admissible_lanes(
+                    |lane_id, dataspace_id, lane_block_height| {
+                        self.lane_block_artifact_targets_active_route(
+                            lane_id,
+                            dataspace_id,
+                            proposal_height,
+                            lane_block_height,
+                        )
+                    },
+                ),
+        );
+        tips
+    }
+
+    pub(super) fn unapplied_lane_block_lanes_for_proposal(
+        &self,
+        state: &State,
+        proposal_height: u64,
+    ) -> BTreeSet<LaneId> {
+        let mut blocked_lanes = state
+            .unapplied_lane_block_artifact_heights_snapshot_cached()
+            .into_iter()
+            .chain(
+                state
+                    .unapplied_certified_lane_block_heights_snapshot_cached()
+                    .into_iter(),
+            )
+            .filter_map(|((lane_id, dataspace_id), lane_block_height)| {
+                self.lane_block_artifact_targets_active_route(
+                    lane_id,
+                    dataspace_id,
+                    proposal_height,
+                    lane_block_height,
+                )
+                .then_some(lane_id)
+            })
+            .collect::<BTreeSet<_>>();
+        blocked_lanes.extend(
+            self.subsystems
+                .committed_lane_blocks
+                .unapplied_lane_ids_for_admissible_lanes(
+                    state.kura(),
+                    |lane_id, dataspace_id, lane_block_height, artifact_proposal_height| {
+                        self.lane_block_artifact_targets_active_route(
+                            lane_id,
+                            dataspace_id,
+                            artifact_proposal_height,
+                            lane_block_height,
+                        )
+                    },
+                ),
+        );
+        blocked_lanes.extend(
+            self.subsystems
+                .lane_blocks
+                .pending_lane_ids_for_admissible_lanes(
+                    |lane_id, dataspace_id, lane_block_height, artifact_proposal_height| {
+                        self.lane_block_artifact_targets_active_route(
+                            lane_id,
+                            dataspace_id,
+                            artifact_proposal_height,
+                            lane_block_height,
+                        )
+                    },
+                ),
+        );
+        blocked_lanes
+    }
+
+    pub(super) fn local_lane_block_prepare_vote(
+        &self,
+        plan: &super::lane_scheduler::LaneBlockVotePlan,
+    ) -> Option<crate::lane_consensus::LaneBlockVoteV1> {
+        if plan.phase != crate::sumeragi::consensus::Phase::Prepare {
+            return None;
+        }
+
+        match self.common_config.key_pair.public_key().try_algorithm() {
+            Ok(iroha_crypto::Algorithm::BlsNormal) => {}
+            Ok(algorithm) => {
+                warn!(
+                    ?algorithm,
+                    "skipping local lane-block prepare vote broadcast with non-BLS consensus key"
+                );
+                return None;
+            }
+            Err(err) => {
+                warn!(
+                    ?err,
+                    "skipping local lane-block prepare vote broadcast with unrecognized consensus key"
+                );
+                return None;
+            }
+        }
+
+        let local_peer = self.common_config.peer.id();
+        let Some(vote) = plan.votes.iter().find(|vote| {
+            vote.phase == crate::sumeragi::consensus::Phase::Prepare && &vote.signer == local_peer
+        }) else {
+            return None;
+        };
+
+        if vote.body.phase != crate::sumeragi::consensus::Phase::Prepare
+            || vote.proposal_hash != plan.proposal_hash
+            || vote.descriptor_hash != plan.descriptor_hash
+            || vote.validator_set_hash != plan.validator_set_hash
+        {
+            warn!(
+                lane = vote.lane_id.as_u32(),
+                lane_block_height = vote.lane_block_height,
+                lane_block_view = vote.lane_block_view,
+                "skipping inconsistent local lane-block prepare vote plan"
+            );
+            return None;
+        }
+
+        if vote.signer.public_key() != self.common_config.key_pair.public_key() {
+            warn!("skipping local lane-block prepare vote for mismatched local peer key");
+            return None;
+        }
+
+        let signing_hash = Hash::new(vote.body.signature_preimage());
+        if vote.signing_hash != signing_hash {
+            warn!(
+                lane = vote.lane_id.as_u32(),
+                lane_block_height = vote.lane_block_height,
+                lane_block_view = vote.lane_block_view,
+                "skipping local lane-block prepare vote with stale signing hash"
+            );
+            return None;
+        }
+
+        if !self.lane_block_vote_body_targets_authorized_local_signer(&vote.body, local_peer) {
+            warn!(
+                lane = vote.lane_id.as_u32(),
+                dataspace_id = vote.dataspace_id.as_u64(),
+                lane_block_height = vote.lane_block_height,
+                lane_block_view = vote.lane_block_view,
+                validator_count = vote.body.validator_count,
+                min_quorum = vote.body.min_quorum,
+                "skipping local lane-block prepare vote for non-authoritative route or committee"
+            );
+            return None;
+        }
+
+        let signature = match Signature::try_new(
+            self.common_config.key_pair.private_key(),
+            &vote.body.signature_preimage(),
+        ) {
+            Ok(signature) => signature,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    lane = vote.lane_id.as_u32(),
+                    lane_block_height = vote.lane_block_height,
+                    lane_block_view = vote.lane_block_view,
+                    "skipping local lane-block prepare vote after signing failure"
+                );
+                return None;
+            }
+        };
+
+        Some(crate::lane_consensus::LaneBlockVoteV1 {
+            body: vote.body.clone(),
+            signer: vote.signer.clone(),
+            bls_signature: signature.payload().to_vec(),
+        })
+    }
+
+    pub(super) fn broadcast_lane_block_plan_artifacts(
+        &mut self,
+        proposals: &[crate::sumeragi::consensus::LaneBlockProposalV1],
+        prepare_vote_plans: &[super::lane_scheduler::LaneBlockVotePlan],
+        payload_block_hint: Option<crate::sumeragi::consensus::LaneBlockProposalPayloadHintV1>,
+    ) -> usize {
+        let mut scheduled = 0_usize;
+
+        for proposal_artifact in proposals {
+            let proposal = payload_block_hint.clone().map_or_else(
+                || proposal_artifact.clone(),
+                |hint| proposal_artifact.clone().with_payload_block_hint(hint),
+            );
+            let accepted_for_broadcast =
+                self.lane_block_proposal_accepts_local_broadcast(&proposal);
+            if accepted_for_broadcast {
+                self.schedule_background(BackgroundRequest::Broadcast {
+                    msg: BlockMessageWire::new(BlockMessage::LaneBlockProposal(proposal.clone())),
+                });
+                self.schedule_lane_block_message_to_validator_set(
+                    BlockMessage::LaneBlockProposal(proposal.clone()),
+                    proposal.descriptor.validator_set.as_slice(),
+                );
+                scheduled = scheduled.saturating_add(1);
+            }
+            if let Err(err) = self.handle_lane_block_proposal(proposal.clone()) {
+                warn!(?err, "failed to cache locally produced lane-block proposal");
+            }
+        }
+
+        let local_prepare_votes = prepare_vote_plans
+            .iter()
+            .filter_map(|plan| self.local_lane_block_prepare_vote(plan))
+            .collect::<Vec<_>>();
+        let local_peer = self.common_config.peer.id().clone();
+        for vote in local_prepare_votes {
+            let accepted_for_broadcast =
+                self.lane_block_vote_accepts_local_broadcast(&vote, &local_peer);
+            if accepted_for_broadcast {
+                self.schedule_background(BackgroundRequest::Broadcast {
+                    msg: BlockMessageWire::new(BlockMessage::LaneBlockVote(vote.clone())),
+                });
+                self.schedule_lane_block_vote_to_known_validator_set(&vote);
+                scheduled = scheduled.saturating_add(1);
+            }
+            if let Err(err) = self.handle_lane_block_vote(vote, Some(&local_peer)) {
+                warn!(
+                    ?err,
+                    "failed to cache locally produced lane-block prepare vote"
+                );
+            }
+        }
+
+        if scheduled > 0 {
+            debug!(
+                lane_block_proposals = proposals.len(),
+                lane_block_prepare_vote_plans = prepare_vote_plans.len(),
+                scheduled,
+                "scheduled finalized lane-block proposal artifacts for broadcast"
+            );
+        }
+
+        scheduled
     }
 
     fn requeue_accepted_transaction(
@@ -3376,6 +3811,17 @@ impl Actor {
                         now,
                         "exhausted_vote_locked_same_height",
                     );
+                let all_validator_vote_lock_new_view_requested = lock.candidate_possible_votes == 0
+                    && !qc_observed
+                    && proposal_height == self.committed_height_snapshot().saturating_add(1);
+                if all_validator_vote_lock_new_view_requested {
+                    self.maybe_rebroadcast_new_view_votes(proposal_height, now);
+                    self.trigger_view_change_with_cause(
+                        proposal_height,
+                        view,
+                        ViewChangeCause::MissingQc,
+                    );
+                }
                 warn!(
                     height = proposal_height,
                     view,
@@ -3395,6 +3841,7 @@ impl Actor {
                     highest_qc_view = highest_qc.view,
                     highest_qc_block = %highest_qc.subject_block_hash,
                     stale_vote_locked_recovery_requested,
+                    all_validator_vote_lock_new_view_requested,
                     "deferring proposal assembly: same-height vote history makes a fresh branch non-viable"
                 );
                 return Ok(false);
@@ -4004,7 +4451,7 @@ impl Actor {
                 proposal_hint,
                 block_hash,
                 block_created_frame_len,
-                lane_payload_ownerships,
+                final_lane_payload_plan,
             ) = loop {
                 let sidecar_started_at = Instant::now();
                 let nexus = self.state.nexus_snapshot();
@@ -4373,9 +4820,14 @@ impl Actor {
                     );
                 }
 
-                let lane_payload_ownerships = self.plan_final_lane_payload_ownerships(
+                let tx_hashes: Vec<_> = tx_batch
+                    .iter()
+                    .map(|tx| Hash::from(tx.hash_as_entrypoint()))
+                    .collect();
+                let final_lane_payload_plan = self.plan_final_lane_payload(
                     self.state.as_ref(),
                     &routing_batch,
+                    &tx_hashes,
                     proposal_height,
                     view,
                 )?;
@@ -4401,7 +4853,7 @@ impl Actor {
                     })
                     .collect::<Vec<_>>();
                 let execution_context = BlockExecutionContextBundle::new(execution_context)
-                    .with_lane_payload_ownerships(lane_payload_ownerships.clone());
+                    .with_lane_payload_ownerships(final_lane_payload_plan.ownerships.clone());
                 if !execution_context.is_empty() {
                     builder = builder.with_execution_context(Some(execution_context));
                 }
@@ -4596,7 +5048,7 @@ impl Actor {
                     proposal_hint,
                     block_hash,
                     frame_len,
-                    lane_payload_ownerships,
+                    final_lane_payload_plan,
                 );
             };
             let block_loop_ms = block_loop_started_at.elapsed().as_millis();
@@ -4642,7 +5094,9 @@ impl Actor {
                     stale_window.as_millis()
                 ));
             }
-            crate::sumeragi::status::set_lane_payload_ownerships(lane_payload_ownerships);
+            crate::sumeragi::status::set_lane_payload_ownerships(
+                final_lane_payload_plan.ownerships.clone(),
+            );
 
             // Loop back consensus messages locally so the leader participates immediately.
             let frontier_block_created_ready = matches!(
@@ -4747,6 +5201,17 @@ impl Actor {
                 &local_peer_id,
                 proposal_hint,
                 proposal,
+            );
+            let lane_block_payload_hint =
+                crate::sumeragi::consensus::LaneBlockProposalPayloadHintV1 {
+                    proposal_height,
+                    proposal_view: view,
+                    proposal_block_hash: block_hash,
+                };
+            self.broadcast_lane_block_plan_artifacts(
+                &final_lane_payload_plan.lane_block_proposal_artifacts,
+                &final_lane_payload_plan.lane_block_prepare_vote_plans,
+                Some(lane_block_payload_hint),
             );
             if let Some(plan) = rbc_plan.take() {
                 self.broadcast_rbc_session_plan(plan.primary)?;
@@ -5949,13 +6414,21 @@ impl Actor {
         epoch: u64,
         now: Instant,
         precommit_votes_at_view: usize,
+        pending_queue_len: usize,
         highest_qc: crate::sumeragi::consensus::QcHeaderRef,
     ) -> Option<(Duration, Duration)> {
-        let stale_window = self
+        let full_stale_window = self
             .quorum_timeout(self.runtime_da_enabled())
             .max(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
             .max(self.frontier_slot_lag_window())
             .max(Duration::from_millis(1));
+        let stale_window = if pending_queue_len > 0 && precommit_votes_at_view == 0 {
+            self.cap_active_block_production_gap(full_stale_window, true)
+                .max(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
+                .max(Duration::from_millis(1))
+        } else {
+            full_stale_window
+        };
         if !self.config.resilience.enabled
             || height != self.committed_height_snapshot().saturating_add(1)
             || view == 0
@@ -7778,6 +8251,7 @@ impl Actor {
                         epoch,
                         now,
                         precommit_votes_at_view,
+                        pending_queue_len,
                         highest_qc,
                     )
                 {
@@ -8412,8 +8886,8 @@ mod tests {
         collect_sccp_messages_for_active_proposal_routes,
         collect_sccp_messages_for_committable_proposal_routes, consensus_queue_backpressure,
         da_payload_budget, drain_aligned_batch, next_cached_slot_timeout_streak,
-        refresh_proposal_routing_from_state, reorder_vec_by_indices, trim_batch_for_size_cap,
-        trim_batch_for_size_cap_with_plans,
+        refresh_proposal_routing_from_state, relay_tip_descriptor_hash_for_proposal,
+        reorder_vec_by_indices, trim_batch_for_size_cap, trim_batch_for_size_cap_with_plans,
     };
     use crate::queue::{
         BackpressureState, ConfigLaneRouter, LaneRouter, RoutingDecision, RoutingPlan,
@@ -8421,16 +8895,19 @@ mod tests {
     use crate::sumeragi::status;
     use crate::tx::AcceptedTransaction;
     use iroha_config::parameters::actual::LaneRoutingPolicy;
-    use iroha_crypto::Hash;
-    use iroha_crypto::KeyPair;
+    use iroha_crypto::{Hash, HashOf, KeyPair};
     use iroha_data_model::{
         ChainId, Level,
+        block::{BlockHeader, consensus::LaneBlockCommitment},
+        consensus::{CertPhase, Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1},
         domain::{Domain, DomainId},
         isi::{Log, Register},
         nexus::{
             AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId,
-            DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
+            DataSpaceMetadata, LaneCatalog, LaneConfig, LaneFastpqProofMaterial, LaneId,
+            LaneRelayEnvelope,
         },
+        peer::PeerId,
         prelude::{AccountId, InstructionBox, TransactionBuilder},
         transaction::{Executable, IvmBytecode, IvmProved},
     };
@@ -8529,6 +9006,90 @@ mod tests {
             1,
             0,
         )
+    }
+
+    fn proposal_lane_relay_settlement(height: u64) -> LaneBlockCommitment {
+        LaneBlockCommitment {
+            block_height: height,
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            tx_count: 0,
+            total_local_micro: 0,
+            total_xor_due_micro: 0,
+            total_xor_after_haircut_micro: 0,
+            total_xor_variance_micro: 0,
+            swap_metadata: None,
+            receipts: Vec::new(),
+            nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
+        }
+    }
+
+    fn proposal_lane_relay_qc(header: &BlockHeader) -> Qc {
+        let validator_set: Vec<PeerId> = Vec::new();
+        Qc {
+            phase: CertPhase::Commit,
+            subject_block_hash: header.hash(),
+            parent_state_root: Hash::new(b"proposal relay parent state"),
+            post_state_root: Hash::new(b"proposal relay post state"),
+            height: header.height().get(),
+            view: header.view_change_index(),
+            epoch: 0,
+            chain_order_hash: iroha_data_model::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            mode_tag: iroha_data_model::block::consensus::PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set,
+            aggregate: QcAggregate {
+                signers_bitmap: vec![0b0000_0001],
+                bls_aggregate_signature: vec![0xA5; 48],
+            },
+        }
+    }
+
+    fn proposal_lane_relay_envelope(
+        descriptor_hash: Option<Hash>,
+        include_qc: bool,
+        fastpq_proof: Option<LaneFastpqProofMaterial>,
+    ) -> LaneRelayEnvelope {
+        let header = proposal_test_header();
+        let qc = include_qc.then(|| proposal_lane_relay_qc(&header));
+        LaneRelayEnvelope::new(header, qc, None, proposal_lane_relay_settlement(1), 0)
+            .expect("proposal lane relay envelope")
+            .with_lane_block_descriptor_hash(descriptor_hash)
+            .with_fastpq_proof_material(fastpq_proof)
+    }
+
+    #[test]
+    fn relay_tip_descriptor_hash_for_proposal_requires_merge_admissible_relay() {
+        let descriptor_hash = Hash::new(b"proposal relay descriptor");
+        let fastpq_proof = LaneFastpqProofMaterial {
+            proof_digest: Hash::new(b"proposal relay fastpq proof"),
+            verified_at_height: 1,
+        };
+        let pending = proposal_lane_relay_envelope(Some(descriptor_hash), true, None);
+        assert_eq!(
+            relay_tip_descriptor_hash_for_proposal(&pending),
+            None,
+            "QC-only pending relay metadata must not become proposal lineage"
+        );
+
+        let fastpq_without_qc =
+            proposal_lane_relay_envelope(Some(descriptor_hash), false, Some(fastpq_proof));
+        assert_eq!(
+            relay_tip_descriptor_hash_for_proposal(&fastpq_without_qc),
+            None,
+            "FastPQ metadata without lane finality must not become proposal lineage"
+        );
+
+        let merge_admissible =
+            proposal_lane_relay_envelope(Some(descriptor_hash), true, Some(fastpq_proof));
+        assert_eq!(
+            relay_tip_descriptor_hash_for_proposal(&merge_admissible),
+            Some(descriptor_hash)
+        );
     }
 
     #[test]

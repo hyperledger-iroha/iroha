@@ -41,6 +41,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     evidence_artifact_is_valid,
     evidence_artifact_fingerprint,
     evidence_schema_by_kind,
+    forbidden_non_production_markers,
     init_evidence_artifact_buckets,
     build_required_evidence_summary,
     record_explicit_evidence_validation_errors,
@@ -83,11 +84,14 @@ from sorafs_required_kinds import (  # noqa: E402
 from sorafs_response_args import (  # noqa: E402
     EvidenceArgumentParser,
     expand_response_args,
+    non_negative_int_arg,
+    positive_int_arg,
 )
 
 
 SUMMARY_SCHEMA = "sorafs.moderation.ai_prescreen.rollout_evidence_gate.v1"
 MAX_EVIDENCE_BYTES = 2 * 1024 * 1024
+DEFAULT_MAX_EVIDENCE_AGE_SECS = 7 * 24 * 60 * 60
 HEX32_LEN = 32
 HEX64_LEN = 64
 WORKFLOW_ID_PATTERN = re.compile(r"^sfm-4a-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
@@ -217,7 +221,27 @@ def operator_route_paths(quarantine_id_hex: str) -> dict[str, str]:
 def expected_operator_route_url(operator_url: str, route_path: str) -> str:
     """Return the reviewed operator route URL for a base URL and route path."""
 
-    return f"{operator_url.rstrip('/')}{route_path}"
+    return f"{operator_url}{route_path}"
+
+
+AI_PRESCREEN_BASE_URL_ERROR = (
+    "SoraFS AI pre-screen base URL fields must not end with a slash"
+)
+
+
+def require_ai_prescreen_base_url(
+    payload: dict[str, Any],
+    field: str,
+    errors: list[str],
+) -> str:
+    """Return a safe slashless AI pre-screen base URL or append an error."""
+
+    value = require_safe_url(payload, field, errors)
+    if value.endswith("/"):
+        if AI_PRESCREEN_BASE_URL_ERROR not in errors:
+            errors.append(AI_PRESCREEN_BASE_URL_ERROR)
+        return ""
+    return value
 
 
 REQUIRED_TRANSPARENCY_SOURCE_KINDS = (
@@ -316,7 +340,7 @@ def require_only_required_values(
             value = item.get(field)
         else:
             value = item
-        if not isinstance(value, str) or value.strip() not in allowed:
+        if not isinstance(value, str) or value not in allowed:
             errors.append(f"{array_field} must not include unknown values")
             return
 
@@ -330,11 +354,7 @@ def require_workflow_id(payload: dict[str, Any], errors: list[str]) -> str:
     if WORKFLOW_ID_PATTERN.fullmatch(workflow_id) is None:
         errors.append(WORKFLOW_ID_ERROR)
         return ""
-    forbidden = sorted(
-        marker
-        for marker in FORBIDDEN_WORKFLOW_ID_MARKERS
-        if marker in workflow_id.split("-")
-    )
+    forbidden = forbidden_non_production_markers(workflow_id, FORBIDDEN_WORKFLOW_ID_MARKERS)
     if forbidden:
         errors.append(
             f"workflow_id must not contain non-production markers {forbidden}"
@@ -357,11 +377,7 @@ def require_subject_reference(
     subject_tokens = frozenset(
         token for token in re.split(r"[^a-z0-9]+", subject) if token
     )
-    forbidden = sorted(
-        marker
-        for marker in FORBIDDEN_SUBJECT_REFERENCE_MARKERS
-        if marker in subject_tokens
-    )
+    forbidden = forbidden_non_production_markers(subject_tokens, FORBIDDEN_SUBJECT_REFERENCE_MARKERS)
     if forbidden:
         errors.append(f"{path} must not contain non-production markers {forbidden}")
         return ""
@@ -388,11 +404,7 @@ def require_inventory_label(
     label_tokens = frozenset(
         token for token in re.split(r"[^a-z0-9]+", label) if token
     )
-    forbidden = sorted(
-        marker
-        for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
-        if marker in label_tokens
-    )
+    forbidden = forbidden_non_production_markers(label_tokens, FORBIDDEN_INVENTORY_LABEL_MARKERS)
     if forbidden:
         errors.append(f"{path} must not contain non-production markers {forbidden}")
         return ""
@@ -406,6 +418,14 @@ class EvidenceKind:
     name: str
     schema: str
     accepted_statuses: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ValidationOptions:
+    """Reviewer-controlled freshness options for AI pre-screen evidence."""
+
+    now_unix: int
+    max_evidence_age_secs: int
 
 
 EVIDENCE_KINDS: tuple[EvidenceKind, ...] = (
@@ -606,7 +626,7 @@ def validate_status(kind: EvidenceKind, payload: dict[str, Any], errors: list[st
 
 
 def validate_runner(payload: dict[str, Any], errors: list[str]) -> None:
-    require_safe_url(payload, "runner_url", errors)
+    require_ai_prescreen_base_url(payload, "runner_url", errors)
     require_safe_url(payload, "status_url", errors)
     require_safe_url(payload, "screen_url", errors)
     require_hex(payload, "manifest_id_hex", HEX32_LEN, errors)
@@ -622,7 +642,7 @@ def validate_runner(payload: dict[str, Any], errors: list[str]) -> None:
 
 
 def validate_committee(payload: dict[str, Any], errors: list[str]) -> None:
-    require_safe_url(payload, "committee_url", errors)
+    require_ai_prescreen_base_url(payload, "committee_url", errors)
     require_safe_url(payload, "status_url", errors)
     require_safe_url(payload, "aggregate_url", errors)
     require_hex(payload, "manifest_id_hex", HEX32_LEN, errors)
@@ -765,9 +785,8 @@ def validate_routes(
 
 def validate_operator_workflow(payload: dict[str, Any], errors: list[str]) -> None:
     require_hex(payload, "workflow_digest_hex", HEX64_LEN, errors)
-    operator_url = require_safe_url(payload, "operator_url", errors)
+    operator_url = require_ai_prescreen_base_url(payload, "operator_url", errors)
     quarantine_id_hex = require_hex(payload, "quarantine_id_hex", HEX32_LEN, errors)
-    require_positive_int(payload, "generated_at_unix", errors)
     require_false(payload, "payload_bytes_included", errors)
     require_false(payload, "private_payloads_included", errors)
     validate_routes(
@@ -843,6 +862,14 @@ def validate_notification_transport(payload: dict[str, Any], errors: list[str]) 
         "probe_count",
         errors,
         field="dedup_key",
+        allow_scalar_items=False,
+    )
+    require_string_coverage(
+        payload,
+        "probes",
+        "action",
+        ALLOWED_NOTIFICATION_ACTIONS,
+        errors,
         allow_scalar_items=False,
     )
     require_false(payload, "payload_bytes_included", errors)
@@ -1265,7 +1292,10 @@ def validate_kind_specific(kind: EvidenceKind, payload: dict[str, Any], errors: 
         validate_end_to_end_workflow(payload, errors)
 
 
-def validate_evidence_payload(payload: dict[str, Any]) -> tuple[str | None, list[str]]:
+def validate_evidence_payload(
+    payload: dict[str, Any],
+    options: ValidationOptions,
+) -> tuple[str | None, list[str]]:
     kind_name, errors = validate_standard_evidence_payload(
         payload,
         SCHEMA_TO_KIND,
@@ -1275,10 +1305,43 @@ def validate_evidence_payload(payload: dict[str, Any]) -> tuple[str | None, list
         validate_kind_specific,
         require_reviewed_deployment_context=True,
     )
-    if kind_name is not None and kind_name != "operator_workflow":
-        require_positive_int(payload, "generated_at_unix", errors)
+    if kind_name is not None:
+        require_recent_timestamp(
+            payload,
+            "generated_at_unix",
+            errors,
+            now_unix=options.now_unix,
+            max_age_secs=options.max_evidence_age_secs,
+        )
     return kind_name, errors
 
+
+def require_single_active_digest(
+    digests: set[str],
+    errors: list[str],
+    *,
+    label: str,
+) -> set[str]:
+    """Return one active rollout digest or fail closed on mixed anchors."""
+
+    if len(digests) <= 1:
+        return digests
+    errors.append(f"{label} must contain exactly one active digest")
+    return set()
+
+
+def require_single_active_binding(
+    bindings: set[Any],
+    errors: list[str],
+    *,
+    label: str,
+) -> set[Any]:
+    """Return one active rollout binding or fail closed on mixed anchors."""
+
+    if len(bindings) <= 1:
+        return bindings
+    errors.append(f"{label} must contain exactly one active binding")
+    return set()
 
 
 def build_summary(
@@ -1286,6 +1349,7 @@ def build_summary(
     evidence_files: list[Path],
     required_kinds: tuple[str, ...],
     summary_out: Path | None,
+    options: ValidationOptions,
 ) -> tuple[dict[str, Any], list[str]]:
     errors: list[str] = []
     artifacts_by_kind = init_evidence_artifact_buckets(DEFAULT_REQUIRED_KINDS)
@@ -1312,7 +1376,7 @@ def build_summary(
         if loaded is None:
             continue
         payload, digest = loaded
-        kind_name, validation_errors = validate_evidence_payload(payload)
+        kind_name, validation_errors = validate_evidence_payload(payload, options)
         if kind_name is None:
             record_explicit_evidence_validation_errors(
                 path, explicit, validation_errors, errors
@@ -1339,30 +1403,56 @@ def build_summary(
                     and isinstance(subject_digest, str)
                 ):
                     valid_runner_bindings.add(
-                        (manifest_id.lower(), runner_hash.lower(), subject_digest.lower())
+                        (manifest_id, runner_hash, subject_digest)
                     )
                 if isinstance(policy_digest, str):
-                    valid_policy_digests.add(policy_digest.lower())
+                    valid_policy_digests.add(policy_digest)
             if kind_name in RUNNER_BOUND_KINDS:
                 runner_bound_artifacts.append((kind_name, artifact))
             if kind_name == "end_to_end_workflow":
                 digest = fingerprint.get("workflow_digest_hex")
                 if isinstance(digest, str):
-                    valid_workflow_digests.add(digest.lower())
+                    valid_workflow_digests.add(digest)
             if kind_name == "notification_transport":
                 digest = fingerprint.get("manifest_body_blake3_hex")
                 if isinstance(digest, str):
-                    valid_notification_manifest_digests.add(digest.lower())
+                    valid_notification_manifest_digests.add(digest)
             if kind_name == "commit_reveal_executor":
                 digest = fingerprint.get("execution_summary_digest_hex")
                 if isinstance(digest, str):
-                    valid_executor_summary_digests.add(digest.lower())
+                    valid_executor_summary_digests.add(digest)
             if kind_name in WORKFLOW_BOUND_KINDS:
                 workflow_bound_artifacts.append((kind_name, artifact))
             if kind_name in POLICY_BOUND_KINDS:
                 policy_bound_artifacts.append((kind_name, artifact))
         record_evidence_validation_errors(path, validation_errors, errors)
 
+
+    valid_runner_bindings = require_single_active_binding(
+        valid_runner_bindings,
+        errors,
+        label="valid_runner_bindings",
+    )
+    valid_workflow_digests = require_single_active_digest(
+        valid_workflow_digests,
+        errors,
+        label="valid_workflow_digests",
+    )
+    valid_notification_manifest_digests = require_single_active_digest(
+        valid_notification_manifest_digests,
+        errors,
+        label="valid_notification_manifest_digests",
+    )
+    valid_executor_summary_digests = require_single_active_digest(
+        valid_executor_summary_digests,
+        errors,
+        label="valid_executor_summary_digests",
+    )
+    valid_policy_digests = require_single_active_digest(
+        valid_policy_digests,
+        errors,
+        label="valid_policy_digests",
+    )
 
     validate_bound_evidence_tuple_references(
         required_kinds=required_kinds,
@@ -1429,6 +1519,7 @@ def build_summary(
         "required_kinds": required_evidence_kind_names(required_kinds),
         "thresholds": {
             "max_evidence_bytes": MAX_EVIDENCE_BYTES,
+            "max_evidence_age_secs": options.max_evidence_age_secs,
         },
         "evidence_file_count": count_evidence_files(files),
         "recognized_artifact_count": count_evidence_artifacts(artifacts_by_kind),
@@ -1482,6 +1573,17 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="Optional summary JSON output path.",
     )
+    parser.add_argument(
+        "--now-unix",
+        type=positive_int_arg,
+        required=True,
+        help="Required reviewed validator clock used for age checks.",
+    )
+    parser.add_argument(
+        "--max-evidence-age-secs",
+        type=non_negative_int_arg,
+        default=DEFAULT_MAX_EVIDENCE_AGE_SECS,
+    )
     raw_args = sys.argv[1:] if argv is None else argv
     try:
         expanded_args = expand_response_args(raw_args, parser)
@@ -1503,13 +1605,21 @@ def main(argv: list[str] | None = None) -> int:
         emit_checker_exception(error)
         return 2
 
+    options = ValidationOptions(
+        now_unix=args.now_unix,
+        max_evidence_age_secs=args.max_evidence_age_secs,
+    )
     preflight_errors = validate_checker_preflight(args)
     if preflight_errors:
         emit_checker_error_lines(preflight_errors)
         return 2
 
     summary, errors = build_summary(
-        args.evidence_dir, args.evidence, required_kinds, args.summary_out
+        args.evidence_dir,
+        args.evidence,
+        required_kinds,
+        args.summary_out,
+        options,
     )
     rendered_summary, summary_errors = render_and_write_checker_summary(
         args.summary_out, summary

@@ -32,7 +32,6 @@ EXPECTED_ABI6_ARCHIVE_FIXTURE = {
 }
 EXPECTED_ABI6_PROOF_CIRCUIT_IDS = {
     "recursive_aggregation": "kagemusha-recursive-aggregation-v1",
-    "reserved_lineage": "kagemusha-recursive-spend-lineage-v1",
     "reserved_lineage_one_hop": "kagemusha-recursive-spend-lineage-onehop-v1",
     "reserved_lineage_append": "kagemusha-recursive-spend-lineage-append-v1",
 }
@@ -63,7 +62,7 @@ EXPECTED_ABI6_LIMIT_VALUES = {
     "previous_proof_open_envelopes_required_count": 1,
     "previous_proof_open_envelopes_max_bytes": 8 * 1024 * 1024,
     "pallas_open_envelope_max_transcript_label_bytes": 128,
-    "native_archive_max_bytes": 64 * 1024 * 1024,
+    "native_archive_max_bytes": 256 * 1024 * 1024,
 }
 EXPECTED_ABI6_MODES = {
     "preferred_when_recursive_available": "recursive_spend_v1",
@@ -98,8 +97,8 @@ EXPECTED_ABI6_HOP_POLICY = {
         {
             "circuit_id": "kagemusha-recursive-spend-lineage-v1",
             "hop_count": 1,
-            "allowed": True,
-            "requires_lineage_witness": False,
+            "allowed": False,
+            "requires_lineage_witness": True,
         },
         {
             "circuit_id": "kagemusha-recursive-spend-lineage-onehop-v1",
@@ -114,7 +113,7 @@ EXPECTED_ABI6_HOP_POLICY = {
             "requires_lineage_witness": False,
         },
         {
-            "circuit_id": "kagemusha-recursive-spend-lineage-v1",
+            "circuit_id": "kagemusha-recursive-spend-lineage-append-v1",
             "hop_count": 64,
             "allowed": True,
             "requires_lineage_witness": False,
@@ -249,7 +248,6 @@ ABI6_ARCHIVE_FIXTURE_FIELDS = frozenset(("path", "schema"))
 ABI6_PROOF_CIRCUIT_ID_FIELDS = frozenset(
     (
         "recursive_aggregation",
-        "reserved_lineage",
         "reserved_lineage_one_hop",
         "reserved_lineage_append",
     )
@@ -322,8 +320,9 @@ TEXT_REQUIREMENTS = {
         "Remaining compact-token release work is to attach signed device-lab evidence",
         "packaged one-hop and append proving-key artifacts",
         "receiver admission can trust that metadata",
-        "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4",
-        "64-by-4 scalar coverage",
+        "direct `255 x 1` fixed",
+        "zero shared table families",
+        "49,725 required usable rows",
         "compact-first SDK selection",
         "production proof-log artifact",
         "ABI-7 recursive compact key evidence",
@@ -499,11 +498,12 @@ TEXT_REQUIREMENTS = {
         "exact one-LF values",
     ),
     "docs/source/offline_kagemusha.md": (
-        "The reserved `kagemusha-recursive-spend-lineage-v1` profile is the enabled",
-        "witnessless chain-admission path for constant-size lineage proofs inside the",
-        "64-hop cap",
-        "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4",
-        "64-by-4 fixed-window Vesta verifier witness profile",
+        "The profile-specific `kagemusha-recursive-spend-lineage-onehop-v1` and",
+        "`kagemusha-recursive-spend-lineage-append-v1` proof ids are the enabled",
+        "generic `kagemusha-recursive-spend-lineage-v1` family label is",
+        "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-255x1",
+        "direct `255 x 1` verifier profile",
+        "LEN=4 one-hop verifier-slice keygen layout still requires 49,725 usable rows",
         "The routine readiness route still validates the ABI-6 reserved-lineage",
         "recursive spend verifier and redemption surface",
         "Zero-argument SDK preferred-mode helpers probe the native bridge",
@@ -4748,6 +4748,9 @@ TEXT_REQUIREMENTS = {
         'DEFAULT_RESOURCE_LOCK_FILE = Path("/tmp").resolve() / "iroha-codex-kagemusha-heavy-job.lock"',
         "PS_COMMAND = next(",
         "Path(\"/bin/ps\"), Path(\"/usr/bin/ps\")",
+        "FOOTPRINT_COMMAND = next(",
+        "Path(\"/usr/bin/footprint\"), Path(\"/bin/footprint\")",
+        "FOOTPRINT_VALUE_RE = re.compile(",
         'encoding="utf-8"',
         'errors="replace"',
         "HEAVY_JOB_COMMAND_MARKERS = (",
@@ -4776,6 +4779,12 @@ TEXT_REQUIREMENTS = {
         "if pgid_by_pid.get(pid) == owned_process_group_id",
         "children_by_parent.setdefault(parent_pid, []).append(pid)",
         "stack.extend(children_by_parent.get(pid, ()))",
+        "def _owned_process_ids_from_ps(",
+        "def _parse_footprint_bytes(",
+        "def _physical_footprint_bytes_for_pid_direct(",
+        "def physical_footprint_bytes_for_pids(",
+        "footprint_total = physical_footprint_bytes_for_pids(owned_pids)",
+        "return max(rss_total, footprint_total)",
         "def _process_group_exists(",
         "os.killpg(process_group_id, 0)",
         "def terminate_owned_process(",
@@ -6441,6 +6450,8 @@ TEXT_REQUIREMENTS = {
         "test_staged_resource_guard_counts_descendant_rss",
         "test_staged_resource_guard_counts_owned_process_group_after_parent_exit",
         "test_staged_resource_guard_falls_back_to_direct_pid_rss",
+        "test_staged_resource_guard_uses_physical_footprint_when_larger_than_rss",
+        "test_staged_resource_guard_ignores_malformed_physical_footprint",
         "test_staged_resource_guard_terminates_owned_process_group",
         "test_staged_resource_guard_kills_residual_group_after_parent_reaped",
         "test_staged_resource_guard_terminates_residual_group_after_child_exit",
@@ -7815,6 +7826,16 @@ TEXT_REQUIREMENTS = {
             "pub fn kagemusha_recursive_spend_lineage_vk_record_from_box(",
         "pub fn kagemusha_recursive_spend_lineage_append_vk_record_from_box(",
         "does not generate a verifier key at runtime",
+        "kagemusha recursive semantic pk keygen start",
+        "kagemusha recursive semantic pk keygen done",
+        "kagemusha recursive one-hop pk keygen start",
+        "kagemusha recursive one-hop pk keygen done",
+        "kagemusha recursive append pk keygen start",
+        "kagemusha recursive append pk keygen done",
+        "kagemusha recursive one-hop cached pk keygen start",
+        "kagemusha recursive one-hop cached pk keygen done",
+        "kagemusha recursive append cached pk keygen start",
+        "kagemusha recursive append cached pk keygen done",
         "lineage_vk_record_from_box_canonicalizes_profiles_without_keygen",
     ),
     "crates/iroha_cli/src/zk.rs": (
@@ -8153,6 +8174,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-abi7-core-contract-open",
     "ci/check_kagemusha_production_readiness.sh --negative-control-abi7-one-hop-runtime-keygen-fallback",
     "ci/check_kagemusha_production_readiness.sh --negative-control-abi7-append-runtime-keygen-fallback",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-core-kagemusha-pk-progress-logging",
     "ci/check_kagemusha_production_readiness.sh --negative-control-abi7-compact-package-only-verifier-dispatch",
     "ci/check_kagemusha_production_readiness.sh --negative-control-abi7-bridge-unavailable-mapping",
     "ci/check_kagemusha_production_readiness.sh --negative-control-abi7-offline-doc-one-hop-boundary",
@@ -8884,6 +8906,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-supervisor-output-pipe",
     "ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-heavy-job-lock",
     "ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-rss-limit-termination",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-footprint-upper-bound",
     "ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-residual-process-group",
     "ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-existing-heavy-job-conflict",
     "ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-resource-report-fields",
@@ -9633,13 +9656,14 @@ if mode == "--negative-control-abi6-manifest-direct-nested-value-binding":
         manifest["archive_fixture"]["path"] = (
             "token=abi6-direct-archive-value-secret"
         )
-        manifest["proof_circuit_ids"]["reserved_lineage"] = (
+        manifest["proof_circuit_ids"]["reserved_lineage_one_hop"] = (
             "token=abi6-direct-proof-value-secret"
         )
         manifest["domains"]["transition_profile"] = (
             "token=abi6-direct-domain-value-secret"
         )
         manifest["limits"]["previous_proof_open_envelopes_max_bytes"] = 1
+        manifest["limits"]["native_archive_max_bytes"] = 64 * 1024 * 1024
         manifest["modes"]["preferred_when_recursive_available"] = (
             "token=abi6-direct-mode-value-secret"
         )
@@ -10459,6 +10483,17 @@ if mode == "--negative-control-abi7-append-runtime-keygen-fallback":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-core-kagemusha-pk-progress-logging":
+    run_negative_control(
+        "core Kagemusha proving-key progress logging",
+        lambda: override_text(
+            "crates/iroha_core/src/zk.rs",
+            "kagemusha recursive one-hop pk keygen start",
+            "kagemusha recursive one-hop pk keygen quiet",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-abi7-compact-package-only-verifier-dispatch":
     run_negative_control(
         "ABI-7 compact package-only verifier dispatch",
@@ -10529,13 +10564,13 @@ if mode == "--negative-control-offline-doc-verifier-profile-exactness":
     def mutate_offline_doc_verifier_profile() -> None:
         override_text(
             "docs/source/offline_kagemusha.md",
-            "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4",
-            "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-85x3",
+            "direct `255 x 1` verifier profile",
+            "direct `85 x 3` verifier profile",
         )
         override_text(
             "roadmap.md",
-            "64-by-4 scalar coverage",
-            "85-by-3 scalar coverage",
+            "direct `255 x 1` fixed",
+            "direct `85 x 3` fixed",
         )
 
     run_negative_control(
@@ -20625,6 +20660,17 @@ if mode == "--negative-control-staged-runner-rss-limit-termination":
             "scripts/kagemusha_staged_resource_guard.py",
             "if last_rss_bytes > max_rss_bytes:",
             "if False and last_rss_bytes > max_rss_bytes:",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-staged-runner-footprint-upper-bound":
+    run_negative_control(
+        "Kagemusha staged resource guard physical-footprint upper-bound gate",
+        lambda: override_text(
+            "scripts/kagemusha_staged_resource_guard.py",
+            "return max(rss_total, footprint_total)",
+            "return rss_total",
         ),
     )
     raise SystemExit(0)

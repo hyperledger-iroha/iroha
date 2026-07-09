@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import re
 import signal
 import shlex
 import subprocess
@@ -31,6 +32,19 @@ PS_COMMAND = next(
         if candidate.exists()
     ),
     "ps",
+)
+FOOTPRINT_COMMAND = next(
+    (
+        str(candidate)
+        for candidate in (Path("/usr/bin/footprint"), Path("/bin/footprint"))
+        if candidate.exists()
+    ),
+    None,
+)
+FOOTPRINT_VALUE_RE = re.compile(
+    r"(?P<value>[0-9][0-9,]*(?:\.[0-9]+)?)\s*"
+    r"(?P<unit>bytes?|[kmgt]i?b|[kmgt]b|[kmgt])\b",
+    re.IGNORECASE,
 )
 HEAVY_JOB_COMMAND_MARKERS = (
     "iroha app zk kagemusha recursive-compact-key-artifacts",
@@ -290,6 +304,110 @@ def _rss_bytes_from_owned_ps(root_pid: int, output: str) -> int:
     return max(tree_total, group_total)
 
 
+def _owned_process_ids_from_ps(root_pid: int, output: str) -> list[int]:
+    """Return ``root_pid`` descendants plus members of its owned process group."""
+
+    pgid_by_pid: dict[int, int] = {}
+    children_by_parent: dict[int, list[int]] = {}
+    for line in output.splitlines():
+        fields = line.split()
+        if len(fields) < 4:
+            continue
+        try:
+            pid = int(fields[0])
+            parent_pid = int(fields[1])
+            process_group_id = int(fields[2])
+            int(fields[3])
+        except ValueError:
+            continue
+        pgid_by_pid[pid] = process_group_id
+        children_by_parent.setdefault(parent_pid, []).append(pid)
+
+    tree_pids: set[int] = set()
+    stack = [root_pid]
+    while stack:
+        pid = stack.pop()
+        if pid in tree_pids:
+            continue
+        tree_pids.add(pid)
+        stack.extend(children_by_parent.get(pid, ()))
+
+    owned_process_group_id = pgid_by_pid.get(root_pid, root_pid)
+    group_pids = {
+        pid
+        for pid, process_group_id in pgid_by_pid.items()
+        if process_group_id == owned_process_group_id
+    }
+    return sorted(tree_pids | group_pids)
+
+
+def _memory_unit_multiplier(unit: str) -> int:
+    """Return the byte multiplier for a footprint/RSS unit."""
+
+    normalized = unit.strip().lower()
+    if normalized in {"b", "byte", "bytes"}:
+        return 1
+    if normalized in {"k", "kb", "kib"}:
+        return 1024
+    if normalized in {"m", "mb", "mib"}:
+        return 1024 * 1024
+    if normalized in {"g", "gb", "gib"}:
+        return BYTES_PER_GIB
+    if normalized in {"t", "tb", "tib"}:
+        return 1024 * BYTES_PER_GIB
+    return 0
+
+
+def _parse_footprint_bytes(output: str) -> int:
+    """Parse macOS ``footprint`` output into bytes.
+
+    The report line format has varied across macOS releases. We accept the
+    summary ``TOTAL`` rows and explicit physical-footprint rows, and ignore
+    malformed or unrelated rows so the guard falls back to RSS.
+    """
+
+    totals: list[int] = []
+    for line in output.splitlines():
+        marker = line.lower()
+        if "total" not in marker and "footprint" not in marker:
+            continue
+        for match in FOOTPRINT_VALUE_RE.finditer(line):
+            multiplier = _memory_unit_multiplier(match.group("unit"))
+            if multiplier <= 0:
+                continue
+            value = float(match.group("value").replace(",", ""))
+            totals.append(int(value * multiplier))
+    return max(totals, default=0)
+
+
+def _physical_footprint_bytes_for_pid_direct(pid: int) -> int:
+    """Return macOS physical footprint bytes for a single ``pid`` when available."""
+
+    if FOOTPRINT_COMMAND is None:
+        return 0
+    completed = subprocess.run(
+        [FOOTPRINT_COMMAND, str(pid)],
+        check=False,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    if completed.returncode != 0:
+        return 0
+    return _parse_footprint_bytes(completed.stdout)
+
+
+def physical_footprint_bytes_for_pids(pids: list[int]) -> int:
+    """Return summed physical footprint bytes for the supplied process ids."""
+
+    total = 0
+    for pid in sorted({int(pid) for pid in pids if int(pid) > 0}):
+        total += _physical_footprint_bytes_for_pid_direct(pid)
+    return total
+
+
 def _parse_ps_process_rows(output: str) -> list[tuple[int, int, int, int, str]]:
     """Parse ``ps`` process rows into pid, ppid, pgid, RSS bytes, and command."""
 
@@ -431,7 +549,13 @@ def validate_no_conflicting_heavy_jobs() -> list[str]:
 
 
 def rss_bytes_for_pid(pid: int) -> int:
-    """Return total RSS bytes for ``pid`` and its process descendants."""
+    """Return the best available memory bytes for ``pid`` and descendants.
+
+    On macOS, `ps` RSS substantially under-reports large Halo2 keygen memory
+    because compressed and dirty memory remain outside the RSS view. When
+    `footprint` is available, use summed physical footprint as an upper-bound
+    sample while preserving RSS fallback behavior on other platforms.
+    """
 
     if pid <= 0:
         return 0
@@ -445,9 +569,14 @@ def rss_bytes_for_pid(pid: int) -> int:
         stderr=subprocess.DEVNULL,
     )
     if completed.returncode == 0:
-        total = _rss_bytes_from_owned_ps(pid, completed.stdout)
-        if total > 0:
-            return total
+        rss_total = _rss_bytes_from_owned_ps(pid, completed.stdout)
+        owned_pids = _owned_process_ids_from_ps(pid, completed.stdout)
+        if owned_pids:
+            footprint_total = physical_footprint_bytes_for_pids(owned_pids)
+            if footprint_total > 0:
+                return max(rss_total, footprint_total)
+        if rss_total > 0:
+            return rss_total
     return _rss_bytes_for_pid_direct(pid)
 
 

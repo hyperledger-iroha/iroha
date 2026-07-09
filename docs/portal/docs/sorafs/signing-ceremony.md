@@ -66,7 +66,8 @@ cargo xtask sorafs-fetch-fixture \
 ```
 
 Pass `--manifest` if the manifest lives at a different URL. Unsigned envelopes
-are refused unless `--allow-unsigned` is set for local smoke runs.
+are refused; use the Parliament-published envelope or a locally generated
+council-signed envelope for smoke runs.
 
 - When validating a manifest through a staging gateway, target Torii instead of
   local payloads:

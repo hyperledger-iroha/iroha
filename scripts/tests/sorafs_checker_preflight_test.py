@@ -13,6 +13,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from sorafs_checker_preflight import (  # noqa: E402
+    CHECKER_EVIDENCE_SPEC_ERROR,
     CHECKER_RENDERED_PATH_ERROR,
     artifact_path_label,
     checker_output_parent_sync_open_flags,
@@ -86,6 +87,31 @@ def test_present_evidence_spec_passes_input_check(tmp_path: Path) -> None:
     )
 
     assert errors == []
+
+
+def test_evidence_spec_rejects_padded_or_unicode_components_without_trimming(
+    tmp_path: Path,
+) -> None:
+    cases = (
+        f"latest= {tmp_path}",
+        f"latest ={tmp_path}",
+        f"latest\u200d={tmp_path}",
+        f"latest={tmp_path}\u202e",
+        f"latest\uff1d{tmp_path}",
+        f"latest%3D{tmp_path}",
+        f"latest&#61;{tmp_path}",
+    )
+
+    for spec in cases:
+        errors = validate_checker_evidence_inputs(
+            argparse.Namespace(evidence_dir=[], evidence=[spec])
+        )
+        rendered = "\n".join(errors)
+        escaped_spec = spec.encode("unicode_escape").decode("ascii")
+
+        assert errors == [CHECKER_EVIDENCE_SPEC_ERROR]
+        assert spec not in rendered
+        assert escaped_spec not in rendered
 
 
 def test_validate_checker_rendered_paths_rejects_unsafe_components_without_leaking(
@@ -372,7 +398,14 @@ def test_checker_preflight_path_inspectors_reject_malformed_existing_error_text(
         inspect_checker_preflight_path_is_dir,
         inspect_checker_preflight_path_is_symlink,
     ):
-        for errors in ([""], [" old"], ["old "], ["old\nerror"]):
+        for errors in (
+            [""],
+            [" old"],
+            ["old "],
+            ["old\nerror"],
+            ["old\u200derror"],
+            ["old\u202eerror"],
+        ):
             try:
                 helper(tmp_path, errors, label="--summary-out")
             except ValueError as error:
@@ -394,7 +427,15 @@ def test_checker_preflight_path_inspectors_reject_malformed_labels(
         inspect_checker_preflight_path_is_dir,
         inspect_checker_preflight_path_is_symlink,
     ):
-        for label in ("", " --summary-out", "--summary-out ", "--summary\nout", 7):
+        for label in (
+            "",
+            " --summary-out",
+            "--summary-out ",
+            "--summary\nout",
+            "--summary\u200dout",
+            "--summary\u202eout",
+            7,
+        ):
             errors: list[str] = []
             try:
                 helper(tmp_path, errors, label=label)
@@ -429,7 +470,15 @@ def test_validate_checker_output_parent_rejects_malformed_label(
 ) -> None:
     summary = tmp_path / "summary.json"
 
-    for label in ("", " --summary-out", "--summary-out ", "--summary\nout", 7):
+    for label in (
+        "",
+        " --summary-out",
+        "--summary-out ",
+        "--summary\nout",
+        "--summary\u200dout",
+        "--summary\u202eout",
+        7,
+    ):
         errors: list[str] = []
         try:
             validate_checker_output_parent(summary, errors, label=label)
@@ -606,6 +655,8 @@ def test_render_checker_summary_rejects_malformed_summary_keys() -> None:
         {"": "ready"},
         {" status": "ready"},
         {"status\nbad": "ready"},
+        {"status\u200dbad": "ready"},
+        {"status\u202ebad": "ready"},
         {7: "ready"},
         {"artifacts": [{"path": "evidence.json", " bad": True}]},
         {"required": {"provider\nbad": {"valid": True}}},
@@ -856,7 +907,15 @@ def test_fsync_checker_output_parent_rejects_non_path_without_traceback() -> Non
 def test_fsync_checker_output_parent_rejects_malformed_label(
     tmp_path: Path,
 ) -> None:
-    for label in ("", " --summary-out", "--summary-out ", "--summary\nout", 7):
+    for label in (
+        "",
+        " --summary-out",
+        "--summary-out ",
+        "--summary\nout",
+        "--summary\u200dout",
+        "--summary\u202eout",
+        7,
+    ):
         try:
             fsync_checker_output_parent(tmp_path / "summary.json", label=label)
         except ValueError as error:
@@ -1023,7 +1082,14 @@ def test_emit_checker_error_lines_rejects_malformed_messages(capsys) -> None:
             assert "checker error messages must be a sequence of strings" in str(error)
         else:
             raise AssertionError(f"accepted malformed messages {errors!r}")
-    for errors in ([""], [" old"], ["old "], ["old\nline"]):
+    for errors in (
+        [""],
+        [" old"],
+        ["old "],
+        ["old\nline"],
+        ["old\u200dline"],
+        ["old\u202eline"],
+    ):
         try:
             emit_checker_error_lines(errors)
         except ValueError as error:
@@ -1072,7 +1138,14 @@ def test_emit_checker_error_block_rejects_malformed_messages_before_heading(
             assert "checker error messages must be a sequence of strings" in str(error)
         else:
             raise AssertionError(f"accepted malformed messages {errors!r}")
-    for errors in ([""], [" old"], ["old "], ["old\nline"]):
+    for errors in (
+        [""],
+        [" old"],
+        ["old "],
+        ["old\nline"],
+        ["old\u200dline"],
+        ["old\u202eline"],
+    ):
         try:
             emit_checker_error_block("ERROR: rollout evidence is incomplete:", errors)
         except ValueError as error:
@@ -1096,7 +1169,14 @@ def test_emit_checker_notice_writes_stderr(capsys) -> None:
 
 
 def test_emit_checker_notice_rejects_malformed_message(capsys) -> None:
-    for message in ("", " rollout evidence is ready", "ready\nnext", 7):
+    for message in (
+        "",
+        " rollout evidence is ready",
+        "ready\nnext",
+        "ready\u200dnext",
+        "ready\u202enext",
+        7,
+    ):
         try:
             emit_checker_notice(message)
         except ValueError as error:
@@ -1116,6 +1196,8 @@ def test_artifact_path_label_returns_path_or_unknown() -> None:
     assert artifact_path_label({"path": ""}) == "<unknown>"
     assert artifact_path_label({"path": " evidence.json"}) == "<unknown>"
     assert artifact_path_label({"path": "evidence\njson"}) == "<unknown>"
+    assert artifact_path_label({"path": "evidence\u200djson"}) == "<unknown>"
+    assert artifact_path_label({"path": "evidence\u202ejson"}) == "<unknown>"
     assert artifact_path_label({"path": None}) == "<unknown>"
     assert artifact_path_label({}) == "<unknown>"
     assert artifact_path_label("bad") == "<unknown>"
@@ -1189,7 +1271,15 @@ def test_record_artifact_error_rejects_malformed_summary_error_container() -> No
 
 
 def test_record_artifact_error_rejects_malformed_error_messages() -> None:
-    for error_message in ("", " new", "new ", "new\nline", 7):
+    for error_message in (
+        "",
+        " new",
+        "new ",
+        "new\nline",
+        "new\u200dline",
+        "new\u202eline",
+        7,
+    ):
         artifact = {"path": "evidence.json", "valid": True, "errors": []}
         summary_errors: list[str] = []
 
@@ -1208,7 +1298,15 @@ def test_record_artifact_error_rejects_malformed_error_messages() -> None:
 
 
 def test_record_artifact_error_rejects_malformed_summary_error_messages() -> None:
-    for summary_error in ("", " summary", "summary ", "summary\nline", 7):
+    for summary_error in (
+        "",
+        " summary",
+        "summary ",
+        "summary\nline",
+        "summary\u200dline",
+        "summary\u202eline",
+        7,
+    ):
         artifact = {"path": "evidence.json", "valid": True, "errors": []}
         summary_errors: list[str] = []
 
@@ -1234,7 +1332,13 @@ def test_record_artifact_error_rejects_malformed_summary_error_messages() -> Non
 
 
 def test_record_artifact_error_rejects_malformed_artifact_path_before_mutation() -> None:
-    for path in (" evidence.json", "evidence.json ", "evidence\njson"):
+    for path in (
+        " evidence.json",
+        "evidence.json ",
+        "evidence\njson",
+        "evidence\u200djson",
+        "evidence\u202ejson",
+    ):
         artifact = {"path": path, "valid": True, "errors": []}
         summary_errors: list[str] = []
 

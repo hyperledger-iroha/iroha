@@ -26,7 +26,7 @@ translator: machine-google-reviewed
 | 1 | `cargo test -p sorafs_chunker` | Բոլոր թեստերն անցնում են; `vectors` հավասարության թեստը հաջողվում է: | Հաստատում է կանոնական հարմարանքների կազմումը և համապատասխանությունը Rust-ի իրականացմանը: |
 | 2 | `ci/check_sorafs_fixtures.sh` | Սցենարը դուրս է գալիս 0; հաղորդում է ստորև ներկայացված մանիֆեստները: | Ստուգում է, որ հարմարանքները մաքուր են վերականգնվում, և ստորագրությունները մնում են կցված: |
 | 3 | `cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles` | Մուտք `sorafs.sf1@1.0.0` համընկնում է ռեեստրի նկարագրիչի համար (`profile_id=1`): | Ապահովում է ռեեստրի մետատվյալների համաժամեցումը: |
-| 4 | `cargo run --locked -p sorafs_chunker --bin export_vectors` | Վերականգնումը հաջողվում է առանց `--allow-unsigned`; մանիֆեստի և ստորագրության ֆայլերը անփոփոխ են: | Ապահովում է դետերմինիզմի ապացույցներ հատվածի սահմանների և դրսևորումների համար: |
+| 4 | `cargo run --locked -p sorafs_chunker --bin export_vectors` | Regeneration succeeds with verified council signatures; manifest and signature files unchanged. | Provides determinism proof for chunk boundaries and manifests. |
 | 5 | `node scripts/check_sf1_vectors.mjs` | Ոչ մի տարբերություն չի հաղորդում TypeScript հարմարանքների և Rust JSON-ի միջև: | կամընտիր օգնական; ապահովել հավասարություն գործարկման ժամանակներում (սկրիպտը պահպանվում է Tooling WG-ի կողմից): |
 
 ## Սպասված ամփոփումներ

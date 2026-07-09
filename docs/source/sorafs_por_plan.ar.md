@@ -4,10 +4,10 @@ direction: rtl
 source: docs/source/sorafs_por_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 20074dd52af70730424b83fab999b280445ce3d6e6b8edf3bc12cda982c02731
-source_last_modified: "2026-07-05T00:48:50.900046+00:00"
+source_hash: be3eed6000e5eeb93c0e4af06a24b8e8eb0f3d1be700124e6b46c8edd63ffe11
+source_last_modified: "2026-07-06T19:43:41.006556+00:00"
 translation_last_reviewed: 2026-07-05
-source_mtime: "2026-07-05T00:48:50.900046+00:00"
+source_mtime: "2026-07-06T19:43:41.006556+00:00"
 ---
 # SoraFS PoR Challenge Scheduler & Randomness Integration
 
@@ -363,14 +363,18 @@ entries before promotion can report ready. Every route response must include a
 `body_blake3_hex` digest before runtime or reporting readiness can report ready.
 Observability artifacts also bind `metric_count` to the unique canonical
 `metrics` inventory, require the reviewed PoR metric set, and reject duplicate
-or unknown metric labels before promotion can report ready. Reporting/archive
-artifacts fingerprint the reviewed `archive_backend` value and
+or unknown metric labels before promotion can report ready.
+Reporting/archive artifacts fingerprint the reviewed `archive_backend` value and
 `governance_archive_handoff_digest_hex`, the summary exports the sorted
 reviewed `metrics` inventory plus `metric_count_values`, `archive_backends`,
 and `valid_governance_archive_handoff_digests`, and the aggregate
 production-readiness gate requires those fields to match the observability and
 reporting/archive artifact fingerprints before final promotion can report
-ready.
+ready. The PoR gate fail-closes when more than one valid seed replay, policy,
+or governance archive handoff anchor appears, and clears the mixed
+`valid_seed_replay_digests`, `valid_policy_digests`, or
+`valid_governance_archive_handoff_digests` set before aggregate promotion can
+report ready.
 Aggregate promotion also rechecks the lane-proven PoR digest relationships:
 seed-replay-bound artifact fingerprints must match `valid_seed_replay_digests`,
 and policy-bound artifact fingerprints must match `valid_policy_digests` before

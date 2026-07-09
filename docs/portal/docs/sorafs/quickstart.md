@@ -16,19 +16,20 @@ Set `export RUST_LOG=info` while experimenting to surface helpful CLI messages.
 
 ## 1. Refresh the deterministic fixtures
 
-Regenerate the canonical SF-1 chunking vectors. The command also emits signed
-manifest envelopes when `--signing-key` is supplied; use `--allow-unsigned`
-during local development only.
+Regenerate the canonical SF-1 chunking vectors. The command verifies the
+existing council signature file, or appends a signature when `--signing-key` is
+supplied.
 
 ```bash
-cargo run -p sorafs_chunker --bin export_vectors -- --allow-unsigned
+cargo run -p sorafs_chunker --bin export_vectors -- \
+  --signing-key=<ed25519-private-key-hex>
 ```
 
 Outputs:
 
 - `fixtures/sorafs_chunker/sf1_profile_v1.{json,rs,ts,go}`
 - `fixtures/sorafs_chunker/manifest_blake3.json`
-- `fixtures/sorafs_chunker/manifest_signatures.json` (if signed)
+- `fixtures/sorafs_chunker/manifest_signatures.json`
 - `fuzz/sorafs_chunker/sf1_profile_v1_{input,backpressure}.json`
 
 ## 2. Chunk a payload and inspect the plan
@@ -66,7 +67,7 @@ cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   --manifest-out=/tmp/docs.manifest \
   --manifest-signatures-out=/tmp/docs.manifest_signatures.json \
   --json-out=/tmp/docs.report.json \
-  --allow-unsigned
+  --council-signature=<signerhex>:<signaturehex>
 ```
 
 Review `/tmp/docs.report.json` for:
@@ -76,9 +77,9 @@ Review `/tmp/docs.report.json` for:
 - `manifest.manifest_blake3` – BLAKE3 digest signed in the manifest envelope.
 - `chunk_fetch_specs[]` – ordered fetch instructions for orchestrators.
 
-When ready to supply real signatures, add `--signing-key` and `--signer`
-arguments. The command verifies every Ed25519 signature before writing the
-envelope.
+The `--council-signature` value must be a reviewed council signer public key and
+Ed25519 signature pair. The command verifies every Ed25519 signature before
+writing the envelope.
 
 ## 4. Simulate multi-provider retrieval
 

@@ -1647,7 +1647,6 @@ test("registerVerifyingKey accepts current production backend labels", async () 
     "halo2/pasta/kaigi-roster-v1",
     "halo2/pasta/kagemusha-recursive-aggregation-v1",
     "halo2/pasta/kagemusha-recursive-compact-v1",
-    "halo2/pasta/kagemusha-recursive-spend-lineage-v1",
     "halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1",
     "halo2/pasta/kagemusha-recursive-spend-lineage-append-v1",
     "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
@@ -1678,7 +1677,6 @@ test("updateVerifyingKey accepts current production backend labels", async () =>
   const backends = [
     "halo2/pasta/kagemusha-recursive-aggregation-v1",
     "halo2/pasta/kagemusha-recursive-compact-v1",
-    "halo2/pasta/kagemusha-recursive-spend-lineage-v1",
     "halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1",
     "halo2/pasta/kagemusha-recursive-spend-lineage-append-v1",
     "stark/fri/sha256-goldilocks",

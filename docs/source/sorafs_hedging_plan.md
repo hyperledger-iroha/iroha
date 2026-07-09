@@ -62,7 +62,10 @@ billing-cycle `reference_decision_id_hex` must appear in
 `valid_reference_decision_ids` before final promotion can report ready. It also
 rechecks the lane-proven bound artifacts before final promotion:
 cycle-bound artifact fingerprints must match `valid_cycle_bindings`, and
-policy-bound artifact fingerprints must match `valid_policy_digests`.
+policy-bound artifact fingerprints must match `valid_policy_digests`. The
+hedging gate fail-closes when more than one valid cycle tuple or policy anchor
+appears, and clears the mixed `valid_cycle_bindings` or
+`valid_policy_digests` set before aggregate promotion can report ready.
 Statement-publication artifacts also bind `route_count` to the unique canonical
 `routes[].name` inventory and reject duplicate or unknown route entries before promotion
 can report ready, require every route response to carry a lowercase
@@ -364,7 +367,10 @@ Required before rollout:
   and every billing-cycle `reference_decision_id_hex` must appear in
   `valid_reference_decision_ids` before final promotion can report ready. It
   also rechecks cycle-bound and policy-bound artifact fingerprints against
-  `valid_cycle_bindings` and `valid_policy_digests`.
+  `valid_cycle_bindings` and `valid_policy_digests`. The hedging gate
+  fail-closes when more than one valid cycle tuple or policy anchor appears,
+  and clears the mixed `valid_cycle_bindings` or `valid_policy_digests` set
+  before aggregate promotion can report ready.
 - Remaining: implement collector service, daemonized pricing/exposure engine,
   billing aggregator, statement publisher, signed APIs, runtime CLI helpers,
   runtime service emission of the checked-in metric families, released native

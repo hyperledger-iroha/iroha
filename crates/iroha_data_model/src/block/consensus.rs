@@ -258,7 +258,7 @@ pub struct PayloadResponse {
 ///
 /// These parameters are encoded with Norito (binary) in a fixed order to
 /// guarantee determinism across peers and platforms.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 pub struct ConsensusGenesisParams {
     /// Maximal amount of time a leader waits before proposing (ms).
     pub block_time_ms: u64,
@@ -789,6 +789,97 @@ pub struct SumeragiDataspaceCommitment {
     pub block_hash: HashOf<BlockHeader>,
 }
 
+/// Execution status for a certified lane block whose payload is not locally recoverable yet.
+pub const COMMITTED_LANE_STATUS_AWAITING_EXECUTABLE_PAYLOAD: &str = "awaiting_executable_payload";
+/// Execution status for a certified lane block whose payload can be recovered for execution.
+pub const COMMITTED_LANE_STATUS_PAYLOAD_AVAILABLE_AWAITING_EXECUTOR: &str =
+    "payload_available_awaiting_executor";
+/// Execution status for a certified lane block whose execution input has been recovered.
+pub const COMMITTED_LANE_STATUS_PAYLOAD_RECOVERED_AWAITING_STATE_APPLICATION: &str =
+    "payload_recovered_awaiting_state_application";
+/// Execution status for a certified lane block that preflighted cleanly at the local state tip.
+pub const COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHTED_AWAITING_STATE_APPLICATION: &str =
+    "payload_preflighted_awaiting_state_application";
+/// Execution status for a certified lane block whose preflight produced at least one rejection.
+pub const COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHT_REJECTED_AWAITING_STATE_APPLICATION: &str =
+    "payload_preflight_rejected_awaiting_state_application";
+/// Execution status for a certified lane block whose canonical receipt conflicts with preflight.
+pub const COMMITTED_LANE_STATUS_APPLICATION_RECEIPT_CONFLICTS_WITH_PREFLIGHT: &str =
+    "application_receipt_conflicts_with_preflight";
+/// Execution status for a certified lane block waiting for its predecessor to be applied.
+pub const COMMITTED_LANE_STATUS_AWAITING_PREDECESSOR_APPLICATION: &str =
+    "awaiting_predecessor_application";
+/// Execution status for a certified lane block with committed canonical application results.
+pub const COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK: &str =
+    "state_applied_by_canonical_block";
+/// Execution status for a certified lane block directly applied to the local WSV.
+pub const COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION: &str =
+    "state_applied_by_direct_execution";
+
+/// Whether a committed lane-block status may count as rollout progress evidence.
+///
+/// Rejected preflight evidence is an execution blocker, not progress: it proves
+/// the payload was recoverable, but it must not satisfy autoscale/localnet
+/// expansion evidence until direct application or a canonical receipt resolves it.
+#[must_use]
+pub fn committed_lane_block_status_counts_as_progress(
+    execution_status: &str,
+    executable_payload_available: bool,
+) -> bool {
+    match execution_status {
+        COMMITTED_LANE_STATUS_AWAITING_EXECUTABLE_PAYLOAD => !executable_payload_available,
+        COMMITTED_LANE_STATUS_PAYLOAD_AVAILABLE_AWAITING_EXECUTOR
+        | COMMITTED_LANE_STATUS_PAYLOAD_RECOVERED_AWAITING_STATE_APPLICATION
+        | COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHTED_AWAITING_STATE_APPLICATION
+        | COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK
+        | COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION => executable_payload_available,
+        COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHT_REJECTED_AWAITING_STATE_APPLICATION
+        | COMMITTED_LANE_STATUS_AWAITING_PREDECESSOR_APPLICATION => false,
+        _ => false,
+    }
+}
+
+/// Certified standalone lane-local block summary reported by Sumeragi status.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SumeragiCommittedLaneBlock {
+    /// Lane whose local block is committed.
+    pub lane_id: LaneId,
+    /// Dataspace bound to the lane-local block.
+    pub dataspace_id: DataSpaceId,
+    /// Lane-local block height.
+    pub lane_block_height: u64,
+    /// Lane-local consensus view.
+    pub lane_block_view: u64,
+    /// Stable hash of the standalone lane block descriptor.
+    pub descriptor_hash: Hash,
+    /// Stable hash of the standalone lane block proposal.
+    pub proposal_hash: Hash,
+    /// Operator-facing execution readiness label.
+    pub execution_status: String,
+    /// Whether payload material is locally available for standalone execution.
+    pub executable_payload_available: bool,
+    /// Subject hash certified by the lane block proposal.
+    pub subject_hash: Hash,
+    /// Payload ownership hash certified by the lane block proposal.
+    pub payload_ownership_hash: Hash,
+    /// RBC instance hash certified by the lane block proposal.
+    pub rbc_instance_hash: Hash,
+    /// Consensus/QC mode tag used to derive the lane hashes.
+    pub qc_mode_tag: String,
+    /// Validator count in the lane descriptor.
+    pub validator_count: u32,
+    /// Minimum quorum required by the lane descriptor.
+    pub min_quorum: u32,
+    /// Signers present in the prepare QC.
+    pub prepare_qc_signer_count: u32,
+    /// Signers present in the commit QC.
+    pub commit_qc_signer_count: u32,
+}
+
 /// Planned lane-local payload ownership exported by Sumeragi status.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -811,14 +902,705 @@ pub struct SumeragiLanePayloadOwnership {
     /// Stable digest of the lane-local block subject.
     pub subject_hash: Hash,
     /// Domain-separated QC mode tag used to derive the lane-local subject.
-    #[norito(default)]
     pub qc_mode_tag: String,
     /// Fetched-batch candidate indices owned by this lane payload.
     pub accepted_candidate_indices: Vec<u64>,
+    /// Accepted transaction hashes owned by this lane payload.
+    pub accepted_transaction_hashes: Vec<Hash>,
+    /// Lane-local predecessor height bound by the descriptor.
+    pub previous_lane_block_height: u64,
+    /// Descriptor hash of the lane-local predecessor, when the predecessor is known.
+    pub previous_lane_block_descriptor_hash: Option<Hash>,
+    /// Stable descriptor hash binding standalone lane block replay context.
+    pub lane_block_descriptor_hash: Option<Hash>,
+    /// Canonical validator set bound by the descriptor.
+    pub lane_block_descriptor_validator_set: Vec<PeerId>,
+    /// Validator count bound by the descriptor quorum context.
+    pub lane_block_descriptor_validator_count: u32,
+    /// Minimum quorum bound by the descriptor quorum context.
+    pub lane_block_descriptor_min_quorum: u32,
     /// Stable digest naming lane-local payload ownership.
     pub payload_ownership_hash: Hash,
     /// Stable digest naming the lane-local RBC instance for this payload.
     pub rbc_instance_hash: Hash,
+}
+
+#[derive(Clone, Debug, Encode)]
+struct LaneBlockProposalPreimage {
+    purpose: String,
+    version: u8,
+    proposal_height: u64,
+    descriptor_hash: Hash,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_block_height: u64,
+    lane_block_view: u64,
+    subject_hash: Hash,
+    payload_ownership_hash: Hash,
+    rbc_instance_hash: Hash,
+    candidate_indices: Vec<u64>,
+    candidate_hashes: Vec<Hash>,
+    validator_set_hash_version: u16,
+    validator_set_hash: HashOf<Vec<PeerId>>,
+    validator_set: Vec<PeerId>,
+    validator_count: u32,
+    min_quorum: u32,
+    qc_mode_tag: String,
+}
+
+/// Canonical descriptor for a standalone lane-local block proposal.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct LaneBlockDescriptorV1 {
+    /// Lane whose local block is described.
+    pub lane_id: LaneId,
+    /// Dataspace bound to the lane-local block.
+    pub dataspace_id: DataSpaceId,
+    /// Global proposal height that planned this lane-local block.
+    pub proposal_height: u64,
+    /// Latest committed lane-local height used as this block's predecessor tip.
+    pub previous_lane_block_height: u64,
+    /// Descriptor hash of the predecessor tip, when the predecessor is known.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub previous_lane_block_descriptor_hash: Option<Hash>,
+    /// Lane-local block height assigned to the descriptor.
+    pub lane_block_height: u64,
+    /// Lane-local view assigned to the descriptor.
+    pub lane_block_view: u64,
+    /// Lane-local subject hash signed by lane validators.
+    pub subject_hash: Hash,
+    /// DA/RBC payload ownership hash.
+    pub payload_ownership_hash: Hash,
+    /// DA/RBC instance hash.
+    pub rbc_instance_hash: Hash,
+    /// Accepted fetched-batch candidate indices in scheduler order.
+    pub accepted_candidate_indices: Vec<u64>,
+    /// Accepted transaction hashes in scheduler order.
+    pub accepted_transaction_hashes: Vec<Hash>,
+    /// Version of the validator-set hashing scheme.
+    pub validator_set_hash_version: u16,
+    /// Stable hash of the validator set eligible to sign this lane block.
+    pub validator_set_hash: HashOf<Vec<PeerId>>,
+    /// Canonical validator order eligible to sign this lane block.
+    pub validator_set: Vec<PeerId>,
+    /// Number of validators bound by the descriptor quorum context.
+    pub validator_count: u32,
+    /// Minimum distinct signer count required for quorum.
+    pub min_quorum: u32,
+    /// Domain-separated QC mode tag used for lane-local votes.
+    pub qc_mode_tag: String,
+    /// Stable descriptor digest binding predecessor, work, ownership, committee, and quorum.
+    pub descriptor_hash: Hash,
+}
+
+impl LaneBlockDescriptorV1 {
+    /// Compute the canonical descriptor hash from all descriptor fields except `descriptor_hash`.
+    #[must_use]
+    pub fn computed_descriptor_hash(&self) -> Hash {
+        Hash::new(
+            norito::to_bytes(&LaneBlockDescriptorPreimage {
+                purpose: "nexus:lane-block-descriptor:v1".to_string(),
+                version: 1,
+                lane_id: self.lane_id,
+                dataspace_id: self.dataspace_id,
+                proposal_height: self.proposal_height,
+                previous_lane_block_height: self.previous_lane_block_height,
+                previous_lane_block_descriptor_hash: self.previous_lane_block_descriptor_hash,
+                lane_block_height: self.lane_block_height,
+                lane_block_view: self.lane_block_view,
+                subject_hash: self.subject_hash,
+                payload_ownership_hash: self.payload_ownership_hash,
+                rbc_instance_hash: self.rbc_instance_hash,
+                candidate_indices: self.accepted_candidate_indices.clone(),
+                candidate_hashes: self.accepted_transaction_hashes.clone(),
+                validator_set_hash_version: self.validator_set_hash_version,
+                validator_set_hash: self.validator_set_hash,
+                validator_set: self.validator_set.clone(),
+                validator_count: self.validator_count,
+                min_quorum: self.min_quorum,
+                qc_mode_tag: self.qc_mode_tag.clone(),
+            })
+            .expect("lane block descriptor must encode"),
+        )
+    }
+
+    /// Compute the canonical validator-set hash for the embedded validator order.
+    #[must_use]
+    pub fn computed_validator_set_hash(&self) -> HashOf<Vec<PeerId>> {
+        HashOf::new(&self.validator_set)
+    }
+}
+
+/// Advisory pointer to the canonical global block that carried a lane payload.
+///
+/// This is deliberately not part of [`LaneBlockProposalV1::computed_proposal_hash`].
+/// Peers use it only as a recovery hint for fetching a certified block body;
+/// the fetched block still has to validate against its commit certificate and
+/// the lane descriptor before any payload is replayed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct LaneBlockProposalPayloadHintV1 {
+    /// Global proposal height that anchored the lane payload ownership.
+    pub proposal_height: u64,
+    /// Global proposal view that anchored the lane payload ownership.
+    pub proposal_view: u64,
+    /// Hash of the global block body that carried the lane payload ownership.
+    pub proposal_block_hash: HashOf<BlockHeader>,
+}
+
+/// Canonical standalone lane-local block proposal artifact.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct LaneBlockProposalV1 {
+    /// Replayable descriptor proposed to the lane committee.
+    pub descriptor: LaneBlockDescriptorV1,
+    /// Stable proposal digest binding descriptor, work, committee, and quorum.
+    pub proposal_hash: Hash,
+    /// Optional recovery hint for fetching the global block body with the payload.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub payload_block_hint: Option<LaneBlockProposalPayloadHintV1>,
+}
+
+impl LaneBlockProposalV1 {
+    /// Compute the canonical proposal hash from the embedded descriptor.
+    #[must_use]
+    pub fn computed_proposal_hash(&self) -> Hash {
+        let descriptor = &self.descriptor;
+        Hash::new(
+            norito::to_bytes(&LaneBlockProposalPreimage {
+                purpose: "nexus:lane-block-proposal:v1".to_string(),
+                version: 1,
+                proposal_height: descriptor.proposal_height,
+                descriptor_hash: descriptor.descriptor_hash,
+                lane_id: descriptor.lane_id,
+                dataspace_id: descriptor.dataspace_id,
+                lane_block_height: descriptor.lane_block_height,
+                lane_block_view: descriptor.lane_block_view,
+                subject_hash: descriptor.subject_hash,
+                payload_ownership_hash: descriptor.payload_ownership_hash,
+                rbc_instance_hash: descriptor.rbc_instance_hash,
+                candidate_indices: descriptor.accepted_candidate_indices.clone(),
+                candidate_hashes: descriptor.accepted_transaction_hashes.clone(),
+                validator_set_hash_version: descriptor.validator_set_hash_version,
+                validator_set_hash: descriptor.validator_set_hash,
+                validator_set: descriptor.validator_set.clone(),
+                validator_count: descriptor.validator_count,
+                min_quorum: descriptor.min_quorum,
+                qc_mode_tag: descriptor.qc_mode_tag.clone(),
+            })
+            .expect("lane block proposal must encode"),
+        )
+    }
+
+    /// Return `true` when two proposals identify the same certified lane block.
+    #[must_use]
+    pub fn same_consensus_identity(&self, other: &Self) -> bool {
+        self.descriptor == other.descriptor && self.proposal_hash == other.proposal_hash
+    }
+
+    /// Attach a payload recovery hint without changing the proposal identity.
+    #[must_use]
+    pub fn with_payload_block_hint(mut self, hint: LaneBlockProposalPayloadHintV1) -> Self {
+        self.payload_block_hint = Some(hint);
+        self
+    }
+
+    /// Build a canonical lane-block vote body for this proposal and phase.
+    #[must_use]
+    pub fn vote_body(&self, phase: CertPhase) -> LaneBlockVoteBodyV1 {
+        let descriptor = &self.descriptor;
+        LaneBlockVoteBodyV1 {
+            phase,
+            lane_id: descriptor.lane_id,
+            dataspace_id: descriptor.dataspace_id,
+            proposal_height: descriptor.proposal_height,
+            lane_block_height: descriptor.lane_block_height,
+            lane_block_view: descriptor.lane_block_view,
+            proposal_hash: self.proposal_hash,
+            descriptor_hash: descriptor.descriptor_hash,
+            subject_hash: descriptor.subject_hash,
+            payload_ownership_hash: descriptor.payload_ownership_hash,
+            rbc_instance_hash: descriptor.rbc_instance_hash,
+            accepted_candidate_indices: descriptor.accepted_candidate_indices.clone(),
+            accepted_transaction_hashes: descriptor.accepted_transaction_hashes.clone(),
+            validator_set_hash_version: descriptor.validator_set_hash_version,
+            validator_set_hash: descriptor.validator_set_hash,
+            validator_count: descriptor.validator_count,
+            min_quorum: descriptor.min_quorum,
+            qc_mode_tag: descriptor.qc_mode_tag.clone(),
+        }
+    }
+}
+
+/// Canonical lane-local block vote payload signed by lane committees.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct LaneBlockVoteBodyV1 {
+    /// Lane-local QC phase certified by this vote body.
+    pub phase: CertPhase,
+    /// Lane whose local block is being certified.
+    pub lane_id: LaneId,
+    /// Dataspace bound to the lane-local block.
+    pub dataspace_id: DataSpaceId,
+    /// Global proposal height that planned this lane-local block.
+    pub proposal_height: u64,
+    /// Lane-local block height being certified.
+    pub lane_block_height: u64,
+    /// Lane-local view being certified.
+    pub lane_block_view: u64,
+    /// Standalone lane-block proposal hash.
+    pub proposal_hash: Hash,
+    /// Standalone lane-block descriptor hash.
+    pub descriptor_hash: Hash,
+    /// Lane-local subject hash.
+    pub subject_hash: Hash,
+    /// DA/RBC payload ownership hash.
+    pub payload_ownership_hash: Hash,
+    /// DA/RBC instance hash.
+    pub rbc_instance_hash: Hash,
+    /// Accepted fetched-batch candidate indices in scheduler order.
+    pub accepted_candidate_indices: Vec<u64>,
+    /// Accepted transaction hashes in scheduler order.
+    pub accepted_transaction_hashes: Vec<Hash>,
+    /// Version of the validator-set hashing scheme.
+    pub validator_set_hash_version: u16,
+    /// Stable hash of the validator set that may sign this lane block.
+    pub validator_set_hash: HashOf<Vec<PeerId>>,
+    /// Number of validators bound by the descriptor quorum context.
+    pub validator_count: u32,
+    /// Minimum distinct signer count required for quorum.
+    pub min_quorum: u32,
+    /// Domain-separated QC mode tag for this lane block.
+    pub qc_mode_tag: String,
+}
+
+impl LaneBlockVoteBodyV1 {
+    /// Build the domain-separated signature preimage for this lane-block vote body.
+    #[must_use]
+    pub fn signature_preimage(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(32 + 512);
+        out.extend_from_slice(b"iroha:lane-block-vote:v1");
+        out.extend_from_slice(&norito::to_bytes(self).expect("lane block vote body must encode"));
+        out
+    }
+}
+
+/// Validator-set proof for a standalone lane-local block proposal.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct LaneBlockQcV1 {
+    /// Vote body certified by the aggregate signature.
+    pub body: LaneBlockVoteBodyV1,
+    /// Version of the validator-set hashing scheme.
+    pub validator_set_hash_version: u16,
+    /// Stable hash of the validator set that produced the certificate.
+    pub validator_set_hash: HashOf<Vec<PeerId>>,
+    /// Ordered validator set used when assembling the certificate.
+    pub validator_set: Vec<PeerId>,
+    /// Compact signer bitmap (LSB-first).
+    pub signers_bitmap: Vec<u8>,
+    /// BLS12-381 aggregate signature bytes (compressed).
+    pub bls_aggregate_signature: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Encode)]
+struct LanePayloadOwnershipSubjectPreimage {
+    version: u8,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_block_height: u64,
+    lane_block_view: u64,
+    candidate_indices: Vec<u64>,
+    candidate_hashes: Vec<Hash>,
+    qc_mode_tag: String,
+}
+
+#[derive(Clone, Debug, Encode)]
+struct LanePayloadOwnershipPreimage {
+    purpose: String,
+    version: u8,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_block_height: u64,
+    lane_block_view: u64,
+    subject_hash: Hash,
+    candidate_indices: Vec<u64>,
+    candidate_hashes: Vec<Hash>,
+    qc_mode_tag: String,
+}
+
+#[derive(Clone, Debug, Encode)]
+struct LanePayloadOwnershipRbcPreimage {
+    purpose: String,
+    version: u8,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_block_height: u64,
+    lane_block_view: u64,
+    subject_hash: Hash,
+    payload_ownership_hash: Hash,
+}
+
+#[derive(Clone, Debug, Encode)]
+struct LaneBlockDescriptorPreimage {
+    purpose: String,
+    version: u8,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    proposal_height: u64,
+    previous_lane_block_height: u64,
+    previous_lane_block_descriptor_hash: Option<Hash>,
+    lane_block_height: u64,
+    lane_block_view: u64,
+    subject_hash: Hash,
+    payload_ownership_hash: Hash,
+    rbc_instance_hash: Hash,
+    candidate_indices: Vec<u64>,
+    candidate_hashes: Vec<Hash>,
+    validator_set_hash_version: u16,
+    validator_set_hash: HashOf<Vec<PeerId>>,
+    validator_set: Vec<PeerId>,
+    validator_count: u32,
+    min_quorum: u32,
+    qc_mode_tag: String,
+}
+
+/// Canonical lane payload ownership replay hashes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SumeragiLanePayloadOwnershipReplayHashes {
+    /// Expected lane-local block subject hash.
+    pub subject_hash: Hash,
+    /// Expected lane-local payload ownership hash.
+    pub payload_ownership_hash: Hash,
+    /// Expected lane-local RBC instance hash.
+    pub rbc_instance_hash: Hash,
+    /// Expected standalone lane block descriptor hash.
+    pub lane_block_descriptor_hash: Hash,
+}
+
+/// Validation error for lane payload ownership replay material.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SumeragiLanePayloadOwnershipReplayError {
+    /// QC mode tag is empty.
+    BlankQcModeTag,
+    /// No accepted candidate indices are present.
+    EmptyCandidateIndices,
+    /// Candidate index and accepted transaction hash counts differ.
+    CandidateHashCountMismatch,
+    /// Lane block height is zero.
+    ZeroLaneBlockHeight,
+    /// Previous lane block height does not equal `lane_block_height - 1`.
+    PreviousLaneBlockHeightMismatch,
+    /// Genesis predecessor unexpectedly carries a descriptor hash.
+    UnexpectedGenesisPredecessorDescriptorHash,
+    /// Descriptor hash is absent.
+    MissingDescriptorHash,
+    /// Descriptor validator set is empty.
+    EmptyValidatorSet,
+    /// Descriptor validator set is not in canonical sorted order.
+    ValidatorSetNotCanonical,
+    /// Descriptor validator set contains duplicate peers.
+    DuplicateValidator,
+    /// Descriptor validator count does not match the validator set length.
+    ValidatorCountMismatch,
+    /// Descriptor quorum is zero or exceeds validator count.
+    InvalidQuorum,
+    /// Norito encoding failed while deriving replay hashes.
+    Encode,
+    /// Subject hash does not match the replay material.
+    SubjectHashMismatch,
+    /// Payload ownership hash does not match the replay material.
+    PayloadOwnershipHashMismatch,
+    /// RBC instance hash does not match the replay material.
+    RbcInstanceHashMismatch,
+    /// Descriptor hash does not match the replay material.
+    DescriptorHashMismatch,
+}
+
+impl fmt::Display for SumeragiLanePayloadOwnershipReplayError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::BlankQcModeTag => "blank QC mode tag",
+            Self::EmptyCandidateIndices => "empty candidate indices",
+            Self::CandidateHashCountMismatch => "candidate hash count mismatch",
+            Self::ZeroLaneBlockHeight => "zero lane block height",
+            Self::PreviousLaneBlockHeightMismatch => "previous lane block height mismatch",
+            Self::UnexpectedGenesisPredecessorDescriptorHash => {
+                "unexpected genesis predecessor descriptor hash"
+            }
+            Self::MissingDescriptorHash => "missing descriptor hash",
+            Self::EmptyValidatorSet => "empty descriptor validator set",
+            Self::ValidatorSetNotCanonical => "non-canonical descriptor validator set",
+            Self::DuplicateValidator => "duplicate descriptor validator",
+            Self::ValidatorCountMismatch => "descriptor validator count mismatch",
+            Self::InvalidQuorum => "invalid descriptor quorum",
+            Self::Encode => "failed to encode replay preimage",
+            Self::SubjectHashMismatch => "subject hash mismatch",
+            Self::PayloadOwnershipHashMismatch => "payload ownership hash mismatch",
+            Self::RbcInstanceHashMismatch => "RBC instance hash mismatch",
+            Self::DescriptorHashMismatch => "descriptor hash mismatch",
+        };
+        f.write_str(message)
+    }
+}
+
+impl SumeragiLanePayloadOwnership {
+    /// Compute the canonical lane-local subject hash from replay material.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SumeragiLanePayloadOwnershipReplayError::Encode`] if the
+    /// canonical preimage cannot be encoded.
+    pub fn compute_replay_subject_hash(
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_block_height: u64,
+        lane_block_view: u64,
+        accepted_candidate_indices: &[u64],
+        accepted_transaction_hashes: &[Hash],
+        qc_mode_tag: &str,
+    ) -> Result<Hash, SumeragiLanePayloadOwnershipReplayError> {
+        Ok(Hash::new(
+            norito::to_bytes(&LanePayloadOwnershipSubjectPreimage {
+                version: 1,
+                lane_id,
+                dataspace_id,
+                lane_block_height,
+                lane_block_view,
+                candidate_indices: accepted_candidate_indices.to_vec(),
+                candidate_hashes: accepted_transaction_hashes.to_vec(),
+                qc_mode_tag: qc_mode_tag.to_string(),
+            })
+            .map_err(|_| SumeragiLanePayloadOwnershipReplayError::Encode)?,
+        ))
+    }
+
+    /// Compute the canonical lane-local payload ownership hash.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SumeragiLanePayloadOwnershipReplayError::Encode`] if the
+    /// canonical preimage cannot be encoded.
+    pub fn compute_replay_payload_ownership_hash(
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_block_height: u64,
+        lane_block_view: u64,
+        subject_hash: Hash,
+        accepted_candidate_indices: &[u64],
+        accepted_transaction_hashes: &[Hash],
+        qc_mode_tag: &str,
+    ) -> Result<Hash, SumeragiLanePayloadOwnershipReplayError> {
+        Ok(Hash::new(
+            norito::to_bytes(&LanePayloadOwnershipPreimage {
+                purpose: "nexus:lane-payload-ownership:v1".to_string(),
+                version: 1,
+                lane_id,
+                dataspace_id,
+                lane_block_height,
+                lane_block_view,
+                subject_hash,
+                candidate_indices: accepted_candidate_indices.to_vec(),
+                candidate_hashes: accepted_transaction_hashes.to_vec(),
+                qc_mode_tag: qc_mode_tag.to_string(),
+            })
+            .map_err(|_| SumeragiLanePayloadOwnershipReplayError::Encode)?,
+        ))
+    }
+
+    /// Compute the canonical lane-local RBC instance hash.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SumeragiLanePayloadOwnershipReplayError::Encode`] if the
+    /// canonical preimage cannot be encoded.
+    pub fn compute_replay_rbc_instance_hash(
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_block_height: u64,
+        lane_block_view: u64,
+        subject_hash: Hash,
+        payload_ownership_hash: Hash,
+    ) -> Result<Hash, SumeragiLanePayloadOwnershipReplayError> {
+        Ok(Hash::new(
+            norito::to_bytes(&LanePayloadOwnershipRbcPreimage {
+                purpose: "nexus:lane-rbc-instance:v1".to_string(),
+                version: 1,
+                lane_id,
+                dataspace_id,
+                lane_block_height,
+                lane_block_view,
+                subject_hash,
+                payload_ownership_hash,
+            })
+            .map_err(|_| SumeragiLanePayloadOwnershipReplayError::Encode)?,
+        ))
+    }
+
+    /// Compute canonical replay hashes from the embedded descriptor material.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SumeragiLanePayloadOwnershipReplayError`] when required replay
+    /// material is missing, malformed, or cannot be encoded.
+    pub fn compute_replay_hashes(
+        &self,
+    ) -> Result<SumeragiLanePayloadOwnershipReplayHashes, SumeragiLanePayloadOwnershipReplayError>
+    {
+        self.validate_replay_shape()?;
+        let subject_hash = Self::compute_replay_subject_hash(
+            self.lane_id,
+            self.dataspace_id,
+            self.lane_block_height,
+            self.lane_block_view,
+            &self.accepted_candidate_indices,
+            &self.accepted_transaction_hashes,
+            &self.qc_mode_tag,
+        )?;
+        let payload_ownership_hash = Self::compute_replay_payload_ownership_hash(
+            self.lane_id,
+            self.dataspace_id,
+            self.lane_block_height,
+            self.lane_block_view,
+            subject_hash,
+            &self.accepted_candidate_indices,
+            &self.accepted_transaction_hashes,
+            &self.qc_mode_tag,
+        )?;
+        let rbc_instance_hash = Self::compute_replay_rbc_instance_hash(
+            self.lane_id,
+            self.dataspace_id,
+            self.lane_block_height,
+            self.lane_block_view,
+            subject_hash,
+            payload_ownership_hash,
+        )?;
+        let lane_block_descriptor_hash = Hash::new(
+            norito::to_bytes(&LaneBlockDescriptorPreimage {
+                purpose: "nexus:lane-block-descriptor:v1".to_string(),
+                version: 1,
+                lane_id: self.lane_id,
+                dataspace_id: self.dataspace_id,
+                proposal_height: self.proposal_height,
+                previous_lane_block_height: self.previous_lane_block_height,
+                previous_lane_block_descriptor_hash: self.previous_lane_block_descriptor_hash,
+                lane_block_height: self.lane_block_height,
+                lane_block_view: self.lane_block_view,
+                subject_hash,
+                payload_ownership_hash,
+                rbc_instance_hash,
+                candidate_indices: self.accepted_candidate_indices.clone(),
+                candidate_hashes: self.accepted_transaction_hashes.clone(),
+                validator_set_hash_version: crate::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set_hash: HashOf::new(&self.lane_block_descriptor_validator_set),
+                validator_set: self.lane_block_descriptor_validator_set.clone(),
+                validator_count: self.lane_block_descriptor_validator_count,
+                min_quorum: self.lane_block_descriptor_min_quorum,
+                qc_mode_tag: self.qc_mode_tag.clone(),
+            })
+            .map_err(|_| SumeragiLanePayloadOwnershipReplayError::Encode)?,
+        );
+        Ok(SumeragiLanePayloadOwnershipReplayHashes {
+            subject_hash,
+            payload_ownership_hash,
+            rbc_instance_hash,
+            lane_block_descriptor_hash,
+        })
+    }
+
+    /// Validate embedded replay material and all canonical ownership hashes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SumeragiLanePayloadOwnershipReplayError`] when any replay field
+    /// or canonical hash does not match the lane-local payload ownership.
+    pub fn validate_replay_material(&self) -> Result<(), SumeragiLanePayloadOwnershipReplayError> {
+        let expected = self.compute_replay_hashes()?;
+        if self.subject_hash != expected.subject_hash {
+            return Err(SumeragiLanePayloadOwnershipReplayError::SubjectHashMismatch);
+        }
+        if self.payload_ownership_hash != expected.payload_ownership_hash {
+            return Err(SumeragiLanePayloadOwnershipReplayError::PayloadOwnershipHashMismatch);
+        }
+        if self.rbc_instance_hash != expected.rbc_instance_hash {
+            return Err(SumeragiLanePayloadOwnershipReplayError::RbcInstanceHashMismatch);
+        }
+        if self.lane_block_descriptor_hash != Some(expected.lane_block_descriptor_hash) {
+            return Err(SumeragiLanePayloadOwnershipReplayError::DescriptorHashMismatch);
+        }
+        Ok(())
+    }
+
+    fn validate_replay_shape(&self) -> Result<(), SumeragiLanePayloadOwnershipReplayError> {
+        if self.qc_mode_tag.trim().is_empty() {
+            return Err(SumeragiLanePayloadOwnershipReplayError::BlankQcModeTag);
+        }
+        if self.accepted_candidate_indices.is_empty() {
+            return Err(SumeragiLanePayloadOwnershipReplayError::EmptyCandidateIndices);
+        }
+        if self.accepted_candidate_indices.len() != self.accepted_transaction_hashes.len() {
+            return Err(SumeragiLanePayloadOwnershipReplayError::CandidateHashCountMismatch);
+        }
+        let Some(expected_previous) = self.lane_block_height.checked_sub(1) else {
+            return Err(SumeragiLanePayloadOwnershipReplayError::ZeroLaneBlockHeight);
+        };
+        if self.previous_lane_block_height != expected_previous {
+            return Err(SumeragiLanePayloadOwnershipReplayError::PreviousLaneBlockHeightMismatch);
+        }
+        if self.previous_lane_block_height == 0
+            && self.previous_lane_block_descriptor_hash.is_some()
+        {
+            return Err(
+                SumeragiLanePayloadOwnershipReplayError::UnexpectedGenesisPredecessorDescriptorHash,
+            );
+        }
+        if self.lane_block_descriptor_hash.is_none() {
+            return Err(SumeragiLanePayloadOwnershipReplayError::MissingDescriptorHash);
+        }
+        if self.lane_block_descriptor_validator_set.is_empty() {
+            return Err(SumeragiLanePayloadOwnershipReplayError::EmptyValidatorSet);
+        }
+        let mut canonical_validator_set = self.lane_block_descriptor_validator_set.clone();
+        canonical_validator_set.sort();
+        if canonical_validator_set != self.lane_block_descriptor_validator_set {
+            return Err(SumeragiLanePayloadOwnershipReplayError::ValidatorSetNotCanonical);
+        }
+        for pair in canonical_validator_set.windows(2) {
+            if pair[0] == pair[1] {
+                return Err(SumeragiLanePayloadOwnershipReplayError::DuplicateValidator);
+            }
+        }
+        let Ok(validator_count) = u32::try_from(self.lane_block_descriptor_validator_set.len())
+        else {
+            return Err(SumeragiLanePayloadOwnershipReplayError::ValidatorCountMismatch);
+        };
+        if self.lane_block_descriptor_validator_count != validator_count {
+            return Err(SumeragiLanePayloadOwnershipReplayError::ValidatorCountMismatch);
+        }
+        if self.lane_block_descriptor_min_quorum == 0
+            || self.lane_block_descriptor_min_quorum > self.lane_block_descriptor_validator_count
+        {
+            return Err(SumeragiLanePayloadOwnershipReplayError::InvalidQuorum);
+        }
+        Ok(())
+    }
 }
 
 /// Deterministic settlement receipt emitted for audit and reconciliation.
@@ -1104,7 +1886,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for LaneSwapMetadata {
 }
 
 /// Runtime-upgrade governance hook snapshot.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -2295,6 +3077,59 @@ pub struct SumeragiV1StatusWire {
     pub rbc_status: String,
 }
 
+/// Cached standalone lane-block consensus session status.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SumeragiLaneBlockSessionStatus {
+    /// Lane whose lane-local block is being certified.
+    #[norito(default)]
+    pub lane_id: LaneId,
+    /// Dataspace bound to the lane-local block.
+    #[norito(default)]
+    pub dataspace_id: DataSpaceId,
+    /// Lane-local block height.
+    #[norito(default)]
+    pub lane_block_height: u64,
+    /// Lane-local block view.
+    #[norito(default)]
+    pub lane_block_view: u64,
+    /// Proposal hash identifying the cached session.
+    pub proposal_hash: Hash,
+    /// Whether the proposal artifact is cached locally.
+    #[norito(default)]
+    pub has_proposal: bool,
+    /// Number of cached prepare votes.
+    #[norito(default)]
+    pub prepare_vote_count: u32,
+    /// Number of cached commit votes.
+    #[norito(default)]
+    pub commit_vote_count: u32,
+    /// Whether a prepare QC is cached.
+    #[norito(default)]
+    pub has_prepare_qc: bool,
+    /// Whether a commit QC is cached.
+    #[norito(default)]
+    pub has_commit_qc: bool,
+    /// Whether this peer has a pending local commit-vote opportunity.
+    #[norito(default)]
+    pub pending_commit_vote_request: bool,
+    /// Whether this session is ready to drain as a committed lane block.
+    #[norito(default)]
+    pub pending_committed_session_drain: bool,
+    /// Whether this session already drained to the committed-lane queue.
+    #[norito(default)]
+    pub committed_session_drained: bool,
+    /// Validator count advertised by the session body.
+    #[norito(default)]
+    pub validator_count: u32,
+    /// Minimum quorum advertised by the session body.
+    #[norito(default)]
+    pub min_quorum: u32,
+}
+
 /// Proposal-gate inputs from the most recent pacemaker evaluation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -2681,6 +3516,12 @@ pub struct SumeragiStatusWire {
     /// Planned lane-local payload ownership and RBC instance identities.
     #[norito(default)]
     pub lane_payload_ownerships: Vec<SumeragiLanePayloadOwnership>,
+    /// Certified standalone lane-local block summaries.
+    #[norito(default)]
+    pub committed_lane_blocks: Vec<SumeragiCommittedLaneBlock>,
+    /// Cached standalone lane-local block consensus sessions.
+    #[norito(default)]
+    pub lane_block_sessions: Vec<SumeragiLaneBlockSessionStatus>,
     /// Count of lanes that still require a governance manifest.
     #[norito(default)]
     pub lane_governance_sealed_total: u32,
@@ -3079,7 +3920,12 @@ impl_decode_from_slice_via_codec!(NposGenesisParams);
 impl_decode_from_slice_via_codec!(SumeragiMembershipStatus);
 impl_decode_from_slice_via_codec!(SumeragiLaneCommitment);
 impl_decode_from_slice_via_codec!(SumeragiDataspaceCommitment);
+impl_decode_from_slice_via_codec!(SumeragiCommittedLaneBlock);
 impl_decode_from_slice_via_codec!(SumeragiLanePayloadOwnership);
+impl_decode_from_slice_via_codec!(LaneBlockDescriptorV1);
+impl_decode_from_slice_via_codec!(LaneBlockProposalV1);
+impl_decode_from_slice_via_codec!(LaneBlockVoteBodyV1);
+impl_decode_from_slice_via_codec!(LaneBlockQcV1);
 impl_decode_from_slice_via_codec!(SumeragiRuntimeUpgradeHook);
 impl_decode_from_slice_via_codec!(SumeragiLaneGovernance);
 impl_decode_from_slice_via_codec!(SumeragiV1StatusWire);
@@ -3173,6 +4019,72 @@ mod tests {
             epoch: 1,
             highest_qc: sample_qc_ref(),
         }
+    }
+
+    #[test]
+    fn committed_lane_block_status_progress_policy_is_fail_closed() {
+        for (status, executable) in [
+            (COMMITTED_LANE_STATUS_AWAITING_EXECUTABLE_PAYLOAD, false),
+            (
+                COMMITTED_LANE_STATUS_PAYLOAD_AVAILABLE_AWAITING_EXECUTOR,
+                true,
+            ),
+            (
+                COMMITTED_LANE_STATUS_PAYLOAD_RECOVERED_AWAITING_STATE_APPLICATION,
+                true,
+            ),
+            (
+                COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHTED_AWAITING_STATE_APPLICATION,
+                true,
+            ),
+            (COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK, true),
+            (
+                COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
+                true,
+            ),
+        ] {
+            assert!(
+                committed_lane_block_status_counts_as_progress(status, executable),
+                "{status} with matching availability should count as audited progress"
+            );
+        }
+
+        assert!(!committed_lane_block_status_counts_as_progress(
+            COMMITTED_LANE_STATUS_APPLICATION_RECEIPT_CONFLICTS_WITH_PREFLIGHT,
+            false
+        ));
+        assert!(!committed_lane_block_status_counts_as_progress(
+            COMMITTED_LANE_STATUS_AWAITING_PREDECESSOR_APPLICATION,
+            false
+        ));
+        assert!(!committed_lane_block_status_counts_as_progress(
+            COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHT_REJECTED_AWAITING_STATE_APPLICATION,
+            true
+        ));
+        assert!(!committed_lane_block_status_counts_as_progress(
+            COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHT_REJECTED_AWAITING_STATE_APPLICATION,
+            false
+        ));
+        assert!(!committed_lane_block_status_counts_as_progress(
+            COMMITTED_LANE_STATUS_AWAITING_PREDECESSOR_APPLICATION,
+            true
+        ));
+        assert!(!committed_lane_block_status_counts_as_progress(
+            "future_status",
+            true
+        ));
+        assert!(!committed_lane_block_status_counts_as_progress(
+            COMMITTED_LANE_STATUS_AWAITING_EXECUTABLE_PAYLOAD,
+            true
+        ));
+        assert!(!committed_lane_block_status_counts_as_progress(
+            COMMITTED_LANE_STATUS_PAYLOAD_RECOVERED_AWAITING_STATE_APPLICATION,
+            false
+        ));
+        assert!(!committed_lane_block_status_counts_as_progress(
+            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
+            false
+        ));
     }
 
     fn sample_round_id() -> RoundId {
@@ -3419,6 +4331,463 @@ mod tests {
         let preimage = body.signature_preimage();
         assert!(preimage.starts_with(b"iroha:native-amx:v1"));
         assert!(preimage.len() > b"iroha:native-amx:v1".len());
+    }
+
+    fn sample_lane_block_vote_body(phase: CertPhase) -> LaneBlockVoteBodyV1 {
+        LaneBlockVoteBodyV1 {
+            phase,
+            lane_id: LaneId::new(7),
+            dataspace_id: DataSpaceId::new(11),
+            proposal_height: 12,
+            lane_block_height: 13,
+            lane_block_view: 2,
+            proposal_hash: Hash::prehashed([0x21; Hash::LENGTH]),
+            descriptor_hash: Hash::prehashed([0x22; Hash::LENGTH]),
+            subject_hash: Hash::prehashed([0x23; Hash::LENGTH]),
+            payload_ownership_hash: Hash::prehashed([0x24; Hash::LENGTH]),
+            rbc_instance_hash: Hash::prehashed([0x25; Hash::LENGTH]),
+            accepted_candidate_indices: vec![3, 1],
+            accepted_transaction_hashes: vec![
+                Hash::prehashed([0x26; Hash::LENGTH]),
+                Hash::prehashed([0x27; Hash::LENGTH]),
+            ],
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: HashOf::new(&sample_roster()),
+            validator_count: 3,
+            min_quorum: 3,
+            qc_mode_tag: "permissioned:lane:7:dataspace:11".to_string(),
+        }
+    }
+
+    fn sample_lane_block_proposal() -> LaneBlockProposalV1 {
+        let roster = sample_roster();
+        let mut descriptor = LaneBlockDescriptorV1 {
+            lane_id: LaneId::new(7),
+            dataspace_id: DataSpaceId::new(11),
+            proposal_height: 12,
+            previous_lane_block_height: 12,
+            previous_lane_block_descriptor_hash: Some(Hash::prehashed([0x20; Hash::LENGTH])),
+            lane_block_height: 13,
+            lane_block_view: 2,
+            subject_hash: Hash::prehashed([0x23; Hash::LENGTH]),
+            payload_ownership_hash: Hash::prehashed([0x24; Hash::LENGTH]),
+            rbc_instance_hash: Hash::prehashed([0x25; Hash::LENGTH]),
+            accepted_candidate_indices: vec![3, 1],
+            accepted_transaction_hashes: vec![
+                Hash::prehashed([0x26; Hash::LENGTH]),
+                Hash::prehashed([0x27; Hash::LENGTH]),
+            ],
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set: roster,
+            validator_count: 3,
+            min_quorum: 3,
+            qc_mode_tag: "permissioned:lane:7:dataspace:11".to_string(),
+            descriptor_hash: Hash::prehashed([0x00; Hash::LENGTH]),
+        };
+        descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
+        let mut proposal = LaneBlockProposalV1 {
+            descriptor,
+            proposal_hash: Hash::prehashed([0x00; Hash::LENGTH]),
+            payload_block_hint: None,
+        };
+        proposal.proposal_hash = proposal.computed_proposal_hash();
+        proposal
+    }
+
+    fn refresh_lane_block_descriptor_hash(proposal: &mut LaneBlockProposalV1) {
+        proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
+    }
+
+    #[test]
+    fn lane_block_vote_body_signature_preimage_binds_phase_and_descriptor() {
+        let body = sample_lane_block_vote_body(CertPhase::Prepare);
+        let preimage = body.signature_preimage();
+
+        assert!(preimage.starts_with(b"iroha:lane-block-vote:v1"));
+        assert!(preimage.len() > b"iroha:lane-block-vote:v1".len());
+
+        let mut commit_body = body.clone();
+        commit_body.phase = CertPhase::Commit;
+        assert_ne!(
+            preimage,
+            commit_body.signature_preimage(),
+            "prepare and commit lane votes must be domain-separated"
+        );
+
+        let mut descriptor_drift = body;
+        descriptor_drift.descriptor_hash = Hash::prehashed([0x29; Hash::LENGTH]);
+        assert_ne!(
+            preimage,
+            descriptor_drift.signature_preimage(),
+            "descriptor drift must change the lane vote preimage"
+        );
+    }
+
+    #[test]
+    fn lane_block_vote_body_signature_preimage_binds_replay_and_quorum_fields() {
+        let body = sample_lane_block_vote_body(CertPhase::Prepare);
+        let preimage = body.signature_preimage();
+
+        let mut cases = Vec::<(&str, LaneBlockVoteBodyV1)>::new();
+
+        let mut lane_drift = body.clone();
+        lane_drift.lane_id = LaneId::new(8);
+        cases.push(("lane id", lane_drift));
+
+        let mut dataspace_drift = body.clone();
+        dataspace_drift.dataspace_id = DataSpaceId::new(12);
+        cases.push(("dataspace id", dataspace_drift));
+
+        let mut proposal_height_drift = body.clone();
+        proposal_height_drift.proposal_height =
+            proposal_height_drift.proposal_height.saturating_add(1);
+        cases.push(("proposal height", proposal_height_drift));
+
+        let mut height_drift = body.clone();
+        height_drift.lane_block_height = height_drift.lane_block_height.saturating_add(1);
+        cases.push(("lane block height", height_drift));
+
+        let mut view_drift = body.clone();
+        view_drift.lane_block_view = view_drift.lane_block_view.saturating_add(1);
+        cases.push(("lane block view", view_drift));
+
+        let mut proposal_drift = body.clone();
+        proposal_drift.proposal_hash = Hash::prehashed([0x31; Hash::LENGTH]);
+        cases.push(("proposal hash", proposal_drift));
+
+        let mut subject_drift = body.clone();
+        subject_drift.subject_hash = Hash::prehashed([0x32; Hash::LENGTH]);
+        cases.push(("subject hash", subject_drift));
+
+        let mut ownership_drift = body.clone();
+        ownership_drift.payload_ownership_hash = Hash::prehashed([0x33; Hash::LENGTH]);
+        cases.push(("payload ownership hash", ownership_drift));
+
+        let mut rbc_drift = body.clone();
+        rbc_drift.rbc_instance_hash = Hash::prehashed([0x34; Hash::LENGTH]);
+        cases.push(("rbc instance hash", rbc_drift));
+
+        let mut candidate_indices_drift = body.clone();
+        candidate_indices_drift.accepted_candidate_indices.reverse();
+        cases.push(("accepted candidate indices", candidate_indices_drift));
+
+        let mut transaction_hashes_drift = body.clone();
+        transaction_hashes_drift
+            .accepted_transaction_hashes
+            .reverse();
+        cases.push(("accepted transaction hashes", transaction_hashes_drift));
+
+        let mut validator_hash_version_drift = body.clone();
+        validator_hash_version_drift.validator_set_hash_version = validator_hash_version_drift
+            .validator_set_hash_version
+            .saturating_add(1);
+        cases.push(("validator set hash version", validator_hash_version_drift));
+
+        let mut validator_hash_drift = body.clone();
+        validator_hash_drift.validator_set_hash =
+            HashOf::from_untyped_unchecked(Hash::prehashed([0x35; Hash::LENGTH]));
+        cases.push(("validator set hash", validator_hash_drift));
+
+        let mut validator_count_drift = body.clone();
+        validator_count_drift.validator_count =
+            validator_count_drift.validator_count.saturating_add(1);
+        cases.push(("validator count", validator_count_drift));
+
+        let mut quorum_drift = body.clone();
+        quorum_drift.min_quorum = quorum_drift.min_quorum.saturating_sub(1);
+        cases.push(("minimum quorum", quorum_drift));
+
+        let mut qc_mode_drift = body.clone();
+        qc_mode_drift.qc_mode_tag.push_str(":drift");
+        cases.push(("qc mode tag", qc_mode_drift));
+
+        for (label, drifted) in cases {
+            assert_ne!(
+                preimage,
+                drifted.signature_preimage(),
+                "{label} drift must change the lane vote preimage"
+            );
+        }
+    }
+
+    #[test]
+    fn lane_block_proposal_hashes_bind_predecessor_and_committee() {
+        let proposal = sample_lane_block_proposal();
+
+        assert_eq!(
+            proposal.descriptor.computed_descriptor_hash(),
+            proposal.descriptor.descriptor_hash
+        );
+        assert_eq!(proposal.computed_proposal_hash(), proposal.proposal_hash);
+
+        let mut predecessor_drift = proposal.clone();
+        predecessor_drift
+            .descriptor
+            .previous_lane_block_descriptor_hash = Some(Hash::prehashed([0x31; Hash::LENGTH]));
+        assert_ne!(
+            predecessor_drift.descriptor.computed_descriptor_hash(),
+            proposal.descriptor.descriptor_hash,
+            "predecessor descriptor drift must change descriptor identity"
+        );
+
+        let mut committee_drift = proposal.clone();
+        committee_drift.descriptor.validator_set.reverse();
+        assert_ne!(
+            committee_drift.descriptor.computed_descriptor_hash(),
+            proposal.descriptor.descriptor_hash,
+            "committee order drift must change descriptor identity"
+        );
+    }
+
+    #[test]
+    fn lane_block_descriptor_hash_binds_replay_and_quorum_fields() {
+        let descriptor = sample_lane_block_proposal().descriptor;
+        let mut cases = Vec::<(&str, LaneBlockDescriptorV1)>::new();
+
+        let mut lane_drift = descriptor.clone();
+        lane_drift.lane_id = LaneId::new(8);
+        cases.push(("lane id", lane_drift));
+
+        let mut dataspace_drift = descriptor.clone();
+        dataspace_drift.dataspace_id = DataSpaceId::new(12);
+        cases.push(("dataspace id", dataspace_drift));
+
+        let mut proposal_height_drift = descriptor.clone();
+        proposal_height_drift.proposal_height =
+            proposal_height_drift.proposal_height.saturating_add(1);
+        cases.push(("proposal height", proposal_height_drift));
+
+        let mut previous_height_drift = descriptor.clone();
+        previous_height_drift.previous_lane_block_height = previous_height_drift
+            .previous_lane_block_height
+            .saturating_sub(1);
+        cases.push(("previous lane block height", previous_height_drift));
+
+        let mut predecessor_drift = descriptor.clone();
+        predecessor_drift.previous_lane_block_descriptor_hash = None;
+        cases.push(("previous descriptor hash", predecessor_drift));
+
+        let mut height_drift = descriptor.clone();
+        height_drift.lane_block_height = height_drift.lane_block_height.saturating_add(1);
+        cases.push(("lane block height", height_drift));
+
+        let mut view_drift = descriptor.clone();
+        view_drift.lane_block_view = view_drift.lane_block_view.saturating_add(1);
+        cases.push(("lane block view", view_drift));
+
+        let mut subject_drift = descriptor.clone();
+        subject_drift.subject_hash = Hash::prehashed([0x31; Hash::LENGTH]);
+        cases.push(("subject hash", subject_drift));
+
+        let mut ownership_drift = descriptor.clone();
+        ownership_drift.payload_ownership_hash = Hash::prehashed([0x32; Hash::LENGTH]);
+        cases.push(("payload ownership hash", ownership_drift));
+
+        let mut rbc_drift = descriptor.clone();
+        rbc_drift.rbc_instance_hash = Hash::prehashed([0x33; Hash::LENGTH]);
+        cases.push(("rbc instance hash", rbc_drift));
+
+        let mut candidate_indices_drift = descriptor.clone();
+        candidate_indices_drift.accepted_candidate_indices.reverse();
+        cases.push(("accepted candidate indices", candidate_indices_drift));
+
+        let mut transaction_hashes_drift = descriptor.clone();
+        transaction_hashes_drift
+            .accepted_transaction_hashes
+            .reverse();
+        cases.push(("accepted transaction hashes", transaction_hashes_drift));
+
+        let mut validator_hash_version_drift = descriptor.clone();
+        validator_hash_version_drift.validator_set_hash_version = validator_hash_version_drift
+            .validator_set_hash_version
+            .saturating_add(1);
+        cases.push(("validator set hash version", validator_hash_version_drift));
+
+        let mut validator_hash_drift = descriptor.clone();
+        validator_hash_drift.validator_set_hash =
+            HashOf::from_untyped_unchecked(Hash::prehashed([0x34; Hash::LENGTH]));
+        cases.push(("validator set hash", validator_hash_drift));
+
+        let mut validator_set_drift = descriptor.clone();
+        validator_set_drift.validator_set.reverse();
+        cases.push(("validator set order", validator_set_drift));
+
+        let mut validator_count_drift = descriptor.clone();
+        validator_count_drift.validator_count =
+            validator_count_drift.validator_count.saturating_add(1);
+        cases.push(("validator count", validator_count_drift));
+
+        let mut quorum_drift = descriptor.clone();
+        quorum_drift.min_quorum = quorum_drift.min_quorum.saturating_sub(1);
+        cases.push(("minimum quorum", quorum_drift));
+
+        let mut qc_mode_drift = descriptor.clone();
+        qc_mode_drift.qc_mode_tag.push_str(":drift");
+        cases.push(("qc mode tag", qc_mode_drift));
+
+        for (label, drifted) in cases {
+            assert_ne!(
+                drifted.computed_descriptor_hash(),
+                descriptor.descriptor_hash,
+                "{label} drift must change descriptor identity"
+            );
+        }
+    }
+
+    #[test]
+    fn lane_block_proposal_hash_binds_descriptor_replay_and_quorum_fields() {
+        let proposal = sample_lane_block_proposal();
+        let mut cases = Vec::<(&str, LaneBlockProposalV1)>::new();
+
+        let mut descriptor_hash_drift = proposal.clone();
+        descriptor_hash_drift.descriptor.descriptor_hash = Hash::prehashed([0x31; Hash::LENGTH]);
+        cases.push(("descriptor hash", descriptor_hash_drift));
+
+        let mut lane_drift = proposal.clone();
+        lane_drift.descriptor.lane_id = LaneId::new(8);
+        refresh_lane_block_descriptor_hash(&mut lane_drift);
+        cases.push(("lane id", lane_drift));
+
+        let mut dataspace_drift = proposal.clone();
+        dataspace_drift.descriptor.dataspace_id = DataSpaceId::new(12);
+        refresh_lane_block_descriptor_hash(&mut dataspace_drift);
+        cases.push(("dataspace id", dataspace_drift));
+
+        let mut proposal_height_drift = proposal.clone();
+        proposal_height_drift.descriptor.proposal_height = proposal_height_drift
+            .descriptor
+            .proposal_height
+            .saturating_add(1);
+        refresh_lane_block_descriptor_hash(&mut proposal_height_drift);
+        cases.push(("proposal height", proposal_height_drift));
+
+        let mut previous_height_drift = proposal.clone();
+        previous_height_drift.descriptor.previous_lane_block_height = previous_height_drift
+            .descriptor
+            .previous_lane_block_height
+            .saturating_sub(1);
+        refresh_lane_block_descriptor_hash(&mut previous_height_drift);
+        cases.push(("previous lane block height", previous_height_drift));
+
+        let mut predecessor_drift = proposal.clone();
+        predecessor_drift
+            .descriptor
+            .previous_lane_block_descriptor_hash = None;
+        refresh_lane_block_descriptor_hash(&mut predecessor_drift);
+        cases.push(("previous descriptor hash", predecessor_drift));
+
+        let mut height_drift = proposal.clone();
+        height_drift.descriptor.lane_block_height =
+            height_drift.descriptor.lane_block_height.saturating_add(1);
+        refresh_lane_block_descriptor_hash(&mut height_drift);
+        cases.push(("lane block height", height_drift));
+
+        let mut view_drift = proposal.clone();
+        view_drift.descriptor.lane_block_view =
+            view_drift.descriptor.lane_block_view.saturating_add(1);
+        refresh_lane_block_descriptor_hash(&mut view_drift);
+        cases.push(("lane block view", view_drift));
+
+        let mut subject_drift = proposal.clone();
+        subject_drift.descriptor.subject_hash = Hash::prehashed([0x32; Hash::LENGTH]);
+        refresh_lane_block_descriptor_hash(&mut subject_drift);
+        cases.push(("subject hash", subject_drift));
+
+        let mut ownership_drift = proposal.clone();
+        ownership_drift.descriptor.payload_ownership_hash = Hash::prehashed([0x33; Hash::LENGTH]);
+        refresh_lane_block_descriptor_hash(&mut ownership_drift);
+        cases.push(("payload ownership hash", ownership_drift));
+
+        let mut rbc_drift = proposal.clone();
+        rbc_drift.descriptor.rbc_instance_hash = Hash::prehashed([0x34; Hash::LENGTH]);
+        refresh_lane_block_descriptor_hash(&mut rbc_drift);
+        cases.push(("rbc instance hash", rbc_drift));
+
+        let mut candidate_indices_drift = proposal.clone();
+        candidate_indices_drift
+            .descriptor
+            .accepted_candidate_indices
+            .reverse();
+        refresh_lane_block_descriptor_hash(&mut candidate_indices_drift);
+        cases.push(("accepted candidate indices", candidate_indices_drift));
+
+        let mut transaction_hashes_drift = proposal.clone();
+        transaction_hashes_drift
+            .descriptor
+            .accepted_transaction_hashes
+            .reverse();
+        refresh_lane_block_descriptor_hash(&mut transaction_hashes_drift);
+        cases.push(("accepted transaction hashes", transaction_hashes_drift));
+
+        let mut validator_hash_version_drift = proposal.clone();
+        validator_hash_version_drift
+            .descriptor
+            .validator_set_hash_version = validator_hash_version_drift
+            .descriptor
+            .validator_set_hash_version
+            .saturating_add(1);
+        refresh_lane_block_descriptor_hash(&mut validator_hash_version_drift);
+        cases.push(("validator set hash version", validator_hash_version_drift));
+
+        let mut validator_hash_drift = proposal.clone();
+        validator_hash_drift.descriptor.validator_set_hash =
+            HashOf::from_untyped_unchecked(Hash::prehashed([0x35; Hash::LENGTH]));
+        refresh_lane_block_descriptor_hash(&mut validator_hash_drift);
+        cases.push(("validator set hash", validator_hash_drift));
+
+        let mut validator_set_drift = proposal.clone();
+        validator_set_drift.descriptor.validator_set.reverse();
+        refresh_lane_block_descriptor_hash(&mut validator_set_drift);
+        cases.push(("validator set order", validator_set_drift));
+
+        let mut validator_count_drift = proposal.clone();
+        validator_count_drift.descriptor.validator_count = validator_count_drift
+            .descriptor
+            .validator_count
+            .saturating_add(1);
+        refresh_lane_block_descriptor_hash(&mut validator_count_drift);
+        cases.push(("validator count", validator_count_drift));
+
+        let mut quorum_drift = proposal.clone();
+        quorum_drift.descriptor.min_quorum = quorum_drift.descriptor.min_quorum.saturating_sub(1);
+        refresh_lane_block_descriptor_hash(&mut quorum_drift);
+        cases.push(("minimum quorum", quorum_drift));
+
+        let mut qc_mode_drift = proposal.clone();
+        qc_mode_drift.descriptor.qc_mode_tag.push_str(":drift");
+        refresh_lane_block_descriptor_hash(&mut qc_mode_drift);
+        cases.push(("qc mode tag", qc_mode_drift));
+
+        for (label, drifted) in cases {
+            assert_ne!(
+                drifted.computed_proposal_hash(),
+                proposal.proposal_hash,
+                "{label} drift must change proposal identity"
+            );
+        }
+    }
+
+    #[test]
+    fn lane_block_proposal_roundtrips_and_derives_vote_body() {
+        let proposal = sample_lane_block_proposal();
+        let encoded = norito::to_bytes(&proposal).expect("lane proposal encodes");
+        let decoded: LaneBlockProposalV1 =
+            norito::decode_from_bytes(&encoded).expect("lane proposal decodes");
+        assert_eq!(decoded, proposal);
+
+        let body = decoded.vote_body(CertPhase::Prepare);
+        assert_eq!(body.proposal_hash, decoded.proposal_hash);
+        assert_eq!(body.descriptor_hash, decoded.descriptor.descriptor_hash);
+        assert_eq!(body.proposal_height, decoded.descriptor.proposal_height);
+        assert_eq!(
+            body.validator_set_hash,
+            decoded.descriptor.computed_validator_set_hash()
+        );
+        assert_eq!(
+            body.accepted_transaction_hashes,
+            decoded.descriptor.accepted_transaction_hashes
+        );
     }
 
     fn sample_proposal() -> Proposal {
@@ -3846,6 +5215,182 @@ mod tests {
         assert_eq!(used, encoded.len());
     }
 
+    fn checked_seeded_peer_id(seed: u8) -> PeerId {
+        PeerId::new(
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                .expect("fixture seed must produce a keypair")
+                .public_key()
+                .clone(),
+        )
+    }
+
+    fn sample_lane_payload_ownership_with_replay_material() -> SumeragiLanePayloadOwnership {
+        let mut validator_set = vec![checked_seeded_peer_id(1), checked_seeded_peer_id(2)];
+        validator_set.sort();
+        let validator_count = u32::try_from(validator_set.len()).expect("validator count fits u32");
+        let mut ownership = SumeragiLanePayloadOwnership {
+            proposal_height: 12,
+            proposal_view: 3,
+            lane_id: LaneId::new(7),
+            dataspace_id: DataSpaceId::new(42),
+            lane_block_height: 2,
+            lane_block_view: 1,
+            subject_hash: Hash::new(b"lane subject placeholder"),
+            qc_mode_tag: "test-lane-qc-mode".to_string(),
+            accepted_candidate_indices: vec![0, 2],
+            accepted_transaction_hashes: vec![
+                Hash::new(b"lane accepted tx 0"),
+                Hash::new(b"lane accepted tx 2"),
+            ],
+            previous_lane_block_height: 1,
+            previous_lane_block_descriptor_hash: Some(Hash::new(b"lane predecessor descriptor")),
+            lane_block_descriptor_hash: Some(Hash::new(b"lane block descriptor placeholder")),
+            lane_block_descriptor_validator_set: validator_set,
+            lane_block_descriptor_validator_count: validator_count,
+            lane_block_descriptor_min_quorum: validator_count,
+            payload_ownership_hash: Hash::new(b"lane payload ownership placeholder"),
+            rbc_instance_hash: Hash::new(b"lane rbc instance placeholder"),
+        };
+        let replay_hashes = ownership
+            .compute_replay_hashes()
+            .expect("replay hashes compute for canonical lane ownership");
+        ownership.subject_hash = replay_hashes.subject_hash;
+        ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
+        ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
+        ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
+        ownership
+    }
+
+    #[test]
+    fn lane_payload_ownership_replay_material_validates_canonical_hashes() {
+        let ownership = sample_lane_payload_ownership_with_replay_material();
+        let replay_hashes = ownership
+            .compute_replay_hashes()
+            .expect("canonical replay material should hash");
+
+        assert_eq!(ownership.subject_hash, replay_hashes.subject_hash);
+        assert_eq!(
+            ownership.payload_ownership_hash,
+            replay_hashes.payload_ownership_hash
+        );
+        assert_eq!(ownership.rbc_instance_hash, replay_hashes.rbc_instance_hash);
+        assert_eq!(
+            ownership.lane_block_descriptor_hash,
+            Some(replay_hashes.lane_block_descriptor_hash)
+        );
+        ownership
+            .validate_replay_material()
+            .expect("canonical replay material should validate");
+    }
+
+    #[test]
+    fn lane_payload_ownership_replay_material_rejects_accepted_hash_drift() {
+        let mut ownership = sample_lane_payload_ownership_with_replay_material();
+        ownership.accepted_transaction_hashes[0] = Hash::new(b"forged accepted tx 0");
+
+        assert_eq!(
+            ownership.validate_replay_material(),
+            Err(SumeragiLanePayloadOwnershipReplayError::SubjectHashMismatch)
+        );
+    }
+
+    #[test]
+    fn lane_payload_ownership_replay_material_rejects_proposal_height_drift() {
+        let mut ownership = sample_lane_payload_ownership_with_replay_material();
+        ownership.proposal_height = ownership.proposal_height.saturating_add(1);
+
+        assert_eq!(
+            ownership.validate_replay_material(),
+            Err(SumeragiLanePayloadOwnershipReplayError::DescriptorHashMismatch)
+        );
+    }
+
+    #[test]
+    fn lane_payload_ownership_replay_material_rejects_defaulted_candidate_hashes() {
+        let mut ownership = sample_lane_payload_ownership_with_replay_material();
+        ownership.accepted_transaction_hashes.clear();
+
+        assert_eq!(
+            ownership.validate_replay_material(),
+            Err(SumeragiLanePayloadOwnershipReplayError::CandidateHashCountMismatch)
+        );
+    }
+
+    #[test]
+    fn lane_payload_ownership_replay_material_rejects_defaulted_predecessor_height() {
+        let mut ownership = sample_lane_payload_ownership_with_replay_material();
+        ownership.previous_lane_block_height = 0;
+
+        assert_eq!(
+            ownership.validate_replay_material(),
+            Err(SumeragiLanePayloadOwnershipReplayError::PreviousLaneBlockHeightMismatch)
+        );
+    }
+
+    #[test]
+    fn lane_payload_ownership_replay_material_rejects_missing_descriptor_hash() {
+        let mut ownership = sample_lane_payload_ownership_with_replay_material();
+        ownership.lane_block_descriptor_hash = None;
+
+        assert_eq!(
+            ownership.validate_replay_material(),
+            Err(SumeragiLanePayloadOwnershipReplayError::MissingDescriptorHash)
+        );
+    }
+
+    #[test]
+    fn lane_payload_ownership_replay_material_rejects_empty_validator_set() {
+        let mut ownership = sample_lane_payload_ownership_with_replay_material();
+        ownership.lane_block_descriptor_validator_set.clear();
+        ownership.lane_block_descriptor_validator_count = 0;
+        ownership.lane_block_descriptor_min_quorum = 0;
+
+        assert_eq!(
+            ownership.validate_replay_material(),
+            Err(SumeragiLanePayloadOwnershipReplayError::EmptyValidatorSet)
+        );
+    }
+
+    #[test]
+    fn lane_payload_ownership_replay_material_rejects_validator_count_drift() {
+        let mut ownership = sample_lane_payload_ownership_with_replay_material();
+        ownership.lane_block_descriptor_validator_count = ownership
+            .lane_block_descriptor_validator_count
+            .saturating_add(1);
+
+        assert_eq!(
+            ownership.validate_replay_material(),
+            Err(SumeragiLanePayloadOwnershipReplayError::ValidatorCountMismatch)
+        );
+    }
+
+    #[test]
+    fn lane_payload_ownership_replay_material_rejects_noncanonical_validator_set() {
+        let mut ownership = sample_lane_payload_ownership_with_replay_material();
+        ownership.lane_block_descriptor_validator_set.reverse();
+
+        assert_eq!(
+            ownership.validate_replay_material(),
+            Err(SumeragiLanePayloadOwnershipReplayError::ValidatorSetNotCanonical)
+        );
+    }
+
+    #[test]
+    fn lane_payload_ownership_replay_material_rejects_genesis_predecessor_descriptor() {
+        let mut ownership = sample_lane_payload_ownership_with_replay_material();
+        ownership.lane_block_height = 1;
+        ownership.previous_lane_block_height = 0;
+        ownership.previous_lane_block_descriptor_hash =
+            Some(Hash::new(b"unexpected genesis predecessor descriptor"));
+
+        assert_eq!(
+            ownership.validate_replay_material(),
+            Err(
+                SumeragiLanePayloadOwnershipReplayError::UnexpectedGenesisPredecessorDescriptorHash
+            )
+        );
+    }
+
     #[test]
     fn lane_payload_ownership_status_roundtrip_codec() {
         let ownership = SumeragiLanePayloadOwnership {
@@ -3858,6 +5403,16 @@ mod tests {
             subject_hash: Hash::new(b"lane subject"),
             qc_mode_tag: "test-lane-qc-mode".to_string(),
             accepted_candidate_indices: vec![0, 2],
+            accepted_transaction_hashes: vec![
+                Hash::new(b"lane accepted tx 0"),
+                Hash::new(b"lane accepted tx 2"),
+            ],
+            previous_lane_block_height: 1,
+            previous_lane_block_descriptor_hash: Some(Hash::new(b"lane predecessor descriptor")),
+            lane_block_descriptor_hash: Some(Hash::new(b"lane block descriptor")),
+            lane_block_descriptor_validator_set: Vec::new(),
+            lane_block_descriptor_validator_count: 0,
+            lane_block_descriptor_min_quorum: 0,
             payload_ownership_hash: Hash::new(b"lane payload ownership"),
             rbc_instance_hash: Hash::new(b"lane rbc instance"),
         };

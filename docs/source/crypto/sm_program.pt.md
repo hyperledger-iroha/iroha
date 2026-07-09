@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/crypto/sm_program.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 08e2e1e4a54390d9142d6788aad2385e93282a33423b9fc7f3418e3633f3f86a
+source_hash: 2d65304e93effdc04fc35690fe3d4fb1c11ed5fd5963cdda9d84f617891b8ca5
 source_last_modified: "2026-01-23T18:50:10.586502+00:00"
 translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
@@ -80,7 +80,7 @@ implantações mistas onde observadores somente Ed25519 se conectam a validadore
 registrado em `WARN`, mas os nós de consenso devem manter os padrões habilitados para evitar acidentes
 divergência entre pares com conhecimento de SM e com deficiência de SM.
 A CLI apresenta essas alternâncias por meio da atualização de handshake do `iroha_cli app sorafs
---allow-sm-handshake-mismatch` and `--allow-sm-openssl-preview-mismatch`, or the matching `--require-*`
+--require-sm-handshake-match` and `--require-sm-openssl-preview-match`, or the matching `--require-*`
 sinalizadores para restaurar a aplicação estrita.#### Visualização do OpenSSL/Tongsuo (`sm-ffi-openssl`)
 - **Escopo.** Cria um shim de provedor somente para visualização (`OpenSslProvider`) que valida a disponibilidade do tempo de execução OpenSSL e expõe hashing SM3 apoiado por OpenSSL, verificação SM2 e criptografia/descriptografia SM4-GCM, permanecendo ativo. Os binários de consenso devem continuar usando o caminho RustCrypto; o back-end da FFI é estritamente opcional para pilotos de verificação/assinatura de borda.
 - **Pré-requisitos de compilação.** Compile com `cargo build -p iroha_crypto --features "sm sm-ffi-openssl"` e garanta os links do conjunto de ferramentas com OpenSSL/Tongsuo 3.0+ (`libcrypto` com suporte SM2/SM3/SM4). A vinculação estática é desencorajada; prefira bibliotecas dinâmicas gerenciadas pelo operador.

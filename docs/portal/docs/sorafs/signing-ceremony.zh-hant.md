@@ -74,8 +74,9 @@ cargo xtask sorafs-fetch-fixture \
   --out fixtures/sorafs_chunker
 ```
 
-如果清單位於不同的 URL，則傳遞 `--manifest`。未簽名的信封
-除非為本地煙霧運行設置 `--allow-unsigned`，否則將被拒絕。
+Pass `--manifest` if the manifest lives at a different URL or path. The
+command refuses unsigned envelopes; use the Parliament-published envelope or a
+locally generated council-signed envelope for smoke runs.
 
 - 通過暫存網關驗證清單時，目標為 Torii 而不是
   本地有效負載：

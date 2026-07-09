@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs/developer/orchestrator_tuning.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e220b21c725b607416869d20b3f39c58bba011a701eefbeb376c6cca7f09029d
+source_hash: a708f49ac9aad2e9e4cfd9697197da15cedeec50b4321d817ed4394333631c17
 source_last_modified: "2026-01-22T15:38:30.691937+00:00"
 translation_last_reviewed: 2026-01-30
 ---
@@ -141,9 +141,9 @@ tuning:
 - **Concurrency:** Leave `global_parallel_limit` unset (`None`) unless a
   specific environment cannot saturate the advertised ranges. When set, ensure
   the value is ≤ the sum of provider stream budgets to avoid starvation.
-- **Verification toggles:** `verify_lengths` and `verify_digests` must remain
-  enabled in production. They guarantee determinism when mixed provider fleets
-  are in play; only disable them in isolated fuzzing environments.
+- **Verification fields:** `verify_lengths` and `verify_digests` must remain
+  enabled. First-release parsers reject `false` values so every fetch validates
+  chunk length and BLAKE3 digest before accepting provider bytes.
 
 ## 4. Transport & Anonymity Staging
 

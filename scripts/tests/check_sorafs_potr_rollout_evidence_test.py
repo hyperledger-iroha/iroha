@@ -863,6 +863,76 @@ def test_all_reputation_weight_bound_artifacts_reject_governance_mismatch(
         ) in artifact["errors"]
 
 
+def test_multiple_valid_receipt_summary_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = multi_provider_probe()
+    payload["receipt_summary_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "multi-provider-probe-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_receipt_summary_digests"] == []
+    assert (
+        "valid_receipt_summary_digests must contain exactly one active digest"
+        in result["errors"]
+    )
+
+
+def test_multiple_valid_pq_key_roster_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    write_json(
+        tmp_path / "governance-approval-alt.json",
+        governance_approval(pq_key_roster_digest=DIGEST_2),
+    )
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_pq_key_roster_digests"] == []
+    assert (
+        "valid_pq_key_roster_digests must contain exactly one active digest"
+        in result["errors"]
+    )
+
+
+def test_multiple_valid_reputation_weight_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    write_json(
+        tmp_path / "governance-approval-alt.json",
+        governance_approval(reputation_weight_policy_digest=DIGEST_2),
+    )
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_reputation_weight_policy_digests"] == []
+    assert (
+        "valid_reputation_weight_policy_digests must contain exactly one active digest"
+        in result["errors"]
+    )
+
+
+def test_multiple_valid_policy_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_approval()
+    payload["policy_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "governance-approval-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_policy_digests"] == []
+    assert (
+        "valid_policy_digests must contain exactly one active digest"
+        in result["errors"]
+    )
+
+
 def test_observability_critical_alert_fails(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     write_json(tmp_path / "observability.json", observability(critical=True))

@@ -27,12 +27,12 @@ translation_last_reviewed: 2026-01-30
 
 ## 1. تحديث الـ fixtures الحتمية
 
-أعد توليد متجهات التقسيم (chunking) القياسية لـ SF-1. كما يُصدر الأمر مظاريف
-مانيفست موقعة عند تزويد `--signing-key`؛ استخدم `--allow-unsigned` أثناء التطوير
-المحلي فقط.
+Regenerate the canonical SF-1 chunking vectors. The command verifies the
+existing council signature file, or appends a signature when `--signing-key` is
+supplied.
 
 ```bash
-cargo run -p sorafs_chunker --bin export_vectors -- --allow-unsigned
+cargo run -p sorafs_chunker --bin export_vectors -- --signing-key=<ed25519-private-key-hex>
 ```
 
 المخرجات:
@@ -77,7 +77,7 @@ cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   --manifest-out=/tmp/docs.manifest \
   --manifest-signatures-out=/tmp/docs.manifest_signatures.json \
   --json-out=/tmp/docs.report.json \
-  --allow-unsigned
+  --council-signature=<signerhex>:<signaturehex>
 ```
 
 راجع `/tmp/docs.report.json` من أجل:
@@ -87,8 +87,9 @@ cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
 - `manifest.manifest_blake3` – بصمة BLAKE3 الموقعة ضمن ظرف المانيفست.
 - `chunk_fetch_specs[]` – تعليمات جلب مرتبة للأوركستراتورات.
 
-عندما تكون جاهزًا لتقديم تواقيع حقيقية، أضف الوسيطين `--signing-key` و `--signer`.
-يتحقق الأمر من كل توقيع Ed25519 قبل كتابة الظرف.
+The `--council-signature` value must be a reviewed council signer public key and
+Ed25519 signature pair. The command verifies every Ed25519 signature before
+writing the envelope.
 
 ## 4. حاكِ الاسترجاع متعدد المزوّدين
 

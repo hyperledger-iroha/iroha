@@ -132,9 +132,9 @@ tuning:
 - **Concurrency:** Leave `global_parallel_limit` unset (`None`) unless a
   specific environment cannot saturate the advertised ranges. When set, ensure
   the value is ≤ the sum of provider stream budgets to avoid starvation.
-- **Verification toggles:** `verify_lengths` and `verify_digests` must remain
-  enabled in production. They guarantee determinism when mixed provider fleets
-  are in play; only disable them in isolated fuzzing environments.
+- **Verification fields:** `verify_lengths` and `verify_digests` must remain
+  enabled. First-release parsers reject `false` values so every fetch validates
+  chunk length and BLAKE3 digest before accepting provider bytes.
 
 ## 4. Transport & Anonymity Staging
 

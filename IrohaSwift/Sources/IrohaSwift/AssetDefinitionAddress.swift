@@ -128,6 +128,19 @@ public enum AssetDefinitionAddressCodec {
         }
         return trimmed
     }
+
+    public static func uuidBytes(_ rawLiteral: String?) -> Data? {
+        let trimmed = rawLiteral?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty,
+              trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) == nil else {
+            return nil
+        }
+        return AssetDefinitionAddress.decode(trimmed)
+    }
+
+    public static func definitionLiteral(uuidBytes: Data) -> String? {
+        AssetDefinitionAddress.encode(uuidBytes: uuidBytes)
+    }
 }
 
 private enum AssetDefinitionAddressBlake3 {

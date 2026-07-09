@@ -49,9 +49,9 @@ public final class KagemushaRecursiveSpendProverTest {
 
   @Test
   public void recursiveSpendWitnesslessPolicyFailsClosedAtBounds() {
-    assertTrue(
+    assertFalse(
         KagemushaRecursiveSpendProver.canRedeemWitnessless(
-            KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+            "kagemusha-recursive-spend-lineage-v1",
             1));
     assertTrue(
         KagemushaRecursiveSpendProver.canRedeemWitnessless(
@@ -67,11 +67,11 @@ public final class KagemushaRecursiveSpendProverTest {
             1));
     assertFalse(
         KagemushaRecursiveSpendProver.canRedeemWitnessless(
-            KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+            "kagemusha-recursive-spend-lineage-v1",
             0));
     assertFalse(
         KagemushaRecursiveSpendProver.canRedeemWitnessless(
-            KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+            "kagemusha-recursive-spend-lineage-v1",
             KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1 + 1));
     assertTrue(KagemushaRecursiveSpendProver.canAppendWitnesslessLineage(63));
     assertFalse(KagemushaRecursiveSpendProver.canAppendWitnesslessLineage(64));

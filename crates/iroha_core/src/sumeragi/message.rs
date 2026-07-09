@@ -63,10 +63,16 @@ pub enum BlockMessage {
     ProposalHint(#[skip_try_from] ProposalHint),
     /// Full proposal header + payload hash. Used for on-wire parent/HighestQC checks.
     Proposal(#[skip_try_from] super::consensus::Proposal),
+    /// Standalone lane-local block proposal.
+    LaneBlockProposal(#[skip_try_from] super::consensus::LaneBlockProposalV1),
     /// Commit vote (Prepare/Commit/NewView) carrying a BLS signature.
     QcVote(#[skip_try_from] super::consensus::QcVote),
     /// Commit certificate (Prepare/Commit/NewView) aggregating BLS signatures.
     Qc(#[skip_try_from] super::consensus::Qc),
+    /// Standalone lane-local block vote carrying a BLS signature.
+    LaneBlockVote(#[skip_try_from] crate::lane_consensus::LaneBlockVoteV1),
+    /// Standalone lane-local block QC aggregating lane-validator BLS signatures.
+    LaneBlockQc(#[skip_try_from] super::consensus::LaneBlockQcV1),
 }
 
 impl BlockMessage {
@@ -901,7 +907,7 @@ mod tests {
             types::{BlobDigest, RetentionPolicy, StorageTicketId},
         },
         isi::Log,
-        nexus::LaneId,
+        nexus::{DataSpaceId, LaneId},
         sorafs::pin_registry::ManifestDigest,
         transaction::TransactionBuilder,
     };
@@ -1096,6 +1102,67 @@ mod tests {
             idx,
             bytes,
         }
+    }
+
+    fn sample_lane_block_messages(
+        seed: u8,
+    ) -> (
+        consensus::LaneBlockProposalV1,
+        crate::lane_consensus::LaneBlockVoteV1,
+        consensus::LaneBlockQcV1,
+    ) {
+        let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+            .expect("derive lane-block fixture key");
+        let validator = PeerId::from(keypair.public_key().clone());
+        let validator_set = vec![validator.clone()];
+        let mut descriptor = consensus::LaneBlockDescriptorV1 {
+            lane_id: LaneId::new(u32::from(seed % 11) + 1),
+            dataspace_id: DataSpaceId::new(u64::from(seed % 13) + 1),
+            proposal_height: u64::from(seed).saturating_add(1),
+            previous_lane_block_height: 0,
+            previous_lane_block_descriptor_hash: None,
+            lane_block_height: u64::from(seed).saturating_add(1),
+            lane_block_view: u64::from(seed % 3),
+            subject_hash: Hash::prehashed([seed.wrapping_add(1); Hash::LENGTH]),
+            payload_ownership_hash: Hash::prehashed([seed.wrapping_add(2); Hash::LENGTH]),
+            rbc_instance_hash: Hash::prehashed([seed.wrapping_add(3); Hash::LENGTH]),
+            accepted_candidate_indices: vec![0],
+            accepted_transaction_hashes: vec![Hash::prehashed(
+                [seed.wrapping_add(4); Hash::LENGTH],
+            )],
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set: validator_set.clone(),
+            validator_count: 1,
+            min_quorum: 1,
+            qc_mode_tag: "permissioned:lane:fixture".to_owned(),
+            descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
+        };
+        descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
+        let mut proposal = consensus::LaneBlockProposalV1 {
+            descriptor,
+            proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+            payload_block_hint: None,
+        };
+        proposal.proposal_hash = proposal.computed_proposal_hash();
+
+        let body = proposal.vote_body(consensus::Phase::Prepare);
+        let signature = Signature::try_new(keypair.private_key(), &body.signature_preimage())
+            .expect("sign lane-block fixture vote");
+        let vote = crate::lane_consensus::LaneBlockVoteV1 {
+            body: body.clone(),
+            signer: validator,
+            bls_signature: signature.payload().to_vec(),
+        };
+        let qc = consensus::LaneBlockQcV1 {
+            body,
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set,
+            signers_bitmap: vec![1],
+            bls_aggregate_signature: vote.bls_signature.clone(),
+        };
+        (proposal, vote, qc)
     }
 
     fn assert_compact_matches_chunk(compact: &RbcChunkCompact, chunk: &consensus::RbcChunk) {
@@ -1515,6 +1582,7 @@ mod tests {
         };
         let fetch_proof = sample_certified_block_fetch_proof(0x9A);
         let fetch_body = sample_certified_block_fetch_body(0x9B);
+        let (lane_proposal, lane_vote, lane_qc) = sample_lane_block_messages(0xA7);
 
         let messages = vec![
             (
@@ -1638,8 +1706,14 @@ mod tests {
                 }),
             ),
             ("Proposal", BlockMessage::Proposal(proposal)),
+            (
+                "LaneBlockProposal",
+                BlockMessage::LaneBlockProposal(lane_proposal),
+            ),
             ("QcVote", BlockMessage::QcVote(sample_qc_vote(0xA5))),
             ("Qc", BlockMessage::Qc(sample_qc(0xA6))),
+            ("LaneBlockVote", BlockMessage::LaneBlockVote(lane_vote)),
+            ("LaneBlockQc", BlockMessage::LaneBlockQc(lane_qc)),
         ];
 
         for (variant, message) in messages {
@@ -2242,6 +2316,37 @@ mod tests {
                 );
             }
             other => panic!("expected cached sumeragi block message, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn block_message_wire_network_roundtrip_cached_lane_block_messages() {
+        let (proposal, vote, qc) = sample_lane_block_messages(0x71);
+        let cases = vec![
+            ("lane proposal", BlockMessage::LaneBlockProposal(proposal)),
+            ("lane vote", BlockMessage::LaneBlockVote(vote)),
+            ("lane QC", BlockMessage::LaneBlockQc(qc)),
+        ];
+
+        for (label, message) in cases {
+            let decoded = roundtrip_cached_block_message_over_network_message(message);
+            match decoded {
+                crate::NetworkMessage::SumeragiBlock(wire) => {
+                    let matches_variant = match (label, wire.as_ref().as_message()) {
+                        ("lane proposal", BlockMessage::LaneBlockProposal(_))
+                        | ("lane vote", BlockMessage::LaneBlockVote(_))
+                        | ("lane QC", BlockMessage::LaneBlockQc(_)) => true,
+                        _ => false,
+                    };
+                    assert!(matches_variant, "{label} roundtrip changed variant");
+                    assert!(
+                        wire.as_ref()
+                            .encoded_len()
+                            .is_some_and(|len| len >= norito_core::Header::SIZE)
+                    );
+                }
+                other => panic!("expected cached sumeragi block message, got {other:?}"),
+            }
         }
     }
 

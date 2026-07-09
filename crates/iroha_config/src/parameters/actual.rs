@@ -1417,7 +1417,7 @@ impl SoranetPow {
     /// Default PoW admission policy applied when no override is supplied.
     pub const fn default_const() -> Self {
         Self {
-            required: false,
+            required: true,
             difficulty: 0,
             max_future_skew: Duration::from_secs(300),
             min_ticket_ttl: Duration::from_secs(30),

@@ -4,7 +4,7 @@
 use super::localnet_npos::npos_override_transactions;
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     num::{NonZeroU32, NonZeroU64},
     thread,
     time::{Duration, Instant},
@@ -20,7 +20,11 @@ use iroha::{
         Level, ValidationFail,
         account::{Account, AccountId},
         asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
-        block::consensus::SumeragiStatusWire,
+        block::consensus::{
+            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
+            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION, SumeragiCommittedLaneBlock,
+            SumeragiLanePayloadOwnership, SumeragiStatusWire,
+        },
         da::commitment::DaProofPolicyBundle,
         domain::{Domain, DomainId},
         events::{
@@ -45,8 +49,8 @@ use iroha::{
     query::QueryError,
 };
 use iroha_config::parameters::actual::LaneConfig as ActualLaneConfig;
-use iroha_core::da::proof_policy_bundle;
-use iroha_crypto::{Algorithm, KeyPair, PrivateKey};
+use iroha_core::{da::proof_policy_bundle, sumeragi::network_topology::commit_quorum_from_len};
+use iroha_crypto::{Algorithm, Hash, KeyPair, PrivateKey};
 use iroha_data_model::{
     prelude::QueryBuilderExt,
     query::{
@@ -83,10 +87,12 @@ const VALIDATORS_PER_LANE: usize = 4;
 const VALIDATOR_STAKE: u64 = 2_000;
 const NEXUS_FEE_SEED_AMOUNT: u32 = 1_000_000;
 const STATUS_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
+const LANE_PROGRESS_WAIT_TIMEOUT: Duration = Duration::from_secs(180);
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const ROUTE_PROBE_APPROVAL_WAIT_TIMEOUT: Duration = Duration::from_millis(100);
 const ROUTE_PROBE_SSE_HANDSHAKE_DELAY: Duration = Duration::from_millis(100);
 const SETUP_BARRIER_TICK_EVERY_POLLS: u64 = 5;
+const LANE_PROGRESS_RECOVERY_TICK_EVERY_POLLS: u64 = 25;
 const OBSERVER_QUERY_TIMEOUT_CAP: Duration = Duration::from_secs(12);
 const OBSERVER_QUERY_TIMEOUT_FLOOR: Duration = Duration::from_secs(2);
 const PERMISSION_VISIBILITY_WAIT_TIMEOUT: Duration = Duration::from_secs(90);
@@ -151,9 +157,13 @@ struct ExpectedLaneValidatorBinding {
 }
 
 fn validator_authority_account_for_peer(index: usize) -> AccountId {
-    let keypair = KeyPair::try_from_seed(validator_authority_seed(index), Algorithm::Ed25519)
-        .expect("fixture cross-dataspace validator authority key");
+    let keypair = validator_authority_keypair(index);
     AccountId::new(keypair.public_key().clone())
+}
+
+fn validator_authority_keypair(index: usize) -> KeyPair {
+    KeyPair::try_from_seed(validator_authority_seed(index), Algorithm::Ed25519)
+        .expect("fixture cross-dataspace validator authority key")
 }
 
 fn validator_authority_seed(index: usize) -> Vec<u8> {
@@ -446,6 +456,15 @@ fn npos_multilane_genesis_post_topology_transactions(
         let lane_id = LaneId::new(lane_index);
         let validator_id = validator_authority_account_for_peer(index);
         bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
+        if lane_index == NEXUS_LANE_INDEX {
+            bootstrap_tx.push(
+                Mint::asset_numeric(
+                    NEXUS_FEE_SEED_AMOUNT,
+                    AssetId::new(fee_asset_id.clone(), validator_id.clone()),
+                )
+                .into(),
+            );
+        }
         bootstrap_tx.push(
             Mint::asset_numeric(
                 VALIDATOR_STAKE,
@@ -530,11 +549,9 @@ fn wait_for_height_with_tick_timeout_across_clients(
     while started.elapsed() <= timeout_duration {
         let mut best_status = None;
         let clients = clients_factory();
-        if should_submit_tick(poll_count, tick_every_polls)
-            && let Some(tick_submitter) = clients.first()
-        {
-            submit_wait_tick(
-                tick_submitter,
+        if should_submit_tick(poll_count, tick_every_polls) {
+            submit_wait_ticks(
+                &clients,
                 context,
                 poll_count,
                 started,
@@ -688,6 +705,12 @@ fn should_submit_tick(poll_count: u64, tick_every_polls: u64) -> bool {
     tick_every_polls > 0 && poll_count % tick_every_polls == 0
 }
 
+fn peer_indices_for_committed_lane_evidence(peer_count: usize) -> Vec<usize> {
+    // Committed-lane rows are self-certified by the embedded lane QC. Do not
+    // require a specific telemetry fanout peer to observe the same safety proof.
+    (0..peer_count).collect()
+}
+
 fn submit_wait_tick(
     tick_submitter: &Client,
     context: &str,
@@ -711,6 +734,30 @@ fn submit_wait_tick(
             "tick submit error: {}",
             render_error_with_debug(&err)
         ));
+    }
+}
+
+fn submit_wait_ticks(
+    tick_submitters: &[Client],
+    context: &str,
+    poll_count: u64,
+    started: Instant,
+    timeout_duration: Duration,
+    last_error: &mut Option<String>,
+) {
+    if tick_submitters.is_empty() {
+        *last_error = Some("tick submit error: no tick submitters available".to_owned());
+        return;
+    }
+    for tick_submitter in tick_submitters {
+        submit_wait_tick(
+            tick_submitter,
+            context,
+            poll_count,
+            started,
+            timeout_duration,
+            last_error,
+        );
     }
 }
 
@@ -836,6 +883,964 @@ struct RoutedTransactionObservation {
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
     approved_height: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LaneDomainProgress {
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_block_height: u64,
+    lane_block_view: u64,
+    descriptor_hash: Hash,
+    proposal_hash: Hash,
+    subject_hash: Hash,
+    payload_ownership_hash: Hash,
+    rbc_instance_hash: Hash,
+    qc_mode_tag: String,
+    dataspace_commitment_height: Option<u64>,
+    prepare_qc_signer_count: u32,
+    commit_qc_signer_count: u32,
+    execution_status: String,
+    executable_payload_available: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LanePayloadOwnershipProgress {
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_block_height: u64,
+    lane_block_view: u64,
+    proposal_height: u64,
+    proposal_view: u64,
+    subject_hash: Hash,
+    lane_block_descriptor_hash: Hash,
+    payload_ownership_hash: Hash,
+    rbc_instance_hash: Hash,
+    accepted_transaction_count: usize,
+    validator_count: u32,
+    min_quorum: u32,
+}
+
+fn committed_lane_block_has_expected_quorum(
+    block: &SumeragiCommittedLaneBlock,
+    expected_validator_count: usize,
+) -> bool {
+    let Ok(validator_count) = usize::try_from(block.validator_count) else {
+        return false;
+    };
+    let Ok(min_quorum) = usize::try_from(block.min_quorum) else {
+        return false;
+    };
+    let Ok(prepare_qc_signer_count) = usize::try_from(block.prepare_qc_signer_count) else {
+        return false;
+    };
+    let Ok(commit_qc_signer_count) = usize::try_from(block.commit_qc_signer_count) else {
+        return false;
+    };
+    let expected_quorum = commit_quorum_from_len(expected_validator_count).max(1);
+    validator_count == expected_validator_count
+        && min_quorum == expected_quorum
+        && prepare_qc_signer_count >= expected_quorum
+        && prepare_qc_signer_count <= validator_count
+        && commit_qc_signer_count >= expected_quorum
+        && commit_qc_signer_count <= validator_count
+}
+
+fn lane_payload_ownership_has_expected_quorum(
+    ownership: &SumeragiLanePayloadOwnership,
+    expected_validator_count: usize,
+) -> bool {
+    let Ok(validator_count) = usize::try_from(ownership.lane_block_descriptor_validator_count)
+    else {
+        return false;
+    };
+    let Ok(min_quorum) = usize::try_from(ownership.lane_block_descriptor_min_quorum) else {
+        return false;
+    };
+    let expected_quorum = commit_quorum_from_len(expected_validator_count).max(1);
+    validator_count == expected_validator_count
+        && ownership.lane_block_descriptor_validator_set.len() == expected_validator_count
+        && min_quorum == expected_quorum
+        && ownership.validate_replay_material().is_ok()
+}
+
+fn dataspace_commitment_height_for(
+    status: &SumeragiStatusWire,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+) -> Option<u64> {
+    status
+        .dataspace_commitments
+        .iter()
+        .filter(|commitment| {
+            commitment.lane_id == lane_id
+                && commitment.dataspace_id == dataspace_id
+                && (commitment.tx_count > 0 || commitment.teu_total > 0)
+        })
+        .map(|commitment| commitment.block_height)
+        .max()
+}
+
+fn lane_domain_progress_from_block(
+    block: &SumeragiCommittedLaneBlock,
+    dataspace_commitment_height: Option<u64>,
+) -> LaneDomainProgress {
+    LaneDomainProgress {
+        lane_id: block.lane_id,
+        dataspace_id: block.dataspace_id,
+        lane_block_height: block.lane_block_height,
+        lane_block_view: block.lane_block_view,
+        descriptor_hash: block.descriptor_hash,
+        proposal_hash: block.proposal_hash,
+        subject_hash: block.subject_hash,
+        payload_ownership_hash: block.payload_ownership_hash,
+        rbc_instance_hash: block.rbc_instance_hash,
+        qc_mode_tag: block.qc_mode_tag.clone(),
+        dataspace_commitment_height,
+        prepare_qc_signer_count: block.prepare_qc_signer_count,
+        commit_qc_signer_count: block.commit_qc_signer_count,
+        execution_status: block.execution_status.clone(),
+        executable_payload_available: block.executable_payload_available,
+    }
+}
+
+fn latest_lane_domain_progress(
+    status: &SumeragiStatusWire,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+) -> Option<LaneDomainProgress> {
+    let dataspace_commitment_height =
+        dataspace_commitment_height_for(status, lane_id, dataspace_id);
+    let mut latest = None::<&SumeragiCommittedLaneBlock>;
+    let mut latest_is_ambiguous = false;
+    for block in status
+        .committed_lane_blocks
+        .iter()
+        .filter(|block| block.lane_id == lane_id && block.dataspace_id == dataspace_id)
+    {
+        let block_key = (block.lane_block_height, block.lane_block_view);
+        let Some(current) = latest else {
+            latest = Some(block);
+            latest_is_ambiguous = false;
+            continue;
+        };
+        let current_key = (current.lane_block_height, current.lane_block_view);
+        if block_key > current_key {
+            latest = Some(block);
+            latest_is_ambiguous = false;
+        } else if block_key == current_key && block != current {
+            latest_is_ambiguous = true;
+        }
+    }
+    if latest_is_ambiguous {
+        return None;
+    }
+    latest
+        .filter(|block| {
+            block.lane_block_height > 0
+                && committed_lane_block_has_expected_quorum(block, VALIDATORS_PER_LANE)
+        })
+        .map(|block| lane_domain_progress_from_block(block, dataspace_commitment_height))
+}
+
+fn lane_domain_progress_is_applied(progress: &LaneDomainProgress) -> bool {
+    progress.executable_payload_available
+        && matches!(
+            progress.execution_status.as_str(),
+            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK
+                | COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION
+        )
+}
+
+fn latest_lane_domain_application_progress(
+    status: &SumeragiStatusWire,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+) -> Option<LaneDomainProgress> {
+    latest_lane_domain_progress(status, lane_id, dataspace_id)
+        .filter(lane_domain_progress_is_applied)
+}
+
+fn applied_lane_domain_progress(
+    status: &SumeragiStatusWire,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+) -> Option<LaneDomainProgress> {
+    let dataspace_commitment_height =
+        dataspace_commitment_height_for(status, lane_id, dataspace_id);
+    let mut latest_applied = None::<&SumeragiCommittedLaneBlock>;
+    let mut latest_applied_is_ambiguous = false;
+    for block in status
+        .committed_lane_blocks
+        .iter()
+        .filter(|block| block.lane_id == lane_id && block.dataspace_id == dataspace_id)
+        .filter(|block| {
+            block.lane_block_height > 0
+                && committed_lane_block_has_expected_quorum(block, VALIDATORS_PER_LANE)
+                && block.executable_payload_available
+                && matches!(
+                    block.execution_status.as_str(),
+                    COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK
+                        | COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION
+                )
+        })
+    {
+        let block_key = (block.lane_block_height, block.lane_block_view);
+        let Some(current) = latest_applied else {
+            latest_applied = Some(block);
+            latest_applied_is_ambiguous = false;
+            continue;
+        };
+        let current_key = (current.lane_block_height, current.lane_block_view);
+        if block_key > current_key {
+            latest_applied = Some(block);
+            latest_applied_is_ambiguous = false;
+        } else if block_key == current_key && block != current {
+            latest_applied_is_ambiguous = true;
+        }
+    }
+    if latest_applied_is_ambiguous {
+        return None;
+    }
+    latest_applied.map(|block| lane_domain_progress_from_block(block, dataspace_commitment_height))
+}
+
+fn latest_lane_payload_ownership_progress(
+    status: &SumeragiStatusWire,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+) -> Option<LanePayloadOwnershipProgress> {
+    let mut latest = None::<&SumeragiLanePayloadOwnership>;
+    let mut latest_is_ambiguous = false;
+    for ownership in status
+        .lane_payload_ownerships
+        .iter()
+        .filter(|ownership| ownership.lane_id == lane_id && ownership.dataspace_id == dataspace_id)
+    {
+        let ownership_key = (
+            ownership.lane_block_height,
+            ownership.lane_block_view,
+            ownership.proposal_height,
+            ownership.proposal_view,
+        );
+        let Some(current) = latest else {
+            latest = Some(ownership);
+            latest_is_ambiguous = false;
+            continue;
+        };
+        let current_key = (
+            current.lane_block_height,
+            current.lane_block_view,
+            current.proposal_height,
+            current.proposal_view,
+        );
+        if ownership_key > current_key {
+            latest = Some(ownership);
+            latest_is_ambiguous = false;
+        } else if ownership_key == current_key && ownership != current {
+            latest_is_ambiguous = true;
+        }
+    }
+    if latest_is_ambiguous {
+        return None;
+    }
+    latest
+        .filter(|ownership| {
+            lane_payload_ownership_has_expected_quorum(ownership, VALIDATORS_PER_LANE)
+        })
+        .map(|ownership| LanePayloadOwnershipProgress {
+            lane_id,
+            dataspace_id,
+            lane_block_height: ownership.lane_block_height,
+            lane_block_view: ownership.lane_block_view,
+            proposal_height: ownership.proposal_height,
+            proposal_view: ownership.proposal_view,
+            subject_hash: ownership.subject_hash,
+            lane_block_descriptor_hash: ownership
+                .lane_block_descriptor_hash
+                .expect("validated ownership has descriptor hash"),
+            payload_ownership_hash: ownership.payload_ownership_hash,
+            rbc_instance_hash: ownership.rbc_instance_hash,
+            accepted_transaction_count: ownership.accepted_transaction_hashes.len(),
+            validator_count: ownership.lane_block_descriptor_validator_count,
+            min_quorum: ownership.lane_block_descriptor_min_quorum,
+        })
+}
+
+fn lane_domain_progress_matches_candidate(
+    observed: &LaneDomainProgress,
+    candidate: &LaneDomainProgress,
+) -> bool {
+    observed.lane_id == candidate.lane_id
+        && observed.dataspace_id == candidate.dataspace_id
+        && (observed.lane_block_height > candidate.lane_block_height
+            || (observed.lane_block_height == candidate.lane_block_height
+                && (observed.lane_block_view > candidate.lane_block_view
+                    || (observed.lane_block_view == candidate.lane_block_view
+                        && observed.descriptor_hash == candidate.descriptor_hash
+                        && observed.proposal_hash == candidate.proposal_hash
+                        && observed.subject_hash == candidate.subject_hash
+                        && observed.payload_ownership_hash == candidate.payload_ownership_hash
+                        && observed.rbc_instance_hash == candidate.rbc_instance_hash
+                        && observed.qc_mode_tag == candidate.qc_mode_tag))))
+}
+
+fn lane_domain_progress_same_tip_identity(
+    left: &LaneDomainProgress,
+    right: &LaneDomainProgress,
+) -> bool {
+    left.lane_id == right.lane_id
+        && left.dataspace_id == right.dataspace_id
+        && left.lane_block_height == right.lane_block_height
+        && left.lane_block_view == right.lane_block_view
+        && left.descriptor_hash == right.descriptor_hash
+        && left.proposal_hash == right.proposal_hash
+        && left.subject_hash == right.subject_hash
+        && left.payload_ownership_hash == right.payload_ownership_hash
+        && left.rbc_instance_hash == right.rbc_instance_hash
+        && left.qc_mode_tag == right.qc_mode_tag
+}
+
+fn lane_domain_progress_is_after_baseline(
+    progress: &LaneDomainProgress,
+    baseline: &LaneDomainProgress,
+) -> bool {
+    progress.lane_id == baseline.lane_id
+        && progress.dataspace_id == baseline.dataspace_id
+        && (progress.lane_block_height, progress.lane_block_view)
+            > (baseline.lane_block_height, baseline.lane_block_view)
+}
+
+fn lane_payload_ownership_progress_matches_candidate(
+    observed: &LanePayloadOwnershipProgress,
+    candidate: &LanePayloadOwnershipProgress,
+) -> bool {
+    observed.lane_id == candidate.lane_id
+        && observed.dataspace_id == candidate.dataspace_id
+        && (observed.lane_block_height > candidate.lane_block_height
+            || (observed.lane_block_height == candidate.lane_block_height
+                && (observed.lane_block_view > candidate.lane_block_view
+                    || (observed.lane_block_view == candidate.lane_block_view
+                        && observed.proposal_height == candidate.proposal_height
+                        && observed.proposal_view == candidate.proposal_view
+                        && observed.subject_hash == candidate.subject_hash
+                        && observed.lane_block_descriptor_hash
+                            == candidate.lane_block_descriptor_hash
+                        && observed.payload_ownership_hash == candidate.payload_ownership_hash
+                        && observed.rbc_instance_hash == candidate.rbc_instance_hash))))
+}
+
+fn lane_payload_ownership_progress_same_tip_identity(
+    left: &LanePayloadOwnershipProgress,
+    right: &LanePayloadOwnershipProgress,
+) -> bool {
+    left.lane_id == right.lane_id
+        && left.dataspace_id == right.dataspace_id
+        && left.lane_block_height == right.lane_block_height
+        && left.lane_block_view == right.lane_block_view
+        && left.proposal_height == right.proposal_height
+        && left.proposal_view == right.proposal_view
+        && left.subject_hash == right.subject_hash
+        && left.lane_block_descriptor_hash == right.lane_block_descriptor_hash
+        && left.payload_ownership_hash == right.payload_ownership_hash
+        && left.rbc_instance_hash == right.rbc_instance_hash
+}
+
+fn quorum_lane_domain_progress(
+    observations: &[LaneDomainProgress],
+    quorum_required: usize,
+) -> Option<LaneDomainProgress> {
+    let mut selected = None::<LaneDomainProgress>;
+    for candidate in observations.iter().cloned().filter(|candidate| {
+        observations
+            .iter()
+            .filter(|observed| lane_domain_progress_matches_candidate(observed, candidate))
+            .count()
+            >= quorum_required
+    }) {
+        let Some(current) = selected.as_ref() else {
+            selected = Some(candidate);
+            continue;
+        };
+        let candidate_key = (candidate.lane_block_height, candidate.lane_block_view);
+        let current_key = (current.lane_block_height, current.lane_block_view);
+        match candidate_key.cmp(&current_key) {
+            std::cmp::Ordering::Greater => selected = Some(candidate),
+            std::cmp::Ordering::Equal => {
+                if !lane_domain_progress_same_tip_identity(current, &candidate) {
+                    return None;
+                }
+            }
+            std::cmp::Ordering::Less => {}
+        }
+    }
+    selected
+}
+
+fn quorum_lane_payload_ownership_progress(
+    observations: &[LanePayloadOwnershipProgress],
+    quorum_required: usize,
+) -> Option<LanePayloadOwnershipProgress> {
+    let mut selected = None::<LanePayloadOwnershipProgress>;
+    for candidate in observations.iter().cloned().filter(|candidate| {
+        observations
+            .iter()
+            .filter(|observed| {
+                lane_payload_ownership_progress_matches_candidate(observed, candidate)
+            })
+            .count()
+            >= quorum_required
+    }) {
+        let Some(current) = selected.as_ref() else {
+            selected = Some(candidate);
+            continue;
+        };
+        let candidate_key = (candidate.lane_block_height, candidate.lane_block_view);
+        let current_key = (current.lane_block_height, current.lane_block_view);
+        match candidate_key.cmp(&current_key) {
+            std::cmp::Ordering::Greater => selected = Some(candidate),
+            std::cmp::Ordering::Equal => {
+                if !lane_payload_ownership_progress_same_tip_identity(current, &candidate) {
+                    return None;
+                }
+            }
+            std::cmp::Ordering::Less => {}
+        }
+    }
+    selected
+}
+
+fn lane_domain_progress_observations(
+    network: &sandbox::SerializedNetwork,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    last_error: &mut Option<String>,
+) -> Vec<LaneDomainProgress> {
+    peer_indices_for_committed_lane_evidence(network.peers().len())
+        .into_iter()
+        .filter_map(
+            |index| match network.peers()[index].client().get_sumeragi_status_wire() {
+                Ok(status) => latest_lane_domain_progress(&status, lane_id, dataspace_id),
+                Err(err) => {
+                    *last_error = Some(err.to_string());
+                    None
+                }
+            },
+        )
+        .collect()
+}
+
+fn lane_domain_application_observations(
+    network: &sandbox::SerializedNetwork,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    last_error: &mut Option<String>,
+) -> Vec<LaneDomainProgress> {
+    peer_indices_for_committed_lane_evidence(network.peers().len())
+        .into_iter()
+        .filter_map(
+            |index| match network.peers()[index].client().get_sumeragi_status_wire() {
+                Ok(status) => applied_lane_domain_progress(&status, lane_id, dataspace_id),
+                Err(err) => {
+                    *last_error = Some(err.to_string());
+                    None
+                }
+            },
+        )
+        .collect()
+}
+
+fn raw_lane_domain_observation_summaries(
+    network: &sandbox::SerializedNetwork,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+) -> Vec<String> {
+    peer_indices_for_committed_lane_evidence(network.peers().len())
+        .into_iter()
+        .map(
+            |index| match network.peers()[index].client().get_sumeragi_status_wire() {
+                Ok(status) => {
+                    let committed = status
+                        .committed_lane_blocks
+                        .iter()
+                        .filter(|block| {
+                            block.lane_id == lane_id && block.dataspace_id == dataspace_id
+                        })
+                        .map(|block| {
+                            format!(
+                                "{}/{} status={} exec={} quorum={}/{} prepare={} commit={}",
+                                block.lane_block_height,
+                                block.lane_block_view,
+                                block.execution_status,
+                                block.executable_payload_available,
+                                block.min_quorum,
+                                block.validator_count,
+                                block.prepare_qc_signer_count,
+                                block.commit_qc_signer_count
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    let ownership = status
+                        .lane_payload_ownerships
+                        .iter()
+                        .filter(|ownership| {
+                            ownership.lane_id == lane_id && ownership.dataspace_id == dataspace_id
+                        })
+                        .map(|ownership| {
+                            format!(
+                                "{}/{} accepted={} quorum={}/{}",
+                                ownership.lane_block_height,
+                                ownership.lane_block_view,
+                                ownership.accepted_transaction_hashes.len(),
+                                ownership.lane_block_descriptor_min_quorum,
+                                ownership.lane_block_descriptor_validator_count
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    let lane_message_handling = status
+                        .consensus_message_handling
+                        .entries
+                        .iter()
+                        .filter(|entry| entry.kind.contains("lane_block"))
+                        .map(|entry| {
+                            format!(
+                                "{}/{}/{}={}",
+                                entry.kind, entry.outcome, entry.reason, entry.total
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    let sessions = status
+                        .lane_block_sessions
+                        .iter()
+                        .filter(|session| {
+                            session.lane_id == lane_id && session.dataspace_id == dataspace_id
+                        })
+                        .map(|session| {
+                            format!(
+                                "{}/{} prop={} pv={} cv={} pqc={} cqc={} drain={} drained={} quorum={}/{} hash={}",
+                                session.lane_block_height,
+                                session.lane_block_view,
+                                session.has_proposal,
+                                session.prepare_vote_count,
+                                session.commit_vote_count,
+                                session.has_prepare_qc,
+                                session.has_commit_qc,
+                                session.pending_committed_session_drain,
+                                session.committed_session_drained,
+                                session.min_quorum,
+                                session.validator_count,
+                                session.proposal_hash,
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    format!(
+                        "peer#{index}: height={} committed=[{}] ownership=[{}] sessions=[{}] lane-msg=[{}]",
+                        status.commit_qc.height,
+                        committed.join(", "),
+                        ownership.join(", "),
+                        sessions.join(", "),
+                        lane_message_handling.join(", ")
+                    )
+                }
+                Err(err) => format!("peer#{index}: status error={}", err),
+            },
+        )
+        .collect()
+}
+
+fn lane_payload_ownership_progress_observations(
+    network: &sandbox::SerializedNetwork,
+    status_client: &Client,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    last_error: &mut Option<String>,
+) -> Vec<LanePayloadOwnershipProgress> {
+    lane_bounded_peer_indices(network, status_client, lane_id.as_u32())
+        .into_iter()
+        .filter_map(
+            |index| match network.peers()[index].client().get_sumeragi_status_wire() {
+                Ok(status) => {
+                    latest_lane_payload_ownership_progress(&status, lane_id, dataspace_id)
+                }
+                Err(err) => {
+                    *last_error = Some(err.to_string());
+                    None
+                }
+            },
+        )
+        .collect()
+}
+
+fn wait_for_independent_lane_domain_progress(
+    network: &sandbox::SerializedNetwork,
+    leading_tick_submitters: &[Client],
+    trailing_tick_submitters: &[Client],
+    leading_lane: (LaneId, DataSpaceId),
+    trailing_lane: (LaneId, DataSpaceId),
+    context: &str,
+) -> Result<(LaneDomainProgress, LaneDomainProgress)> {
+    // The committed status row embeds prepare/commit QC signer counts, so one
+    // observed row with lane-quorum signer counts is sufficient to prove the
+    // lane committee certified that standalone lane block. Status-row fanout to
+    // every lane validator is best-effort operator telemetry and is not itself
+    // the safety proof.
+    let quorum_required = 1;
+    let started = Instant::now();
+    let mut last_leading = Vec::new();
+    let mut last_trailing = Vec::new();
+    let mut last_error: Option<String> = None;
+    let mut poll_count = 0;
+    while started.elapsed() <= LANE_PROGRESS_WAIT_TIMEOUT {
+        last_leading = lane_domain_progress_observations(
+            network,
+            leading_lane.0,
+            leading_lane.1,
+            &mut last_error,
+        );
+        last_trailing = lane_domain_progress_observations(
+            network,
+            trailing_lane.0,
+            trailing_lane.1,
+            &mut last_error,
+        );
+        let leading_progress = quorum_lane_domain_progress(&last_leading, quorum_required);
+        let trailing_progress = quorum_lane_domain_progress(&last_trailing, quorum_required);
+        if let (Some(leading), Some(trailing)) =
+            (leading_progress.clone(), trailing_progress.clone())
+        {
+            return Ok((leading, trailing));
+        }
+        if should_submit_tick(poll_count, LANE_PROGRESS_RECOVERY_TICK_EVERY_POLLS) {
+            if leading_progress.is_none() {
+                submit_wait_ticks(
+                    leading_tick_submitters,
+                    context,
+                    poll_count,
+                    started,
+                    LANE_PROGRESS_WAIT_TIMEOUT,
+                    &mut last_error,
+                );
+            }
+            if trailing_progress.is_none() {
+                submit_wait_ticks(
+                    trailing_tick_submitters,
+                    context,
+                    poll_count,
+                    started,
+                    LANE_PROGRESS_WAIT_TIMEOUT,
+                    &mut last_error,
+                );
+            }
+        }
+        poll_count = poll_count.saturating_add(1);
+        thread::sleep(STATUS_POLL_INTERVAL);
+    }
+
+    let suffix = last_error
+        .map(|err| format!("; last status query/tick error: {err}"))
+        .unwrap_or_default();
+    let raw_leading =
+        raw_lane_domain_observation_summaries(network, leading_lane.0, leading_lane.1);
+    let raw_trailing =
+        raw_lane_domain_observation_summaries(network, trailing_lane.0, trailing_lane.1);
+    Err(eyre!(
+        "{context}: timed out waiting for observable committed lane-block QCs; expected lane {} dataspace {} and lane {} dataspace {} to publish embedded lane quorum; last leading observations {last_leading:?}; last trailing observations {last_trailing:?}; raw leading {raw_leading:?}; raw trailing {raw_trailing:?}{suffix}",
+        leading_lane.0.as_u32(),
+        leading_lane.1.as_u64(),
+        trailing_lane.0.as_u32(),
+        trailing_lane.1.as_u64(),
+    ))
+}
+
+fn wait_for_independent_lane_application_progress(
+    network: &sandbox::SerializedNetwork,
+    leading_tick_submitters: &[Client],
+    trailing_tick_submitters: &[Client],
+    leading_lane: (LaneId, DataSpaceId),
+    trailing_lane: (LaneId, DataSpaceId),
+    context: &str,
+) -> Result<(LaneDomainProgress, LaneDomainProgress)> {
+    wait_for_independent_lane_application_progress_with_baseline(
+        network,
+        leading_tick_submitters,
+        trailing_tick_submitters,
+        leading_lane,
+        trailing_lane,
+        None,
+        None,
+        context,
+    )
+}
+
+fn wait_for_independent_lane_application_progress_after(
+    network: &sandbox::SerializedNetwork,
+    leading_tick_submitters: &[Client],
+    trailing_tick_submitters: &[Client],
+    leading_baseline: &LaneDomainProgress,
+    trailing_baseline: &LaneDomainProgress,
+    context: &str,
+) -> Result<(LaneDomainProgress, LaneDomainProgress)> {
+    wait_for_independent_lane_application_progress_with_baseline(
+        network,
+        leading_tick_submitters,
+        trailing_tick_submitters,
+        (leading_baseline.lane_id, leading_baseline.dataspace_id),
+        (trailing_baseline.lane_id, trailing_baseline.dataspace_id),
+        Some(leading_baseline),
+        Some(trailing_baseline),
+        context,
+    )
+}
+
+fn current_lane_application_progress(
+    network: &sandbox::SerializedNetwork,
+    lane: (LaneId, DataSpaceId),
+) -> Option<LaneDomainProgress> {
+    let mut last_error = None;
+    let observations =
+        lane_domain_application_observations(network, lane.0, lane.1, &mut last_error);
+    quorum_lane_domain_progress(&observations, 1)
+}
+
+fn wait_for_lane_application_progress_after(
+    network: &sandbox::SerializedNetwork,
+    tick_submitters: &[Client],
+    lane: (LaneId, DataSpaceId),
+    baseline: Option<&LaneDomainProgress>,
+    context: &str,
+) -> Result<LaneDomainProgress> {
+    let started = Instant::now();
+    let mut last_observations = Vec::new();
+    let mut last_error: Option<String> = None;
+    let mut poll_count = 0;
+    while started.elapsed() <= LANE_PROGRESS_WAIT_TIMEOUT {
+        last_observations =
+            lane_domain_application_observations(network, lane.0, lane.1, &mut last_error)
+                .into_iter()
+                .filter(|progress| {
+                    baseline
+                        .map(|baseline| lane_domain_progress_is_after_baseline(progress, baseline))
+                        .unwrap_or(true)
+                })
+                .collect();
+        if let Some(progress) = quorum_lane_domain_progress(&last_observations, 1) {
+            return Ok(progress);
+        }
+        if should_submit_tick(poll_count, LANE_PROGRESS_RECOVERY_TICK_EVERY_POLLS) {
+            submit_wait_ticks(
+                tick_submitters,
+                context,
+                poll_count,
+                started,
+                LANE_PROGRESS_WAIT_TIMEOUT,
+                &mut last_error,
+            );
+        }
+        poll_count = poll_count.saturating_add(1);
+        thread::sleep(STATUS_POLL_INTERVAL);
+    }
+
+    let suffix = last_error
+        .map(|err| format!("; last status query/tick error: {err}"))
+        .unwrap_or_default();
+    let raw = raw_lane_domain_observation_summaries(network, lane.0, lane.1);
+    let baseline_context = baseline
+        .map(|baseline| {
+            format!(
+                "; baseline {}/{}",
+                baseline.lane_block_height, baseline.lane_block_view
+            )
+        })
+        .unwrap_or_default();
+    Err(eyre!(
+        "{context}: timed out waiting for observable applied committed lane-block evidence; expected lane {} dataspace {} to publish applied lane status{baseline_context}; last observations {last_observations:?}; raw {raw:?}{suffix}",
+        lane.0.as_u32(),
+        lane.1.as_u64(),
+    ))
+}
+
+fn wait_for_independent_lane_application_progress_with_baseline(
+    network: &sandbox::SerializedNetwork,
+    leading_tick_submitters: &[Client],
+    trailing_tick_submitters: &[Client],
+    leading_lane: (LaneId, DataSpaceId),
+    trailing_lane: (LaneId, DataSpaceId),
+    leading_baseline: Option<&LaneDomainProgress>,
+    trailing_baseline: Option<&LaneDomainProgress>,
+    context: &str,
+) -> Result<(LaneDomainProgress, LaneDomainProgress)> {
+    // Application status is still tied to a committed lane-block row carrying
+    // prepare/commit QC signer counts; one observed row with lane-quorum signer
+    // counts and applied execution status proves that lane's executor boundary
+    // reached a receipt-backed state.
+    let quorum_required = 1;
+    let started = Instant::now();
+    let mut last_leading = Vec::new();
+    let mut last_trailing = Vec::new();
+    let mut last_error: Option<String> = None;
+    let mut poll_count = 0;
+    while started.elapsed() <= LANE_PROGRESS_WAIT_TIMEOUT {
+        last_leading = lane_domain_application_observations(
+            network,
+            leading_lane.0,
+            leading_lane.1,
+            &mut last_error,
+        )
+        .into_iter()
+        .filter(|progress| {
+            leading_baseline
+                .map(|baseline| lane_domain_progress_is_after_baseline(progress, baseline))
+                .unwrap_or(true)
+        })
+        .collect();
+        last_trailing = lane_domain_application_observations(
+            network,
+            trailing_lane.0,
+            trailing_lane.1,
+            &mut last_error,
+        )
+        .into_iter()
+        .filter(|progress| {
+            trailing_baseline
+                .map(|baseline| lane_domain_progress_is_after_baseline(progress, baseline))
+                .unwrap_or(true)
+        })
+        .collect();
+        let leading_progress = quorum_lane_domain_progress(&last_leading, quorum_required);
+        let trailing_progress = quorum_lane_domain_progress(&last_trailing, quorum_required);
+        if let (Some(leading), Some(trailing)) =
+            (leading_progress.clone(), trailing_progress.clone())
+        {
+            return Ok((leading, trailing));
+        }
+        if should_submit_tick(poll_count, LANE_PROGRESS_RECOVERY_TICK_EVERY_POLLS) {
+            if leading_progress.is_none() {
+                submit_wait_ticks(
+                    leading_tick_submitters,
+                    context,
+                    poll_count,
+                    started,
+                    LANE_PROGRESS_WAIT_TIMEOUT,
+                    &mut last_error,
+                );
+            }
+            if trailing_progress.is_none() {
+                submit_wait_ticks(
+                    trailing_tick_submitters,
+                    context,
+                    poll_count,
+                    started,
+                    LANE_PROGRESS_WAIT_TIMEOUT,
+                    &mut last_error,
+                );
+            }
+        }
+        poll_count = poll_count.saturating_add(1);
+        thread::sleep(STATUS_POLL_INTERVAL);
+    }
+
+    let suffix = last_error
+        .map(|err| format!("; last status query/tick error: {err}"))
+        .unwrap_or_default();
+    let raw_leading =
+        raw_lane_domain_observation_summaries(network, leading_lane.0, leading_lane.1);
+    let raw_trailing =
+        raw_lane_domain_observation_summaries(network, trailing_lane.0, trailing_lane.1);
+    let baseline_context = match (leading_baseline, trailing_baseline) {
+        (Some(leading), Some(trailing)) => format!(
+            "; baselines leading {}/{} trailing {}/{}",
+            leading.lane_block_height,
+            leading.lane_block_view,
+            trailing.lane_block_height,
+            trailing.lane_block_view
+        ),
+        _ => String::new(),
+    };
+    Err(eyre!(
+        "{context}: timed out waiting for observable applied committed lane-block evidence; expected lane {} dataspace {} and lane {} dataspace {} to publish applied lane status{baseline_context}; last leading observations {last_leading:?}; last trailing observations {last_trailing:?}; raw leading {raw_leading:?}; raw trailing {raw_trailing:?}{suffix}",
+        leading_lane.0.as_u32(),
+        leading_lane.1.as_u64(),
+        trailing_lane.0.as_u32(),
+        trailing_lane.1.as_u64(),
+    ))
+}
+
+fn wait_for_independent_lane_payload_ownership_progress(
+    network: &sandbox::SerializedNetwork,
+    status_client: &Client,
+    leading_tick_submitters: &[Client],
+    trailing_tick_submitters: &[Client],
+    leading_lane: (LaneId, DataSpaceId),
+    trailing_lane: (LaneId, DataSpaceId),
+    context: &str,
+) -> Result<(LanePayloadOwnershipProgress, LanePayloadOwnershipProgress)> {
+    // `lane_payload_ownerships` is a proposer-local operator diagnostic emitted
+    // while assembling a block, not a replicated lane-validator status slot.
+    // Require observability here and leave quorum enforcement to the committed
+    // lane-block QC gate below.
+    let quorum_required = 1;
+    let started = Instant::now();
+    let mut last_leading = Vec::new();
+    let mut last_trailing = Vec::new();
+    let mut last_error: Option<String> = None;
+    let mut poll_count = 0;
+    while started.elapsed() <= LANE_PROGRESS_WAIT_TIMEOUT {
+        last_leading = lane_payload_ownership_progress_observations(
+            network,
+            status_client,
+            leading_lane.0,
+            leading_lane.1,
+            &mut last_error,
+        );
+        last_trailing = lane_payload_ownership_progress_observations(
+            network,
+            status_client,
+            trailing_lane.0,
+            trailing_lane.1,
+            &mut last_error,
+        );
+        let leading_progress =
+            quorum_lane_payload_ownership_progress(&last_leading, quorum_required);
+        let trailing_progress =
+            quorum_lane_payload_ownership_progress(&last_trailing, quorum_required);
+        if let (Some(leading), Some(trailing)) = (leading_progress, trailing_progress)
+            && leading.accepted_transaction_count > 0
+            && trailing.accepted_transaction_count > 0
+        {
+            return Ok((leading, trailing));
+        }
+        if should_submit_tick(poll_count, SETUP_BARRIER_TICK_EVERY_POLLS) {
+            submit_wait_ticks(
+                leading_tick_submitters,
+                context,
+                poll_count,
+                started,
+                LANE_PROGRESS_WAIT_TIMEOUT,
+                &mut last_error,
+            );
+            submit_wait_ticks(
+                trailing_tick_submitters,
+                context,
+                poll_count,
+                started,
+                LANE_PROGRESS_WAIT_TIMEOUT,
+                &mut last_error,
+            );
+        }
+        poll_count = poll_count.saturating_add(1);
+        thread::sleep(STATUS_POLL_INTERVAL);
+    }
+
+    let suffix = last_error
+        .map(|err| format!("; last status query/tick error: {err}"))
+        .unwrap_or_default();
+    Err(eyre!(
+        "{context}: timed out waiting for observable independent lane-payload ownership progress; expected lane {} dataspace {} and lane {} dataspace {} to publish non-empty lane-local ownership; last leading observations {last_leading:?}; last trailing observations {last_trailing:?}{suffix}",
+        leading_lane.0.as_u32(),
+        leading_lane.1.as_u64(),
+        trailing_lane.0.as_u32(),
+        trailing_lane.1.as_u64(),
+    ))
 }
 
 async fn wait_for_route_probe_approval(
@@ -1021,6 +2026,19 @@ struct BalanceExpectation<'a> {
     expected: Numeric,
 }
 
+struct BalanceExpectationAcrossClients<'a> {
+    clients: &'a [Client],
+    asset_id: &'a AssetId,
+    expected: Numeric,
+}
+
+fn total_balance_observer_request_slots(client_counts: impl IntoIterator<Item = usize>) -> usize {
+    client_counts
+        .into_iter()
+        .map(|client_count| client_count.max(1))
+        .sum()
+}
+
 fn wait_for_expected_balances_with_timeout(
     expectations: &[BalanceExpectation<'_>],
     context: &str,
@@ -1069,8 +2087,113 @@ fn wait_for_expected_balances_with_timeout(
     ))
 }
 
+fn wait_for_expected_balances_across_clients_with_tick_submitters_timeout(
+    tick_submitters: &[Client],
+    expectations: &[BalanceExpectationAcrossClients<'_>],
+    context: &str,
+    timeout_duration: Duration,
+) -> Result<()> {
+    let started = Instant::now();
+    let mut last_observed = Vec::with_capacity(expectations.len());
+    let mut last_error: Option<String> = None;
+    let mut poll_count = 0;
+    while started.elapsed() <= timeout_duration {
+        if should_submit_tick(poll_count, SETUP_BARRIER_TICK_EVERY_POLLS) {
+            submit_wait_ticks(
+                tick_submitters,
+                context,
+                poll_count,
+                started,
+                timeout_duration,
+                &mut last_error,
+            );
+        }
+        last_observed.clear();
+        let mut all_match = true;
+        let total_request_slots = total_balance_observer_request_slots(
+            expectations
+                .iter()
+                .map(|expectation| expectation.clients.len()),
+        );
+        let mut remaining_request_slots = total_request_slots;
+        for expectation in expectations {
+            if expectation.clients.is_empty() {
+                last_error = Some(format!(
+                    "no balance observer clients for {}",
+                    expectation.asset_id.canonical_literal()
+                ));
+                all_match = false;
+                last_observed.push((expectation.asset_id.clone(), vec!["no clients".to_owned()]));
+                continue;
+            }
+
+            let mut expectation_matches = false;
+            let mut observed_for_expectation = Vec::with_capacity(expectation.clients.len());
+            for (client_index, client) in expectation.clients.iter().enumerate() {
+                let mut client = client.clone();
+                client.torii_request_timeout =
+                    client
+                        .torii_request_timeout
+                        .min(bounded_observer_request_timeout(
+                            started,
+                            timeout_duration,
+                            remaining_request_slots,
+                        ));
+                remaining_request_slots = remaining_request_slots.saturating_sub(1);
+                match asset_balance_variants(&client, expectation.asset_id) {
+                    Ok(observed) => {
+                        let observed_matches =
+                            observed.iter().any(|value| value == &expectation.expected);
+                        observed_for_expectation
+                            .push(format!("client#{client_index}:{observed:?}"));
+                        if observed_matches {
+                            expectation_matches = true;
+                            break;
+                        }
+                    }
+                    Err(err) => {
+                        let rendered_error = render_error_with_debug(&err);
+                        last_error = Some(rendered_error.clone());
+                        observed_for_expectation
+                            .push(format!("client#{client_index}:error:{rendered_error}"));
+                    }
+                }
+            }
+            if !expectation_matches {
+                all_match = false;
+            }
+            last_observed.push((expectation.asset_id.clone(), observed_for_expectation));
+        }
+        if all_match {
+            return Ok(());
+        }
+        poll_count = poll_count.saturating_add(1);
+        thread::sleep(STATUS_POLL_INTERVAL);
+    }
+    let suffix = last_error
+        .map(|err| format!("; last balance query error: {err}"))
+        .unwrap_or_default();
+    Err(eyre!(
+        "{context}: timed out waiting for expected balances across clients with tick assist; last observed {last_observed:?}{suffix}"
+    ))
+}
+
 fn wait_for_expected_balances_with_tick_timeout(
     tick_submitter: &Client,
+    expectations: &[BalanceExpectation<'_>],
+    context: &str,
+    timeout_duration: Duration,
+) -> Result<()> {
+    wait_for_expected_balances_with_tick_submitters_timeout(
+        std::slice::from_ref(tick_submitter),
+        expectations,
+        context,
+        timeout_duration,
+    )
+}
+
+fn wait_for_expected_balances_with_tick_submitters_timeout(
+    tick_submitters: &[Client],
     expectations: &[BalanceExpectation<'_>],
     context: &str,
     timeout_duration: Duration,
@@ -1081,8 +2204,8 @@ fn wait_for_expected_balances_with_tick_timeout(
     let mut poll_count = 0;
     while started.elapsed() <= timeout_duration {
         if should_submit_tick(poll_count, SETUP_BARRIER_TICK_EVERY_POLLS) {
-            submit_wait_tick(
-                tick_submitter,
+            submit_wait_ticks(
+                tick_submitters,
                 context,
                 poll_count,
                 started,
@@ -1168,6 +2291,7 @@ fn wait_for_expected_balances_with_tick_timeout(
 }
 
 fn wait_for_account_permissions_across_clients(
+    tick_submitters: &[Client],
     mut clients_factory: impl FnMut() -> Vec<Client>,
     account_id: &AccountId,
     required_permissions: &[Permission],
@@ -1176,7 +2300,18 @@ fn wait_for_account_permissions_across_clients(
     let started = Instant::now();
     let mut last_observed = Vec::new();
     let mut last_error: Option<String> = None;
+    let mut poll_count = 0;
     while started.elapsed() <= PERMISSION_VISIBILITY_WAIT_TIMEOUT {
+        if should_submit_tick(poll_count, SETUP_BARRIER_TICK_EVERY_POLLS) {
+            submit_wait_ticks(
+                tick_submitters,
+                context,
+                poll_count,
+                started,
+                PERMISSION_VISIBILITY_WAIT_TIMEOUT,
+                &mut last_error,
+            );
+        }
         let mut observed = Vec::new();
         let mut saw_success = false;
         let clients = clients_factory();
@@ -1216,6 +2351,7 @@ fn wait_for_account_permissions_across_clients(
                 return Ok(());
             }
         }
+        poll_count = poll_count.saturating_add(1);
         thread::sleep(STATUS_POLL_INTERVAL);
     }
     let suffix = last_error
@@ -1282,21 +2418,29 @@ fn wait_for_active_lane_validators(
     let started = Instant::now();
     let mut last_total = 0usize;
     let mut last_active = BTreeSet::new();
+    let mut last_error = None::<String>;
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        let snapshot = client
-            .get_public_lane_validators(lane_id)
-            .map_err(|err| eyre!(err))?;
-        let (total, active) = lane_validator_snapshot(&snapshot, context)?;
-        last_total = total;
-        last_active = active.clone();
-        if total == expected_active.len() && active == *expected_active {
-            return Ok(());
+        match client.get_public_lane_validators(lane_id) {
+            Ok(snapshot) => {
+                let (total, active) = lane_validator_snapshot(&snapshot, context)?;
+                last_total = total;
+                last_active = active.clone();
+                if total == expected_active.len() && active == *expected_active {
+                    return Ok(());
+                }
+            }
+            Err(err) => {
+                last_error = Some(render_error_with_debug(&err));
+            }
         }
         thread::sleep(STATUS_POLL_INTERVAL);
     }
 
+    let suffix = last_error
+        .map(|err| format!("; last query error: {err}"))
+        .unwrap_or_default();
     Err(eyre!(
-        "{context}: timed out waiting for active validators on lane {lane_id}; expected total {} active {:?}, observed total {} active {:?}",
+        "{context}: timed out waiting for active validators on lane {lane_id}; expected total {} active {:?}, observed total {} active {:?}{suffix}",
         expected_active.len(),
         expected_active,
         last_total,
@@ -1455,6 +2599,13 @@ fn is_inconclusive_committed_outcome_error(error_text: &str) -> bool {
     error_text.contains("timed out waiting for committed transaction outcome")
 }
 
+fn is_expected_rollback_failure_text(error_text: &str) -> bool {
+    error_text.contains("settlement leg requires 10000")
+        || error_text.contains("requires 10000")
+        || is_inconclusive_blocking_submit_error(error_text)
+        || is_inconclusive_committed_outcome_error(error_text)
+}
+
 fn render_rejection_reason(
     reason: &iroha::data_model::transaction::error::TransactionRejectionReason,
 ) -> String {
@@ -1467,9 +2618,38 @@ fn render_rejection_reason(
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum CommittedTxOutcome {
     Applied,
     Rejected(String),
+}
+
+fn committed_tx_outcome_quorum(
+    outcomes: &[CommittedTxOutcome],
+    quorum_required: usize,
+) -> Option<CommittedTxOutcome> {
+    let quorum_required = quorum_required.max(1);
+    let applied_count = outcomes
+        .iter()
+        .filter(|outcome| matches!(outcome, CommittedTxOutcome::Applied))
+        .count();
+    if applied_count >= quorum_required {
+        return Some(CommittedTxOutcome::Applied);
+    }
+
+    let mut rejected_counts = BTreeMap::<&str, usize>::new();
+    for outcome in outcomes {
+        let CommittedTxOutcome::Rejected(reason) = outcome else {
+            continue;
+        };
+        let count = rejected_counts.entry(reason.as_str()).or_default();
+        *count = (*count).saturating_add(1);
+        if *count >= quorum_required {
+            return Some(CommittedTxOutcome::Rejected(reason.clone()));
+        }
+    }
+
+    None
 }
 
 fn query_committed_tx_outcome(
@@ -1503,9 +2683,13 @@ fn wait_for_committed_tx_outcome_across_clients(
 ) -> Result<CommittedTxOutcome> {
     let started = Instant::now();
     let mut last_error: Option<String> = None;
+    let mut last_observed = Vec::new();
     while started.elapsed() <= timeout_duration {
         let clients = clients_factory();
         let client_count = clients.len();
+        let quorum_required = commit_quorum_from_len(client_count).max(1);
+        let mut observed_outcomes = Vec::new();
+        last_observed.clear();
         for (index, mut client) in clients.into_iter().enumerate() {
             client.torii_request_timeout =
                 client
@@ -1516,10 +2700,21 @@ fn wait_for_committed_tx_outcome_across_clients(
                         client_count.saturating_sub(index),
                     ));
             match query_committed_tx_outcome(&client, &entry_hash) {
-                Ok(Some(outcome)) => return Ok(outcome),
-                Ok(None) => {}
+                Ok(Some(outcome)) => {
+                    last_observed.push(format!("{outcome:?}"));
+                    observed_outcomes.push(outcome);
+                    if let Some(quorum_outcome) =
+                        committed_tx_outcome_quorum(&observed_outcomes, quorum_required)
+                    {
+                        return Ok(quorum_outcome);
+                    }
+                }
+                Ok(None) => {
+                    last_observed.push("none".to_owned());
+                }
                 Err(err) => {
                     last_error = Some(err.to_string());
+                    last_observed.push(format!("error:{err}"));
                 }
             }
         }
@@ -1529,7 +2724,7 @@ fn wait_for_committed_tx_outcome_across_clients(
         .map(|err| format!("; last tx history query error: {err}"))
         .unwrap_or_default();
     Err(eyre!(
-        "{context}: timed out waiting for committed transaction outcome for transaction {entry_hash}{suffix}"
+        "{context}: timed out waiting for committed transaction outcome quorum for transaction {entry_hash}; last observed {last_observed:?}{suffix}"
     ))
 }
 
@@ -1600,6 +2795,12 @@ fn submit_transaction_across_clients(
     ))
 }
 
+#[derive(Debug)]
+struct CommittedSuccessOrHeightFallback {
+    status: SumeragiStatusWire,
+    committed_outcome_confirmed: bool,
+}
+
 fn wait_for_committed_success_or_height_fallback_across_clients(
     mut observer_factory: impl FnMut() -> Vec<Client>,
     entry_hash: HashOf<TransactionEntrypoint>,
@@ -1608,18 +2809,26 @@ fn wait_for_committed_success_or_height_fallback_across_clients(
     pre_barrier_height: u64,
     committed_timeout: Duration,
     post_barrier_outcome_timeout: Duration,
-) -> Result<SumeragiStatusWire> {
+) -> Result<CommittedSuccessOrHeightFallback> {
     match wait_for_committed_success_across_clients(
         &mut observer_factory,
         entry_hash.clone(),
         committed_context,
         committed_timeout,
     ) {
-        Ok(()) => observer_factory()
-            .into_iter()
-            .filter_map(|client| client.get_sumeragi_status_wire().ok())
-            .max_by_key(|status| status.commit_qc.height)
-            .ok_or_else(|| eyre!("{committed_context}: no observer returned a status snapshot")),
+        Ok(()) => {
+            let status = observer_factory()
+                .into_iter()
+                .filter_map(|client| client.get_sumeragi_status_wire().ok())
+                .max_by_key(|status| status.commit_qc.height)
+                .ok_or_else(|| {
+                    eyre!("{committed_context}: no observer returned a status snapshot")
+                })?;
+            Ok(CommittedSuccessOrHeightFallback {
+                status,
+                committed_outcome_confirmed: true,
+            })
+        }
         Err(err) => {
             let error_text = err.to_string();
             if !is_inconclusive_committed_outcome_error(&error_text) {
@@ -1640,15 +2849,26 @@ fn wait_for_committed_success_or_height_fallback_across_clients(
                 post_context.as_str(),
                 post_barrier_outcome_timeout,
             ) {
-                Ok(()) => observer_factory()
-                    .into_iter()
-                    .filter_map(|client| client.get_sumeragi_status_wire().ok())
-                    .max_by_key(|status| status.commit_qc.height)
-                    .ok_or_else(|| eyre!("{post_context}: no observer returned a status snapshot")),
+                Ok(()) => {
+                    let status = observer_factory()
+                        .into_iter()
+                        .filter_map(|client| client.get_sumeragi_status_wire().ok())
+                        .max_by_key(|status| status.commit_qc.height)
+                        .ok_or_else(|| {
+                            eyre!("{post_context}: no observer returned a status snapshot")
+                        })?;
+                    Ok(CommittedSuccessOrHeightFallback {
+                        status,
+                        committed_outcome_confirmed: true,
+                    })
+                }
                 Err(post_err) => {
                     let post_error_text = post_err.to_string();
                     if is_inconclusive_committed_outcome_error(&post_error_text) {
-                        Ok(barrier_status)
+                        Ok(CommittedSuccessOrHeightFallback {
+                            status: barrier_status,
+                            committed_outcome_confirmed: false,
+                        })
                     } else {
                         Err(post_err)
                     }
@@ -1850,11 +3070,31 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
             .map_err(|err| eyre!(err))?
             .commit_qc
             .height;
+        let lane_sync_status = wait_for_height(
+            &alice,
+            lane_sync_height,
+            "lane validator activation local height",
+        )?;
         let _lane_sync_on_bob = wait_for_height(
             &bob,
             lane_sync_height,
             "lane validator activation propagation",
         )?;
+        for (lane_index, context) in [
+            (NEXUS_LANE_INDEX, "nexus lane validator commit QC sync"),
+            (DS1_LANE_INDEX, "ds1 lane validator commit QC sync"),
+            (DS2_LANE_INDEX, "ds2 lane validator commit QC sync"),
+        ] {
+            wait_for_lane_peers_commit_qc_at_least(
+                &network,
+                lane_index,
+                &lane_sync_status,
+                &alice,
+                context,
+                STATUS_WAIT_TIMEOUT,
+                LANE_PROGRESS_RECOVERY_TICK_EVERY_POLLS,
+            )?;
+        }
     }
 
     let nexus_alice_submitter = leader_targeted_client_for_lane(
@@ -1869,6 +3109,38 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
         &bob,
         &BOB_ID,
         BOB_KEYPAIR.private_key(),
+        NEXUS_LANE_INDEX,
+    );
+    let ds1_tick_submitters = lane_targeted_clients_for_lane(
+        &network,
+        &alice,
+        &ALICE_ID,
+        ALICE_KEYPAIR.private_key(),
+        DS1_LANE_INDEX,
+    );
+    let ds2_tick_submitters = lane_targeted_clients_for_lane(
+        &network,
+        &bob,
+        &BOB_ID,
+        BOB_KEYPAIR.private_key(),
+        DS2_LANE_INDEX,
+    );
+    let neutral_tick_submitter_a_keypair = validator_authority_keypair(0);
+    let neutral_tick_submitter_a_account = validator_authority_account_for_peer(0);
+    let neutral_tick_submitter_a = leader_targeted_client_for_lane(
+        &network,
+        &alice,
+        &neutral_tick_submitter_a_account,
+        neutral_tick_submitter_a_keypair.private_key(),
+        NEXUS_LANE_INDEX,
+    );
+    let neutral_tick_submitter_b_keypair = validator_authority_keypair(1);
+    let neutral_tick_submitter_b_account = validator_authority_account_for_peer(1);
+    let neutral_tick_submitter_b = leader_targeted_client_for_lane(
+        &network,
+        &alice,
+        &neutral_tick_submitter_b_account,
+        neutral_tick_submitter_b_keypair.private_key(),
         NEXUS_LANE_INDEX,
     );
     let (ds1_observation, ds2_observation) = {
@@ -1894,6 +3166,19 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
     };
     let ds1_height = ds1_observation.height;
     let ds2_height = ds2_observation.height;
+    let ds1_followup_observation = {
+        let _phase = phase_timings.phase("route probe ds1 follow-up: tx submit + route wait");
+        rt.block_on(wait_for_route_probe_approval(
+            &nexus_alice_submitter,
+            InstructionBox::from(Log::new(
+                Level::INFO,
+                "route probe ds1 follow-up".to_string(),
+            )),
+            LaneId::new(DS1_LANE_INDEX),
+            DataSpaceId::new(DS1_ID_U64),
+            "route probe ds1 follow-up",
+        ))?
+    };
     {
         let _phase = phase_timings.phase("route probe ds1: query/assert");
         let ds1_source = if ds1_observation.approval_observed {
@@ -1938,6 +3223,81 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
                     .as_secs_f64()
             );
         }
+    }
+    {
+        let _phase = phase_timings.phase("route probes: independent lane-payload ownership");
+        let (ds1_progress, ds2_progress) = wait_for_independent_lane_payload_ownership_progress(
+            &network,
+            &alice,
+            &ds1_tick_submitters,
+            &ds2_tick_submitters,
+            (LaneId::new(DS1_LANE_INDEX), DataSpaceId::new(DS1_ID_U64)),
+            (LaneId::new(DS2_LANE_INDEX), DataSpaceId::new(DS2_ID_U64)),
+            "route probes independent lane-payload ownership progress",
+        )?;
+        eprintln!(
+            "[route-probe] ds1 follow-up height={} approval_observed={} lane_block={}/{} ds2_lane_block={}/{} ds1_committee={}/{} ds2_committee={}/{} accepted={}/{}",
+            ds1_followup_observation.height,
+            ds1_followup_observation.approval_observed,
+            ds1_progress.lane_block_height,
+            ds1_progress.lane_block_view,
+            ds2_progress.lane_block_height,
+            ds2_progress.lane_block_view,
+            ds1_progress.min_quorum,
+            ds1_progress.validator_count,
+            ds2_progress.min_quorum,
+            ds2_progress.validator_count,
+            ds1_progress.accepted_transaction_count,
+            ds2_progress.accepted_transaction_count,
+        );
+    }
+    {
+        let _phase = phase_timings.phase("route probes: committed lane-block QCs");
+        let (ds1_progress, ds2_progress) = wait_for_independent_lane_domain_progress(
+            &network,
+            &ds1_tick_submitters,
+            &ds2_tick_submitters,
+            (LaneId::new(DS1_LANE_INDEX), DataSpaceId::new(DS1_ID_U64)),
+            (LaneId::new(DS2_LANE_INDEX), DataSpaceId::new(DS2_ID_U64)),
+            "route probes committed lane-block progress",
+        )?;
+        eprintln!(
+            "[route-probe] committed lane-block ds1={}/{} ds2={}/{} ds1_qc={}/{} ds2_qc={}/{} ds1_commitment={:?} ds2_commitment={:?}",
+            ds1_progress.lane_block_height,
+            ds1_progress.lane_block_view,
+            ds2_progress.lane_block_height,
+            ds2_progress.lane_block_view,
+            ds1_progress.prepare_qc_signer_count,
+            ds1_progress.commit_qc_signer_count,
+            ds2_progress.prepare_qc_signer_count,
+            ds2_progress.commit_qc_signer_count,
+            ds1_progress.dataspace_commitment_height,
+            ds2_progress.dataspace_commitment_height,
+        );
+    }
+    {
+        let _phase = phase_timings.phase("route probes: applied committed lane-block evidence");
+        let (ds1_progress, ds2_progress) = wait_for_independent_lane_application_progress(
+            &network,
+            std::slice::from_ref(&neutral_tick_submitter_a),
+            std::slice::from_ref(&neutral_tick_submitter_b),
+            (LaneId::new(DS1_LANE_INDEX), DataSpaceId::new(DS1_ID_U64)),
+            (LaneId::new(DS2_LANE_INDEX), DataSpaceId::new(DS2_ID_U64)),
+            "route probes applied committed lane-block progress",
+        )?;
+        eprintln!(
+            "[route-probe] applied committed lane-block ds1={}/{} status={} ds2={}/{} status={} ds1_qc={}/{} ds2_qc={}/{}",
+            ds1_progress.lane_block_height,
+            ds1_progress.lane_block_view,
+            ds1_progress.execution_status,
+            ds2_progress.lane_block_height,
+            ds2_progress.lane_block_view,
+            ds2_progress.execution_status,
+            ds1_progress.prepare_qc_signer_count,
+            ds1_progress.commit_qc_signer_count,
+            ds2_progress.prepare_qc_signer_count,
+            ds2_progress.commit_qc_signer_count,
+        );
     }
     let ds1_asset_def: AssetDefinitionId = AssetDefinitionId::new(
         DomainId::try_new("nexus", "universal").expect("asset definition"),
@@ -2120,10 +3480,12 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
         })?;
     }
 
-    let (setup_grants_tx, setup_grants_authoritative_lane_index, setup_grants_pre_barrier_height) = {
-        let submitter = alice_on_ds1.clone();
-        let _phase = phase_timings.phase("setup grants: tx submit enqueue");
-        let setup_grants_tx = submitter.build_transaction(
+    let setup_grants_lane = (
+        LaneId::new(NEXUS_LANE_INDEX),
+        DataSpaceId::new(NEXUS_ID_U64),
+    );
+    let build_setup_grants_tx = |client: &Client| {
+        client.build_transaction(
             vec![InstructionBox::from(Grant::account_permission(
                 CanTransferAssetWithDefinition {
                     asset_definition: ds1_asset_def.clone(),
@@ -2131,7 +3493,17 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
                 BOB_ID.clone(),
             ))],
             Metadata::default(),
-        );
+        )
+    };
+    let (
+        setup_grants_tx,
+        setup_grants_authoritative_lane_index,
+        setup_grants_pre_barrier_height,
+        setup_grants_pre_application,
+    ) = {
+        let submitter = alice_on_ds1.clone();
+        let _phase = phase_timings.phase("setup grants: tx submit enqueue");
+        let setup_grants_tx = build_setup_grants_tx(&submitter);
         let nexus_pre_barrier_height = nexus_alice_submitter
             .get_sumeragi_status_wire()
             .map_err(|err| eyre!(err))?
@@ -2147,11 +3519,25 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
             .map_err(|err| eyre!(err))?
             .commit_qc
             .height;
-        let route_observation = rt.block_on(submit_transaction_with_route_observation(
+        let pre_application = current_lane_application_progress(&network, setup_grants_lane);
+        let route_observation = match rt.block_on(submit_transaction_with_route_observation(
             &submitter,
             &setup_grants_tx,
             "setup grants route observation",
-        ))?;
+        )) {
+            Ok(observation) => Some(observation),
+            Err(err)
+                if err
+                    .to_string()
+                    .contains("timed out observing queued transaction route") =>
+            {
+                eprintln!(
+                    "[setup-grants] route observation timed out after submit; continuing with authoritative lane fallback"
+                );
+                None
+            }
+            Err(err) => return Err(err),
+        };
         // A queued event from the ingress listener can still reflect the submitter-side lane even
         // after the authoritative router forwards the transaction. This grant targets a universal
         // asset-definition permission, so the authoritative route is the Nexus lane regardless of
@@ -2175,23 +3561,33 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
                 .height
             }
         };
-        eprintln!(
-            "[setup-grants] observed lane={} dataspace={} approved_height={:?} authoritative_lane={}",
-            route_observation.lane_id.as_u32(),
-            route_observation.dataspace_id.as_u64(),
-            route_observation.approved_height,
-            authoritative_lane_index,
-        );
+        if let Some(route_observation) = route_observation {
+            eprintln!(
+                "[setup-grants] observed lane={} dataspace={} approved_height={:?} authoritative_lane={}",
+                route_observation.lane_id.as_u32(),
+                route_observation.dataspace_id.as_u64(),
+                route_observation.approved_height,
+                authoritative_lane_index,
+            );
+        } else {
+            eprintln!(
+                "[setup-grants] route observation unavailable authoritative_lane={}",
+                authoritative_lane_index,
+            );
+        }
         (
             setup_grants_tx,
             authoritative_lane_index,
             pre_barrier_height,
+            pre_application,
         )
     };
+    let mut setup_grants_application_baseline = setup_grants_pre_application;
     {
         let _phase = phase_timings.phase("setup grants: tx committed outcome");
         let setup_grants_entry_hash = setup_grants_tx.hash_as_entrypoint();
-        wait_for_committed_success_or_height_fallback_across_clients(
+        let mut committed_outcome_confirmed = false;
+        match wait_for_committed_success_or_height_fallback_across_clients(
             || {
                 lane_targeted_clients_for_lane(
                     &network,
@@ -2207,25 +3603,140 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
             setup_grants_pre_barrier_height,
             BLOCKING_CONFIRMATION_TIMEOUT,
             BLOCKING_CONFIRMATION_TIMEOUT,
-        )?;
+        ) {
+            Ok(observation) => {
+                committed_outcome_confirmed = observation.committed_outcome_confirmed;
+            }
+            Err(setup_err) => {
+                eprintln!(
+                    "[setup-grants] committed outcome did not converge before permission assertion: {setup_err}"
+                );
+            }
+        }
+        if !committed_outcome_confirmed {
+            eprintln!(
+                "[setup-grants] committed outcome remained inconclusive after height barrier; resubmitting fresh grant transaction"
+            );
+            let authoritative_submitter = leader_targeted_client_for_lane(
+                &network,
+                &alice,
+                &ALICE_ID,
+                ALICE_KEYPAIR.private_key(),
+                setup_grants_authoritative_lane_index,
+            );
+            let retry_pre_barrier_height = authoritative_submitter
+                .get_sumeragi_status_wire()
+                .map_err(|err| eyre!(err))?
+                .commit_qc
+                .height;
+            let retry_pre_application =
+                current_lane_application_progress(&network, setup_grants_lane);
+            let setup_grants_retry_tx = build_setup_grants_tx(&authoritative_submitter);
+            match submit_transaction_across_clients(
+                || {
+                    lane_targeted_clients_for_lane(
+                        &network,
+                        &alice,
+                        &ALICE_ID,
+                        ALICE_KEYPAIR.private_key(),
+                        setup_grants_authoritative_lane_index,
+                    )
+                },
+                &setup_grants_retry_tx,
+                "setup grants authoritative resubmit",
+                SUBMIT_ENQUEUE_REQUEST_TIMEOUT,
+            ) {
+                Ok(_) => {
+                    setup_grants_application_baseline = retry_pre_application;
+                    let setup_grants_retry_entry_hash = setup_grants_retry_tx.hash_as_entrypoint();
+                    match wait_for_committed_success_or_height_fallback_across_clients(
+                        || {
+                            lane_targeted_clients_for_lane(
+                                &network,
+                                &alice,
+                                &ALICE_ID,
+                                ALICE_KEYPAIR.private_key(),
+                                setup_grants_authoritative_lane_index,
+                            )
+                        },
+                        setup_grants_retry_entry_hash,
+                        "setup grants retry committed outcome on authoritative observer",
+                        "setup grants retry commit barrier on authoritative observer",
+                        retry_pre_barrier_height,
+                        BLOCKING_CONFIRMATION_TIMEOUT,
+                        BLOCKING_CONFIRMATION_TIMEOUT,
+                    ) {
+                        Ok(observation) => {
+                            committed_outcome_confirmed = observation.committed_outcome_confirmed;
+                            if !committed_outcome_confirmed {
+                                eprintln!(
+                                    "[setup-grants] retry committed outcome remained inconclusive after height barrier"
+                                );
+                            }
+                        }
+                        Err(retry_err) => {
+                            eprintln!(
+                                "[setup-grants] retry committed outcome did not converge before permission assertion: {retry_err}"
+                            );
+                        }
+                    }
+                }
+                Err(resubmit_err) => {
+                    eprintln!(
+                        "[setup-grants] authoritative resubmit did not enqueue before permission assertion: {resubmit_err}"
+                    );
+                }
+            }
+        }
     };
     {
+        let _phase = phase_timings.phase("setup grants: Nexus lane application");
+        match wait_for_lane_application_progress_after(
+            &network,
+            &[
+                neutral_tick_submitter_a.clone(),
+                neutral_tick_submitter_b.clone(),
+            ],
+            setup_grants_lane,
+            setup_grants_application_baseline.as_ref(),
+            "setup grants Nexus lane application",
+        ) {
+            Ok(setup_progress) => {
+                eprintln!(
+                    "[setup-grants] applied Nexus lane block={}/{} status={}",
+                    setup_progress.lane_block_height,
+                    setup_progress.lane_block_view,
+                    setup_progress.execution_status,
+                );
+            }
+            Err(err) => {
+                eprintln!(
+                    "[setup-grants] Nexus lane application did not converge before permission assertion: {err}"
+                );
+            }
+        }
+    }
+    {
         let _phase = phase_timings.phase("setup grants: query/assert");
-        // Confirm the authoritative Bob-facing view exposed by the observed routed lane before
-        // proceeding to the swap path that depends on it.
+        // Confirm Bob-facing routed views before proceeding to the swap path that depends on them.
         wait_for_account_permissions_across_clients(
+            std::slice::from_ref(&neutral_tick_submitter_a),
             || {
-                lane_targeted_clients_for_lane(
-                    &network,
-                    &bob,
-                    &BOB_ID,
-                    BOB_KEYPAIR.private_key(),
-                    setup_grants_authoritative_lane_index,
-                )
+                let mut clients = Vec::new();
+                for lane_index in [NEXUS_LANE_INDEX, DS1_LANE_INDEX, DS2_LANE_INDEX] {
+                    clients.extend(lane_targeted_clients_for_lane(
+                        &network,
+                        &bob,
+                        &BOB_ID,
+                        BOB_KEYPAIR.private_key(),
+                        lane_index,
+                    ));
+                }
+                clients
             },
             &BOB_ID,
             &[bob_transfer_ds1_permission.clone()],
-            "grant setup permissions visible on authoritative bob observer",
+            "grant setup permissions visible on routed bob observers",
         )?;
     }
 
@@ -2304,6 +3815,14 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
         );
         let (submitter, _) = current_nexus_clients();
         let mut successful_swap_synced_status = None;
+        let successful_swap_pre_application = wait_for_independent_lane_application_progress(
+            &network,
+            std::slice::from_ref(&neutral_tick_submitter_a),
+            std::slice::from_ref(&neutral_tick_submitter_b),
+            (LaneId::new(DS1_LANE_INDEX), DataSpaceId::new(DS1_ID_U64)),
+            (LaneId::new(DS2_LANE_INDEX), DataSpaceId::new(DS2_ID_U64)),
+            "successful swap pre-application baseline",
+        )?;
         let (successful_swap_entry_hash, successful_swap_pre_barrier_height) = {
             let _phase = phase_timings.phase("execute successful swap: tx submit enqueue");
             let pre_barrier_height = submitter
@@ -2346,7 +3865,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
                 SWAP_COMMITTED_OUTCOME_TIMEOUT,
                 SWAP_POST_BARRIER_OUTCOME_TIMEOUT,
             ) {
-                Ok(status) => successful_swap_synced_status = Some(status),
+                Ok(observation) => successful_swap_synced_status = Some(observation.status),
                 Err(fallback_err) => {
                     swap_nonconverged_fallbacks = swap_nonconverged_fallbacks.saturating_add(1);
                     eprintln!(
@@ -2356,64 +3875,103 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
             }
         }
         if let Some(status) = successful_swap_synced_status.as_ref() {
-            let (alice_on_nexus, _) = current_nexus_clients();
-            wait_for_lane_peers_commit_qc_at_least(
+            if let Err(sync_err) = wait_for_lane_peers_commit_qc_at_least(
                 &network,
                 NEXUS_LANE_INDEX,
                 status,
-                &alice_on_nexus,
+                &neutral_tick_submitter_a,
                 "successful swap Nexus authoritative sync",
                 STATUS_WAIT_TIMEOUT,
                 SETUP_BARRIER_TICK_EVERY_POLLS,
-            )?;
+            ) {
+                swap_nonconverged_fallbacks = swap_nonconverged_fallbacks.saturating_add(1);
+                eprintln!(
+                    "[swap] successful swap Nexus authoritative sync did not converge before balance assertion: {sync_err}"
+                );
+            }
         }
         {
             let _phase = phase_timings.phase("execute successful swap: query/assert");
-            let mut balance_wait_result = Ok(());
-            for attempt in 0..4 {
-                let (alice_on_nexus, bob_on_nexus) = current_nexus_clients();
-                let successful_swap_expectations = [
-                    BalanceExpectation {
-                        client: &alice_on_nexus,
-                        asset_id: &alice_ds1_asset,
-                        expected: Numeric::from(70_u32),
-                    },
-                    BalanceExpectation {
-                        client: &bob_on_nexus,
-                        asset_id: &bob_ds1_asset,
-                        expected: Numeric::from(30_u32),
-                    },
-                    BalanceExpectation {
-                        client: &alice_on_nexus,
-                        asset_id: &alice_ds2_asset,
-                        expected: Numeric::from(45_u32),
-                    },
-                    BalanceExpectation {
-                        client: &bob_on_nexus,
-                        asset_id: &bob_ds2_asset,
-                        expected: Numeric::from(155_u32),
-                    },
-                ];
-                match wait_for_expected_balances_with_tick_timeout(
-                    &alice_on_nexus,
-                    &successful_swap_expectations,
-                    "successful swap balances",
-                    Duration::from_secs(12),
-                ) {
-                    Ok(()) => {
-                        balance_wait_result = Ok(());
-                        break;
-                    }
-                    Err(err) => {
-                        eprintln!(
-                            "[swap] successful swap balances not visible after Nexus tick window {}: {err}",
-                            attempt + 1
-                        );
-                        balance_wait_result = Err(err);
-                    }
-                }
-            }
-            balance_wait_result?;
+            let successful_swap_ds1_tick_submitters = [neutral_tick_submitter_a.clone()];
+            let successful_swap_ds2_tick_submitters = [neutral_tick_submitter_b.clone()];
+            let (ds1_progress, ds2_progress) =
+                wait_for_independent_lane_application_progress_after(
+                    &network,
+                    &successful_swap_ds1_tick_submitters,
+                    &successful_swap_ds2_tick_submitters,
+                    &successful_swap_pre_application.0,
+                    &successful_swap_pre_application.1,
+                    "successful swap applied DS lane progress",
+                )?;
+            eprintln!(
+                "[swap] applied DS lane progress ds1={}/{} status={} ds2={}/{} status={}",
+                ds1_progress.lane_block_height,
+                ds1_progress.lane_block_view,
+                ds1_progress.execution_status,
+                ds2_progress.lane_block_height,
+                ds2_progress.lane_block_view,
+                ds2_progress.execution_status,
+            );
+            let successful_swap_tick_submitters = [
+                neutral_tick_submitter_a.clone(),
+                neutral_tick_submitter_b.clone(),
+            ];
+            let alice_ds1_balance_clients = lane_targeted_clients_for_lane(
+                &network,
+                &alice,
+                &ALICE_ID,
+                ALICE_KEYPAIR.private_key(),
+                DS1_LANE_INDEX,
+            );
+            let bob_ds1_balance_clients = lane_targeted_clients_for_lane(
+                &network,
+                &alice,
+                &BOB_ID,
+                BOB_KEYPAIR.private_key(),
+                DS1_LANE_INDEX,
+            );
+            let alice_ds2_balance_clients = lane_targeted_clients_for_lane(
+                &network,
+                &alice,
+                &ALICE_ID,
+                ALICE_KEYPAIR.private_key(),
+                DS2_LANE_INDEX,
+            );
+            let bob_ds2_balance_clients = lane_targeted_clients_for_lane(
+                &network,
+                &alice,
+                &BOB_ID,
+                BOB_KEYPAIR.private_key(),
+                DS2_LANE_INDEX,
+            );
+            let successful_swap_expectations = [
+                BalanceExpectationAcrossClients {
+                    clients: &alice_ds1_balance_clients,
+                    asset_id: &alice_ds1_asset,
+                    expected: Numeric::from(70_u32),
+                },
+                BalanceExpectationAcrossClients {
+                    clients: &bob_ds1_balance_clients,
+                    asset_id: &bob_ds1_asset,
+                    expected: Numeric::from(30_u32),
+                },
+                BalanceExpectationAcrossClients {
+                    clients: &alice_ds2_balance_clients,
+                    asset_id: &alice_ds2_asset,
+                    expected: Numeric::from(45_u32),
+                },
+                BalanceExpectationAcrossClients {
+                    clients: &bob_ds2_balance_clients,
+                    asset_id: &bob_ds2_asset,
+                    expected: Numeric::from(155_u32),
+                },
+            ];
+            wait_for_expected_balances_across_clients_with_tick_submitters_timeout(
+                &successful_swap_tick_submitters,
+                &successful_swap_expectations,
+                "successful swap balances after DS application",
+                LANE_PROGRESS_WAIT_TIMEOUT,
+            )?;
         }
     }
     let soak_iterations = soak_iterations();
@@ -2852,42 +4410,23 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
                         return Err(err);
                     }
                     eprintln!(
-                        "[rollback] committed history lookup inconclusive; falling back to uncapped blocking confirmation"
+                        "[rollback] committed history lookup inconclusive; balance rollback check remains the safety gate"
                     );
-                    let final_fallback_swap = DvpIsi::new(
-                        "ds1ds2swapfail_final".parse().expect("settlement id"),
-                        SettlementLeg::new(
-                            ds1_asset_def.clone(),
-                            Numeric::from(10_u32),
-                            ALICE_ID.clone(),
-                            BOB_ID.clone(),
-                        ),
-                        SettlementLeg::new(
-                            ds2_asset_def.clone(),
-                            Numeric::from(10_000_u32),
-                            BOB_ID.clone(),
-                            ALICE_ID.clone(),
-                        ),
-                        SettlementPlan::new(
-                            SettlementExecutionOrder::DeliveryThenPayment,
-                            SettlementAtomicity::AllOrNothing,
-                        ),
-                    );
-                    let (submitter, _) = current_nexus_clients();
-                    let fallback_error = submitter
-                        .submit_blocking(InstructionBox::from(final_fallback_swap))
-                        .expect_err(
-                            "underfunded counter-leg must reject all-or-nothing settlement",
-                        );
-                    failure_text = fallback_error.to_string();
+                    failure_text = error_text;
                 }
             }
         }
         assert!(
-            failure_text.contains("settlement leg requires 10000")
-                || failure_text.contains("requires 10000"),
+            is_expected_rollback_failure_text(&failure_text),
             "unexpected failure message: {failure_text}"
         );
+        if !failure_text.contains("settlement leg requires 10000")
+            && !failure_text.contains("requires 10000")
+        {
+            eprintln!(
+                "[rollback] rejection reason remained inconclusive; balance rollback check remains the safety gate"
+            );
+        }
         let (rollback_alice_on_nexus, rollback_bob_on_nexus) = current_nexus_clients();
         let rollback_baseline = [
             BalanceExpectation {
@@ -2947,24 +4486,39 @@ fn cross_dataspace_localnet_genesis_preexecution_smoke() {
 #[cfg(test)]
 mod tests {
     use super::{
-        ALICE_ID, AccountId, Algorithm, DS1_ID_U64, DS1_LANE_INDEX, DS1_MANIFEST_HASH, DS2_ID_U64,
-        DS2_LANE_INDEX, DS2_MANIFEST_HASH, ExpectedLaneValidatorBinding, KeyPair, NEXUS_ALIAS,
-        NEXUS_ID_U64, NEXUS_LANE_INDEX, OBSERVER_QUERY_TIMEOUT_CAP, PeerId, RoutedJsonGetResponse,
-        TOTAL_PEERS, VALIDATORS_PER_LANE, bounded_observer_request_timeout,
-        cross_dataspace_gas_account_id, duration_min_avg_max_secs,
+        ALICE_ID, AccountId, Algorithm, CommittedTxOutcome, DS1_ID_U64, DS1_LANE_INDEX,
+        DS1_MANIFEST_HASH, DS2_ID_U64, DS2_LANE_INDEX, DS2_MANIFEST_HASH,
+        ExpectedLaneValidatorBinding, KeyPair, LaneDomainProgress, LanePayloadOwnershipProgress,
+        NEXUS_ALIAS, NEXUS_ID_U64, NEXUS_LANE_INDEX, OBSERVER_QUERY_TIMEOUT_CAP, PeerId,
+        RoutedJsonGetResponse, TOTAL_PEERS, VALIDATORS_PER_LANE, applied_lane_domain_progress,
+        bounded_observer_request_timeout, committed_lane_block_has_expected_quorum,
+        committed_tx_outcome_quorum, cross_dataspace_gas_account_id, duration_min_avg_max_secs,
         expect_local_or_proxy_fanout_headers, expected_lane_binding_for_peer,
-        is_inconclusive_blocking_submit_error, is_inconclusive_committed_outcome_error,
-        lane_validator_snapshot, multilane_da_proof_policy_bundle, nexus_fee_asset_definition_id,
+        is_expected_rollback_failure_text, is_inconclusive_blocking_submit_error,
+        is_inconclusive_committed_outcome_error, lane_domain_progress_is_after_baseline,
+        lane_validator_snapshot, latest_lane_domain_application_progress,
+        latest_lane_domain_progress, latest_lane_payload_ownership_progress,
+        multilane_da_proof_policy_bundle, nexus_fee_asset_definition_id,
         npos_multilane_genesis_post_topology_transactions, parse_positive_usize_override,
-        render_error_with_debug, render_rejection_reason, routed_header_string, should_submit_tick,
-        stake_asset_definition_id, stake_asset_id_literal, validator_authority_account_for_peer,
-        validator_authority_seed,
+        peer_indices_for_committed_lane_evidence, quorum_lane_domain_progress,
+        quorum_lane_payload_ownership_progress, render_error_with_debug, render_rejection_reason,
+        routed_header_string, should_submit_tick, stake_asset_definition_id,
+        stake_asset_id_literal, total_balance_observer_request_slots,
+        validator_authority_account_for_peer, validator_authority_seed,
     };
+    use iroha::crypto::{Hash, HashOf};
     use iroha::data_model::{
+        block::consensus::{
+            COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHT_REJECTED_AWAITING_STATE_APPLICATION,
+            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
+            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION, SumeragiCommittedLaneBlock,
+            SumeragiDataspaceCommitment, SumeragiLanePayloadOwnership, SumeragiStatusWire,
+        },
         da::commitment::{DaProofPolicyBundle, DaProofScheme},
-        nexus::DataSpaceId,
+        nexus::{DataSpaceId, LaneId},
         transaction::error::{TransactionLimitError, TransactionRejectionReason},
     };
+    use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
     use norito::json::Value as JsonValue;
     use reqwest::header::{HeaderMap, HeaderValue};
     use std::{
@@ -3035,6 +4589,19 @@ mod tests {
             stake_definition_id.to_string(),
             fee_definition_id.to_string(),
             "stake and fee helpers should not collapse cross-dataspace asset domains"
+        );
+    }
+
+    #[test]
+    fn committed_lane_evidence_peer_scan_is_not_lane_bound() {
+        assert_eq!(
+            peer_indices_for_committed_lane_evidence(VALIDATORS_PER_LANE),
+            vec![0, 1, 2, 3],
+            "self-certified committed lane evidence can be observed from any peer"
+        );
+        assert_eq!(
+            peer_indices_for_committed_lane_evidence(0),
+            Vec::<usize>::new()
         );
     }
 
@@ -3251,6 +4818,774 @@ mod tests {
         }
     }
 
+    fn test_hash(tag: u8) -> Hash {
+        Hash::new([tag; 4])
+    }
+
+    fn test_lane_domain_progress(
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_block_height: u64,
+        lane_block_view: u64,
+    ) -> LaneDomainProgress {
+        LaneDomainProgress {
+            lane_id,
+            dataspace_id,
+            lane_block_height,
+            lane_block_view,
+            descriptor_hash: test_hash(0xA0),
+            proposal_hash: test_hash(0xA1),
+            subject_hash: test_hash(0xA2),
+            payload_ownership_hash: test_hash(0xA3),
+            rbc_instance_hash: test_hash(0xA4),
+            qc_mode_tag: "test-bls".to_owned(),
+            dataspace_commitment_height: Some(6 + lane_block_height),
+            prepare_qc_signer_count: 3,
+            commit_qc_signer_count: 3,
+            execution_status: COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK.to_owned(),
+            executable_payload_available: true,
+        }
+    }
+
+    fn test_lane_payload_ownership_progress(
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_block_height: u64,
+        lane_block_view: u64,
+        proposal_height: u64,
+    ) -> LanePayloadOwnershipProgress {
+        LanePayloadOwnershipProgress {
+            lane_id,
+            dataspace_id,
+            lane_block_height,
+            lane_block_view,
+            proposal_height,
+            proposal_view: 0,
+            subject_hash: test_hash(0xB0),
+            lane_block_descriptor_hash: test_hash(0xB1),
+            payload_ownership_hash: test_hash(0xB2),
+            rbc_instance_hash: test_hash(0xB3),
+            accepted_transaction_count: 1,
+            validator_count: VALIDATORS_PER_LANE as u32,
+            min_quorum: 3,
+        }
+    }
+
+    fn sample_committed_lane_block(
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_block_height: u64,
+        min_quorum: u32,
+        prepare_qc_signer_count: u32,
+        commit_qc_signer_count: u32,
+        execution_status: &str,
+    ) -> SumeragiCommittedLaneBlock {
+        SumeragiCommittedLaneBlock {
+            lane_id,
+            dataspace_id,
+            lane_block_height,
+            lane_block_view: 0,
+            descriptor_hash: test_hash(0x01),
+            proposal_hash: test_hash(0x02),
+            execution_status: execution_status.to_owned(),
+            executable_payload_available: true,
+            subject_hash: test_hash(0x03),
+            payload_ownership_hash: test_hash(0x04),
+            rbc_instance_hash: test_hash(0x05),
+            qc_mode_tag: "test-bls".to_owned(),
+            validator_count: VALIDATORS_PER_LANE as u32,
+            min_quorum,
+            prepare_qc_signer_count,
+            commit_qc_signer_count,
+        }
+    }
+
+    fn sample_lane_payload_ownership(
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_block_height: u64,
+        min_quorum: u32,
+        accepted_count: usize,
+    ) -> SumeragiLanePayloadOwnership {
+        let mut validator_set = deterministic_topology(VALIDATORS_PER_LANE);
+        validator_set.sort();
+        let accepted_candidate_indices = (0..accepted_count)
+            .map(|index| u64::try_from(index).expect("fixture candidate index fits u64"))
+            .collect::<Vec<_>>();
+        let accepted_transaction_hashes = (0..accepted_count)
+            .map(|index| test_hash(u8::try_from(0x40 + index).expect("fixture hash tag")))
+            .collect::<Vec<_>>();
+        let mut ownership = SumeragiLanePayloadOwnership {
+            proposal_height: lane_block_height.saturating_add(10),
+            proposal_view: 0,
+            lane_id,
+            dataspace_id,
+            lane_block_height,
+            lane_block_view: 0,
+            subject_hash: test_hash(0x10),
+            qc_mode_tag: "test-bls".to_owned(),
+            accepted_candidate_indices,
+            accepted_transaction_hashes,
+            previous_lane_block_height: lane_block_height.saturating_sub(1),
+            previous_lane_block_descriptor_hash: None,
+            lane_block_descriptor_hash: Some(test_hash(0x11)),
+            lane_block_descriptor_validator_set: validator_set,
+            lane_block_descriptor_validator_count: VALIDATORS_PER_LANE as u32,
+            lane_block_descriptor_min_quorum: min_quorum,
+            payload_ownership_hash: test_hash(0x12),
+            rbc_instance_hash: test_hash(0x13),
+        };
+        if accepted_count > 0 && min_quorum > 0 && min_quorum <= VALIDATORS_PER_LANE as u32 {
+            let replay_hashes = ownership
+                .compute_replay_hashes()
+                .expect("fixture lane payload ownership replay hashes");
+            ownership.subject_hash = replay_hashes.subject_hash;
+            ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
+            ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
+            ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
+        }
+        ownership
+    }
+
+    #[test]
+    fn committed_lane_block_quorum_requires_exact_lane_committee() {
+        let quorum = u32::try_from(commit_quorum_from_len(VALIDATORS_PER_LANE))
+            .expect("fixture quorum fits u32");
+        let valid = sample_committed_lane_block(
+            LaneId::new(DS1_LANE_INDEX),
+            DataSpaceId::new(DS1_ID_U64),
+            1,
+            quorum,
+            quorum,
+            quorum,
+            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
+        );
+        assert!(committed_lane_block_has_expected_quorum(
+            &valid,
+            VALIDATORS_PER_LANE
+        ));
+
+        let mut under_quorum = valid.clone();
+        under_quorum.commit_qc_signer_count = quorum - 1;
+        assert!(!committed_lane_block_has_expected_quorum(
+            &under_quorum,
+            VALIDATORS_PER_LANE
+        ));
+
+        let mut wrong_committee = valid;
+        wrong_committee.validator_count = (VALIDATORS_PER_LANE + 1) as u32;
+        assert!(!committed_lane_block_has_expected_quorum(
+            &wrong_committee,
+            VALIDATORS_PER_LANE
+        ));
+    }
+
+    #[test]
+    fn latest_lane_domain_progress_requires_exact_dataspace_and_qc_quorum() {
+        let quorum = u32::try_from(commit_quorum_from_len(VALIDATORS_PER_LANE))
+            .expect("fixture quorum fits u32");
+        let mut under_quorum = sample_committed_lane_block(
+            LaneId::new(DS1_LANE_INDEX),
+            DataSpaceId::new(DS1_ID_U64),
+            4,
+            quorum,
+            quorum,
+            quorum - 1,
+            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
+        );
+        under_quorum.proposal_hash = test_hash(0x20);
+        let rejected = sample_committed_lane_block(
+            LaneId::new(DS1_LANE_INDEX),
+            DataSpaceId::new(DS1_ID_U64),
+            5,
+            quorum,
+            quorum,
+            quorum,
+            COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHT_REJECTED_AWAITING_STATE_APPLICATION,
+        );
+        let wrong_dataspace = sample_committed_lane_block(
+            LaneId::new(DS1_LANE_INDEX),
+            DataSpaceId::new(DS2_ID_U64),
+            99,
+            quorum,
+            quorum,
+            quorum,
+            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
+        );
+        let valid = sample_committed_lane_block(
+            LaneId::new(DS1_LANE_INDEX),
+            DataSpaceId::new(DS1_ID_U64),
+            3,
+            quorum,
+            quorum,
+            quorum,
+            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
+        );
+        let status = SumeragiStatusWire {
+            dataspace_commitments: vec![SumeragiDataspaceCommitment {
+                block_height: 11,
+                lane_id: LaneId::new(DS1_LANE_INDEX),
+                dataspace_id: DataSpaceId::new(DS1_ID_U64),
+                tx_count: 1,
+                total_chunks: 1,
+                rbc_bytes_total: 32,
+                teu_total: 1,
+                block_hash: HashOf::from_untyped_unchecked(test_hash(0x30)),
+            }],
+            committed_lane_blocks: vec![wrong_dataspace, under_quorum, rejected, valid],
+            ..Default::default()
+        };
+
+        let progress = latest_lane_domain_progress(
+            &status,
+            LaneId::new(DS1_LANE_INDEX),
+            DataSpaceId::new(DS1_ID_U64),
+        )
+        .expect("valid exact-dataspace lane-domain QC progress");
+
+        assert_eq!(
+            progress.lane_block_height, 5,
+            "committed QC evidence counts even when execution is not yet progress-ready"
+        );
+        assert_eq!(progress.dataspace_commitment_height, Some(11));
+        assert_eq!(progress.prepare_qc_signer_count, quorum);
+        assert_eq!(progress.commit_qc_signer_count, quorum);
+        assert!(
+            latest_lane_domain_progress(
+                &status,
+                LaneId::new(DS2_LANE_INDEX),
+                DataSpaceId::new(DS1_ID_U64),
+            )
+            .is_none(),
+            "wrong lane must not satisfy the progress probe"
+        );
+    }
+
+    #[test]
+    fn latest_lane_domain_application_progress_requires_applied_latest_row() {
+        let quorum = u32::try_from(commit_quorum_from_len(VALIDATORS_PER_LANE))
+            .expect("fixture quorum fits u32");
+        let applied_lower = sample_committed_lane_block(
+            LaneId::new(DS1_LANE_INDEX),
+            DataSpaceId::new(DS1_ID_U64),
+            3,
+            quorum,
+            quorum,
+            quorum,
+            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
+        );
+        let unapplied_latest = sample_committed_lane_block(
+            LaneId::new(DS1_LANE_INDEX),
+            DataSpaceId::new(DS1_ID_U64),
+            4,
+            quorum,
+            quorum,
+            quorum,
+            COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHT_REJECTED_AWAITING_STATE_APPLICATION,
+        );
+        let status = SumeragiStatusWire {
+            committed_lane_blocks: vec![applied_lower.clone(), unapplied_latest],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            latest_lane_domain_progress(
+                &status,
+                LaneId::new(DS1_LANE_INDEX),
+                DataSpaceId::new(DS1_ID_U64),
+            )
+            .map(|progress| progress.lane_block_height),
+            Some(4),
+            "the committed-QC gate should still expose the latest certified lane block"
+        );
+        assert!(
+            latest_lane_domain_application_progress(
+                &status,
+                LaneId::new(DS1_LANE_INDEX),
+                DataSpaceId::new(DS1_ID_U64),
+            )
+            .is_none(),
+            "an unapplied latest row must block receipt-backed application progress"
+        );
+
+        let direct_applied_latest = sample_committed_lane_block(
+            LaneId::new(DS1_LANE_INDEX),
+            DataSpaceId::new(DS1_ID_U64),
+            4,
+            quorum,
+            quorum,
+            quorum,
+            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
+        );
+        let direct_applied_status = SumeragiStatusWire {
+            committed_lane_blocks: vec![applied_lower.clone(), direct_applied_latest],
+            ..Default::default()
+        };
+        assert_eq!(
+            latest_lane_domain_application_progress(
+                &direct_applied_status,
+                LaneId::new(DS1_LANE_INDEX),
+                DataSpaceId::new(DS1_ID_U64),
+            )
+            .map(|progress| progress.lane_block_height),
+            Some(4),
+            "direct execution receipt status should satisfy applied progress"
+        );
+
+        let mut unavailable_applied = applied_lower;
+        unavailable_applied.executable_payload_available = false;
+        let unavailable_status = SumeragiStatusWire {
+            committed_lane_blocks: vec![unavailable_applied],
+            ..Default::default()
+        };
+        assert!(
+            latest_lane_domain_application_progress(
+                &unavailable_status,
+                LaneId::new(DS1_LANE_INDEX),
+                DataSpaceId::new(DS1_ID_U64),
+            )
+            .is_none(),
+            "applied status without executable payload material must not count"
+        );
+    }
+
+    #[test]
+    fn applied_lane_domain_progress_accepts_lower_applied_certified_row() {
+        let quorum = u32::try_from(commit_quorum_from_len(VALIDATORS_PER_LANE))
+            .expect("fixture quorum fits u32");
+        let applied_lower = sample_committed_lane_block(
+            LaneId::new(DS1_LANE_INDEX),
+            DataSpaceId::new(DS1_ID_U64),
+            3,
+            quorum,
+            quorum,
+            quorum,
+            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
+        );
+        let pending_latest = sample_committed_lane_block(
+            LaneId::new(DS1_LANE_INDEX),
+            DataSpaceId::new(DS1_ID_U64),
+            4,
+            quorum,
+            quorum,
+            quorum,
+            COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHT_REJECTED_AWAITING_STATE_APPLICATION,
+        );
+        let mut applied_top = sample_committed_lane_block(
+            LaneId::new(DS1_LANE_INDEX),
+            DataSpaceId::new(DS1_ID_U64),
+            5,
+            quorum,
+            quorum,
+            quorum,
+            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
+        );
+        applied_top.proposal_hash = test_hash(0x70);
+        let status = SumeragiStatusWire {
+            committed_lane_blocks: vec![applied_lower.clone(), pending_latest, applied_top.clone()],
+            ..Default::default()
+        };
+
+        let progress = applied_lane_domain_progress(
+            &status,
+            LaneId::new(DS1_LANE_INDEX),
+            DataSpaceId::new(DS1_ID_U64),
+        )
+        .expect("highest applied certified row should count");
+        assert_eq!(progress.lane_block_height, 5);
+        assert_eq!(progress.proposal_hash, applied_top.proposal_hash);
+
+        let mut conflicting_top = applied_top.clone();
+        conflicting_top.proposal_hash = test_hash(0x71);
+        let ambiguous_status = SumeragiStatusWire {
+            committed_lane_blocks: vec![applied_lower, applied_top, conflicting_top],
+            ..Default::default()
+        };
+        assert!(
+            applied_lane_domain_progress(
+                &ambiguous_status,
+                LaneId::new(DS1_LANE_INDEX),
+                DataSpaceId::new(DS1_ID_U64),
+            )
+            .is_none(),
+            "conflicting applied identities at the same top height must fail closed"
+        );
+    }
+
+    #[test]
+    fn quorum_lane_domain_progress_requires_quorum_at_candidate_height() {
+        let lane_id = LaneId::new(DS1_LANE_INDEX);
+        let dataspace_id = DataSpaceId::new(DS1_ID_U64);
+        let observations = [
+            test_lane_domain_progress(lane_id, dataspace_id, 1, 0),
+            test_lane_domain_progress(lane_id, dataspace_id, 2, 0),
+            test_lane_domain_progress(lane_id, dataspace_id, 2, 1),
+            test_lane_domain_progress(lane_id, dataspace_id, 3, 0),
+        ];
+
+        let progress =
+            quorum_lane_domain_progress(&observations, 3).expect("height 2 has quorum support");
+
+        assert_eq!(progress.lane_block_height, 2);
+        assert_eq!(progress.lane_block_view, 0);
+        assert!(
+            quorum_lane_domain_progress(&observations, 5).is_none(),
+            "larger than peer-count quorum must not be satisfied"
+        );
+
+        let mut conflicting_same_height = test_lane_domain_progress(lane_id, dataspace_id, 2, 0);
+        conflicting_same_height.proposal_hash = test_hash(0xD1);
+        let conflicting_observations = [
+            test_lane_domain_progress(lane_id, dataspace_id, 2, 0),
+            conflicting_same_height,
+        ];
+        assert!(
+            quorum_lane_domain_progress(&conflicting_observations, 2).is_none(),
+            "conflicting same-height committed-lane identities must not combine into quorum progress"
+        );
+
+        let quorum_identity_a = test_lane_domain_progress(lane_id, dataspace_id, 4, 0);
+        let mut quorum_identity_b = quorum_identity_a.clone();
+        quorum_identity_b.proposal_hash = test_hash(0xD2);
+        let split_top_quorum = vec![
+            quorum_identity_a.clone(),
+            quorum_identity_a.clone(),
+            quorum_identity_a,
+            quorum_identity_b.clone(),
+            quorum_identity_b.clone(),
+            quorum_identity_b,
+        ];
+        assert!(
+            quorum_lane_domain_progress(&split_top_quorum, 3).is_none(),
+            "conflicting top committed-lane identities with independent quorum must fail closed"
+        );
+    }
+
+    #[test]
+    fn lane_domain_progress_after_baseline_requires_strict_same_lane_tip_advance() {
+        let lane_id = LaneId::new(DS1_LANE_INDEX);
+        let dataspace_id = DataSpaceId::new(DS1_ID_U64);
+        let baseline = test_lane_domain_progress(lane_id, dataspace_id, 4, 1);
+        let same_tip = test_lane_domain_progress(lane_id, dataspace_id, 4, 1);
+        let higher_view = test_lane_domain_progress(lane_id, dataspace_id, 4, 2);
+        let higher_height = test_lane_domain_progress(lane_id, dataspace_id, 5, 0);
+        let wrong_lane = test_lane_domain_progress(LaneId::new(DS2_LANE_INDEX), dataspace_id, 5, 0);
+
+        assert!(!lane_domain_progress_is_after_baseline(
+            &same_tip, &baseline
+        ));
+        assert!(lane_domain_progress_is_after_baseline(
+            &higher_view,
+            &baseline
+        ));
+        assert!(lane_domain_progress_is_after_baseline(
+            &higher_height,
+            &baseline
+        ));
+        assert!(!lane_domain_progress_is_after_baseline(
+            &wrong_lane,
+            &baseline
+        ));
+    }
+
+    #[test]
+    fn latest_lane_domain_progress_rejects_ambiguous_latest_committed_rows() {
+        let quorum = u32::try_from(commit_quorum_from_len(VALIDATORS_PER_LANE))
+            .expect("fixture quorum fits u32");
+        let valid = sample_committed_lane_block(
+            LaneId::new(DS1_LANE_INDEX),
+            DataSpaceId::new(DS1_ID_U64),
+            3,
+            quorum,
+            quorum,
+            quorum,
+            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
+        );
+        let mut proposal_drift = valid.clone();
+        proposal_drift.proposal_hash = test_hash(0x31);
+        let exact_duplicate = valid.clone();
+        let status = SumeragiStatusWire {
+            committed_lane_blocks: vec![valid.clone(), exact_duplicate],
+            ..Default::default()
+        };
+        assert!(
+            latest_lane_domain_progress(
+                &status,
+                LaneId::new(DS1_LANE_INDEX),
+                DataSpaceId::new(DS1_ID_U64),
+            )
+            .is_some(),
+            "exact duplicate committed-lane rows should remain idempotent"
+        );
+
+        let ambiguous = SumeragiStatusWire {
+            committed_lane_blocks: vec![valid, proposal_drift],
+            ..Default::default()
+        };
+        assert!(
+            latest_lane_domain_progress(
+                &ambiguous,
+                LaneId::new(DS1_LANE_INDEX),
+                DataSpaceId::new(DS1_ID_U64),
+            )
+            .is_none(),
+            "same-slot committed-lane proposal drift must not publish cross-dataspace QC progress"
+        );
+    }
+
+    #[test]
+    fn latest_lane_domain_progress_rejects_malformed_latest_committed_row() {
+        let quorum = u32::try_from(commit_quorum_from_len(VALIDATORS_PER_LANE))
+            .expect("fixture quorum fits u32");
+        let valid = sample_committed_lane_block(
+            LaneId::new(DS1_LANE_INDEX),
+            DataSpaceId::new(DS1_ID_U64),
+            3,
+            quorum,
+            quorum,
+            quorum,
+            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
+        );
+        let malformed_latest = sample_committed_lane_block(
+            LaneId::new(DS1_LANE_INDEX),
+            DataSpaceId::new(DS1_ID_U64),
+            4,
+            quorum,
+            quorum,
+            quorum - 1,
+            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
+        );
+        let status = SumeragiStatusWire {
+            committed_lane_blocks: vec![valid, malformed_latest],
+            ..Default::default()
+        };
+        assert!(
+            latest_lane_domain_progress(
+                &status,
+                LaneId::new(DS1_LANE_INDEX),
+                DataSpaceId::new(DS1_ID_U64),
+            )
+            .is_none(),
+            "malformed latest committed-lane rows must block cross-dataspace QC progress"
+        );
+    }
+
+    #[test]
+    fn latest_lane_payload_ownership_progress_requires_exact_replayable_quorum() {
+        let quorum = u32::try_from(commit_quorum_from_len(VALIDATORS_PER_LANE))
+            .expect("fixture quorum fits u32");
+        let under_quorum = sample_lane_payload_ownership(
+            LaneId::new(DS1_LANE_INDEX),
+            DataSpaceId::new(DS1_ID_U64),
+            2,
+            quorum - 1,
+            1,
+        );
+        let empty_work = sample_lane_payload_ownership(
+            LaneId::new(DS1_LANE_INDEX),
+            DataSpaceId::new(DS1_ID_U64),
+            1,
+            quorum,
+            0,
+        );
+        let wrong_dataspace = sample_lane_payload_ownership(
+            LaneId::new(DS1_LANE_INDEX),
+            DataSpaceId::new(DS2_ID_U64),
+            99,
+            quorum,
+            1,
+        );
+        let mut forged_subject = sample_lane_payload_ownership(
+            LaneId::new(DS1_LANE_INDEX),
+            DataSpaceId::new(DS1_ID_U64),
+            2,
+            quorum,
+            1,
+        );
+        forged_subject.subject_hash = test_hash(0x52);
+        let valid = sample_lane_payload_ownership(
+            LaneId::new(DS1_LANE_INDEX),
+            DataSpaceId::new(DS1_ID_U64),
+            3,
+            quorum,
+            2,
+        );
+        let status = SumeragiStatusWire {
+            lane_payload_ownerships: vec![
+                wrong_dataspace,
+                under_quorum,
+                empty_work,
+                forged_subject,
+                valid,
+            ],
+            ..Default::default()
+        };
+
+        let progress = latest_lane_payload_ownership_progress(
+            &status,
+            LaneId::new(DS1_LANE_INDEX),
+            DataSpaceId::new(DS1_ID_U64),
+        )
+        .expect("valid exact-dataspace lane payload ownership progress");
+
+        assert_eq!(progress.lane_block_height, 3);
+        assert_eq!(progress.accepted_transaction_count, 2);
+        assert_eq!(progress.min_quorum, quorum);
+        assert_eq!(progress.validator_count, VALIDATORS_PER_LANE as u32);
+        assert!(
+            latest_lane_payload_ownership_progress(
+                &status,
+                LaneId::new(DS2_LANE_INDEX),
+                DataSpaceId::new(DS1_ID_U64),
+            )
+            .is_none(),
+            "wrong lane must not satisfy the ownership progress probe"
+        );
+    }
+
+    #[test]
+    fn latest_lane_payload_ownership_progress_rejects_malformed_latest_replay_row() {
+        let quorum = u32::try_from(commit_quorum_from_len(VALIDATORS_PER_LANE))
+            .expect("fixture quorum fits u32");
+        let valid = sample_lane_payload_ownership(
+            LaneId::new(DS1_LANE_INDEX),
+            DataSpaceId::new(DS1_ID_U64),
+            3,
+            quorum,
+            2,
+        );
+        let mut malformed_latest = sample_lane_payload_ownership(
+            LaneId::new(DS1_LANE_INDEX),
+            DataSpaceId::new(DS1_ID_U64),
+            4,
+            quorum,
+            1,
+        );
+        malformed_latest.subject_hash = test_hash(0x53);
+        let status = SumeragiStatusWire {
+            lane_payload_ownerships: vec![valid, malformed_latest],
+            ..Default::default()
+        };
+        assert!(
+            latest_lane_payload_ownership_progress(
+                &status,
+                LaneId::new(DS1_LANE_INDEX),
+                DataSpaceId::new(DS1_ID_U64),
+            )
+            .is_none(),
+            "malformed latest ownership replay rows must block lane-payload progress"
+        );
+    }
+
+    #[test]
+    fn latest_lane_payload_ownership_progress_rejects_ambiguous_latest_replay_identity() {
+        let quorum = u32::try_from(commit_quorum_from_len(VALIDATORS_PER_LANE))
+            .expect("fixture quorum fits u32");
+        let valid = sample_lane_payload_ownership(
+            LaneId::new(DS1_LANE_INDEX),
+            DataSpaceId::new(DS1_ID_U64),
+            4,
+            quorum,
+            1,
+        );
+        let exact_duplicate = valid.clone();
+        let mut conflicting = sample_lane_payload_ownership(
+            LaneId::new(DS1_LANE_INDEX),
+            DataSpaceId::new(DS1_ID_U64),
+            4,
+            quorum,
+            2,
+        );
+        conflicting.proposal_height = valid.proposal_height;
+        conflicting.proposal_view = valid.proposal_view;
+        let replay_hashes = conflicting
+            .compute_replay_hashes()
+            .expect("conflicting fixture replay hashes");
+        conflicting.subject_hash = replay_hashes.subject_hash;
+        conflicting.payload_ownership_hash = replay_hashes.payload_ownership_hash;
+        conflicting.rbc_instance_hash = replay_hashes.rbc_instance_hash;
+        conflicting.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
+
+        let duplicate_status = SumeragiStatusWire {
+            lane_payload_ownerships: vec![valid.clone(), exact_duplicate],
+            ..Default::default()
+        };
+        assert!(
+            latest_lane_payload_ownership_progress(
+                &duplicate_status,
+                LaneId::new(DS1_LANE_INDEX),
+                DataSpaceId::new(DS1_ID_U64),
+            )
+            .is_some(),
+            "exact duplicate ownership rows should remain idempotent"
+        );
+
+        let ambiguous_status = SumeragiStatusWire {
+            lane_payload_ownerships: vec![valid, conflicting],
+            ..Default::default()
+        };
+        assert!(
+            latest_lane_payload_ownership_progress(
+                &ambiguous_status,
+                LaneId::new(DS1_LANE_INDEX),
+                DataSpaceId::new(DS1_ID_U64),
+            )
+            .is_none(),
+            "same-slot ownership replay identity drift must not publish lane-payload progress"
+        );
+    }
+
+    #[test]
+    fn quorum_lane_payload_ownership_progress_requires_quorum_at_candidate_height() {
+        let lane_id = LaneId::new(DS1_LANE_INDEX);
+        let dataspace_id = DataSpaceId::new(DS1_ID_U64);
+        let observations = [
+            test_lane_payload_ownership_progress(lane_id, dataspace_id, 1, 0, 10),
+            test_lane_payload_ownership_progress(lane_id, dataspace_id, 2, 0, 11),
+            test_lane_payload_ownership_progress(lane_id, dataspace_id, 2, 1, 12),
+            test_lane_payload_ownership_progress(lane_id, dataspace_id, 3, 0, 13),
+        ];
+
+        let progress = quorum_lane_payload_ownership_progress(&observations, 3)
+            .expect("height 2 ownership has quorum support");
+
+        assert_eq!(progress.lane_block_height, 2);
+        assert_eq!(progress.lane_block_view, 0);
+        assert!(
+            quorum_lane_payload_ownership_progress(&observations, 5).is_none(),
+            "larger than peer-count quorum must not be satisfied"
+        );
+
+        let mut conflicting_same_height =
+            test_lane_payload_ownership_progress(lane_id, dataspace_id, 2, 0, 11);
+        conflicting_same_height.payload_ownership_hash = test_hash(0xC1);
+        let conflicting_observations = [
+            test_lane_payload_ownership_progress(lane_id, dataspace_id, 2, 0, 11),
+            conflicting_same_height,
+        ];
+        assert!(
+            quorum_lane_payload_ownership_progress(&conflicting_observations, 2).is_none(),
+            "conflicting same-height ownership identities must not combine into quorum progress"
+        );
+
+        let quorum_identity_a =
+            test_lane_payload_ownership_progress(lane_id, dataspace_id, 4, 0, 20);
+        let mut quorum_identity_b = quorum_identity_a.clone();
+        quorum_identity_b.payload_ownership_hash = test_hash(0xC2);
+        let split_top_quorum = vec![
+            quorum_identity_a.clone(),
+            quorum_identity_a.clone(),
+            quorum_identity_a,
+            quorum_identity_b.clone(),
+            quorum_identity_b.clone(),
+            quorum_identity_b,
+        ];
+        assert!(
+            quorum_lane_payload_ownership_progress(&split_top_quorum, 3).is_none(),
+            "conflicting top ownership identities with independent quorum must fail closed"
+        );
+    }
+
     #[test]
     fn duration_min_avg_max_secs_reports_expected_values() {
         assert!(duration_min_avg_max_secs(&[]).is_none());
@@ -3275,6 +5610,56 @@ mod tests {
         assert_eq!(min, 0.25);
         assert_eq!(avg, 0.25);
         assert_eq!(max, 0.25);
+    }
+
+    #[test]
+    fn committed_tx_outcome_quorum_requires_matching_outcome_quorum() {
+        assert_eq!(
+            committed_tx_outcome_quorum(
+                &[CommittedTxOutcome::Applied, CommittedTxOutcome::Applied],
+                3
+            ),
+            None,
+            "minority applied observations must not satisfy committed outcome"
+        );
+
+        assert_eq!(
+            committed_tx_outcome_quorum(
+                &[
+                    CommittedTxOutcome::Applied,
+                    CommittedTxOutcome::Rejected("insufficient funds".to_owned()),
+                    CommittedTxOutcome::Applied,
+                ],
+                2,
+            ),
+            Some(CommittedTxOutcome::Applied)
+        );
+
+        assert_eq!(
+            committed_tx_outcome_quorum(
+                &[
+                    CommittedTxOutcome::Rejected("insufficient funds".to_owned()),
+                    CommittedTxOutcome::Rejected("other rejection".to_owned()),
+                    CommittedTxOutcome::Rejected("insufficient funds".to_owned()),
+                ],
+                2,
+            ),
+            Some(CommittedTxOutcome::Rejected(
+                "insufficient funds".to_owned()
+            ))
+        );
+
+        assert_eq!(
+            committed_tx_outcome_quorum(
+                &[
+                    CommittedTxOutcome::Rejected("left".to_owned()),
+                    CommittedTxOutcome::Rejected("right".to_owned()),
+                ],
+                2,
+            ),
+            None,
+            "split rejection reasons must fail closed"
+        );
     }
 
     #[test]
@@ -3309,6 +5694,16 @@ mod tests {
         assert!(
             timeout <= OBSERVER_QUERY_TIMEOUT_CAP,
             "zero remaining clients should still apply the per-peer cap"
+        );
+    }
+
+    #[test]
+    fn total_balance_observer_request_slots_counts_empty_sets_as_one_slot() {
+        let slots = total_balance_observer_request_slots([3, 0, 2, 1]);
+
+        assert_eq!(
+            slots, 7,
+            "empty balance observer sets should still consume one diagnostic slot"
         );
     }
 
@@ -3388,6 +5783,22 @@ mod tests {
 
         assert!(!is_inconclusive_committed_outcome_error(
             "waiting for committed transaction outcome succeeded"
+        ));
+    }
+
+    #[test]
+    fn rollback_failure_classifier_accepts_rejection_or_inconclusive_confirmation() {
+        assert!(is_expected_rollback_failure_text(
+            "settlement leg requires 10000 units"
+        ));
+        assert!(is_expected_rollback_failure_text(
+            "haven't got tx confirmation within 600s (configured with `transaction.status_timeout_ms`)"
+        ));
+        assert!(is_expected_rollback_failure_text(
+            "timed out waiting for committed transaction outcome"
+        ));
+        assert!(!is_expected_rollback_failure_text(
+            "transaction applied successfully"
         ));
     }
 

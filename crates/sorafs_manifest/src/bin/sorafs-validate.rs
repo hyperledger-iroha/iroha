@@ -542,10 +542,14 @@ fn run_governance(args: GovernanceArgs) -> Result<ExitCode, CliError> {
         }
         let bytes = fs::read(&node)
             .map_err(|err| CliError::Io(format!("failed to read {}: {err}", node.display())))?;
+        let cid = args.cid.as_deref().ok_or(CliError::Config(
+            "governance --node requires --cid <node-cid>".to_owned(),
+        ))?;
+        let expected_cid = parse_cid_arg_bytes(cid)?;
         validate_governance_log_node_bytes(
             &bytes,
             node.display().to_string(),
-            args.cid.as_deref().map(str::as_bytes),
+            Some(expected_cid.as_slice()),
             generated_at,
         )
     } else if let Some(block) = args.block {
@@ -3091,7 +3095,7 @@ Usage:
   sorafs-validate repair --kind <payload-kind> --input <path> [--format table|json|yaml] [--telemetry-out <path>]
   sorafs-validate repair --task <path> | --evidence <path> | --report <path> | --signed-auditor-request <path>
   sorafs-validate bundle --bundle <dir> [--format table|json|yaml] [--telemetry-out <path>] [--now <unix-seconds>]
-  sorafs-validate governance --node <path> [--cid <node-cid>] [--format table|json|yaml] [--telemetry-out <path>]
+  sorafs-validate governance --node <path> --cid <node-cid> [--format table|json|yaml] [--telemetry-out <path>]
   sorafs-validate governance --block <path> [--cid <block-cid|hex:HEX>] [--format table|json|yaml] [--telemetry-out <path>]
   sorafs-validate governance --head <path> --block <path> [--block <path>...] [--format table|json|yaml] [--telemetry-out <path>]
   sorafs-validate sign --kind advert --input <advert.to> --out <signed-advert.to> (--key-hex <hex> | --key <path>) [--format table|json|yaml] [--now <unix-seconds>]

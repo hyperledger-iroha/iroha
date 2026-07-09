@@ -20,8 +20,6 @@ public final class KagemushaRecursiveSpendProver {
   public static final String RECURSIVE_COMPACT_CIRCUIT_ID_V1 =
       "kagemusha-recursive-compact-v1";
   public static final String RECURSIVE_AGGREGATION_PROOF_BACKEND = "halo2/ipa";
-  public static final String RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 =
-      "kagemusha-recursive-spend-lineage-v1";
   public static final String RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1 =
       "kagemusha-recursive-spend-lineage-onehop-v1";
   public static final String RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1 =
@@ -121,8 +119,7 @@ public final class KagemushaRecursiveSpendProver {
   }
 
   public static boolean isLineageProofCircuitId(final String circuitId) {
-    return RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.equals(circuitId)
-        || RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1.equals(circuitId)
+    return RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1.equals(circuitId)
         || RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.equals(circuitId);
   }
 
@@ -555,7 +552,7 @@ public final class KagemushaRecursiveSpendProver {
   }
 
   public static boolean requiresLineageKeyArtifactsForInit() {
-    return true;
+    return false;
   }
 
   public static boolean requiresLineageWitnessForRedeem(

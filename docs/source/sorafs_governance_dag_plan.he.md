@@ -4,10 +4,10 @@ direction: rtl
 source: docs/source/sorafs_governance_dag_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: baef1204f4fa2238b622e82e4ef1b66e51c038275119d7299dc7210396609aa7
-source_last_modified: "2026-07-04T22:25:42.499635+00:00"
-translation_last_reviewed: 2026-07-05
-source_mtime: 2026-07-04T22:25:42.499635+00:00
+source_hash: 5a624184be91a1529c018ef68e8544fde7c6dfa3c567f496641724076359f6e9
+source_last_modified: "2026-07-06T20:48:18.492409+00:00"
+translation_last_reviewed: 2026-07-06
+source_mtime: "2026-07-06T20:48:18.492409+00:00"
 ---
 
 # Governance DAG Publishing Pipeline
@@ -580,7 +580,10 @@ artifact fingerprint before final promotion can report ready. Governance DAG
 aggregate promotion also rechecks the lane-proven relationships: public-head
 bound artifact fingerprints must match `valid_public_head_cids`, and
 policy-bound artifact fingerprints must match `valid_policy_digests` before
-final promotion can report ready. Governance DAG
+final promotion can report ready. Governance DAG rollout summaries must expose
+exactly one active public head CID, one active publisher policy digest, and one
+active checkpoint digest; mixed valid public-head, policy, or checkpoint
+anchors fail closed before final promotion can report ready. Governance DAG
 payload-safety artifacts must explicitly set `payload_bytes_included`,
 `raw_head_included`, `raw_car_included`, `mirror_drift_detected`,
 `raw_blocks_included`, `raw_checkpoint_included`, `response_bodies_included`,

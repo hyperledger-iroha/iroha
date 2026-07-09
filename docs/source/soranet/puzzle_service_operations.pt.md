@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/soranet/puzzle_service_operations.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 9efa3476e5cdecd37e504f67b8a3a8e6716bd6007c42293cabbcd63aaf00eab8
+source_hash: d618e9ea912b230477dc0d3390ff1e08bfb35472bd0d2519867f1e16336a41b6
 source_last_modified: "2026-01-03T18:08:01.759843+00:00"
 translation_last_reviewed: 2026-01-30
 ---
@@ -125,8 +125,9 @@ Set `pow.signed_ticket_public_key_hex` in the relay JSON to advertise the ML-DSA
 key used to verify signed PoW tickets; the `/v1/puzzle/config` endpoint now echoes both the
 public key and its BLAKE3 fingerprint (`signed_ticket_public_key_fingerprint_hex`) so clients
 can pin the verifier key. Signed tickets are validated against the relay ID and transcript
-bindings and still share the same revocation store; raw 74-byte PoW tickets remain valid when
-presented to relays that have a signed-ticket key configured.
+bindings and still share the same revocation store. Relays with a configured
+signed-ticket verifier key reject raw 74-byte PoW tickets; raw tickets are only
+accepted by relays that do not configure a signed-ticket verifier key.
 Pass the signer secret via `--signed-ticket-secret-hex` or `--signed-ticket-secret-path` when
 launching the puzzle service; startup rejects mismatched keypairs if the secret does not
 validate against `pow.signed_ticket_public_key_hex`. `POST /v1/puzzle/mint` accepts
@@ -162,14 +163,14 @@ deterministic purge without deleting the snapshot on disk.
 
 ## Emergency disable procedure
 
-1. Set `pow.puzzle.enabled = false` in the shared relay configuration. Keep
-   `pow.required = true` if hashcash fallback tickets must remain mandatory.
+1. Keep `pow.required = true` and leave the Argon2 puzzle gate enabled. The first release rejects
+   attempts to make PoW optional or clear puzzle admission.
 2. Optionally enforce `pow.emergency` entries to reject stale descriptors while
    the Argon2 gate is offline.
 3. Restart both the relay and the puzzle service to apply the change.
 4. Monitor `soranet_handshake_pow_difficulty` to ensure the difficulty drops to
    the expected hashcash value, and verify `/v1/puzzle/config` reports
-   `puzzle = null`.
+   the active puzzle parameters.
 
 ## Monitoring and alerting
 

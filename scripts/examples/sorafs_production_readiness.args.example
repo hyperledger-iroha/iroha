@@ -1,5 +1,7 @@
 --evidence-dir artifacts/sorafs/production-readiness/summaries
 --deployment-id sorafs-mainnet-2026-06
 --environment production
+--now-unix 1800400000
 --max-summary-artifact-age-secs 1209600
 --summary-out artifacts/sorafs/production-readiness/sorafs-production-readiness-summary.json
+--require-gate ai_prescreen,appeal_finance,gateway_compliance,gateway_load,governance_dag,hedging_billing,moderation_panel,orderbook,pdp,pop_credentials,por,potr,reference_sdk_release,repair,reputation,reserve_rent,transparency

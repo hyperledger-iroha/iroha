@@ -165,6 +165,44 @@ def test_encoded_sensitive_key_fragments_fail_without_leaking_names() -> None:
     assert "session_token" not in joined
 
 
+def test_unicode_compatibility_sensitive_key_fragments_fail_without_leaking_names() -> None:
+    errors: list[str] = []
+    fullwidth_private_key = (
+        "\uff50\uff52\uff49\uff56\uff41\uff54\uff45"
+        "\uff3f\uff4b\uff45\uff59"
+    )
+    fullwidth_bearer_token = (
+        "\uff42\uff45\uff41\uff52\uff45\uff52\uff3f"
+        "\uff54\uff4f\uff4b\uff45\uff4e"
+    )
+    payload = {
+        "transport": {
+            fullwidth_private_key: "runtime-only-private-key",
+            fullwidth_bearer_token: "runtime-only-token",
+        },
+    }
+
+    assert normalize_sensitive_key(fullwidth_private_key) == "privatekey"
+    assert normalize_sensitive_key(fullwidth_bearer_token) == "bearertoken"
+
+    visit_sensitive_fields(
+        payload,
+        "",
+        errors,
+        sensitive_keys={"private_key"},
+    )
+
+    assert errors == [
+        "transport.<sensitive-key> must not be present in rollout evidence",
+        "transport.<sensitive-key> must not be present in rollout evidence",
+    ]
+    joined = "\n".join(errors)
+    assert fullwidth_private_key not in joined
+    assert fullwidth_bearer_token not in joined
+    assert "private_key" not in joined
+    assert "bearer_token" not in joined
+
+
 def test_secret_like_values_under_neutral_keys_fail_without_leaking_values() -> None:
     errors: list[str] = []
     jwt_value = (
@@ -248,6 +286,48 @@ def test_secret_like_values_under_neutral_keys_fail_without_leaking_values() -> 
     assert "runtime-only-cookie" not in joined
     assert jwt_value not in joined
     assert "BEGIN PRIVATE KEY" not in joined
+
+
+def test_unicode_compatibility_secret_like_values_fail_without_leaking_values() -> None:
+    errors: list[str] = []
+    fullwidth_bearer = (
+        "\uff22\uff45\uff41\uff52\uff45\uff52 runtime-only-token"
+    )
+    fullwidth_private_key_assignment = (
+        "\uff50\uff52\uff49\uff56\uff41\uff54\uff45"
+        "\uff3f\uff4b\uff45\uff59=runtime-only-key"
+    )
+    fullwidth_secret_url = (
+        "\uff48\uff54\uff54\uff50\uff53://torii.example/path?"
+        "\uff41\uff43\uff43\uff45\uff53\uff53"
+        "\uff3f\uff54\uff4f\uff4b\uff45\uff4e=runtime-only-token"
+    )
+    payload = {
+        "transport": {
+            "fullwidthBearer": fullwidth_bearer,
+            "fullwidthAssignment": fullwidth_private_key_assignment,
+            "fullwidthUrl": fullwidth_secret_url,
+        },
+    }
+
+    visit_sensitive_fields(payload, "", errors, sensitive_keys={"payload"})
+
+    assert errors == [
+        "transport.fullwidthBearer must not contain secret-looking values in rollout evidence",
+        (
+            "transport.fullwidthAssignment must not contain secret-looking values "
+            "in rollout evidence"
+        ),
+        "transport.fullwidthUrl must not contain secret-looking values in rollout evidence",
+    ]
+    joined = "\n".join(errors)
+    assert fullwidth_bearer not in joined
+    assert fullwidth_private_key_assignment not in joined
+    assert fullwidth_secret_url not in joined
+    assert "runtime-only-token" not in joined
+    assert "runtime-only-key" not in joined
+    assert "private_key" not in joined
+    assert "access_token" not in joined
 
 
 def test_secret_like_url_values_under_neutral_keys_fail_without_leaking() -> None:
@@ -710,7 +790,14 @@ def test_sensitive_scan_rejects_malformed_error_container() -> None:
 
 
 def test_sensitive_scan_rejects_malformed_existing_error_text() -> None:
-    for errors in ([""], [" old"], ["old "], ["old\nerror"]):
+    for errors in (
+        [""],
+        [" old"],
+        ["old "],
+        ["old\nerror"],
+        ["old\u200derror"],
+        ["old\u202eerror"],
+    ):
         try:
             visit_sensitive_fields(
                 {"privateKey": "runtime-only-private-key"},
@@ -732,6 +819,8 @@ def test_sensitive_scan_rejects_malformed_path_before_payload_scan() -> None:
         " root",
         "root ",
         "root\nchild",
+        "root\u200dchild",
+        "root\u202echild",
         "root%5Fchild",
         "root..child",
         "root[01]",
@@ -783,6 +872,8 @@ def test_sensitive_scan_rejects_malformed_evidence_label_before_payload_scan() -
         "rollout ",
         "rollout  evidence",
         "rollout\nevidence",
+        "rollout\u200devidence",
+        "rollout\u202eevidence",
         "rollout%20evidence",
         "rollout&#95;evidence",
         "rollout/evidence",

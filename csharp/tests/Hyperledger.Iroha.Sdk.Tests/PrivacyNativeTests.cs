@@ -1075,6 +1075,7 @@ public sealed class PrivacyNativeTests
     public void PrivacyNativeReadOutputRejectsMismatchedExpectedSchemaSetAndFreesPointer()
     {
         var bytes = PrivacyNoritoFrameWithPayload(0x56);
+        var mismatchedExpectedSchema = PrivacyNative.PrivacyBuildProofResultSchemaByte;
         var pointer = Marshal.AllocHGlobal(bytes.Length);
         var freed = false;
         try
@@ -1095,7 +1096,7 @@ public sealed class PrivacyNativeTests
                             pointer = IntPtr.Zero;
                             freed = true;
                         },
-                        PrivacyNative.PrivacyBuildProofResultSchemaByte));
+                        mismatchedExpectedSchema));
 
             Assert.True(freed);
         }

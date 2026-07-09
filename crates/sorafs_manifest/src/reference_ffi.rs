@@ -919,7 +919,8 @@ pub unsafe extern "C" fn sorafs_reference_validate_repair_json(
 
 /// Validate a Norito-encoded `GovernanceLogNodeV1` and return outcome JSON.
 ///
-/// Pass `expected_cid_len = 0` to skip exact node-CID binding.
+/// `expected_cid_ptr` and `expected_cid_len` must identify the canonical node
+/// CID that belongs to the governance log node.
 ///
 /// # Safety
 /// Non-null pointers must be valid for their corresponding lengths until the
@@ -945,7 +946,10 @@ pub unsafe extern "C" fn sorafs_reference_validate_governance_json(
             generated_at,
         )?;
         let label = read_label(&scope, label_ptr, label_len, "governance.to", generated_at)?;
-        let expected_cid = read_optional_input(
+        if expected_cid_len == 0 {
+            return Err(missing_expected_node_cid_error(generated_at));
+        }
+        let expected_cid = read_input(
             &scope,
             expected_cid_ptr,
             expected_cid_len,
@@ -955,7 +959,7 @@ pub unsafe extern "C" fn sorafs_reference_validate_governance_json(
         Ok(validate_governance_log_node_bytes(
             input,
             label,
-            expected_cid,
+            Some(expected_cid),
             generated_at,
         ))
     })
@@ -1292,6 +1296,19 @@ fn null_pointer_error(label: impl Into<String>, generated_at: u64) -> Validation
     )
 }
 
+fn missing_expected_node_cid_error(generated_at: u64) -> ValidationOutcomeV1 {
+    ffi_error(
+        SFS_FFI_ARGUMENT,
+        "SoraFS reference FFI requires expected governance node CID bytes",
+        "Pass the canonical node CID bytes for every governance log node validation.",
+        vec![ValidationContextFieldV1::new(
+            "argument",
+            "expected_node_cid",
+        )],
+        generated_at,
+    )
+}
+
 fn unsupported_selector_error(
     selector: &str,
     value: u32,
@@ -1341,15 +1358,16 @@ mod tests {
 
     use crate::{
         BillingLineDirectionV1, BillingLineItemKindV1, BillingStatementV1, ByteRangeV1,
-        HEDGING_PRICE_FEED_VERSION_V1, HedgingFeedStatusV1, HedgingPriceFeedV1, MICRO_XOR_PER_XOR,
-        ORDERBOOK_ORDER_VERSION_V1, ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1,
-        ORDERBOOK_TRADE_EVENT_VERSION_V1, OrderBookEntryV1, OrderRequestV1, OrderSideV1,
-        OrderTierV1, OrderbookRuntimeSnapshotV1, OrderbookSignatureV1, POP_CREDENTIAL_VERSION_V1,
-        PopCredentialAttributeV1, PopCredentialV1, PopEligibilityClassV1, PopSignatureAlgorithmV1,
-        PopSignatureV1, ReplicationOrderSignatureV1, ReplicationOrderV1,
-        SETTLEMENT_RECEIPT_VERSION_V1, SIGNED_REPLICATION_ORDER_VERSION_V1, SettlementReceiptV1,
-        SignatureAlgorithm, SignedReplicationOrderV1, TradeEventV1, XorAmount,
-        build_billing_line_item_v1, build_billing_statement_v1, derive_reference_price_decision_v1,
+        GovernanceLogNodeV1, HEDGING_PRICE_FEED_VERSION_V1, HedgingFeedStatusV1,
+        HedgingPriceFeedV1, MICRO_XOR_PER_XOR, ORDERBOOK_ORDER_VERSION_V1,
+        ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1, ORDERBOOK_TRADE_EVENT_VERSION_V1, OrderBookEntryV1,
+        OrderRequestV1, OrderSideV1, OrderTierV1, OrderbookRuntimeSnapshotV1, OrderbookSignatureV1,
+        POP_CREDENTIAL_VERSION_V1, PopCredentialAttributeV1, PopCredentialV1,
+        PopEligibilityClassV1, PopSignatureAlgorithmV1, PopSignatureV1,
+        ReplicationOrderSignatureV1, ReplicationOrderV1, SETTLEMENT_RECEIPT_VERSION_V1,
+        SIGNED_REPLICATION_ORDER_VERSION_V1, SettlementReceiptV1, SignatureAlgorithm,
+        SignedReplicationOrderV1, TradeEventV1, XorAmount, build_billing_line_item_v1,
+        build_billing_statement_v1, derive_reference_price_decision_v1,
         sign_pop_credential_ed25519_v1,
     };
 
@@ -1692,6 +1710,72 @@ mod tests {
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
             Some("SFS-GOV-003")
+        );
+    }
+
+    #[test]
+    fn ffi_governance_validator_accepts_matching_expected_cid() {
+        let bytes = fs::read(workspace_fixture(
+            "fixtures/sorafs_manifest/governance/node_v1.to",
+        ))
+        .expect("read governance fixture");
+        let node: GovernanceLogNodeV1 =
+            norito::decode_from_bytes(&bytes).expect("decode governance fixture");
+        let label = b"governance.to";
+
+        // SAFETY: the pointers reference live test vectors for the duration of the call.
+        let outcome = outcome_from_buffer(unsafe {
+            sorafs_reference_validate_governance_json(
+                bytes.as_ptr(),
+                bytes.len(),
+                label.as_ptr(),
+                label.len(),
+                node.node_cid.as_ptr(),
+                node.node_cid.len(),
+                124,
+            )
+        });
+
+        assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
+        assert_eq!(
+            outcome.get("code").and_then(Value::as_str),
+            Some("SFS-OK-000")
+        );
+    }
+
+    #[test]
+    fn ffi_governance_validator_rejects_missing_expected_cid() {
+        let bytes = fs::read(workspace_fixture(
+            "fixtures/sorafs_manifest/governance/node_v1.to",
+        ))
+        .expect("read governance fixture");
+        let label = b"governance.to";
+
+        // SAFETY: non-null pointers reference live test vectors; the null CID pointer has
+        // zero length and must be rejected before any read.
+        let outcome = outcome_from_buffer(unsafe {
+            sorafs_reference_validate_governance_json(
+                bytes.as_ptr(),
+                bytes.len(),
+                label.as_ptr(),
+                label.len(),
+                std::ptr::null(),
+                0,
+                125,
+            )
+        });
+
+        assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
+        assert_eq!(
+            outcome.get("code").and_then(Value::as_str),
+            Some(SFS_FFI_ARGUMENT)
+        );
+        assert!(
+            outcome
+                .get("message")
+                .and_then(Value::as_str)
+                .is_some_and(|message| message.contains("requires expected governance node CID")),
+            "{outcome:?}"
         );
     }
 

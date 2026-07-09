@@ -53,7 +53,16 @@ from sorafs_checker_preflight import (  # noqa: E402
     write_all_checker_summary_bytes,
     validate_checker_output_parent,
 )
-from sorafs_path_identity import path_diagnostic_label  # noqa: E402
+from sorafs_path_identity import (  # noqa: E402
+    diagnostic_text_is_canonical,
+    error_diagnostic_label,
+    path_diagnostic_label,
+)
+from sorafs_evidence_validation import (  # noqa: E402
+    forbidden_non_production_markers,
+    require_rollout_deployment_id,
+    require_rollout_environment,
+)
 from sorafs_response_args import (  # noqa: E402
     EvidenceArgumentParser,
     expand_response_args,
@@ -118,14 +127,11 @@ FORCED_FALSE_FIELDS: dict[str, tuple[str, ...]] = {
 
 
 def split_csv_values(values: Sequence[str]) -> list[str]:
-    """Split repeated comma-separated CLI values into canonical strings."""
+    """Split repeated comma-separated CLI values into exact strings."""
 
     items: list[str] = []
     for value in values:
-        for item in value.split(","):
-            stripped = item.strip()
-            if stripped:
-                items.append(stripped)
+        items.extend(value.split(","))
     return items
 
 
@@ -190,11 +196,7 @@ def validate_reviewed_inventory(
                 )
             )
             continue
-        forbidden = sorted(
-            marker
-            for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
-            if marker in item.split("-")
-        )
+        forbidden = forbidden_non_production_markers(item, FORBIDDEN_INVENTORY_LABEL_MARKERS)
         if forbidden:
             errors.append(
                 f"{option}[{index}] must not contain non-production markers {forbidden}"
@@ -255,14 +257,9 @@ def validate_hex64(value: str | None, *, option: str, errors: list[str]) -> None
 
 
 def validate_canonical_string(value: str | None, *, label: str, errors: list[str]) -> None:
-    """Require a non-empty canonical string without control characters."""
+    """Require a non-empty canonical string without control/format text."""
 
-    if (
-        not isinstance(value, str)
-        or not value.strip()
-        or value != value.strip()
-        or any(ord(character) < 32 or ord(character) == 127 for character in value)
-    ):
+    if not diagnostic_text_is_canonical(value):
         errors.append(f"{label} must be a non-empty canonical string")
 
 
@@ -275,9 +272,7 @@ def validate_cycle_id_arg(value: str | None, *, errors: list[str]) -> None:
     if CYCLE_ID_PATTERN.fullmatch(value) is None:
         errors.append(CYCLE_ID_ERROR.replace("cycle_id", "--cycle-id"))
         return
-    forbidden = sorted(
-        marker for marker in FORBIDDEN_CYCLE_ID_MARKERS if marker in value.split("-")
-    )
+    forbidden = forbidden_non_production_markers(value, FORBIDDEN_CYCLE_ID_MARKERS)
     if forbidden:
         errors.append(f"--cycle-id must not contain non-production markers {forbidden}")
 
@@ -303,11 +298,7 @@ def parse_artifacts(values: Sequence[str], errors: list[str]) -> list[dict[str, 
                 )
             )
         else:
-            forbidden = sorted(
-                marker
-                for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
-                if marker in artifact_id.split("-")
-            )
+            forbidden = forbidden_non_production_markers(artifact_id, FORBIDDEN_INVENTORY_LABEL_MARKERS)
             if forbidden:
                 errors.append(
                     f"--artifact[{index}].id must not contain non-production markers "
@@ -680,8 +671,16 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
 
     errors: list[str] = []
     validate_output_path(args.out, errors)
-    validate_canonical_string(args.deployment_id, label="--deployment-id", errors=errors)
-    validate_canonical_string(args.environment, label="--environment", errors=errors)
+    require_rollout_deployment_id(
+        {"--deployment-id": args.deployment_id},
+        errors,
+        field="--deployment-id",
+    )
+    require_rollout_environment(
+        {"--environment": args.environment},
+        errors,
+        field="--environment",
+    )
     if args.feed_lag_seconds is not None and args.feed_lag_seconds > DEFAULT_MAX_FEED_LAG_SECS:
         errors.append(f"--feed-lag-seconds must be <= {DEFAULT_MAX_FEED_LAG_SECS}")
     if (
@@ -699,7 +698,7 @@ def validation_options(args: argparse.Namespace) -> ValidationOptions:
     """Return checker options used to prevalidate the generated canary."""
 
     return ValidationOptions(
-        now_unix=args.now_unix or args.generated_at_unix,
+        now_unix=args.now_unix,
         max_feed_lag_secs=DEFAULT_MAX_FEED_LAG_SECS,
         max_cycle_age_secs=DEFAULT_MAX_CYCLE_AGE_SECS,
         max_divergence_bps=DEFAULT_MAX_DIVERGENCE_BPS,
@@ -727,8 +726,11 @@ def write_payload_atomic(path: Path, payload: dict[str, Any]) -> list[str]:
     try:
         parent.mkdir(parents=True, exist_ok=True)
     except (OSError, RuntimeError) as error:
-        del error
-        return [f"--out parent `{path_diagnostic_label(parent)}` cannot be created"]
+        parent_label = path_diagnostic_label(parent)
+        return [
+            f"--out parent `{parent_label}` cannot be created: "
+            f"{error_diagnostic_label(error, path_label=parent_label)}"
+        ]
     tmp_name = f".{path.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
     tmp_path = parent / tmp_name
     fd = -1
@@ -747,7 +749,7 @@ def write_payload_atomic(path: Path, payload: dict[str, Any]) -> list[str]:
         if parent_sync_errors:
             return parent_sync_errors
     except (OSError, RuntimeError) as error:
-        del error
+        path_label = path_diagnostic_label(path)
         try:
             if fd >= 0:
                 os.close(fd)
@@ -758,7 +760,10 @@ def write_payload_atomic(path: Path, payload: dict[str, Any]) -> list[str]:
                 pass
             except (OSError, RuntimeError):
                 pass
-        return [f"--out `{path_diagnostic_label(path)}` cannot be written"]
+        return [
+            f"--out `{path_label}` cannot be written: "
+            f"{error_diagnostic_label(error, path_label=path_label)}"
+        ]
     return []
 
 
@@ -771,7 +776,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--deployment-id", required=True)
     parser.add_argument("--environment", required=True)
     parser.add_argument("--generated-at-unix", type=positive_int_arg, required=True)
-    parser.add_argument("--now-unix", type=positive_int_arg)
+    parser.add_argument("--now-unix", type=positive_int_arg, required=True)
     parser.add_argument("--verified-claim", action="append", default=[])
     parser.add_argument("--feed-count", type=positive_int_arg)
     parser.add_argument("--feed", action="append", default=[])

@@ -781,6 +781,16 @@ prover material: Swift wallet code must pass it through Norito unchanged and
 must not construct, rewrite, or mutate it. The native bridge validates
 `vk_commitment`, `public_inputs_schema_hash`, and `domain_tag` against the exact
 previous bundle before proving or returning output bytes.
+For confidential-v2 top-up flows, Swift also mirrors the Kotlin helper surface:
+use `KagemushaVerifiedFoldHopEvidence` with
+`buildVerifiedFoldRecordBundle(hops:)` to assemble the verified fold bundle
+from native proof output archives, open-verify envelopes, verifier records, and
+Pallas opening archives. `buildPallasOpenEnvelopesArchive(hops:)` derives the
+per-hop opening archive bundle, and
+`encodeConfidentialTransferV2VerifierRecordArchive(verifierKey:)` emits the
+confidential-transfer-v2 verifier record. Swift does not expose a
+proof-output-only verified-fold builder; Pallas opening evidence is required to
+validate every hop.
 Native append streams the previous recursive proof bytes and per-hop accumulator
 material into native-owned accumulator digests (`recursive_proof_chain_digest`,
 lineage/aggregation transcript, fixed-window schedule/shared-manifest/table-base,
@@ -799,11 +809,13 @@ same public-binding preflight before the native bridge returns a
 matching active `lineage_verifier_record`, semantic bundles must omit it, and
 unsupported proof attachments are rejected as malformed requests rather than
 soft invalid proof results. Decoded verify results expose only
-`lineageWitnessRequiredForRedeem` for the redeem decision. Production init requests and
-Reserved-lineage append-output requests must also include packaged lineage key
-artifacts in the raw Norito request: `lineage_verifier_key` and
-`lineage_proving_key_archive`. Missing artifacts are rejected before runtime key
-generation. The
+`lineageWitnessRequiredForRedeem` for the redeem decision. Init requests may
+omit both packaged lineage key artifacts to select the semantic recursive
+aggregation path. That bundle is valid for offline acceptance and re-spending,
+while online redemption must carry the record-backed lineage witness. Supplying
+exactly one of `lineage_verifier_key` or `lineage_proving_key_archive` is
+rejected. Reserved-lineage append-output requests must still include the append
+lineage key artifacts in the raw Norito request. The
 previous bundle must already be Reserved-lineage before a Reserved-lineage
 append output is valid; semantic previous bundles keep using semantic append
 plus a record-backed lineage witness.
@@ -851,6 +863,25 @@ diagnostics and cross-language parity: `ffiStatusError`, `ffiErrorNullPointer`,
 values are `status_error = 1`, `null_pointer = 1`, `malformed_norito = 2`,
 `unsupported_algorithm = 3`, `production_disabled = 4`, and
 `invalid_request = 5`; treat them as sanitized status metadata, not proof success.
+The confidential-v2 Swift wallet helpers expose
+`ConfidentialNoteOpening`, `ConfidentialNoteCommitment.deriveFromOpening`,
+`ConfidentialNoteNullifier`, `ConfidentialOwnerTag`,
+`ConfidentialNoteEncryption.encryptNote`,
+`ConfidentialNoteDecryption.decryptNote`,
+`ConfidentialNoteDecryption.decryptNoteWithOwnerTag`,
+`PrivacyConfidentialWitnessV1`, `buildConfidentialTransferProofRequestV1`,
+`LocalZkAssetMerklePathProvider`, and
+`ToriiClient.getMerklePathForCommitment(asset:commitment:)`. Default note
+decryption derives the expected owner tag from the supplied spend key;
+diversified notes must use the explicit expected-owner-tag overload. Decrypted
+note plaintext rejects noncanonical length varints before reconstructing the
+opening. Their compact Norito encoders keep fixed32 values as raw 32-byte
+fields, and the confidential-transfer-v2 verifier-record `status` field is
+encoded as a 32-bit integer. Swift Merkle providers reject ambiguous local
+frontiers and Torii responses with duplicate JSON keys, noncanonical integer
+fields, non-lowercase fixed32 hex, depth/count drift, root drift,
+direction-bit drift, or non-verifying paths before wallet code receives proof
+material.
 
 `OfflineBearerCashWallet` is the app-facing Offline Bearer Cash surface. It is
 the Offline Note wallet under the cash naming layer, so value is represented by

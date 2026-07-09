@@ -2053,6 +2053,11 @@ impl TieredStateBackend {
             OfflineNoteReplayKey,
             world.offline_note_replay_keys
         );
+        collect_map!(
+            TieredSegment::DirectLaneBlockApplicationMarkers,
+            DirectLaneBlockApplicationMarker,
+            world.direct_lane_block_application_markers
+        );
 
         Ok(())
     }
@@ -2653,7 +2658,8 @@ mod measured_bytes_impls {
     use crate::{
         governance::state::ParliamentTerm,
         state::{
-            ElectionState, FrontierCheckpoint, GovernanceLockRecord, GovernanceLocksForReferendum,
+            DirectLaneBlockApplicationKey, DirectLaneBlockApplicationMarker, ElectionState,
+            FrontierCheckpoint, GovernanceLockRecord, GovernanceLocksForReferendum,
             GovernanceParliamentSnapshot, GovernancePipeline, GovernanceProposalRecord,
             GovernanceProposalStatus, GovernanceReferendumMode, GovernanceReferendumRecord,
             GovernanceReferendumStatus, GovernanceSlashEntry, GovernanceSlashLedger,
@@ -2867,6 +2873,23 @@ mod measured_bytes_impls {
     impl<T> MeasuredBytes for HashOf<T> {
         fn measured_bytes(&self) -> usize {
             size_of::<HashOf<T>>()
+        }
+    }
+
+    impl MeasuredBytes for DirectLaneBlockApplicationKey {
+        fn measured_bytes(&self) -> usize {
+            size_of::<DirectLaneBlockApplicationKey>()
+        }
+    }
+
+    impl MeasuredBytes for DirectLaneBlockApplicationMarker {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<DirectLaneBlockApplicationMarker>();
+            total = total.saturating_add(self.descriptor_hash.measured_bytes_extra());
+            total = total.saturating_add(self.proposal_hash.measured_bytes_extra());
+            total = total.saturating_add(self.preflight_state_hash.measured_bytes_extra());
+            total = total.saturating_add(self.result_hashes.measured_bytes_extra());
+            total
         }
     }
 
@@ -4017,6 +4040,7 @@ enum TieredSegment {
     Council,
     ParliamentBodies,
     OfflineNoteReplayKeys,
+    DirectLaneBlockApplicationMarkers,
 }
 
 impl TieredSegment {
@@ -4057,6 +4081,9 @@ impl TieredSegment {
             TieredSegment::Council => "council",
             TieredSegment::ParliamentBodies => "parliament_bodies",
             TieredSegment::OfflineNoteReplayKeys => "offline_note_replay_keys",
+            TieredSegment::DirectLaneBlockApplicationMarkers => {
+                "direct_lane_block_application_markers"
+            }
         }
     }
 }
@@ -4108,6 +4135,9 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "council" => TieredSegment::Council,
             "parliament_bodies" => TieredSegment::ParliamentBodies,
             "offline_note_replay_keys" => TieredSegment::OfflineNoteReplayKeys,
+            "direct_lane_block_application_markers" => {
+                TieredSegment::DirectLaneBlockApplicationMarkers
+            }
             other => {
                 return Err(norito::json::Error::InvalidField {
                     field: "segment".into(),
@@ -4302,6 +4332,7 @@ pub(crate) enum TieredKeyHandle {
     Council(u64),
     ParliamentBodies(u64),
     OfflineNoteReplayKey(iroha_crypto::Hash),
+    DirectLaneBlockApplicationMarker(super::DirectLaneBlockApplicationKey),
 }
 
 impl TieredKeyHandle {
@@ -4342,6 +4373,9 @@ impl TieredKeyHandle {
             TieredKeyHandle::Council(_) => TieredSegment::Council,
             TieredKeyHandle::ParliamentBodies(_) => TieredSegment::ParliamentBodies,
             TieredKeyHandle::OfflineNoteReplayKey(_) => TieredSegment::OfflineNoteReplayKeys,
+            TieredKeyHandle::DirectLaneBlockApplicationMarker(_) => {
+                TieredSegment::DirectLaneBlockApplicationMarkers
+            }
         }
     }
 
@@ -4382,6 +4416,9 @@ impl TieredKeyHandle {
             TieredKeyHandle::Council(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::ParliamentBodies(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::OfflineNoteReplayKey(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::DirectLaneBlockApplicationMarker(key) => {
+                Ok(norito::codec::Encode::encode(key))
+            }
         }
     }
 
@@ -4450,6 +4487,9 @@ impl TieredKeyHandle {
             TieredKeyHandle::OfflineNoteReplayKey(id) => {
                 fetch!(world.offline_note_replay_keys, id)
             }
+            TieredKeyHandle::DirectLaneBlockApplicationMarker(id) => {
+                fetch!(world.direct_lane_block_application_markers, id)
+            }
         }
     }
 
@@ -4511,6 +4551,9 @@ impl TieredKeyHandle {
             TieredKeyHandle::OfflineNoteReplayKey(id) => {
                 fetch!(world.offline_note_replay_keys, id)
             }
+            TieredKeyHandle::DirectLaneBlockApplicationMarker(id) => {
+                fetch!(world.direct_lane_block_application_markers, id)
+            }
         }
     }
 }
@@ -4569,6 +4612,12 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::OfflineNoteReplayKey(id) => {
                 write!(f, "offline_note_replay_key:{id}")
             }
+            TieredKeyHandle::DirectLaneBlockApplicationMarker(id) => write!(
+                f,
+                "direct_lane_block_application_marker:{}:{}",
+                id.lane_id.as_u32(),
+                id.lane_block_height
+            ),
         }
     }
 }

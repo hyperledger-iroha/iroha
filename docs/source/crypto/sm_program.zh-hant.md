@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/crypto/sm_program.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 08e2e1e4a54390d9142d6788aad2385e93282a33423b9fc7f3418e3633f3f86a
+source_hash: 2d65304e93effdc04fc35690fe3d4fb1c11ed5fd5963cdda9d84f617891b8ca5
 source_last_modified: "2026-01-23T23:46:10.134857+00:00"
 translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
@@ -80,7 +80,7 @@ translator: machine-google-reviewed
 記錄在`WARN`，但共識節點應保持默認啟用，以防止意外
 SM 感知和 SM 禁用對等點之間的差異。
 CLI 通過“iroha_cli app sorafs 握手更新”顯示這些切換
---allow-sm-handshake-mismatch` and `--allow-sm-openssl-preview-mismatch`, or the matching `--require-*`
+--require-sm-handshake-match` and `--require-sm-openssl-preview-match`, or the matching `--require-*`
 旗幟恢復嚴格執行。#### OpenSSL/通所預覽(`sm-ffi-openssl`)
 - **範圍。 ** 構建僅預覽的提供程序墊片 (`OpenSslProvider`)，用於驗證 OpenSSL 運行時可用性並公開 OpenSSL 支持的 SM3 哈希、SM2 驗證和 SM4-GCM 加密/解密，同時保持選擇加入。共識二進製文件必須繼續使用 RustCrypto 路徑； FFI 後端嚴格選擇加入邊緣驗證/簽名試點。
 - **構建先決條件。 ** 使用 `cargo build -p iroha_crypto --features "sm sm-ffi-openssl"` 進行編譯，並確保工具鍊鍊接到 OpenSSL/Tongsuo 3.0+（支持 SM2/SM3/SM4 的 `libcrypto`）。不鼓勵靜態鏈接；更喜歡由操作員管理的動態庫。

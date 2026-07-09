@@ -1885,7 +1885,11 @@ impl<F: Field> ConstraintSystem<F> {
     }
 
     pub(crate) fn get_advice_query_index(&self, column: Column<Advice>, at: Rotation) -> usize {
-        if let Some(index) = self.advice_query_indices.get(&(column.index, at.0)).copied() {
+        if let Some(index) = self
+            .advice_query_indices
+            .get(&(column.index, at.0))
+            .copied()
+        {
             return index;
         }
 
@@ -2493,6 +2497,12 @@ mod query_index_tests {
     use crate::poly::Rotation;
     use halo2curves::pasta::Fp;
 
+    fn assert_query_index_maps_match_vectors(cs: &ConstraintSystem<Fp>) {
+        assert_eq!(cs.fixed_query_indices.len(), cs.fixed_queries.len());
+        assert_eq!(cs.advice_query_indices.len(), cs.advice_queries.len());
+        assert_eq!(cs.instance_query_indices.len(), cs.instance_queries.len());
+    }
+
     #[test]
     fn duplicate_queries_return_same_index_without_growing_vectors() {
         let mut cs = ConstraintSystem::<Fp>::default();
@@ -2514,6 +2524,7 @@ mod query_index_tests {
         assert_eq!(cs.advice_queries.len(), 1);
         assert_eq!(cs.fixed_queries.len(), 1);
         assert_eq!(cs.instance_queries.len(), 1);
+        assert_query_index_maps_match_vectors(&cs);
     }
 
     #[test]
@@ -2529,6 +2540,7 @@ mod query_index_tests {
         assert_ne!(cur, prev);
         assert_ne!(next, prev);
         assert_eq!(cs.advice_queries.len(), 3);
+        assert_query_index_maps_match_vectors(&cs);
     }
 
     #[test]
@@ -2555,5 +2567,28 @@ mod query_index_tests {
         assert_eq!(cs.get_advice_query_index(a, Rotation::cur()), 0);
         assert_eq!(cs.get_advice_query_index(b, Rotation::cur()), 1);
         assert_eq!(cs.get_advice_query_index(a, Rotation::next()), 2);
+        assert_query_index_maps_match_vectors(&cs);
+    }
+
+    #[test]
+    fn many_duplicate_queries_do_not_grow_index_maps() {
+        let mut cs = ConstraintSystem::<Fp>::default();
+        let advice = cs.advice_column();
+        let fixed = cs.fixed_column();
+        let instance = cs.instance_column();
+
+        for _ in 0..10_000 {
+            assert_eq!(cs.query_advice_index(advice, Rotation::cur()), 0);
+            assert_eq!(cs.query_advice_index(advice, Rotation::next()), 1);
+            assert_eq!(cs.query_fixed_index(fixed, Rotation::cur()), 0);
+            assert_eq!(cs.query_fixed_index(fixed, Rotation::next()), 1);
+            assert_eq!(cs.query_instance_index(instance, Rotation::cur()), 0);
+            assert_eq!(cs.query_instance_index(instance, Rotation::next()), 1);
+        }
+
+        assert_eq!(cs.advice_queries.len(), 2);
+        assert_eq!(cs.fixed_queries.len(), 2);
+        assert_eq!(cs.instance_queries.len(), 2);
+        assert_query_index_maps_match_vectors(&cs);
     }
 }

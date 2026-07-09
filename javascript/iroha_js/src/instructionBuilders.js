@@ -1645,7 +1645,6 @@ const PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS = new Set([
   "halo2/pasta/kagemusha-folded-v1",
   "halo2/pasta/kagemusha-recursive-aggregation-v1",
   "halo2/pasta/kagemusha-recursive-compact-v1",
-  "halo2/pasta/kagemusha-recursive-spend-lineage-v1",
   "halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1",
   "halo2/pasta/kagemusha-recursive-spend-lineage-append-v1",
   "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
@@ -8080,6 +8079,16 @@ function normalizeAnonymousPgcReceiverSetFromSource(source, context) {
     "receiver set",
   );
   if (receiverSetAlias.value !== undefined) {
+    const inlineFields = ["version", "threshold", "k", "receivers"].filter((key) =>
+      Object.prototype.hasOwnProperty.call(source, key),
+    );
+    if (inlineFields.length > 0) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.receiverSet must not be combined with inline receiver-set fields: ${inlineFields.join(", ")}`,
+        `${context}.receiverSet`,
+      );
+    }
     return normalizeAnonymousPgcReceiverSet(
       receiverSetAlias.value,
       `${context}.receiverSet`,
@@ -8115,6 +8124,8 @@ function normalizeAnonymousPgcPublicInputs(value, name) {
       "linkTag",
       "range_commitments",
       "rangeCommitments",
+      "payment_binding_hash",
+      "paymentBindingHash",
       "chain_id",
       "chainId",
       "domain_separator",
@@ -8175,6 +8186,12 @@ function normalizeAnonymousPgcPublicInputs(value, name) {
     ["range_commitments", "rangeCommitments"],
     `${name}.rangeCommitments`,
     "range commitments",
+  );
+  const paymentBindingAlias = readSingleAlias(
+    source,
+    ["payment_binding_hash", "paymentBindingHash"],
+    `${name}.paymentBindingHash`,
+    "payment binding hash",
   );
   const chainAlias = readSingleAlias(
     source,
@@ -8252,6 +8269,13 @@ function normalizeAnonymousPgcPublicInputs(value, name) {
       `${name}.rangeCommitments`,
       ANON_PGC_MAX_RANGE_COMMITMENTS,
     ).map((entry) => Buffer.from(entry).toString("hex")),
+    payment_binding_hash: Buffer.from(
+      normalizeNonZeroFixedBytes(
+        paymentBindingAlias.value,
+        `${name}.paymentBindingHash`,
+        32,
+      ),
+    ).toString("hex"),
     chain_id: assertNonBlankString(chainAlias.value, `${name}.chainId`),
     domain_separator: assertNonBlankString(
       domainAlias.value,
@@ -8296,23 +8320,70 @@ function normalizeAnonymousPgcProofParts(
       `${context}.proofBytes`,
     );
   }
+  const anonymityRootAlias = readSingleAlias(
+    source,
+    ["anonymitySetRoot", "anonymity_set_root"],
+    `${context}.anonymitySetRoot`,
+    "anonymity set root",
+  );
+  const balanceCommitmentsAlias = readSingleAlias(
+    source,
+    ["balanceCommitments", "balance_commitments"],
+    `${context}.balanceCommitments`,
+    "balance commitments",
+  );
+  const linkTagAlias = readSingleAlias(
+    source,
+    ["linkTag", "link_tag"],
+    `${context}.linkTag`,
+    "link tag",
+  );
+  const rangeCommitmentsAlias = readSingleAlias(
+    source,
+    ["rangeCommitments", "range_commitments"],
+    `${context}.rangeCommitments`,
+    "range commitments",
+  );
+  const paymentBindingAlias = readSingleAlias(
+    source,
+    ["paymentBindingHash", "payment_binding_hash"],
+    `${context}.paymentBindingHash`,
+    "payment binding hash",
+  );
+  const chainAlias = readSingleAlias(
+    source,
+    ["chainId", "chain_id"],
+    `${context}.chainId`,
+    "chain id",
+  );
+  const domainAlias = readSingleAlias(
+    source,
+    ["domainSeparator", "domain_separator"],
+    `${context}.domainSeparator`,
+    "domain separator",
+  );
   const maxLimits = normalizeOptionalPrivacyMaxLimits(source, context);
   const receiverSet = normalizeAnonymousPgcReceiverSetFromSource(source, context);
   const anonymityRoot = normalizeNonZeroFixedBytes(
-    source.anonymitySetRoot ?? source.anonymity_set_root,
+    anonymityRootAlias.value,
     `${context}.anonymitySetRoot`,
     32,
   );
   const txDigest = normalizeAnonymousPgcPayloadDigest(source, context);
   const balanceCommitments = normalizeAnonymousPgcCommitmentList(
-    source.balanceCommitments ?? source.balance_commitments,
+    balanceCommitmentsAlias.value,
     `${context}.balanceCommitments`,
     ANON_PGC_MAX_BALANCE_COMMITMENTS,
   );
   const rangeCommitments = normalizeAnonymousPgcCommitmentList(
-    source.rangeCommitments ?? source.range_commitments,
+    rangeCommitmentsAlias.value,
     `${context}.rangeCommitments`,
     ANON_PGC_MAX_RANGE_COMMITMENTS,
+  );
+  const paymentBindingHash = normalizeNonZeroFixedBytes(
+    paymentBindingAlias.value,
+    `${context}.paymentBindingHash`,
+    32,
   );
   const publicInputs = {
     version: 1,
@@ -8330,14 +8401,15 @@ function normalizeAnonymousPgcProofParts(
     receiver_threshold: receiverSet.threshold,
     receiver_count: receiverSet.receiver_count,
     link_tag: Buffer.from(
-      normalizeNonZeroFixedBytes(source.linkTag ?? source.link_tag, `${context}.linkTag`, 32),
+      normalizeNonZeroFixedBytes(linkTagAlias.value, `${context}.linkTag`, 32),
     ).toString("hex"),
     range_commitments: rangeCommitments.map((entry) =>
       Buffer.from(entry).toString("hex"),
     ),
-    chain_id: assertNonBlankString(source.chainId ?? source.chain_id, `${context}.chainId`),
+    payment_binding_hash: Buffer.from(paymentBindingHash).toString("hex"),
+    chain_id: assertNonBlankString(chainAlias.value, `${context}.chainId`),
     domain_separator: assertNonBlankString(
-      source.domainSeparator ?? source.domain_separator ?? ANON_PGC_DOMAIN_SEPARATOR,
+      domainAlias.key === null ? ANON_PGC_DOMAIN_SEPARATOR : domainAlias.value,
       `${context}.domainSeparator`,
     ),
   };
@@ -8419,6 +8491,8 @@ function anonymousPgcProofAllowedFields() {
     "link_tag",
     "rangeCommitments",
     "range_commitments",
+    "paymentBindingHash",
+    "payment_binding_hash",
     "chainId",
     "chain_id",
     "domainSeparator",
@@ -8495,6 +8569,12 @@ function ensureAnonymousPgcVerificationExpectations(source, publicInputs, contex
       "linkTag",
       (value) => Buffer.from(normalizeNonZeroFixedBytes(value, `${context}.linkTag`, 32)).toString("hex"),
       publicInputs.link_tag,
+    ],
+    [
+      ["paymentBindingHash", "payment_binding_hash"],
+      "paymentBindingHash",
+      (value) => Buffer.from(normalizeNonZeroFixedBytes(value, `${context}.paymentBindingHash`, 32)).toString("hex"),
+      publicInputs.payment_binding_hash,
     ],
   ]) {
     const alias = readSingleAlias(source, fields, `${context}.${path}`, path);
@@ -15450,13 +15530,37 @@ export function buildAnonymousPgcAccountCommitmentInstruction(options) {
     ]),
     "anonymousPgcAccountCommitmentInstruction",
   );
+  const accountCommitmentAlias = readSingleAlias(
+    source,
+    ["accountCommitment", "account_commitment"],
+    "anonymousPgcAccountCommitmentInstruction.accountCommitment",
+    "account commitment",
+  );
+  const anonymitySetRootAlias = readSingleAlias(
+    source,
+    ["anonymitySetRoot", "anonymity_set_root"],
+    "anonymousPgcAccountCommitmentInstruction.anonymitySetRoot",
+    "anonymity-set root",
+  );
+  const chainAlias = readSingleAlias(
+    source,
+    ["chainId", "chain_id"],
+    "anonymousPgcAccountCommitmentInstruction.chainId",
+    "chain id",
+  );
+  const domainAlias = readSingleAlias(
+    source,
+    ["domainSeparator", "domain_separator"],
+    "anonymousPgcAccountCommitmentInstruction.domainSeparator",
+    "domain separator",
+  );
   const accountCommitment = normalizeNonZeroFixedBytes(
-    source.accountCommitment ?? source.account_commitment,
+    accountCommitmentAlias.value,
     "anonymousPgcAccountCommitmentInstruction.accountCommitment",
     32,
   );
   const anonymitySetRoot = normalizeNonZeroFixedBytes(
-    source.anonymitySetRoot ?? source.anonymity_set_root,
+    anonymitySetRootAlias.value,
     "anonymousPgcAccountCommitmentInstruction.anonymitySetRoot",
     32,
   );
@@ -15466,11 +15570,11 @@ export function buildAnonymousPgcAccountCommitmentInstruction(options) {
     account_commitment: Buffer.from(accountCommitment).toString("hex"),
     anonymity_set_root: Buffer.from(anonymitySetRoot).toString("hex"),
     chain_id: assertNonBlankString(
-      source.chainId ?? source.chain_id,
+      chainAlias.value,
       "anonymousPgcAccountCommitmentInstruction.chainId",
     ),
     domain_separator: assertNonBlankString(
-      source.domainSeparator ?? source.domain_separator ?? ANON_PGC_DOMAIN_SEPARATOR,
+      domainAlias.key === null ? ANON_PGC_DOMAIN_SEPARATOR : domainAlias.value,
       "anonymousPgcAccountCommitmentInstruction.domainSeparator",
     ),
   };
@@ -15527,6 +15631,8 @@ export function buildAnonymousPgcDevProofFixture(options) {
       "link_tag",
       "rangeCommitments",
       "range_commitments",
+      "paymentBindingHash",
+      "payment_binding_hash",
       "chainId",
       "chain_id",
       "domainSeparator",
@@ -15563,6 +15669,7 @@ export function buildAnonymousPgcDevProofFixture(options) {
     proofBytes: Buffer.from(proofBytes),
     receiver_set: parts.receiverSet,
     public_inputs: parts.publicInputs,
+    public_input_bytes: Buffer.from(parts.publicInputBytes),
     publicInputBytes: Buffer.from(parts.publicInputBytes),
     envelope,
   };
@@ -15616,6 +15723,8 @@ export function verifyAnonymousPgcDevProofLocally(options) {
       "link_tag",
       "rangeCommitments",
       "range_commitments",
+      "paymentBindingHash",
+      "payment_binding_hash",
       "chainId",
       "chain_id",
       "domainSeparator",
@@ -15733,6 +15842,8 @@ export function verifyAnonymousPgcKOutOfNProofV1(options) {
       "link_tag",
       "rangeCommitments",
       "range_commitments",
+      "paymentBindingHash",
+      "payment_binding_hash",
       "chainId",
       "chain_id",
       "domainSeparator",
@@ -15833,6 +15944,8 @@ export function buildAnonymousPgcTransferInstruction(options) {
       "link_tag",
       "rangeCommitments",
       "range_commitments",
+      "paymentBindingHash",
+      "payment_binding_hash",
       "chainId",
       "chain_id",
       "domainSeparator",
@@ -15840,6 +15953,19 @@ export function buildAnonymousPgcTransferInstruction(options) {
     ]),
     "anonymousPgcTransferInstruction",
   );
+  const paymentBindingAlias = readSingleAlias(
+    source,
+    ["paymentBindingHash", "payment_binding_hash"],
+    "anonymousPgcTransferInstruction.paymentBindingHash",
+    "payment binding hash",
+  );
+  if (paymentBindingAlias.value === undefined) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "anonymousPgcTransferInstruction.paymentBindingHash is required",
+      "anonymousPgcTransferInstruction.paymentBindingHash",
+    );
+  }
   const verified = verifyAnonymousPgcKOutOfNProofV1(source);
   const envelopeAlias = readSingleAlias(
     source,
@@ -15863,6 +15989,7 @@ export function buildAnonymousPgcTransferInstruction(options) {
     receiver_threshold: publicInputs.receiver_threshold,
     receiver_count: publicInputs.receiver_count,
     link_tag: publicInputs.link_tag,
+    payment_binding_hash: publicInputs.payment_binding_hash,
     chain_id: publicInputs.chain_id,
     domain_separator: publicInputs.domain_separator,
   };

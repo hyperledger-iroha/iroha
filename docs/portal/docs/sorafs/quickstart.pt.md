@@ -28,12 +28,12 @@ Defina `export RUST_LOG=info` durante os testes para expor mensagens úteis da C
 
 ## 1. Atualize os fixtures determinísticos
 
-Gere novamente os vetores canônicos de chunking SF-1. O comando também emite
-envelopes de manifesto assinados quando `--signing-key` é fornecido; use
-`--allow-unsigned` apenas no desenvolvimento local.
+Regenerate the canonical SF-1 chunking vectors. The command verifies the
+existing council signature file, or appends a signature when `--signing-key` is
+supplied.
 
 ```bash
-cargo run -p sorafs_chunker --bin export_vectors -- --allow-unsigned
+cargo run -p sorafs_chunker --bin export_vectors -- --signing-key=<ed25519-private-key-hex>
 ```
 
 Saídas:
@@ -78,7 +78,7 @@ cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   --manifest-out=/tmp/docs.manifest \
   --manifest-signatures-out=/tmp/docs.manifest_signatures.json \
   --json-out=/tmp/docs.report.json \
-  --allow-unsigned
+  --council-signature=<signerhex>:<signaturehex>
 ```
 
 Revise `/tmp/docs.report.json` para:
@@ -88,9 +88,9 @@ Revise `/tmp/docs.report.json` para:
 - `manifest.manifest_blake3` – digest BLAKE3 assinado no envelope do manifesto.
 - `chunk_fetch_specs[]` – instruções de busca ordenadas para orquestradores.
 
-Quando estiver pronto para fornecer assinaturas reais, adicione os argumentos
-`--signing-key` e `--signer`. O comando verifica cada assinatura Ed25519 antes de gravar
-o envelope.
+The `--council-signature` value must be a reviewed council signer public key and
+Ed25519 signature pair. The command verifies every Ed25519 signature before
+writing the envelope.
 
 ## 4. Simule a recuperação multi-provedor
 

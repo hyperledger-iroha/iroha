@@ -16,7 +16,6 @@ import {
   KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
   KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
   KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
-  KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
   KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
   KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
   KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS,
@@ -111,6 +110,7 @@ import {
   requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend,
 } from "../src/crypto.js";
 
+const GENERIC_LINEAGE_FAMILY_ID = "kagemusha-recursive-spend-lineage-v1";
 const UNSUPPORTED_RECURSIVE_SPEND_PROOF_CIRCUIT_ID =
   "kagemusha-recursive-spend-lineage-badhop-v1";
 const KAGEMUSHA_TEST_ASSET_DEFINITION_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
@@ -2027,8 +2027,8 @@ test("Kagemusha recursive spend shared ABI-6 fixture matches SDK surface", () =>
     KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
   );
   assert.equal(
-    manifest.proof_circuit_ids.reserved_lineage,
-    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+    Object.hasOwn(manifest.proof_circuit_ids, "reserved_lineage"),
+    false,
   );
   assert.equal(
     manifest.proof_circuit_ids.reserved_lineage_one_hop,
@@ -2172,7 +2172,7 @@ test("Kagemusha recursive spend shared ABI-6 fixture matches SDK surface", () =>
   assert.equal(redeemArchive.norito_type, "KagemushaRecursiveSpendRedeemRequestV1");
   assert.equal(
     redeemArchive.sha256_hex,
-    "1fe949217c8bbe26957cf2a2510d79894e15b20fc5143dee2c3a1ff8678d3a5d",
+    "703128068fa36897c952640cb77006af29a8aa802d67da82c97e73c8e0ef1864",
   );
   assert.ok(redeemArchive.byte_len > 0);
   assert.ok(Buffer.from(redeemArchive.bytes_base64, "base64").length > 0);
@@ -2182,7 +2182,7 @@ test("Kagemusha recursive spend shared ABI-6 fixture matches SDK surface", () =>
   assert.equal(redeemInstructionArchive.norito_type, "RedeemKagemushaRecursive");
   assert.equal(
     redeemInstructionArchive.sha256_hex,
-    "dd7bcb5ab602696be67028e03578933a93e9396057a5decefe8cc9058662bf85",
+    "e05fb3ebb3a3e823f65403e09d1aa6e5deab0145f7aa0827f66a371ad633cc3e",
   );
   assert.equal(
     preferredKagemushaRecursiveSpendAppendOutputProofCircuitId(1),
@@ -2208,7 +2208,7 @@ test("Kagemusha recursive spend shared ABI-6 fixture matches SDK surface", () =>
   );
   assert.equal(
     canRedeemKagemushaRecursiveSpendWitnessless(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
       65,
     ),
     false,
@@ -3890,6 +3890,32 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
         lineageProvingKeyArchive: syntheticKagemushaArchive("test::Key", 0x73),
       }),
     kagemushaRequestCodecError("field", "lineageVerifierKey", null),
+  );
+  const semanticInitRequest = encodeKagemushaRecursiveSpendInitRequest({
+    recordBundle,
+    pallasOpenEnvelopes,
+    currentNote: note,
+  });
+  assert.ok(Buffer.isBuffer(semanticInitRequest));
+  assert.equal(semanticInitRequest.length > 0, true);
+  const semanticNullInitRequest = encodeKagemushaRecursiveSpendInitRequest({
+    recordBundle,
+    pallasOpenEnvelopes,
+    currentNote: note,
+    lineageVerifierKey: null,
+    lineageProvingKeyArchive: null,
+  });
+  assert.ok(Buffer.isBuffer(semanticNullInitRequest));
+  assert.equal(semanticNullInitRequest.length > 0, true);
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendInitRequest({
+        recordBundle,
+        pallasOpenEnvelopes,
+        currentNote: note,
+        lineageVerifierKey: initLineageVerifierKey,
+      }),
+    kagemushaRequestCodecError("archive", "lineageProvingKeyArchive", null),
   );
   assert.throws(
     () =>
@@ -5639,14 +5665,18 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
   assert.equal(KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION, 15);
   assert.equal(
     KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME,
+    "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpRequestV1",
+  );
+  assert.equal(
     KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME,
+    "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1",
   );
   assert.equal(
     KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
     "kagemusha-recursive-aggregation-v1",
   );
   assert.equal(
-    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+    GENERIC_LINEAGE_FAMILY_ID,
     "kagemusha-recursive-spend-lineage-v1",
   );
   assert.equal(
@@ -5663,7 +5693,7 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
   assert.equal(KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1, 1);
   assert.equal(KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES, 8 * 1024 * 1024);
   assert.equal(KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES, 128);
-  assert.equal(KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES, 64 * 1024 * 1024);
+  assert.equal(KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES, 256 * 1024 * 1024);
   assert.equal(
     KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN,
     "iroha:kagemusha:v1:recursive-spend-transition-profile",
@@ -5706,9 +5736,9 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
   );
   assert.equal(
     normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
     ),
-    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+    GENERIC_LINEAGE_FAMILY_ID,
   );
   assert.equal(
     normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(
@@ -5717,7 +5747,7 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
     "unknown-kagemusha-recursive-spend-circuit",
   );
   const whitespaceLineageOutputCircuitId =
-    ` ${KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1} `;
+    ` ${GENERIC_LINEAGE_FAMILY_ID} `;
   assert.equal(
     normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(
       whitespaceLineageOutputCircuitId,
@@ -5734,7 +5764,7 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
     );
   }
   for (const circuitId of [
-    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+    GENERIC_LINEAGE_FAMILY_ID,
   ]) {
     assert.equal(
       isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(circuitId),
@@ -5759,8 +5789,8 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
     ),
     false,
   );
+  assert.equal(isKagemushaRecursiveSpendLineageProofCircuitId(GENERIC_LINEAGE_FAMILY_ID), false);
   for (const circuitId of [
-    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
     KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
     KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
   ]) {
@@ -5778,7 +5808,7 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
     ),
     true,
   );
-  assert.equal(requiresKagemushaRecursiveSpendLineageKeyArtifactsForInit(), true);
+  assert.equal(requiresKagemushaRecursiveSpendLineageKeyArtifactsForInit(), false);
   assert.equal(
     requiresKagemushaRecursiveSpendLineageKeyArtifactsForAppendOutput(
       KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
@@ -5790,7 +5820,7 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
     null,
     "",
     KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
-    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+    GENERIC_LINEAGE_FAMILY_ID,
     KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
     "unknown-kagemusha-recursive-spend-circuit",
   ]) {
@@ -6304,9 +6334,9 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
   );
   assert.equal(
     isSupportedKagemushaRecursiveSpendPreviousProofCircuitId(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
     ),
-    true,
+    false,
   );
   assert.equal(
     isSupportedKagemushaRecursiveSpendPreviousProofCircuitId(
@@ -6340,9 +6370,9 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
   );
   assert.equal(
     requiresKagemushaRecursiveSpendPreviousLineageVerifierRecordForAppend(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
     ),
-    true,
+    false,
   );
   assert.equal(
     requiresKagemushaRecursiveSpendPreviousLineageVerifierRecordForAppend(
@@ -6378,29 +6408,29 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
   );
   assert.equal(
     isSupportedKagemushaRecursiveSpendAppendProofTransition(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
       KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
-    ),
-    true,
-  );
-  assert.equal(
-    isSupportedKagemushaRecursiveSpendAppendProofTransition(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
     ),
     false,
   );
   assert.equal(
     isSupportedKagemushaRecursiveSpendAppendProofTransition(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
+      GENERIC_LINEAGE_FAMILY_ID,
+    ),
+    false,
+  );
+  assert.equal(
+    isSupportedKagemushaRecursiveSpendAppendProofTransition(
+      GENERIC_LINEAGE_FAMILY_ID,
       KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
     ),
-    true,
+    false,
   );
   assert.equal(
     isSupportedKagemushaRecursiveSpendAppendProofTransition(
       KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
     ),
     false,
   );
@@ -6413,17 +6443,17 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
   );
   assert.equal(
     isSupportedKagemushaRecursiveSpendAppendProofTransition(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
       "unknown-kagemusha-recursive-spend-circuit",
     ),
     false,
   );
   assert.equal(
     canRedeemKagemushaRecursiveSpendWitnessless(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
       1,
     ),
-    true,
+    false,
   );
   assert.equal(
     canRedeemKagemushaRecursiveSpendWitnessless(
@@ -6441,40 +6471,40 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
   );
   assert.equal(
     requiresKagemushaRecursiveSpendLineageWitnessForRedeem(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
       1,
-    ),
-    false,
-  );
-  assert.equal(
-    canRedeemKagemushaRecursiveSpendWitnessless(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
-      64,
     ),
     true,
   );
   assert.equal(
-    requiresKagemushaRecursiveSpendLineageWitnessForRedeem(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+    canRedeemKagemushaRecursiveSpendWitnessless(
+      GENERIC_LINEAGE_FAMILY_ID,
       64,
     ),
     false,
   );
+  assert.equal(
+    requiresKagemushaRecursiveSpendLineageWitnessForRedeem(
+      GENERIC_LINEAGE_FAMILY_ID,
+      64,
+    ),
+    true,
+  );
   for (const [circuitId, hopCount] of [
     [KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1, 1],
-    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, 0],
-    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, 65],
-    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, 1.5],
-    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, -1],
-    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, Number.MAX_SAFE_INTEGER],
-    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, Number.NaN],
-    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, Number.POSITIVE_INFINITY],
-    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, Number.NEGATIVE_INFINITY],
-    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, 1n],
-    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, new Number(1)],
-    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, true],
-    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, false],
-    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, "1"],
+    [GENERIC_LINEAGE_FAMILY_ID, 0],
+    [GENERIC_LINEAGE_FAMILY_ID, 65],
+    [GENERIC_LINEAGE_FAMILY_ID, 1.5],
+    [GENERIC_LINEAGE_FAMILY_ID, -1],
+    [GENERIC_LINEAGE_FAMILY_ID, Number.MAX_SAFE_INTEGER],
+    [GENERIC_LINEAGE_FAMILY_ID, Number.NaN],
+    [GENERIC_LINEAGE_FAMILY_ID, Number.POSITIVE_INFINITY],
+    [GENERIC_LINEAGE_FAMILY_ID, Number.NEGATIVE_INFINITY],
+    [GENERIC_LINEAGE_FAMILY_ID, 1n],
+    [GENERIC_LINEAGE_FAMILY_ID, new Number(1)],
+    [GENERIC_LINEAGE_FAMILY_ID, true],
+    [GENERIC_LINEAGE_FAMILY_ID, false],
+    [GENERIC_LINEAGE_FAMILY_ID, "1"],
     [undefined, 1],
     [null, 1],
     ["", 1],
@@ -6549,7 +6579,7 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
   );
   assert.equal(
     canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
       1,
     ),
     false,
@@ -6570,7 +6600,7 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
   );
   assert.equal(
     canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
       63,
     ),
     false,
@@ -6578,7 +6608,7 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
   for (const [circuitId, previousHopCount] of [
     [KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1, 0],
     [KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1, KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS],
-    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, 64],
+    [GENERIC_LINEAGE_FAMILY_ID, 64],
     [undefined, 1],
     [null, 1],
     ["", 1],
@@ -6612,27 +6642,27 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
   );
   assert.equal(
     canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
       KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
-      1,
-    ),
-    true,
-  );
-  assert.equal(
-    canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
       1,
     ),
     false,
   );
   assert.equal(
     canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
+      GENERIC_LINEAGE_FAMILY_ID,
+      1,
+    ),
+    false,
+  );
+  assert.equal(
+    canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(
+      GENERIC_LINEAGE_FAMILY_ID,
       KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
       1,
     ),
-    true,
+    false,
   );
   assert.equal(
     canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(
@@ -6645,7 +6675,7 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
   assert.equal(
     canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(
       KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
       1,
     ),
     false,
@@ -6659,7 +6689,7 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
     ],
     [
       KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
       1,
     ],
     [
@@ -6668,7 +6698,7 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
       1,
     ],
     [
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
       whitespaceLineageOutputCircuitId,
       1,
     ],
@@ -6739,7 +6769,7 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
   }
   assert.equal(
     requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
       1,
     ),
     false,
@@ -6753,25 +6783,25 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
   );
   assert.equal(
     requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
       64,
     ),
     false,
   );
   for (const [circuitId, previousHopCount] of [
     ["", 1],
-    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, 0],
+    [GENERIC_LINEAGE_FAMILY_ID, 0],
     [KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1, 1],
     ["unknown-kagemusha-recursive-spend-circuit", 1],
-    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, 1.5],
-    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, Number.NaN],
-    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, Number.POSITIVE_INFINITY],
-    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, Number.NEGATIVE_INFINITY],
-    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, 1n],
-    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, new Number(1)],
-    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, true],
-    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, false],
-    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, "1"],
+    [GENERIC_LINEAGE_FAMILY_ID, 1.5],
+    [GENERIC_LINEAGE_FAMILY_ID, Number.NaN],
+    [GENERIC_LINEAGE_FAMILY_ID, Number.POSITIVE_INFINITY],
+    [GENERIC_LINEAGE_FAMILY_ID, Number.NEGATIVE_INFINITY],
+    [GENERIC_LINEAGE_FAMILY_ID, 1n],
+    [GENERIC_LINEAGE_FAMILY_ID, new Number(1)],
+    [GENERIC_LINEAGE_FAMILY_ID, true],
+    [GENERIC_LINEAGE_FAMILY_ID, false],
+    [GENERIC_LINEAGE_FAMILY_ID, "1"],
   ]) {
     assert.equal(
       requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend(

@@ -17,7 +17,6 @@ struct CliOptions {
     signing_key_hex: Option<String>,
     signer_hex: Option<String>,
     signature_out: Option<PathBuf>,
-    allow_unsigned: bool,
 }
 
 enum CliError {
@@ -32,7 +31,6 @@ Options:
     --signing-key <hex>         Ed25519 private key (32- or 64-byte hex) for signing the manifest
     --signer <hex>              Expected public key (32-byte hex). Defaults to the key derived from --signing-key
     --signature-out <path>      Output path for council signature JSON (defaults to fixtures/sorafs_chunker/manifest_signatures.json)
-    --allow-unsigned            Permit regeneration without signatures (local development only; CI MUST sign)
     -h, --help                  Show this help message
 ";
 
@@ -108,9 +106,6 @@ fn parse_cli() -> Result<CliOptions, CliError> {
                     PathBuf::from(raw),
                     "--signature-out",
                 )?;
-            }
-            "--allow-unsigned" => {
-                options.allow_unsigned = true;
             }
             other => return Err(CliError::Message(format!("unknown argument {other}"))),
         }
@@ -415,26 +410,11 @@ fn write_manifest_signatures(
     if cli.signing_key_hex.is_none() {
         match existing_root.as_ref() {
             Some(root) => {
-                if let Err(err) = ensure_signed(root, &manifest_digest) {
-                    if cli.allow_unsigned {
-                        eprintln!(
-                            "warning: {err}; continuing due to --allow-unsigned (NOT FOR CI)"
-                        );
-                        return Ok(());
-                    }
-                    return Err(err);
-                }
+                ensure_signed(root, &manifest_digest)?;
                 return Ok(());
             }
             None => {
-                if cli.allow_unsigned {
-                    eprintln!(
-                        "warning: manifest signatures missing; continuing due to --allow-unsigned \
-                         (NOT FOR CI)"
-                    );
-                    return Ok(());
-                }
-                return Err("manifest_signatures.json missing; provide --signing-key or explicitly allow unsigned output".into());
+                return Err("manifest_signatures.json missing; provide --signing-key".into());
             }
         }
     }
@@ -1067,23 +1047,42 @@ mod tests {
     }
 
     #[test]
-    fn allow_unsigned_flag_skips_enforcement() {
+    fn existing_manifest_signatures_reject_empty_signature_set() {
         let dir = temp_dir();
         let vectors = FixtureProfile::SF1_V1.generate_vectors();
         prepare_fixture_files(&dir, &vectors);
         let manifest_digest = write_manifest(&dir, &vectors).expect("write manifest");
+        let signature_path = dir.join("manifest_signatures.json");
+
+        let mut root = Map::new();
+        root.insert("profile".to_owned(), Value::from(CANONICAL_PROFILE_HANDLE));
+        root.insert(
+            "profile_aliases".to_owned(),
+            Value::Array(vec![Value::from(CANONICAL_PROFILE_HANDLE)]),
+        );
+        root.insert("manifest".to_owned(), Value::from("manifest_blake3.json"));
+        root.insert(
+            "manifest_blake3".to_owned(),
+            Value::from(to_hex(manifest_digest.as_bytes())),
+        );
+        root.insert(
+            "chunk_digest_sha3_256".to_owned(),
+            Value::from(vectors.sha3_digest_hex()),
+        );
+        root.insert("signatures".to_owned(), Value::Array(Vec::new()));
+        let bytes = json::to_vec_pretty(&Value::Object(root)).expect("serialize signatures");
+        fs::write(&signature_path, bytes).expect("write unsigned signature file");
 
         let cli = CliOptions {
-            signature_out: Some(dir.join("manifest_signatures.json")),
-            allow_unsigned: true,
+            signature_out: Some(signature_path.clone()),
             ..CliOptions::default()
         };
 
-        write_manifest_signatures(&dir, &vectors, manifest_digest, &cli)
-            .expect("allow unsigned should bypass enforcement");
+        let err = write_manifest_signatures(&dir, &vectors, manifest_digest, &cli)
+            .expect_err("empty signature set must fail");
         assert!(
-            !cli.signature_out.as_ref().unwrap().exists(),
-            "manifest signatures file should not be created"
+            err.to_string().contains("contains no council signatures"),
+            "unexpected error: {err}"
         );
 
         fs::remove_dir_all(&dir).expect("cleanup temp dir");

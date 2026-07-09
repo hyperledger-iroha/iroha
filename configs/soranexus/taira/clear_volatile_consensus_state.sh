@@ -9,6 +9,7 @@ TORII_PORTS="29080,29081,29082,29083"
 STOP_TIMEOUT_SECONDS=5
 START_AFTER=0
 APPLY=0
+DRY_RUN_HAS_WARNINGS=0
 
 usage() {
   cat <<'EOF'
@@ -49,6 +50,36 @@ is_positive_integer() {
   [[ "$1" =~ ^[1-9][0-9]*$ ]]
 }
 
+normalize_torii_ports_csv() {
+  local value="$1"
+  local port trimmed port_number normalized
+  local -a ports
+  declare -A seen_ports=()
+
+  if [[ -z "$value" ]]; then
+    printf '\n'
+    return 0
+  fi
+
+  [[ "$value" != ,* && "$value" != *, ]] || die "--torii-ports contains an empty port entry"
+  IFS=',' read -r -a ports <<<"$value"
+  for port in "${ports[@]}"; do
+    trimmed="${port//[[:space:]]/}"
+    [[ -n "$trimmed" ]] || die "--torii-ports contains an empty port entry"
+    [[ "$trimmed" =~ ^[0-9]+$ ]] || die "--torii-ports must be a comma-separated list of numeric ports"
+    port_number=$((10#$trimmed))
+    (( port_number >= 1 && port_number <= 65535 )) || die "--torii-ports contains out-of-range port ${trimmed}; expected 1..65535"
+    [[ -z "${seen_ports[$port_number]:-}" ]] || die "--torii-ports contains duplicate port ${port_number}"
+    seen_ports[$port_number]=1
+    if [[ -z "${normalized:-}" ]]; then
+      normalized="$port_number"
+    else
+      normalized="${normalized},${port_number}"
+    fi
+  done
+  printf '%s\n' "$normalized"
+}
+
 sha256_file() {
   if command -v shasum >/dev/null 2>&1; then
     shasum -a 256 "$1" | awk '{print $1}'
@@ -59,10 +90,128 @@ sha256_file() {
   fi
 }
 
+is_peer_config_path_fallback() {
+  local path="$1"
+  local base
+  [[ "$path" == "$DIST"/peer*.toml ]] || return 1
+  base="$(basename "$path")"
+  [[ "$base" =~ ^peer[0-9]+\.toml$ ]]
+}
+
+command_references_dist_peer_config_fallback() {
+  local command_line="$1"
+  local expect_config=0
+  local token config_path
+  # Fallback parser for minimal shells where python3 is unavailable. The
+  # generated Taira localnet paths do not contain spaces.
+  for token in $command_line; do
+    token="${token#\"}"
+    token="${token%\"}"
+    token="${token#\'}"
+    token="${token%\'}"
+    if [[ $expect_config -eq 1 ]]; then
+      is_peer_config_path_fallback "$token"
+      return
+    fi
+    case "$token" in
+      --config=*)
+        config_path="${token#--config=}"
+        is_peer_config_path_fallback "$config_path" && return 0
+        ;;
+      --config)
+        expect_config=1
+        ;;
+    esac
+  done
+  return 1
+}
+
+command_references_dist_peer_config() {
+  local command_line="$1"
+  if ! command -v python3 >/dev/null 2>&1; then
+    command_references_dist_peer_config_fallback "$command_line"
+    return
+  fi
+  COMMAND_LINE="$command_line" DIST_ROOT="$DIST" python3 - <<'PY'
+import os
+import pathlib
+import shlex
+import sys
+
+command_line = os.environ["COMMAND_LINE"]
+dist = pathlib.Path(os.environ["DIST_ROOT"]).resolve()
+try:
+    args = shlex.split(command_line)
+except ValueError:
+    args = command_line.split()
+
+
+def is_peer_config(value):
+    try:
+        path = pathlib.Path(value).resolve()
+    except OSError:
+        return False
+    name = path.name
+    return (
+        path.parent == dist
+        and name.startswith("peer")
+        and name.endswith(".toml")
+        and name[len("peer") : -len(".toml")].isdigit()
+    )
+
+
+for index, arg in enumerate(args):
+    if arg == "--config" and index + 1 < len(args) and is_peer_config(args[index + 1]):
+        sys.exit(0)
+    if arg.startswith("--config=") and is_peer_config(arg.split("=", 1)[1]):
+        sys.exit(0)
+sys.exit(1)
+PY
+}
+
+command_looks_like_peer_runtime() {
+  local command_line="$1"
+  [[ "$command_line" =~ (^|[[:space:]/])(irohad|iroha3d|peer-runtime)([[:space:]]|$) ]]
+}
+
+pid_exists() {
+  local pid="$1"
+  kill -0 "$pid" 2>/dev/null || ps -p "$pid" >/dev/null 2>&1
+}
+
+pid_command_line() {
+  local pid="$1"
+  ps -p "$pid" -o command= 2>/dev/null || true
+}
+
+record_pidfile_peer_if_owned() {
+  local pid="$1"
+  local pidfile="$2"
+  local command_line
+  if ! pid_exists "$pid"; then
+    return
+  fi
+  command_line="$(pid_command_line "$pid")"
+  if [[ -z "$command_line" ]]; then
+    unverified_live_pid_refs+=("${pidfile}:${pid}")
+    return
+  fi
+  if command_looks_like_peer_runtime "$command_line" &&
+    command_references_dist_peer_config "$command_line"; then
+    stop_pids+=("$pid")
+  else
+    echo "notice: ignoring stale or reused pidfile ${pidfile}; pid ${pid} command does not reference $DIST/peer*.toml" >&2
+  fi
+}
+
 run_or_print() {
-  printf '+'
-  printf ' %q' "$@"
-  printf '\n'
+  local line="+"
+  local quoted_arg
+  for arg in "$@"; do
+    printf -v quoted_arg '%q' "$arg"
+    line+=" ${quoted_arg}"
+  done
+  printf '%s\n' "$line"
   if [[ $APPLY -eq 1 ]]; then
     "$@"
   fi
@@ -121,6 +270,7 @@ done
 [[ -n "$DIST" ]] || die "--dist is required"
 [[ -d "$DIST" ]] || die "dist directory not found: $DIST"
 is_positive_integer "$STOP_TIMEOUT_SECONDS" || die "--stop-timeout-seconds must be a positive integer"
+TORII_PORTS="$(normalize_torii_ports_csv "$TORII_PORTS")"
 if [[ $START_AFTER -eq 1 ]]; then
   [[ -x "$DIST/start.sh" ]] || die "start script is not executable: $DIST/start.sh"
 fi
@@ -151,23 +301,32 @@ fi
 echo "==> dist: $DIST"
 
 stop_pids=()
+unverified_live_pid_refs=()
 for pidfile in "$DIST"/peer*.pid; do
   [[ -f "$pidfile" ]] || continue
   pid="$(cat "$pidfile" 2>/dev/null || true)"
   if [[ "$pid" =~ ^[0-9]+$ ]]; then
-    stop_pids+=("$pid")
+    record_pidfile_peer_if_owned "$pid" "$pidfile"
   fi
 done
 
-while IFS= read -r pid; do
+while read -r pid command_line; do
   [[ -n "$pid" ]] || continue
-  stop_pids+=("$pid")
-done < <(
-  ps -axo pid=,command= |
-    awk -v dist="$DIST" '
-      ($0 ~ /irohad|peer-runtime/) && index($0, dist "/peer") { print $1 }
-    '
-)
+  [[ -n "$command_line" ]] || continue
+  if command_looks_like_peer_runtime "$command_line" &&
+    command_references_dist_peer_config "$command_line"; then
+    stop_pids+=("$pid")
+  fi
+done < <(ps -axo pid=,command=)
+
+if [[ ${#unverified_live_pid_refs[@]} -gt 0 ]]; then
+  message="found ${#unverified_live_pid_refs[@]} live pidfile process(es) whose command line could not be inspected; refusing to quarantine volatile consensus state until stale pidfiles are removed or peer ownership is verifiable"
+  if [[ $APPLY -eq 1 ]]; then
+    die "$message"
+  fi
+  echo "warning: $message" >&2
+  DRY_RUN_HAS_WARNINGS=1
+fi
 
 if [[ ${#stop_pids[@]} -gt 0 ]]; then
   unique_pids=()
@@ -177,11 +336,22 @@ if [[ ${#stop_pids[@]} -gt 0 ]]; then
   done < <(printf '%s\n' "${stop_pids[@]}" | awk '!seen[$0]++')
   stop_pids=("${unique_pids[@]}")
   echo "==> stopping ${#stop_pids[@]} peer process(es)"
+  inaccessible_pids=()
   for pid in "${stop_pids[@]}"; do
     if kill -0 "$pid" 2>/dev/null; then
       run_or_print kill "$pid"
+    elif ps -p "$pid" >/dev/null 2>&1; then
+      inaccessible_pids+=("$pid")
     fi
   done
+  if [[ ${#inaccessible_pids[@]} -gt 0 ]]; then
+    message="matched ${#inaccessible_pids[@]} peer process(es) but cannot signal them as the current user; rerun as the peer process owner or with sudo before quarantining volatile consensus state"
+    if [[ $APPLY -eq 1 ]]; then
+      die "$message"
+    fi
+    echo "warning: $message" >&2
+    DRY_RUN_HAS_WARNINGS=1
+  fi
   if [[ $APPLY -eq 1 ]]; then
     sleep "$STOP_TIMEOUT_SECONDS"
   fi
@@ -288,4 +458,11 @@ PY
   fi
 fi
 
-echo "volatile consensus quarantine completed."
+if [[ $APPLY -eq 1 ]]; then
+  echo "volatile consensus quarantine completed."
+elif [[ $DRY_RUN_HAS_WARNINGS -ne 0 ]]; then
+  echo "volatile consensus quarantine dry-run completed with warnings; fix them before running with --apply" >&2
+  exit 2
+else
+  echo "volatile consensus quarantine dry-run completed."
+fi

@@ -43,6 +43,11 @@ targets the new `torii.sorafs_gateway.direct_mode` table alongside the standard 
 iroha app sorafs gateway direct-mode enable --plan direct-mode-plan.json
 ```
 
+The `enable` subcommand fails before printing configuration when the plan is not canonical: provider
+and manifest digests must be lowercase 32-byte hex values, derived hostnames and direct-CAR HTTPS
+URLs must match the plan inputs, the manifest must require an envelope, and the manifest metadata
+must advertise direct-CAR support.
+
 Apply the snippet to your Torii configuration (`config.toml`). The fields under
 `torii.sorafs_gateway.direct_mode` map 1:1 to the plan output:
 
@@ -51,13 +56,15 @@ Apply the snippet to your Torii configuration (`config.toml`). The fields under
 - `direct_car_canonical`, `direct_car_vanity`
 - `manifest_digest_hex`
 
-While the direct-mode override is active, `torii.sorafs_gateway.require_manifest_envelope` and
-`enforce_admission` are explicitly disabled to match the snippet output.
+While the direct-mode override is active, `torii.sorafs_gateway.require_manifest_envelope`,
+`enforce_admission`, and `enforce_capabilities` remain enabled. Direct mode only installs the
+deterministic provider/route mapping; it must not be used as a bypass for envelope, admission, or
+capability enforcement.
 
 ## Rolling Back
 
-To restore the secure defaults, remove the `direct_mode` table and re-enable envelope/admission
-checks. The CLI prints the rollback snippet for convenience:
+To restore the default routing path, remove the `direct_mode` table and keep envelope, admission,
+and capability checks enabled. The CLI prints the rollback snippet for convenience:
 
 ```bash
 iroha app sorafs gateway direct-mode rollback
@@ -73,4 +80,7 @@ the payload output, fetch summary, adoption report, or policy-derived
 scoreboard path is a symlink, points at a non-regular file, or sits under a
 symlinked parent component. This keeps direct-mode rollout evidence from being
 written through ambiguous filesystem aliases while still allowing the wrapper to
-create missing ordinary output directories.
+create missing ordinary output directories. The helper also refuses
+`--skip-adoption-check` unless
+`SORAFS_DIRECT_MODE_ALLOW_ADOPTION_SKIP=local-diagnostic` is present, keeping
+the adoption report mandatory for regulated rollout runs.

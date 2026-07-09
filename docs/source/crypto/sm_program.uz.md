@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/crypto/sm_program.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 08e2e1e4a54390d9142d6788aad2385e93282a33423b9fc7f3418e3633f3f86a
+source_hash: 2d65304e93effdc04fc35690fe3d4fb1c11ed5fd5963cdda9d84f617891b8ca5
 source_last_modified: "2026-01-23T23:46:10.134857+00:00"
 translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
@@ -80,7 +80,7 @@ faqat Ed25519 kuzatuvchilari SM yoqilgan validatorlarga ulanadigan aralash joyla
 `WARN` da tizimga kirgan, ammo konsensus tugunlari tasodifiy holatlarning oldini olish uchun standart sozlamalarni yoqilgan holda saqlashi kerak.
 SM-dan xabardor va SM-nogiron tengdoshlari o'rtasidagi tafovut.
 CLI bu almashishlarni “iroha_cli” ilovasi orqali qo‘l siqish yangilanishi orqali amalga oshiradi
---allow-sm-handshake-mismatch` and `--allow-sm-openssl-oldindan ko'rish-mismatch`, or the matching `--talab qilish-*`
+--require-sm-handshake-match` and `--allow-sm-openssl-oldindan ko'rish-mismatch`, or the matching `--talab qilish-*`
 qat'iy ijroni tiklash uchun bayroqlar.#### OpenSSL/Tongsuo oldindan ko'rish (`sm-ffi-openssl`)
 - **Scope.** OpenSSL ish vaqti mavjudligini tasdiqlovchi va OpenSSL tomonidan qo‘llab-quvvatlangan SM3 xeshing, SM2 tekshiruvi va SM4-GCM shifrlash/shifrini yechish imkonini beruvchi faqat oldindan ko‘rish uchun mo‘ljallangan provayder (`OpenSslProvider`) tuzadi. Konsensus ikkiliklari RustCrypto yo'lidan foydalanishni davom ettirishi kerak; FFI backend chekka tekshirish/imzolovchi uchuvchilar uchun qat'iy ravishda tanlanadi.
 - **Shartlarni yarating.** `cargo build -p iroha_crypto --features "sm sm-ffi-openssl"` bilan kompilyatsiya qiling va OpenSSL/Tongsuo 3.0+ (SM2/SM3/SM4 qo'llab-quvvatlangan `libcrypto`) ga qarshi asboblar zanjiri havolalarini ta'minlang. Statik ulanish tavsiya etilmaydi; operator tomonidan boshqariladigan dinamik kutubxonalarni afzal ko'ring.

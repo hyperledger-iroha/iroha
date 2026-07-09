@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_gateway_direct_mode.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 7e50a7c828048181d294ae8af24111e34fa38e6ae0c346829051984d8eee183c
+source_hash: 574c7677144946ea5a8d4957933fe817e2be65061690d9f3e053bd28f85b900f
 source_last_modified: "2026-01-22T14:35:37.556642+00:00"
 translation_last_reviewed: 2026-02-07
 title: SoraFS Gateway Direct-Mode Toolkit
@@ -51,6 +51,11 @@ targets the new `torii.sorafs_gateway.direct_mode` table alongside the standard 
 iroha app sorafs gateway direct-mode enable --plan direct-mode-plan.json
 ```
 
+The `enable` subcommand fails before printing configuration when the plan is not canonical: provider
+and manifest digests must be lowercase 32-byte hex values, derived hostnames and direct-CAR HTTPS
+URLs must match the plan inputs, the manifest must require an envelope, and the manifest metadata
+must advertise direct-CAR support.
+
 Apply the snippet to your Torii configuration (`config.toml`). The fields under
 `torii.sorafs_gateway.direct_mode` map 1:1 to the plan output:
 
@@ -59,13 +64,15 @@ Apply the snippet to your Torii configuration (`config.toml`). The fields under
 - `direct_car_canonical`, `direct_car_vanity`
 - `manifest_digest_hex`
 
-While the direct-mode override is active, `torii.sorafs_gateway.require_manifest_envelope` and
-`enforce_admission` are explicitly disabled to match the snippet output.
+While the direct-mode override is active, `torii.sorafs_gateway.require_manifest_envelope`,
+`enforce_admission`, and `enforce_capabilities` remain enabled. Direct mode only installs the
+deterministic provider/route mapping; it must not be used as a bypass for envelope, admission, or
+capability enforcement.
 
 ## Rolling Back
 
-To restore the secure defaults, remove the `direct_mode` table and re-enable envelope/admission
-checks. The CLI prints the rollback snippet for convenience:
+To restore the default routing path, remove the `direct_mode` table and keep envelope, admission,
+and capability checks enabled. The CLI prints the rollback snippet for convenience:
 
 ```bash
 iroha app sorafs gateway direct-mode rollback

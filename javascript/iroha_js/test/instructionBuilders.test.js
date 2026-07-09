@@ -2365,7 +2365,6 @@ descriptorTest("privacy proof envelopes preserve pending production backend tags
     ["Halo2IpaPasta", "Halo2IpaPasta"],
     ["halo2/pasta/kagemusha-recursive-aggregation-v1", "Halo2IpaPasta"],
     ["halo2/pasta/kagemusha-recursive-compact-v1", "Halo2IpaPasta"],
-    ["halo2/pasta/kagemusha-recursive-spend-lineage-v1", "Halo2IpaPasta"],
     ["halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1", "Halo2IpaPasta"],
     ["halo2/pasta/kagemusha-recursive-spend-lineage-append-v1", "Halo2IpaPasta"],
     ["stark/fri", "Stark"],
@@ -4369,6 +4368,7 @@ descriptorTest("Anonymous PGC builders normalize receiver sets and dev proof env
     balanceCommitments: [Buffer.alloc(32, 0x51), Buffer.alloc(32, 0x52)],
     linkTag: Buffer.alloc(32, 0x61),
     rangeCommitments: [Buffer.alloc(32, 0x71)],
+    paymentBindingHash: Buffer.alloc(32, 0x62),
     chainId: "boi-localnet",
     domainSeparator: "boi:anonymous-pgc:v1",
     vkHash,
@@ -4377,8 +4377,15 @@ descriptorTest("Anonymous PGC builders normalize receiver sets and dev proof env
   assert.equal(fixture.production, false);
   assert.ok(Buffer.isBuffer(fixture.envelope));
   assert.ok(Buffer.isBuffer(fixture.proofBytes));
+  assert.ok(Buffer.isBuffer(fixture.public_input_bytes));
+  assert.ok(Buffer.isBuffer(fixture.publicInputBytes));
   assert.equal(Buffer.from(fixture.proof_bytes).equals(fixture.proofBytes), true);
+  assert.equal(fixture.public_input_bytes.equals(fixture.publicInputBytes), true);
   const decoded = noritoDecodePrivacyProofEnvelope(fixture.envelope);
+  assert.equal(
+    fixture.public_input_bytes.equals(Buffer.from(decoded.public_inputs)),
+    true,
+  );
   assert.equal(decoded.backend, "Stark");
   assert.equal(
     decoded.circuit_id,
@@ -4397,6 +4404,7 @@ descriptorTest("Anonymous PGC builders normalize receiver sets and dev proof env
     publicInputs.receiver_set_commitment,
     Buffer.from(receiverSet.receiver_set_commitment).toString("hex"),
   );
+  assert.equal(publicInputs.payment_binding_hash, Buffer.alloc(32, 0x62).toString("hex"));
 
   const verified = verifyAnonymousPgcDevProofLocally({
     envelope: fixture.envelope,
@@ -4406,6 +4414,7 @@ descriptorTest("Anonymous PGC builders normalize receiver sets and dev proof env
     balanceCommitments: [Buffer.alloc(32, 0x51), Buffer.alloc(32, 0x52)],
     linkTag: Buffer.alloc(32, 0x61),
     rangeCommitments: [Buffer.alloc(32, 0x71)],
+    paymentBindingHash: Buffer.alloc(32, 0x62),
     chainId: "boi-localnet",
     domainSeparator: "boi:anonymous-pgc:v1",
   });
@@ -4438,6 +4447,7 @@ descriptorTest("Anonymous PGC production proof and instruction builders roundtri
     balanceCommitments: [Buffer.alloc(32, 0x51), Buffer.alloc(32, 0x52)],
     linkTag: Buffer.alloc(32, 0x61),
     rangeCommitments: [Buffer.alloc(32, 0x71)],
+    paymentBindingHash: Buffer.alloc(32, 0x62),
     chainId: "boi-localnet",
     domainSeparator: "boi:anonymous-pgc:v1",
     vkHash: Buffer.alloc(32, 0x55),
@@ -4459,6 +4469,7 @@ descriptorTest("Anonymous PGC production proof and instruction builders roundtri
     balanceCommitments: base.balanceCommitments,
     linkTag: base.linkTag,
     rangeCommitments: base.rangeCommitments,
+    paymentBindingHash: base.paymentBindingHash,
     chainId: base.chainId,
     domainSeparator: base.domainSeparator,
   };
@@ -4468,6 +4479,54 @@ descriptorTest("Anonymous PGC production proof and instruction builders roundtri
   assert.equal(verified.kind, "anonymous-pgc-k-out-of-n-v1");
   assert.equal(verified.receiver_count, 2);
   assert.equal(verified.receiver_threshold, 1);
+  assert.equal(
+    verified.public_inputs.payment_binding_hash,
+    Buffer.alloc(32, 0x62).toString("hex"),
+  );
+
+  const transferInputWithoutPaymentBinding = { ...transferInput };
+  delete transferInputWithoutPaymentBinding.paymentBindingHash;
+  assert.equal(
+    verifyAnonymousPgcKOutOfNProofV1(transferInputWithoutPaymentBinding).ok,
+    true,
+  );
+  assert.throws(
+    () => buildAnonymousPgcTransferInstruction(transferInputWithoutPaymentBinding),
+    /paymentBindingHash is required/,
+  );
+  assert.throws(
+    () =>
+      buildAnonymousPgcTransferInstruction({
+        ...transferInput,
+        paymentBindingHash: Buffer.alloc(32, 0x63),
+      }),
+    /paymentBindingHash must match the envelope public inputs/,
+  );
+  assert.throws(
+    () =>
+      buildAnonymousPgcKOutOfNProofV1({
+        ...base,
+        payment_binding_hash: base.paymentBindingHash,
+        proofBytes,
+      }),
+    /multiple payment binding hash aliases/,
+  );
+  assert.throws(
+    () =>
+      verifyAnonymousPgcKOutOfNProofV1({
+        ...transferInput,
+        payment_binding_hash: base.paymentBindingHash,
+      }),
+    /multiple paymentBindingHash aliases/,
+  );
+  assert.throws(
+    () =>
+      buildAnonymousPgcTransferInstruction({
+        ...transferInput,
+        payment_binding_hash: base.paymentBindingHash,
+      }),
+    /multiple payment binding hash aliases/,
+  );
 
   const accountInstruction = buildAnonymousPgcAccountCommitmentInstruction({
     accountCommitment: Buffer.alloc(32, 0x21),
@@ -4480,11 +4539,33 @@ descriptorTest("Anonymous PGC production proof and instruction builders roundtri
     "zk::RegisterAnonymousPgcAccountCommitment",
   );
   assert.equal(accountInstruction.instruction_digest.length, 64);
+  for (const patch of [
+    { account_commitment: Buffer.alloc(32, 0x21) },
+    { anonymity_set_root: Buffer.alloc(32, 0x41) },
+    { chain_id: "boi-localnet" },
+    { domain_separator: "boi:anonymous-pgc:v1" },
+  ]) {
+    assert.throws(
+      () =>
+        buildAnonymousPgcAccountCommitmentInstruction({
+          accountCommitment: Buffer.alloc(32, 0x21),
+          anonymitySetRoot: Buffer.alloc(32, 0x41),
+          chainId: "boi-localnet",
+          domainSeparator: "boi:anonymous-pgc:v1",
+          ...patch,
+        }),
+      /anonymousPgcAccountCommitmentInstruction/,
+    );
+  }
 
   const transferInstruction = buildAnonymousPgcTransferInstruction(transferInput);
   assert.equal(transferInstruction.kind, "zk::SubmitAnonymousPgcTransfer");
   assert.equal(transferInstruction.proof_envelope.equals(envelope), true);
   assert.equal(transferInstruction.receiver_count, 2);
+  assert.equal(
+    transferInstruction.payment_binding_hash,
+    Buffer.alloc(32, 0x62).toString("hex"),
+  );
   assert.equal(transferInstruction.instruction_digest.length, 64);
 });
 
@@ -4509,6 +4590,7 @@ descriptorTest("Anonymous PGC production helpers reject dev fixture bytes", () =
     balanceCommitments: [Buffer.alloc(32, 0x51), Buffer.alloc(32, 0x52)],
     linkTag: Buffer.alloc(32, 0x61),
     rangeCommitments: [Buffer.alloc(32, 0x71)],
+    paymentBindingHash: Buffer.alloc(32, 0x62),
     chainId: "boi-localnet",
     domainSeparator: "boi:anonymous-pgc:v1",
     vkHash: Buffer.alloc(32, 0x55),
@@ -4522,6 +4604,7 @@ descriptorTest("Anonymous PGC production helpers reject dev fixture bytes", () =
     balanceCommitments: base.balanceCommitments,
     linkTag: base.linkTag,
     rangeCommitments: base.rangeCommitments,
+    paymentBindingHash: base.paymentBindingHash,
     chainId: base.chainId,
     domainSeparator: base.domainSeparator,
   };
@@ -4594,6 +4677,7 @@ descriptorTest("Anonymous PGC builders reject malformed receiver and proof input
     balanceCommitments: [Buffer.alloc(32, 0x51), Buffer.alloc(32, 0x52)],
     linkTag: Buffer.alloc(32, 0x61),
     rangeCommitments: [Buffer.alloc(32, 0x71)],
+    paymentBindingHash: Buffer.alloc(32, 0x62),
     chainId: "boi-localnet",
     domainSeparator: "boi:anonymous-pgc:v1",
     vkHash: Buffer.alloc(32, 0x55),
@@ -4604,8 +4688,23 @@ descriptorTest("Anonymous PGC builders reject malformed receiver and proof input
     { payload: Buffer.from("payload"), txDigest: Buffer.alloc(32, 0xee) },
     { maxPayloadBytes: undefined },
     { maxPayloadBytes: null },
+    { version: 1 },
+    { threshold: 1 },
+    { k: 1 },
+    { receivers: [receiverA, receiverB] },
+    { maxPayloadBytes: 1024, max_payload_bytes: 1024 },
+    { maxProofBytes: 1024, max_proof_bytes: 1024 },
+    { maxPublicInputBytes: 1024, max_public_input_bytes: 1024 },
+    { anonymity_set_root: Buffer.alloc(32, 0x41) },
+    { balance_commitments: [Buffer.alloc(32, 0x51), Buffer.alloc(32, 0x52)] },
+    { link_tag: Buffer.alloc(32, 0x61) },
+    { range_commitments: [Buffer.alloc(32, 0x71)] },
+    { payment_binding_hash: Buffer.alloc(32, 0x62) },
+    { chain_id: "boi-localnet" },
+    { domain_separator: "boi:anonymous-pgc:v1" },
     { balanceCommitments: [Buffer.alloc(32, 0x51), Buffer.alloc(32, 0x51)] },
     { rangeCommitments: [] },
+    { paymentBindingHash: Buffer.alloc(32) },
     { linkTag: Buffer.alloc(32) },
     { chainId: " " },
     { vkHash: Buffer.alloc(32) },
@@ -4637,6 +4736,7 @@ descriptorTest("Anonymous PGC local verifier rejects tampered dev fixtures", () 
     balanceCommitments: [Buffer.alloc(32, 0x51), Buffer.alloc(32, 0x52)],
     linkTag: Buffer.alloc(32, 0x61),
     rangeCommitments: [Buffer.alloc(32, 0x71)],
+    paymentBindingHash: Buffer.alloc(32, 0x62),
     chainId: "boi-localnet",
     domainSeparator: "boi:anonymous-pgc:v1",
     vkHash: Buffer.alloc(32, 0x55),
@@ -4674,6 +4774,7 @@ descriptorTest("Anonymous PGC local verifier rejects tampered dev fixtures", () 
     { envelope: rebuildEnvelope({ proofBytes: tamperedProof }), payload: fixtureInput.payload },
     { envelope: fixture.envelope, payload: Buffer.from("substituted-payload") },
     { envelope: fixture.envelope, receiverSet: buildAnonymousPgcReceiverSet({ threshold: 1, receivers: [receiverB, receiverA] }) },
+    { envelope: fixture.envelope, paymentBindingHash: Buffer.alloc(32, 0x63) },
     { envelope: fixture.envelope, chainId: "wrong-chain" },
     { envelope: rebuildEnvelope({ backend: "groth16" }), payload: fixtureInput.payload },
     { envelope: rebuildEnvelope({ publicInputsBytes: nonCanonicalPublicInputs }), payload: fixtureInput.payload },
@@ -5346,6 +5447,7 @@ descriptorTest("privacy dev proof fixture builders reject production readiness c
         balanceCommitments: [Buffer.alloc(32, 0x51), Buffer.alloc(32, 0x52)],
         linkTag: Buffer.alloc(32, 0x61),
         rangeCommitments: [Buffer.alloc(32, 0x71)],
+        paymentBindingHash: Buffer.alloc(32, 0x62),
         chainId: "boi-localnet",
         domainSeparator: "boi:anonymous-pgc:v1",
         vkHash: Buffer.alloc(32, 0x55),

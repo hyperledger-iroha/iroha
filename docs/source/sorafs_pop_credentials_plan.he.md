@@ -4,10 +4,10 @@ direction: rtl
 source: docs/source/sorafs_pop_credentials_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3eb77b0182688b04843693ea978a27b67df61f56ec471375f6f48068de91be8f
-source_last_modified: "2026-07-04T23:07:05.429426+00:00"
+source_hash: d4b7d5f39feb31a2dcac42b7c03a122e6f3817ec604030fb97516a0fab5c2630
+source_last_modified: "2026-07-06T20:49:23.174615+00:00"
 translation_last_reviewed: 2026-07-05
-source_mtime: "2026-07-04T23:07:05.429426+00:00"
+source_mtime: "2026-07-06T20:49:23.174615+00:00"
 ---
 
 # Proof-of-Personhood Credential Pipeline
@@ -55,6 +55,9 @@ fingerprints. The aggregate production-readiness gate also rechecks the
 juror-client sync tuple before final promotion: synced roots in
 `valid_juror_sync_bindings` must appear in `valid_root_digests`, and synced
 revocation lists must appear in `valid_revocation_list_digests`.
+PoP rollout summaries must expose exactly one active root digest, revocation-list
+digest, verifier policy digest, and moderation PoP snapshot digest; mixed valid
+anchors fail closed before downstream evidence can satisfy the rollout gate.
 Aggregate promotion also rechecks the lane-proven PoP digest relationships:
 root-bound artifact fingerprints must match `valid_root_digests`,
 revocation-bound artifact fingerprints must match

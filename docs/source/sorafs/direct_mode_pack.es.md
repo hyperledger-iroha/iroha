@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs/direct_mode_pack.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 25b819d27b4456839f8c142f7676d0d37b962695eea2d2482fd9dcbd75e31805
+source_hash: 3580fb0f6641f59899b748acb1b7e892999ff7c414d1a92439c3658289227873
 source_last_modified: "2025-11-22T08:38:05.762995+00:00"
 translation_last_reviewed: "2026-01-30"
 ---

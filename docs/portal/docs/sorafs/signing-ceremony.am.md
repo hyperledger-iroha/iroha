@@ -74,8 +74,9 @@ cargo xtask sorafs-fetch-fixture \
   --out fixtures/sorafs_chunker
 ```
 
-አንጸባራቂው በተለያየ ዩአርኤል ላይ የሚኖር ከሆነ `--manifest` ይለፉ። ያልተፈረሙ ፖስታዎች
-`--allow-unsigned` ለአካባቢው ጭስ ሩጫ ካልተዋቀረ በስተቀር ውድቅ ተደርገዋል።
+Pass `--manifest` if the manifest lives at a different URL or path. The
+command refuses unsigned envelopes; use the Parliament-published envelope or a
+locally generated council-signed envelope for smoke runs.
 
 - በማስተናገጃ መግቢያ በር በኩል አንጸባራቂን በሚያረጋግጡበት ጊዜ ኢ18NT00000007X ሳይሆን ኢላማ ያድርጉ።
   የሀገር ውስጥ ሸክሞች፡-

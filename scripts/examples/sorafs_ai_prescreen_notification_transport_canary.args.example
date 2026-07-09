@@ -8,6 +8,8 @@ ai-prescreen-prod-20260701
 production
 --generated-at-unix
 1800400000
+--now-unix
+1800400000
 --body-digest-hex
 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 --workflow-digest-hex

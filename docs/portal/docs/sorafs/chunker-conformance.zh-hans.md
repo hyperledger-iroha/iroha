@@ -53,10 +53,10 @@ translator: machine-google-reviewed
 
 ### 签名政策
 
-灯具再生**必须**包含有效的理事会签名。发电机
-拒绝无符号输出，除非显式传递 `--allow-unsigned`（预期
-仅用于本地实验）。签名信封仅供附加，
-对每个签名者进行重复数据删除。
+Fixture regeneration **must** include a valid council signature. The generator
+rejects unsigned output in every mode; use `--signing-key` to create or append a
+council signature, or keep the existing verified `manifest_signatures.json`
+unchanged. Signature envelopes are append-only and deduplicated per signer.
 
 添加理事会签名：
 

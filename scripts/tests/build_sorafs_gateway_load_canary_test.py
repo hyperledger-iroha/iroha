@@ -219,6 +219,22 @@ def test_response_file_can_build_staging_canary_with_spaced_version(
     assert errors == []
 
 
+def test_http3_committed_flag_fails_closed_until_endpoint_exists(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("transport_scope", tmp_path)
+    args.append("--http3-endpoint-committed")
+
+    assert_rejected_without_artifact(
+        args,
+        kind="transport_scope",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error=MODULE.HTTP3_ENDPOINT_COMMITTED_UNSUPPORTED_ERROR,
+    )
+
+
 def test_success_rate_bps_rejects_out_of_range_before_write(
     tmp_path: Path,
     capsys,

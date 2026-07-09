@@ -4,10 +4,10 @@ direction: rtl
 source: docs/source/sorafs_orderbook_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 09c1cd160b9bcb3237efc34fc4fc4064b805d44e9cee4dc2d0d7c692be38f444
-source_last_modified: "2026-07-05T00:18:07.185755+00:00"
-translation_last_reviewed: 2026-07-05
-source_mtime: 2026-07-05T00:18:07.185755+00:00
+source_hash: 714458281e4d5779f6a14263401a71ccf8ac28a077ac4a6baec4d41c3f57b191
+source_last_modified: "2026-07-06T19:01:01.680637+00:00"
+translation_last_reviewed: 2026-07-06
+source_mtime: 2026-07-06T19:01:01.680637+00:00
 ---
 
 # SoraFS XOR Orderbook & Streaming Settlement
@@ -115,7 +115,10 @@ recorded on the offending artifact in the JSON summary before required-kind
 validity is reported. Contract-surface evidence must also carry
 `policy_digest_hex`, the checker publishes valid contract-surface policies as
 `valid_policy_digests`, and governance approval `policy_digest_hex` must match
-one of those valid contract-surface policy digests.
+one of those valid contract-surface policy digests. Promotion summaries must
+expose exactly one active contract digest and exactly one active policy digest;
+mixed valid contract or policy anchors fail closed before binding checks can
+satisfy final promotion.
 
 Other foundations that this work can build on include generic settlement and
 deal payloads, SoraFS pricing/reserve helpers, repair/PoR governance evidence,

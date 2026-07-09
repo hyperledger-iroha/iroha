@@ -348,6 +348,57 @@ def test_all_release_key_bound_artifacts_reject_signed_manifest_key_mismatch(
         ) in artifact["errors"]
 
 
+def test_multiple_valid_release_manifest_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = signed_manifest()
+    payload["manifest_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "signed-manifest-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_release_manifest_digests"] == []
+    assert (
+        "valid_release_manifest_digests must contain exactly one active digest"
+        in result["errors"]
+    )
+
+
+def test_multiple_valid_policy_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = signed_manifest()
+    payload["policy_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "signed-manifest-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_policy_digests"] == []
+    assert (
+        "valid_policy_digests must contain exactly one active digest"
+        in result["errors"]
+    )
+
+
+def test_multiple_valid_release_key_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = signed_manifest()
+    payload["public_key_fingerprint_hex"] = DIGEST_2
+    write_json(tmp_path / "signed-manifest-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_release_key_fingerprints"] == []
+    assert (
+        "valid_release_key_fingerprints must contain exactly one active digest"
+        in result["errors"]
+    )
+
+
 def test_response_file_arguments_pass(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     args = tmp_path / "reference-sdk.args"

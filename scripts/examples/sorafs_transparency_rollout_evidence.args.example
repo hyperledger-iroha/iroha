@@ -8,3 +8,7 @@ artifacts/sorafs/transparency/staged
 artifacts/sorafs/transparency/staged/rollout-summary.json
 --require-kind
 source_entry,publication,privacy_aggregate,proof_token_issuance,explorer
+--now-unix
+1800400000
+--max-evidence-age-secs
+604800

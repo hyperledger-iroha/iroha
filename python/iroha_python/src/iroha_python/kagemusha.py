@@ -100,9 +100,6 @@ KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND = "halo2/ipa"
 KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 = (
     "kagemusha-recursive-aggregation-v1"
 )
-KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 = (
-    "kagemusha-recursive-spend-lineage-v1"
-)
 KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1 = (
     "kagemusha-recursive-spend-lineage-onehop-v1"
 )
@@ -116,7 +113,7 @@ KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = True
 KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1 = 1
 KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES = 8 * 1024 * 1024
 KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES = 128
-KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024
+KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 256 * 1024 * 1024
 KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN = (
     "iroha:kagemusha:v1:recursive-spend-accumulator"
 )
@@ -203,7 +200,6 @@ __all__ = [
     "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT",
     "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND",
     "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1",
-    "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1",
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1",
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1",
     "KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS",
@@ -1076,10 +1072,6 @@ def can_redeem_kagemusha_recursive_spend_witnessless(
     return (
         KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1
         and hop_count_supported
-        and proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
-    ) or (
-        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1
-        and hop_count_supported
         and proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
     ) or (
         KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1
@@ -1094,7 +1086,6 @@ def is_kagemusha_recursive_spend_lineage_proof_circuit_id(
     """Return whether a circuit id is any Reserved-lineage spend profile."""
 
     return proof_circuit_id in (
-        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
         KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
         KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
     )
@@ -1262,7 +1253,7 @@ def _lineage_key_artifact_bytes(value: object, name: str) -> bytes:
 def requires_kagemusha_recursive_spend_lineage_key_artifacts_for_init() -> bool:
     """Return whether init proof builders need packaged Reserved-lineage keys."""
 
-    return True
+    return False
 
 
 def requires_kagemusha_recursive_spend_lineage_witness_for_redeem(
@@ -1930,6 +1921,11 @@ def encode_kagemusha_recursive_spend_init_request(
 ) -> bytes:
     if not isinstance(request, KagemushaRecursiveSpendInitRequest):
         raise ValueError("request")
+    lineage_verifier_key_payload = (
+        None
+        if request.lineage_verifier_key is None
+        else _kagemusha_verifying_key_box_payload(request.lineage_verifier_key)
+    )
     payload = b"".join(
         (
             _kagemusha_raw_field(
@@ -1941,11 +1937,7 @@ def encode_kagemusha_recursive_spend_init_request(
             ),
             _kagemusha_field(_kagemusha_bytes_vec(request.pallas_open_envelopes)),
             _kagemusha_field(_kagemusha_spendable_note_payload(request.current_note)),
-            _kagemusha_field(
-                _kagemusha_option_raw(
-                    _kagemusha_verifying_key_box_payload(request.lineage_verifier_key)
-                )
-            ),
+            _kagemusha_field(_kagemusha_option_raw(lineage_verifier_key_payload)),
             _kagemusha_field(
                 _kagemusha_option_bytes_vec(request.lineage_proving_key_archive)
             ),
@@ -2172,7 +2164,21 @@ def _kagemusha_lineage_key_artifacts_for_init_request(
     lineage_key_artifacts: KagemushaRecursiveSpendLineageKeyArtifacts | None,
     lineage_verifier_key: bytes | None,
     lineage_proving_key_archive: bytes | None,
-) -> tuple[bytes, bytes]:
+) -> tuple[bytes | None, bytes | None]:
+    if (
+        lineage_key_artifacts is None
+        and lineage_verifier_key is None
+        and lineage_proving_key_archive is None
+    ):
+        return None, None
+    if lineage_key_artifacts is None and lineage_verifier_key is None:
+        raise ValueError(
+            "lineage_verifier_key is required when lineage_proving_key_archive is present"
+        )
+    if lineage_key_artifacts is None and lineage_proving_key_archive is None:
+        raise ValueError(
+            "lineage_proving_key_archive is required when lineage_verifier_key is present"
+        )
     artifacts = _kagemusha_lineage_key_artifacts_for_request(
         lineage_key_artifacts,
         lineage_verifier_key,

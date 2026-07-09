@@ -941,16 +941,40 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         _ = try Self.optionSomePayload(initWithoutBlockHeightFields[4])
         try Self.assertOptionNone(initWithoutBlockHeightFields[5])
 
-        var assetBytes = Data(repeating: 0x21, count: 16)
-        assetBytes[6] = 0x42
-        assetBytes[8] = 0x82
+        let topUpInitArchive = try KagemushaRecursiveSpendRequestCodecs.encodeTopUpInitRequest(
+            KagemushaRecursiveSpendTopUpInitRequest(
+                recordBundle: recordBundle,
+                pallasOpenEnvelopes: pallasOpenEnvelopes,
+                currentNote: note,
+                blockHeight: 11
+            )
+        )
+        try Self.assertArchiveSchema(
+            topUpInitArchive,
+            KagemushaRecursiveSpendRequestCodecs.initRequestWireName
+        )
+        let topUpInitFields = try Self.requestFields(
+            topUpInitArchive,
+            schema: KagemushaRecursiveSpendRequestCodecs.initRequestWireName
+        )
+        XCTAssertEqual(topUpInitFields.count, 6)
+        try Self.assertOptionNone(topUpInitFields[3])
+        try Self.assertOptionNone(topUpInitFields[4])
+        XCTAssertEqual(UInt64(11), try Self.readUInt64Payload(Self.optionSomePayload(topUpInitFields[5])))
+
+        let topUpInitSummary = try KagemushaRecursiveSpendRequestCodecs.topUpInitRequestSummary(
+            topUpInitArchive
+        )
+        let assetBytes = Self.syntheticRecordBundleAssetBytes()
         let assetDefinitionId = try XCTUnwrap(AssetDefinitionAddress.encode(uuidBytes: assetBytes))
+        XCTAssertEqual(topUpInitSummary.assetDefinitionId, assetDefinitionId)
+        XCTAssertEqual(topUpInitSummary.amount, note.amount)
         let topUpArchive = try KagemushaRecursiveSpendRequestCodecs.encodeTopUpRequest(
             KagemushaRecursiveSpendTopUpRequest(
                 accountId: try Self.sampleRecipient(),
                 assetDefinitionId: assetDefinitionId,
-                amount: "13",
-                initRequestArchive: initArchive
+                amount: note.amount,
+                initRequestArchive: topUpInitArchive
             )
         )
         try Self.assertArchiveSchema(
@@ -972,11 +996,17 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         XCTAssertEqual(UInt32(0), try Self.readUInt32Payload(numericFields[1]))
         XCTAssertEqual(
             try Self.compactPayload(
-                initArchive,
+                topUpInitArchive,
                 schema: KagemushaRecursiveSpendRequestCodecs.initRequestWireName
             ),
             topUpFields[2]
         )
+
+        let derivedTopUpArchive = try KagemushaRecursiveSpendRequestCodecs.encodeTopUpRequestFromInitRequest(
+            accountId: try Self.sampleRecipient(),
+            initRequestArchive: topUpInitArchive
+        )
+        XCTAssertEqual(derivedTopUpArchive, topUpArchive)
 
         try Self.assertArchiveSchema(
             KagemushaRecursiveSpendRequestCodecs.encodeAppendRequest(
@@ -1496,6 +1526,79 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             )
         ) { error in
             XCTAssertEqual(error as? KagemushaRecursiveSpendRequestCodecError, .invalidArchive("recordBundle.steps"))
+        }
+
+        let topUpInitArchive = try KagemushaRecursiveSpendRequestCodecs.encodeTopUpInitRequest(
+            KagemushaRecursiveSpendTopUpInitRequest(
+                recordBundle: recordBundle,
+                pallasOpenEnvelopes: pallasOpenEnvelopes,
+                currentNote: Self.sampleNote()
+            )
+        )
+        let assetDefinitionId = try XCTUnwrap(
+            AssetDefinitionAddress.encode(uuidBytes: Self.syntheticRecordBundleAssetBytes())
+        )
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendTopUpInitRequest(
+                recordBundle: Self.syntheticRecordBundleArchive(hopCount: 2),
+                pallasOpenEnvelopes: Self.syntheticPallasOpenEnvelopesArchive(count: 2),
+                currentNote: Self.sampleNote()
+            )
+        ) { error in
+            XCTAssertEqual(error as? KagemushaRecursiveSpendRequestCodecError, .invalidArchive("recordBundle"))
+        }
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendTopUpInitRequest(
+                recordBundle: recordBundle,
+                pallasOpenEnvelopes: Self.syntheticPallasOpenEnvelopesArchive(count: 2),
+                currentNote: Self.sampleNote()
+            )
+        ) { error in
+            XCTAssertEqual(error as? KagemushaRecursiveSpendRequestCodecError, .invalidArchive("pallasOpenEnvelopes"))
+        }
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendTopUpRequest(
+                accountId: try Self.sampleRecipient(),
+                assetDefinitionId: assetDefinitionId,
+                amount: "18",
+                initRequestArchive: topUpInitArchive
+            )
+        ) { error in
+            XCTAssertEqual(error as? KagemushaRecursiveSpendRequestCodecError, .invalidField("amount"))
+        }
+        var mismatchedAssetBytes = Self.syntheticRecordBundleAssetBytes()
+        mismatchedAssetBytes[15] ^= 0x7f
+        let mismatchedAssetDefinitionId = try XCTUnwrap(
+            AssetDefinitionAddress.encode(uuidBytes: mismatchedAssetBytes)
+        )
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendTopUpRequest(
+                accountId: try Self.sampleRecipient(),
+                assetDefinitionId: mismatchedAssetDefinitionId,
+                amount: "17",
+                initRequestArchive: topUpInitArchive
+            )
+        ) { error in
+            XCTAssertEqual(error as? KagemushaRecursiveSpendRequestCodecError, .invalidField("assetId"))
+        }
+        let lineageInitArchive = try KagemushaRecursiveSpendRequestCodecs.encodeInitRequest(
+            KagemushaRecursiveSpendInitRequest(
+                recordBundle: recordBundle,
+                pallasOpenEnvelopes: pallasOpenEnvelopes,
+                currentNote: Self.sampleNote(),
+                lineageVerifierKey: lineageVerifierKey,
+                lineageProvingKeyArchive: lineageProvingKeyArchive
+            )
+        )
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendTopUpRequest(
+                accountId: try Self.sampleRecipient(),
+                assetDefinitionId: assetDefinitionId,
+                amount: "17",
+                initRequestArchive: lineageInitArchive
+            )
+        ) { error in
+            XCTAssertEqual(error as? KagemushaRecursiveSpendRequestCodecError, .invalidField("lineageVerifierKey"))
         }
 
         XCTAssertThrowsError(
@@ -2867,8 +2970,11 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         }
         let bundlePayload = encodeFields(
             [
-                Data([0x41]),
-                Data([0x42]),
+                encodeFields(
+                    [noritoString("synthetic-kagemusha-test-chain", flags: NoritoHeader.compactLen)],
+                    flags: NoritoHeader.compactLen
+                ),
+                syntheticRecordBundleAssetBytes(),
                 resolvedStepsPayload
             ],
             flags: NoritoHeader.compactLen
@@ -2884,6 +2990,13 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             ),
             flags: NoritoHeader.compactLen
         )
+    }
+
+    private static func syntheticRecordBundleAssetBytes() -> Data {
+        var assetBytes = Data(repeating: 0x21, count: 16)
+        assetBytes[6] = 0x42
+        assetBytes[8] = 0x82
+        return assetBytes
     }
 
     private static func syntheticPallasOpenEnvelopesArchive(

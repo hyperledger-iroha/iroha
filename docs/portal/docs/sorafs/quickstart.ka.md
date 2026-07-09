@@ -28,12 +28,12 @@ translator: machine-google-reviewed
 
 ## 1. განაახლეთ დეტერმინისტული მოწყობილობები
 
-აღადგინეთ კანონიკური SF-1 დაქუცმაცებული ვექტორები. ბრძანება ასევე გამოსცემს ხელმოწერილს
-მანიფესტის კონვერტები `--signing-key`-ის მიწოდებისას; გამოიყენეთ `--allow-unsigned`
-მხოლოდ ადგილობრივი განვითარების დროს.
+Regenerate the canonical SF-1 chunking vectors. The command verifies the
+existing council signature file, or appends a signature when `--signing-key` is
+supplied.
 
 ```bash
-cargo run -p sorafs_chunker --bin export_vectors -- --allow-unsigned
+cargo run -p sorafs_chunker --bin export_vectors -- --signing-key=<ed25519-private-key-hex>
 ```
 
 შედეგები:
@@ -78,7 +78,7 @@ cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   --manifest-out=/tmp/docs.manifest \
   --manifest-signatures-out=/tmp/docs.manifest_signatures.json \
   --json-out=/tmp/docs.report.json \
-  --allow-unsigned
+  --council-signature=<signerhex>:<signaturehex>
 ```
 
 გადახედეთ `/tmp/docs.report.json`:
@@ -88,9 +88,9 @@ cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
 - `manifest.manifest_blake3` – BLAKE3 დაიჯესტი ხელმოწერილია მანიფესტის კონვერტში.
 - `chunk_fetch_specs[]` – შეუკვეთა მოტანის ინსტრუქციები ორკესტრებისთვის.
 
-როდესაც მზად ხართ რეალური ხელმოწერების მიწოდებისთვის, დაამატეთ `--signing-key` და `--signer`
-არგუმენტები. ბრძანება ამოწმებს ყველა Ed25519 ხელმოწერას დაწერამდე
-კონვერტი.
+The `--council-signature` value must be a reviewed council signer public key and
+Ed25519 signature pair. The command verifies every Ed25519 signature before
+writing the envelope.
 
 ## 4. მრავალპროვაიდერის მოძიების სიმულაცია
 

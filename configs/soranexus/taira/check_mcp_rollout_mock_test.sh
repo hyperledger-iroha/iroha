@@ -70,6 +70,8 @@ output_file=""
 header_file=""
 payload=""
 url=""
+connect_timeout=""
+max_time=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -82,6 +84,14 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --resolve)
+      shift 2
+      ;;
+    --connect-timeout)
+      connect_timeout="$2"
+      shift 2
+      ;;
+    --max-time)
+      max_time="$2"
       shift 2
       ;;
     --write-out)
@@ -108,6 +118,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ -n "${MOCK_STATE_DIR:-}" ]]; then
+  printf '%s %s\n' "$connect_timeout" "$max_time" >> "${MOCK_STATE_DIR}/curl_timeouts"
+fi
+if [[ -z "$connect_timeout" || -z "$max_time" ]]; then
+  echo "curl timeout flags were not provided" >&2
+  exit 91
+fi
+
 scenario="${MOCK_SCENARIO:-}"
 after_ping=0
 if [[ -n "${MOCK_STATE_DIR:-}" && -f "${MOCK_STATE_DIR}/ping_seen" ]]; then
@@ -129,6 +147,10 @@ if [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/mcp" ]]; then
 elif [[ "$method" == "POST" && "$url" == "https://taira.sora.org/v1/mcp" && "$payload" == *'"method":"initialize"'* ]]; then
   body='{"result":{"protocolVersion":"2025-06-18"}}'
 elif [[ "$method" == "POST" && "$url" == "https://taira.sora.org/v1/mcp" && "$payload" == *'"method":"notifications/initialized"'* ]]; then
+  if [[ "$scenario" == "initialized_timeout" ]]; then
+    echo "curl: (28) Operation timed out after mock timeout" >&2
+    exit 28
+  fi
   status="202"
   body=''
 elif [[ "$method" == "POST" && "$url" == "https://taira.sora.org/v1/mcp" && "$payload" == *'"method":"tools/list"'* ]]; then
@@ -310,6 +332,7 @@ run_case permission_403 'write canary failed: signer or permission check returne
 run_case public_502 'public Torii ingress looks degraded' 'HTTP 502'
 run_case public_503 'public Torii ingress looks degraded' 'HTTP 503'
 run_case public_503_mcp 'public MCP ingress looks degraded' 'HTTP 503'
+run_case initialized_timeout 'initialized notification failed with HTTP curl_error_28' 'Operation timed out'
 run_case status_build_sha_missing '/status did not publish build.git_commit_sha' '' '490dacc'
 run_case status_build_sha_too_short '/status build git SHA 490dac is not a 7 to 40 character hexadecimal SHA prefix' '' '490dacc'
 run_case status_build_sha_mismatch '/status build git SHA 94dcbf7c28 does not match expected 490dacc' '' '490dacc'
@@ -341,6 +364,82 @@ root="$(mktemp -d)"
 cleanup_paths+=("$root")
 make_fake_repo "$root"
 if PATH="${root}/mockbin:${PATH}" \
+    MOCK_SCENARIO="cargo_success" \
+    MOCK_STATE_DIR="${root}/state" \
+    "${root}/configs/soranexus/taira/check_mcp_rollout.sh" \
+      --skip-local \
+      --public-root https://taira.sora.org \
+      --curl-connect-timeout-seconds 0 \
+      --skip-write-canary \
+      >"${root}/invalid-connect-timeout-output.log" 2>&1; then
+  echo "invalid connect timeout case unexpectedly succeeded" >&2
+  sed -n '1,200p' "${root}/invalid-connect-timeout-output.log" >&2 || true
+  exit 1
+fi
+grep -q 'MCP_ROLLOUT_CURL_CONNECT_TIMEOUT_SECONDS must be a positive integer' \
+  "${root}/invalid-connect-timeout-output.log"
+
+root="$(mktemp -d)"
+cleanup_paths+=("$root")
+make_fake_repo "$root"
+if PATH="${root}/mockbin:${PATH}" \
+    MOCK_SCENARIO="cargo_success" \
+    MOCK_STATE_DIR="${root}/state" \
+    "${root}/configs/soranexus/taira/check_mcp_rollout.sh" \
+      --skip-local \
+      --public-root https://taira.sora.org \
+      --curl-max-time-seconds abc \
+      --skip-write-canary \
+      >"${root}/invalid-max-time-output.log" 2>&1; then
+  echo "invalid max-time case unexpectedly succeeded" >&2
+  sed -n '1,200p' "${root}/invalid-max-time-output.log" >&2 || true
+  exit 1
+fi
+grep -q 'MCP_ROLLOUT_CURL_MAX_TIME_SECONDS must be a positive integer' \
+  "${root}/invalid-max-time-output.log"
+
+root="$(mktemp -d)"
+cleanup_paths+=("$root")
+make_fake_repo "$root"
+if PATH="${root}/mockbin:${PATH}" \
+    MOCK_SCENARIO="cargo_success" \
+    MOCK_STATE_DIR="${root}/state" \
+    POST_CANARY_STATUS_RECHECK_DELAY_SECONDS=abc \
+    "${root}/configs/soranexus/taira/check_mcp_rollout.sh" \
+      --skip-local \
+      --public-root https://taira.sora.org \
+      --skip-write-canary \
+      >"${root}/invalid-recheck-delay-output.log" 2>&1; then
+  echo "invalid recheck delay case unexpectedly succeeded" >&2
+  sed -n '1,200p' "${root}/invalid-recheck-delay-output.log" >&2 || true
+  exit 1
+fi
+grep -q 'POST_CANARY_STATUS_RECHECK_DELAY_SECONDS must be a non-negative integer' \
+  "${root}/invalid-recheck-delay-output.log"
+
+root="$(mktemp -d)"
+cleanup_paths+=("$root")
+make_fake_repo "$root"
+if PATH="${root}/mockbin:${PATH}" \
+    MOCK_SCENARIO="cargo_success" \
+    MOCK_STATE_DIR="${root}/state" \
+    PUBLIC_LANE_ID='0/../../status' \
+    "${root}/configs/soranexus/taira/check_mcp_rollout.sh" \
+      --skip-local \
+      --public-root https://taira.sora.org \
+      --skip-write-canary \
+      >"${root}/invalid-public-lane-output.log" 2>&1; then
+  echo "invalid public lane case unexpectedly succeeded" >&2
+  sed -n '1,200p' "${root}/invalid-public-lane-output.log" >&2 || true
+  exit 1
+fi
+grep -q 'PUBLIC_LANE_ID must be a non-negative integer' \
+  "${root}/invalid-public-lane-output.log"
+
+root="$(mktemp -d)"
+cleanup_paths+=("$root")
+make_fake_repo "$root"
+if PATH="${root}/mockbin:${PATH}" \
     MOCK_SCENARIO="txn_expired" \
     MOCK_STATE_DIR="${root}/state" \
     "${root}/configs/soranexus/taira/check_mcp_rollout.sh" \
@@ -355,6 +454,30 @@ if PATH="${root}/mockbin:${PATH}" \
   exit 1
 fi
 grep -q 'write canary failed: transaction expired' "${root}/resolve-output.log"
+
+root="$(mktemp -d)"
+cleanup_paths+=("$root")
+make_fake_repo "$root"
+if ! PATH="${root}/mockbin:${PATH}" \
+    MOCK_SCENARIO="cargo_success" \
+    MOCK_STATE_DIR="${root}/state" \
+    "${root}/configs/soranexus/taira/check_mcp_rollout.sh" \
+      --skip-local \
+      --public-root https://taira.sora.org \
+      --curl-connect-timeout-seconds 7 \
+      --curl-max-time-seconds 33 \
+      --skip-write-canary \
+      >"${root}/curl-timeout-output.log" 2>&1; then
+  echo "custom curl timeout case unexpectedly failed" >&2
+  sed -n '1,200p' "${root}/curl-timeout-output.log" >&2 || true
+  exit 1
+fi
+grep -q 'Taira MCP rollout checks passed.' "${root}/curl-timeout-output.log"
+if grep -vq '^7 33$' "${root}/state/curl_timeouts"; then
+  echo "custom curl timeout case did not pass custom timeout flags to every curl call" >&2
+  cat "${root}/state/curl_timeouts" >&2
+  exit 1
+fi
 
 root="$(mktemp -d)"
 cleanup_paths+=("$root")

@@ -701,12 +701,19 @@ bash configs/soranexus/taira/clear_volatile_consensus_state.sh \
   --dist /Users/administrator/dev/iroha/dist/taira-localnet \
   --runtime-bin /Users/administrator/dev/iroha-build-taira-latest/target/release/irohad \
   --expected-runtime-sha <64-hex-sha256> \
+  --torii-ports 29080,29081,29082,29083 \
   --start \
   --apply
 ```
 
 Run it without `--apply` first to inspect the planned stop/quarantine/archive
-operations. The script intentionally leaves durable ledger storage in place.
+operations. If the dry run warns that matched peer processes cannot be
+signalled, rerun it as the peer process owner or with sudo before applying; the
+apply path refuses to touch pidfiles or storage in that state. The script
+normalizes `--torii-ports` to a unique numeric comma-separated list before any
+mutation and accepts `--torii-ports ""` only as an explicit request to skip the
+post-start local Torii wait. It intentionally leaves durable ledger storage in
+place.
 
 ## Governance mode
 

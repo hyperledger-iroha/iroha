@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/crypto/sm_program.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 08e2e1e4a54390d9142d6788aad2385e93282a33423b9fc7f3418e3633f3f86a
+source_hash: 2d65304e93effdc04fc35690fe3d4fb1c11ed5fd5963cdda9d84f617891b8ca5
 source_last_modified: "2026-01-23T23:46:10.134857+00:00"
 translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
@@ -80,7 +80,7 @@ Ed25519 သီးသန့်လေ့လာသူများ SM-enabled valida
 `WARN` တွင် အကောင့်ဝင်ထားသော်လည်း မတော်တဆမှုမှ ကာကွယ်ရန် သဘောတူညီမှု ဆုံမှတ်များသည် ပုံသေများကို ဖွင့်ထားသင့်သည်။
 SM-aware နှင့် SM-disabled လုပ်ဖော်ကိုင်ဖက်များအကြား ကွဲပြားမှု။
 CLI သည် ဤခလုတ်များကို `iroha_cli အက်ပ် sorafs လက်ဆွဲခြင်းအပ်ဒိတ်မှတဆင့် မျက်နှာပြင်ပြသည်။
---allow-sm-handshake-mismatch` and `--allow-sm-openssl-preview-mismatch`, or the matching `--require-*`
+--require-sm-handshake-match` and `--require-sm-openssl-preview-match`, or the matching `--require-*`
 တင်းကျပ်သော ပြဋ္ဌာန်းချက်ကို ပြန်လည်ရယူရန် အလံများ။#### OpenSSL/Tongsuo အစမ်းကြည့်ရှုခြင်း (`sm-ffi-openssl`)
 - **Scope.** သည် အကြိုကြည့်ရှုခြင်းအတွက်သာ ပံ့ပိုးပေးသူ shim (`OpenSslProvider`) ကို တည်ဆောက်ပြီး OpenSSL လုပ်ဆောင်ချိန်ရရှိနိုင်မှုကို အတည်ပြုပေးပြီး OpenSSL ကျောထောက်နောက်ခံပြု SM3 hashing၊ SM2 အတည်ပြုခြင်းနှင့် SM4-GCM ကုဒ်ဝှက်ခြင်း/စာဝှက်ခြင်းတို့ကို ဖော်ထုတ်ပြသပေးပါသည်။ Consensus binaries များသည် RustCrypto လမ်းကြောင်းကို ဆက်လက်အသုံးပြုရပါမည်။ FFI backend သည် edge verification/ signing pilots များအတွက် တင်းကြပ်စွာ ရွေးချယ်ထားသည်။
 - **ကြိုတင်လိုအပ်ချက်များကို တည်ဆောက်ပါ။** `cargo build -p iroha_crypto --features "sm sm-ffi-openssl"` ဖြင့် စုစည်းပြီး OpenSSL/Tongsuo 3.0+ (SM2/SM3/SM4 ပံ့ပိုးမှုဖြင့် `libcrypto`) နှင့် ဆက်စပ်သော toolchain လင့်ခ်များကို သေချာပါစေ။ Static linking သည် စိတ်ပျက်အားလျော့နေပါသည်။ အော်ပရေတာမှ စီမံခန့်ခွဲသော ဒိုင်းနမစ်စာကြည့်တိုက်များကို ပိုနှစ်သက်သည်။
