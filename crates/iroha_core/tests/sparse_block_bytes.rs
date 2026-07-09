@@ -5,6 +5,8 @@ use std::time::{Duration, Instant};
 
 use iroha_config::kura::FsyncMode;
 use iroha_core::kura::BlockStore;
+use iroha_crypto::{Hash, HashOf};
+use iroha_data_model::block::BlockHeader;
 use tempfile::tempdir;
 
 #[test]
@@ -31,6 +33,12 @@ fn block_bytes_sparse_file_reads_requested_slice() {
     store
         .write_block_index(0, offset, payload.len() as u64)
         .expect("write sparse index");
+    store
+        .write_block_hash(
+            0,
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x5A; Hash::LENGTH])),
+        )
+        .expect("write sparse hash");
 
     let start = Instant::now();
     let slice = store
