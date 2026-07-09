@@ -177,3 +177,32 @@ SCCP .NET BSC validator-set payload parity was completed and locally validated
 with a temporary .NET SDK on 2026-07-07.
 SCCP .NET BSC commit-seal signer/quorum parity was completed and locally
 validated with a temporary .NET SDK on 2026-07-07.
+SCCP .NET BSC commit-message helper parity was completed and locally validated
+with a temporary .NET SDK on 2026-07-07.
+SCCP ETH source-adapter coherent deployment replay coverage was completed on
+2026-07-07.
+SCCP Solana/TON local-admission replay coverage was completed on 2026-07-07.
+SCCP TRON local-admission replay coverage was completed on 2026-07-07.
+SCCP EVM local-admission recovery replay coverage was completed on 2026-07-07.
+SCCP source-proof recovery replay coverage was completed on 2026-07-07.
+SCCP spliced source-proof recovery replay coverage was completed on 2026-07-08.
+SCCP spliced source-proof bundle admission coverage was completed on 2026-07-08.
+SCCP spliced source-proof builder rejection coverage was completed on 2026-07-08.
+SCCP source-material extractor deployment-evidence hardening was completed on
+2026-07-08.
+SCCP deployment-only source-context rejection coverage was completed on
+2026-07-08.
+SCCP deployment-only packaging-context rejection coverage was completed on
+2026-07-08.
+SCCP foreign-target Groth16 source-context-free rejection coverage was completed
+on 2026-07-08.
+SCCP foreign-target TRON Groth16 source-context-free rejection coverage was
+completed on 2026-07-08.
+SCCP foreign-target Solana/TON native source-context-free rejection coverage was
+completed on 2026-07-08.
+SCCP source-aware foreign-target Solana/TON native packaging rejection coverage
+was completed on 2026-07-08.
+SCCP source-aware foreign-target EVM/TRON Groth16 packaging rejection coverage
+was completed on 2026-07-08.
+SCCP source-aware foreign-target EVM/TRON verification rejection coverage was
+completed on 2026-07-08.

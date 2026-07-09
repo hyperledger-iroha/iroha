@@ -4585,7 +4585,7 @@ pub struct SccpRouteManifest {
     #[config(default = "String::new()")]
     #[norito(default)]
     pub network: String,
-    /// Legacy TRON route network alias accepted when `network` is absent.
+    /// Retired TRON route network alias kept only for rejection.
     pub tron_network: Option<String>,
     /// Canonical counterparty chain key.
     pub chain: String,
@@ -4616,27 +4616,27 @@ pub struct SccpRouteManifest {
     pub taira_xor_bridge_address: String,
     /// Generic SCCP source bridge contract address.
     pub source_bridge_address: Option<String>,
-    /// Legacy BSC SCCP source bridge address alias accepted when the canonical field is absent.
+    /// Retired BSC SCCP source bridge address alias kept only for rejection.
     pub sccp_bsc_source_bridge_address: Option<String>,
-    /// Legacy BSC source bridge address alias accepted when the canonical field is absent.
+    /// Retired BSC source bridge address alias kept only for rejection.
     pub bsc_source_bridge_address: Option<String>,
-    /// Legacy TRON SCCP source bridge address alias accepted when the canonical field is absent.
+    /// Retired TRON SCCP source bridge address alias kept only for rejection.
     pub sccp_tron_source_bridge_address: Option<String>,
     /// Generic destination verifier contract address.
     pub destination_verifier_address: Option<String>,
     /// TON verifier internal message value in nanoTON.
     pub ton_finalize_message_value_nano: Option<String>,
-    /// Legacy generic verifier address alias accepted when the canonical field is absent.
+    /// Retired generic verifier address alias kept only for rejection.
     pub verifier_address: Option<String>,
-    /// Legacy BSC destination verifier address alias accepted when the canonical field is absent.
+    /// Retired BSC destination verifier address alias kept only for rejection.
     pub sccp_bsc_destination_verifier_address: Option<String>,
-    /// Legacy BSC verifier address alias accepted when the canonical field is absent.
+    /// Retired BSC verifier address alias kept only for rejection.
     pub bsc_verifier_address: Option<String>,
-    /// Legacy EVM verifier address alias accepted when the canonical field is absent.
+    /// Retired EVM verifier address alias kept only for rejection.
     pub evm_verifier_address: Option<String>,
-    /// Legacy TRON verifier address alias accepted when the canonical field is absent.
+    /// Retired TRON verifier address alias kept only for rejection.
     pub tron_verifier_address: Option<String>,
-    /// Legacy TRON SCCP destination verifier address alias accepted when the canonical field is absent.
+    /// Retired TRON SCCP destination verifier address alias kept only for rejection.
     pub sccp_tron_destination_verifier_address: Option<String>,
     /// Hex-encoded verifier code digest.
     pub verifier_code_hash: String,
@@ -5448,6 +5448,52 @@ impl SccpRouteManifest {
 
     fn reject_noncanonical_route_manifest_aliases(&self) {
         for (field, value, replacement) in [
+            ("tron_network", self.tron_network.as_deref(), "network"),
+            (
+                "sccp_bsc_source_bridge_address",
+                self.sccp_bsc_source_bridge_address.as_deref(),
+                "source_bridge_address",
+            ),
+            (
+                "bsc_source_bridge_address",
+                self.bsc_source_bridge_address.as_deref(),
+                "source_bridge_address",
+            ),
+            (
+                "sccp_tron_source_bridge_address",
+                self.sccp_tron_source_bridge_address.as_deref(),
+                "source_bridge_address",
+            ),
+            (
+                "verifier_address",
+                self.verifier_address.as_deref(),
+                "destination_verifier_address",
+            ),
+            (
+                "sccp_bsc_destination_verifier_address",
+                self.sccp_bsc_destination_verifier_address.as_deref(),
+                "destination_verifier_address",
+            ),
+            (
+                "bsc_verifier_address",
+                self.bsc_verifier_address.as_deref(),
+                "destination_verifier_address",
+            ),
+            (
+                "evm_verifier_address",
+                self.evm_verifier_address.as_deref(),
+                "destination_verifier_address",
+            ),
+            (
+                "tron_verifier_address",
+                self.tron_verifier_address.as_deref(),
+                "destination_verifier_address",
+            ),
+            (
+                "sccp_tron_destination_verifier_address",
+                self.sccp_tron_destination_verifier_address.as_deref(),
+                "destination_verifier_address",
+            ),
             (
                 "prover_artifact_hash",
                 self.prover_artifact_hash.as_deref(),
@@ -5470,13 +5516,10 @@ impl SccpRouteManifest {
         Self::resolve_required_alias(
             "network",
             false,
-            &[
-                (
-                    "network",
-                    (!self.network.trim().is_empty()).then_some(self.network.as_str()),
-                ),
-                ("tron_network", self.tron_network.as_deref()),
-            ],
+            &[(
+                "network",
+                (!self.network.trim().is_empty()).then_some(self.network.as_str()),
+            )],
         )
     }
 
@@ -5484,24 +5527,10 @@ impl SccpRouteManifest {
         Self::resolve_required_alias(
             "source bridge address",
             trim_aliases,
-            &[
-                (
-                    "source_bridge_address",
-                    self.source_bridge_address.as_deref(),
-                ),
-                (
-                    "sccp_bsc_source_bridge_address",
-                    self.sccp_bsc_source_bridge_address.as_deref(),
-                ),
-                (
-                    "bsc_source_bridge_address",
-                    self.bsc_source_bridge_address.as_deref(),
-                ),
-                (
-                    "sccp_tron_source_bridge_address",
-                    self.sccp_tron_source_bridge_address.as_deref(),
-                ),
-            ],
+            &[(
+                "source_bridge_address",
+                self.source_bridge_address.as_deref(),
+            )],
         )
     }
 
@@ -5509,27 +5538,10 @@ impl SccpRouteManifest {
         Self::resolve_required_alias(
             "destination verifier address",
             trim_aliases,
-            &[
-                (
-                    "destination_verifier_address",
-                    self.destination_verifier_address.as_deref(),
-                ),
-                ("verifier_address", self.verifier_address.as_deref()),
-                (
-                    "sccp_bsc_destination_verifier_address",
-                    self.sccp_bsc_destination_verifier_address.as_deref(),
-                ),
-                ("bsc_verifier_address", self.bsc_verifier_address.as_deref()),
-                ("evm_verifier_address", self.evm_verifier_address.as_deref()),
-                (
-                    "tron_verifier_address",
-                    self.tron_verifier_address.as_deref(),
-                ),
-                (
-                    "sccp_tron_destination_verifier_address",
-                    self.sccp_tron_destination_verifier_address.as_deref(),
-                ),
-            ],
+            &[(
+                "destination_verifier_address",
+                self.destination_verifier_address.as_deref(),
+            )],
         )
     }
 
@@ -6798,8 +6810,11 @@ mod sccp_route_manifest_user_config_tests {
     }
 
     #[test]
-    fn conflicting_route_address_aliases_are_rejected_without_echoing_values() {
-        let cases: [(&str, &str, fn(&mut SccpRouteManifest, String)); 6] = [
+    fn noncanonical_route_manifest_aliases_are_rejected_without_echoing_values() {
+        let cases: [(&str, &str, fn(&mut SccpRouteManifest, String)); 10] = [
+            ("tron_network", "network", |manifest, value| {
+                manifest.tron_network = Some(value);
+            }),
             (
                 "sccp_bsc_source_bridge_address",
                 "source_bridge_address",
@@ -6809,6 +6824,11 @@ mod sccp_route_manifest_user_config_tests {
                 "bsc_source_bridge_address",
                 "source_bridge_address",
                 |manifest, value| manifest.bsc_source_bridge_address = Some(value),
+            ),
+            (
+                "sccp_tron_source_bridge_address",
+                "source_bridge_address",
+                |manifest, value| manifest.sccp_tron_source_bridge_address = Some(value),
             ),
             (
                 "verifier_address",
@@ -6830,6 +6850,16 @@ mod sccp_route_manifest_user_config_tests {
                 "destination_verifier_address",
                 |manifest, value| manifest.evm_verifier_address = Some(value),
             ),
+            (
+                "tron_verifier_address",
+                "destination_verifier_address",
+                |manifest, value| manifest.tron_verifier_address = Some(value),
+            ),
+            (
+                "sccp_tron_destination_verifier_address",
+                "destination_verifier_address",
+                |manifest, value| manifest.sccp_tron_destination_verifier_address = Some(value),
+            ),
         ];
 
         for (field, replacement, mutate) in cases {
@@ -6840,46 +6870,61 @@ mod sccp_route_manifest_user_config_tests {
             let panic = std::panic::catch_unwind(|| {
                 let _ = manifest.parse();
             })
-            .expect_err("conflicting route alias was accepted");
+            .expect_err("noncanonical route alias was accepted");
             let message = panic_message(panic.as_ref());
             assert!(
-                message.contains("aliases disagree")
-                    && message.contains(field)
-                    && message.contains(replacement),
-                "unexpected alias conflict rejection for {field}: {message}"
+                message.contains(&format!(
+                    "must not use noncanonical {field}; use {replacement}"
+                )),
+                "unexpected noncanonical alias rejection for {field}: {message}"
             );
             assert!(
                 !message.contains(&secret_value),
-                "alias conflict rejection leaked supplied value for {field}: {message}"
+                "noncanonical alias rejection leaked supplied value for {field}: {message}"
             );
         }
     }
 
     #[test]
-    fn legacy_tron_route_aliases_parse_when_canonical_fields_are_absent() {
-        let mut manifest = production_ready_tron_route_manifest();
-        let network = manifest.network.clone();
-        let source_bridge_address = manifest
-            .source_bridge_address
-            .take()
-            .expect("fixture should have canonical source bridge address");
-        let destination_verifier_address = manifest
-            .destination_verifier_address
-            .take()
-            .expect("fixture should have canonical destination verifier address");
-        manifest.network.clear();
-        manifest.tron_network = Some(network.clone());
-        manifest.sccp_tron_source_bridge_address = Some(source_bridge_address.clone());
-        manifest.tron_verifier_address = Some(destination_verifier_address.clone());
+    fn noncanonical_tron_route_aliases_are_rejected_when_canonical_fields_are_absent() {
+        let cases: [(&str, &str, fn(&mut SccpRouteManifest)); 3] = [
+            ("tron_network", "network", |manifest| {
+                let network = std::mem::take(&mut manifest.network);
+                manifest.tron_network = Some(network);
+            }),
+            (
+                "sccp_tron_source_bridge_address",
+                "source_bridge_address",
+                |manifest| {
+                    manifest.sccp_tron_source_bridge_address =
+                        manifest.source_bridge_address.take();
+                },
+            ),
+            (
+                "tron_verifier_address",
+                "destination_verifier_address",
+                |manifest| {
+                    manifest.tron_verifier_address = manifest.destination_verifier_address.take();
+                },
+            ),
+        ];
 
-        let actual = manifest.parse();
+        for (field, replacement, mutate) in cases {
+            let mut manifest = production_ready_tron_route_manifest();
+            mutate(&mut manifest);
 
-        assert_eq!(actual.network, network);
-        assert_eq!(actual.source_bridge_address, source_bridge_address);
-        assert_eq!(
-            actual.destination_verifier_address,
-            destination_verifier_address
-        );
+            let panic = std::panic::catch_unwind(|| {
+                let _ = manifest.parse();
+            })
+            .expect_err("noncanonical TRON route alias was accepted");
+            let message = panic_message(panic.as_ref());
+            assert!(
+                message.contains(&format!(
+                    "must not use noncanonical {field}; use {replacement}"
+                )),
+                "unexpected noncanonical TRON alias rejection for {field}: {message}"
+            );
+        }
     }
 
     #[test]

@@ -11,7 +11,7 @@ final class ConnectEnvelopeCodecTests: XCTestCase {
     func testEncryptSignResultOkRoundTrip() throws {
         try requireConnectBridge()
 
-        let signature = Data((0..<64).map(UInt8.init))
+        let signature = try Self.validEd25519Signature(message: "connect envelope codec round trip")
         let key = Data(repeating: 0x4A, count: 32)
         let sessionID = Data(repeating: 0x5B, count: 32)
 
@@ -82,6 +82,16 @@ final class ConnectEnvelopeCodecTests: XCTestCase {
         }
     }
 
+    func testEncodeSignResultOkRejectsMalformedEd25519Signature() throws {
+        try requireConnectBridge()
+
+        XCTAssertThrowsError(try ConnectEnvelopeCodec.encodeSignResultOk(sequence: 7,
+                                                                         algorithm: "ed25519",
+                                                                         signature: Data(repeating: 0, count: 64))) { error in
+            XCTAssertEqual(error as? ConnectEnvelopeCodecError, .encodeFailed)
+        }
+    }
+
     func testEncryptEnvelopeValidatesLengths() {
         let envelope = Data([0x01, 0x02])
         XCTAssertThrowsError(try ConnectEnvelopeCodec.encryptEnvelope(envelope,
@@ -98,5 +108,10 @@ final class ConnectEnvelopeCodecTests: XCTestCase {
             XCTAssertEqual(error as? ConnectEnvelopeCodecError,
                            .invalidSessionIdentifierLength(expected: 32, actual: 0))
         }
+    }
+
+    private static func validEd25519Signature(message: String) throws -> Data {
+        let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 0x63, count: 32))
+        return try signingKey.sign(Data(message.utf8))
     }
 }

@@ -10,6 +10,7 @@ public enum ProofAttachmentError: Error, LocalizedError, Sendable {
     case verifyingKeyBackendMismatch(expected: String, actual: String)
     case invalidVerifyingKeyCommitmentLength(expected: Int, actual: Int)
     case invalidEnvelopeHashLength(expected: Int, actual: Int)
+    case envelopeHashMismatch
 
     public var errorDescription: String? {
         switch self {
@@ -31,6 +32,8 @@ public enum ProofAttachmentError: Error, LocalizedError, Sendable {
             return "Verifying key commitment must be \(expected) bytes (found \(actual))."
         case let .invalidEnvelopeHashLength(expected, actual):
             return "Envelope hash must be \(expected) bytes (found \(actual))."
+        case .envelopeHashMismatch:
+            return "Envelope hash must match the proof bytes."
         }
     }
 }
@@ -89,6 +92,9 @@ public struct ProofAttachment: Sendable, Equatable {
             try Self.ensureFixedLength(envelope,
                                        expectedLength: Self.hashLength,
                                        makeError: ProofAttachmentError.invalidEnvelopeHashLength)
+            guard envelope == Self.canonicalEnvelopeHash(for: proof) else {
+                throw ProofAttachmentError.envelopeHashMismatch
+            }
         }
         self.backend = normalizedBackend
         self.proof = proof
@@ -141,12 +147,11 @@ public struct ProofAttachment: Sendable, Equatable {
                                            makeError: ProofAttachmentError.invalidVerifyingKeyCommitmentLength)
             payload["vk_commitment_hex"] = commitment.hexEncodedString()
         }
-        if let envelope = envelopeHash {
-            _ = try Self.fixedBytesPayload(envelope,
-                                           expectedLength: Self.hashLength,
-                                           makeError: ProofAttachmentError.invalidEnvelopeHashLength)
-            payload["envelope_hash_hex"] = envelope.hexEncodedString()
-        }
+        let envelope = envelopeHash ?? Self.canonicalEnvelopeHash(for: proof)
+        _ = try Self.fixedBytesPayload(envelope,
+                                       expectedLength: Self.hashLength,
+                                       makeError: ProofAttachmentError.invalidEnvelopeHashLength)
+        payload["envelope_hash_hex"] = envelope.hexEncodedString()
         guard payload["vk_ref"] != nil else {
             throw ProofAttachmentError.missingVerifyingKey
         }
@@ -187,6 +192,10 @@ public struct ProofAttachment: Sendable, Equatable {
     }
 
     private static let hashLength = 32
+
+    private static func canonicalEnvelopeHash(for proof: Data) -> Data {
+        IrohaHash.hash(proof)
+    }
 
     private static func proofBoxPayload(backend: String, bytes: Data) -> Data {
         var writer = OfflineNoritoWriter()

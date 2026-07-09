@@ -19,6 +19,8 @@ ROLLOUT_CANARY_GAS_ASSET_ID="${ROLLOUT_CANARY_GAS_ASSET_ID:-6TEAJqbb8oEPmLncoNiM
 ROLLOUT_CANARY_SKIP_FAUCET="${ROLLOUT_CANARY_SKIP_FAUCET:-auto}"
 POST_CANARY_STATUS_RECHECK_ATTEMPTS="${POST_CANARY_STATUS_RECHECK_ATTEMPTS:-10}"
 POST_CANARY_STATUS_RECHECK_DELAY_SECONDS="${POST_CANARY_STATUS_RECHECK_DELAY_SECONDS:-2}"
+MCP_ROLLOUT_CURL_CONNECT_TIMEOUT_SECONDS="${MCP_ROLLOUT_CURL_CONNECT_TIMEOUT_SECONDS:-5}"
+MCP_ROLLOUT_CURL_MAX_TIME_SECONDS="${MCP_ROLLOUT_CURL_MAX_TIME_SECONDS:-20}"
 MIN_VALIDATOR_SET_LEN="${MIN_VALIDATOR_SET_LEN:-4}"
 EXPECTED_TAIRA_GIT_SHA="${EXPECTED_TAIRA_GIT_SHA:-}"
 PUBLIC_LANE_ID="${PUBLIC_LANE_ID:-0}"
@@ -39,6 +41,8 @@ Usage: check_mcp_rollout.sh [--local-root URL] [--public-root URL] [--local-url 
                             [--write-config PATH] [--write-target local|public|URL]
                             [--gas-asset-id ASSET_DEFINITION_ID]
                             [--iroha-bin PATH] [--resolve-host HOST:IP|HOST:PORT:IP]
+                            [--curl-connect-timeout-seconds N]
+                            [--curl-max-time-seconds N]
                             [--expected-git-sha 7_TO_40_HEX_SHA] [--skip-write-canary]
 
 Verify that Taira's native Torii MCP endpoint is live locally and/or publicly.
@@ -223,6 +227,22 @@ while [[ $# -gt 0 ]]; do
       CURL_RESOLVE_RULES+=("$2")
       shift 2
       ;;
+    --curl-connect-timeout-seconds)
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --curl-connect-timeout-seconds" >&2
+        exit 1
+      }
+      MCP_ROLLOUT_CURL_CONNECT_TIMEOUT_SECONDS="$2"
+      shift 2
+      ;;
+    --curl-max-time-seconds)
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --curl-max-time-seconds" >&2
+        exit 1
+      }
+      MCP_ROLLOUT_CURL_MAX_TIME_SECONDS="$2"
+      shift 2
+      ;;
     --skip-write-canary)
       SKIP_WRITE_CANARY=1
       shift
@@ -256,6 +276,55 @@ if [[ -n "$WRITE_CONFIG" && $SKIP_WRITE_CANARY -eq 1 ]]; then
   echo "--write-config and --skip-write-canary are mutually exclusive" >&2
   exit 1
 fi
+
+require_positive_integer() {
+  local name="$1"
+  local value="$2"
+
+  if [[ ! "$value" =~ ^[0-9]+$ || "$value" == "0" ]]; then
+    echo "${name} must be a positive integer" >&2
+    exit 1
+  fi
+}
+
+require_nonnegative_integer() {
+  local name="$1"
+  local value="$2"
+
+  if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+    echo "${name} must be a non-negative integer" >&2
+    exit 1
+  fi
+}
+
+validate_numeric_inputs() {
+  require_positive_integer \
+    "ROLLOUT_CANARY_TIME_TO_LIVE_MS" \
+    "$ROLLOUT_CANARY_TIME_TO_LIVE_MS"
+  require_positive_integer \
+    "ROLLOUT_CANARY_STATUS_TIMEOUT_MS" \
+    "$ROLLOUT_CANARY_STATUS_TIMEOUT_MS"
+  require_positive_integer \
+    "POST_CANARY_STATUS_RECHECK_ATTEMPTS" \
+    "$POST_CANARY_STATUS_RECHECK_ATTEMPTS"
+  require_nonnegative_integer \
+    "POST_CANARY_STATUS_RECHECK_DELAY_SECONDS" \
+    "$POST_CANARY_STATUS_RECHECK_DELAY_SECONDS"
+  require_positive_integer \
+    "MIN_VALIDATOR_SET_LEN" \
+    "$MIN_VALIDATOR_SET_LEN"
+  require_nonnegative_integer \
+    "PUBLIC_LANE_ID" \
+    "$PUBLIC_LANE_ID"
+  require_positive_integer \
+    "MCP_ROLLOUT_CURL_CONNECT_TIMEOUT_SECONDS" \
+    "$MCP_ROLLOUT_CURL_CONNECT_TIMEOUT_SECONDS"
+  require_positive_integer \
+    "MCP_ROLLOUT_CURL_MAX_TIME_SECONDS" \
+    "$MCP_ROLLOUT_CURL_MAX_TIME_SECONDS"
+}
+
+validate_numeric_inputs
 
 if [[ $SKIP_PUBLIC -eq 0 && -z "$WRITE_CONFIG" && $SKIP_WRITE_CANARY -eq 0 ]]; then
   WRITE_CONFIG="$(default_write_config_path)"
@@ -382,11 +451,23 @@ http_request() {
   local method="$1"
   local url="$2"
   local payload="${3:-}"
-  local body_file header_file
-  local curl_cmd=(curl --silent --show-error -H "accept: application/json")
+  local body_file header_file error_file
+  local curl_output curl_rc
+  local curl_cmd=(
+    curl
+    --silent
+    --show-error
+    -H
+    "accept: application/json"
+    --connect-timeout
+    "$MCP_ROLLOUT_CURL_CONNECT_TIMEOUT_SECONDS"
+    --max-time
+    "$MCP_ROLLOUT_CURL_MAX_TIME_SECONDS"
+  )
 
   body_file="$(mktemp)"
   header_file="$(mktemp)"
+  error_file="$(mktemp)"
   cleanup
   last_body="$body_file"
   last_headers="$header_file"
@@ -394,15 +475,20 @@ http_request() {
   curl_cmd+=( ${CURL_URL_RESOLVE_ARGS[@]+"${CURL_URL_RESOLVE_ARGS[@]}"} )
 
   if [[ "$method" == "GET" ]]; then
-    last_status="$(
+    set +e
+    curl_output="$(
       "${curl_cmd[@]}" \
       --output "$body_file" \
       --dump-header "$header_file" \
       --write-out "%{http_code}" \
-      "$url"
+      "$url" \
+      2>"$error_file"
     )"
+    curl_rc=$?
+    set -e
   else
-    last_status="$(
+    set +e
+    curl_output="$(
       "${curl_cmd[@]}" \
       --output "$body_file" \
       --dump-header "$header_file" \
@@ -410,9 +496,25 @@ http_request() {
       -X POST \
       -H "content-type: application/json" \
       --data "$payload" \
-      "$url"
+      "$url" \
+      2>"$error_file"
     )"
+    curl_rc=$?
+    set -e
   fi
+
+  if [[ $curl_rc -ne 0 ]]; then
+    last_status="curl_error_${curl_rc}"
+    {
+      printf 'curl exited with status %s\n' "$curl_rc"
+      sed -n '1,40p' "$error_file" || true
+    } >"$header_file"
+    rm -f "$error_file"
+    return 0
+  fi
+
+  rm -f "$error_file"
+  last_status="$curl_output"
 }
 
 print_status_route_diagnostics() {

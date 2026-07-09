@@ -59,6 +59,7 @@ def _base_fixture() -> dict[str, object]:
         "balanceCommitments": [bytes([0x51]) * 32, bytes([0x52]) * 32],
         "linkTag": bytes([0x61]) * 32,
         "rangeCommitments": [bytes([0x71]) * 32],
+        "paymentBindingHash": bytes([0x62]) * 32,
         "chainId": "boi-localnet",
         "domainSeparator": "boi:anonymous-pgc:v1",
         "vkHash": bytes([0x55]) * 32,
@@ -100,6 +101,7 @@ def test_anonymous_pgc_builders_normalize_receiver_sets_and_dev_fixture() -> Non
     assert public_inputs["receiver_set_commitment"] == receiver_set[
         "receiver_set_commitment"
     ].hex()
+    assert public_inputs["payment_binding_hash"] == bytes([0x62] * 32).hex()
 
     verified = verify_anonymous_pgc_dev_proof_locally(
         {
@@ -110,6 +112,7 @@ def test_anonymous_pgc_builders_normalize_receiver_sets_and_dev_fixture() -> Non
             "balanceCommitments": [bytes([0x51]) * 32, bytes([0x52]) * 32],
             "linkTag": bytes([0x61]) * 32,
             "rangeCommitments": [bytes([0x71]) * 32],
+            "paymentBindingHash": bytes([0x62]) * 32,
             "chainId": "boi-localnet",
             "domainSeparator": "boi:anonymous-pgc:v1",
         }
@@ -133,6 +136,7 @@ def _production_transfer_input(envelope: bytes) -> dict[str, object]:
         "balanceCommitments": fixture["balanceCommitments"],
         "linkTag": fixture["linkTag"],
         "rangeCommitments": fixture["rangeCommitments"],
+        "paymentBindingHash": fixture["paymentBindingHash"],
         "chainId": fixture["chainId"],
         "domainSeparator": fixture["domainSeparator"],
     }
@@ -148,14 +152,14 @@ def test_anonymous_pgc_production_proof_and_instruction_builders_roundtrip() -> 
     assert decoded["backend"] == "Stark"
     assert decoded["proof_bytes"] == proof_bytes
 
-    verified = verify_anonymous_pgc_k_out_of_n_proof_v1(
-        _production_transfer_input(envelope)
-    )
+    transfer_input = _production_transfer_input(envelope)
+    verified = verify_anonymous_pgc_k_out_of_n_proof_v1(transfer_input)
     assert verified["ok"] is True
     assert verified["production"] is True
     assert verified["kind"] == "anonymous-pgc-k-out-of-n-v1"
     assert verified["receiver_count"] == 2
     assert verified["receiver_threshold"] == 1
+    assert verified["public_inputs"]["payment_binding_hash"] == bytes([0x62] * 32).hex()
 
     account_instruction = build_anonymous_pgc_account_commitment_instruction(
         {
@@ -168,12 +172,44 @@ def test_anonymous_pgc_production_proof_and_instruction_builders_roundtrip() -> 
     assert account_instruction["kind"] == "zk::RegisterAnonymousPgcAccountCommitment"
     assert len(account_instruction["instruction_digest"]) == 64
 
-    transfer_instruction = build_anonymous_pgc_transfer_instruction(
-        _production_transfer_input(envelope)
+    transfer_input_without_payment_binding = dict(transfer_input)
+    del transfer_input_without_payment_binding["paymentBindingHash"]
+    assert (
+        verify_anonymous_pgc_k_out_of_n_proof_v1(
+            transfer_input_without_payment_binding
+        )["ok"]
+        is True
     )
+    with pytest.raises(ValueError, match="paymentBindingHash is required"):
+        build_anonymous_pgc_transfer_instruction(
+            transfer_input_without_payment_binding
+        )
+    with pytest.raises(ValueError, match="paymentBindingHash must match"):
+        build_anonymous_pgc_transfer_instruction(
+            {**transfer_input, "paymentBindingHash": bytes([0x63]) * 32}
+        )
+    with pytest.raises(TypeError, match="multiple payment binding hash aliases"):
+        build_anonymous_pgc_k_out_of_n_proof_v1(
+            {
+                **_base_fixture(),
+                "payment_binding_hash": bytes([0x62]) * 32,
+                "proofBytes": proof_bytes,
+            }
+        )
+    with pytest.raises(TypeError, match="multiple paymentBindingHash aliases"):
+        verify_anonymous_pgc_k_out_of_n_proof_v1(
+            {**transfer_input, "payment_binding_hash": bytes([0x62]) * 32}
+        )
+    with pytest.raises(TypeError, match="multiple payment binding hash aliases"):
+        build_anonymous_pgc_transfer_instruction(
+            {**transfer_input, "payment_binding_hash": bytes([0x62]) * 32}
+        )
+
+    transfer_instruction = build_anonymous_pgc_transfer_instruction(transfer_input)
     assert transfer_instruction["kind"] == "zk::SubmitAnonymousPgcTransfer"
     assert transfer_instruction["proof_envelope"] == envelope
     assert transfer_instruction["receiver_count"] == 2
+    assert transfer_instruction["payment_binding_hash"] == bytes([0x62] * 32).hex()
     assert len(transfer_instruction["instruction_digest"]) == 64
 
 
@@ -197,6 +233,25 @@ def test_anonymous_pgc_package_root_exports_production_entrypoint_aliases() -> N
     assert verified["production"] is True
     assert account_instruction["kind"] == "zk::RegisterAnonymousPgcAccountCommitment"
     assert transfer_instruction["kind"] == "zk::SubmitAnonymousPgcTransfer"
+    for patch in (
+        {"account_commitment": bytes([0x21]) * 32},
+        {"anonymity_set_root": bytes([0x41]) * 32},
+        {"chain_id": "boi-localnet"},
+        {"domain_separator": "boi:anonymous-pgc:v1"},
+    ):
+        with pytest.raises(
+            TypeError,
+            match="anonymousPgcAccountCommitmentInstruction",
+        ):
+            build_anonymous_pgc_account_commitment_instruction(
+                {
+                    "accountCommitment": bytes([0x21]) * 32,
+                    "anonymitySetRoot": bytes([0x41]) * 32,
+                    "chainId": "boi-localnet",
+                    "domainSeparator": "boi:anonymous-pgc:v1",
+                    **patch,
+                }
+            )
 
 
 def test_anonymous_pgc_production_helpers_reject_dev_fixture_bytes() -> None:
@@ -319,6 +374,7 @@ def test_anonymous_pgc_package_root_exports_catalog_entrypoint_aliases() -> None
             "balanceCommitments": [bytes([0x51]) * 32, bytes([0x52]) * 32],
             "linkTag": bytes([0x61]) * 32,
             "rangeCommitments": [bytes([0x71]) * 32],
+            "paymentBindingHash": bytes([0x62]) * 32,
             "chainId": "boi-localnet",
             "domainSeparator": "boi:anonymous-pgc:v1",
         }
@@ -383,8 +439,22 @@ def test_anonymous_pgc_receiver_set_rejects_malformed_inputs(
         },
         {"anonymitySetRoot": bytes(32)},
         {"payload": b"payload", "txDigest": bytes([0xEE]) * 32},
+        {"version": 1},
+        {"threshold": 1},
+        {"k": 1},
+        {"receivers": [_receiver_a(), _receiver_b()]},
+        {"maxPayloadBytes": 1024, "max_payload_bytes": 1024},
+        {"maxProofBytes": 1024, "max_proof_bytes": 1024},
+        {"maxPublicInputBytes": 1024, "max_public_input_bytes": 1024},
+        {"anonymity_set_root": bytes([0x41]) * 32},
+        {"balance_commitments": [bytes([0x51]) * 32, bytes([0x52]) * 32]},
+        {"link_tag": bytes([0x61]) * 32},
+        {"range_commitments": [bytes([0x71]) * 32]},
+        {"payment_binding_hash": bytes([0x62]) * 32},
+        {"domain_separator": "boi:anonymous-pgc:v1"},
         {"balanceCommitments": [bytes([0x51]) * 32, bytes([0x51]) * 32]},
         {"rangeCommitments": []},
+        {"paymentBindingHash": bytes(32)},
         {"linkTag": bytes(32)},
         {"chainId": " "},
         {"chain_id": "boi-localnet"},
@@ -451,6 +521,7 @@ def test_anonymous_pgc_local_verifier_rejects_tampered_dev_fixtures() -> None:
         {"envelope": rebuild(proofBytes=bytes(tampered_proof)), "payload": _payload()},
         {"envelope": fixture["envelope"], "payload": b"substituted-payload"},
         {"envelope": fixture["envelope"], "receiverSet": swapped_receiver_set},
+        {"envelope": fixture["envelope"], "paymentBindingHash": bytes([0x63]) * 32},
         {"envelope": fixture["envelope"], "chainId": "wrong-chain"},
         {"envelope": rebuild(backend="groth16"), "payload": _payload()},
         {"envelope": rebuild(circuitId="other_anonymous_pgc_v1"), "payload": _payload()},

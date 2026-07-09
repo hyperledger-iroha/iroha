@@ -246,6 +246,12 @@ final class SigningKeyTests: XCTestCase {
         }
 
         let allZeroSignature = Data(repeating: 0, count: signature.count)
+        XCTAssertEqual(NoritoNativeBridge.shared.mldsaVerify(
+            suiteId: keypair.suite.rawValue,
+            publicKey: keypair.publicKey,
+            message: message,
+            signature: allZeroSignature
+        ), false)
         XCTAssertFalse(try keypair.verify(message: message, signature: allZeroSignature))
     }
 

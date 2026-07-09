@@ -146,7 +146,7 @@ KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV = (
     "IROHA_KAGEMUSHA_ALLOW_RUNTIME_LINEAGE_KEYGEN"
 )
 EXPECTED_LINEAGE_VERIFIER_WITNESS_PROFILE = (
-    "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4"
+    "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-255x1"
 )
 EXPECTED_LINEAGE_CIRCUIT_IDS = {
     "one_hop": "kagemusha-recursive-spend-lineage-onehop-v1",
@@ -545,7 +545,7 @@ EXPECTED_ABI6_LIMITS = {
     "compact_token_max_hops": 64,
     "reserved_lineage_witnessless_max_hops": 64,
     "previous_proof_open_envelopes_required_count": 1,
-    "native_archive_max_bytes": 64 * 1024 * 1024,
+    "native_archive_max_bytes": 256 * 1024 * 1024,
 }
 EXPECTED_ABI6_LIMIT_VALUES = {
     **EXPECTED_ABI6_LIMITS,
@@ -586,7 +586,6 @@ ABI6_ARCHIVE_FIXTURE_REF_FIELDS = frozenset(("path", "schema"))
 ABI6_PROOF_CIRCUIT_ID_FIELDS = frozenset(
     (
         "recursive_aggregation",
-        "reserved_lineage",
         "reserved_lineage_one_hop",
         "reserved_lineage_append",
     )
@@ -635,7 +634,6 @@ EXPECTED_ABI6_ARCHIVE_FIXTURE = {
 }
 EXPECTED_ABI6_PROOF_CIRCUIT_IDS = {
     "recursive_aggregation": "kagemusha-recursive-aggregation-v1",
-    "reserved_lineage": "kagemusha-recursive-spend-lineage-v1",
     "reserved_lineage_one_hop": "kagemusha-recursive-spend-lineage-onehop-v1",
     "reserved_lineage_append": "kagemusha-recursive-spend-lineage-append-v1",
 }
@@ -689,8 +687,8 @@ EXPECTED_ABI6_HOP_POLICY = {
         {
             "circuit_id": "kagemusha-recursive-spend-lineage-v1",
             "hop_count": 1,
-            "allowed": True,
-            "requires_lineage_witness": False,
+            "allowed": False,
+            "requires_lineage_witness": True,
         },
         {
             "circuit_id": "kagemusha-recursive-spend-lineage-onehop-v1",
@@ -705,7 +703,7 @@ EXPECTED_ABI6_HOP_POLICY = {
             "requires_lineage_witness": False,
         },
         {
-            "circuit_id": "kagemusha-recursive-spend-lineage-v1",
+            "circuit_id": "kagemusha-recursive-spend-lineage-append-v1",
             "hop_count": 64,
             "allowed": True,
             "requires_lineage_witness": False,
@@ -772,6 +770,16 @@ LINEAGE_KEY_RELEASE_TOOLING_REQUIREMENTS = {
         "pub fn kagemusha_recursive_spend_lineage_vk_record_from_box(",
         "pub fn kagemusha_recursive_spend_lineage_append_vk_record_from_box(",
         "does not generate a verifier key at runtime",
+        "kagemusha recursive semantic pk keygen start",
+        "kagemusha recursive semantic pk keygen done",
+        "kagemusha recursive one-hop pk keygen start",
+        "kagemusha recursive one-hop pk keygen done",
+        "kagemusha recursive append pk keygen start",
+        "kagemusha recursive append pk keygen done",
+        "kagemusha recursive one-hop cached pk keygen start",
+        "kagemusha recursive one-hop cached pk keygen done",
+        "kagemusha recursive append cached pk keygen start",
+        "kagemusha recursive append cached pk keygen done",
         "lineage_vk_record_from_box_canonicalizes_profiles_without_keygen",
     ),
     "docs/source/offline_kagemusha.md": (

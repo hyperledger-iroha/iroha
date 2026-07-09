@@ -83,6 +83,32 @@ final class ProofAttachmentNoritoTests: XCTestCase {
         )
         let object = try JSONSerialization.jsonObject(with: attachment.encodedJSON()) as? [String: Any]
         XCTAssertNotNil(object?["vk_ref"])
+        XCTAssertEqual(object?["envelope_hash_hex"] as? String, IrohaHash.hash(Data([0x01])).hexLowercased())
+    }
+
+    func testProofAttachmentJsonAddsCanonicalEnvelopeHash() throws {
+        let attachment = try ProofAttachment(
+            backend: "test",
+            proof: Data([0x01]),
+            verifyingKey: .reference(.init(backend: "test", name: "vk"))
+        )
+        let object = try JSONSerialization.jsonObject(with: attachment.encodedJSON()) as? [String: Any]
+        XCTAssertEqual(object?["envelope_hash_hex"] as? String, IrohaHash.hash(Data([0x01])).hexLowercased())
+    }
+
+    func testProofAttachmentRejectsEnvelopeHashMismatch() {
+        XCTAssertThrowsError(
+            try ProofAttachment(
+                backend: "test",
+                proof: Data([0x01]),
+                verifyingKey: .reference(.init(backend: "test", name: "vk")),
+                envelopeHash: Data(repeating: 0xAB, count: 32)
+            )
+        ) { error in
+            guard case ProofAttachmentError.envelopeHashMismatch = error else {
+                return XCTFail("expected envelopeHashMismatch error")
+            }
+        }
     }
 
     func testProofAttachmentRejectsVerifyingKeyBackendMismatch() {

@@ -9,6 +9,8 @@ public final class KagemushaRecursiveCompactPaymentTokenProver {
   private static final BigInteger MAX_U64 = new BigInteger("18446744073709551615");
   public static final int REQUIRED_BRIDGE_ABI_VERSION = 7;
   public static final int REQUIRED_NATIVE_BRIDGE_ABI_VERSION = REQUIRED_BRIDGE_ABI_VERSION;
+  public static final int NATIVE_ARCHIVE_MAX_BYTES =
+      KagemushaCompactPaymentTokenProver.NATIVE_ARCHIVE_MAX_BYTES;
   public static final String RECURSIVE_COMPACT_CIRCUIT_ID_V1 =
       "kagemusha-recursive-compact-v1";
   private static final String RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT =

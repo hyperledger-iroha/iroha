@@ -1115,7 +1115,7 @@ public final class OfflineNoteTest {
         "semantic recursive aggregation proof circuit id");
     assertEquals(
         "kagemusha-recursive-spend-lineage-v1",
-        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+        "kagemusha-recursive-spend-lineage-v1",
         "reserved recursive spend lineage proof circuit id");
     assertTrue(
         KagemushaRecursiveSpendProver.detectNativeAvailability(

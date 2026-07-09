@@ -212,14 +212,16 @@ table-schedule/shared-manifest/table-base, verifier-witness batch,
 transition-profile binding, append-opening preflight, recursive verifier
 scalar-projection, and previous/resulting accumulator aliases are native-owned
 material, not Python request fields.
-Production init requests and Reserved-lineage append-output requests must also
-include packaged lineage key artifacts in the raw Norito request:
-`lineage_verifier_key` and `lineage_proving_key_archive`. Missing artifacts are
-rejected before runtime key generation.
-Use `kagemusha_recursive_spend_lineage_key_artifacts_for_init(...)` and
-`kagemusha_recursive_spend_lineage_key_artifacts_for_append(...)` to package
-and validate these verifier/proving key artifacts before building the raw
-request.
+Init requests may omit both packaged lineage key artifacts to select the
+semantic recursive aggregation path. That bundle is valid for offline
+acceptance and re-spending, while online redemption must carry the
+record-backed lineage witness. Supplying exactly one of `lineage_verifier_key`
+or `lineage_proving_key_archive` is rejected. Reserved-lineage append-output
+requests must still include the append lineage key artifacts in the raw Norito
+request. Use `kagemusha_recursive_spend_lineage_key_artifacts_for_init(...)`
+and `kagemusha_recursive_spend_lineage_key_artifacts_for_append(...)` to
+package and validate these verifier/proving key artifacts before building a
+witnessless Reserved-lineage request.
 Verify request archives must pass the same public-binding preflight before the
 PyO3 host returns a `KagemushaRecursiveSpendVerifyResultV1`: Reserved-lineage
 bundles require a matching active `lineage_verifier_record`, semantic bundles

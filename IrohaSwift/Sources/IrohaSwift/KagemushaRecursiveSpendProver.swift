@@ -53,7 +53,6 @@ public enum KagemushaRecursiveSpendProver {
     public static let recursiveAggregationProofCircuitIdV1 = "kagemusha-recursive-aggregation-v1"
     public static let recursiveCompactCircuitIdV1 = "kagemusha-recursive-compact-v1"
     public static let recursiveAggregationProofBackend = "halo2/ipa"
-    public static let recursiveSpendLineageProofCircuitIdV1 = "kagemusha-recursive-spend-lineage-v1"
     public static let recursiveSpendLineageOneHopProofCircuitIdV1 =
         "kagemusha-recursive-spend-lineage-onehop-v1"
     public static let recursiveSpendLineageAppendProofCircuitIdV1 =
@@ -135,8 +134,7 @@ public enum KagemushaRecursiveSpendProver {
     }
 
     public static func isLineageProofCircuitId(_ circuitId: String?) -> Bool {
-        circuitId == recursiveSpendLineageProofCircuitIdV1
-            || circuitId == recursiveSpendLineageOneHopProofCircuitIdV1
+        circuitId == recursiveSpendLineageOneHopProofCircuitIdV1
             || circuitId == recursiveSpendLineageAppendProofCircuitIdV1
     }
 
@@ -555,7 +553,7 @@ public enum KagemushaRecursiveSpendProver {
     }
 
     public static func requiresLineageKeyArtifactsForInit() -> Bool {
-        true
+        false
     }
 
     public static func requiresLineageWitnessForRedeem(circuitId: String, hopCount: UInt32) -> Bool {

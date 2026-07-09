@@ -67,6 +67,7 @@ public final class KagemushaRecursiveSpendProverTest {
   private KagemushaRecursiveSpendProverTest() {}
 
   public static void main(final String[] args) {
+    firstReleaseApiDoesNotExposeProofOutputOnlyFoldBuilder();
     exposesStableModesAndCircuitIds();
     lineageKeyArtifactPackagesValidateReleaseProfiles();
     sharedRecursiveSpendAbi6FixtureMatchesSdkSurface();
@@ -85,12 +86,21 @@ public final class KagemushaRecursiveSpendProverTest {
     System.out.println("[IrohaAndroid] KagemushaRecursiveSpendProverTest passed.");
   }
 
+  private static void firstReleaseApiDoesNotExposeProofOutputOnlyFoldBuilder() {
+    final String source =
+        repoFile(
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/"
+                + "KagemushaRecursiveSpendRequestCodecs.java");
+    assert !source.contains("hopProofOutputArchives")
+        : "Android SDK exposes proof-output-only fold inputs";
+    assert !source.contains("buildVerifiedFoldRecordBundle(\n      final List<byte[]>")
+        : "Android SDK exposes a proof-output-only fold builder";
+  }
+
   private static void exposesStableModesAndCircuitIds() {
     assert KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION == 6;
     assert "kagemusha-recursive-aggregation-v1"
         .equals(KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1);
-    assert "kagemusha-recursive-spend-lineage-v1"
-        .equals(KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1);
     assert "kagemusha-recursive-spend-lineage-onehop-v1"
         .equals(KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1);
     assert "kagemusha-recursive-spend-lineage-append-v1"
@@ -106,6 +116,8 @@ public final class KagemushaRecursiveSpendProverTest {
         == 128;
     assert KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES == 256 * 1024 * 1024;
     assert KagemushaCompactPaymentTokenProver.NATIVE_ARCHIVE_MAX_BYTES == 256 * 1024 * 1024;
+    assert KagemushaRecursiveCompactPaymentTokenProver.NATIVE_ARCHIVE_MAX_BYTES
+        == KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES;
     assert "iroha:kagemusha:v1:recursive-spend-accumulator"
         .equals(KagemushaRecursiveSpendProver.RECURSIVE_SPEND_ACCUMULATOR_DOMAIN);
     assert "iroha:kagemusha:v1:recursive-spend-transition-profile"
@@ -132,31 +144,31 @@ public final class KagemushaRecursiveSpendProverTest {
         .equals(
             KagemushaRecursiveSpendProver
                 .RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1);
-    assert KagemushaRecursiveSpendProver.canRedeemWitnessless(
-        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, 1);
+    assert !KagemushaRecursiveSpendProver.canRedeemWitnessless(
+        "kagemusha-recursive-spend-lineage-v1", 1);
     assert KagemushaRecursiveSpendProver.canRedeemWitnessless(
         KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1, 1);
     assert KagemushaRecursiveSpendProver.canRedeemWitnessless(
         KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1, 2);
-    assert !KagemushaRecursiveSpendProver.requiresLineageWitnessForRedeem(
-        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, 1);
-    assert KagemushaRecursiveSpendProver.canRedeemWitnessless(
-        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+    assert KagemushaRecursiveSpendProver.requiresLineageWitnessForRedeem(
+        "kagemusha-recursive-spend-lineage-v1", 1);
+    assert !KagemushaRecursiveSpendProver.canRedeemWitnessless(
+        "kagemusha-recursive-spend-lineage-v1",
         KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1);
-    assert !KagemushaRecursiveSpendProver.requiresLineageWitnessForRedeem(
-        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+    assert KagemushaRecursiveSpendProver.requiresLineageWitnessForRedeem(
+        "kagemusha-recursive-spend-lineage-v1",
         KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1);
     assert !KagemushaRecursiveSpendProver.canRedeemWitnessless(
         KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1, 1);
     assert !KagemushaRecursiveSpendProver.canRedeemWitnessless(
-        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, 0);
-    assert !KagemushaRecursiveSpendProver.requiresLineageWitnessForRedeem(
-        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, 2);
+        "kagemusha-recursive-spend-lineage-v1", 0);
+    assert KagemushaRecursiveSpendProver.requiresLineageWitnessForRedeem(
+        "kagemusha-recursive-spend-lineage-v1", 2);
     assert KagemushaRecursiveSpendProver.requiresLineageWitnessForRedeem(null, 1);
     final Object[][] redeemCases = {
-      {KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, -1},
-      {KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, Integer.MIN_VALUE},
-      {KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, Integer.MAX_VALUE},
+      {"kagemusha-recursive-spend-lineage-v1", -1},
+      {"kagemusha-recursive-spend-lineage-v1", Integer.MIN_VALUE},
+      {"kagemusha-recursive-spend-lineage-v1", Integer.MAX_VALUE},
       {KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1, 0},
       {KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1, Integer.MIN_VALUE},
       {KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1, Integer.MAX_VALUE},
@@ -180,16 +192,16 @@ public final class KagemushaRecursiveSpendProverTest {
     assert KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS == 64;
     assert "".equals(KagemushaRecursiveSpendProver.normalizeAppendOutputCircuitId(null));
     assert "".equals(KagemushaRecursiveSpendProver.normalizeAppendOutputCircuitId(""));
-    assert KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.equals(
+    assert "kagemusha-recursive-spend-lineage-v1".equals(
         KagemushaRecursiveSpendProver.normalizeAppendOutputCircuitId(
-            KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1));
+            "kagemusha-recursive-spend-lineage-v1"));
     assert "unknown-kagemusha-recursive-spend-circuit"
         .equals(
             KagemushaRecursiveSpendProver.normalizeAppendOutputCircuitId(
                 "unknown-kagemusha-recursive-spend-circuit"));
     final String whitespaceLineageOutputCircuitId =
         " "
-            + KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+            + "kagemusha-recursive-spend-lineage-v1"
             + " ";
     assert whitespaceLineageOutputCircuitId.equals(
         KagemushaRecursiveSpendProver.normalizeAppendOutputCircuitId(
@@ -199,7 +211,7 @@ public final class KagemushaRecursiveSpendProverTest {
     assert KagemushaRecursiveSpendProver.isSupportedAppendOutputCircuitId(
         KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1);
     assert !KagemushaRecursiveSpendProver.isSupportedAppendOutputCircuitId(
-        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1);
+        "kagemusha-recursive-spend-lineage-v1");
     assert KagemushaRecursiveSpendProver.isSupportedAppendOutputCircuitId(
         KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1);
     assert !KagemushaRecursiveSpendProver.isSupportedAppendOutputCircuitId(
@@ -208,8 +220,8 @@ public final class KagemushaRecursiveSpendProverTest {
         "unknown-kagemusha-recursive-spend-circuit");
     assert !KagemushaRecursiveSpendProver.isSupportedAppendOutputCircuitId(
         whitespaceLineageOutputCircuitId);
-    assert KagemushaRecursiveSpendProver.isLineageProofCircuitId(
-        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1);
+    assert !KagemushaRecursiveSpendProver.isLineageProofCircuitId(
+        "kagemusha-recursive-spend-lineage-v1");
     assert KagemushaRecursiveSpendProver.isLineageProofCircuitId(
         KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1);
     assert KagemushaRecursiveSpendProver.isLineageProofCircuitId(
@@ -218,9 +230,9 @@ public final class KagemushaRecursiveSpendProverTest {
         KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1);
     assert KagemushaRecursiveSpendProver.isLineageAppendOutputCircuitId(
         KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1);
-    assert KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForInit();
+    assert !KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForInit();
     assert !KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForAppendOutput(
-        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1);
+        "kagemusha-recursive-spend-lineage-v1");
     assert KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForAppendOutput(
         KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1);
     assert !KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForAppendOutput(null);
@@ -233,8 +245,8 @@ public final class KagemushaRecursiveSpendProverTest {
         "unknown-kagemusha-recursive-spend-circuit");
     assert KagemushaRecursiveSpendProver.isSupportedPreviousProofCircuitId(
         KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1);
-    assert KagemushaRecursiveSpendProver.isSupportedPreviousProofCircuitId(
-        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1);
+    assert !KagemushaRecursiveSpendProver.isSupportedPreviousProofCircuitId(
+        "kagemusha-recursive-spend-lineage-v1");
     assert KagemushaRecursiveSpendProver.isSupportedPreviousProofCircuitId(
         KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1);
     assert KagemushaRecursiveSpendProver.isSupportedPreviousProofCircuitId(
@@ -245,8 +257,8 @@ public final class KagemushaRecursiveSpendProverTest {
         whitespaceLineageOutputCircuitId);
     assert !KagemushaRecursiveSpendProver.requiresPreviousLineageVerifierRecordForAppend(
         KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1);
-    assert KagemushaRecursiveSpendProver.requiresPreviousLineageVerifierRecordForAppend(
-        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1);
+    assert !KagemushaRecursiveSpendProver.requiresPreviousLineageVerifierRecordForAppend(
+        "kagemusha-recursive-spend-lineage-v1");
     assert KagemushaRecursiveSpendProver.requiresPreviousLineageVerifierRecordForAppend(
         KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1);
     assert KagemushaRecursiveSpendProver.requiresPreviousLineageVerifierRecordForAppend(
@@ -258,23 +270,23 @@ public final class KagemushaRecursiveSpendProverTest {
         KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1);
     assert !KagemushaRecursiveSpendProver.isSupportedAppendProofTransition(
         KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1, "");
-    assert KagemushaRecursiveSpendProver.isSupportedAppendProofTransition(
-        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+    assert !KagemushaRecursiveSpendProver.isSupportedAppendProofTransition(
+        "kagemusha-recursive-spend-lineage-v1",
         KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1);
     assert !KagemushaRecursiveSpendProver.isSupportedAppendProofTransition(
-        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
-        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1);
-    assert KagemushaRecursiveSpendProver.isSupportedAppendProofTransition(
-        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+        "kagemusha-recursive-spend-lineage-v1",
+        "kagemusha-recursive-spend-lineage-v1");
+    assert !KagemushaRecursiveSpendProver.isSupportedAppendProofTransition(
+        "kagemusha-recursive-spend-lineage-v1",
         KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1);
     assert !KagemushaRecursiveSpendProver.isSupportedAppendProofTransition(
         KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
-        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1);
+        "kagemusha-recursive-spend-lineage-v1");
     assert !KagemushaRecursiveSpendProver.isSupportedAppendProofTransition(
         "unknown-kagemusha-recursive-spend-circuit",
         KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1);
     assert !KagemushaRecursiveSpendProver.isSupportedAppendProofTransition(
-        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+        "kagemusha-recursive-spend-lineage-v1",
         "unknown-kagemusha-recursive-spend-circuit");
     assert KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.equals(
         KagemushaRecursiveSpendProver.preferredAppendOutputCircuitId(1));
@@ -300,15 +312,15 @@ public final class KagemushaRecursiveSpendProverTest {
         KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
         KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS);
     assert !KagemushaRecursiveSpendProver.canProveAppendOutputCircuitId(
-        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, 1);
+        "kagemusha-recursive-spend-lineage-v1", 1);
     assert KagemushaRecursiveSpendProver.canProveAppendOutputCircuitId(
         KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1, 1);
     assert !KagemushaRecursiveSpendProver.canProveAppendOutputCircuitId(
         KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1, 1);
     assert !KagemushaRecursiveSpendProver.canProveAppendOutputCircuitId(
-        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, 63);
+        "kagemusha-recursive-spend-lineage-v1", 63);
     assert !KagemushaRecursiveSpendProver.canProveAppendOutputCircuitId(
-        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, 64);
+        "kagemusha-recursive-spend-lineage-v1", 64);
     assert !KagemushaRecursiveSpendProver.canProveAppendOutputCircuitId(
         "unknown-kagemusha-recursive-spend-circuit", 1);
     assert !KagemushaRecursiveSpendProver.canProveAppendOutputCircuitId(
@@ -317,8 +329,8 @@ public final class KagemushaRecursiveSpendProverTest {
         KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
         KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
         1);
-    assert KagemushaRecursiveSpendProver.canSelectAppendOutputCircuitId(
-        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+    assert !KagemushaRecursiveSpendProver.canSelectAppendOutputCircuitId(
+        "kagemusha-recursive-spend-lineage-v1",
         KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
         1);
     assert !KagemushaRecursiveSpendProver.canSelectAppendOutputCircuitId(
@@ -327,14 +339,14 @@ public final class KagemushaRecursiveSpendProverTest {
         1);
     assert !KagemushaRecursiveSpendProver.canSelectAppendOutputCircuitId(
         KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
-        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+        "kagemusha-recursive-spend-lineage-v1",
         1) : "semantic previous proofs cannot select Reserved-lineage output";
     assert !KagemushaRecursiveSpendProver.canSelectAppendOutputCircuitId(
-        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
-        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+        "kagemusha-recursive-spend-lineage-v1",
+        "kagemusha-recursive-spend-lineage-v1",
         1);
-    assert KagemushaRecursiveSpendProver.canSelectAppendOutputCircuitId(
-        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+    assert !KagemushaRecursiveSpendProver.canSelectAppendOutputCircuitId(
+        "kagemusha-recursive-spend-lineage-v1",
         KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
         1);
     assert KagemushaRecursiveSpendProver.canSelectAppendOutputCircuitId(
@@ -346,7 +358,7 @@ public final class KagemushaRecursiveSpendProverTest {
         "unknown-kagemusha-recursive-spend-circuit",
         1);
     assert !KagemushaRecursiveSpendProver.canSelectAppendOutputCircuitId(
-        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+        "kagemusha-recursive-spend-lineage-v1",
         whitespaceLineageOutputCircuitId,
         1);
     assert !KagemushaRecursiveSpendProver.canSelectAppendOutputCircuitId(
@@ -362,15 +374,15 @@ public final class KagemushaRecursiveSpendProverTest {
         KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
         Integer.MIN_VALUE);
     assert !KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend(
-        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, 1);
+        "kagemusha-recursive-spend-lineage-v1", 1);
     assert KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend(
         KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1, 1);
     assert !KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend(
-        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, 64);
+        "kagemusha-recursive-spend-lineage-v1", 64);
     assert !KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend(
-        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, 0);
+        "kagemusha-recursive-spend-lineage-v1", 0);
     assert !KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend(
-        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+        "kagemusha-recursive-spend-lineage-v1",
         Integer.MIN_VALUE);
     assert !KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend(
         KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1, 1);
@@ -455,7 +467,7 @@ public final class KagemushaRecursiveSpendProverTest {
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
                     validRecursiveCompactInput, validRecursiveCompactInput, new byte[0]));
     assertThrows(
-        "recordBundleArchive must not exceed 67108864 bytes",
+        "recordBundleArchive must not exceed 268435456 bytes",
         () ->
             KagemushaRecursiveCompactPaymentTokenProver
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
@@ -463,7 +475,7 @@ public final class KagemushaRecursiveSpendProverTest {
                     validRecursiveCompactInput,
                     validRecursiveCompactKeyArtifacts));
     assertThrows(
-        "pallasOpenEnvelopesArchive must not exceed 67108864 bytes",
+        "pallasOpenEnvelopesArchive must not exceed 268435456 bytes",
         () ->
             KagemushaRecursiveCompactPaymentTokenProver
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
@@ -471,7 +483,7 @@ public final class KagemushaRecursiveSpendProverTest {
                     oversizedRecursiveCompactInput,
                     validRecursiveCompactKeyArtifacts));
     assertThrows(
-        "recursiveCompactKeyArtifactsArchive must not exceed 67108864 bytes",
+        "recursiveCompactKeyArtifactsArchive must not exceed 268435456 bytes",
         () ->
             KagemushaRecursiveCompactPaymentTokenProver
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
@@ -530,7 +542,7 @@ public final class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveCompactPaymentTokenProver
                 .recursiveSpendCompactPaymentTokenFromBundle(new byte[0]));
     assertThrows(
-        "bundleArchive must not exceed 67108864 bytes",
+        "bundleArchive must not exceed 268435456 bytes",
         () ->
             KagemushaRecursiveCompactPaymentTokenProver
                 .recursiveSpendCompactPaymentTokenFromBundle(oversizedRecursiveCompactInput));
@@ -550,7 +562,7 @@ public final class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(
                 new byte[0], validRecursiveCompactVerifierKeys));
     assertThrows(
-        "compactTokenArchive must not exceed 67108864 bytes",
+        "compactTokenArchive must not exceed 268435456 bytes",
         () ->
             KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(
                 oversizedRecursiveCompactInput, validRecursiveCompactVerifierKeys));
@@ -570,7 +582,7 @@ public final class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(
                 validRecursiveCompactInput, new byte[0]));
     assertThrows(
-        "recursiveCompactVerifierKeysArchive must not exceed 67108864 bytes",
+        "recursiveCompactVerifierKeysArchive must not exceed 268435456 bytes",
         () ->
             KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(
                 validRecursiveCompactInput, oversizedRecursiveCompactInput));
@@ -591,7 +603,7 @@ public final class KagemushaRecursiveSpendProverTest {
                 .verifyRecursiveSpendCompactPaymentTokenProjection(
                     validRecursiveCompactInput, new byte[0]));
     assertThrows(
-        "verifierRecordArchive must not exceed 67108864 bytes",
+        "verifierRecordArchive must not exceed 268435456 bytes",
         () ->
             KagemushaRecursiveCompactPaymentTokenProver
                 .verifyRecursiveSpendCompactPaymentTokenProjection(
@@ -1142,11 +1154,9 @@ public final class KagemushaRecursiveSpendProverTest {
         "\"recursive_aggregation\": \""
             + KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
             + "\"");
-    assertContains(
-        manifest,
-        "\"reserved_lineage\": \""
-            + KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
-            + "\"");
+    if (manifest.contains("\"reserved_lineage\":")) {
+      throw new AssertionError("generic Reserved-lineage family id must not be a manifest proof id");
+    }
     assertContains(
         manifest,
         "\"reserved_lineage_one_hop\": \""
@@ -1258,7 +1268,7 @@ public final class KagemushaRecursiveSpendProverTest {
     assert KagemushaRecursiveSpendProver.canRedeemWitnessless(
         KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1, 2);
     assert !KagemushaRecursiveSpendProver.canRedeemWitnessless(
-        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, 65);
+        "kagemusha-recursive-spend-lineage-v1", 65);
   }
 
   private static void assertKeySet(final Map<String, Object> value, final String... expected) {
@@ -2463,11 +2473,11 @@ public final class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendTopUpRequestFromInitRequest(
                 sampleRecipient(), lineageInit));
 
-    assertThrows(
-        "lineageVerifierKey is required for recursive spend init",
-        () ->
-            new KagemushaRecursiveSpendRequestCodecs.InitSpendRequest(
-                recordBundle, pallasOpenEnvelopes, note, null, null, null));
+    final KagemushaRecursiveSpendRequestCodecs.InitSpendRequest semanticInit =
+        new KagemushaRecursiveSpendRequestCodecs.InitSpendRequest(
+            recordBundle, pallasOpenEnvelopes, note, null, null, null);
+    assert semanticInit.lineageVerifierKey() == null;
+    assert semanticInit.lineageProvingKeyArchive() == null;
     assertThrows(
         "top-up init request must contain exactly one checked hop",
         () ->
@@ -2743,7 +2753,7 @@ public final class KagemushaRecursiveSpendProverTest {
                     null,
                     initLineageArtifacts.provingKeyArchive,
                     12L));
-    assert "lineageVerifierKey is required for recursive spend init"
+    assert "lineageVerifierKey is required when lineageProvingKeyArchive is present"
         .equals(autoInitPallasMissingLineageKey.getMessage());
 
     final IllegalArgumentException autoInitPallasWrongProfile =
@@ -2944,14 +2954,6 @@ public final class KagemushaRecursiveSpendProverTest {
             () -> KagemushaRecursiveSpendRequestCodecs.buildPallasOpenEnvelopesArchive(
                 Collections.emptyList()));
     assert "hops must not be empty".equals(pallasError.getMessage());
-
-    final IllegalArgumentException bundleError =
-        captureIllegalArgument(
-            () -> KagemushaRecursiveSpendRequestCodecs.buildVerifiedFoldRecordBundle(
-                Arrays.asList(new byte[] {1}), Arrays.asList(sampleVerifierRecord())));
-    assert "chainId, asset, and rootAfter are required to build KagemushaVerifiedFoldRecordBundle; "
-            .concat("use VerifiedFoldHopEvidence inputs instead")
-        .equals(bundleError.getMessage());
 
     final String proofOnlyRequestMessage =
         "recursive spend requests require explicit VerifiedFoldHopEvidence and a bridge-generated or explicit "
@@ -3292,16 +3294,26 @@ public final class KagemushaRecursiveSpendProverTest {
 
     final SampleLineageArtifacts initLineageArtifacts = sampleInitLineageArtifacts((byte) 0x6a);
     final SampleLineageArtifacts appendLineageArtifacts = sampleAppendLineageArtifacts((byte) 0x6b);
-    final String missingInitLineageVerifierKeyMessage =
-        "lineageVerifierKey is required for recursive spend init";
+    final String partialInitLineageVerifierKeyMessage =
+        "lineageVerifierKey is required when lineageProvingKeyArchive is present";
     assertThrows(
-        missingInitLineageVerifierKeyMessage,
+        partialInitLineageVerifierKeyMessage,
         () ->
             new KagemushaRecursiveSpendRequestCodecs.InitSpendRequest(
                 sampleRecordBundle(),
                 pallasOpenEnvelopeVectorArchive(),
                 sampleNote(),
                 null,
+                initLineageArtifacts.provingKeyArchive,
+                null));
+    assertThrows(
+        "lineageProvingKeyArchive is required when lineageVerifierKey is present",
+        () ->
+            new KagemushaRecursiveSpendRequestCodecs.InitSpendRequest(
+                sampleRecordBundle(),
+                pallasOpenEnvelopeVectorArchive(),
+                sampleNote(),
+                initLineageArtifacts.verifierKey,
                 null,
                 null));
     final String initWrongRecordBundleMessage =
@@ -3901,7 +3913,7 @@ public final class KagemushaRecursiveSpendProverTest {
         "requestArchive must not be empty",
         () -> KagemushaRecursiveSpendProver.ownedNativeInput(new byte[0], "requestArchive"));
     assertThrows(
-        "requestArchive must not exceed 67108864 bytes",
+        "requestArchive must not exceed 268435456 bytes",
         () ->
             KagemushaRecursiveSpendProver.ownedNativeInput(
                 new byte[KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES + 1],
@@ -3919,7 +3931,7 @@ public final class KagemushaRecursiveSpendProverTest {
         new byte[KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES + 1];
 
     assertThrows(
-        "requestArchive must not exceed 67108864 bytes",
+        "requestArchive must not exceed 268435456 bytes",
         () -> KagemushaRecursiveSpendProver.initSpend(oversizedArchive));
     assertThrows(
         "requestArchive must be a valid Norito archive",
@@ -3958,7 +3970,7 @@ public final class KagemushaRecursiveSpendProverTest {
         "profileArchive must contain a non-empty Norito payload",
         () -> KagemushaRecursiveSpendProver.lineageAppendBoundary(emptyPayloadArchive));
     assertThrows(
-        "profileArchive must not exceed 67108864 bytes",
+        "profileArchive must not exceed 268435456 bytes",
         () -> KagemushaRecursiveSpendProver.lineageAppendBoundary(oversizedArchive));
 
     assertThrows(
@@ -3968,7 +3980,7 @@ public final class KagemushaRecursiveSpendProverTest {
         "recordBundleArchive must contain a non-empty Norito payload",
         () -> KagemushaRecursiveSpendProver.buildPallasOpenEnvelopesArchive(emptyPayloadArchive));
     assertThrows(
-        "recordBundleArchive must not exceed 67108864 bytes",
+        "recordBundleArchive must not exceed 268435456 bytes",
         () -> KagemushaRecursiveSpendProver.buildPallasOpenEnvelopesArchive(oversizedArchive));
     assertThrows(
         "previousBundleArchive must be a valid Norito archive",
@@ -3981,7 +3993,7 @@ public final class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveSpendProver.buildPreviousProofOpenEnvelopesArchive(
                 emptyPayloadArchive));
     assertThrows(
-        "previousBundleArchive must not exceed 67108864 bytes",
+        "previousBundleArchive must not exceed 268435456 bytes",
         () ->
             KagemushaRecursiveSpendProver.buildPreviousProofOpenEnvelopesArchive(
                 oversizedArchive));
@@ -4020,12 +4032,12 @@ public final class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(
                 validArchive, emptyPayloadArchive));
     assertThrows(
-        "requestArchive must not exceed 67108864 bytes",
+        "requestArchive must not exceed 268435456 bytes",
         () ->
             KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(
                 oversizedArchive, validArchive));
     assertThrows(
-        "bundleArchive must not exceed 67108864 bytes",
+        "bundleArchive must not exceed 268435456 bytes",
         () ->
             KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(
                 validArchive, oversizedArchive));
@@ -4061,17 +4073,17 @@ public final class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
                 validArchive, validArchive, emptyPayloadArchive));
     assertThrows(
-        "previousWitnessArchive must not exceed 67108864 bytes",
+        "previousWitnessArchive must not exceed 268435456 bytes",
         () ->
             KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
                 oversizedArchive, validArchive, validArchive));
     assertThrows(
-        "requestArchive must not exceed 67108864 bytes",
+        "requestArchive must not exceed 268435456 bytes",
         () ->
             KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
                 validArchive, oversizedArchive, validArchive));
     assertThrows(
-        "bundleArchive must not exceed 67108864 bytes",
+        "bundleArchive must not exceed 268435456 bytes",
         () ->
             KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
                 validArchive, validArchive, oversizedArchive));
@@ -5715,6 +5727,22 @@ public final class KagemushaRecursiveSpendProverTest {
     }
     throw new AssertionError(
         "missing shared recursive spend " + abi.name() + " fixture " + fileName);
+  }
+
+  private static String repoFile(final String relativePath) {
+    Path directory = Path.of("").toAbsolutePath();
+    while (directory != null) {
+      final Path candidate = directory.resolve(relativePath);
+      if (Files.isRegularFile(candidate)) {
+        try {
+          return Files.readString(candidate, StandardCharsets.UTF_8);
+        } catch (final IOException error) {
+          throw new AssertionError("failed to read repo file " + relativePath, error);
+        }
+      }
+      directory = directory.getParent();
+    }
+    throw new AssertionError("missing repo file " + relativePath);
   }
 
   private enum FixtureAbi {

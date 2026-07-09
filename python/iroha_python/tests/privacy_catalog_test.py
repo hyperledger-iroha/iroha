@@ -825,7 +825,7 @@ def test_privacy_catalog_rejects_required_production_privacy_plan_public_input_s
             "'anonymity_set_root,tx_digest,balance_commitments,"
             "receiver_set_commitment,receiver_ciphertext_commitments,"
             "receiver_threshold,receiver_count,link_tag,range_commitments,"
-            "chain_id,domain_separator'"
+            "payment_binding_hash,chain_id,domain_separator'"
         ),
     ):
         privacy_catalog._validate_required_privacy_plan_rows(tuple(descriptors))

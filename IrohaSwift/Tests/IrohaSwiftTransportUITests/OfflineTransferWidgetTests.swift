@@ -139,13 +139,14 @@ final class OfflineTransferWidgetTests: XCTestCase {
             IrohaOfflineDeviceTransferPayloadRuntime.currentTextPayloadKind(for: receiveRequest),
             .receiveRequest
         )
-        XCTAssertEqual(
+        XCTAssertThrowsError(
             try IrohaOfflineDeviceTransferPayloadRuntime.normalizedCurrentTextPayload(
                 " \t\(receiveRequest)\n",
                 expectedKind: .receiveRequest
-            ),
-            receiveRequest
-        )
+            )
+        ) { error in
+            XCTAssertEqual(error as? OfflineNoteTextTransferContractError, .invalidCharacters)
+        }
         XCTAssertFalse(
             IrohaOfflineDeviceTransferPayloadRuntime.acceptsCurrentTextPayload(
                 receiveRequest,
@@ -1210,7 +1211,7 @@ final class OfflineTransferWidgetTests: XCTestCase {
         let receiveRequest = try Self.validReceiveRequestTextPayload()
 
         let receiveBytes = try IrohaOfflineNearbyTextEnvelopeCodec.encode(
-            payload: "  \(receiveRequest)\n",
+            payload: receiveRequest,
             kind: .receiveRequest,
             pairingChallenge: challenge
         )
@@ -1303,13 +1304,14 @@ final class OfflineTransferWidgetTests: XCTestCase {
                 prefixes: [OfflineNoteTransferTextPayloadCodec.receiveRequestPrefix]
             )
         )
-        XCTAssertEqual(
+        XCTAssertThrowsError(
             try IrohaOfflineDeviceToDeviceTextPayload.normalize(
                 " \(receiveRequest)\n",
                 expectedKind: .receiveRequest
-            ),
-            receiveRequest
-        )
+            )
+        ) { error in
+            XCTAssertEqual(error as? OfflineNoteTextTransferContractError, .invalidCharacters)
+        }
         XCTAssertTrue(
             IrohaOfflineDeviceToDeviceTextPayload.isValid(receiveRequest, expectedKind: .receiveRequest)
         )

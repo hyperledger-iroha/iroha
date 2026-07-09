@@ -6857,11 +6857,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// Execute a closure with a mutable reference to the [`CoreHost`] attached to `vm`.
     ///
     /// Used in tests to access the host state without juggling raw pointers.
-    pub fn with_host<R>(vm: &mut IVM, f: impl FnOnce(&mut CoreHost) -> R) -> R {
+    pub fn with_host<R>(vm: &mut IVM, f: impl FnOnce(&mut Self) -> R) -> R
+    where
+        Self: 'static,
+    {
         let host_any = vm.host_mut_any().expect("CoreHost not attached to VM");
         let host = host_any
-            .downcast_mut::<CoreHost>()
-            .expect("host type mismatch: expected CoreHost");
+            .downcast_mut::<Self>()
+            .expect("host type mismatch: expected CoreHostImpl variant");
         f(host)
     }
 }

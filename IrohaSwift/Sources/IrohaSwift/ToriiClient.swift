@@ -17199,6 +17199,54 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try decodeJSON(ToriiConfidentialAssetPolicy.self, from: data)
     }
 
+    @discardableResult
+    public func getZkAssetMerklePaths(asset: String,
+                                      commitments: [Data],
+                                      completion: @escaping (Result<[ZkAssetMerklePath], Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) {
+            try await self.getZkAssetMerklePaths(asset: asset, commitments: commitments)
+        }
+    }
+
+    public func getZkAssetMerklePaths(asset: String,
+                                      commitments: [Data]) async throws -> [ZkAssetMerklePath] {
+        let requestBody = try ToriiZkMerklePathRequest(assetId: asset, commitments: commitments)
+        if requestBody.commitments.isEmpty {
+            return []
+        }
+        let request = try makeRequest(path: "/v1/zk/merkle-path",
+                                      method: .post,
+                                      queryItems: nil,
+                                      body: try JSONEncoder().encode(requestBody),
+                                      headers: ["Content-Type": "application/json"])
+        let data = try await data(for: request)
+        let response: ToriiZkMerklePathResponse
+        do {
+            response = try ToriiZkMerklePathResponse.decodeStrict(data)
+        } catch {
+            throw ToriiClientError.decoding(error)
+        }
+        return try response.validatedPaths(expectedCommitments: requestBody.commitments)
+    }
+
+    @discardableResult
+    public func getMerklePathForCommitment(asset: String,
+                                           commitment: Data,
+                                           completion: @escaping (Result<ZkAssetMerklePath, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) {
+            try await self.getMerklePathForCommitment(asset: asset, commitment: commitment)
+        }
+    }
+
+    public func getMerklePathForCommitment(asset: String,
+                                           commitment: Data) async throws -> ZkAssetMerklePath {
+        let paths = try await getZkAssetMerklePaths(asset: asset, commitments: [commitment])
+        guard let path = paths.first, paths.count == 1 else {
+            throw ToriiClientError.invalidPayload("Torii returned an invalid Merkle path count.")
+        }
+        return path
+    }
+
     public func registerContractCode(_ requestBody: ToriiRegisterContractCodeRequest) async throws {
         let request = try makeRequest(path: "/v1/contracts/code",
                                       method: .post,

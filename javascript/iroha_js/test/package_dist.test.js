@@ -41,7 +41,6 @@ import {
   KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
   KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
   KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
-  KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
   KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
   KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
   KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS,
@@ -463,6 +462,7 @@ import { compileKotodamaProgram as compileDistKotodamaProgram } from "../dist/ko
 import { renderCanonicalAccountIdLiteralFromPublicKeyLiteral } from "../src/kotodamaCompiler/accountLiteral.js";
 import { compileKotodamaProgram as compileSrcKotodamaProgram } from "../src/kotodamaCompiler/index.js";
 
+const GENERIC_LINEAGE_FAMILY_ID = "kagemusha-recursive-spend-lineage-v1";
 const UNSUPPORTED_RECURSIVE_SPEND_PROOF_CIRCUIT_ID =
   "kagemusha-recursive-spend-lineage-badhop-v1";
 
@@ -2040,6 +2040,22 @@ function declarationInterface(name) {
   return match[0];
 }
 
+function declarationInterfaceOrType(name) {
+  const interfaceMatch = DECLARATIONS_TEXT.match(
+    new RegExp(
+      `export interface ${name}(?:\\s+extends\\s+[^{]+)?\\s*\\{[\\s\\S]*?\\n\\}`,
+    ),
+  );
+  if (interfaceMatch) {
+    return interfaceMatch[0];
+  }
+  const typeMatch = DECLARATIONS_TEXT.match(
+    new RegExp(`export type ${name}\\s*=\\s*[\\s\\S]*?;\\n`, "u"),
+  );
+  assert.ok(typeMatch, `missing declaration interface or type ${name}`);
+  return typeMatch[0];
+}
+
 function declarationClass(name) {
   const start = DECLARATIONS_TEXT.indexOf(`export class ${name} {`);
   assert.notEqual(start, -1, `missing declaration class ${name}`);
@@ -2812,7 +2828,6 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
     "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND",
     "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1",
-    "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1",
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1",
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1",
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1",
@@ -2964,7 +2979,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "kagemusha-recursive-aggregation-v1",
   );
   assert.equal(
-    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+    GENERIC_LINEAGE_FAMILY_ID,
     "kagemusha-recursive-spend-lineage-v1",
   );
   assert.equal(
@@ -2993,7 +3008,15 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES,
     128,
   );
-  assert.equal(KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES, 64 * 1024 * 1024);
+  assert.equal(KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES, 256 * 1024 * 1024);
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: 268435456;/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export const KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME: "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpRequestV1";/u,
+  );
   assert.equal(
     KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN,
     "iroha:kagemusha:v1:recursive-spend-accumulator",
@@ -3027,6 +3050,14 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "iroha:kagemusha:recursive-spend-lineage-append-boundary-final-note:v1",
   );
   assert.equal(
+    KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME,
+    "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpRequestV1",
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export const KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME: "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpRequestV1";/u,
+  );
+  assert.equal(
     isSupportedKagemushaRecursiveSpendAppendProofTransition(
       KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
       KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
@@ -3042,29 +3073,29 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   );
   assert.equal(
     isSupportedKagemushaRecursiveSpendAppendProofTransition(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
       KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
-    ),
-    true,
-  );
-  assert.equal(
-    isSupportedKagemushaRecursiveSpendAppendProofTransition(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
     ),
     false,
   );
   assert.equal(
     isSupportedKagemushaRecursiveSpendAppendProofTransition(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
+      GENERIC_LINEAGE_FAMILY_ID,
+    ),
+    false,
+  );
+  assert.equal(
+    isSupportedKagemushaRecursiveSpendAppendProofTransition(
+      GENERIC_LINEAGE_FAMILY_ID,
       KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
     ),
-    true,
+    false,
   );
   assert.equal(
     isSupportedKagemushaRecursiveSpendAppendProofTransition(
       KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
     ),
     false,
   );
@@ -3089,9 +3120,9 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   );
   assert.equal(
     normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
     ),
-    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+    GENERIC_LINEAGE_FAMILY_ID,
   );
   assert.equal(
     normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(
@@ -3109,7 +3140,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     );
   }
   for (const circuitId of [
-    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+    GENERIC_LINEAGE_FAMILY_ID,
   ]) {
     assert.equal(
       isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(circuitId),
@@ -3128,8 +3159,11 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     ),
     false,
   );
+  assert.equal(
+    isKagemushaRecursiveSpendLineageProofCircuitId(GENERIC_LINEAGE_FAMILY_ID),
+    false,
+  );
   for (const circuitId of [
-    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
     KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
     KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
   ]) {
@@ -3152,7 +3186,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   );
   assert.equal(
     requiresKagemushaRecursiveSpendLineageKeyArtifactsForInit(),
-    true,
+    false,
   );
   for (const openingLen of [2, 4, 8, 16, 32, 64, 128]) {
     assert.equal(
@@ -3317,7 +3351,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     [
       {
         ...initArtifacts,
-        proofCircuitId: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+        proofCircuitId: GENERIC_LINEAGE_FAMILY_ID,
       },
       /proof_circuit_id/,
     ],
@@ -3379,7 +3413,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     null,
     "",
     KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
-    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+    GENERIC_LINEAGE_FAMILY_ID,
     KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
     "unknown-kagemusha-recursive-spend-circuit",
   ]) {
@@ -3398,9 +3432,9 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   );
   assert.equal(
     isSupportedKagemushaRecursiveSpendPreviousProofCircuitId(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
     ),
-    true,
+    false,
   );
   assert.equal(
     isSupportedKagemushaRecursiveSpendPreviousProofCircuitId(
@@ -3428,9 +3462,9 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   );
   assert.equal(
     requiresKagemushaRecursiveSpendPreviousLineageVerifierRecordForAppend(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
     ),
-    true,
+    false,
   );
   assert.equal(
     requiresKagemushaRecursiveSpendPreviousLineageVerifierRecordForAppend(
@@ -3452,10 +3486,10 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   );
   assert.equal(
     canRedeemKagemushaRecursiveSpendWitnessless(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
       1,
     ),
-    true,
+    false,
   );
   assert.equal(
     canRedeemKagemushaRecursiveSpendWitnessless(
@@ -3473,10 +3507,10 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   );
   assert.equal(
     requiresKagemushaRecursiveSpendLineageWitnessForRedeem(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
       1,
     ),
-    false,
+    true,
   );
   assert.equal(
     canRedeemKagemushaRecursiveSpendWitnessless(
@@ -3487,26 +3521,26 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   );
   assert.equal(
     requiresKagemushaRecursiveSpendLineageWitnessForRedeem(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
       2,
     ),
-    false,
+    true,
   );
   for (const [circuitId, hopCount] of [
-    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, -1],
+    [GENERIC_LINEAGE_FAMILY_ID, -1],
     [
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
       Number.MAX_SAFE_INTEGER,
     ],
-    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, Number.NaN],
+    [GENERIC_LINEAGE_FAMILY_ID, Number.NaN],
     [
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
       Number.POSITIVE_INFINITY,
     ],
-    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, 1n],
-    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, new Number(1)],
-    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, true],
-    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, "1"],
+    [GENERIC_LINEAGE_FAMILY_ID, 1n],
+    [GENERIC_LINEAGE_FAMILY_ID, new Number(1)],
+    [GENERIC_LINEAGE_FAMILY_ID, true],
+    [GENERIC_LINEAGE_FAMILY_ID, "1"],
     [undefined, 1],
     [null, 1],
     ["", 1],
@@ -3613,7 +3647,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   );
   assert.equal(
     canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
       1,
     ),
     false,
@@ -3634,14 +3668,14 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   );
   assert.equal(
     canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
       63,
     ),
     false,
   );
   assert.equal(
     canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
       64,
     ),
     false,
@@ -3686,11 +3720,11 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   );
   assert.equal(
     canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
       KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
       1,
     ),
-    true,
+    false,
   );
   assert.equal(
     canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(
@@ -3703,7 +3737,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   assert.equal(
     canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(
       KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
       1,
     ),
     false,
@@ -3711,8 +3745,8 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   );
   assert.equal(
     canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
+      GENERIC_LINEAGE_FAMILY_ID,
       1,
     ),
     false,
@@ -3753,7 +3787,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   }
   assert.equal(
     requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
       1,
     ),
     false,
@@ -3767,14 +3801,14 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   );
   assert.equal(
     requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
       64,
     ),
     false,
   );
   assert.equal(
     requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      GENERIC_LINEAGE_FAMILY_ID,
       0,
     ),
     false,
@@ -3800,7 +3834,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   ]) {
     assert.equal(
       requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend(
-        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+        GENERIC_LINEAGE_FAMILY_ID,
         previousHopCount,
       ),
       false,
@@ -5506,6 +5540,22 @@ test("package dist Kagemusha recursive spend typed requests reject malformed raw
     kagemushaRequestCodecError("field", "lineageVerifierKey", null),
     "package dist accepted init raw lineage proving key without verifier key",
   );
+  const semanticInitRequest = encodeKagemushaRecursiveSpendInitRequest({
+    recordBundle,
+    pallasOpenEnvelopes,
+    currentNote,
+  });
+  assert.ok(Buffer.isBuffer(semanticInitRequest));
+  assert.equal(semanticInitRequest.length > 0, true);
+  const semanticNullInitRequest = encodeKagemushaRecursiveSpendInitRequest({
+    recordBundle,
+    pallasOpenEnvelopes,
+    currentNote,
+    lineageVerifierKey: null,
+    lineageProvingKeyArchive: null,
+  });
+  assert.ok(Buffer.isBuffer(semanticNullInitRequest));
+  assert.equal(semanticNullInitRequest.length > 0, true);
   assert.throws(
     () =>
       encodeKagemushaRecursiveSpendInitRequest({
@@ -8430,6 +8480,173 @@ test("package dist entrypoint exports production component privacy helpers", () 
     DECLARATIONS_TEXT,
     /export interface AnonymousPgcProofV1VerificationResult[\s\S]*production: true;[\s\S]*kind: "anonymous-pgc-k-out-of-n-v1";[\s\S]*backend: "Stark";/u,
   );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type AnonymousPgcPaymentBindingHashInput =[\s\S]*\{ paymentBindingHash: BinaryLike; payment_binding_hash\?: never \}[\s\S]*\{ paymentBindingHash\?: never; payment_binding_hash: BinaryLike \};/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type AnonymousPgcReceiverSetMaterialInput =[\s\S]*receiverSet\?: AnonymousPgcReceiverSetInput \| AnonymousPgcReceiverSet;[\s\S]*receivers\?: never;[\s\S]*receiver_set\?: AnonymousPgcReceiverSetInput \| AnonymousPgcReceiverSet;[\s\S]*receiverSet\?: never;[\s\S]*receivers\?: ReadonlyArray<AnonymousPgcReceiverInput>;/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type AnonymousPgcAccountCommitmentInstructionInput =[\s\S]*AnonymousPgcRequiredAlias2<[\s\S]*"accountCommitment"[\s\S]*"account_commitment"[\s\S]*BinaryLike[\s\S]*AnonymousPgcRequiredAlias2<[\s\S]*"anonymitySetRoot"[\s\S]*"anonymity_set_root"[\s\S]*BinaryLike[\s\S]*AnonymousPgcRequiredAlias2<"chainId", "chain_id", string>/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type AnonymousPgcDevProofFixtureInput =\s*AnonymousPgcProofMaterialInput & AnonymousPgcPaymentBindingHashInput;/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type AnonymousPgcProofV1Input =\s*AnonymousPgcDevProofFixtureInput & AnonymousPgcProofBytesInput;/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type AnonymousPgcProofV1VerificationInput =[\s\S]*AnonymousPgcProofMaterialInput &[\s\S]*AnonymousPgcProofEnvelopeInput &[\s\S]*AnonymousPgcOptionalPaymentBindingHashInput;/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type AnonymousPgcTransferInstructionInput =\s*AnonymousPgcProofV1VerificationInput & AnonymousPgcPaymentBindingHashInput;/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface AnonymousPgcDevProofFixture[\s\S]*public_input_bytes: Buffer;[\s\S]*publicInputBytes: Buffer;/u,
+  );
+});
+
+test("package dist Anonymous PGC transfer instruction requires explicit payment binding", () => {
+  const receiverSet = buildAnonymousPgcReceiverSet({
+    threshold: 1,
+    receivers: [
+      {
+        accountCommitment: Buffer.alloc(32, 0x21),
+        ciphertextCommitment: Buffer.alloc(32, 0x31),
+      },
+      {
+        accountCommitment: Buffer.alloc(32, 0x22),
+        ciphertextCommitment: Buffer.alloc(32, 0x32),
+      },
+    ],
+  });
+  const base = {
+    receiverSet,
+    anonymitySetRoot: Buffer.alloc(32, 0x41),
+    payload: Buffer.from("anonymous-pgc:alice:bob:42"),
+    balanceCommitments: [Buffer.alloc(32, 0x51), Buffer.alloc(32, 0x52)],
+    linkTag: Buffer.alloc(32, 0x61),
+    rangeCommitments: [Buffer.alloc(32, 0x71)],
+    paymentBindingHash: Buffer.alloc(32, 0x62),
+    chainId: "boi-localnet",
+    domainSeparator: "boi:anonymous-pgc:v1",
+    vkHash: Buffer.alloc(32, 0x55),
+  };
+  const envelope = buildAnonymousPgcKOutOfNProofV1({
+    ...base,
+    proofBytes: Buffer.from("external-anonymous-pgc-proof-v1"),
+  });
+  const devFixture = buildAnonymousPgcDevProofFixture(base);
+  const decodedDevFixture = noritoDecodePrivacyProofEnvelope(devFixture.envelope);
+  assert.equal(Buffer.isBuffer(devFixture.public_input_bytes), true);
+  assert.equal(Buffer.isBuffer(devFixture.publicInputBytes), true);
+  assert.equal(devFixture.public_input_bytes.equals(devFixture.publicInputBytes), true);
+  assert.equal(
+    devFixture.public_input_bytes.equals(Buffer.from(decodedDevFixture.public_inputs)),
+    true,
+  );
+  const transferInput = {
+    proofEnvelope: envelope,
+    receiverSet,
+    payload: base.payload,
+    anonymitySetRoot: base.anonymitySetRoot,
+    balanceCommitments: base.balanceCommitments,
+    linkTag: base.linkTag,
+    rangeCommitments: base.rangeCommitments,
+    paymentBindingHash: base.paymentBindingHash,
+    chainId: base.chainId,
+    domainSeparator: base.domainSeparator,
+  };
+  const transferInputWithoutPaymentBinding = { ...transferInput };
+  delete transferInputWithoutPaymentBinding.paymentBindingHash;
+
+  assert.equal(
+    verifyAnonymousPgcKOutOfNProofV1(transferInputWithoutPaymentBinding).ok,
+    true,
+  );
+  assert.throws(
+    () => buildAnonymousPgcTransferInstruction(transferInputWithoutPaymentBinding),
+    /paymentBindingHash is required/,
+  );
+  assert.throws(
+    () =>
+      buildAnonymousPgcTransferInstruction({
+        ...transferInput,
+        paymentBindingHash: Buffer.alloc(32, 0x63),
+      }),
+    /paymentBindingHash must match the envelope public inputs/,
+  );
+  assert.throws(
+    () =>
+      buildAnonymousPgcKOutOfNProofV1({
+        ...base,
+        payment_binding_hash: base.paymentBindingHash,
+        proofBytes: Buffer.from("external-anonymous-pgc-proof-v1"),
+      }),
+    /multiple payment binding hash aliases/,
+  );
+  assert.throws(
+    () =>
+      buildAnonymousPgcKOutOfNProofV1({
+        ...base,
+        receivers: [
+          {
+            accountCommitment: Buffer.alloc(32, 0x21),
+            ciphertextCommitment: Buffer.alloc(32, 0x31),
+          },
+          {
+            accountCommitment: Buffer.alloc(32, 0x22),
+            ciphertextCommitment: Buffer.alloc(32, 0x32),
+          },
+        ],
+        proofBytes: Buffer.from("external-anonymous-pgc-proof-v1"),
+      }),
+    /receiverSet must not be combined with inline receiver-set fields/,
+  );
+  assert.throws(
+    () =>
+      buildAnonymousPgcKOutOfNProofV1({
+        ...base,
+        maxPayloadBytes: 1024,
+        max_payload_bytes: 1024,
+        proofBytes: Buffer.from("external-anonymous-pgc-proof-v1"),
+      }),
+    /multiple max payload byte limit aliases/,
+  );
+  assert.throws(
+    () =>
+      verifyAnonymousPgcKOutOfNProofV1({
+        ...transferInput,
+        payment_binding_hash: base.paymentBindingHash,
+      }),
+    /multiple paymentBindingHash aliases/,
+  );
+  assert.throws(
+    () =>
+      buildAnonymousPgcTransferInstruction({
+        ...transferInput,
+        payment_binding_hash: base.paymentBindingHash,
+      }),
+    /multiple payment binding hash aliases/,
+  );
+  assert.throws(
+    () =>
+      buildAnonymousPgcAccountCommitmentInstruction({
+        accountCommitment: Buffer.alloc(32, 0x21),
+        account_commitment: Buffer.alloc(32, 0x21),
+        anonymitySetRoot: Buffer.alloc(32, 0x41),
+        chainId: "boi-localnet",
+      }),
+    /multiple account commitment aliases/,
+  );
 });
 
 test("package dist ZK-AMS production helpers reject dev fixture bytes", () => {
@@ -8495,7 +8712,6 @@ test("package dist privacy proof envelopes preserve pending production backend t
     ["Halo2IpaPasta", "Halo2IpaPasta"],
     ["halo2/pasta/kagemusha-recursive-aggregation-v1", "Halo2IpaPasta"],
     ["halo2/pasta/kagemusha-recursive-compact-v1", "Halo2IpaPasta"],
-    ["halo2/pasta/kagemusha-recursive-spend-lineage-v1", "Halo2IpaPasta"],
     [
       "halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1",
       "Halo2IpaPasta",
@@ -9241,6 +9457,7 @@ test("package dist privacy dev proof fixtures reject production metadata claims"
         balanceCommitments: [Buffer.alloc(32, 0x51), Buffer.alloc(32, 0x52)],
         linkTag: Buffer.alloc(32, 0x61),
         rangeCommitments: [Buffer.alloc(32, 0x71)],
+        paymentBindingHash: Buffer.alloc(32, 0x62),
         chainId: "boi-localnet",
         domainSeparator: "boi:anonymous-pgc:v1",
         vkHash: Buffer.alloc(32, 0x55),
@@ -10818,12 +11035,13 @@ test("package declarations do not advertise privacy production metadata inputs",
     "ZkX509IdentityEnvelopeInput",
     "JindoLatticeProofEnvelopeInput",
     "SisHintsCredentialEnvelopeInput",
+    "AnonymousPgcProofMaterialInput",
     "AnonymousPgcDevProofFixtureInput",
     "VeRangeProofEnvelopeInput",
     "VeRangeProofV1Input",
     "VeRangeDevProofFixtureInput",
   ]) {
-    const declaration = declarationInterface(name);
+    const declaration = declarationInterfaceOrType(name);
     assert.doesNotMatch(
       declaration,
       /\bproduction\b/u,

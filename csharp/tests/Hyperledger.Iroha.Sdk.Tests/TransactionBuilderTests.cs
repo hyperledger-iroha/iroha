@@ -1137,7 +1137,7 @@ public sealed class TransactionBuilderTests
             "lineageVerifierRecordCount",
             () => builder.KagemushaRecursiveRedeem(
                 malformedRequestArchive,
-                KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
+                KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
                 hopCount: 1u,
                 hasLineageWitness: true,
                 hasLineageVerifierRecord: false,
@@ -1149,7 +1149,7 @@ public sealed class TransactionBuilderTests
             "lineageVerifierRecordCount",
             () => builder.KagemushaRecursiveRedeem(
                 malformedRequestArchive,
-                KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
+                KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
                 hopCount: 1u,
                 hasLineageWitness: true,
                 hasLineageVerifierRecord: false,

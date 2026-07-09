@@ -853,13 +853,16 @@ single-record path and also carry the trailing defaulted
 records; C# metadata-bound `Redeem(...)` overloads accept either source through
 the plural record-count preflight while the single-record boolean overloads
 are part of the first-release API.
-Production init requests and Reserved-lineage append-output requests must also
-include packaged lineage key artifacts in the raw Norito request:
-`lineage_verifier_key` and `lineage_proving_key_archive`. Missing artifacts are
-rejected before runtime key generation.
-Use `LineageKeyArtifactsForInit(...)` and `LineageKeyArtifactsForAppend(...)`
-to package and validate these verifier/proving key artifacts before building
-the raw request.
+Init requests may omit both packaged lineage key artifacts to select the
+semantic recursive aggregation path. That bundle is valid for offline
+acceptance and re-spending, while online redemption must carry the
+record-backed lineage witness. Supplying exactly one of `lineage_verifier_key`
+or `lineage_proving_key_archive` is rejected. Reserved-lineage append-output
+requests must still include the append lineage key artifacts in the raw Norito
+request. Use `LineageKeyArtifactsForInit(...)` and
+`LineageKeyArtifactsForAppend(...)` to package and validate these
+verifier/proving key artifacts before building a witnessless Reserved-lineage
+request.
 Semantic append is bounded by the separate `CompactTokenMaxHops` constant;
 witnessless Reserved-lineage append and redeem use
 `RecursiveSpendLineageWitnesslessMaxHopsV1`.

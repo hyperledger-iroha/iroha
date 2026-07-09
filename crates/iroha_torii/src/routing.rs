@@ -9041,15 +9041,31 @@ fn verified_taira_tron_xor_diagnostic_source_bundle_allows_static_disabled_manif
     taira_diagnostic_local_admission: bool,
 ) -> bool {
     configured_source_lane.is_none()
-        && (fallback_source_material.is_some() || taira_diagnostic_local_admission)
+        && (fallback_source_material.is_some()
+            || sccp_taira_tron_xor_diagnostic_fixture_local_admission_enabled(
+                taira_diagnostic_local_admission,
+            ))
         && destination_binding.is_none()
         && proof_bytes.is_none()
         && iroha_sccp::sccp_taira_tron_xor_diagnostic_message_bundle_structure(bundle)
 }
 
+#[cfg(test)]
+fn sccp_taira_tron_xor_diagnostic_fixture_local_admission_enabled(enabled: bool) -> bool {
+    enabled
+}
+
+#[cfg(not(test))]
+fn sccp_taira_tron_xor_diagnostic_fixture_local_admission_enabled(_enabled: bool) -> bool {
+    false
+}
+
 fn sccp_taira_tron_xor_diagnostic_local_admission_enabled_for_chain(
     chain_id: &iroha_data_model::ChainId,
 ) -> bool {
+    if !sccp_taira_tron_xor_diagnostic_fixture_local_admission_enabled(true) {
+        return false;
+    }
     chain_id.as_str() == iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1
 }
 
@@ -9272,6 +9288,10 @@ fn sccp_message_artifact_for_material_request(
     fallback_source_material: Option<&iroha_sccp::SccpSourceVerifierMaterialV1>,
     taira_diagnostic_local_admission: bool,
 ) -> Result<Option<NexusSccpMessageTransparentProofV1>> {
+    #[cfg(not(test))]
+    let _ = (fallback_source_material, taira_diagnostic_local_admission);
+
+    #[cfg(test)]
     if fallback_source_material.is_none()
         && verified_taira_tron_xor_diagnostic_source_bundle_allows_static_disabled_manifest(
             bundle,

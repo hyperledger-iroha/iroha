@@ -433,8 +433,6 @@ export const KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT =
 export const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND = "halo2/ipa";
 export const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 =
   "kagemusha-recursive-aggregation-v1";
-export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 =
-  "kagemusha-recursive-spend-lineage-v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1 =
   "kagemusha-recursive-spend-lineage-onehop-v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1 =
@@ -445,7 +443,7 @@ export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = tru
 export const KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1 = 1;
 export const KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES = 8 * 1024 * 1024;
 export const KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES = 128;
-export const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;
+export const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 256 * 1024 * 1024;
 export const KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN =
   "iroha:kagemusha:v1:recursive-spend-accumulator";
 export const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN =
@@ -553,7 +551,6 @@ export function canRedeemKagemushaRecursiveSpendWitnessless(proofCircuitId, hopC
 
 export function isKagemushaRecursiveSpendLineageProofCircuitId(proofCircuitId) {
   return (
-    proofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 ||
     proofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1 ||
     proofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
   );
@@ -1037,7 +1034,7 @@ function privacyCrc64(payload) {
 }
 
 export function requiresKagemushaRecursiveSpendLineageKeyArtifactsForInit() {
-  return true;
+  return false;
 }
 
 export function requiresKagemushaRecursiveSpendLineageWitnessForRedeem(

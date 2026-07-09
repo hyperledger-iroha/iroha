@@ -350,7 +350,7 @@ REQUIRED_PRIVACY_PLAN_PUBLIC_INPUT_SCHEMA_BY_ALGORITHM_ID = {
         "anonymity_set_root,tx_digest,balance_commitments,"
         "receiver_set_commitment,receiver_ciphertext_commitments,"
         "receiver_threshold,receiver_count,link_tag,range_commitments,"
-        "chain_id,domain_separator"
+        "payment_binding_hash,chain_id,domain_separator"
     ),
     "verange-transparent-range-v1": (
         "commitments,range_parameters,aggregation_count,domain_separator,"
@@ -656,7 +656,7 @@ REQUIRED_PRIVACY_PLAN_FAILURE_MODES_BY_ALGORITHM_ID = {
     "pq-masp-stark-v0": ("stale asset-set root", "duplicate PQ nullifier", "ML-DSA or ML-KEM domain mismatch", "malformed proof bytes", "wrong verifier key", "public input mismatch"),
 }
 REQUIRED_PRIVACY_PLAN_SECURITY_NOTES_BY_ALGORITHM_ID = {
-    "anonymous-pgc-k-out-of-n-v1": ("Requires fresh anonymity-set roots and replay/link-tag state.", "Amount privacy depends on the range-proof component and commitment binding.", "Receiver ciphertext commitments must bind to the same transaction digest as the proof.", "Production Anonymous PGC proof admission requires a caller-supplied proof envelope bound to the anonymity root, receiver set, link tag, range commitments, chain id, and domain separator.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
+    "anonymous-pgc-k-out-of-n-v1": ("Requires fresh anonymity-set roots and replay/link-tag state.", "Amount privacy depends on the range-proof component and commitment binding.", "Receiver ciphertext commitments must bind to the same transaction digest as the proof.", "Production Anonymous PGC proof admission requires a caller-supplied proof envelope bound to the anonymity root, receiver set, link tag, range commitments, payment binding hash, chain id, and domain separator.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
     "verange-transparent-range-v1": ("This range-proof backend component is not a standalone payment protocol.", "Range parameters must be bound to the transaction payload and verifier key.", "Aggregated proof limits must be enforced by validators.", "The SDK dev fixture is non-production and verifies deterministic binding only; production VeRange proving remains unavailable until the hardening gates pass.", "Wallet witnesses and private range inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
     "zkat-policy-private-auth-v1": ("Hides authorization policy, not payment fields.", "Policy commitments require explicit epoch, replay, and rotation semantics.", "Combining with ZK-ACE requires both proofs to bind the same transaction digest.", "Production zkAt proof admission requires canonical policy commitments, transaction digest binding, account/action/domain binding, verifier-key registration, deterministic vectors, parser/verifier fuzzing, performance gates, and internal cryptographic review.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
     "zk-ams-recursive-admission-v0": ("Admission privacy is separate from later payment privacy.", "Duplicate admission prevention depends on issuer-scoped nullifiers.", "Recursive batching must bind every admitted account commitment.", "This production admission component is proof-verifiable but not a standalone payment protocol.", "Production ZK-AMS admission requires canonical issuer roots, admission-nullifier sets, anonymous account commitments, recursive admission digests, domain binding, verifier-key registration, deterministic vectors, parser/verifier fuzzing, performance gates, and internal cryptographic review.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet admission witnesses and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
@@ -1041,7 +1041,7 @@ _RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON = (
     "e_amount\",\"hide_sender\",\"hide_receiver\"],\"proofFamily\":\"anonymous-pgc-k-out-of-n\",\"publi"
     "cInputsSchema\":\"anonymity_set_root,tx_digest,balance_commitments,receiver_set_commitment"
     ",receiver_ciphertext_commitments,receiver_threshold,receiver_count,link_tag,range_commit"
-    "ments,chain_id,domain_separator\",\"verifierKeyId\":\"anonymous_pgc_k_out_of_n_v1\",\"pqLayers"
+    "ments,payment_binding_hash,chain_id,domain_separator\",\"verifierKeyId\":\"anonymous_pgc_k_out_of_n_v1\",\"pqLayers"
     "\":{\"proof\":false,\"authorization\":false,\"note_encryption\":false},\"implementationStage\":\"s"
     "dk-builder\",\"recommendedFor\":[\"account-based private payments\",\"multi-receiver confident"
     "ial transfers\",\"payment privacy without a note-based shielded pool UX\"],\"sourceReference"
@@ -1050,8 +1050,9 @@ _RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON = (
     "\"Amount privacy depends on the range-proof component and commitment binding.\",\"Receiver "
     "ciphertext commitments must bind to the same transaction digest as the proof.\",\"Producti"
     "on Anonymous PGC proof admission requires a caller-supplied proof envelope bound to the "
-    "anonymity root, receiver set, link tag, range commitments, chain id, and domain separato"
-    "r.\",\"Wallet witness material and private inputs must stay local and must not be exposed "
+    "anonymity root, receiver set, link tag, range commitments, payment binding hash, chain "
+    "id, and domain separator.\",\"Wallet witness material and private inputs must stay local and "
+    "must not be exposed "
     "through SDK or chain APIs.\",\"Production hardening requires deterministic vectors, negati"
     "ve/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, pe"
     "rformance gates, and internal cryptographic review.\"],\"requiredState\":[\"anonymous accoun"

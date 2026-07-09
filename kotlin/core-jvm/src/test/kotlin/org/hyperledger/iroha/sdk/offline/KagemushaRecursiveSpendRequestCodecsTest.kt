@@ -24,6 +24,22 @@ import kotlin.test.assertTrue
 
 class KagemushaRecursiveSpendRequestCodecsTest {
     @Test
+    fun `first release API does not expose proof output only fold builder`() {
+        val source = repoFile(
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/" +
+                "KagemushaRecursiveSpendRequestCodecs.kt",
+        )
+        assertFalse(
+            source.contains("hopProofOutputArchives"),
+            "Kotlin SDK exposes proof-output-only fold inputs",
+        )
+        assertFalse(
+            source.contains("buildVerifiedFoldRecordBundle(\n        hopProofOutputArchives"),
+            "Kotlin SDK exposes a proof-output-only fold builder",
+        )
+    }
+
+    @Test
     @Suppress("UNCHECKED_CAST")
     fun `ABI 7 fixture manifest matches archive fixture`() {
         val manifest = JsonParser.parse(
@@ -1167,14 +1183,13 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             topUpLineageInit.message,
         )
 
-        val missingLineage = assertFailsWith<IllegalArgumentException> {
-            InitSpendRequest(
-                recordBundle = recordBundle,
-                pallasOpenEnvelopes = pallasOpenEnvelopes,
-                currentNote = note,
-            )
-        }
-        assertEquals("lineageVerifierKey is required for recursive spend init", missingLineage.message)
+        val semanticInit = InitSpendRequest(
+            recordBundle = recordBundle,
+            pallasOpenEnvelopes = pallasOpenEnvelopes,
+            currentNote = note,
+        )
+        assertEquals(null, semanticInit.lineageVerifierKey)
+        assertEquals(null, semanticInit.lineageProvingKeyArchive)
         val topUpInitMultiHop = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendTopUpInitRequest(
                 recordBundle = sampleRecordBundle(hopCount = 2),
@@ -1599,7 +1614,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             )
         }
         assertEquals(
-            "lineageVerifierKey is required for recursive spend init",
+            "lineageVerifierKey is required when lineageProvingKeyArchive is present",
             autoInitPallasMissingLineageKey.message,
         )
         val autoInitPallasWrongProfile = assertFailsWith<IllegalArgumentException> {
@@ -1700,25 +1715,13 @@ class KagemushaRecursiveSpendRequestCodecsTest {
     }
 
     @Test
-    fun `proof output only evidence builders fail closed`() {
+    fun `proof output only request helpers fail closed`() {
         val verifierRecord = sampleVerifierRecord()
 
         val pallasError = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.buildPallasOpenEnvelopesArchive(emptyList())
         }
         assertEquals("hops must not be empty", pallasError.message)
-
-        val bundleError = assertFailsWith<IllegalArgumentException> {
-            KagemushaRecursiveSpendRequestCodecs.buildVerifiedFoldRecordBundle(
-                listOf(byteArrayOf(1)),
-                listOf(verifierRecord),
-            )
-        }
-        assertEquals(
-            "chainId, asset, and rootAfter are required to build KagemushaVerifiedFoldRecordBundle; " +
-                "use VerifiedFoldHopEvidence inputs instead",
-            bundleError.message,
-        )
 
         val initError = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendInitRequest(
@@ -2075,16 +2078,31 @@ class KagemushaRecursiveSpendRequestCodecsTest {
     fun `typed requests reject malformed archives heights and lineage gaps before native dispatch`() {
         val initLineageArtifacts = sampleInitLineageArtifacts(seed = 0x6a)
         val appendLineageArtifacts = sampleAppendLineageArtifacts(seed = 0x6b)
-        val missingInitLineageVerifierKey = assertFailsWith<IllegalArgumentException> {
+        val partialInitLineageVerifierKey = assertFailsWith<IllegalArgumentException> {
             InitSpendRequest(
                 recordBundle = sampleRecordBundle(),
                 pallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive(),
                 currentNote = sampleNote(),
+                lineageVerifierKey = null,
+                lineageProvingKeyArchive = initLineageArtifacts.provingKeyArchive,
             )
         }
         assertEquals(
-            "lineageVerifierKey is required for recursive spend init",
-            missingInitLineageVerifierKey.message,
+            "lineageVerifierKey is required when lineageProvingKeyArchive is present",
+            partialInitLineageVerifierKey.message,
+        )
+        val partialInitLineageProvingKey = assertFailsWith<IllegalArgumentException> {
+            InitSpendRequest(
+                recordBundle = sampleRecordBundle(),
+                pallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive(),
+                currentNote = sampleNote(),
+                lineageVerifierKey = initLineageArtifacts.verifierKey,
+                lineageProvingKeyArchive = null,
+            )
+        }
+        assertEquals(
+            "lineageProvingKeyArchive is required when lineageVerifierKey is present",
+            partialInitLineageProvingKey.message,
         )
         val initWrongRecordBundle = assertFailsWith<IllegalArgumentException> {
             InitSpendRequest(
@@ -3993,6 +4011,18 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             directory = directory.parent
         }
         error("missing shared recursive spend ${abi.name} fixture $fileName")
+    }
+
+    private fun repoFile(relativePath: String): String {
+        var directory: Path? = Paths.get("").toAbsolutePath()
+        while (directory != null) {
+            val candidate = directory.resolve(relativePath)
+            if (Files.isRegularFile(candidate)) {
+                return String(Files.readAllBytes(candidate), Charsets.UTF_8)
+            }
+            directory = directory.parent
+        }
+        error("missing repo file $relativePath")
     }
 
     private enum class FixtureAbi(val directory: String) {

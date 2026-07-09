@@ -9,7 +9,6 @@
   "operation_count": 9,
   "proof_circuit_ids": {
     "recursive_aggregation": "kagemusha-recursive-aggregation-v1",
-    "reserved_lineage": "kagemusha-recursive-spend-lineage-v1",
     "reserved_lineage_one_hop": "kagemusha-recursive-spend-lineage-onehop-v1",
     "reserved_lineage_append": "kagemusha-recursive-spend-lineage-append-v1"
   },
@@ -19,7 +18,7 @@
     "previous_proof_open_envelopes_required_count": 1,
     "previous_proof_open_envelopes_max_bytes": 8388608,
     "pallas_open_envelope_max_transcript_label_bytes": 128,
-    "native_archive_max_bytes": 67108864
+    "native_archive_max_bytes": 268435456
   },
   "domains": {
     "transition_profile": "iroha:kagemusha:v1:recursive-spend-transition-profile",
@@ -147,8 +146,8 @@
       {
         "circuit_id": "kagemusha-recursive-spend-lineage-v1",
         "hop_count": 1,
-        "allowed": true,
-        "requires_lineage_witness": false
+        "allowed": false,
+        "requires_lineage_witness": true
       },
       {
         "circuit_id": "kagemusha-recursive-spend-lineage-onehop-v1",
@@ -163,7 +162,7 @@
         "requires_lineage_witness": false
       },
       {
-        "circuit_id": "kagemusha-recursive-spend-lineage-v1",
+        "circuit_id": "kagemusha-recursive-spend-lineage-append-v1",
         "hop_count": 64,
         "allowed": true,
         "requires_lineage_witness": false
