@@ -5,7 +5,7 @@
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
-    smartcontracts::ivm::host::CoreHost,
+    smartcontracts::ivm::host::{CoreHost, CoreHostImpl},
     state::{State, World, WorldReadOnly},
 };
 use iroha_data_model::{account::NewAccount, prelude::*};
@@ -94,7 +94,6 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
 
     // Build VM with CoreHost and preload INPUT
     let mut vm = IVM::new(500_000);
-    vm.set_host(CoreHost::new(from.clone()));
     vm.memory
         .preload_input(off_from, &from_bytes)
         .expect("preload input");
@@ -116,8 +115,6 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
     vm.set_register(12, ptr_asset);
     vm.set_register(13, ptr_amount);
     vm.set_register(14, ptr_dataspace);
-    vm.run().unwrap();
-
     // Build a minimal State and apply setup ISIs (register domain/accounts/asset, mint initial balance)
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -139,8 +136,11 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
     let reg_domain = RegisterBox::from(Register::domain(new_domain));
     let reg_from = RegisterBox::from(Register::account(NewAccount::new(from.clone())));
     let reg_to = RegisterBox::from(Register::account(NewAccount::new(to.clone())));
-    let new_asset_def =
-        AssetDefinition::numeric(asset_def.clone()).with_name(asset_def.name().to_string());
+    let new_asset_def = AssetDefinition::numeric(asset_def.clone())
+        .with_name(asset_def.name().to_string())
+        .with_balance_scope_policy(
+            iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+        );
     let reg_asset_def = RegisterBox::from(Register::asset_definition(new_asset_def));
     let mint = MintBox::from(Mint::asset_numeric(
         1000u64,
@@ -163,13 +163,34 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
             .execute_instruction(&mut tx, &from, instr)
             .expect("setup should succeed");
     }
-
-    // Apply queued transfer via CoreHost bridge
-    let queued = CoreHost::with_host(&mut vm, |host| host.apply_queued(&mut tx, &from))
-        .expect("apply queued instructions");
-    assert_eq!(queued.len(), 1);
     tx.apply();
-    block.commit().expect("commit block");
+    block.commit().expect("commit setup block");
+
+    {
+        let view = state.view();
+        let mut host = CoreHostImpl::new(from.clone());
+        host.set_query_state(&view);
+        vm.run_with_host(&mut host).unwrap();
+
+        let header = iroha_data_model::block::BlockHeader::new(
+            core::num::NonZeroU64::new(2).unwrap(),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+
+        // Apply queued transfer via CoreHost bridge.
+        let queued = host
+            .apply_queued(&mut tx, &from)
+            .expect("apply queued instructions");
+        assert_eq!(queued.len(), 1);
+        tx.apply();
+        block.commit().expect("commit transfer block");
+    }
 
     // Assert balances updated: from decreased by 500, to increased by 500
     let from_asset = AssetId::with_scope(
