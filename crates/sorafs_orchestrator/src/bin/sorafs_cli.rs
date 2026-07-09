@@ -134,27 +134,57 @@ const MODERATION_COMMITTEE_DEFAULT_LISTEN: &str = "127.0.0.1:9196";
 const MODERATION_REGISTRY_DEFAULT_LISTEN: &str = "127.0.0.1:9198";
 
 fn parse_u32_arg(flag: &str, raw: &str, context: &str) -> Result<u32, String> {
-    raw.trim()
+    require_canonical_unsigned_decimal(flag, raw, context)?;
+    raw
         .parse::<u32>()
         .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
 }
 
 fn parse_u64_arg(flag: &str, raw: &str, context: &str) -> Result<u64, String> {
-    raw.trim()
+    require_canonical_unsigned_decimal(flag, raw, context)?;
+    raw
         .parse::<u64>()
         .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
 }
 
 fn parse_u16_arg(flag: &str, raw: &str, context: &str) -> Result<u16, String> {
-    raw.trim()
+    require_canonical_unsigned_decimal(flag, raw, context)?;
+    raw
         .parse::<u16>()
         .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
 }
 
 fn parse_decimal_arg(flag: &str, raw: &str, context: &str) -> Result<Decimal, String> {
-    raw.trim()
+    require_canonical_decimal_token(flag, raw, context)?;
+    raw
         .parse::<Decimal>()
         .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
+}
+
+fn require_canonical_unsigned_decimal(
+    flag: &str,
+    raw: &str,
+    context: &str,
+) -> Result<(), String> {
+    let digits = raw.as_bytes();
+    if digits.is_empty()
+        || !digits.iter().all(u8::is_ascii_digit)
+        || (digits.len() > 1 && digits[0] == b'0')
+    {
+        return Err(format!(
+            "failed to parse `{flag}` for `{context}`: value must be a canonical unsigned decimal integer"
+        ));
+    }
+    Ok(())
+}
+
+fn require_canonical_decimal_token(flag: &str, raw: &str, context: &str) -> Result<(), String> {
+    if raw.is_empty() || raw.trim() != raw || raw.starts_with('+') {
+        return Err(format!(
+            "failed to parse `{flag}` for `{context}`: value must be a canonical decimal"
+        ));
+    }
+    Ok(())
 }
 
 fn infer_i105_network_prefix(raw: &str) -> Option<u16> {
