@@ -63,6 +63,26 @@ class HostileImportedScalar:
         raise AssertionError("secret-token imported EVM live metadata was stringified")
 
 
+class HostileEvmLiveFieldName(str):
+    def __new__(cls, value: str):
+        return str.__new__(cls, value)
+
+    def __str__(self):
+        raise AssertionError("secret-token EVM live field name was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token EVM live field name was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token EVM live field name was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token EVM live field name was compared")
+
+    def __hash__(self):
+        return str.__hash__(self)
+
+
 class HostileImportedInteger:
     def __int__(self):
         raise AssertionError("secret-token imported EVM live integer was coerced")
@@ -913,6 +933,45 @@ def test_evm_route_canary_evidence_hash_rejects_non_string_call_fields_without_s
                     "EVM route-canary evidence hash accepted non-string "
                     f"{field}"
                 )
+
+
+def test_evm_route_canary_collect_requires_exact_destination_domain_keys():
+    module = load_live_module()
+    fake = fake_opener_for(module)
+    route_allowlist_hash = bytes.fromhex(EVM_LIVE_ROUTE_ALLOWLIST_HASH_VECTOR)
+    destination = {
+        "source_domain": module.evidence.SCCP_DOMAIN_SORA,
+        "target_domain": module.evidence.SCCP_DOMAIN_ETH,
+        "bridge_address": fake.bridge,
+        "destination_binding_hash": "0x" + fake.destination_binding.hex(),
+        "verifier_backend_hash": "0x" + module.evidence.evm_verifier_backend_hash().hex(),
+        "proof_family_hash": "0x" + module.evidence.evm_proof_family_hash().hex(),
+        "network_id": "0x" + fake.network_id.hex(),
+    }
+
+    for field in ("source_domain", "target_domain"):
+        forged_destination = dict(destination)
+        forged_destination[HostileEvmLiveFieldName(field)] = forged_destination.pop(field)
+        try:
+            module._collect_route_canary_transaction_evidence(
+                "https://ethereum.example",
+                destination=forged_destination,
+                route_allowlist_hash=route_allowlist_hash,
+                transaction_hash=fake.route_canary_transaction_hash,
+                log_index=fake.route_canary_log_index,
+                block_tag="finalized",
+                opener=fake.opener,
+                timeout=1.0,
+            )
+        except RuntimeError as exc:
+            rendered = str(exc)
+            assert rendered == "destination bridge domains must be integers"
+            assert "secret-token" not in rendered
+            assert "hostile" not in rendered
+        else:
+            raise AssertionError(
+                f"EVM route-canary collect accepted copied {field} key alias"
+            )
 
 
 def test_evm_route_canary_evidence_hash_rejects_non_integer_summary_fields_without_coercion(
@@ -2508,6 +2567,10 @@ def test_live_evm_rejects_non_string_copied_route_metadata_without_stringifying(
             ("route_canary", "evidence_hash"),
             "route canary evidence hash must be an exact hex string",
         ),
+        (
+            ("destination_bridge", "expected_destination_binding_hash_matches"),
+            "TOML output requires --expected-destination-binding-hash",
+        ),
     )
 
     for path, expected_message in cases:
@@ -2528,6 +2591,83 @@ def test_live_evm_rejects_non_string_copied_route_metadata_without_stringifying(
         else:
             raise AssertionError(
                 f"EVM full TOML accepted non-string copied {'.'.join(path)}"
+            )
+
+
+def test_live_evm_rejects_copied_route_metadata_key_aliases_without_stringifying():
+    module = load_live_module()
+    summary = full_evm_live_summary(module)
+
+    cases = (
+        (
+            ("source_record_hashes", "source_verifier_material_hash"),
+            "source verifier material hash must be an exact hex string",
+        ),
+        (
+            ("source_record_hashes", "source_adapter_engine_deployment_hash"),
+            "source adapter engine deployment hash must be an exact hex string",
+        ),
+        (
+            ("route_canary", "evidence_hash"),
+            "route canary evidence hash must be an exact hex string",
+        ),
+    )
+
+    for path, expected_message in cases:
+        forged = copy.deepcopy(summary)
+        container = forged
+        for key in path[:-1]:
+            container = container[key]
+        container[HostileEvmLiveFieldName(path[-1])] = container.pop(path[-1])
+
+        try:
+            module.render_offline_toml(forged)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert "hostile" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(
+                f"EVM full TOML accepted copied key alias {'.'.join(path)}"
+            )
+
+
+def test_live_evm_route_canary_transaction_verification_requires_exact_keys():
+    module = load_live_module()
+    summary = full_evm_live_summary(module)
+    assert module._route_canary_transaction_verified(summary) is True
+
+    cases = (
+        ("route_canary", "evidence_hash"),
+        ("route_canary_transaction", "route_canary_evidence_hash"),
+        ("route_canary_transaction", "message_proof_used"),
+        ("route_canary_transaction", "receipt_block_finalized"),
+        ("route_canary_transaction", "block_receipts_root"),
+    )
+
+    for section, field in cases:
+        forged = copy.deepcopy(summary)
+        forged[section][HostileEvmLiveFieldName(field)] = forged[section].pop(field)
+
+        assert module._route_canary_transaction_verified(forged) is False
+        try:
+            module.render_offline_toml(forged)
+        except ValueError as exc:
+            rendered = str(exc)
+            if section == "route_canary" and field == "evidence_hash":
+                assert rendered == "route canary evidence hash must be an exact hex string"
+            else:
+                assert rendered == "TOML output requires --route-canary-transaction-hash"
+            assert "secret-token" not in rendered
+            assert "hostile" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(
+                f"EVM full TOML accepted route-canary transaction key alias {section}.{field}"
             )
 
 

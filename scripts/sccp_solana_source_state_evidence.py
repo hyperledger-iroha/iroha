@@ -140,7 +140,9 @@ SOLANA_FINALIZED_VOTE_PREFIX = b"sccp:solana:finalized-vote:v1"
 SOLANA_FULL_LIGHT_CLIENT_GATE_PREFIX = b"sccp:solana:full-light-client-gate:v1"
 
 
-def _strip_lower_0x_hex(value: str, *, label: str) -> str:
+def _strip_lower_0x_hex(value: object, *, label: str) -> str:
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be canonical lowercase 0x hex")
     if value.startswith("0X"):
         raise argparse.ArgumentTypeError(f"{label} must use lowercase 0x prefix")
     if not value.startswith("0x"):
@@ -152,7 +154,7 @@ def _strip_lower_0x_hex(value: str, *, label: str) -> str:
 
 
 def parse_hex_bytes(
-    value: str,
+    value: object,
     *,
     label: str,
     byte_length: int,
@@ -163,6 +165,8 @@ def parse_hex_bytes(
     if type(nonzero) is not bool:
         raise ValueError("Solana source-state fixed hex nonzero must be a boolean")
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be canonical lowercase 0x hex")
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
     text = _strip_lower_0x_hex(value, label=label)
@@ -177,9 +181,11 @@ def parse_hex_bytes(
     return raw
 
 
-def parse_u32(value: str, *, label: str) -> int:
+def parse_u32(value: object, *, label: str) -> int:
     """Parse an unsigned 32-bit integer."""
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be a u32")
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must be a u32")
     text = value

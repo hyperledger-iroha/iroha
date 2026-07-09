@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-07-08
+Last updated: 2026-07-09
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -131,6 +131,9 @@ The source-adapter readiness boundary was revalidated under the BLS
 source-verifier feature: built-in/material-only profiles stay blocked, matching
 deployment evidence can open the adapter, and drifted or foreign-target
 deployment descriptors remain rejected.
+Focused Rust SCCP admission validation was also rerun for proof-request
+canonical binding, SORA-origin source-adapter context rejection, and
+deployment-bound transparent proof source-deployment matching.
 Local-admission and generic platform submission payload builders now also
 require caller-supplied transparent public inputs to equal the bundle/context
 public inputs recomputed at packaging time, so package bytes cannot mix a
@@ -160,6 +163,221 @@ required-record, expected native-bundle, cryptographic audit-hash, all-lanes
 summary, phase transcript, native metadata, Markdown blocker, and report-input
 helper paths now complete that verifier sweep; the strict verifier no longer has
 subclass-accepting copied `dict`/`list` checks.
+The active-launch checklist schema inventory now also pins the
+`operator_override` required-record unknown-field diagnostic, keeping unexpected
+active-lane record flags release-blocking.
+The strict bundle recomputation regression now mirrors that
+`records.operator_override` case, so copied all-lanes summaries cannot add
+ungoverned active-lane record flags without tripping the release verifier.
+The active-launch checklist schema inventory also pins the exact
+required-record malformed-key diagnostics across readiness and strict bundle
+tests, so those category-only redaction boundaries cannot silently disappear.
+It now also pins the direct no-unresolved active blocker diagnostics for
+malformed top-level evidence blockers and singular active-lane blockers on both
+paths.
+The same inventory now pins decoded-domain blocker assertions, keeping active
+encoded blockers visible, unscoped active-lane blockers prefixed, and
+other-domain blockers suppressed in readiness and strict bundle checks.
+Active-lane blocker routing now also has explicit plain-prefix regressions for
+`route allowlist` and `source adapter`, in addition to the encoded/case-variant
+coverage.
+Malformed copied route-allowlist containers are now asserted on both the route
+binding and live-route-canary checklist gates, with those item-level assertions
+pinned in the active-launch schema inventory.
+The active-launch schema inventory now also pins the full role-reuse blocker
+matrix for source-record, route-allowlist, destination-binding, and source-gate
+hashes across readiness and strict bundle tests.
+Direct active-launch readiness and strict bundle tests now also prove copied
+route-canary operator blockers cannot mask an unbound `evidence_bound` canary.
+The active-launch schema inventory now pins the route-canary binding-hash case
+tables and mismatch sentinels for copied route and destination binding hashes.
+Readiness and strict bundle tests now also prove copied route-canary operator
+blockers cannot mask route or destination canary binding-hash drift.
+The same active route-canary gate now blocks missing, zero, or noncanonical
+sibling route-allowlist and destination-binding hashes directly on the
+live-canary checklist item.
+SCCP route allowlist/canary copied-evidence exact-key hardening was completed
+on 2026-07-09.
+SCCP active source-adapter gate copied-evidence exact-key hardening was also
+completed on 2026-07-09, covering active checklist recomputation,
+cryptographic-evidence row generation, strict all-lanes schema checks, and
+bundle preflight before source-gate readiness can be published.
+SCCP active source-record and destination-binding copied-evidence exact-key
+hardening was completed on 2026-07-09 as well, covering destination blockers,
+native EVM expected destination binding comparison, route-allowlist source hash
+inputs, strict active-checklist recomputation, and bundle destination preflight.
+SCCP native EVM copied-manifest exact-key hardening was completed on
+2026-07-09, covering readiness status assembly, strict verifier status assembly,
+release-bundle native payload source collection, native summary validation, and
+SDK artifact/audit role comparisons.
+SCCP source-context deployment-match hardening was completed on 2026-07-09:
+packaging and transparent-proof verification now reject supplied
+source-adapter deployment descriptors that do not match their source verifier
+material, and local-admission deployment hashes are emitted only for
+production-opening material/deployment pairs.
+SCCP all-lanes source material/deployment exact-key hardening was completed on
+2026-07-09: source-verifier material and source-adapter deployment domain
+dispatch, role-shape checks, template-replay denylists, material/deployment
+comparisons, and source-evidence recomputation args now use exact public
+string-key helpers before copied all-lanes evidence can affect readiness.
+SCCP all-lanes source-live metadata exact-key hardening was completed on
+2026-07-09: EVM and TRON copied source-live RPC, block, source bridge,
+deployment receipt, runtime bytecode, and source bridge config metadata now use
+exact public string-key helpers before source-chain verifier readiness or public
+lane summaries can consume them.
+SCCP all-lanes destination-live metadata exact-key hardening was completed on
+2026-07-09: EVM, TRON, Solana, and TON copied destination-live verifier,
+ProgramData, account, code BoC, destination-binding, and route-canary lookback
+metadata now use exact public string-key helpers before all-lanes readiness can
+consume them.
+SCCP all-lanes route-canary ingress exact-key hardening was completed on
+2026-07-09: copied route-canary status/hash fallbacks, EVM/TRON transcript
+presence probes, TON live-account canary fields, source-adapter gate
+route-canary role checks, cross-lane field rejection, duplicate canary-hash
+scans, and copied blocker lists now use exact public string-key helpers before
+all-lanes readiness can consume them.
+SCCP all-lanes release-checklist exact-key hardening was completed on
+2026-07-09: copied lane, record, source-record hash, source-adapter gate,
+destination-binding, route-allowlist, and route-canary fields are now read
+through exact public string-key helpers, and hostile copied container truthiness
+cannot run before malformed evidence is reported.
+SCCP release-bundle/strict route-canary exact-key hardening was completed on
+2026-07-09: copied route-canary container lookup, semantic domain selection,
+source-gate coherence, not-ready hash-role collection, and cross-lane
+route-canary hash collection now reject hostile public key aliases before copied
+summaries can invoke comparison or stringification hooks.
+SCCP all-lanes public lane schema exact-key hardening was completed on
+2026-07-09: copied lane roots, records, source-record hashes, source-adapter
+gates, EVM live metadata, destination bindings, route allowlists, route-canary
+containers, sibling route/destination hashes, and lane blockers now use exact
+public string-key helpers before public copied-summary schema validation can
+accept or redact them.
+SCCP release-bundle crypto row scalar exact-key hardening was completed on
+2026-07-09: copied `cryptographic_evidence` row header and route-canary scalar
+control fields now use exact public string-key helpers before bundle validation.
+SCCP release-bundle crypto route-canary exact-key hardening was completed on
+2026-07-09: copied route-canary evidence hash, EVM live tags, proof context,
+TRON transcript, finalized receipt metadata, snapshot metadata, and
+source-adapter audit hashes now use exact public string-key helpers before
+bundle validation.
+SCCP strict-verifier crypto row exact-key hardening was completed on
+2026-07-09: strict release-bundle cryptographic-evidence source-gate and row
+schema checks now use exact public string-key helpers before copied public
+crypto, route-canary, EVM live, TRON transcript, receipt, snapshot, or
+source-adapter fields can satisfy bundle verification.
+SCCP release-bundle submission-surface exact-key hardening was completed on
+2026-07-09: copied user-prover submission-surface row fields now use exact
+public string-key helpers before bundle validation.
+SCCP release-bundle EVM live metadata exact-key hardening was completed on
+2026-07-09: copied release-bundle nested `evm_live_metadata` fields now use
+exact public string-key helpers before nested public evidence can pass bundle
+validation.
+SCCP release-bundle report root/corridor exact-key hardening was completed on
+2026-07-09: copied release-bundle report roots and corridor required fields now
+use exact public string-key helpers before public bundle validation or redaction.
+SCCP release-bundle provenance/artifact exact-key hardening was completed on
+2026-07-09: copied input provenance roots, artifact-integrity report and
+corridor roots, corridor phase transcript roots, and manifest nested readiness
+comparisons now use exact public string-key helpers before copied bundle data is
+recomputed, compared, or verified.
+SCCP strict-verifier manifest artifact exact-key hardening was completed on
+2026-07-09: strict release-bundle manifest artifact ordering, referenced-artifact
+collection, native EVM artifact checks, and corridor artifact checks now use
+exact public string-key helpers before copied native/corridor artifacts can be
+included in manifest verification.
+SCCP release-bundle all-lanes summary exact-key hardening was completed on
+2026-07-09: copied release-bundle all-lanes summary root, lane, and lane-record
+fields now use exact public string-key helpers before public evidence can pass
+bundle validation or redaction.
+SCCP all-lanes public summary root exact-key hardening was completed on
+2026-07-09: top-level readiness, blocker, launch-domain lists, lane list,
+release-checklist, and final copied payload construction now use exact public
+string-key helpers before public JSON can publish any copied all-lanes root.
+SCCP all-lanes release-checklist required-key exact-key hardening was completed
+on 2026-07-09: copied checklist root `ready`/`items` and item
+`id`/`title`/`ready`/`blockers` fields now use exact public string-key helpers
+before public all-lanes JSON can validate or redact copied checklist rows.
+SCCP all-lanes evidence section exact-key hardening was completed on
+2026-07-09: evidence-bundle canonical section selection and source-adapter gate
+blocker propagation now use exact public string-key helpers before merged
+operator evidence can satisfy all-lanes validation.
+SCCP release readiness/bundle checklist and Markdown exact-key hardening was
+completed on 2026-07-09: standalone release-readiness public checklist
+validation, checklist Markdown rows, and release-bundle preflight/checklist
+helpers now use exact public string-key reads for copied readiness, blocker,
+root, and item fields.
+SCCP active all-lanes copied-summary exact-key hardening was completed on
+2026-07-09: readiness-report and strict bundle active lane selection, copied
+lane blockers, live metadata, source/destination/route child summaries,
+cryptographic-evidence row generation, and readiness Markdown lane rows now use
+exact public string-key helpers before copied all-lanes evidence can affect
+release readiness.
+SCCP readiness public crypto direct-helper exact-key hardening was completed on
+2026-07-09: standalone readiness Markdown, duplicate-domain, source-record,
+route-canary, source-gate, and audit-hash helper entry points now normalize
+copied public crypto rows through exact public string-key views before direct
+helper diagnostics can consume them.
+SCCP source-inventory Markdown exact-key hardening was completed on 2026-07-09:
+standalone readiness and strict bundle source-inventory Markdown helper entry
+points now normalize copied validation rows through exact public string-key views
+before status, blocker, or Markdown invariant diagnostics can consume them.
+SCCP strict release-checklist Markdown exact-key hardening was completed on
+2026-07-09: strict bundle readiness Markdown release-checklist row and invariant
+helpers now normalize copied checklist roots and items through exact public
+string-key views before gate, status, or blocker diagnostics can consume them.
+Native EVM prover bundle validation now applies the same fail-closed expected
+binding-root rule to the active lane destination-binding hash, so a locally
+canonical native bundle cannot pass when its sibling destination evidence root
+is missing, hostile-aliased, zero, or noncanonical.
+Bundle pre-render and strict verification now also reject non-empty public
+`cryptographic_evidence` claims for destination, route, source-gate hash, or
+source-gate audit roots when the corresponding embedded lane path is missing,
+while still allowing empty public fields to stay empty.
+The same missing-root guard is field-sensitive for booleans:
+`source_adapter_gate_required = false` now fails when embedded
+`source_adapter_gate.required` is absent, while optional false route-canary
+booleans still carry absent/no-claim semantics.
+Standalone public readiness rendering now also recomputes copied
+`release_checklist` payloads from embedded evidence plus native EVM prover
+status before publishing them, so a schema-valid but source-inconsistent
+checklist root is suppressed with fixed diagnostics instead of leaking copied
+operator blocker text.
+The same standalone public JSON path now rejects any claimed-ready report that
+omits a required public root, matching the strict bundle verifier's top-level
+field contract before `production_ready` can be published as true.
+Claimed-ready standalone reports now also require the copied release-checklist,
+corridor, native-prover, source-inventory, and user-prover subroots to be ready
+or passed; blocked but schema-valid subroots are suppressed with fixed
+diagnostics so copied blocker text cannot leak through a forged top-level
+ready claim.
+Not-ready standalone reports now also get fixed top-level summary blockers when
+their schema-valid diagnostic subroots are blocked but the copied top-level
+`blockers` list is empty, keeping public JSON from presenting an unexplained
+not-ready state.
+Release-checklist validators now also require every not-ready checklist state to
+be explained across standalone public JSON, bundle generation, and strict bundle
+verification: `ready: false` roots need at least one false item, and false items
+must carry canonical blockers.
+Standalone public corridor validation now also rejects unexplained not-ready
+states: `production_ready: false` copied corridor roots need canonical blockers,
+and all-passed phase maps cannot contradict the root readiness flag.
+Release-bundle preflight now also rejects unexplained not-ready roots before
+diagnostic bundle generation, so `production_ready: false` must carry at least
+one canonical top-level blocker even under `--allow-not-ready`.
+Final bundle all-lanes validation now applies the same explanation rule to
+published summaries and lane rows: any `production_ready: false` all-lanes root
+or lane must carry canonical blockers before bundle generation or strict
+verification can pass.
+Copied all-lanes source-adapter gates now also apply that rule at the nested
+component level: `ready: false` gates need canonical blockers in both bundle
+generation and strict verification.
+Standalone release-readiness JSON validation now applies the same
+public-crypto-to-embedded-lane binding before bundle generation, so copied
+readiness rows cannot drift from `evidence.lanes` or claim a missing source-gate
+required flag.
+Standalone readiness JSON also recomputes user-prover submission-surface status
+and blockers from the copied corridor phase map, rejecting stale passed rows
+when required phases failed and stale blocked rows after phases pass.
 The release-bundle source inventories now also pin the remaining bundle-side
 schema hardening tests for active-launch nested containers, all-lanes lane-label
 diagnostics, route-canary decimal string subclasses, repeated missing
@@ -172,11 +390,17 @@ without breaking release/readiness gates.
 The all-lanes evidence-root schema inventory now also pins the fallback TOML
 parser's hostile array-subclass regression, keeping copied array-like values out
 of operator evidence parsing without relying only on direct unit tests.
+It now also pins release-bundle pre-render diagnostics for copied not-ready
+route-canary proof-context drift across BSC, TRON, Solana, and TON, including
+operator-blocker redaction before public readiness artifacts are written.
 That all-lanes schema coverage now also pins duplicate metadata comments,
 duplicate TOML keys, noncanonical TOML integers, route-canary comment drift,
 unsupported domains, boolean domain/integer aliases, unknown record fields, and
 hostile root section names, so malformed operator evidence cannot lose its
 fail-closed parser and schema regressions without tripping release/readiness.
+The governed blocker inventory now also pins exact destination-rollout and
+route-allowlist blocker diagnostics plus operator-text redaction across ETH,
+BSC, Solana, TON, and TRON copied evidence.
 The all-lanes source-material role-validation inventory now also pins source
 material/deployment role-hash replay, stale source-record hash comments,
 Solana/TON light-client audit role reuse, cross-role template replay, malformed
@@ -208,10 +432,17 @@ route-allowlist/stale-canary/padded-hash drift, malformed checklist
 record/lane/blocker containers, duplicate blocker diagnostics, future-lane
 blocker deduplication, and copied route-allowlist recompute helper failure
 redaction.
+Copied all-lanes route-allowlist recomputation now reads source material,
+source-adapter deployment, and destination-binding hashes through exact
+string-key lookup, so a hostile copied source-record alias cannot hide a missing
+exact field while forging a route hash that otherwise recomputes.
 The all-lanes route-canary scalar inventory now pins malformed route-canary
 summary handling, including hostile copied summary containers, so release
 checklist readiness cannot lose that fail-closed path without tripping the
-release/readiness inventories.
+release/readiness inventories. It now also pins Rust route-allowlist production
+gate regressions for uppercase, missing-prefix, and padded route hashes,
+non-canonical route IDs, route-canary status drift, uppercase route-canary
+hashes, padded destination hashes, and failed route-canary summaries.
 It also pins direct EVM/TRON route-canary transaction metadata drift,
 transaction readback drift, transcript drift, transcript hash reuse, governed
 hash role reuse, required boolean state, TRON signature ownership, noncanonical
@@ -302,6 +533,9 @@ offline route-canary summary construction.
 TON live evidence collection mirrors that boundary for accountStates response
 objects, account lists/rows, live-evidence roots, byte inputs, and offline
 route-canary summary construction.
+The route-allowlist canary-summary inventory now also pins malformed copied
+summary containers and hostile container redaction in direct all-lanes
+release-checklist validation.
 The remaining SCCP evidence helpers now complete the public-data subclass
 boundary: Solana/TON destination and source-state evidence, ETH/BSC
 source-bridge evidence, EVM destination/receipt/source/live evidence, TRON
@@ -404,6 +638,9 @@ The readiness-report generator and strict release-bundle verifier now share the
 same BSC route-config source-inventory Markdown for the expanded retired-alias
 guard set, keeping generated readiness bundles and verifier expectations
 canonical.
+That inventory now also pins duplicate route-manifest string/container alias
+rejections and route-config-side placeholder TAIRA burn-record artifact
+rejection before BSC route profiles can satisfy production readiness.
 
 TRON helper CLI parsing now uses per-command allowlists and fails closed before
 deploy, evidence, route-manifest, or route-config work for unknown commands,
@@ -430,6 +667,10 @@ alias collisions still fail closed, accessor-backed alias traps are ignored
 without reads, and adversarial tests cover top-level, nested rollout, binding,
 burn-record, settlement, and post-deploy evidence aliases without echoing
 secret-looking values.
+The TRON canonical-manifest release inventory now pins exact duplicate-alias
+assertions for post-deploy readback, rollout/binding hashes, burn-record
+artifacts, settlement submit paths, route-canary evidence, offline full-TOML
+hashes, and disabled-route production readiness rejection.
 
 Solana route-manifest publication now requires exact canonical boolean
 `production_ready` input and canonical top-level route metadata before a
@@ -469,7 +710,8 @@ environment-derived aliases. JSON outputs are written through temporary-file
 rename so output symlinks are replaced rather than followed and hostile
 temporary-path symlinks are retried without receiving artifacts. The release
 bundle/readiness inventories require the Solana route-manifest CLI negative
-tests in the contract-smoke evidence phase.
+tests in the contract-smoke evidence phase, including the existing-output
+no-overwrite regression for malformed `production_ready`.
 
 TON route-manifest drafts now use only canonical public TON fields for the
 source bridge and destination verifier. Retired TRON-named public manifest
@@ -478,7 +720,8 @@ fields (`tron_network`, `sccp_tron_source_bridge_address`, and
 values; the publish helper writes the same chain-neutral
 `network`, `source_bridge_address`, and `destination_verifier_address` fields
 used by runtime SCCP route manifests. The release bundle/readiness inventories
-pin the alias-retirement guard.
+pin the alias-retirement guard and the malformed nanoTON manifest-scalar
+no-overwrite regression for publish preflight failures.
 Runtime SCCP route-manifest model/config/ISI fields are now chain-neutral for
 the first release: BSC, TON, and TRON manifests use `network`,
 `source_bridge_address`, and `destination_verifier_address` in configured
@@ -490,6 +733,9 @@ verifier aliases, `sccp_tron_destination_verifier_address`,
 deployment-evidence payloads keep their chain-specific evidence field names.
 Torii route-manifest DTOs also omit the retired proof-artifact aliases and
 emit only canonical `proof_artifact_hash`.
+TRON runtime route-manifest release inventories now also pin exact post-deploy
+blocker-list diagnostics for non-empty production blockers, padded or empty
+canonical-string entries, non-ASCII blocker text, and duplicate blockers.
 SCCP capabilities use only the first-release canonical `burn_registry_backend`
 field; Torii, Rust clients, CLI samples, and JavaScript parsing no longer emit
 or accept the retired `legacy_burn_registry_backend` spelling.
@@ -533,13 +779,19 @@ same TON route-canary hash-role boundary before emitting canonical hashes.
 Solana live ProgramData route-canary evidence now also rejects verifier-code
 hash replay into route allowlist, destination binding, source-material, or
 source-deployment hash roles before canonical evidence bytes or hashes are
-emitted. EVM-family route-canary evidence now also rejects replay between
-governed route/destination/source/deployment hashes and receipt transcript
-hashes before Rust or Python canonical hashes, full-TOML rendering, or lane
-readiness can pass. TRON route-canary evidence now also rejects replay between
-governed route/source/deployment hashes and transaction transcript hashes
-before Rust, Python, JavaScript SDK, package-dist, or package-root canonical
-hashes are emitted. Swift, Kotlin/JVM, and Java Android TRON route-canary
+emitted. The source-material role-validation release inventory now pins those
+Solana and TON route-canary verifier-code, source-record, live-account, and
+non-canonical destination-binding replay checks so they cannot silently drop
+from the strict release gate. EVM-family route-canary evidence now also rejects
+replay between governed route/destination/source/deployment hashes and receipt
+transcript hashes before Rust or Python canonical hashes, full-TOML rendering,
+or lane readiness can pass. TRON route-canary evidence now also rejects replay
+between governed route/source/deployment hashes and transaction transcript
+hashes before Rust, Python, JavaScript SDK, package-dist, or package-root
+canonical hashes are emitted. The source-material role-validation release
+inventory now also pins EVM/TRON route-canary canonical-spelling rejections for
+destination binding, bridge/network id, verifier code, and EVM receipt
+transcript role replays. Swift, Kotlin/JVM, and Java Android TRON route-canary
 helpers now mirror that boundary and include finality height in transcript
 distinctness before mobile canonical bytes are emitted. Checked source-adapter statement/context encoding now also rejects
 zero transcript/evidence hashes, role-hash replays, transcript/evidence
@@ -549,14 +801,19 @@ SORA-origin Nexus finality binding by decoding `NexusBridgeFinalityProofV1` from
 bundle finality bytes and rejecting opaque or public-input-drifted finality
 proofs before local proving. TON proof requests now also reject diagnostic
 zero/zero source-adapter deployment bindings, wrong-source deployment bindings,
-and self-consistent proof-result requests whose cached deployment-binding hash
-does not match the binding object before local proving. Source-message and ETH
-SSZ Merkle inclusion proofs now also reject non-canonical high-bit leaf indexes that would otherwise
-reconstruct the same root after unused index bits are shifted away, and ETH
-source-adapter preflight now rejects stale or non-fixed-depth execution payload
-branches before checked transcript encoding. BSC source-adapter preflight now
-rejects high-S or
-otherwise non-canonical validator-set seal signatures for both active and
+canonical-but-extraneous source proof bytes on SORA-origin requests, and
+self-consistent proof-result requests whose cached deployment-binding hash does
+not match the binding object before local proving. TRON and TON proof-result
+wrappers now also reject self-consistent requests whose bundle bytes are swapped
+after request-hash recomputation. The proof-request release inventory now also
+pins the existing EVM remote-source bundle binding, opaque source-proof,
+stripped source-proof, and swapped-bundle wrapper regressions. Source-message
+and ETH SSZ Merkle inclusion proofs now also reject non-canonical high-bit leaf
+indexes that would otherwise reconstruct the same root after unused index bits
+are shifted away, and ETH source-adapter preflight now rejects stale or
+non-fixed-depth execution payload branches before checked transcript encoding.
+BSC source-adapter preflight now rejects high-S or otherwise non-canonical
+validator-set seal signatures for both active and
 transition seals and verifies that each seal signature recovers to the declared
 validator address before checked transcript encoding. Solana source-adapter
 preflight now also reconstructs the finality-context stake, account-inclusion,
@@ -577,7 +834,12 @@ and TON active/transition validator signatures must pass deterministic Ed25519
 batch verification while shard-state openings and masterchain config proofs must
 verify their BOC/dictionary roots before checked transcript encoding; checked
 TON adapter encoder coverage now also pins all-zero and opaque source-state
-capsule rejection.
+capsule rejection. The strict SCCP release inventory now pins the full
+source-proof structural preflight marker set for ETH signer/quorum and
+stale-branch checks, BSC signer bitmap/count and high-S checked-encoding
+checks, Solana vote quorum/stake/message drift checks, TON validator
+bitmap/quorum/stale transcript checks, and TRON transaction/header drift
+checked-encoding checks.
 Release-bundle pre-render
 validation also keeps
 top-level public crypto hash-role replay blockers visible when
@@ -674,9 +936,35 @@ and Solana/TON native-recursive packaging now also refuse to use explicit source
 material or source-adapter deployment context for remote-to-remote destination
 packaging; source context is packagable only for inbound remote -> SORA proofs.
 Transparent-proof verification now applies the same source-context packaging
-guard, and adversarial EVM/BSC plus TRON artifacts prove diagnostic
-source-aware verification rejects remote-to-remote deployment-bound source
-proofs.
+guard, and adversarial EVM/BSC, TRON, Solana, and TON artifacts prove
+diagnostic source-aware and context-free verification, recovery, and
+artifact-to-job conversion reject remote-to-remote deployment-bound source
+proofs. The source-material extractor now also rejects those coherent
+deployment-bound foreign-target bundles before they can be downgraded into
+context-free material evidence. SORA-origin transparent artifacts now also
+reject verifier and recovery attempts that supply external source material or
+deployment-bound source-adapter context. BSC and Ethereum source-proof byte
+recovery now also rejects exact
+deployment-bound proof bytes paired with coherent non-SORA source-adapter
+deployment targets, while TRON refuses to construct non-SORA source-adapter
+deployment targets. Solana, TON, and TRON local-admission artifact recovery now
+also keeps the disabled destination-manifest gate closed on normal recovery and
+rejects backend-label drift on the deployment-bound recovery path. BSC and
+Ethereum now pin the same lane-specific recovery-gate assertions in the EVM
+source-adapter deployment release inventory. Solana and TON local-admission
+verification and recovery now also reject exact deployment-bound artifacts
+paired with source-adapter deployments retargeted away from SORA. BSC and
+Ethereum local-admission verification and recovery now enforce that same
+non-SORA deployment-target rejection at the transparent artifact layer. The
+deployment-bound transparent proof builder now also rejects material-only source
+proofs across BSC, Ethereum, Solana, TON, and TRON even when callers pass
+deployment descriptors separately. The same builder now rejects non-SORA
+destination bundles and copied wrong-source bundles for every active inbound
+source-adapter lane before transparent artifacts can be packaged. The strict
+release inventories now also pin BSC mainnet proof-request rejection of
+non-mainnet bindings, non-BSC manifests, opaque source proof bytes, all-zero
+source proof bytes, and ETH/BSC facade plus recovery rejection of source proofs
+that omit deployment evidence.
 
 TON source-adapter readiness now stays aligned with the governed
 full-light-client audit policy: readiness-positive test fixtures use the
@@ -899,7 +1187,21 @@ so hostile direct namespace values cannot be stringified into post-deploy route
 evidence. Collected EVM route-canary transaction summaries are now revalidated
 through the same exact hex and integer helpers before
 offline/full-TOML arguments are generated, so imported or post-collector hostile
-metadata cannot run string or integer coercion hooks. EVM source-live runtime
+metadata cannot run string or integer coercion hooks. Copied EVM live
+source-record, route-canary, and route-canary transaction checks now also use
+exact string-key lookup before full-TOML rendering, so hostile key aliases
+cannot stand in for missing exact fields. The EVM live route-canary
+`message_proof_used` and `receipt_block_finalized` booleans now use exact
+summary-key access before generated offline/full-TOML args or route-allowlist
+validation can consume copied route-canary transaction metadata, and copied
+destination match flags now use the same exact-key boundary before expected
+binding or route-allowlist arguments are emitted or route-canary source/target
+domains are consumed. TRON live
+copied-summary full-TOML
+readiness now applies the same exact-key lookup to source bridge,
+source-record, destination, route-canary transaction, trigger-contract, and
+embedded transaction-copy metadata before rendering offline/full-TOML output.
+EVM source-live runtime
 namespace inputs now mirror that pre-RPC bytes32 validation for expected source
 bridge code hashes, deployment transaction pins, source component hashes,
 adapter verifier keys, deployment receipt hashes, and expected source-record
@@ -1010,6 +1312,14 @@ Copied all-lanes route-canary common semantic checks now also compare `status`,
 `evidence_source`, route-allowlist hashes, and destination-binding hashes only
 for exact builtin strings in release-bundle pre-rendering and strict
 verification, keeping hostile string subclasses out of the comparison path.
+Standalone readiness Markdown, release-bundle release notes, and strict
+readiness/manifest verifier invariants now also read top-level readiness-report
+roots through exact public string-key helpers, so alias-only `production_ready`
+or `blockers` keys cannot certify public readiness or leak copied blocker text.
+Release-bundle and strict-verifier manifest validation now also use exact public
+string-key helpers for manifest schema, artifacts, readiness flags, blockers,
+and report/summary readiness comparisons, so hostile manifest key aliases remain
+diagnostic-only.
 Strict verifier active route-allowlist blocker text now also requires exact
 builtin strings before trimming, decoded marker scans, duplicate checks, or
 empty-blocker enforcement run.
@@ -1194,6 +1504,40 @@ Standalone all-lanes scalar parser helpers now require exact builtin strings
 before runtime-bytecode parsing, Solana pubkey decoding, destination-binding
 hex parsing, TOML string-array admission, metadata comment copying, or
 source-adapter gate audit-hash summary copying.
+All-lanes fallback/minimal TOML parsing now follows the same exact builtin-string
+boundary before copied operator text reaches `.strip()`, `.splitlines()`, JSON
+metadata parsing, or metadata-comment parsing, and the route-canary scalar
+inventory pins the hostile subclass regression.
+Release readiness and bundle generation phase/output path helpers now enforce
+exact builtin strings before copied values reach `in`, `.split()`, `.strip()`,
+or `.isascii()` hooks; the phase-evidence and output-path inventories pin the
+hostile subclass regressions. Readiness output collision preflight also rejects
+phase-evidence assignment subclasses before `=` membership or splitting can run.
+Release-bundle report builders now use the same exact-string assignment
+translator before rewriting copied phase-evidence arguments into bundle-relative
+paths.
+Release-corridor `.NET` marker/path diagnostics and public diagnostic fragments
+now also require exact builtin strings before regex, splitting, path
+normalization, phase lookups, or Markdown-safe formatting can consume copied
+transcript text.
+Release-corridor phase command matchers now apply the same exact builtin-string
+boundary to direct phase, command, fragment, expected-path, suffix, bridge-path,
+and selector-token inputs before matching traced command evidence.
+Release-corridor success-window helpers now also require exact builtin phase,
+block, fragment, and integer position values before binding success output to
+the required command window.
+Release-bundle source-gate, source-record, route-canary, and
+cryptographic-evidence helpers now use exact public string-key accessors for
+copied evidence maps before route-canary semantic and role-hash validation.
+Release-bundle corridor phase-evidence lookups now also require exact public
+phase keys before satisfying hashed evidence, manifest artifact order,
+referenced artifact, or transcript checks.
+Standalone release-readiness corridor phase-evidence checks use the same exact
+public phase-key boundary for Markdown rows, shared full-run artifacts, and
+public readiness validation.
+Standalone release-readiness public JSON root shaping now uses exact public
+string-key access for readiness, blocker, root presence, subroot consistency,
+and final payload publication decisions.
 Release-bundle strict verifier public field-name classification now uses the
 same exact builtin-string boundary before sorting, unknown-field allowlist
 membership, ASCII/Markdown checks, or sensitive-name scanning can run.
@@ -4116,7 +4460,44 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
     traced commands in every phase, so copied side commands such as
     `+ true ...` cannot sit beside the required evidence. The Swift SDK phase
     keeps only the required Rust target and NoritoBridge XCFramework setup
-    commands as allowlisted setup traces.
+    commands as allowlisted setup traces. Command tokenization,
+    option/positional helper parsing, diagnostic command parsing,
+    effective-command parsing, and phase-prefix environment assignment parsing
+    now reject non-exact command text or token scalars before strip, equality,
+    prefix, or partition operations, keeping command matching, Gradle/pytest
+    selectors, `.NET` env prefixes, Java Android harness mains, runner-cd,
+    parenthesized-group, parseability, and shell-comment diagnostics
+    fail-closed against string-subclass transcript scalars. Output-line
+    normalization, shell-xtrace detection, success-fragment matching, and
+    hidden success-marker checks now do the same for copied line, fragment, and
+    phase scalars. Phase-block and full-transcript helpers also reject
+    non-exact text containers before extraction, marker counting, completion
+    checks, or command/output line indexing can call copied `splitlines` or
+    whitespace hooks. Phase transcript artifact entries now read public `path`
+    fields through exact string-key lookup and reject copied phase-name scalars
+    before any file read or diagnostic formatting. Generic readiness Markdown
+    input and corridor artifact rows now resolve `path`, `bytes`, and `sha256`
+    through exact string-key lookup before rendering public tables; release-notes
+    attachment artifact rows use the same exact-key rule in builder/verifier
+    render and invariant checks. Native EVM prover artifact metadata now applies
+    exact public-key lookup for `path`, `bytes`, and `sha256` before payload,
+    parity-fixture, and self-test consumers validate copied artifacts. Readiness
+    Markdown invariant checks also use exact artifact keys before requiring
+    copied input/corridor paths, hashes, and rows in public Markdown. Release
+    bundle artifact row schema, native artifact summary schema, and integrity
+    checks now use exact public artifact keys before validating copied metadata
+    or comparing artifact bytes and hashes on disk. Native EVM readiness
+    Markdown artifact path/hash cells also use exact public `path` and `sha256`
+    keys in both checker copies before rendering native prover artifact cells,
+    and readiness native EVM public redaction uses exact `path`, `bytes`, and
+    `sha256` keys before keeping or redacting copied artifact metadata.
+    Readiness input-artifact provenance comparison also extracts copied
+    artifact paths through exact public `path` keys before matching `inputs`.
+    Strict readiness Markdown native artifact invariants now read native
+    artifact, parity fixture, and self-test `sha256` fields through exact public
+    keys before requiring native prover artifact rows. Strict corridor phase
+    validation also reads each phase evidence artifact `path` through an exact
+    public key before enforcing the canonical `corridor/<phase>.log` binding.
   - Require the Windows `.NET 8` SCCP VSTest summary to report `Skipped: 0`;
     a `Passed!` line with skipped SCCP tests is not production-certifying
     evidence even when `Failed: 0` and the total count is internally consistent,
@@ -12862,6 +13243,9 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   `placeholder_material = False` guard and alias regression, so string,
   container, null, integer, or hostile scalar aliases cannot turn diagnostic
   placeholder material into production all-lanes evidence.
+  It also pins the hostile scalar redaction assertions, keeping
+  `placeholder_material` alias failures from leaking hook text in public
+  blockers.
   The bundle builder's pre-render regression now exercises cross-lane replay
   against another lane's canary evidence hash, source-material hash,
   source-adapter gate audit hash, destination-binding hash, and route-allowlist
@@ -13604,11 +13988,24 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   Copied release-bundle native prover summaries with `validation_status =
   blocked` or non-empty validation blockers are now rejected directly before
   public Markdown or JSON output is written, even when the summary shape is
-  otherwise minimal and canonical; sparse inventory tests must keep the blocked
-  copied-summary pre-render regression and blocker marker pinned, and strict
-  bundle inventory now removes that marker directly to prove the gate fails.
-  Native EVM prover SDK artifact ids must follow the same canonical text policy:
-  whitespace-padded, control-character, internal-whitespace,
+	  otherwise minimal and canonical; sparse inventory tests must keep the blocked
+	  copied-summary pre-render regression and blocker marker pinned, and strict
+	  bundle inventory now removes that marker directly to prove the gate fails.
+	  Standalone public readiness JSON also pins unexplained blocked native-prover
+	  and user-prover roots, suppressing copied roots and operator notes when
+	  blocked validation rows omit canonical blockers.
+	  Active launch checklist recomputation now also rejects a blocked native EVM
+	  prover status with an empty `validation_blockers` list before report-root
+	  sanitization, and both standalone readiness and strict bundle tests pin the
+	  helper-level diagnostic in source inventory.
+	  Copied `validation_status` values now require exact strings before native
+	  prover, source-inventory, or user-prover readiness decisions in standalone
+	  public JSON, bundle pre-render validation, and strict bundle verification;
+	  Markdown status/blocker cells follow the same rule, and hostile string
+	  subclasses are covered by adversarial tests and cannot trigger equality hooks
+	  or set-membership hooks.
+	  Native EVM prover SDK artifact ids must follow the same canonical text policy:
+	  whitespace-padded, control-character, internal-whitespace,
   non-ASCII/confusable, and malformed lowercase-id SDK ids are rejected as
   malformed rows instead of being treated as unknown SDK names or hidden
   missing-SDK evidence.
@@ -13873,13 +14270,14 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   `production_ready` can become true. Malformed release-checklist roots and
   non-boolean checklist `ready` values must now become explicit public blockers
   instead of tracebacks or blocker-free `production_ready = false` reports.
-  Malformed lane record, destination-binding, route-allowlist, route-canary, or
-  lane-local blocker containers must likewise become explicit checklist
-  blockers rather than tracebacks, hidden route-canary gaps, or falsely ready
-  no-unresolved-blockers state. Release-readiness and bundle verification now
-  pin that active checklist schema as a required source-inventory gate before
-  production evidence can pass, including every primary readiness-report and
-  strict-verifier marker for blocker collection, lane blocker schemas,
+	  Malformed lane record, destination-binding, route-allowlist, route-canary, or
+	  lane-local blocker containers must likewise become explicit checklist
+	  blockers rather than tracebacks, hidden route-canary gaps, or falsely ready
+	  no-unresolved-blockers state. Release-readiness and bundle verification now
+	  pin that active checklist schema as a required source-inventory gate before
+	  production evidence can pass, including the native-prover blocked-status
+	  explanation guard and every primary readiness-report and
+	  strict-verifier marker for blocker collection, lane blocker schemas,
   source-record role separation, EVM live metadata, EVM source-adapter gate
   summaries, route-allowlist bindings, route-canary metadata, embedded-evidence
   matching, and unknown-field redaction. Readiness
@@ -14789,13 +15187,17 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   top-level readiness, release-note, release-bundle preflight, native-prover,
 	  source-inventory, and user-prover blocker containers as invalid cells/items
 	  instead of flattening strings or raising during verifier-owned Markdown
-	  generation. Embedded readiness evidence and standalone all-lanes root
-	  blocker summaries plus active-lane blocker containers must also be list-shaped
-		  before active-launch blocker collection runs, so malformed strings cannot
-		  become character-by-character blockers or disappear from verifier checks.
-		  Active-launch blocker collection must scope copied domain-prefixed blockers
-		  with the decoded, casefolded public blocker key, so encoded or case-varied
-		  non-active domain blockers cannot be reclassified as active launch blockers
+		  generation. Embedded readiness evidence and standalone all-lanes root
+		  blocker summaries plus active-lane blocker containers must also be list-shaped
+			  before active-launch blocker collection runs, so malformed strings cannot
+			  become character-by-character blockers or disappear from verifier checks.
+			  Copied blocked native-prover summaries, source-inventory gates, and
+			  user-prover submission rows must also carry non-empty canonical
+			  `validation_blockers` before bundle generation or strict verification can
+			  pass, even though production bundles still require those rows to be passed.
+			  Active-launch blocker collection must scope copied domain-prefixed blockers
+			  with the decoded, casefolded public blocker key, so encoded or case-varied
+			  non-active domain blockers cannot be reclassified as active launch blockers
 		  while active-domain and unscoped lane blockers still fail closed.
 		  Release-bundle generation must validate the structure of both the initial
 		  preflight report and the copied-evidence bundle-local report before Markdown
@@ -27307,6 +27709,10 @@ also reject cross-role replay of any non-zero built-in profile-template hash, so
 template-derived trust-anchor, consensus, message-inclusion, finality,
 source-state, or source-bridge hashes cannot be relabelled as a different
 governed live verifier role across active launch lanes.
+EVM-family deployed mainnet profile coverage now also mutates the governed
+source bridge emitter address directly, so ETH/BSC source material stays
+blocked when the emitter address drifts while source bridge code and verifier
+role hashes remain valid.
 That rejection now scans every active launch lane's profile-template component
 hashes, including Solana and TON full-light-client audit descriptor fields, so a
 foreign lane template hash cannot be repackaged as governed audit material.
@@ -27318,6 +27724,11 @@ instead of relying on later Rust admission.
 That shared denylist now also requires exact builtin, non-zero `bytes32` hashes
 before any local or active-template comparison, with adversarial coverage proving
 hostile hash subclasses and probes cannot trigger comparison hooks.
+ETH/BSC source-bridge evidence parsers and Solana/TON source-state evidence
+parsers now reject string subclasses before hex, decimal, runtime-bytecode, or
+file-path parsing can call `.strip()`, `.startswith()`, decimal predicates, or
+other copied-string hooks; the source-material role-validation inventory pins
+the exact parser guards for every affected active source-material CLI.
 All-lanes preflight, route allowlist hashing, readiness-report public row
 checks, release-bundle construction, and strict release-bundle verification now
 use the same active-template denylist for direct and copied source-record,
@@ -31074,10 +31485,24 @@ validation path.
   reviewed transition actions into one ambiguous proof branch, including inside
   direct imported `Next` aliases. Source and top-level guarded transition disjuncts must not mix multiple action witnesses,
   so source and top-level liveness wrappers cannot conjoin two reviewed
-  transition actions into one ambiguous proof branch. Nested progress
+  transition actions into one ambiguous proof branch, and guarded or
+  identity-gated imported branches or local helper wrappers such as
+  `Guard => Interleaving!ImportedAction`,
+  `TRUE /\ Interleaving!ImportedAction`, or
+  `SourceAliasPathNext == Guard => Interleaving!ImportedAction` cannot hide an
+  extra target-local action witness. Projected guarded and identity-gated
+  helper wrappers likewise cannot hide imported/local witness ambiguity behind
+  `WrappedRbcChunk`, and bare helper references cannot hide local mixed-action
+  helpers such as `WrappedMixed == Guard => (LocalOne /\ LocalTwo)`.
+  Multi-hop bare helper chains such as `OuterMixed == InnerMixed` inherit the
+  same mixed-witness check at the inner guarded helper body, including when a
+  bare helper or direct transition branch references an imported helper such as
+  `Imported!InnerMixed`. Nested progress
   transition aggregates must recursively obey the same branch contract, so
   helper `Next` aggregates cannot hide literal, temporal, or static branches
-  beneath a top-level action witness.
+  beneath a top-level action witness, including when an imported aggregate such
+  as `Imported!ImportedAggregate` is used as a direct branch or behind a local
+  wrapper.
   Source and top-level nested progress transition aggregates must recursively obey the same branch contract,
   so source and top-level liveness wrappers cannot hide literal, temporal, or
   static branches inside helper `Next` aggregates. Single-reference progress transition
@@ -31088,29 +31513,120 @@ validation path.
   Source and top-level single-reference progress transition wrappers must expose nested aggregate contracts,
   so source and top-level helper aliases cannot hide malformed aggregate
   branches from recursive transition-shape checks behind a bare wrapper name.
+  Progress transition boolean disjunct operands must inherit recursive resolution for onward aliases inside named helper operands,
+  so non-identity boolean disjuncts cannot hide imported aggregate transition
+  targets behind another local helper name.
+  Source and top-level progress transition boolean disjunct operands must inherit recursive resolution for onward aliases inside named helper operands,
+  so source and top-level non-identity boolean disjuncts cannot hide imported
+  aggregate transition targets behind another local helper name.
+  Progress transition boolean action-witness operands must expose transitive mixed action witnesses,
+  so non-identity boolean helper operands cannot hide multiple local action
+  witnesses behind another helper wrapper.
+  Source and top-level progress transition boolean action-witness operands must expose transitive mixed action witnesses,
+  so source and top-level non-identity boolean helper operands cannot hide
+  multiple local action witnesses behind another helper wrapper.
+  Progress transition boolean aggregate disjunct operands must expose nested aggregate contracts,
+  so non-identity boolean disjuncts cannot hide malformed local aggregate
+  branches behind a helper operand.
+  Source and top-level progress transition boolean aggregate disjunct operands must expose nested aggregate contracts,
+  so source and top-level non-identity boolean disjuncts cannot hide malformed
+  local aggregate branches behind a helper operand.
+  Progress transition boolean aggregate helper operands must expose transitive nested aggregate contracts,
+  so non-identity boolean helper operands cannot hide malformed local aggregate
+  branches behind another boolean helper wrapper.
+  Source and top-level progress transition boolean aggregate helper operands must expose transitive nested aggregate contracts,
+  so source and top-level non-identity boolean helper operands cannot hide
+  malformed local aggregate branches behind another boolean helper wrapper.
   Progress transition action witness inventories must stay duplicate-free, so
   wrapper helpers cannot duplicate the same reachable action while keeping
   textual disjunct labels distinct, including through bare module-alias
   disjuncts, direct imported `Next` aliases, and direct or transitive imported
   action aliases.
   Source and top-level progress transition action witness inventories must stay duplicate-free,
-  so source and top-level imported `Next` wrappers cannot duplicate the same
-  reachable action while keeping textual disjunct labels distinct.
+  so source and top-level bare module-alias disjuncts and imported `Next`
+  wrappers cannot duplicate the same reachable action while keeping textual
+  disjunct labels distinct.
   Progress transition aliases must be acyclic, so imported `Next` wrappers
   cannot satisfy the transition closure without resolving to inspectable
   transition operators, and direct imported `Next` wrappers still satisfy
   same-name imported fair-action reachability when they resolve to
-  action-shaped targets.
+  action-shaped targets. Whole imported `Next` aliases to helper bodies must
+  preserve helper-level mixed-witness diagnostics before fairness reachability
+  diagnostics are considered, including identity-gated helper bodies and
+  implication/equivalence literal-gated helper bodies. Whole imported `Next`
+  aliases to aggregate targets must do the same, including through
+  implication/equivalence literal-gated aggregate helpers, onward module-alias
+  aggregate helpers, nested local helper wrappers around those onward
+  aggregates, and false-disjunction identity wrappers around the same paths,
+  while preserving same-name imported fair-action reachability.
   Source and top-level progress transition aliases must be acyclic, so source
   and top-level imported `Next` wrappers cannot satisfy the transition closure
-  through recursive imported transition operators.
+  through recursive imported transition operators. Direct source and top-level
+  imported `Next` wrappers remain valid when their imported transition
+  branches and imported fairness action aliases share the same action-shaped
+  targets. Whole source and top-level imported `Next` aliases to helper bodies
+  must preserve helper-level mixed-witness diagnostics before fairness
+  reachability diagnostics are considered, including identity-gated helper
+  bodies and implication/equivalence literal-gated helper bodies. Whole source
+  and top-level imported `Next` aliases to aggregate targets must do the same,
+  including through implication/equivalence literal-gated aggregate helpers,
+  onward module-alias aggregate helpers, nested local helper wrappers around
+  those onward aggregates, and false-disjunction identity wrappers around the
+  same paths, while preserving same-name imported fair-action reachability.
   Source and top-level progress transition aliases must inherit recursive resolution for onward aliases inside imported transition targets,
   so source and top-level imported `Next` wrappers cannot hide missing,
-  undefined, parameterized, recursive, or uninspectable inner transition
-  aliases behind imported transition operators. Progress transition aliases must resolve through named
-  local INSTANCE declarations, so imported `Next` wrappers cannot rely on
-  implicit or misspelled module aliases, including onward aliases inside
-  imported transition targets.
+  undefined, parameterized, recursive, uninspectable, or mixed-witness inner
+  transition aliases behind imported transition operators.
+  False-disjunction local helper wrappers around onward imported transition
+  paths must also surface missing `INSTANCE` aliases, missing modules,
+  undefined targets, parameterized targets, cyclic aliases, or uninspectable
+  module-alias targets before the dead literal branch can satisfy the local
+  helper shape. Regression coverage pins the full malformed target set across
+  projected, source, and top-level progress contract validators, with the
+  source and top-level validators each covering the malformed target classes
+  directly.
+  Direct false-disjunction module-alias transition disjuncts must likewise
+  surface missing `INSTANCE` aliases, missing modules, undefined targets,
+  parameterized targets, cyclic aliases, uninspectable targets, malformed
+  action-shaped target bodies, malformed aggregate target branches, mixed
+  target-local action witnesses, and onward helper-alias failures before the
+  dead literal branch can satisfy the checked transition operator. Regression
+  coverage pins this direct-disjunct path across projected, source, and
+  top-level progress contract validators, including same-name imported
+  fair-action aliases whose reachability must survive the dead literal branch
+  and whose malformed imported targets must surface before that literal branch
+  can satisfy the checked transition. Identity-gated same-name imported
+  fair-action branches behind the same dead literal must still surface their
+  malformed imported targets, nested-fairness, temporal, and purely static
+  imported target bodies, malformed imported target bodies, malformed or
+  cyclic module-alias operands inside imported target bodies,
+  helper-wrapped target-body action witnesses, guarded single-action helper
+  witnesses, module-alias-wrapped guarded helper witnesses, all-static,
+  action/static, static/temporal, guarded nested-static, and guarded nested
+  action/static aggregate branches, module-alias-wrapped all-static,
+  action/static, static/temporal, guarded nested-static, and guarded nested
+  action/static aggregate branches, multi-hop module-alias-wrapped all-static,
+  action/static, static/temporal, guarded nested-static, and guarded nested
+  action/static aggregate branches, local helper cycles, boolean helper-wrapper
+  cycles, direct and boolean invalid helper references, module-alias helper
+  cycles, multi-hop module-alias helper cycles, onward action aliases,
+  fair-action definitions aliasing different imported reviewed fair actions,
+  direct and multi-hop cyclic fair-action aliases, onward helper-alias
+  resolution failures, multi-hop helper-alias recursive helper bad targets,
+  helper aliases, direct and transitive fair-action helper aliases, boolean
+  direct/transitive fair-action helper aliases, boolean helper aliases, helper
+  wrappers, and helper actions composing other fair actions, direct references to and direct,
+  boolean-hidden, action-shaped wrapper, and boolean-operand helper-wrapper
+  compositions of other fair actions, module-alias conjunct fair-action composition plus direct,
+  boolean-helper, and transitive fair-action conjunct operands, module-alias
+  boolean fair-action composition plus direct, helper, and transitive
+  fair-action boolean operands, multi-hop module-alias operand cycles,
+  multi-hop recursive helper failures behind module-alias conjunct and
+  boolean operands, module-alias helper resolution failures, and
+  module-alias imported/target-local mixed action witnesses.
+  Progress transition aliases must resolve through named local INSTANCE declarations,
+  so imported `Next` wrappers cannot rely on implicit or misspelled module
+  aliases, including onward aliases inside imported transition targets.
   Source and top-level progress transition aliases must resolve through named local INSTANCE declarations,
   so source and top-level imported `Next` wrappers cannot rely on implicit or
   misspelled module aliases.
@@ -31148,6 +31664,16 @@ validation path.
   Source and top-level progress transition boolean-gated helper wrappers must be acyclic,
   so source and top-level identity-literal boolean gates cannot obscure
   recursive transition helper cycles.
+  Progress transition boolean helper operands must inherit recursive resolution for onward aliases inside named helper operands,
+  so non-identity boolean helper wrappers cannot hide imported aggregate
+  transition targets behind another local helper name, including guarded
+  wrappers that reach imported aggregate targets with mixed-witness helper
+  branches.
+  Source and top-level progress transition boolean helper operands must inherit recursive resolution for onward aliases inside named helper operands,
+  so source and top-level non-identity boolean helper wrappers cannot hide
+  imported aggregate transition targets behind another local helper name,
+  including guarded wrappers that reach imported aggregate targets with
+  mixed-witness helper branches.
   Progress transition identity-gated helper wrappers must be acyclic, so
   identity-literal conjunction, disjunction, implication, or equivalence gates
   cannot downgrade recursive helper chains into generic non-bare branch
@@ -31358,10 +31884,13 @@ validation path.
   Progress transition identity-gated module-alias disjuncts must resolve to
   inspectable transition operators, so imported transition branches hidden
   behind identity-literal gates cannot point at empty or otherwise
-  uninspectable transition operators. The regression suite pins
-  identity-gated module-alias disjunct resolution for missing `INSTANCE`
-  aliases, missing target modules, undefined targets, parameterized targets,
-  and uninspectable targets.
+  uninspectable transition operators. Identity-gated module-alias transition
+  disjuncts must not mix imported and target-local action witnesses, so
+  `TRUE /\ Interleaving!Start` and `TRUE /\ Interleaving!RbcReady` cannot
+  satisfy the transition contract when resolution exposes both alias and
+  target action names. The regression suite pins identity-gated module-alias
+  disjunct resolution for missing `INSTANCE` aliases, missing target modules,
+  undefined targets, parameterized targets, and uninspectable targets.
   Progress transition disjunct inventories must stay duplicate-free, so
   repeated action or helper branches, including inside direct imported `Next`
   aliases, cannot collapse before transition-shape checks run.
@@ -31547,195 +32076,383 @@ validation path.
   so source and top-level fairness action bodies cannot rely on implicit or
   misspelled imported conjunct aliases. Progress fairness action module-alias conjuncts must resolve to local action modules,
   so local action bodies cannot reference missing imported action modules.
+  Source and top-level progress fairness action module-alias conjuncts must resolve to local action modules,
+  so source and top-level fairness action bodies cannot reference missing
+  imported action modules.
   Progress fairness action module-alias conjuncts must resolve to defined zero-arity actions,
   so local action bodies cannot reference undefined or parameterized imported
-  conjunct operands. Progress fairness action module-alias conjuncts must resolve to inspectable action definitions,
+  conjunct operands. Source and top-level progress fairness action module-alias conjuncts must resolve to defined zero-arity actions,
+  so source and top-level fairness action bodies cannot reference undefined
+  or parameterized imported conjunct operands. Progress fairness action module-alias conjuncts must resolve to inspectable action definitions,
   so local action bodies cannot point conjunct operands at empty or otherwise
-  uninspectable imported action operators. Progress
+  uninspectable imported action operators. Source and top-level progress fairness action module-alias conjuncts must resolve to inspectable action definitions,
+  so source and top-level fairness action bodies cannot point conjunct operands
+  at empty or otherwise uninspectable imported action operators. Progress
   fairness action module-alias boolean operands must not hide composed fair
   actions, so local action bodies cannot bury imported fair-action helpers behind
   boolean structure, even when the imported operand aliases onward through
-  nested module aliases or reaches boolean helper bodies. Progress
+  nested module aliases or reaches boolean helper bodies. Source and top-level progress fairness action module-alias boolean operands must not hide composed fair actions,
+  so source and top-level fairness action bodies cannot bury imported
+  fair-action helpers behind boolean structure. Progress
   fairness action module-alias boolean operands must be acyclic, so imported
   operands hidden behind boolean structure cannot recurse through local or
-  imported helpers without surfacing a fairness-action cycle diagnostic. Progress fairness action module-alias boolean operands must inherit multi-hop recursive helper guards behind imported module-alias chains,
+  imported helpers without surfacing a fairness-action cycle diagnostic. Source and top-level progress fairness action module-alias boolean operands must be acyclic,
+  so source and top-level imported boolean operands cannot recurse through
+  local or imported action helpers without surfacing a fairness-action cycle
+  diagnostic. Progress fairness action module-alias boolean operands must inherit multi-hop recursive helper guards behind imported module-alias chains,
   so imported boolean operands cannot hide bad terminal helper targets after
-  alternating module-alias and local-helper hops. Progress
+  alternating module-alias and local-helper hops. Source and top-level progress fairness action module-alias boolean operands must inherit multi-hop recursive helper guards behind imported module-alias chains,
+  so source and top-level imported boolean operands cannot hide bad terminal
+  helper targets after alternating module-alias and local-helper hops. Progress
   fairness action module-alias boolean operands must resolve through named local INSTANCE declarations,
   so local action bodies cannot rely on implicit or misspelled imported
-  boolean operands. Progress fairness action module-alias boolean operands must resolve to local action modules,
+  boolean operands. Source and top-level progress fairness action module-alias boolean operands must resolve through named local INSTANCE declarations,
+  so source and top-level fairness action bodies cannot rely on implicit or
+  misspelled imported boolean operands. Progress fairness action module-alias boolean operands must resolve to local action modules,
   so local action bodies cannot bury references to missing imported action
-  modules behind boolean structure. Progress fairness action module-alias boolean operands must resolve to defined zero-arity actions,
+  modules behind boolean structure. Source and top-level progress fairness action module-alias boolean operands must resolve to local action modules,
+  so source and top-level fairness action bodies cannot bury references to
+  missing imported action modules behind boolean structure. Progress fairness action module-alias boolean operands must resolve to defined zero-arity actions,
   so local action bodies cannot bury undefined or parameterized imported action
-  operands behind boolean structure. Progress fairness action module-alias boolean operands must resolve to inspectable action definitions,
+  operands behind boolean structure. Source and top-level progress fairness action module-alias boolean operands must resolve to defined zero-arity actions,
+  so source and top-level fairness action bodies cannot bury undefined or
+  parameterized imported action operands behind boolean structure. Progress fairness action module-alias boolean operands must resolve to inspectable action definitions,
   so local action bodies cannot bury empty or otherwise uninspectable imported
-  action operators behind boolean structure. Progress
+  action operators behind boolean structure. Source and top-level progress fairness action module-alias boolean operands must resolve to inspectable action definitions,
+  so source and top-level fairness action bodies cannot bury empty or
+  otherwise uninspectable imported action operators behind boolean structure. Progress
   fairness action aliases must be acyclic, so fair action definitions that
   delegate through module-instance aliases cannot recurse through imported
   action modules instead of resolving to inspectable transition definitions.
+  Source and top-level progress fairness action aliases must be acyclic, so
+  source and top-level fair action definitions cannot delegate through
+  imported modules that recurse back into the reviewed action aliases.
   Progress
   fairness action aliases must not resolve directly to other fair actions, so
   one reviewed fair action cannot delegate to a different fair action through a
-  module-instance alias. Progress fairness action aliases must not resolve to
+  module-instance alias. Source and top-level progress fairness action aliases must not resolve directly to other fair actions,
+  so source and top-level fair action definitions cannot delegate to a
+  different reviewed fair action through an imported module alias. Progress fairness action aliases must not resolve to
   definitions that compose other fair actions, so imported action targets
   cannot hide the same cross-action composition behind a module-instance alias.
+  Source and top-level progress fairness action aliases must not resolve to
+  definitions that compose other fair actions, so source and top-level imported
+  action targets cannot hide cross-action composition behind a module-instance
+  alias.
   Progress fairness action aliases must not resolve to definitions that hide
   other fair actions in boolean structure, so imported action targets cannot
   bury another reviewed transition action behind disjunction, implication,
   equivalence, or negation.
+  Source and top-level progress fairness action aliases must not resolve to
+  definitions that hide other fair actions in boolean structure, so source and
+  top-level imported action targets cannot bury another reviewed transition
+  action behind boolean structure.
   Progress fairness action aliases must not resolve through helper wrappers
   that compose other fair actions, so imported action targets cannot hide
   cross-action composition behind local static helper chains in the target
   module, including when helper names are reached through boolean structure
   with direct fair-action targets or helper bodies use boolean structure.
+  Source and top-level progress fairness action aliases must not resolve
+  through helper wrappers that compose other fair actions, so source and
+  top-level imported action targets cannot hide cross-action composition
+  behind local helper-wrapper chains, including boolean paths.
   Progress fairness action aliases must inherit helper-wrapper multi-hop
   local-helper composed-action guards inside imported action targets, so
   imported action targets cannot hide composed fair actions several static
   helper-wrapper hops below the resolved action alias.
+  Source and top-level progress fairness action aliases must inherit
+  helper-wrapper multi-hop local-helper composed-action guards inside imported
+  action targets, so source and top-level imported action targets cannot hide
+  composed fair actions several helper-wrapper hops below the resolved action
+  alias.
   Progress fairness action aliases must resolve helper references to defined
   zero-arity helper definitions, so declared helpers inside imported action
   targets cannot be parameterized operators that static traversal cannot
-  inspect as named action predicates. Progress fairness action aliases must
+  inspect as named action predicates. Source and top-level progress fairness action aliases must resolve helper references to defined zero-arity helper definitions,
+  so source and top-level imported action targets cannot reference
+  parameterized local helpers from reviewed action aliases. Progress fairness action aliases must
   resolve helper references to inspectable helper definitions, so declared
   helpers inside imported action targets cannot be empty or otherwise
-  uninspectable operator bodies. Progress fairness action aliases must inherit
+  uninspectable operator bodies. Source and top-level progress fairness action aliases must resolve helper references to inspectable helper definitions,
+  so source and top-level imported action targets cannot reference empty or
+  otherwise uninspectable local helpers from reviewed action aliases. Progress fairness action aliases must inherit
   helper-reference multi-hop recursive local-helper guards inside imported
   action targets, so imported action targets cannot hide parameterized or
   uninspectable helper definitions behind several local helper hops, including
-  boolean helper paths. Progress fairness action aliases must resolve
+  boolean helper paths. Source and top-level progress fairness action aliases must inherit helper-reference multi-hop recursive local-helper guards inside imported action targets,
+  so source and top-level imported action targets cannot hide parameterized or
+  uninspectable helpers behind several local helper hops. Progress fairness action aliases must resolve
   through acyclic helper wrappers, so imported
   action targets cannot satisfy the alias review through recursive static
-  helper chains in the target module. Progress fairness
+  helper chains in the target module. Source and top-level progress fairness action aliases must resolve through acyclic helper wrappers,
+  so source and top-level imported action targets cannot satisfy alias review
+  through recursive static helper chains. Progress fairness
   action aliases must not resolve through helper actions that compose other fair
   actions, so imported action targets cannot hide cross-action composition
   behind local action-shaped helper chains in the target module, including when
   helper names are reached through boolean structure with direct fair-action
-  targets or helper bodies use boolean structure. Progress fairness action
+  targets or helper bodies use boolean structure. Source and top-level progress fairness action aliases must not resolve through helper actions that compose other fair actions,
+  so source and top-level imported action targets cannot hide cross-action
+  composition behind action-shaped helper chains, including boolean paths. Progress fairness action
   aliases must inherit helper-action multi-hop local-helper composed-action
   guards inside imported action targets, so imported action targets cannot hide
   composed fair actions several action-shaped helper hops below the resolved
-  action alias. Progress fairness action aliases must
+  action alias. Source and top-level progress fairness action aliases must inherit helper-action multi-hop local-helper composed-action guards inside imported action targets,
+  so source and top-level imported action targets cannot hide composed fair
+  actions several action-shaped helper hops below the resolved action alias.
+  Progress fairness action aliases must
   resolve through acyclic helper actions, so imported action targets cannot
   satisfy the alias review through recursive action-shaped helper chains in the
-  target module. Progress fairness action aliases must not
+  target module. Source and top-level progress fairness action aliases must resolve through acyclic helper actions,
+  so source and top-level imported action targets cannot satisfy the alias
+  review through recursive action-shaped helper chains in the target module.
+  Progress fairness action aliases must not
   resolve through helper aliases that compose other fair actions, so imported
   action targets cannot hide cross-action composition behind local
   module-instance helper aliases in the target module, nested module-alias
   targets, or direct imported fair-action targets, including when helper
   aliases are reached through boolean structure with direct imported
   fair-action targets or helper bodies use boolean structure.
+  Source and top-level progress fairness action aliases must not resolve through helper aliases that compose other fair actions,
+  so source and top-level imported action targets cannot hide cross-action
+  composition behind local module-instance helper aliases in the target module.
   Progress fairness action aliases must resolve through acyclic helper aliases,
   so imported action targets cannot satisfy the alias review through recursive
   module-instance helper alias chains, including cycles hidden behind boolean
   helper operands.
+  Source and top-level progress fairness action aliases must resolve through acyclic helper aliases,
+  so source and top-level imported action targets cannot satisfy the alias
+  review through recursive module-instance helper alias chains.
   Progress fairness action aliases must inherit helper-alias multi-hop module-alias cycle guards inside imported action targets,
   so imported action targets cannot hide recursive module-alias helper loops
   several helper and module hops below the resolved action alias.
+  Source and top-level progress fairness action aliases must inherit helper-alias multi-hop module-alias cycle guards inside imported action targets,
+  so source and top-level imported action targets cannot hide recursive
+  module-alias helper loops several helper and module hops below the resolved
+  action alias.
   Progress fairness action aliases must resolve helper aliases through named
   local INSTANCE declarations, so imported action targets cannot hide
   unresolved helper module aliases behind a resolved fair-action alias.
+  Source and top-level progress fairness action aliases must resolve helper aliases through named local INSTANCE declarations,
+  so source and top-level imported action targets cannot hide unresolved
+  helper module aliases behind a resolved fair-action alias.
   Progress fairness action aliases must resolve helper aliases to local action
   modules, so imported action targets cannot point helper aliases at absent
-  local modules. Progress fairness action aliases must resolve helper aliases
+  local modules. Source and top-level progress fairness action aliases must resolve helper aliases to local action modules,
+  so source and top-level imported action targets cannot point helper aliases
+  at absent local modules. Progress fairness action aliases must resolve helper aliases
   to defined zero-arity actions, so imported action targets cannot point helper
   aliases at undefined or parameterized imported operators.
+  Source and top-level progress fairness action aliases must resolve helper aliases to defined zero-arity actions,
+  so source and top-level imported action targets cannot point helper aliases
+  at undefined or parameterized imported operators.
   Progress fairness action aliases must resolve helper-alias helper references
   to defined zero-arity helper definitions, so imported helper bodies reached
   through alias-target helper aliases cannot hide parameterized local helper
-  operators from the fairness-action review. Progress fairness action aliases
+  operators from the fairness-action review.
+  Source and top-level progress fairness action aliases must resolve helper-alias helper references to defined zero-arity helper definitions,
+  so source and top-level imported helper bodies reached through alias-target
+  helper aliases cannot hide parameterized local helper operators from the
+  fairness-action review.
+  Progress fairness action aliases
   must resolve helper-alias helper references to inspectable helper
   definitions, so imported helper bodies reached through alias-target helper
   aliases cannot hide empty or otherwise uninspectable local helper operators,
   including the helper alias target itself.
+  Source and top-level progress fairness action aliases must resolve helper-alias helper references to inspectable helper definitions,
+  so source and top-level imported helper bodies reached through alias-target
+  helper aliases cannot hide empty or otherwise uninspectable local helper
+  operators.
   Progress fairness action aliases must inherit helper-alias multi-hop recursive helper guards inside imported action targets,
   so imported action targets cannot hide parameterized or uninspectable
   terminal helper definitions after several module-alias and local-helper hops.
+  Source and top-level progress fairness action aliases must inherit helper-alias multi-hop recursive helper guards inside imported action targets,
+  so source and top-level imported action targets cannot hide parameterized or
+  uninspectable terminal helper definitions after several module-alias and
+  local-helper hops.
   Progress fairness action aliases must not resolve through module-alias
   conjuncts that compose other fair actions, so imported action targets cannot
   compose direct imported fair-action operators beside their own action update,
   even when the imported operand aliases onward or reaches boolean helper bodies.
+  Source and top-level progress fairness action aliases must not resolve through module-alias conjuncts that compose other fair actions,
+  so source and top-level imported action targets cannot compose direct
+  imported fair-action operators beside their own action update.
   Progress fairness action aliases must resolve through acyclic module-alias
   conjuncts, so imported action targets cannot satisfy the alias review through
   recursive module-alias conjunct chains.
+  Source and top-level progress fairness action aliases must resolve through acyclic module-alias conjuncts,
+  so source and top-level imported action targets cannot satisfy the alias
+  review through recursive module-alias conjunct chains.
   Progress fairness action aliases must inherit module-alias conjunct multi-hop cycle guards behind imported module-alias chains,
   so imported action targets cannot hide recursive module-alias conjunct loops
   after several imported and local helper hops.
+  Source and top-level progress fairness action aliases must inherit module-alias conjunct multi-hop cycle guards behind imported module-alias chains,
+  so source and top-level imported action targets cannot hide recursive
+  module-alias conjunct loops after several imported and local helper hops.
   Progress fairness action aliases must resolve module-alias conjuncts through
   named local INSTANCE declarations, so imported action targets cannot hide
   unresolved conjunct module aliases behind a resolved fair-action alias.
+  Source and top-level progress fairness action aliases must resolve module-alias conjuncts through named local INSTANCE declarations,
+  so source and top-level imported action targets cannot hide unresolved
+  conjunct module aliases behind a resolved fair-action alias.
   Progress fairness action aliases must resolve module-alias conjuncts to local
   action modules, so imported action targets cannot point conjunct operands at
-  absent local modules. Progress fairness action aliases must resolve
+  absent local modules. Source and top-level progress fairness action aliases must resolve module-alias conjuncts to local action modules,
+  so source and top-level imported action targets cannot point conjunct
+  operands at absent local modules. Progress fairness action aliases must resolve
   module-alias conjuncts to defined zero-arity actions, so imported action
   targets cannot point conjunct operands at undefined or parameterized imported
-  operators. Progress fairness action aliases must resolve module-alias
+  operators. Source and top-level progress fairness action aliases must resolve module-alias conjuncts to defined zero-arity actions,
+  so source and top-level imported action targets cannot point conjunct
+  operands at undefined or parameterized imported operators.
+  Progress fairness action aliases must resolve module-alias
   conjuncts to inspectable action definitions, so imported action targets
   cannot point conjunct operands at empty or otherwise uninspectable imported
-  action operators. Progress fairness action aliases must inherit
+  action operators. Source and top-level progress fairness action aliases must resolve module-alias conjuncts to inspectable action definitions,
+  so source and top-level imported action targets cannot point conjunct
+  operands at empty or otherwise uninspectable imported action operators.
+  Progress fairness action aliases must inherit
   module-alias conjunct multi-hop recursive helper guards behind imported
   module-alias chains, so imported action targets cannot hide bad terminal
+  conjunct helper targets after alternating module-alias and local-helper hops.
+  Source and top-level progress fairness action aliases must inherit module-alias conjunct multi-hop recursive helper guards behind imported module-alias chains,
+  so source and top-level imported action targets cannot hide bad terminal
   conjunct helper targets after alternating module-alias and local-helper hops.
   Progress fairness action aliases must not resolve through module-alias boolean
   operands that compose other fair actions, so imported action targets cannot
   bury direct imported fair-action operators behind boolean structure, even
   when the imported operand aliases onward or reaches boolean helper bodies.
+  Source and top-level progress fairness action aliases must not resolve through module-alias boolean operands that compose other fair actions,
+  so source and top-level imported action targets cannot bury direct imported
+  fair-action operators behind boolean structure.
   Progress fairness action aliases must resolve through acyclic module-alias
   boolean operands, so imported action targets cannot satisfy the alias review
   through recursive module-alias boolean operand chains.
+  Source and top-level progress fairness action aliases must resolve through acyclic module-alias boolean operands,
+  so source and top-level imported action targets cannot satisfy the alias
+  review through recursive module-alias boolean operand chains.
   Progress fairness action aliases must inherit module-alias boolean operand multi-hop cycle guards behind imported module-alias chains,
   so imported action targets cannot hide recursive module-alias boolean
   operand loops after several imported and local helper hops.
+  Source and top-level progress fairness action aliases must inherit module-alias boolean operand multi-hop cycle guards behind imported module-alias chains,
+  so source and top-level imported action targets cannot hide recursive
+  module-alias boolean operand loops after several imported and local helper
+  hops.
   Progress fairness action aliases must resolve module-alias boolean operands
   through named local INSTANCE declarations, so imported action targets cannot
   hide unresolved boolean-operand module aliases behind a resolved fair-action
-  alias. Progress fairness action aliases must resolve module-alias boolean
+  alias.
+  Source and top-level progress fairness action aliases must resolve module-alias boolean operands through named local INSTANCE declarations,
+  so source and top-level imported action targets cannot hide unresolved
+  boolean-operand module aliases behind a resolved fair-action alias.
+  Progress fairness action aliases must resolve module-alias boolean
   operands to local action modules, so imported action targets cannot point
-  boolean operands at absent local modules. Progress fairness action aliases
-  must resolve module-alias boolean operands to defined zero-arity actions, so
+  boolean operands at absent local modules.
+  Source and top-level progress fairness action aliases must resolve module-alias boolean operands to local action modules,
+  so source and top-level imported action targets cannot point boolean
+  operands at absent local modules.
+  Progress fairness action aliases must resolve module-alias boolean operands to defined zero-arity actions, so
   imported action targets cannot point boolean operands at undefined or
-  parameterized imported operators. Progress fairness action aliases must
-  resolve module-alias boolean operands to inspectable action definitions, so
+  parameterized imported operators.
+  Source and top-level progress fairness action aliases must resolve module-alias boolean operands to defined zero-arity actions,
+  so source and top-level imported action targets cannot point boolean
+  operands at undefined or parameterized imported operators.
+  Progress fairness action aliases must resolve module-alias boolean operands to inspectable action definitions, so
   imported action targets cannot point boolean operands at empty or otherwise
-  uninspectable imported action operators. Progress fairness action aliases
+  uninspectable imported action operators.
+  Source and top-level progress fairness action aliases must resolve module-alias boolean operands to inspectable action definitions,
+  so source and top-level imported action targets cannot point boolean
+  operands at empty or otherwise uninspectable imported action operators.
+  Progress fairness action aliases
   must inherit module-alias boolean operand multi-hop recursive helper guards
   behind imported module-alias chains, so imported action targets cannot hide
   bad terminal boolean helper targets after alternating module-alias and
   local-helper hops.
+  Source and top-level progress fairness action aliases must inherit module-alias boolean operand multi-hop recursive helper guards behind imported module-alias chains,
+  so source and top-level imported action targets cannot hide bad terminal
+  boolean helper targets after alternating module-alias and local-helper hops.
   Progress fairness action aliases must resolve through named local INSTANCE
   declarations, so projection fairness cannot point at an undeclared module
   alias or a static predicate in the imported action module.
+  Source and top-level progress fairness action aliases must resolve through named local INSTANCE declarations,
+  so source and top-level fairness cannot point at undeclared module aliases.
   Same-name imported fair-action aliases remain valid when the imported action
   target is an inspectable action-shaped transition definition.
   Progress fairness action aliases must resolve to local action modules, so
   projection fairness cannot point at absent imported action modules.
+  Source and top-level progress fairness action aliases must resolve to local action modules,
+  so source and top-level fairness cannot point at absent imported action
+  modules.
   Progress fairness action aliases must resolve to defined zero-arity actions,
   so projection fairness cannot point at undefined or parameterized imported
-  action operators. Progress fairness action aliases must resolve to
+  action operators.
+  Source and top-level progress fairness action aliases must resolve to defined zero-arity actions,
+  so source and top-level fairness cannot point at undefined or parameterized
+  imported action operators.
+  Progress fairness action aliases must resolve to
   inspectable actions, so projection fairness cannot point at empty or
-  otherwise uninspectable imported action operators. Progress fairness action aliases must inherit multi-hop module-alias cycle guards behind imported action targets,
+  otherwise uninspectable imported action operators.
+  Source and top-level progress fairness action aliases must resolve to inspectable actions,
+  so source and top-level fairness cannot point at empty or otherwise
+  uninspectable imported action operators. Same-name imported source and
+  top-level fair-action aliases remain valid when the imported targets are
+  inspectable action-shaped transition definitions. Progress fairness action aliases must inherit multi-hop module-alias cycle guards behind imported action targets,
   so projection fairness cannot hide recursive action-alias loops several
-  imported modules below the resolved fair-action alias. Progress fairness action aliases must not resolve through onward action aliases inside imported action targets,
+  imported modules below the resolved fair-action alias.
+  Source and top-level progress fairness action aliases must inherit multi-hop module-alias cycle guards behind imported action targets,
+  so source and top-level fairness cannot hide recursive action-alias loops
+  several imported modules below the resolved fair-action alias. Progress fairness action aliases must not resolve through onward action aliases inside imported action targets,
   so projection fairness cannot accept an imported fair-action target that
   aliases onward instead of being the inspected action-shaped transition
-  definition. Progress fairness action
+  definition.
+  Source and top-level progress fairness action aliases must not resolve through onward action aliases inside imported action targets,
+  so source and top-level fairness cannot accept imported fair-action targets
+  that alias onward instead of being inspected action-shaped transition
+  definitions. Progress fairness action
   aliases must resolve to action definitions without fairness clauses, so
   projection fairness cannot hide nested `WF_vars` obligations inside an
-  imported action alias target. Progress fairness action aliases must resolve
+  imported action alias target.
+  Source and top-level progress fairness action aliases must resolve to action definitions without fairness clauses,
+  so source and top-level fairness cannot hide nested `WF_vars` obligations
+  inside imported action alias targets. Progress fairness action aliases must resolve
   to transition definitions without fairness or temporal operators, so
   projection fairness cannot hide temporal syntax inside an imported action
-  alias target. Progress fairness action aliases must resolve to transition
+  alias target.
+  Source and top-level progress fairness action aliases must resolve to transition definitions without fairness or temporal operators,
+  so source and top-level fairness cannot hide temporal syntax inside imported
+  action alias targets. Progress fairness action aliases must resolve to transition
   definitions that mention next-state updates or UNCHANGED, so projection
   fairness cannot point at static imported predicates.
+  Source and top-level progress fairness action aliases must resolve to transition definitions that mention next-state updates or UNCHANGED,
+  so source and top-level fairness cannot point at static imported predicates.
   Progress transition closures must keep static [][Next]_vars shape, so
   progress liveness cannot switch to a dynamic or temporal closure outside the
   checked transition operator.
+  Source and top-level progress transition closures must keep static [][Next]_vars shape,
+  so source and top-level progress liveness cannot switch to dynamic or
+  temporal closures outside the checked transition operator.
   Progress transition operators must be defined zero-arity operators, so
   progress liveness cannot point at missing or parameterized transition roots.
+  Source and top-level progress transition operators must be defined zero-arity operators,
+  so source and top-level progress liveness cannot point at missing or
+  parameterized transition roots.
   Progress fairness actions must be reachable from the checked transition
   closure, so a liveness spec cannot keep the expected fairness aggregate while
   closing over a `Next` relation that omits one of those fair actions,
   including when fair actions and transition branches are paired through
   same-name imported module aliases.
+  Source and top-level progress fairness actions must be reachable from the checked transition closure,
+  so source and top-level liveness specs cannot keep the expected fairness
+  aggregate while closing over a transition relation that omits a fair action,
+  including when source and top-level fair actions and transition branches are
+  paired through same-name imported module aliases.
+  Progress fairness action reachability must follow transitive boolean local helper operands,
+  so guarded helper wrappers cannot create false missing-fair-action diagnostics
+  when they still reach the reviewed action through another local helper.
+  Source and top-level progress fairness action reachability must follow transitive boolean local helper operands,
+  so source and top-level guarded helper wrappers cannot create false
+  missing-fair-action diagnostics when they still reach the reviewed action
+  through another local helper.
   Source commit progress spec contract inventories must stay duplicate-free, so
   repeated source progress spec rows cannot inflate fairness coverage before
   spec/fairness wiring is checked.
