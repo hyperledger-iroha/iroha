@@ -109,8 +109,18 @@ final class TransactionInputValidatorTests: XCTestCase {
             AssetDefinitionAddressCodec.canonicalDefinitionLiteral(" \(sampleAid) "),
             sampleAid
         )
+        let uuidBytes = Data([
+            0x6e, 0x15, 0x6b, 0x50, 0x10, 0xe6, 0x45, 0xf8,
+            0x83, 0xeb, 0x83, 0x19, 0x46, 0xb8, 0x8d, 0xb8
+        ])
+        XCTAssertEqual(AssetDefinitionAddressCodec.uuidBytes(sampleAid), uuidBytes)
+        XCTAssertEqual(AssetDefinitionAddressCodec.definitionLiteral(uuidBytes: uuidBytes), sampleAid)
+        XCTAssertNil(AssetDefinitionAddressCodec.definitionLiteral(uuidBytes: Data(repeating: 0x01, count: 15)))
         XCTAssertNil(
             AssetDefinitionAddressCodec.canonicalDefinitionLiteral("66owaQmAQMuHxPzxUN3bqZ6FJfDb")
+        )
+        XCTAssertNil(
+            AssetDefinitionAddressCodec.uuidBytes("66owaQmAQMuHxPzxUN3bqZ6FJfDb")
         )
     }
 

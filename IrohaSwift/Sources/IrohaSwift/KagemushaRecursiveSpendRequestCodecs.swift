@@ -141,6 +141,48 @@ public struct KagemushaRecursiveSpendInitRequest: Equatable, Sendable {
     }
 }
 
+public struct KagemushaRecursiveSpendTopUpInitRequest: Equatable, Sendable {
+    public let recordBundle: Data
+    public let pallasOpenEnvelopes: Data
+    public let currentNote: KagemushaRecursiveSpendableNoteDescriptor
+    public let blockHeight: UInt64?
+
+    public init(
+        recordBundle: Data,
+        pallasOpenEnvelopes: Data,
+        currentNote: KagemushaRecursiveSpendableNoteDescriptor,
+        blockHeight: UInt64? = nil
+    ) throws {
+        let recordBundlePayload = try KagemushaRecursiveSpendRequestCodecs.compactPayloadForRequest(
+            recordBundle,
+            schema: KagemushaRecursiveSpendRequestCodecs.recordBundleWireName,
+            field: "recordBundle"
+        )
+        let recordBundleHopCount = try KagemushaRecursiveSpendRequestCodecs.readVerifiedFoldRecordBundleHopCount(
+            recordBundlePayload,
+            field: "recordBundle"
+        )
+        guard recordBundleHopCount == 1 else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("recordBundle")
+        }
+        try KagemushaRecursiveSpendRequestCodecs.requirePallasOpenEnvelopesArchive(
+            pallasOpenEnvelopes,
+            expectedEnvelopeCount: recordBundleHopCount,
+            field: "pallasOpenEnvelopes",
+            maxBytes: KagemushaRecursiveSpendProver.nativeArchiveMaxBytes
+        )
+        self.recordBundle = recordBundle
+        self.pallasOpenEnvelopes = pallasOpenEnvelopes
+        self.currentNote = currentNote
+        self.blockHeight = blockHeight
+    }
+}
+
+public struct KagemushaRecursiveSpendTopUpInitRequestSummary: Equatable, Sendable {
+    public let assetDefinitionId: String
+    public let amount: String
+}
+
 public struct KagemushaRecursiveSpendTopUpRequest: Equatable, Sendable {
     public let assetId: String
     public let amount: String
@@ -163,6 +205,11 @@ public struct KagemushaRecursiveSpendTopUpRequest: Equatable, Sendable {
             initRequestArchive,
             schema: KagemushaRecursiveSpendRequestCodecs.initRequestWireName,
             field: "initRequestArchive"
+        )
+        try KagemushaRecursiveSpendRequestCodecs.validateTopUpRequestPublicBinding(
+            assetId: canonicalAssetId,
+            amount: canonicalAmount,
+            initRequestArchive: initRequestArchive
         )
         self.assetId = canonicalAssetId
         self.amount = canonicalAmount
@@ -622,6 +669,21 @@ public enum KagemushaRecursiveSpendRequestCodecs {
         return noritoEncode(typeName: initRequestWireName, payload: writer.data, flags: requestFlags)
     }
 
+    public static func encodeTopUpInitRequest(_ request: KagemushaRecursiveSpendTopUpInitRequest) throws -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(try compactPayloadForRequest(
+            request.recordBundle,
+            schema: recordBundleWireName,
+            field: "recordBundle"
+        ))
+        writer.writeField(encodeBytesVec(request.pallasOpenEnvelopes))
+        writer.writeField(try encodeSpendableNote(request.currentNote))
+        writer.writeField(encodeOptionRaw(nil))
+        writer.writeField(encodeOptionBytesVec(nil))
+        writer.writeField(encodeOptionUInt64(request.blockHeight))
+        return noritoEncode(typeName: initRequestWireName, payload: writer.data, flags: requestFlags)
+    }
+
     public static func encodeTopUpRequest(_ request: KagemushaRecursiveSpendTopUpRequest) throws -> Data {
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(try assetIdPayload(request.assetId))
@@ -632,6 +694,27 @@ public enum KagemushaRecursiveSpendRequestCodecs {
             field: "initRequestArchive"
         ))
         return noritoEncode(typeName: topUpRequestWireName, payload: writer.data, flags: requestFlags)
+    }
+
+    public static func encodeTopUpRequestFromInitRequest(
+        accountId: String,
+        initRequestArchive: Data,
+        dataspaceId: UInt64? = nil
+    ) throws -> Data {
+        let summary = try topUpInitRequestSummary(initRequestArchive)
+        return try encodeTopUpRequest(KagemushaRecursiveSpendTopUpRequest(
+            accountId: accountId,
+            assetDefinitionId: summary.assetDefinitionId,
+            amount: summary.amount,
+            initRequestArchive: initRequestArchive,
+            dataspaceId: dataspaceId
+        ))
+    }
+
+    public static func topUpInitRequestSummary(
+        _ initRequestArchive: Data
+    ) throws -> KagemushaRecursiveSpendTopUpInitRequestSummary {
+        try readTopUpInitRequestSummary(initRequestArchive)
     }
 
     public static func encodeAppendRequest(_ request: KagemushaRecursiveSpendAppendRequest) throws -> Data {
@@ -1666,6 +1749,113 @@ extension KagemushaRecursiveSpendRequestCodecs {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
         }
         return hopCount
+    }
+
+    static func validateTopUpRequestPublicBinding(
+        assetId: String,
+        amount: String,
+        initRequestArchive: Data
+    ) throws {
+        let summary = try readTopUpInitRequestSummary(initRequestArchive)
+        let parsedAsset = try parseAssetId(assetId, field: "assetId")
+        guard parsedAsset.assetDefinitionId == summary.assetDefinitionId else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidField("assetId")
+        }
+        guard amount == summary.amount else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidField("amount")
+        }
+    }
+
+    private static func readTopUpInitRequestSummary(
+        _ initRequestArchive: Data
+    ) throws -> KagemushaRecursiveSpendTopUpInitRequestSummary {
+        let payload = try compactPayloadForRequest(
+            initRequestArchive,
+            schema: initRequestWireName,
+            field: "initRequestArchive"
+        )
+        var reader = CompactReader(data: payload)
+        let recordBundlePayload = try reader.readField()
+        let pallasOpenEnvelopes = try readField(&reader, field: "initRequestArchive.pallasOpenEnvelopes") {
+            try $0.readByteVec()
+        }
+        let currentNote = try readField(&reader, field: "initRequestArchive.currentNote") {
+            try readSpendableNote(&$0, field: "initRequestArchive.current_note")
+        }
+        let lineageVerifierKey = try readField(&reader, field: "initRequestArchive.lineageVerifierKey") {
+            try readOptionRawPayload(&$0, field: "initRequestArchive.lineage_verifier_key")
+        }
+        let lineageProvingKeyArchive = try readField(&reader, field: "initRequestArchive.lineageProvingKeyArchive") {
+            try readOptionRawPayload(&$0, field: "initRequestArchive.lineage_proving_key_archive")
+        }
+        _ = try readField(&reader, field: "initRequestArchive.blockHeight") {
+            try readOptionUInt64Payload(&$0)
+        }
+        guard reader.remaining == 0 else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("initRequestArchive")
+        }
+        guard lineageVerifierKey == nil else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidField("lineageVerifierKey")
+        }
+        guard lineageProvingKeyArchive == nil else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidField("lineageProvingKeyArchive")
+        }
+        let recordBundle = try readTopUpInitRecordBundleSummary(recordBundlePayload)
+        guard recordBundle.hopCount == 1 else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("initRequestArchive.recordBundle")
+        }
+        try requirePallasOpenEnvelopesArchive(
+            pallasOpenEnvelopes,
+            expectedEnvelopeCount: recordBundle.hopCount,
+            field: "initRequestArchive.pallas_open_envelopes",
+            maxBytes: KagemushaRecursiveSpendProver.nativeArchiveMaxBytes
+        )
+        return KagemushaRecursiveSpendTopUpInitRequestSummary(
+            assetDefinitionId: recordBundle.assetDefinitionId,
+            amount: currentNote.amount
+        )
+    }
+
+    private struct TopUpInitRecordBundleSummary {
+        let assetDefinitionId: String
+        let hopCount: Int
+    }
+
+    private static func readTopUpInitRecordBundleSummary(
+        _ recordBundlePayload: Data
+    ) throws -> TopUpInitRecordBundleSummary {
+        var decoder = CompactReader(data: recordBundlePayload)
+        let bundlePayload = try decoder.readField()
+        _ = try decoder.readField()
+        guard decoder.remaining == 0 else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("initRequestArchive.record_bundle")
+        }
+
+        var bundle = CompactReader(data: bundlePayload)
+        _ = try readField(&bundle, field: "initRequestArchive.record_bundle.chain_id") {
+            try readChainIdPayload(&$0)
+        }
+        let assetBytes = try readField(&bundle, field: "initRequestArchive.record_bundle.asset") {
+            try $0.readFixedBytesFlexible(
+                expectedCount: 16,
+                field: "initRequestArchive.record_bundle.asset"
+            )
+        }
+        guard let assetDefinitionId = AssetDefinitionAddress.encode(uuidBytes: assetBytes) else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(
+                "initRequestArchive.record_bundle.asset"
+            )
+        }
+        let hopCount = try readField(&bundle, field: "initRequestArchive.record_bundle.steps") {
+            try readVerifiedFoldStepCount(&$0, field: "initRequestArchive.record_bundle.steps")
+        }
+        guard bundle.remaining == 0 else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("initRequestArchive.record_bundle")
+        }
+        return TopUpInitRecordBundleSummary(
+            assetDefinitionId: assetDefinitionId,
+            hopCount: hopCount
+        )
     }
 
     private static func readVerifiedFoldStepCount(

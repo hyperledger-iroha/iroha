@@ -502,6 +502,7 @@ const LOCALNET_UNIVERSAL_DOMAIN: &str = "universal.universal";
 const LOCALNET_STAKE_ASSET_NAME: &str = "xor";
 const LOCALNET_SAMPLE_ASSET_DOMAIN: &str = "wonderland.universal";
 pub(crate) const LOCALNET_SAMPLE_ASSET_NAME: &str = "sample";
+const LOCALNET_REQUESTED_ASSET_INITIAL_QUANTITY: u64 = 1_000_000_000;
 const LOCALNET_OFFLINE_NOTE_ASSET_ID: &str = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1";
 const LOCALNET_OFFLINE_NOTE_ASSET_NAME: &str = "usd";
 const LOCALNET_OFFLINE_NOTE_ASSET_ALIAS: &str = "usd#wonderland";
@@ -658,6 +659,24 @@ fn localnet_offline_note_asset_spec() -> AssetSpec {
     }
 }
 
+fn requested_localnet_asset_spec(asset_definition_id: &str) -> Result<AssetSpec> {
+    let id = asset_definition_id.trim();
+    if id.is_empty() {
+        return Err(eyre!("asset definition id must not be empty"));
+    }
+    AssetDefinitionId::parse_address_literal(id)
+        .wrap_err_with(|| format!("invalid asset definition id `{id}`"))?;
+    let client_account_id = localnet_client_account_id();
+    Ok(AssetSpec {
+        id: id.to_owned(),
+        name: format!("Localnet asset {id}"),
+        alias: None,
+        owned_by: client_account_id.clone(),
+        mint_to: client_account_id,
+        quantity: LOCALNET_REQUESTED_ASSET_INITIAL_QUANTITY,
+    })
+}
+
 fn effective_localnet_assets(extra_assets: &[AssetSpec]) -> Vec<AssetSpec> {
     let mut assets = Vec::with_capacity(extra_assets.len() + 1);
     let mut seen_asset_ids = BTreeSet::new();
@@ -715,6 +734,11 @@ pub struct Args {
     /// The built-in offline-note asset is always emitted.
     #[arg(long, default_value_t = false)]
     sample_asset: bool,
+    /// Register additional asset definition IDs owned by the generated client signer.
+    /// Repeat the flag to register more than one asset definition. A localnet reserve is minted
+    /// to the generated client signer for each requested asset definition.
+    #[arg(long, value_name = "ASSET_DEFINITION_ID")]
+    asset_definition_id: Vec<String>,
     /// Override the consensus block time (milliseconds) in generated manifests/configs.
     /// Leave unset to use the fast localnet pipeline defaults. If only one of
     /// `--block-time-ms`/`--commit-time-ms` is supplied, Kagami mirrors it to the other.
@@ -762,6 +786,21 @@ impl<T: Write> RunArgs<T> for Args {
         let sora_profile = self.sora_profile.map(SoraProfile::from);
         let perf_profile = self.perf_profile.map(LocalnetPerfProfile::from);
         let consensus_mode = resolve_requested_consensus_mode(self.consensus_mode, perf_profile);
+        let mut assets = if self.sample_asset {
+            vec![AssetSpec {
+                id: localnet_sample_asset_literal(),
+                name: LOCALNET_SAMPLE_ASSET_NAME.to_owned(),
+                alias: None,
+                owned_by: ALICE_ID.clone(),
+                mint_to: ALICE_ID.clone(),
+                quantity: 100,
+            }]
+        } else {
+            vec![]
+        };
+        for asset_definition_id in self.asset_definition_id {
+            assets.push(requested_localnet_asset_spec(&asset_definition_id)?);
+        }
         let opts = LocalnetOptions {
             build_line,
             sora_profile,
@@ -774,18 +813,7 @@ impl<T: Write> RunArgs<T> for Args {
             base_p2p_port: self.base_p2p_port,
             out_dir: self.out_dir,
             extra_accounts: self.extra_accounts,
-            assets: if self.sample_asset {
-                vec![AssetSpec {
-                    id: localnet_sample_asset_literal(),
-                    name: LOCALNET_SAMPLE_ASSET_NAME.to_owned(),
-                    alias: None,
-                    owned_by: ALICE_ID.clone(),
-                    mint_to: ALICE_ID.clone(),
-                    quantity: 100,
-                }]
-            } else {
-                vec![]
-            },
+            assets,
             consensus_mode,
             next_consensus_mode: self.next_consensus_mode.map(Into::into),
             mode_activation_height: self.mode_activation_height,
@@ -4048,6 +4076,106 @@ mod tests {
         let source =
             TomlSource::from_file(temp.path().join("peer0.toml")).expect("read generated config");
         actual::Root::from_toml_source(source).expect("generated config must parse");
+    }
+
+    #[test]
+    fn requested_localnet_asset_spec_trims_and_uses_client_owner_with_initial_reserve() {
+        let asset_id = localnet_sample_asset_literal();
+        let spec = requested_localnet_asset_spec(&format!("  {asset_id}  ")).expect("asset spec");
+        let client_account_id = localnet_client_account_id();
+
+        assert_eq!(spec.id, asset_id);
+        assert_eq!(spec.alias, None);
+        assert_eq!(spec.owned_by, client_account_id);
+        assert_eq!(spec.mint_to, spec.owned_by);
+        assert_eq!(spec.quantity, LOCALNET_REQUESTED_ASSET_INITIAL_QUANTITY);
+    }
+
+    #[test]
+    fn requested_localnet_asset_spec_rejects_blank_or_invalid_asset_definition_id() {
+        assert!(requested_localnet_asset_spec("   ").is_err());
+        assert!(requested_localnet_asset_spec("not-valid").is_err());
+    }
+
+    #[test]
+    fn generated_localnet_registers_requested_asset_definition_for_client_owner() {
+        let requested_asset_literal = localnet_sample_asset_literal();
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
+            perf_profile: None,
+            peers: NonZeroU16::new(4).expect("non-zero"),
+            seed: Some("requested-asset-bootstrap".to_owned()),
+            bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 29080,
+            base_p2p_port: 33337,
+            out_dir: PathBuf::from("unused"),
+            extra_accounts: 0,
+            assets: vec![
+                requested_localnet_asset_spec(&requested_asset_literal).expect("asset spec"),
+            ],
+            block_time_ms: None,
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Npos,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        let manifest = localnet_genesis_for_opts(&opts);
+        let requested_asset_id = AssetDefinitionId::parse_address_literal(&requested_asset_literal)
+            .expect("requested asset id");
+        let client_account_id = localnet_client_account_id();
+        let requested_asset = AssetId::new(requested_asset_id.clone(), client_account_id.clone());
+
+        let has_definition = manifest.instructions().any(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<RegisterBox>()
+                .is_some_and(|register| {
+                    matches!(
+                        register,
+                        RegisterBox::AssetDefinition(register)
+                            if register.object().id == requested_asset_id
+                    )
+                })
+        });
+        assert!(
+            has_definition,
+            "localnet must register requested asset definitions"
+        );
+
+        let has_owner_transfer = manifest.instructions().any(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<TransferBox>()
+                .is_some_and(|transfer| match transfer {
+                    TransferBox::AssetDefinition(transfer_asset) => {
+                        transfer_asset.object() == &requested_asset_id
+                            && transfer_asset.destination() == &client_account_id
+                    }
+                    _ => false,
+                })
+        });
+        assert!(
+            has_owner_transfer,
+            "requested asset definition ownership must transfer to the generated client signer"
+        );
+
+        let has_initial_mint = manifest.instructions().any(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<MintBox>()
+                .is_some_and(|mint| match mint {
+                    MintBox::Asset(mint_asset) => mint_asset.destination() == &requested_asset,
+                    _ => false,
+                })
+        });
+        assert!(
+            has_initial_mint,
+            "requested asset definitions must mint an initial reserve to the generated client signer"
+        );
     }
 
     #[test]
