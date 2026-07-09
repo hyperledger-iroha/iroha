@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import re
 import sys
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -32,6 +31,7 @@ from sorafs_evidence_json import (  # noqa: E402
 )
 from sorafs_evidence_validation import (  # noqa: E402
     archive_artifact_path_label,
+    forbidden_non_production_markers,
     build_evidence_artifact,
     count_evidence_artifacts,
     recognized_evidence_artifacts,
@@ -392,7 +392,7 @@ def require_only_required_payload_kinds(
     if not isinstance(values, list):
         return
     if any(
-        not isinstance(value, str) or value.strip() not in REQUIRED_PAYLOAD_KIND_SET
+        not isinstance(value, str) or value not in REQUIRED_PAYLOAD_KIND_SET
         for value in values
     ):
         errors.append("payload_kinds must not include unknown values")
@@ -418,7 +418,7 @@ def require_only_required_values(
             value = item.get(field)
         else:
             value = item
-        if not isinstance(value, str) or value.strip() not in allowed:
+        if not isinstance(value, str) or value not in allowed:
             errors.append(f"{array_field} must not include unknown values")
             return
 
@@ -442,11 +442,7 @@ def require_scalar_inventory_labels(
         if pattern.fullmatch(value) is None:
             errors.append(label_error)
             continue
-        forbidden = sorted(
-            marker
-            for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
-            if marker in value.split("-")
-        )
+        forbidden = forbidden_non_production_markers(value, FORBIDDEN_INVENTORY_LABEL_MARKERS)
         if forbidden:
             errors.append(
                 f"{field}[{index}] must not contain non-production markers "
@@ -684,6 +680,20 @@ def validate_evidence_payload(
     )
 
 
+def require_single_active_digest(
+    digests: set[str],
+    errors: list[str],
+    *,
+    label: str,
+) -> set[str]:
+    """Return one active rollout digest or fail closed on mixed anchors."""
+
+    if len(digests) <= 1:
+        return digests
+    errors.append(f"{label} must contain exactly one active digest")
+    return set()
+
+
 
 def build_summary(
     evidence_dirs: list[Path],
@@ -740,19 +750,35 @@ def build_summary(
             digest = fingerprint.get("public_head_cid_hex")
             if kind_name == "publisher_service":
                 if isinstance(digest, str):
-                    valid_public_head_cids.add(digest.lower())
+                    valid_public_head_cids.add(digest)
                 policy_digest = fingerprint.get("policy_digest_hex")
                 if isinstance(policy_digest, str):
-                    valid_policy_digests.add(policy_digest.lower())
+                    valid_policy_digests.add(policy_digest)
             if kind_name == "operator_recovery":
                 checkpoint_digest = fingerprint.get("checkpoint_digest_hex")
                 if isinstance(checkpoint_digest, str):
-                    valid_checkpoint_digests.add(checkpoint_digest.lower())
+                    valid_checkpoint_digests.add(checkpoint_digest)
             if kind_name in PUBLIC_HEAD_BOUND_KINDS:
                 public_head_bound_artifacts.append((kind_name, artifact))
             if kind_name in POLICY_BOUND_KINDS:
                 policy_bound_artifacts.append((kind_name, artifact))
         record_evidence_validation_errors(path, validation_errors, errors)
+
+    valid_public_head_cids = require_single_active_digest(
+        valid_public_head_cids,
+        errors,
+        label="valid_public_head_cids",
+    )
+    valid_policy_digests = require_single_active_digest(
+        valid_policy_digests,
+        errors,
+        label="valid_policy_digests",
+    )
+    valid_checkpoint_digests = require_single_active_digest(
+        valid_checkpoint_digests,
+        errors,
+        label="valid_checkpoint_digests",
+    )
 
     validate_bound_evidence_digest_references(
         required_kinds=required_kinds,
@@ -850,8 +876,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--now-unix",
         type=positive_int_arg,
-        default=int(time.time()),
-        help="Validator clock used for age checks. Defaults to current Unix time.",
+        required=True,
+        help="Required reviewed validator clock used for age checks.",
     )
     parser.add_argument(
         "--max-evidence-age-secs",

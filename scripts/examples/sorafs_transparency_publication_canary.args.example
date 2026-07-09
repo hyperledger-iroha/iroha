@@ -8,6 +8,8 @@ transparency-mainnet-20260701
 production
 --generated-at-unix
 1800000120
+--now-unix
+1800000120
 --source-batch-digest-hex
 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 --cycle-digest-hex

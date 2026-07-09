@@ -29,12 +29,12 @@ translation_last_reviewed: 2026-01-30
 
 ## 1. Обновить детерминированные фикстуры
 
-Сгенерируйте канонические векторы чанкинга SF-1. Команда также выпускает подписанные
-конверты манифеста при указании `--signing-key`; используйте `--allow-unsigned`
-только в локальной разработке.
+Regenerate the canonical SF-1 chunking vectors. The command verifies the
+existing council signature file, or appends a signature when `--signing-key` is
+supplied.
 
 ```bash
-cargo run -p sorafs_chunker --bin export_vectors -- --allow-unsigned
+cargo run -p sorafs_chunker --bin export_vectors -- --signing-key=<ed25519-private-key-hex>
 ```
 
 Результаты:
@@ -79,7 +79,7 @@ cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   --manifest-out=/tmp/docs.manifest \
   --manifest-signatures-out=/tmp/docs.manifest_signatures.json \
   --json-out=/tmp/docs.report.json \
-  --allow-unsigned
+  --council-signature=<signerhex>:<signaturehex>
 ```
 
 Проверьте `/tmp/docs.report.json` на:
@@ -89,8 +89,9 @@ cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
 - `manifest.manifest_blake3` – BLAKE3-дайджест, подписанный в конверте манифеста.
 - `chunk_fetch_specs[]` – упорядоченные инструкции выборки для оркестраторов.
 
-Когда будете готовы предоставить реальные подписи, добавьте аргументы `--signing-key`
-и `--signer`. Команда проверяет каждую подпись Ed25519 перед записью конверта.
+The `--council-signature` value must be a reviewed council signer public key and
+Ed25519 signature pair. The command verifies every Ed25519 signature before
+writing the envelope.
 
 ## 4. Смоделируйте получение от нескольких провайдеров
 

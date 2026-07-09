@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import re
 import sys
-import time
 from collections import Counter
 from dataclasses import dataclass
 from html import unescape
@@ -45,10 +44,10 @@ from sorafs_evidence_sensitivity import (  # noqa: E402
 from sorafs_evidence_validation import (  # noqa: E402
     evidence_schema_by_kind,
     evidence_gate_status,
-    numbered_rollout_marker_token,
+    forbidden_non_production_markers,
     require_rollout_deployment_id,
 )
-from sorafs_path_identity import resolve_path_identity  # noqa: E402
+from sorafs_path_identity import diagnostic_text_is_canonical, resolve_path_identity  # noqa: E402
 from sorafs_required_kinds import (  # noqa: E402
     parse_required_kinds as parse_required_gates,
 )
@@ -1123,14 +1122,7 @@ class ValidationOptions:
 def canonical_string(value: Any) -> str | None:
     """Return a non-empty canonical string, or None."""
 
-    if (
-        isinstance(value, str)
-        and value.strip()
-        and value == value.strip()
-        and not any(ord(character) < 32 or ord(character) == 127 for character in value)
-    ):
-        return value
-    return None
+    return value if diagnostic_text_is_canonical(value) else None
 
 
 def is_production_ready_environment(value: Any) -> bool:
@@ -1167,26 +1159,14 @@ def require_production_deployment_id_value(
     deployment_id = require_reviewed_deployment_id_value(value, errors, path)
     if not deployment_id:
         return ""
-    tokens = [
-        token for token in re.split(r"[._-]+", deployment_id.lower()) if token
-    ]
+    detected_markers = forbidden_non_production_markers(
+        deployment_id,
+        FORBIDDEN_PRODUCTION_DEPLOYMENT_MARKERS,
+    )
     forbidden = sorted(
-        {
-            token
-            for token in set(tokens)
-            if token in FORBIDDEN_PRODUCTION_DEPLOYMENT_MARKERS
-        }
-        | {
-            marker
-            for token in tokens
-            if (
-                marker := numbered_rollout_marker_token(
-                    token,
-                    FORBIDDEN_PRODUCTION_DEPLOYMENT_MARKERS,
-                )
-            )
-            is not None
-        }
+        marker
+        for marker in detected_markers
+        if not any(marker != other and marker in other for other in detected_markers)
     )
     if forbidden:
         errors.append(
@@ -2501,10 +2481,9 @@ def validate_payload_free_provider_id_metadata_values(
         if REPUTATION_PROVIDER_ID_PATTERN.fullmatch(provider_id) is None:
             errors.append(f"{path} must match canonical lowercase `provider-*`")
             continue
-        forbidden = sorted(
-            marker
-            for marker in REPUTATION_FORBIDDEN_PROVIDER_ID_MARKERS
-            if marker in provider_id.split("-")
+        forbidden = forbidden_non_production_markers(
+            provider_id,
+            REPUTATION_FORBIDDEN_PROVIDER_ID_MARKERS,
         )
         if forbidden:
             errors.append(
@@ -2544,10 +2523,9 @@ def validate_payload_free_object_list_string_field_policies(
                 errors.append(f"{path} {policy['pattern_error']}")
                 continue
             forbidden_markers = policy["forbidden_markers"]
-            forbidden = sorted(
-                marker
-                for marker in forbidden_markers
-                if marker in metadata_value.split("-")
+            forbidden = forbidden_non_production_markers(
+                metadata_value,
+                forbidden_markers,
             )
             if forbidden:
                 errors.append(
@@ -3740,6 +3718,8 @@ def validate_payload_free_summary_metadata(
     gate: GateSummaryKind,
     payload: dict[str, Any],
     errors: list[str],
+    *,
+    enforce_production_deployment_context: bool = False,
 ) -> None:
     """Validate required top-level lane metadata shapes."""
 
@@ -3807,12 +3787,13 @@ def validate_payload_free_summary_metadata(
                 value,
                 errors,
             )
-            validate_payload_free_object_list_deployment_context_metadata(
-                field,
-                value,
-                object_list_schema,
-                errors,
-            )
+            if enforce_production_deployment_context:
+                validate_payload_free_object_list_deployment_context_metadata(
+                    field,
+                    value,
+                    object_list_schema,
+                    errors,
+                )
             continue
         binding_fields = PAYLOAD_FREE_SUMMARY_HEX_BINDING_METADATA_FIELDS.get(field)
         if binding_fields is not None:
@@ -3886,7 +3867,8 @@ def validate_payload_free_summary_metadata(
         object_fields = PAYLOAD_FREE_SUMMARY_OBJECT_METADATA_FIELDS.get(field)
         if object_fields is not None:
             validate_payload_free_object_metadata(field, value, object_fields, errors)
-            validate_payload_free_deployment_context_metadata(field, value, errors)
+            if enforce_production_deployment_context:
+                validate_payload_free_deployment_context_metadata(field, value, errors)
             continue
         errors.append(f"{field} validator is not configured for `{gate.name}`")
     validate_payload_free_cross_metadata_bindings(gate, payload, errors)
@@ -3948,16 +3930,12 @@ def artifact_identity(
 
 
 def artifact_generated_at(
-    artifact: dict[str, Any],
+    fingerprint: dict[str, Any],
     path: str,
     errors: list[str],
 ) -> int | None:
     """Return an artifact generation timestamp from its fingerprint."""
 
-    fingerprint = artifact.get("fingerprint")
-    if not isinstance(fingerprint, dict):
-        errors.append(f"{path}.fingerprint must be an object")
-        return None
     generated_at = fingerprint.get("generated_at_unix")
     if (
         not isinstance(generated_at, int)
@@ -3973,26 +3951,26 @@ def validate_payload_free_artifact_fingerprint(
     artifact: dict[str, Any],
     path: str,
     errors: list[str],
-) -> None:
+) -> dict[str, Any] | None:
     """Require artifact fingerprints to carry only payload-free metadata."""
-
-    fingerprint = artifact.get("fingerprint")
-    if not isinstance(fingerprint, dict):
-        return
-    validate_payload_free_metadata_value(fingerprint, f"{path}.fingerprint", errors)
-
-
-def artifact_deployment_context(
-    artifact: dict[str, Any],
-    path: str,
-    errors: list[str],
-) -> tuple[str, str] | None:
-    """Return the deployment context recorded in an artifact fingerprint."""
 
     fingerprint = artifact.get("fingerprint")
     if not isinstance(fingerprint, dict):
         errors.append(f"{path}.fingerprint must be an object")
         return None
+    validate_payload_free_metadata_value(fingerprint, f"{path}.fingerprint", errors)
+    return fingerprint
+
+
+def artifact_deployment_context(
+    fingerprint: dict[str, Any],
+    path: str,
+    errors: list[str],
+    *,
+    enforce_production_deployment_context: bool = False,
+) -> tuple[str, str] | None:
+    """Return the deployment context recorded in an artifact fingerprint."""
+
     deployment_id = canonical_string(fingerprint.get("deployment_id"))
     environment = canonical_string(fingerprint.get("environment"))
     reviewed = fingerprint.get("deployment_context_reviewed")
@@ -4002,6 +3980,18 @@ def artifact_deployment_context(
         errors.append(f"{path}.fingerprint.environment must be canonical")
     if reviewed is not True:
         errors.append(f"{path}.fingerprint.deployment_context_reviewed must be true")
+    if enforce_production_deployment_context and deployment_id is not None:
+        require_production_deployment_id_value(
+            deployment_id,
+            errors,
+            f"{path}.fingerprint.deployment_id",
+        )
+    if (
+        enforce_production_deployment_context
+        and environment is not None
+        and not is_production_ready_environment(environment)
+    ):
+        errors.append(f"{path}.fingerprint.environment must be production")
     if deployment_id is None or environment is None or reviewed is not True:
         return None
     return deployment_id, environment
@@ -4020,7 +4010,9 @@ def validate_summary_artifact(
     require_optional_artifact_label(artifact, "schema", path, errors)
     require_optional_artifact_label(artifact, "status", path, errors)
     status = canonical_string(artifact.get("status"))
-    if status is not None and status not in SUCCESS_ARTIFACT_STATUSES:
+    if status is None:
+        errors.append(f"{path}.status must be canonical")
+    elif status not in SUCCESS_ARTIFACT_STATUSES:
         errors.append(f"{path}.status must be a successful status")
     if artifact.get("valid") is not True:
         errors.append(f"{path}.valid must be true")
@@ -4029,24 +4021,32 @@ def validate_summary_artifact(
         f"{path}.errors",
         errors,
     )
-    validate_payload_free_artifact_fingerprint(artifact, path, errors)
+    fingerprint = validate_payload_free_artifact_fingerprint(artifact, path, errors)
     generated_times: list[int] = []
     deployment_contexts: set[tuple[str, str]] = set()
-    generated_at = artifact_generated_at(artifact, path, errors)
-    if generated_at is not None:
-        if generated_at > options.now_unix:
-            errors.append(f"{path}.generated_at_unix must not be future")
-        elif (
-            options.now_unix - generated_at
-            > options.max_summary_artifact_age_secs
-        ):
-            errors.append(
-                f"{path}.generated_at_unix exceeds max summary artifact age"
-            )
-        generated_times.append(generated_at)
-    context = artifact_deployment_context(artifact, path, errors)
-    if context is not None:
-        deployment_contexts.add(context)
+    if fingerprint is not None:
+        generated_at = artifact_generated_at(fingerprint, path, errors)
+        if generated_at is not None:
+            if generated_at > options.now_unix:
+                errors.append(f"{path}.fingerprint.generated_at_unix must not be future")
+            elif (
+                options.now_unix - generated_at
+                > options.max_summary_artifact_age_secs
+            ):
+                errors.append(
+                    f"{path}.fingerprint.generated_at_unix exceeds max summary artifact age"
+                )
+            generated_times.append(generated_at)
+        context = artifact_deployment_context(
+            fingerprint,
+            path,
+            errors,
+            enforce_production_deployment_context=is_production_ready_environment(
+                options.environment
+            ),
+        )
+        if context is not None:
+            deployment_contexts.add(context)
     return generated_times, deployment_contexts
 
 
@@ -4853,7 +4853,14 @@ def validate_gate_summary(
         evidence_label="SoraFS production readiness summary",
     )
     require_payload_free_summary_fields(payload, errors)
-    validate_payload_free_summary_metadata(gate, payload, errors)
+    validate_payload_free_summary_metadata(
+        gate,
+        payload,
+        errors,
+        enforce_production_deployment_context=is_production_ready_environment(
+            options.environment
+        ),
+    )
     require_string_field(payload, "schema", errors)
     if payload.get("schema") != gate.schema:
         errors.append(f"schema must be `{gate.schema}`")
@@ -5246,8 +5253,8 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--now-unix",
         type=positive_int_arg,
-        default=int(time.time()),
-        help="Validator clock used for artifact age checks. Defaults to current Unix time.",
+        required=True,
+        help="Required reviewed validator clock used for artifact age checks.",
     )
     parser.add_argument(
         "--max-summary-artifact-age-secs",

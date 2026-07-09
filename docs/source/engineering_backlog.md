@@ -1,6 +1,6 @@
 # Engineering Backlog (Detailed Open Work)
 
-Last updated: 2026-07-08
+Last updated: 2026-07-09
 
 The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
 history lives in [`../../status.md`](../../status.md). This file should only
@@ -15,6 +15,89 @@ and sample fixtures now use the normalized config fields, and the targeted
 torii route-manifest tests pass. The single-deploy contract-manifest
 integration test now also reads the nested receipt field and passes with the
 current Torii response shape.
+The Solana route-manifest CLI release inventory now pins the existing-output
+no-overwrite regression for malformed `production_ready`, so canonical-boolean
+preflight failures cannot clobber operator artifacts before the release gate
+checks CLI no-output behavior.
+The TON route-manifest CLI release inventory now pins the malformed nanoTON
+manifest-scalar no-overwrite regression, so publish preflight failures cannot
+clobber an existing review artifact before canonical string-only scalar
+validation finishes.
+SCCP route allowlist/canary copied-evidence exact-key hardening was completed
+on 2026-07-09.
+SCCP active source-adapter gate copied-evidence exact-key hardening was
+completed on 2026-07-09.
+SCCP active source-record and destination-binding copied-evidence exact-key
+hardening was completed on 2026-07-09.
+SCCP native EVM copied-manifest exact-key hardening was completed on 2026-07-09.
+SCCP source-context deployment-match hardening was completed on 2026-07-09.
+SCCP all-lanes source material/deployment exact-key hardening was completed on
+2026-07-09.
+SCCP all-lanes source-live metadata exact-key hardening was completed on
+2026-07-09.
+SCCP all-lanes destination-live metadata exact-key hardening was completed on
+2026-07-09.
+SCCP all-lanes route-canary ingress exact-key hardening was completed on
+2026-07-09.
+SCCP all-lanes release-checklist exact-key hardening was completed on
+2026-07-09.
+SCCP release-bundle/strict route-canary exact-key hardening was completed on
+2026-07-09.
+SCCP all-lanes public lane schema exact-key hardening was completed on
+2026-07-09.
+SCCP all-lanes public summary root exact-key hardening was completed on
+2026-07-09.
+SCCP all-lanes release-checklist required-key exact-key hardening was completed
+on 2026-07-09.
+SCCP all-lanes evidence section exact-key hardening was completed on
+2026-07-09.
+SCCP release-bundle crypto row scalar exact-key hardening was completed on
+2026-07-09.
+SCCP release-bundle crypto route-canary exact-key hardening was completed on
+2026-07-09.
+SCCP strict-verifier crypto row exact-key hardening was completed on
+2026-07-09.
+SCCP release-bundle submission-surface exact-key hardening was completed on
+2026-07-09.
+SCCP release-bundle EVM live metadata exact-key hardening was completed on
+2026-07-09.
+SCCP release-bundle report root/corridor exact-key hardening was completed on
+2026-07-09.
+SCCP release-bundle provenance/artifact exact-key hardening was completed on
+2026-07-09.
+SCCP strict-verifier manifest artifact exact-key hardening was completed on
+2026-07-09.
+SCCP release-bundle all-lanes summary exact-key hardening was completed on
+2026-07-09.
+SCCP release readiness/bundle checklist and Markdown exact-key hardening was
+completed on 2026-07-09.
+SCCP active all-lanes copied-summary exact-key hardening was completed on
+2026-07-09.
+SCCP readiness public crypto direct-helper exact-key hardening was completed on
+2026-07-09.
+SCCP source-inventory Markdown exact-key hardening was completed on 2026-07-09.
+SCCP strict release-checklist Markdown exact-key hardening was completed on
+2026-07-09.
+SCCP user-prover Markdown exact-key hardening was completed on 2026-07-09.
+
+## Multilane localnet default-soak refresh
+
+The cross-dataspace route-probe corridor now has fresh evidence for ownership,
+committed-lane QC, and applied certified-row gates. The successful-swap balance
+gate now queries lane client sets, and committed transaction history now
+requires matching lane-quorum outcomes before it is treated as authoritative.
+Proposal planning now defers lanes with unapplied artifacts/certified blocks,
+Kura can rebuild missing lane-block artifact sidecars from local canonical block
+bodies, and lane-payload ownership status preserves unrelated lanes by
+lane/dataspace upsert. The remaining open work is the DvP lane-block
+application liveness gap: under the 12-peer localnet, route probes can still
+stall before committed/applied lane-block convergence, with one DS lane split
+between executable-payload wait and canonical application while the other DS
+lane has no committed lane-block row. The default 10-iteration soak must be
+refreshed only after that Kura/history vs WSV application boundary is closed;
+the last default run before the quorum-history hardening exited `ok` with only
+3/10 soak iterations passing, so it remains a stress signal rather than release
+evidence.
 
 ## SCCP launch-scope note
 
@@ -71,6 +154,111 @@ is present, while the copied roots and operator text stay suppressed.
 Release-bundle pre-render copied `cryptographic_evidence` validation now pins
 the same mixed non-object plus duplicate-domain guard, so a malformed row cannot
 hide duplicate-domain or lane-coverage blockers before Markdown is written.
+Standalone copied readiness `release_checklist` validation now recomputes the
+expected checklist from copied embedded evidence and native EVM prover status
+before public JSON emission, so a shape-valid forged checklist cannot drift
+from those copied source sections or leak copied checklist blocker text.
+Standalone public readiness JSON now also fails closed when an internally
+forged ready report omits required public roots, matching the strict bundle
+verifier top-level field contract before `production_ready: true` can be
+published.
+Claimed-ready standalone reports now also reject blocked release-checklist,
+corridor, native-prover, source-inventory, and user-prover subroots even when
+those copied sections are schema-valid. The public sanitizer suppresses those
+contradictory roots and emits fixed diagnostics rather than copying their
+blocker text into public JSON.
+Not-ready standalone reports now also synthesize fixed top-level blocker
+summaries when schema-valid diagnostic subroots are blocked but the copied
+top-level blocker list is empty, so public JSON cannot present an unexplained
+not-ready state.
+Release-checklist validation now also rejects unexplained not-ready states across
+standalone public JSON, release-bundle generation, and strict bundle
+verification: a false checklist root must have at least one false item, and each
+false item must carry a canonical blocker before the copied checklist can remain
+publishable.
+Standalone copied corridor validation now also rejects unexplained not-ready
+states: a false `production_ready` corridor root needs canonical blockers, and
+an all-passed public phase map cannot disagree with the copied root flag.
+Release-bundle preflight now also rejects unexplained not-ready roots before
+writing diagnostic bundles, so `production_ready: false` must carry at least
+one canonical top-level blocker even when operators pass `--allow-not-ready`.
+Final bundle all-lanes validation now also rejects unexplained not-ready
+published summaries and lane rows: a false all-lanes `production_ready` root or
+lane must carry canonical blockers before bundle generation or strict
+verification can pass.
+Copied all-lanes source-adapter gates now also reject unexplained nested
+not-ready states: `ready: false` source-adapter gates need canonical blockers
+before bundle generation or strict verification can pass.
+Strict bundle validation now also rejects unexplained blocked validation rows:
+copied blocked native EVM prover summaries, user-prover submission rows, and
+source-inventory gates must carry non-empty canonical `validation_blockers`
+before bundle generation or strict verification can pass.
+Standalone public readiness JSON now also pins native-prover and user-prover
+blocked-root regressions, so copied blocked validation roots without canonical
+`validation_blockers` are suppressed with fixed diagnostics and no copied row
+text.
+Active launch checklist recomputation now also treats blocked native EVM prover
+status with an empty `validation_blockers` list as not ready in both standalone
+readiness generation and strict bundle verification, before copied report roots
+are sanitized.
+Copied `validation_status` values now also require exact strings across
+standalone readiness public JSON, release-bundle pre-render validation, and
+strict bundle verification, including Markdown status/blocker cells, so hostile
+string subclasses cannot drive native prover, source-inventory, or user-prover
+readiness decisions through equality hooks.
+Source-material evidence CLIs now also reject hostile string subclasses at the
+exact parser boundary for ETH/BSC source-bridge and Solana/TON source-state
+hex, decimal, and runtime-bytecode inputs before copied operator text can reach
+string hooks; the source-material role-validation inventory pins those
+adversarial parser guards.
+All-lanes copied operator evidence now also rejects hostile string subclasses at
+the fallback/minimal TOML boundary before `.strip()`, `.splitlines()`, JSON
+metadata parsing, or comment parsing can invoke copied text hooks; the
+route-canary scalar inventory pins that exact-string parser guard.
+Release readiness and bundle generation now also reject hostile string
+subclasses at phase-result, phase-evidence, and output-path helper boundaries
+before copied values can reach containment, splitting, `.strip()`, or
+`.isascii()` hooks; the phase-evidence and output-path inventories pin those
+exact string-only guards. The readiness output collision preflight now applies
+the same exact-string boundary to copied phase-evidence assignments before
+checking `=` membership or splitting assignment text. Release-bundle report
+builders now also use a shared exact-string assignment translator before
+turning copied phase-evidence arguments into bundle-relative paths. The release
+corridor transcript inventory now also pins exact-string `.NET` marker/path
+helpers and public diagnostic fragments before copied line, path, phase, block,
+or diagnostic text can reach regex, splitting, replacement, hashing, or
+formatting hooks. Direct phase command matcher helpers now also reject copied
+phase, command, fragment, expected-path, suffix, bridge-path, and selector-token
+subclasses before membership checks, slicing, prefix/suffix checks, replacement,
+path normalization, or phase lookup can run.
+Success-marker window helpers now also require exact phase/block/fragment text
+and exact integer positions before mapping success fragments to command windows
+or comparing completion/fallback positions.
+Release-bundle source-gate, source-record, route-canary, and
+cryptographic-evidence helpers now also read copied public evidence through
+exact string-key accessors before semantic route-canary or role-hash checks, so
+hostile copied key aliases cannot stand in for missing exact fields.
+Release-bundle corridor phase evidence now uses the same exact public phase-key
+boundary in pre-render validation and strict verification: hostile string-key
+aliases cannot satisfy hashed phase evidence, expected manifest-artifact order,
+referenced-artifact inventories, or phase transcript checks.
+Standalone release-readiness corridor helpers now mirror that boundary for
+Markdown rows, shared full-corridor artifact detection, and public
+production-readiness validation, so hostile phase-key aliases cannot stand in
+for missing hashed phase evidence before public JSON is emitted.
+Standalone release-readiness public JSON root shaping now also uses exact
+public string-key helpers for top-level readiness, blocker, root presence,
+claimed-ready/not-ready subroot consistency, and final payload construction, so
+hostile root aliases cannot drive public readiness or leak through publication.
+Standalone readiness Markdown, release-bundle release notes, and strict
+readiness/manifest verifier invariants now also use exact public string-key
+helpers for top-level readiness-report roots, so hostile `production_ready` or
+`blockers` aliases cannot certify public readiness or copy blocker text into
+public Markdown.
+Release-bundle and strict-verifier manifest validation now also use exact public
+string-key helpers for manifest schema, artifacts, readiness flags, blockers,
+and report/summary readiness comparisons, so hostile manifest key aliases stay
+classified as malformed or missing instead of certifying readiness.
 Replace the remaining SCCP source-chain verifier placeholders behind the typed
 adapter variants with governed live verifier deployments and external-chain
 rule checks before inbound source proofs can be treated as production-ready:
@@ -100,7 +288,11 @@ also applies that denylist before rebuilt OpenVerify wrappers can return adapter
 verifier commitments. Adapter proof and transcript hashes in source-verifier
 evidence now stay role-separated from source/deployment hashes and reject
 built-in or profile-template source-verifier component replay even on
-material-only diagnostic evidence. Checked SCCP message-bundle serialization now
+material-only diagnostic evidence. EVM-family deployed mainnet source-verifier
+profile coverage now also mutates the governed source bridge emitter address
+directly, so ETH/BSC source material cannot silently satisfy production
+readiness with a wrong emitter address while source bridge code and verifier
+role hashes remain valid. Checked SCCP message-bundle serialization now
 shares the message-bundle structure gate before public canonical bundle bytes
 are emitted, including payload/commitment/Merkle binding, SORA Nexus finality,
 and non-SORA source-proof envelope decoding, while opaque TAIRA/TRON bundle
@@ -180,9 +372,35 @@ and Solana/TON native-recursive packaging now also refuse to use explicit source
 material or source-adapter deployment context for remote-to-remote destination
 packaging; source context is packagable only for inbound remote -> SORA proofs.
 Transparent-proof verification now applies the same source-context packaging
-guard, and adversarial EVM/BSC plus TRON artifacts prove diagnostic
-source-aware verification rejects remote-to-remote deployment-bound source
-proofs.
+guard, and adversarial EVM/BSC, TRON, Solana, and TON artifacts prove
+diagnostic source-aware and context-free verification, recovery, and
+artifact-to-job conversion reject remote-to-remote deployment-bound source
+proofs. The source-material extractor now also rejects those coherent
+deployment-bound foreign-target bundles before they can be downgraded into
+context-free material evidence. SORA-origin transparent artifacts now also
+reject verifier and recovery attempts that supply external source material or
+deployment-bound source-adapter context. BSC and Ethereum source-proof byte
+recovery now also rejects exact
+deployment-bound proof bytes paired with coherent non-SORA source-adapter
+deployment targets, while TRON refuses to construct non-SORA source-adapter
+deployment targets. Solana, TON, and TRON local-admission artifact recovery now
+also keeps the disabled destination-manifest gate closed on normal recovery and
+rejects backend-label drift on the deployment-bound recovery path. BSC and
+Ethereum now pin the same lane-specific recovery-gate assertions in the EVM
+source-adapter deployment release inventory. Solana and TON local-admission
+verification and recovery now also reject exact deployment-bound artifacts
+paired with source-adapter deployments retargeted away from SORA. BSC and
+Ethereum local-admission verification and recovery now enforce that same
+non-SORA deployment-target rejection at the transparent artifact layer. The
+deployment-bound transparent proof builder now also rejects material-only source
+proofs across BSC, Ethereum, Solana, TON, and TRON even when callers pass
+deployment descriptors separately. The same builder now rejects non-SORA
+destination bundles and copied wrong-source bundles for every active inbound
+source-adapter lane before transparent artifacts can be packaged. The strict
+release inventories now also pin BSC mainnet proof-request rejection of
+non-mainnet bindings, non-BSC manifests, opaque source proof bytes, all-zero
+source proof bytes, and ETH/BSC facade plus recovery rejection of source proofs
+that omit deployment evidence.
 Checked
 source-proof envelope serialization now requires that same base wrapper shape
 before canonical bytes or hashes are emitted. TON live-account destination
@@ -194,13 +412,19 @@ now enforce that same TON route-canary hash-role boundary before emitting
 canonical hashes. Solana live ProgramData route-canary evidence now also
 rejects verifier-code hash replay into route allowlist, destination binding,
 source-material, or source-deployment hash roles before canonical evidence bytes
-or hashes are emitted. EVM-family route-canary evidence now also rejects replay
-between governed route/destination/source/deployment hashes and receipt
-transcript hashes before Rust or Python canonical hashes, full-TOML rendering,
-or lane readiness can pass. TRON route-canary evidence now also rejects replay
-between governed route/source/deployment hashes and transaction transcript
-hashes before Rust, Python, JavaScript SDK, package-dist, or package-root
-canonical hashes are emitted. Swift, Kotlin/JVM, and Java Android TRON
+or hashes are emitted. The source-material role-validation release inventory now
+pins those Solana and TON route-canary verifier-code, source-record,
+live-account, and non-canonical destination-binding replay checks so they cannot
+silently drop from the strict release gate. EVM-family route-canary evidence now
+also rejects replay between governed route/destination/source/deployment hashes
+and receipt transcript hashes before Rust or Python canonical hashes, full-TOML
+rendering, or lane readiness can pass. TRON route-canary evidence now also
+rejects replay between governed route/source/deployment hashes and transaction
+transcript hashes before Rust, Python, JavaScript SDK, package-dist, or
+package-root canonical hashes are emitted. The source-material role-validation
+release inventory now also pins EVM/TRON route-canary canonical-spelling
+rejections for destination binding, bridge/network id, verifier code, and EVM
+receipt transcript role replays. Swift, Kotlin/JVM, and Java Android TRON
 route-canary helpers now mirror that boundary and include finality height in
 transcript distinctness before mobile canonical bytes are emitted. Torii
 configured source-lane
@@ -237,11 +461,17 @@ proof-request helpers now mirror the SORA-origin Nexus finality binding by
 decoding `NexusBridgeFinalityProofV1` from bundle finality bytes and rejecting
 opaque or public-input-drifted finality proofs before local proving.
 TON proof requests now also reject diagnostic zero/zero source-adapter
-deployment bindings, wrong-source deployment bindings, and self-consistent
-proof-result requests whose cached deployment-binding hash does not match the
-binding object before local proving. Source-message and ETH SSZ Merkle inclusion
-proofs now reject non-canonical high-bit leaf indexes that would otherwise
-reconstruct the same root after unused index bits are shifted away, and ETH source-adapter preflight now rejects stale or
+deployment bindings, wrong-source deployment bindings,
+canonical-but-extraneous source proof bytes on SORA-origin requests, and
+self-consistent proof-result requests whose cached deployment-binding hash does
+not match the binding object before local proving. TRON and TON proof-result
+wrappers now also reject self-consistent requests whose bundle bytes are swapped
+after request-hash recomputation. The proof-request release inventory now also
+pins the existing EVM remote-source bundle binding, opaque source-proof,
+stripped source-proof, and swapped-bundle wrapper regressions. Source-message
+and ETH SSZ Merkle inclusion proofs now reject non-canonical high-bit leaf
+indexes that would otherwise reconstruct the same root after unused index bits
+are shifted away, and ETH source-adapter preflight now rejects stale or
 non-fixed-depth execution payload branches before checked transcript encoding.
 BSC source-adapter preflight now rejects high-S or otherwise non-canonical
 validator-set seal signatures for both active and transition seals before
@@ -265,7 +495,12 @@ TON active/transition validator signatures must pass deterministic Ed25519
 batch verification while shard-state openings and masterchain config proofs
 must verify their BOC/dictionary roots before checked transcript encoding;
 checked TON adapter encoder coverage now also pins all-zero and opaque
-source-state capsule rejection.
+source-state capsule rejection. The strict SCCP release inventory now pins the
+full source-proof structural preflight marker set for ETH signer/quorum and
+stale-branch checks, BSC signer bitmap/count and high-S checked-encoding
+checks, Solana vote quorum/stake/message drift checks, TON validator
+bitmap/quorum/stale transcript checks, and TRON transaction/header drift
+checked-encoding checks.
 Public readiness/bundle
 `cryptographic_evidence` rows now also reject source-verifier material hashes
 replayed as source-adapter deployment hashes before copied public rows can
@@ -442,7 +677,22 @@ direct namespace values cannot be stringified into post-deploy route evidence.
 Collected EVM route-canary transaction summaries are now
 revalidated through the same exact hex and integer helpers before
 offline/full-TOML arguments are generated, so imported or post-collector hostile
-metadata cannot run string or integer coercion hooks. EVM source-live runtime
+metadata cannot run string or integer coercion hooks. Those copied EVM live
+summary checks now also use exact string-key lookup for
+source-record hashes, route-canary evidence, route-canary transaction fields,
+and missing-prerequisite diagnostics, so hostile copied key aliases cannot hide
+absent exact fields or leak through full-TOML errors. The remaining copied
+EVM live route-canary transaction booleans, `message_proof_used` and
+`receipt_block_finalized`, now use exact summary-key access before generated
+offline/full-TOML args or route-allowlist validation can consume them; copied
+destination match flags that gate expected binding and route-allowlist arguments
+and route-canary source/target domain reads use the same exact-key boundary.
+TRON live copied-summary full-TOML readiness now mirrors that exact-key
+contract for source bridge, source-record, destination verifier, destination
+bytecode, route-canary transaction, trigger-contract, and embedded
+route-canary transaction-copy metadata, so hostile key aliases cannot replace
+missing exact fields or invoke dict-comparison hooks.
+EVM source-live runtime
 namespace inputs now apply the same pre-RPC bytes32 validation to expected
 source bridge code hashes, deployment transaction pins, source component hashes,
 adapter verifier keys, deployment receipt hashes,
@@ -617,6 +867,10 @@ parser-style template-loader failures as fixed route-hash blockers instead of
 letting helper exception text escape. All-lanes canonical base64 and shared hex
 parser helpers now also bound parser-style `argparse.ArgumentTypeError`
 failures to the same fixed public categories used for other decoder failures.
+Copied all-lanes route-allowlist recomputation now also reads source material,
+source-adapter deployment, and destination-binding hashes through exact
+string-key lookup, so a hostile copied key alias cannot satisfy recomputation
+after the exact public source-record field disappears.
 Direct ETH/BSC/TRON source-bridge fixed-hex and runtime-bytecode parser helpers
 now also normalize delegated `argparse.ArgumentTypeError` failures behind fixed
 hex diagnostics, with release inventory markers pinning the no-leak regressions.
@@ -1022,6 +1276,9 @@ Raw all-lanes evidence admission now also treats expected scalar values as
 type-exact, so Python integer aliases such as `0` for
 `placeholder_material = false` or `1` for destination/route readiness booleans
 cannot satisfy production gates before public summaries are generated.
+The exact-boolean release inventory now also pins the hostile
+`placeholder_material` scalar redaction assertions so the alias rejection cannot
+start leaking hostile hook text while still failing closed.
 No active source-adapter gate field may disappear from standalone copied
 summaries or pre-render bundle validation even when the copied active lane is
 marked not-ready.
@@ -1037,6 +1294,9 @@ canonical non-zero bytes32 values that match their sibling route and
 destination summaries before the live-route-canary or no-unresolved checklist
 items can pass, so `evidence_bound = true` cannot hide missing, zero,
 malformed, or drifted canary bindings.
+The route-allowlist canary-summary release inventory now also pins malformed
+copied summary containers and hostile container redaction through the direct
+all-lanes release-checklist path.
 The same direct checklist path now rejects copied route-canary `evidence_hash`
 values that replay the same lane's source-record hashes, destination binding
 hash, route allowlist hash, source-adapter gate hash, or source-adapter gate
@@ -1096,6 +1356,9 @@ BSC, Solana, TON, and TRON adversarial drift without echoing operator text;
 Solana ProgramData addresses must be non-zero canonical base58 pubkeys, not
 merely non-empty copied strings, and TRON owner/recovered-owner addresses must
 stay non-zero canonical `0x41`-prefixed 21-byte hex strings.
+The release-bundle evidence-root inventory now also pins the corresponding
+pre-render copied-summary diagnostics for BSC, TRON, Solana, and TON
+proof-context drift plus operator-blocker redaction.
 Copied not-ready route-canary hash roles now also stay separated from governed
 source/gate/destination/route hashes and sibling transcript hashes before public
 summaries can render.
@@ -1108,29 +1371,56 @@ Release Evidence now names those not-ready nested schema, hash/flag-coherence,
 and route-canary proof-context/hash-role/common/truth-semantic blockers
 explicitly, and strict Markdown checks reject public release evidence that drops
 that phrase.
+The governed blocker schema inventory now also pins exact destination-rollout
+and route-allowlist blocker diagnostics plus redaction assertions across ETH,
+BSC, Solana, TON, and TRON copied evidence.
 Direct release-checklist validation now also requires copied destination
 bindings to carry canonical keys, exact recomputed flags, and hashes that
 recompute from those keys, while copied route-allowlist hashes must recompute
 from the copied source material, source-adapter deployment, and destination
 hashes. Route recompute helper failures collapse to fixed checklist blockers
 before governed-deployment, route, or no-unresolved checklist items can pass.
+The active-launch checklist schema inventory now pins the copied required-record
+unknown-field diagnostic for `operator_override`, so unexpected active-lane
+record flags remain release-blocking and publicly visible without broadening the
+accepted schema.
+The strict release-bundle recomputation path now carries the same
+`records.operator_override` required-record regression, so copied all-lanes
+summaries cannot satisfy the active checklist by adding ungoverned record flags.
+The active-launch checklist schema inventory now also pins the exact
+required-record malformed-key diagnostics for whitespace, control-character,
+Markdown-unsafe, and non-ASCII field names on both readiness and strict bundle
+paths.
 Direct release-checklist top-level lane blockers now also keep their category
 boundaries explicit: valid non-route lane blockers only hold the
 no-unresolved gate, route-canary lane blockers hold the live-canary gate too,
 and encoded sensitive, control-character, Markdown-unsafe, or duplicate lane
 blocker text collapses to fixed diagnostics without leaking copied operator
-text.
+text. The active-launch checklist schema inventory now pins the direct
+no-unresolved blocker diagnostics for malformed top-level evidence blockers and
+singular active-lane blockers on both readiness and strict bundle paths.
 Route-canary lane-blocker classification now uses the same decoded, casefolded
 public blocker key as duplicate detection, so safe case variants or encoded
 spaces in copied route-canary blockers cannot bypass the live-canary gate while
 unsafe decoded blockers still collapse to fixed diagnostics.
+The active-launch checklist schema inventory now pins the decoded-domain
+assertions that keep active encoded blockers visible, prefix unscoped active-lane
+blockers, and suppress other-domain blockers on both readiness and strict bundle
+paths.
 Deployment and route-allowlist lane-blocker classification now uses the same
 decoded, casefolded public blocker key, so safe case variants or encoded spaces
 cannot bypass the governed-deployment or route checklist gates.
+Plain lower-case copied `route allowlist` and `source adapter` lane blockers are
+now covered and pinned in the same active-launch checklist schema inventory, so
+operator-authored blocker text cannot bypass those gates by omitting encoded
+spaces or title case.
 The same direct checklist path now canonicalizes root preflight blockers before
 seeding `no_unresolved_blockers`, so scalar roots, non-string entries, encoded
 sensitive/control/Markdown-unsafe text, and decoded duplicate root blockers
 become fixed diagnostics instead of leaking copied root text.
+Malformed copied route-allowlist containers are now asserted and pinned on both
+the route binding checklist gate and the live-route-canary gate, so nested
+container drift cannot be covered by only one active-launch item.
 Direct release-checklist lane labels now only include copied `chain` text when
 it is one of the known SCCP launch-chain spellings; malformed, unsupported, or
 hostile chain strings fall back to bounded `lane`/`domain N` labels before
@@ -1142,8 +1432,12 @@ source-record or no-unresolved gates.
 Direct governed-deployment validation now also rejects destination binding
 hashes that replay copied source verifier material or source adapter deployment
 hashes, so self-consistent destination hash pairs cannot satisfy governed
-deployment or no-unresolved readiness when they reuse source roles. Active
-source-adapter gate diagnostics now derive their lane label from
+deployment or no-unresolved readiness when they reuse source roles.
+The active-launch checklist schema inventory now pins the full source-record,
+route-allowlist, destination-binding, and source-gate role-reuse blocker matrix
+on readiness and strict bundle paths, including source-adapter deployment hash
+replay cases.
+Active source-adapter gate diagnostics now derive their lane label from
 `ACTIVE_LAUNCH_DISPLAY`, so release blockers track the configured launch lane
 instead of carrying stale family wording.
 Direct route-allowlist validation now also rejects route hashes that replay
@@ -1154,11 +1448,44 @@ Direct route-canary validation now also emits the exact unbound-evidence
 blocker whenever `evidence_bound` is not `true`, even when copied top-level lane
 blockers already mention route-canary work, so copied blockers cannot mask the
 evidence-bound failure.
+The direct active-launch readiness and strict bundle checklists now pin that
+unbound-evidence behavior with copied route-canary operator blockers, matching
+the all-lanes regression.
 Direct active route-canary validation now also requires the copied canary
 `route_allowlist_hash` and `destination_binding_hash` to be canonical non-zero
 bytes32 values that match the lane route allowlist and destination binding
-hashes, so copied binding fields cannot disappear, uppercase, zero out, or drift
-behind the route-canary readiness item.
+hashes, and the active-launch checklist schema inventory now pins the dedicated
+binding-hash case tables plus mismatch sentinels on readiness and strict bundle
+paths. The readiness and strict bundle checklists now also prove copied
+route-canary operator blockers cannot mask route or destination canary binding
+hash drift, so copied binding fields cannot disappear, uppercase, zero out, or
+drift behind the route-canary readiness item.
+The same active route-canary gate now also treats missing, zero, or
+noncanonical sibling route-allowlist and destination-binding hashes as direct
+live-canary blockers, so a locally canonical canary cannot pass after its
+binding target root disappears.
+Native EVM prover bundle readiness now mirrors that expected-root rule for the
+active lane destination-binding hash: readiness generation and strict bundle
+verification block directly when the sibling destination evidence root is
+missing, hostile-aliased, zero, or noncanonical, even if the bundle-side
+destination hash is locally canonical.
+Public `cryptographic_evidence` lane binding now follows the same missing-root
+contract in bundle pre-render and strict verification: empty copied fields can
+remain empty, but non-empty destination-binding, route-allowlist,
+source-gate-hash, or source-gate-audit claims fail when the corresponding
+embedded lane path is absent.
+The guard now treats `source_adapter_gate_required = false` as a required
+source-gate binding claim when embedded `source_adapter_gate.required` is
+absent, while optional false route-canary booleans keep absent/no-claim
+semantics.
+Standalone release-readiness JSON validation now also binds copied
+`cryptographic_evidence` rows back to `evidence.lanes` before publishing, so
+direct readiness output cannot carry public crypto drift that would only be
+caught later by bundle verification.
+Standalone readiness JSON now also binds copied user-prover submission-surface
+status and blockers back to copied corridor phase statuses, so direct readiness
+output cannot advertise stale passed or stale blocked prover surfaces before
+bundle verification.
 Active EVM route-canary proof metadata now likewise keeps target domain, proof
 version, proof source domain, message-proof usage, and finalized receipt state
 exact in standalone copied summaries and pre-render bundle validation even when
@@ -1266,6 +1593,11 @@ readiness-report public `cryptographic_evidence`
 route-canary scalar negatives now cover exact scalar context for every
 message-proof launch domain and null scalar context for every non-message-proof
 launch domain.
+The route-canary scalar release inventory now also pins Rust route-allowlist
+production gate regressions for uppercase, missing-prefix, and padded route
+hashes, non-canonical route IDs, route-canary status drift, uppercase
+route-canary hashes, padded destination hashes, and failed route-canary
+summaries.
 No active EVM route-canary field, including common, scalar, transcript, and
 proof metadata, may disappear from standalone copied summaries or pre-render
 bundle validation even when the copied active lane is marked not-ready.
@@ -1828,7 +2160,51 @@ All readiness and strict-bundle phase transcript checks now reject unrelated
 traced commands, so copied side commands such as `+ true ...` cannot be bundled
 beside the required command sequence. The Swift SDK phase keeps a narrow setup
 allowlist for the required Rust targets and NoritoBridge XCFramework
-build/extract steps.
+build/extract steps. Command tokenization, option/positional helper parsing,
+diagnostic command parsing, effective-command parsing, and phase-prefix
+environment assignment parsing also reject non-exact command text or token
+scalars before strip, equality, prefix, or partition operations, so a hostile
+copied transcript scalar cannot trigger string-subclass hooks while matching
+command shapes, checking `.NET` env prefixes, extracting Java Android harness
+mains, collecting Gradle/pytest selectors, or classifying runner-cd,
+parenthesized-group, parseability, and shell-comment diagnostics. Output-line
+normalization, shell-xtrace detection, success-fragment matching, and hidden
+success-marker checks now apply the same exact-string boundary to copied line,
+fragment, and phase scalars. Phase-block and full-transcript helpers now also
+reject non-exact text containers before block extraction, marker counting,
+completion checks, or command/output line indexing can invoke copied
+`splitlines` or whitespace hooks. Phase transcript artifact entries now read the
+public `path` field only through exact string-key lookup and reject copied
+phase-name scalars before reading transcript files or formatting diagnostics.
+Generic public Markdown input and corridor artifact rows also resolve `path`,
+`bytes`, and `sha256` only through exact string-key lookup, so hostile
+string-subclass aliases cannot satisfy rendered readiness tables. Release-notes
+attachment artifact rows apply the same exact-key rule in bundle-builder and
+strict-verifier render and invariant checks.
+Native EVM prover artifact metadata now also resolves `path`, `bytes`, and
+`sha256` through exact public keys before readiness or strict-verifier payload,
+parity-fixture, or self-test consumers validate copied artifacts.
+Readiness Markdown invariant checks use the same exact-key boundary before
+deciding which input and corridor artifact paths, hashes, and rows must be
+present in public Markdown.
+Release-bundle artifact row schema, native artifact summary schema, and bundled
+artifact integrity checks now also use exact public `path`, `bytes`, and
+`sha256` keys before validating copied bundle metadata or comparing artifact
+bytes/hashes on disk.
+Native EVM readiness Markdown artifact path/hash cells now use the same exact
+public `path` and `sha256` keys in the readiness report and strict verifier, so
+hostile aliases cannot satisfy public native prover artifact cells.
+Readiness native EVM public redaction now also uses exact public `path`,
+`bytes`, and `sha256` keys before keeping or redacting copied artifact metadata.
+Readiness input-artifact provenance comparison now extracts copied artifact
+paths through exact public `path` keys before matching them against public
+`inputs`.
+Strict readiness Markdown native artifact invariants now also read native
+artifact, parity fixture, and self-test `sha256` fields through exact public
+keys before requiring public native prover artifact rows.
+Strict corridor phase validation now reads each phase evidence artifact `path`
+through an exact public key before enforcing the canonical `corridor/<phase>.log`
+binding.
 Standalone readiness phase artifact rows now reject decoded control/non-ASCII
 path text, sensitive marker names, absolute/parent/backslash paths, and
 non-canonical relative separators before transcript reads, so copied internal
@@ -2035,7 +2411,9 @@ TRON runtime route-manifest admission also mirrors the generated
 postDeployLiveEvidence blocker boundary at config load: scalar or non-string
 TOML blocker containers fail before parsing, empty/padded/non-ASCII/duplicate
 blocker entries fail during route normalization, and production-ready TRON
-routes cannot carry non-empty post-deploy blocker lists.
+routes cannot carry non-empty post-deploy blocker lists. The release inventory
+now pins the exact non-empty, padded, non-ASCII, and duplicate blocker
+diagnostics so those runtime guards cannot silently lose coverage.
 BSC runtime route-manifest admission also keeps browser-prover sidecar hashes
 role-separated from route/verifier/proof/deployment hashes and from each other,
 so a copied `module_hash` or `manifest_hash` cannot replace verifier, binding,
@@ -2059,6 +2437,10 @@ hidden behind valid camelCase values. BSC scalar route-config readers now also
 skip accessor-backed preferred aliases before checking later data aliases, so
 accessor-only `productionReady`, domain, gas-limit, or full-TOML readiness
 fields cannot mask valid snake_case manifest data or invoke getters.
+The BSC canonical-manifest release inventory also pins duplicate route-manifest
+string/container alias rejections and route-config-side placeholder TAIRA
+burn-record artifact rejection, so those production-readiness guards cannot
+silently fall out of public bundle verification.
 BSC route-manifest publication also preserves raw Torii pipeline HTTP
 rejections, including bounded public response previews, before attempting any
 JSON fallback that depends on local native decoding. BSC native prover bundle
@@ -2139,6 +2521,10 @@ manifest aliases are ignored without invoking getters, and required
 accessor-only fields are treated as absent; the same descriptor-only rule now
 covers secret scanning, handoff-placeholder scanning, and post-deploy blocker
 extraction before route-config TOML can be rendered.
+The TRON canonical-manifest release inventory now pins exact duplicate-alias
+assertions across post-deploy readback, destination rollout/binding, burn-record
+artifact material, settlement submit paths, route-canary evidence, and offline
+full-TOML hashes, plus disabled-route production readiness rejection.
 TRON live malformed witness-schedule payload regressions now also prove duplicate
 witness-address and total-weight-overflow decoder details remain hidden behind
 the fixed `witness schedule payload is invalid` public blocker, and the release
@@ -6569,10 +6955,108 @@ redistributable schemas, and official trust/revocation bundles.
   lane-local state. The scheduler now exposes a composed lane payload planner
   that reduces known tips, applies reset watermarks, assigns next lane-local
   slots, derives subjects, and validates DA/RBC ownership in one reusable step
-  shared by preview and final proposal assembly. Remaining work is to have the
-  full per-lane proposal/vote scheduler produce, execute, QC-seal, and replay
-  standalone lane blocks from those artifacts instead of relying on the global
-  proposal path.
+  shared by preview and final proposal assembly. That planner now emits
+  invariant-checked per-lane descriptors carrying the domain, selected tip,
+  next slot, subject, ownership, and accepted transaction hashes together,
+  and canonical lane subject/ownership hashes now bind the accepted transaction
+  hash sequence that validators recompute from execution-context entrypoints.
+  The handoff entries also include a Norito-backed lane block descriptor hash
+  that binds the predecessor lane height, accepted work, DA/RBC ownership,
+  optional predecessor descriptor hash, validator set, quorum, and QC mode tag
+  for standalone proposal/vote replay. The same plan output now includes an
+  explicit standalone lane-block proposal artifact and proposal hash for each
+  descriptor, while the live global proposal path remains unchanged. The
+  proposal artifact is now a canonical consensus data-model payload
+  (`LaneBlockDescriptorV1`/`LaneBlockProposalV1`) that derives the proposal hash
+  and the prepare/commit vote bodies validators sign.
+  Artifact-backed proposal tips now carry the predecessor descriptor hash
+  forward, reset-floored synthetic tips clear stale predecessor hashes, and
+  same-height tips with conflicting descriptor hashes fail closed instead of
+  letting the standalone lane chain choose an ambiguous predecessor.
+  Relay-backed proposal tips carry predecessor descriptor hashes only from
+  merge-admissible relays, and the relay FastPQ claim plus merge-hint root both
+  bind that descriptor metadata.
+  Proposal execution contexts and Kura lane artifacts now carry that descriptor
+  hash plus replay material with each lane payload ownership: accepted
+  transaction hashes, predecessor lane height, predecessor descriptor hash when
+  known, canonical validator set, validator count, and quorum. Validators first
+  bind those fields to committed route/candidate hashes, topology or lane
+  authority, and QC mode tag, then share the same embedded replay-hash verifier
+  as Kura artifact reads before accepting committed ownerships or persisted
+  sidecars as lane tips. Both paths reject lane ownerships that omit the
+  descriptor, reuse another lane identity hash, drift in replay material, claim
+  a predecessor descriptor for the genesis predecessor, or carry a descriptor
+  built over a different committee or predecessor.
+  The plan also emits full-committee prepare and commit vote templates carrying
+  canonical `LaneBlockVoteBodyV1` payloads whose signer-independent preimage
+  binds proposal hash, descriptor hash, lane coordinates, subject, DA/RBC
+  ownership, accepted transaction hashes, validator-set hash, quorum, and QC
+  mode tag. `iroha_core::lane_consensus` now validates signed BLS lane votes
+  and aggregates deterministic `LaneBlockQcV1` certificates while rejecting
+  malformed bodies, validator-set hash drift, non-canonical committees,
+  duplicate/unknown signers, non-BLS signers, body drift, invalid signatures,
+  and under-quorum vote sets. Data-model unit coverage now mutates every
+  descriptor/proposal replay, predecessor, ownership, validator-set hash
+  version/hash, quorum, and QC-mode field, and every `LaneBlockVoteBodyV1`
+  replay, ownership, validator-set, quorum, and QC-mode field, to prove each
+  one changes the relevant canonical identity or signed preimage. This
+  gives the standalone scheduler a lane-local
+  block handoff and QC construction surface instead of parallel vectors or
+  fetched-batch indices alone. The core lane-consensus helper also validates
+  standalone proposal artifacts before session insertion, rejecting malformed
+  work, invalid predecessor shape, non-canonical or duplicate committees,
+  validator-set hash drift, descriptor hash drift, and proposal hash drift.
+  Lane-local proposal, vote, and QC artifacts now also have explicit
+  `BlockMessage` transport variants, consensus-status labels, fail-closed
+  main-loop handlers, and a bounded lane-session cache. The handlers validate
+  proposal shape, signed vote ingress, QC structure, signer PoPs, and
+  pre-aggregated QC signatures before caching valid artifacts as deferred
+  `payload_unapplied` work; exact replays are deduplicated, conflicts fail
+  closed, out-of-order artifacts are reconciled when their proposal arrives,
+  and lane-local messages bypass the global height/view future-window gate
+  because their heights are independent lane heights rather than global block
+  heights. Locally sealed QCs are now handed to background broadcast once,
+  while inbound QCs are cached without echoing, and sessions with a matching
+  proposal plus prepare/commit QCs are moved through a bounded actor-owned
+  committed-session staging queue for lane-block application. That staging
+  queue now publishes a bounded Sumeragi/Torii status surface with
+  descriptor/proposal hashes and compact prepare/commit QC summaries for
+  operator rollout evidence. Final proposal assembly now broadcasts finalized
+  lane-block proposals plus the local BLS prepare vote after stale-proposal
+  checks pass, and four-peer main-loop coverage now verifies a final proposal
+  can emit two lane-block proposal artifacts plus two local prepare votes for
+  active lanes at different lane-local heights without waiting for idle default
+  lane work. Mixed-committee coverage now verifies that the same final path
+  still broadcasts proposals for both active lanes while only signing and
+  broadcasting the prepare vote for the lane whose validator set includes the
+  local peer. Negative main-loop coverage also verifies a cross-lane batch with
+  one missing lane authority is deferred atomically, clears stale ownership
+  status, and requeues both transactions instead of accepting partial lane
+  progress. Validated prepare QCs now unlock a one-shot local BLS commit
+  vote broadcast that is cached locally for commit-QC sealing. Queued committed
+  sessions now feed proposal-planning lane tips with the committed descriptor
+  hash, allowing subsequent lane-local slots to advance from sealed QCs before
+  durable standalone execution is complete. Certified standalone lane-block
+  sessions are now also persisted as Norito-framed Kura sidecars with
+  proposal/prepare-QC/commit-QC plus signer-PoP aggregate validation and
+  reloaded into proposal-planning lane tips and the bounded committed-session
+  queue/status surface after restart. The status surface now reports
+  certified-only sessions as `awaiting_executable_payload` and uses Kura's
+  canonical block body plus the lane ownership sidecar to advance recoverable
+  sessions to `payload_available_awaiting_executor`; Kura also persists the
+  recovered proposal, artifact, entrypoint hashes, and verified accepted
+  entrypoints as a durable execution-input sidecar, advancing those handoffs to
+  `payload_recovered_awaiting_state_application`. When canonical block results
+  are already present, Kura also records a durable application-receipt sidecar
+  with the certified proposal, ownership artifact, canonical block height/hash,
+  accepted entrypoint indices/hashes, and committed `TransactionResult`s,
+  advancing those sessions to `state_applied_by_canonical_block` only for
+  canonical receipts. The committed-session queue now also applies clean
+  current-tip direct preflights into world state with durable idempotence
+  markers, persists direct execution receipts after state commit, reports those
+  sessions as `state_applied_by_direct_execution`, repairs missing receipts
+  from committed markers, and replays durable direct receipts into state on
+  restart.
 - Add a multi-peer integration corridor proving two active lanes can advance at
   different heights, produce lane-domain QCs, upgrade FastPQ relay proofs, and
   merge without waiting for an idle configured lane. Unit-level restart/replay
@@ -6583,8 +7067,283 @@ redistributable schemas, and official trust/revocation bundles.
   lanes resume after their previous incarnation, including proposal-path stale
   old-incarnation tip coverage. Lane reset also prunes lane-scoped operator
   status snapshots so retired/recreated lanes do not keep stale activity,
-  commitment, relay, payload-ownership, or governance status. The remaining
-  breadth is the multi-peer corridor.
+  commitment, relay, payload-ownership, or governance status. The autoscale
+  soak reporter now records quorum-required maxima, successful scale-out
+  minimum peer counts, required scale-in cycle counts, required scale-in quorum
+  minima, and optional scale-in cycle counts so rollout summaries expose the
+  quorum evidence instead of only aggregate miss counters. The remaining
+  breadth is the multi-peer corridor; the 2026-07-07 four-peer strict autoscale
+  expand/contract localnet blocker is closed after the strict expansion probe was
+  hardened to require fresh deterministic scale-out transition evidence and
+  expanded-lane status evidence in the same readiness gate. Once transition
+  quorum is observed, strict probes stop adding top-up load while waiting for
+  status propagation. The strict run now observes load application,
+  deterministic scale-out/status quorum, and scale-in quorum in cycle 1, and the
+  public-profile strict transition run passes the same combined evidence gate.
+  The repeated two-cycle autoscale localnet also passes under the
+  stop-top-up-after-transition-quorum policy.
+  Scale-in commit-revalidation coverage now also mirrors the scale-out
+  adversarial boundary: tampered pending transition metadata, survivor catalog
+  rows, preserved retired-lane catalogs, and derived lane configs all abort
+  before retired-lane Kura/tiered storage or committed catalog publication.
+  The 12-peer cross-dataspace localnet route-probe corridor now also requires
+  observable replayable lane-payload ownership for DS1 and DS2 with exact
+  dataspace IDs, the expected four-validator lane committee, and the
+  deterministic three-vote quorum. The route-probe parser now requires those
+  ownership rows to pass the canonical replay-material hash validator, treats
+  same-slot ownership identity drift or malformed latest ownership rows as
+  non-progress, and keeps same-height cross-peer observations from combining
+  into quorum progress unless their descriptor, subject, payload-ownership, and
+  RBC-instance identities match. Conflicting top committed-lane or ownership
+  identities that independently satisfy quorum at the same lane height/view now
+  fail closed instead of being selected by iterator order. A second DS1 route
+  probe proves one active lane can advance beyond another in lane-local block
+  height without waiting for the idle configured lane, while helper coverage
+  rejects wrong-dataspace, empty-work, under-quorum, single-peer-ahead,
+  malformed-latest, forged-replay-hash, and conflicting-identity ownership
+  evidence.
+  Committed standalone lane-block summaries are also exported through the
+  canonical Norito status payload, and the localnet corridor parser requires
+  each active lane to publish committed rows whose embedded prepare and commit
+  QC signer counts satisfy the exact lane quorum. The parser now also retains
+  committed-lane descriptor/proposal hashes, subject hash, payload-ownership
+  hash, RBC-instance hash, and QC-mode tag and treats same-height rows with
+  identity drift or malformed latest QC metadata as non-progress, so
+  conflicting certified payload identities cannot fake scale-out progress,
+  combine into cross-peer route progress, or prove safe scale-in contraction.
+  Runtime committed-lane status merging now also requires
+  descriptor hash plus proposal, prepare-QC, and commit-QC equality before
+  replacing an existing row, so malformed in-memory descriptor or QC drift
+  remains visible as suspicious evidence instead of overwriting the original
+  certified status. That separates independent lane-height planning evidence from
+  standalone lane-block QC evidence instead of treating operator status-row
+  fanout as the safety proof. Kura now
+  centralizes the direct-applier readiness predicate:
+  a recovered input is exposed only after predecessor application is receipted
+  without a preflight conflict, the current local state tip has a clean matching
+  preflight, no receipt or preflight conflict exists, and the lane block has not
+  already been applied.
+  Direct application markers are part of normal and tiered WSV snapshots, and
+  lane lifecycle reset paths now prune markers for retired, replaced, migrated,
+  or autoscale-retired lanes, so cold-tier snapshots preserve
+  direct-application idempotence across restarts without leaking markers across
+  lane incarnations. Direct receipt repair/replay also rejects inactive
+  lane/dataspace routing evidence before mutating Kura or WSV state. Recovered
+  direct execution inputs reject duplicate entrypoints, signed transactions, and
+  sealed commitments before any state execution is staged. Direct application
+  records accepted transaction hashes in a non-canonical membership index so
+  duplicate admission checks see direct WSV effects without advancing canonical
+  transaction height; marker repair and receipt replay backfill that index when
+  durable direct-application evidence already exists. Partial direct-membership
+  repair now inserts only missing hashes, preserving existing direct membership
+  heights when another hash in the same receipt still needs backfill.
+  Nexus-active lane-block queueing also prunes in-memory lane-block
+  proposal/QC sessions and committed-lane execution queue entries against the
+  current active `(LaneId, DataSpaceId)` routes plus lane reset watermarks
+  before status publication, so retired or recreated lane sessions cannot keep
+  stale slot claims or committed status alive in actor memory. Proposal
+  planning now filters in-memory committed-queue lane tips through the same
+  active-route and reset-watermark predicate before mutating prune runs, so
+  stale queued old-incarnation sessions cannot become fresh proposal
+  predecessors. Committed block-artifact tip snapshots read from Kura and cached
+  relay envelopes also honor lane reset watermarks, and relay envelopes must be
+  merge-admissible with a standalone lane-block descriptor hash before they can
+  seed proposal predecessor tips. Historical lane payload artifacts,
+  old-incarnation relays at or below the reset height, or descriptorless
+  verified relays therefore do not export stale predecessor descriptor hashes or
+  global-height compatibility coordinates into fresh proposal planning.
+  Lane-block ingress and local broadcast preflight
+  perform the same Nexus-active route and reset-watermark checks before
+  proposal/vote/QC caching or transport, so stale route or old-incarnation
+  messages cannot seal or rebroadcast QCs, emit local commit votes, or enqueue
+  committed lane-block sessions during the pre-prune window. Ingress also
+  checks the embedded validator set hash/count/full set and quorum threshold
+  before session insertion: shared single-routable-lane mode uses the live
+  consensus roster from lane-block planning, and proposal-lookahead mode uses
+  current authoritative lane peers. Vote ingress also requires the vote signer
+  to belong to that expected committee and requires an authenticated sender
+  before session insertion, so senderless votes or orphan votes with spoofed
+  committee metadata fail closed before cache side effects. Active-route
+  messages from self-appointed or quorum-downgraded committees fail closed
+  before cache or broadcast side effects. The generic
+  `SumeragiHandle::try_incoming_block_message*` paths now treat standalone
+  lane-block proposal/vote/QC messages as blocking consensus evidence, matching
+  network relay ingress, so block-worker queue pressure cannot best-effort drop
+  lane-block evidence before route, sender, and committee authority validation
+  runs.
+  Final proposal assembly also loops locally produced lane-block proposals and
+  locally signed BLS prepare votes back through the same ingress handlers after
+  scheduling their background broadcasts. Leaders no longer wait for network
+  echo before caching their own lane-block proposal/vote evidence, while
+  nonlocal or tampered prepare-vote plans still skip local vote caching.
+  Local lane-block transport preflights route, committee authority, signature,
+  and cache-conflict admissibility before scheduling proposal, prepare-vote,
+  sealed-QC, or post-prepare-QC commit-vote broadcasts, so duplicate,
+  same-slot conflicting, or stale-route locally produced artifacts are recorded
+  as duplicate/invalid without reaching background transport. Active-route
+  artifacts with spoofed validator-set metadata are pinned at the same local
+  broadcast boundary for both post-prepare commit votes and sealed prepare/commit
+  QCs, so cached non-authoritative sessions cannot leak to peers or enqueue
+  committed lane-block execution. Ingress and local transport-preflight coverage
+  also pin the case where the embedded validator set is exactly the live shared
+  committee but the quorum threshold is forged downward; proposal, vote,
+  post-prepare commit vote, and QC paths all fail before cache, status, queue, or
+  transport side effects.
+  Lane consensus-domain planning now also refuses explicit committee
+  `min_quorum` values that do not match the deterministic commit quorum for the
+  canonical validator set, and lane-block vote planning refuses internally
+  hash-consistent descriptors whose embedded quorum diverges from that same
+  canonical threshold before any local validator signature is produced.
+  Local commit-vote production now applies the active-route, authoritative
+  committee, canonical-quorum, and local-signer checks before signing cached
+  prepare-QC requests, so forged cached sessions for inactive routes,
+  self-appointed committees, or quorum-downgraded live committees are skipped
+  without producing a local BLS commit vote.
+  Local prepare-vote production now applies the same pre-sign checks to
+  scheduler vote plans, so spoofed or quorum-downgraded active-route prepare
+  plans cannot create a local BLS prepare signature, orphan lane session,
+  invalid-vote drop, or background broadcast.
+  Committed lane-block queue hydration now revalidates certified sessions
+  before bounded restart admission, rejecting invalid proposals, missing
+  aggregate QC signatures, wrong prepare/commit phase slots, and proposal/QC
+  committee drift before malformed durable sidecars can publish status, recover
+  payloads, or consume capacity needed by a later valid certified session.
+  Certified lane-block sidecar snapshots also honor lane reset watermarks:
+  stale same-lane sidecars at or below the reset height no longer seed
+  proposal tips, restart execution queues, or autoscale unapplied-progress
+  checks, while fresh post-reset sidecars remain visible. Sumeragi startup
+  preloads the persisted DA reset journal before certified sidecar recovery.
+  Direct application marker scale-in guards now apply the same reset-watermark
+  boundary per queried lane, so stale key or marker evidence reintroduced
+  after lifecycle cleanup cannot block fresh-lane scale-in, while fresh
+  post-reset unrepaired markers and malformed key/payload rows still block
+  destruction. Autoscale commit also re-prunes lane-scoped block-local cleanup
+  state immediately before publishing the world block, covering AXT replay
+  rows, DA pin indexes, direct application markers, public-lane
+  validators/economics, and verified relay contract storage, then repeats
+  durable cleanup in committed storage so late inserts after lifecycle staging
+  cannot survive scale-in for retired lanes.
+  Autoscale scale-in now also refuses to retire lanes with committed direct
+  application markers that lack matching durable direct-execution receipts,
+  both when selecting deterministic retire candidates and when revalidating a
+  staged lifecycle at commit. Malformed marker storage keys are treated as
+  unrepaired even when the marker payload has a durable direct receipt, so
+  scale-in cannot prune retained-lane idempotence evidence through a forged key.
+  Direct receipt repair now also treats the marker storage key as committed
+  evidence and refuses malformed key/payload rows instead of promoting them
+  into durable Kura receipts or direct transaction membership. Existing direct
+  markers also cannot let durable receipts for inactive lane/dataspace routes
+  backfill non-canonical transaction membership after lane retirement.
+  Autoscale localnet cycle outcomes and soak artifacts now also preserve
+  direct-applied committed lane-block peer counts separately from generic
+  committed progress, so rollout review can distinguish direct WSV application
+  from canonical application and other expansion signals. The rollout parser
+  now also rejects conflicting latest committed-lane status rows for the same
+  lane height/view instead of choosing one by dataspace id, while preserving
+  exact duplicate rows as idempotent evidence. It also counts only
+  default-dataspace committed-lane rows as autoscale
+  expansion/direct-application/destruction evidence and treats ambiguous or
+  certified elastic-lane committed-block evidence as non-idle for scale-in.
+  Default-dataspace committed-lane rows also have to carry canonical quorum
+  metadata before they can prove rollout progress: `min_quorum` must match the
+  deterministic quorum for `validator_count`, the advertised validator set must
+  fit the fixed localnet peer set, and prepare/commit signer counts must be in
+  range while satisfying that quorum. Quorum-downgraded rows, impossible signer
+  counts, or impossible validator-set sizes cannot fake expansion/direct
+  execution, and malformed latest default-dataspace rows remain non-idle for
+  scale-in instead of being treated as absence.
+  Lane-relay summaries now also preserve dataspace ids, standalone descriptor
+  presence, and merge-admissibility state. Autoscale expansion only counts
+  default-dataspace relay rows that are both descriptor-backed and
+  merge-admissible, while descriptorless or non-merge relay rows for the
+  retiring elastic lane still count as lingering state and block scale-in.
+  Wrong-dataspace relay rows cannot fake default-route progress or block
+  destruction.
+  Exact duplicate same-height default-dataspace relay rows are idempotent, while
+  descriptor-hash drift or merge-admissibility drift in the latest relay row set
+  is ambiguous, cannot prove expansion, and remains non-idle for scale-in.
+  The runtime lane-relay status cache now keys entries by immutable relay
+  identity, including header hash, descriptor hash, DA hash, settlement hash,
+  RBC byte count, and manifest root, so descriptor drift remains visible while
+  merge-admissible rows can still upgrade matching pending rows and cannot be
+  downgraded by later non-merge rows. The state-side `LaneRelayStore` now uses
+  the same immutable identity boundary before pending rows can be upgraded with
+  QC/FastPQ material, so descriptor drift cannot overwrite pending relay
+  evidence under the guise of a verified upgrade. `State::record_lane_relay` has
+  matching regression coverage to keep rejected drift from replacing the state
+  relay cache or Sumeragi status cache.
+  Sumeragi lane-payload ownership status now validates canonical replay material
+  before exposing rows or applying the status cap, so malformed subject,
+  payload-ownership, RBC-instance, or descriptor hashes cannot leak as ownership
+  evidence or evict valid recent rows.
+  Committed-lane status now validates each row against its embedded proposal,
+  prepare QC, and commit QC before exposing or capping it, reusing the
+  lane-consensus committed-session validator so summary drift, malformed
+  proposal hashes, QC phase drift, committee drift, missing aggregate
+  signatures, and under-quorum signer bitmaps cannot leak as certified
+  lane-block evidence.
+  Commit-quorum discovery in the localnet corridor now also fails closed after
+  timeout when peer status reports split-brain or out-of-range explicit quorum
+  values, explicit quorum values that do not match reported validator-set length
+  or peer-count fallback quorum, or conflicting/out-of-range validator-set
+  lengths, instead of masking that status drift with peer-count fallback.
+  Expansion status and deterministic transition comparison now also require
+  provided baselines to cover the same peer set as the current snapshot, so
+  partial snapshots cannot count current-state lane evidence or transition
+  deltas as fresh expansion/scale-in quorum.
+  Duplicate elastic-lane status rows are also malformed destruction evidence
+  rather than proof that the lane is absent. Ambiguous baseline lane evidence
+  for status, commitments, committed blocks, or validators cannot be repaired
+  by later clean rows into fresh expansion proof. Lane-specific transition-log
+  evidence is counted by unambiguous transition height instead of raw matching
+  lines, so exact duplicate same-height rows are idempotent and conflicting
+  same-height rows remain visible as ambiguous evidence that blocks fresh
+  scale-out/scale-in delta quorum from either the baseline or current snapshot.
+  Elastic-lane storage fallback now requires structural growth (file count,
+  total bytes, or first presence) instead of metadata-only mtime movement, and
+  complete peer storage snapshots plus aligned current/baseline elastic-storage
+  rows are required before storage fallback can prove expansion.
+  Sumeragi lane-commitment summaries use the same latest-unambiguous rule so conflicting
+  latest rows cannot fake current activity, post-baseline progress, or
+  post-baseline declaration transitions, and stale positive rows cannot
+  override a newer idle commitment. Ambiguous commitment rows also cannot prove
+  scale-in idleness.
+  Public lane-validator summaries now fail closed for conflicting duplicate
+  rows in both directions: ambiguous live/terminal rows do not create expansion
+  evidence and do not prove scale-in idleness. The lane-local
+  session cache also protects quorum-certified prepare+commit QC sessions from
+  ordinary cache eviction until the executor boundary drains them, so
+  committed-lane queue backpressure cannot silently drop certified lane
+  progress. Sumeragi tick also redrives the committed-lane executor queue,
+  records receipt-backed progress for already pending sessions, and admits
+  protected committed cache entries once queue capacity is freed, so
+  backpressure recovery no longer depends on a fresh lane-block network
+  message. Same-tick committed-lane status now merges newly recorded
+  applied-receipt evidence with the final post-prune queue snapshot, keeping
+  rollout telemetry accurate across that recovery transition. Startup status
+  also merges the latest durable application-receipted certified sidecar per
+  active lane with the in-memory pending queue, so restarted peers keep
+  publishing applied committed-lane evidence for both canonical block receipts
+  and direct execution receipts even when already receipted sessions are
+  skipped by execution hydration. The broader multi-peer independent-lane
+  corridor is now narrowed to full rollout evidence beyond the observable
+  ownership-planning and embedded committed-QC gates.
+  Kura now has a direct-execution lane application receipt format for clean
+  direct preflight evidence tied to a committed state hash, so direct
+  lane-state application can persist durable evidence without reusing the
+  canonical global-block receipt semantics.
+  Queue-generated direct preflights are now bound to the canonical committed WSV
+  snapshot hash rather than only the block tip, preventing stale preflight
+  evidence from surviving a direct WSV mutation that does not advance the
+  canonical block journal.
+  The committed-session queue is now receipt-backed rather than purely sticky:
+  it releases capacity only after Kura validates a durable application receipt,
+  and restart hydration skips already application-receipted certified sidecars
+  so stale applied work cannot crowd out unapplied committed lane blocks. Kura
+  now also revalidates recovered execution-input sidecars against the current
+  canonical lane payload artifact and proposal block before exposing them to
+  standalone direct application, rejecting stale recovered inputs after
+  canonical artifact drift.
 
 ## Cross-dataspace AMX follow-ups
 

@@ -1671,8 +1671,10 @@ test("TON publish-route-manifest rejects malformed nanoTON manifest scalars", as
   for (const [index, value] of cases.entries()) {
     const manifestPath = join(root, `malformed-nanoton-${index}.json`);
     const outPath = join(root, `malformed-nanoton-${index}.out.json`);
+    const sentinel = `sentinel:malformed-nanoton:${index}\n`;
     envelope.manifest.ton_finalize_message_value_nano = value;
     await writeJson(manifestPath, envelope);
+    await writeFile(outPath, sentinel, "utf8");
 
     const publish = runTonCli([
       "publish-route-manifest",
@@ -1687,7 +1689,7 @@ test("TON publish-route-manifest rejects malformed nanoTON manifest scalars", as
       publish.stderr,
       /TON finalize message value in nanoTON must be a positive integer decimal string/u,
     );
-    await assert.rejects(readFile(outPath, "utf8"), /ENOENT/u);
+    assert.equal(await readFile(outPath, "utf8"), sentinel);
   }
 });
 

@@ -4,10 +4,10 @@ direction: ltr
 source: docs/source/sorafs_reference_sdk_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 18a79d098ba9a77344733af361655443cf51d0dfe1929f49adf3a4d2a46e2ada
-source_last_modified: "2026-07-05T01:47:48.121506+00:00"
+source_hash: f0eeb66b53c45ae8420b3c62ee0f88f3ada16e9c5a75a963a75cb1673098df77
+source_last_modified: "2026-07-06T20:43:03.555553+00:00"
 translation_last_reviewed: 2026-07-05
-source_mtime: "2026-07-05T01:47:48.121506+00:00"
+source_mtime: "2026-07-06T20:43:03.555553+00:00"
 ---
 # SoraFS Reference SDK & Validator
 
@@ -499,6 +499,10 @@ digest relationships: manifest-bound artifact fingerprints must match
 `valid_release_manifest_digests`, and policy-bound artifact fingerprints must
 match `valid_policy_digests`, and governance-approval release-key fingerprints
 must match `valid_release_key_fingerprints` before final promotion can report
+ready. The reference SDK release gate fail-closes when more than one valid
+release manifest, policy, or release key anchor appears, and clears the mixed
+`valid_release_manifest_digests`, `valid_policy_digests`, or
+`valid_release_key_fingerprints` set before aggregate promotion can report
 ready.
 Release-manifest, policy, and release-key binding failures are recorded on the
 offending artifact before required-kind validity is computed, so the JSON

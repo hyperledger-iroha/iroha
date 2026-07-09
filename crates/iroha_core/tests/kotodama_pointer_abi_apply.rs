@@ -7,7 +7,7 @@ use iroha_core::telemetry::StateTelemetry;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
-    smartcontracts::ivm::host::CoreHost,
+    smartcontracts::ivm::host::{CoreHost, CoreHostImpl},
     state::{State, World, WorldReadOnly},
 };
 use iroha_data_model::{account::NewAccount, prelude::*};
@@ -16,7 +16,7 @@ use ivm::{
     kotodama::compiler::{CompilerMode, CompilerOptions},
 };
 use mv::storage::StorageReadOnly;
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
 fn fixture_account(hex_public_key: &str) -> AccountId {
     let public_key = hex_public_key.parse().expect("public key");
@@ -30,6 +30,47 @@ fn pointer_abi_test_compiler() -> KotodamaCompiler {
     })
 }
 
+fn parsed_asset_definition_literal(literal: &str) -> AssetDefinitionId {
+    AssetDefinitionId::parse_address_literal(literal).expect("canonical asset definition literal")
+}
+
+fn world_with_asset_definitions(
+    authority: &AccountId,
+    asset_definitions: &[AssetDefinitionId],
+) -> World {
+    let domain_ids: BTreeSet<DomainId> = asset_definitions
+        .iter()
+        .filter_map(|id| id.try_domain().cloned())
+        .collect();
+    let domains = domain_ids
+        .into_iter()
+        .map(|domain_id| Domain::new(domain_id).build(authority));
+    let definitions = asset_definitions.iter().cloned().map(|id| {
+        let name = id
+            .try_name()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| id.canonical_address());
+        AssetDefinition::numeric(id)
+            .with_name(name)
+            .build(authority)
+    });
+
+    World::with_assets(domains, [], definitions, [], [])
+}
+
+fn state_with_asset_definitions(
+    authority: &AccountId,
+    asset_definitions: &[AssetDefinitionId],
+) -> State {
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    State::new_for_testing(
+        world_with_asset_definitions(authority, asset_definitions),
+        kura,
+        query_handle,
+    )
+}
+
 #[test]
 fn kotodama_pointer_abi_asset_ops_end_to_end() {
     // Compile Kotodama sample
@@ -39,7 +80,8 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
         iroha_data_model::asset::AssetDefinitionId::new(asset_domain.clone(), asset_name.clone());
     let sample_asset_literal = asset_def_seed.canonical_address();
     let src = include_str!("../../kotodama_lang/src/samples/asset_ops.ko")
-        .replace("coin#wonder", &sample_asset_literal);
+        .replace("coin#wonder", &sample_asset_literal)
+        .replace("6pEP9RjNoZ7beWkT3pLfKoM1dyfi", &sample_asset_literal);
     let compiler = KotodamaCompiler::new();
     let program = compiler.compile_source(&src).expect("compile kotodama");
 
@@ -48,13 +90,17 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
         fixture_account("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
     let to =
         fixture_account("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB");
+    let query_asset_def = parsed_asset_definition_literal(&sample_asset_literal);
+    let query_state = state_with_asset_definitions(&from, &[query_asset_def]);
+    let query_view = query_state.view();
+    let mut host = CoreHostImpl::new(from.clone());
+    host.set_query_state(&query_view);
     let mut vm = IVM::new(50_000_000);
-    vm.set_host(CoreHost::new(from.clone()));
     vm.load_program(&program).expect("load program");
-    vm.run().expect("run VM");
+    vm.run_with_host(&mut host).expect("run VM");
 
     // Drain queued ISIs
-    let queued = CoreHost::with_host(&mut vm, CoreHost::drain_instructions);
+    let queued = host.drain_instructions();
     assert!(!queued.is_empty());
     eprintln!("queued {} instructions", queued.len());
     for (i, instr) in queued.iter().enumerate() {
@@ -177,10 +223,14 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
 
     let authority =
         fixture_account("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+    let query_asset_def = parsed_asset_definition_literal(&asset_literal);
+    let query_state = state_with_asset_definitions(&authority, &[query_asset_def]);
+    let query_view = query_state.view();
+    let mut host = CoreHostImpl::new(authority.clone());
+    host.set_query_state(&query_view);
     let mut vm = IVM::new(50_000_000);
-    vm.set_host(CoreHost::new(authority.clone()));
     vm.load_program(&program).expect("load program");
-    vm.run()
+    vm.run_with_host(&mut host)
         .expect("state-loaded pointers should be accepted by transfer_asset");
 
     let kura = Kura::blank_kura_for_testing();
@@ -227,7 +277,8 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
             .expect("setup should succeed");
     }
 
-    let queued = CoreHost::with_host(&mut vm, |host| host.apply_queued(&mut tx, &authority))
+    let queued = host
+        .apply_queued(&mut tx, &authority)
         .expect("apply queued transfer");
     assert_eq!(queued.len(), 1, "expected one queued transfer");
     tx.apply();
@@ -284,28 +335,32 @@ fn kotodama_name_keyed_state_loaded_pointers_survive_cross_call() {
     let overlay = CoreHost::with_host(&mut write_vm, CoreHost::drain_durable_state_overlay);
     assert_eq!(overlay.len(), 1, "expected one durable state write");
 
-    let mut world = World::new();
+    let query_asset_def = parsed_asset_definition_literal(&asset_literal);
+    let mut world = world_with_asset_definitions(&authority, &[query_asset_def]);
     for (path, value) in overlay {
         let stored = value.expect("state value must be present");
         world
             .smart_contract_state_mut_for_testing()
             .insert(path, stored);
     }
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let state = State::new_for_testing(world, kura, query_handle);
+    let view = state.view();
 
     let read_program = pointer_abi_test_compiler()
         .compile_source(&read_src)
         .expect("compile reader");
     let mut read_vm = IVM::new(50_000_000);
-    let mut read_host = CoreHost::new(authority.clone());
-    let world_view = world.view();
-    read_host.set_durable_state_snapshot_from_world(&world_view);
-    read_vm.set_host(read_host);
+    let mut read_host = CoreHostImpl::new(authority.clone());
+    read_host.set_durable_state_snapshot_from_world(&view.world);
+    read_host.set_query_state(&view);
     read_vm.load_program(&read_program).expect("load reader");
     read_vm
-        .run()
+        .run_with_host(&mut read_host)
         .expect("name-keyed state-loaded pointers should survive cross-call");
 
-    let queued = CoreHost::with_host(&mut read_vm, CoreHost::drain_instructions);
+    let queued = read_host.drain_instructions();
     assert_eq!(queued.len(), 1, "expected one queued transfer");
 }
 
@@ -357,28 +412,32 @@ fn kotodama_mixed_name_keyed_state_loaded_pointers_survive_cross_call() {
     let overlay = CoreHost::with_host(&mut write_vm, CoreHost::drain_durable_state_overlay);
     assert_eq!(overlay.len(), 2, "expected two durable state writes");
 
-    let mut world = World::new();
+    let query_asset_def = parsed_asset_definition_literal(&asset_literal);
+    let mut world = world_with_asset_definitions(&authority, &[query_asset_def]);
     for (path, value) in overlay {
         let stored = value.expect("state value must be present");
         world
             .smart_contract_state_mut_for_testing()
             .insert(path, stored);
     }
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let state = State::new_for_testing(world, kura, query_handle);
+    let view = state.view();
 
     let read_program = pointer_abi_test_compiler()
         .compile_source(read_src)
         .expect("compile reader");
     let mut read_vm = IVM::new(50_000_000);
-    let mut read_host = CoreHost::new(authority.clone());
-    let world_view = world.view();
-    read_host.set_durable_state_snapshot_from_world(&world_view);
-    read_vm.set_host(read_host);
+    let mut read_host = CoreHostImpl::new(authority.clone());
+    read_host.set_durable_state_snapshot_from_world(&view.world);
+    read_host.set_query_state(&view);
     read_vm.load_program(&read_program).expect("load reader");
     read_vm
-        .run()
+        .run_with_host(&mut read_host)
         .expect("mixed state-loaded pointers should survive cross-call");
 
-    let queued = CoreHost::with_host(&mut read_vm, CoreHost::drain_instructions);
+    let queued = read_host.drain_instructions();
     assert_eq!(queued.len(), 1, "expected one queued transfer");
 }
 
@@ -434,28 +493,32 @@ fn kotodama_event_to_state_loaded_transfer_asset_survives_cross_call() {
     let overlay = CoreHost::with_host(&mut write_vm, CoreHost::drain_durable_state_overlay);
     assert_eq!(overlay.len(), 2, "expected two durable state writes");
 
-    let mut world = World::new();
+    let query_asset_def = parsed_asset_definition_literal(asset_literal);
+    let mut world = world_with_asset_definitions(&authority, &[query_asset_def]);
     for (path, value) in overlay {
         let stored = value.expect("state value must be present");
         world
             .smart_contract_state_mut_for_testing()
             .insert(path, stored);
     }
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let state = State::new_for_testing(world, kura, query_handle);
+    let view = state.view();
 
     let read_program = pointer_abi_test_compiler()
         .compile_source(&read_src)
         .expect("compile reader");
     let mut read_vm = IVM::new(50_000_000);
-    let mut read_host = CoreHost::new(authority.clone());
-    let world_view = world.view();
-    read_host.set_durable_state_snapshot_from_world(&world_view);
-    read_vm.set_host(read_host);
+    let mut read_host = CoreHostImpl::new(authority.clone());
+    read_host.set_durable_state_snapshot_from_world(&view.world);
+    read_host.set_query_state(&view);
     read_vm.load_program(&read_program).expect("load reader");
     read_vm
-        .run()
+        .run_with_host(&mut read_host)
         .expect("event-fed state-loaded transfer_asset should survive cross-call");
 
-    let queued = CoreHost::with_host(&mut read_vm, CoreHost::drain_instructions);
+    let queued = read_host.drain_instructions();
     assert_eq!(queued.len(), 1, "expected one queued transfer");
 }
 
@@ -553,13 +616,19 @@ fn dlmm_pool_seed_bin_entrypoint_survives_cross_call() {
         "expected durable state writes from init_pool"
     );
 
-    let mut world = World::new();
+    let base_asset = parsed_asset_definition_literal("6qLb5RYJbzychndCXgFa9aZzjWyx");
+    let quote_asset = parsed_asset_definition_literal("7Dsw1EgqCsPmv9HpEztf26xEL2qo");
+    let mut world = world_with_asset_definitions(&authority, &[base_asset, quote_asset]);
     for (path, value) in overlay {
         let stored = value.expect("state value must be present");
         world
             .smart_contract_state_mut_for_testing()
             .insert(path, stored);
     }
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let state = State::new_for_testing(world, kura, query_handle);
+    let view = state.view();
 
     let provider_literal = authority.to_string();
     let seed_args = Json::new(norito::json!({
@@ -570,17 +639,16 @@ fn dlmm_pool_seed_bin_entrypoint_survives_cross_call() {
     }));
     let mut seed_vm = IVM::new(50_000_000);
     let mut seed_host =
-        CoreHost::with_accounts_and_args(authority.clone(), Arc::clone(&accounts), seed_args);
-    let world_view = world.view();
-    seed_host.set_durable_state_snapshot_from_world(&world_view);
+        CoreHostImpl::with_accounts_and_args(authority.clone(), Arc::clone(&accounts), seed_args);
+    seed_host.set_durable_state_snapshot_from_world(&view.world);
+    seed_host.set_query_state(&view);
     seed_vm.load_program(&program).expect("load dlmm_pool");
     seed_vm
         .set_program_counter(seed_bin_pc)
         .expect("set seed_bin pc");
     seed_vm.set_register(1, seed_vm.memory.code_len());
-    seed_vm.set_host(seed_host);
-    seed_vm.run().expect("seed_bin run");
+    seed_vm.run_with_host(&mut seed_host).expect("seed_bin run");
 
-    let queued = CoreHost::with_host(&mut seed_vm, CoreHost::drain_instructions);
+    let queued = seed_host.drain_instructions();
     assert_eq!(queued.len(), 2, "expected two queued transfer instructions");
 }

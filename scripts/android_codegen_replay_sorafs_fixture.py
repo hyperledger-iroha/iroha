@@ -18,6 +18,7 @@ import argparse
 import datetime
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -29,7 +30,12 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from sorafs_checker_preflight import fsync_checker_output_parent
+from sorafs_evidence_json import (
+    json_object_without_duplicate_keys,
+    reject_non_standard_json_constant,
+)
 from sorafs_path_identity import error_diagnostic_label, path_diagnostic_label
+from sorafs_runner_preflight import plan_rendered_path_is_safe
 
 
 REPO_ROOT = SCRIPT_DIR.parent
@@ -55,6 +61,33 @@ DEFAULT_TRACKED_FIXTURE = (
     / "fixtures"
     / "sorafs_register_pin_manifest_multi_peer_parity_v1.json"
 )
+CODEGEN_PATH_DIAGNOSTIC = (
+    "SoraFS Android codegen fixture paths must not contain secret-looking, "
+    "control-character, parent, current, drive-prefix, or platform-specific "
+    "components"
+)
+FIXTURE_METADATA_PATH_DIAGNOSTIC = (
+    "SoraFS Android codegen fixture metadata paths must be safe relative paths"
+)
+FIXTURE_METADATA_NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,127}\Z")
+FIXTURE_METADATA_NAME_DIAGNOSTIC = (
+    "SoraFS Android codegen fixture metadata fixture name must be a safe filename"
+)
+FIXTURE_METADATA_FIELD_DIAGNOSTIC = (
+    "SoraFS Android codegen fixture metadata subprocess fields must be canonical"
+)
+PROFILE_HANDLE_RE = re.compile(
+    r"sorafs\.[a-z0-9][a-z0-9_-]*@[0-9]+(?:\.[0-9]+){2}\Z"
+)
+STORAGE_CLASSES = frozenset({"hot", "warm", "cold"})
+
+
+def iso_utc_from_unix_timestamp(value: int) -> str:
+    """Render a reviewed Unix timestamp as canonical UTC fixture metadata."""
+
+    return datetime.datetime.fromtimestamp(value, datetime.timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
 
 
 def read_open_flags() -> int:
@@ -90,31 +123,50 @@ def validate_codegen_path(path: Path, label: str) -> None:
     """Reject symlinked codegen fixture paths and parent chains before I/O."""
 
     if not isinstance(path, Path):
-        raise ValueError(f"{label} must be a path")
+        raise ValueError(f"{label} `{path_diagnostic_label(path)}` must be a path")
+    if not plan_rendered_path_is_safe(path):
+        raise ValueError(CODEGEN_PATH_DIAGNOSTIC)
     try:
         if path.is_symlink():
-            raise ValueError(f"{label} `{path}` must not be a symlink")
+            raise ValueError(
+                f"{label} `{path_diagnostic_label(path)}` must not be a symlink"
+            )
         for parent in (path.parent, *path.parent.parents):
             if parent.is_symlink():
-                raise ValueError(f"{label} parent `{parent}` must not be a symlink")
+                raise ValueError(
+                    f"{label} parent `{path_diagnostic_label(parent)}` "
+                    "must not be a symlink"
+                )
             if parent.exists() and not parent.is_dir():
                 raise ValueError(
-                    f"{label} parent `{parent}` must be a directory when it exists"
+                    f"{label} parent `{path_diagnostic_label(parent)}` "
+                    "must be a directory when it exists"
                 )
     except ValueError:
         raise
     except OSError as error:
-        raise ValueError(f"failed to inspect {label} `{path}`: {error}") from error
+        path_label = path_diagnostic_label(path)
+        error_label = error_diagnostic_label(error, path_label=path_label)
+        raise ValueError(
+            f"failed to inspect {label} `{path_label}`: {error_label}"
+        ) from error
 
 
 def ensure_codegen_directory(path: Path, label: str) -> None:
     """Create a codegen fixture directory after rejecting symlink parents."""
 
     validate_codegen_path(path, label)
-    path.mkdir(parents=True, exist_ok=True)
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        path_label = path_diagnostic_label(path)
+        error_label = error_diagnostic_label(error, path_label=path_label)
+        raise ValueError(
+            f"failed to create {label} `{path_label}`: {error_label}"
+        ) from error
     validate_codegen_path(path, label)
     if not path.is_dir():
-        raise ValueError(f"{label} `{path}` must be a directory")
+        raise ValueError(f"{label} `{path_diagnostic_label(path)}` must be a directory")
 
 
 def require_codegen_file(path: Path, label: str) -> Path:
@@ -122,8 +174,60 @@ def require_codegen_file(path: Path, label: str) -> Path:
 
     validate_codegen_path(path, label)
     if not path.is_file():
-        raise ValueError(f"{label} `{path}` must exist and be a file")
+        raise ValueError(
+            f"{label} `{path_diagnostic_label(path)}` must exist and be a file"
+        )
     return path
+
+
+def require_relative_fixture_path(value: object, *, label: str) -> Path:
+    """Return a safe relative path from fixture metadata."""
+
+    if not isinstance(value, str):
+        raise ValueError(FIXTURE_METADATA_PATH_DIAGNOSTIC)
+    path = Path(value)
+    if path.is_absolute() or not plan_rendered_path_is_safe(path):
+        raise ValueError(FIXTURE_METADATA_PATH_DIAGNOSTIC)
+    return path
+
+
+def require_fixture_name(value: object) -> str:
+    """Return a safe single-component fixture name from metadata."""
+
+    if not isinstance(value, str) or FIXTURE_METADATA_NAME_RE.fullmatch(value) is None:
+        raise ValueError(FIXTURE_METADATA_NAME_DIAGNOSTIC)
+    if not plan_rendered_path_is_safe(Path(value)):
+        raise ValueError(FIXTURE_METADATA_NAME_DIAGNOSTIC)
+    return value
+
+
+def require_profile_handle(value: object) -> str:
+    """Return a canonical SoraFS chunker profile handle from metadata."""
+
+    if not isinstance(value, str) or PROFILE_HANDLE_RE.fullmatch(value) is None:
+        raise ValueError(FIXTURE_METADATA_FIELD_DIAGNOSTIC)
+    return value
+
+
+def require_storage_class(value: object) -> str:
+    """Return a supported manifest storage class from metadata."""
+
+    if not isinstance(value, str) or value not in STORAGE_CLASSES:
+        raise ValueError(FIXTURE_METADATA_FIELD_DIAGNOSTIC)
+    return value
+
+
+def require_metadata_int(value: object, *, minimum: int) -> int:
+    """Return a bounded integer from fixture metadata."""
+
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or value < minimum
+        or value > 2**63 - 1
+    ):
+        raise ValueError(FIXTURE_METADATA_FIELD_DIAGNOSTIC)
+    return value
 
 
 def load_json(path: Path, *, label: str = "JSON fixture") -> dict:
@@ -134,9 +238,15 @@ def load_json(path: Path, *, label: str = "JSON fixture") -> dict:
         handle = os.fdopen(fd, "r", encoding="utf-8")
         fd = -1
         with handle:
-            return json.load(handle)
+            return json.load(
+                handle,
+                parse_constant=reject_non_standard_json_constant,
+                object_pairs_hook=json_object_without_duplicate_keys,
+            )
     except OSError as error:
-        raise ValueError(f"failed to read {label} `{path}`: {error}") from error
+        path_label = path_diagnostic_label(path)
+        error_label = error_diagnostic_label(error, path_label=path_label)
+        raise ValueError(f"failed to read {label} `{path_label}`: {error_label}") from error
     finally:
         if fd >= 0:
             os.close(fd)
@@ -208,7 +318,7 @@ def build_fixture_example(
 ) -> dict:
     chunking = manifest_report["chunking"]
     manifest = manifest_report["manifest"]
-    timestamp = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    timestamp = iso_utc_from_unix_timestamp(fixture_meta["now_unix_secs"])
     instruction = {
         "digest_hex": manifest["digest_hex"],
         "chunker": {
@@ -247,7 +357,7 @@ def update_register_pin_example(example_path: Path, fixture_example: dict) -> No
     write_json(example_path, data, label="RegisterPinManifest example")
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Replay the SoraFS orchestrator fixture for Android codegen."
     )
@@ -286,7 +396,7 @@ def main() -> int:
         default=os.environ.get("CARGO_BIN", "cargo"),
         help="Cargo binary to invoke (defaults to `cargo`).",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     try:
         fixture_meta = load_json(
@@ -294,21 +404,47 @@ def main() -> int:
             label="orchestrator fixture metadata",
         )
         chunker_fixture = load_json(args.chunker_fixture, label="chunker fixture")
-
-        payload_path = require_codegen_file(
-            REPO_ROOT / fixture_meta["payload_path"],
-            "payload path",
+        fixture_name = require_fixture_name(fixture_meta.get("fixture"))
+        fixture_meta["fixture"] = fixture_name
+        profile_handle = require_profile_handle(fixture_meta.get("profile_handle"))
+        fixture_meta["profile_handle"] = profile_handle
+        now_unix_secs = require_metadata_int(
+            fixture_meta.get("now_unix_secs"),
+            minimum=0,
         )
-
-        plan_path = require_codegen_file(
-            args.fixture_dir / fixture_meta["plan_file"],
-            "plan file",
+        fixture_meta["now_unix_secs"] = now_unix_secs
+        retention_epoch = require_metadata_int(
+            fixture_meta.get("retention_epoch", now_unix_secs),
+            minimum=0,
         )
+        min_replicas = require_metadata_int(
+            fixture_meta.get("min_replicas", 3),
+            minimum=1,
+        )
+        storage_class = require_storage_class(fixture_meta.get("storage_class", "hot"))
+        plan_rel = require_relative_fixture_path(
+            fixture_meta.get("plan_file"),
+            label="plan file",
+        )
+        fixture_meta["plan_file"] = plan_rel.as_posix()
+        for metadata_path_field in ("providers_file", "telemetry_file", "options_file"):
+            metadata_path = require_relative_fixture_path(
+                fixture_meta.get(metadata_path_field),
+                label=metadata_path_field,
+            )
+            fixture_meta[metadata_path_field] = metadata_path.as_posix()
+
+        payload_rel = require_relative_fixture_path(
+            fixture_meta.get("payload_path"),
+            label="payload path",
+        )
+        payload_path = require_codegen_file(REPO_ROOT / payload_rel, "payload path")
+
+        plan_path = require_codegen_file(args.fixture_dir / plan_rel, "plan file")
     except ValueError as error:
         raise SystemExit(str(error)) from error
 
-    retention_epoch = fixture_meta.get("retention_epoch", fixture_meta["now_unix_secs"])
-    report_path = args.report_dir / f"{fixture_meta['fixture']}.json"
+    report_path = args.report_dir / f"{fixture_name}.json"
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_report = Path(tmpdir) / "manifest_report.json"
@@ -316,9 +452,9 @@ def main() -> int:
             args.cargo_bin,
             payload_path,
             plan_path,
-            fixture_meta["profile_handle"],
-            min_replicas=fixture_meta.get("min_replicas", 3),
-            storage_class=fixture_meta.get("storage_class", "hot"),
+            profile_handle,
+            min_replicas=min_replicas,
+            storage_class=storage_class,
             retention_epoch=retention_epoch,
             json_out=tmp_report,
         )

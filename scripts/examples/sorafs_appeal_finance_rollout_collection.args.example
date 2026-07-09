@@ -5,6 +5,10 @@
 
 --out-dir
 dist/sorafs-appeal-finance-rollout-evidence
+--summary-out
+dist/sorafs-appeal-finance-rollout-evidence/rollout-summary.json
+--require-kind
+pricing_config,quote_api,deposit_lifecycle,settlement_execution,settlement_submitter,moderation_worker,governance_dag_publication,dashboard_metrics,multi_peer_reconciliation,governance_approval
 --now-unix
 1800008000
 --max-canary-age-secs

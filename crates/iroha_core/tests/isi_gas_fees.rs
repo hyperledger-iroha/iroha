@@ -28,7 +28,9 @@ fn new_state(
     kura: Arc<Kura>,
     query_handle: query::store::LiveQueryStoreHandle,
 ) -> State {
-    State::new(world, kura, query_handle, StateTelemetry::default())
+    let mut state = State::new(world, kura, query_handle, StateTelemetry::default());
+    state.nexus.get_mut().enabled = false;
+    state
 }
 
 #[cfg(not(feature = "telemetry"))]
@@ -37,7 +39,9 @@ fn new_state(
     kura: Arc<Kura>,
     query_handle: query::store::LiveQueryStoreHandle,
 ) -> State {
-    State::new(world, kura, query_handle)
+    let mut state = State::new(world, kura, query_handle);
+    state.nexus.get_mut().enabled = false;
+    state
 }
 
 fn new_account_in_domain(account_id: &AccountId, _domain: &str) -> Account {

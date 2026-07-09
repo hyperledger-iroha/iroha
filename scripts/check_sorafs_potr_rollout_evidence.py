@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import re
 import sys
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -32,6 +31,7 @@ from sorafs_evidence_json import (  # noqa: E402
 )
 from sorafs_evidence_validation import (  # noqa: E402
     archive_artifact_path_label,
+    forbidden_non_production_markers,
     build_evidence_artifact,
     count_evidence_artifacts,
     recognized_evidence_artifacts,
@@ -332,7 +332,7 @@ def require_only_required_values(
             value = item.get(field)
         else:
             value = item
-        if not isinstance(value, str) or value.strip() not in allowed:
+        if not isinstance(value, str) or value not in allowed:
             errors.append(f"{array_field} must not include unknown values")
             return
 
@@ -393,11 +393,7 @@ def require_provider_label(record: dict[str, Any], errors: list[str]) -> str:
     if PROVIDER_LABEL_PATTERN.fullmatch(provider) is None:
         errors.append(PROVIDER_LABEL_ERROR)
         return ""
-    forbidden = sorted(
-        marker
-        for marker in FORBIDDEN_PROVIDER_LABEL_MARKERS
-        if marker in provider.split("-")
-    )
+    forbidden = forbidden_non_production_markers(provider, FORBIDDEN_PROVIDER_LABEL_MARKERS)
     if forbidden:
         errors.append(
             f"providers[].name must not contain non-production markers {forbidden}"
@@ -421,11 +417,7 @@ def require_inventory_label(
     if pattern.fullmatch(value) is None:
         errors.append(label_error)
         return ""
-    forbidden = sorted(
-        marker
-        for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
-        if marker in value.split("-")
-    )
+    forbidden = forbidden_non_production_markers(value, FORBIDDEN_INVENTORY_LABEL_MARKERS)
     if forbidden:
         errors.append(f"{path} must not contain non-production markers {forbidden}")
         return ""
@@ -615,6 +607,20 @@ def validate_evidence_payload(
     )
 
 
+def require_single_active_digest(
+    digests: set[str],
+    errors: list[str],
+    *,
+    label: str,
+) -> set[str]:
+    """Return one active rollout digest or fail closed on mixed anchors."""
+
+    if len(digests) <= 1:
+        return digests
+    errors.append(f"{label} must contain exactly one active digest")
+    return set()
+
+
 
 def build_summary(
     evidence_dirs: list[Path],
@@ -671,29 +677,50 @@ def build_summary(
             fingerprint = evidence_artifact_fingerprint(artifact)
             digest = fingerprint.get("receipt_summary_digest_hex")
             if kind_name == "multi_provider_probe" and isinstance(digest, str):
-                valid_receipt_summary_digests.add(digest.lower())
+                valid_receipt_summary_digests.add(digest)
             elif kind_name in RECEIPT_SUMMARY_BOUND_KINDS:
                 valid_receipt_summary_bound_artifacts.append((kind_name, artifact))
             if kind_name == "governance_approval":
                 pq_digest = fingerprint.get("pq_key_roster_digest_hex")
                 if isinstance(pq_digest, str):
-                    valid_pq_key_roster_digests.add(pq_digest.lower())
+                    valid_pq_key_roster_digests.add(pq_digest)
                 reputation_digest = fingerprint.get(
                     "reputation_weight_policy_digest_hex"
                 )
                 if isinstance(reputation_digest, str):
                     valid_reputation_weight_policy_digests.add(
-                        reputation_digest.lower()
+                        reputation_digest
                     )
                 policy_digest = fingerprint.get("policy_digest_hex")
                 if isinstance(policy_digest, str):
-                    valid_policy_digests.add(policy_digest.lower())
+                    valid_policy_digests.add(policy_digest)
             elif kind_name in PQ_KEY_ROSTER_BOUND_KINDS:
                 pq_key_roster_bound_artifacts.append((kind_name, artifact))
             elif kind_name in REPUTATION_WEIGHT_BOUND_KINDS:
                 reputation_weight_bound_artifacts.append((kind_name, artifact))
         record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         record_evidence_validation_errors(path, validation_errors, errors)
+
+    valid_receipt_summary_digests = require_single_active_digest(
+        valid_receipt_summary_digests,
+        errors,
+        label="valid_receipt_summary_digests",
+    )
+    valid_pq_key_roster_digests = require_single_active_digest(
+        valid_pq_key_roster_digests,
+        errors,
+        label="valid_pq_key_roster_digests",
+    )
+    valid_reputation_weight_policy_digests = require_single_active_digest(
+        valid_reputation_weight_policy_digests,
+        errors,
+        label="valid_reputation_weight_policy_digests",
+    )
+    valid_policy_digests = require_single_active_digest(
+        valid_policy_digests,
+        errors,
+        label="valid_policy_digests",
+    )
 
     validate_bound_evidence_digest_references(
         required_kinds=required_kinds,
@@ -814,8 +841,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--now-unix",
         type=positive_int_arg,
-        default=int(time.time()),
-        help="Validator clock used for age checks. Defaults to current Unix time.",
+        required=True,
+        help="Required reviewed validator clock used for age checks.",
     )
     parser.add_argument(
         "--max-evidence-age-secs",

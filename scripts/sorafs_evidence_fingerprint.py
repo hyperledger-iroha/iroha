@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from sorafs_path_identity import diagnostic_text_is_canonical
+
 
 def artifact_fingerprint(
     payload: Mapping[str, Any], fields: Sequence[str]
@@ -19,13 +21,10 @@ def artifact_fingerprint(
     fingerprint: dict[str, Any] = {}
     seen_fields: set[str] = set()
     for field in fields:
-        if not isinstance(field, str) or not field.strip():
-            raise ValueError("artifact fingerprint fields must be non-empty strings")
-        if field != field.strip():
-            raise ValueError("artifact fingerprint fields must be canonical strings")
-        if any(ord(character) < 32 or ord(character) == 127 for character in field):
+        if not diagnostic_text_is_canonical(field):
             raise ValueError(
-                "artifact fingerprint fields must not contain control characters"
+                "artifact fingerprint fields must be non-empty canonical strings "
+                "without control characters"
             )
         if field in seen_fields:
             raise ValueError("artifact fingerprint fields must not contain duplicates")

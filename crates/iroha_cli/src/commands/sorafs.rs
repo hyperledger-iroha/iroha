@@ -1245,9 +1245,6 @@ pub struct TransparencyPublicationCanaryArgs {
     /// HTTP timeout in seconds.
     #[arg(long = "timeout-secs", default_value_t = 30)]
     timeout_secs: u64,
-    /// Do not fail the canary when publisher identity fields are missing.
-    #[arg(long = "allow-missing-publisher-identity", default_value_t = false)]
-    allow_missing_publisher_identity: bool,
     /// Optional path where the canary evidence JSON will be written.
     #[arg(long = "out", value_name = "PATH")]
     out: Option<PathBuf>,
@@ -1286,11 +1283,7 @@ impl TransparencyPublicationCanaryArgs {
             .map(|cycle_id| normalize_hex_16_lower(cycle_id, "--cycle-id"))
             .collect::<Result<Vec<_>>>()?;
         let evidence = transparency_publication_canary_evidence_json(
-            &torii_url,
-            &cycle_ids,
-            self.limit,
-            !self.allow_missing_publisher_identity,
-            &mut fetch,
+            &torii_url, &cycle_ids, self.limit, &mut fetch,
         )?;
         if let Some(path) = &self.out {
             write_json_artifact(path, &evidence, "transparency publication canary evidence")?;
@@ -6383,9 +6376,6 @@ pub struct IncentivesServiceInitArgs {
     /// Overwrite an existing state file if it already exists.
     #[arg(long = "force", default_value_t = false)]
     pub force: bool,
-    /// Allow missing `budget_approval_id` in the reward configuration (for lab/staging replays).
-    #[arg(long = "allow-missing-budget-approval", default_value_t = false)]
-    pub allow_missing_budget_approval: bool,
 }
 
 impl Run for IncentivesServiceInitArgs {
@@ -6398,7 +6388,7 @@ impl Run for IncentivesServiceInitArgs {
         }
 
         let config = read_reward_config(&self.config)?;
-        if config.budget_approval_id.is_none() && !self.allow_missing_budget_approval {
+        if config.budget_approval_id.is_none() {
             return Err(eyre!(
                 "reward_config.budget_approval_id is required for incentives"
             ));
@@ -6408,11 +6398,6 @@ impl Run for IncentivesServiceInitArgs {
             parse_account_id_str(context, &self.treasury_account, "--treasury-account")?;
         let state = IncentivesState::new(&config, treasury_account);
         save_incentives_state(&self.state, &state)?;
-        if config.budget_approval_id.is_none() {
-            context.println(format_args!(
-                "warning: proceeding without budget_approval_id in reward config"
-            ))?;
-        }
         context.println(format_args!(
             "initialised incentives state at `{}`",
             self.state.display()
@@ -6952,36 +6937,18 @@ pub struct IncentivesServiceShadowRunArgs {
     /// Ignored when `--output-format json` is used.
     #[arg(long = "pretty", default_value_t = false)]
     pub pretty: bool,
-    /// Allow payouts without `budget_approval_id` (for local testing only).
-    #[arg(long = "allow-missing-budget-approval", default_value_t = false)]
-    pub allow_missing_budget_approval: bool,
 }
 
 impl Run for IncentivesServiceShadowRunArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let state = load_incentives_state(&self.state)?;
         let mut state_for_run = state.clone();
-        let mut service = build_clean_payout_service_with_budget_policy(
-            &state_for_run,
-            self.allow_missing_budget_approval,
-        )?;
+        let expected_budget =
+            require_budget_approval_id(state.reward_config.budget_approval_id.as_ref())?;
+        let mut service = build_clean_payout_service(&state_for_run)?;
         let config = load_daemon_config(&self.config, &|literal| {
             crate::resolve_account_id(context, literal)
         })?;
-        let expected_budget =
-            match require_budget_approval_id(state.reward_config.budget_approval_id.as_ref()) {
-                Ok(id) => Some(id),
-                Err(err) => {
-                    if self.allow_missing_budget_approval {
-                        context.println(format_args!(
-                            "warning: proceeding without budget_approval_id enforcement: {err}"
-                        ))?;
-                        None
-                    } else {
-                        return Err(err);
-                    }
-                }
-            };
 
         let iteration_summary = process_daemon_iteration(
             &mut state_for_run,
@@ -6991,12 +6958,11 @@ impl Run for IncentivesServiceShadowRunArgs {
             None,
             None,
             None,
-            expected_budget.as_ref(),
+            Some(&expected_budget),
         )?;
 
-        if expected_budget.is_some()
-            && (iteration_summary.missing_budget_approval > 0
-                || iteration_summary.mismatched_budget_approval > 0)
+        if iteration_summary.missing_budget_approval > 0
+            || iteration_summary.mismatched_budget_approval > 0
         {
             return Err(eyre!(
                 "shadow run found {} payout(s) missing or mismatching budget_approval_id",
@@ -7076,9 +7042,6 @@ pub struct IncentivesServiceDaemonArgs {
     /// Ignored when `--output-format json` is used.
     #[arg(long = "pretty", default_value_t = false)]
     pub pretty: bool,
-    /// Allow payouts without `budget_approval_id` (for local testing only).
-    #[arg(long = "allow-missing-budget-approval", default_value_t = false)]
-    pub allow_missing_budget_approval: bool,
 }
 
 impl Run for IncentivesServiceDaemonArgs {
@@ -7112,22 +7075,9 @@ impl Run for IncentivesServiceDaemonArgs {
         }
 
         let poll_interval = self.poll_interval.max(1);
-        let (mut state, mut service) =
-            load_state_service_with_budget_policy(&self.state, self.allow_missing_budget_approval)?;
+        let (mut state, mut service) = load_state_service(&self.state)?;
         let expected_budget =
-            match require_budget_approval_id(state.reward_config.budget_approval_id.as_ref()) {
-                Ok(id) => Some(id),
-                Err(err) => {
-                    if self.allow_missing_budget_approval {
-                        context.println(format_args!(
-                            "warning: proceeding without budget_approval_id enforcement: {err}"
-                        ))?;
-                        None
-                    } else {
-                        return Err(err);
-                    }
-                }
-            };
+            require_budget_approval_id(state.reward_config.budget_approval_id.as_ref())?;
 
         loop {
             let summary = process_daemon_iteration(
@@ -7138,7 +7088,7 @@ impl Run for IncentivesServiceDaemonArgs {
                 self.instruction_out_dir.as_deref(),
                 self.transfer_out_dir.as_deref(),
                 self.archive_dir.as_deref(),
-                expected_budget.as_ref(),
+                Some(&expected_budget),
             )?;
 
             if !summary.processed.is_empty() {
@@ -7146,9 +7096,7 @@ impl Run for IncentivesServiceDaemonArgs {
             }
 
             log_daemon_summary(context, &summary, self.pretty)?;
-            if expected_budget.is_some()
-                && (summary.missing_budget_approval > 0 || summary.mismatched_budget_approval > 0)
-            {
+            if summary.missing_budget_approval > 0 || summary.mismatched_budget_approval > 0 {
                 return Err(eyre!(
                     "daemon detected {} payout(s) missing or mismatching budget_approval_id",
                     summary
@@ -8888,37 +8836,20 @@ fn save_incentives_state(path: &Path, state: &IncentivesState) -> Result<()> {
         .wrap_err_with(|| format!("failed to write incentives state to `{}`", path.display()))
 }
 
-fn build_clean_payout_service_with_budget_policy(
-    state: &IncentivesState,
-    allow_missing_budget_approval: bool,
-) -> Result<RelayPayoutService> {
+fn build_clean_payout_service(state: &IncentivesState) -> Result<RelayPayoutService> {
     let config = RewardConfig::try_from(state.reward_config.clone())
         .map_err(|err| eyre!("invalid reward configuration in state: {err}"))?;
-    let engine = if allow_missing_budget_approval {
-        RelayRewardEngine::new_allowing_missing_budget(config, true)
-    } else {
-        RelayRewardEngine::new(config)
-    }
-    .map_err(|err| eyre!("invalid reward configuration in state: {err}"))?;
+    let engine = RelayRewardEngine::new(config)
+        .map_err(|err| eyre!("invalid reward configuration in state: {err}"))?;
     Ok(RelayPayoutService::new(
         engine,
         RelayPayoutLedger::new(state.treasury_account.clone()),
     ))
 }
 
-#[allow(dead_code)]
-fn build_clean_payout_service(state: &IncentivesState) -> Result<RelayPayoutService> {
-    build_clean_payout_service_with_budget_policy(state, false)
-}
-
-#[allow(dead_code)]
-fn build_payout_service_with_budget_policy(
-    state: &IncentivesState,
-    allow_missing_budget_approval: bool,
-) -> Result<RelayPayoutService> {
+fn build_payout_service(state: &IncentivesState) -> Result<RelayPayoutService> {
     state.ensure_current()?;
-    let mut service =
-        build_clean_payout_service_with_budget_policy(state, allow_missing_budget_approval)?;
+    let mut service = build_clean_payout_service(state)?;
 
     for instruction in &state.payouts {
         service
@@ -8939,11 +8870,6 @@ fn build_payout_service_with_budget_policy(
     }
 
     Ok(service)
-}
-
-#[allow(dead_code)]
-fn build_payout_service(state: &IncentivesState) -> Result<RelayPayoutService> {
-    build_payout_service_with_budget_policy(state, false)
 }
 
 fn store_payout_instruction(state: &mut IncentivesState, instruction: &RelayRewardInstructionV1) {
@@ -9120,15 +9046,8 @@ fn ensure_instruction_budget_approval(
 }
 
 fn load_state_service(path: &Path) -> Result<(IncentivesState, RelayPayoutService)> {
-    load_state_service_with_budget_policy(path, false)
-}
-
-fn load_state_service_with_budget_policy(
-    path: &Path,
-    allow_missing_budget_approval: bool,
-) -> Result<(IncentivesState, RelayPayoutService)> {
     let state = load_incentives_state(path)?;
-    let service = build_payout_service_with_budget_policy(&state, allow_missing_budget_approval)?;
+    let service = build_payout_service(&state)?;
     Ok((state, service))
 }
 
@@ -11467,12 +11386,9 @@ pub struct HandshakeUpdateArgs {
     /// Clear the configured resume hash.
     #[arg(long = "clear-resume-hash", action = clap::ArgAction::SetTrue)]
     clear_resume_hash: bool,
-    /// Require proof-of-work tickets for admission (`--pow-optional` disables).
-    #[arg(long = "pow-required", action = clap::ArgAction::SetTrue, conflicts_with = "pow_optional")]
+    /// Require proof-of-work tickets for admission.
+    #[arg(long = "pow-required", action = clap::ArgAction::SetTrue)]
     pow_required: bool,
-    /// Disable mandatory proof-of-work tickets.
-    #[arg(long = "pow-optional", action = clap::ArgAction::SetTrue, conflicts_with = "pow_required")]
-    pow_optional: bool,
     /// Override the proof-of-work difficulty.
     #[arg(long = "pow-difficulty", value_parser = clap::value_parser!(u8))]
     pow_difficulty: Option<u8>,
@@ -11485,12 +11401,9 @@ pub struct HandshakeUpdateArgs {
     /// Override the `PoW` ticket TTL (seconds).
     #[arg(long = "pow-ttl", value_parser = clap::value_parser!(u64))]
     pow_ttl: Option<u64>,
-    /// Enable the Argon2 puzzle gate for handshake admission (`--pow-puzzle-disable` clears).
-    #[arg(long = "pow-puzzle-enable", action = clap::ArgAction::SetTrue, conflicts_with = "pow_puzzle_disable")]
+    /// Enable the Argon2 puzzle gate for handshake admission.
+    #[arg(long = "pow-puzzle-enable", action = clap::ArgAction::SetTrue)]
     pow_puzzle_enable: bool,
-    /// Disable the Argon2 puzzle gate.
-    #[arg(long = "pow-puzzle-disable", action = clap::ArgAction::SetTrue, conflicts_with = "pow_puzzle_enable")]
-    pow_puzzle_disable: bool,
     /// Override the puzzle memory cost (KiB).
     #[arg(long = "pow-puzzle-memory", value_parser = clap::value_parser!(u32))]
     pow_puzzle_memory: Option<u32>,
@@ -11504,30 +11417,11 @@ pub struct HandshakeUpdateArgs {
     #[arg(
         long = "require-sm-handshake-match",
         action = clap::ArgAction::SetTrue,
-        conflicts_with = "allow_sm_handshake_mismatch"
     )]
     require_sm_handshake_match: bool,
-    /// Allow mismatched SM helper availability.
-    #[arg(
-        long = "allow-sm-handshake-mismatch",
-        action = clap::ArgAction::SetTrue,
-        conflicts_with = "require_sm_handshake_match"
-    )]
-    allow_sm_handshake_mismatch: bool,
     /// Require peers to match the OpenSSL preview flag.
-    #[arg(
-        long = "require-sm-openssl-preview-match",
-        action = clap::ArgAction::SetTrue,
-        conflicts_with = "allow_sm_openssl_preview_mismatch"
-    )]
+    #[arg(long = "require-sm-openssl-preview-match", action = clap::ArgAction::SetTrue)]
     require_sm_openssl_preview_match: bool,
-    /// Allow mismatched OpenSSL preview flags.
-    #[arg(
-        long = "allow-sm-openssl-preview-mismatch",
-        action = clap::ArgAction::SetTrue,
-        conflicts_with = "require_sm_openssl_preview_match"
-    )]
-    allow_sm_openssl_preview_mismatch: bool,
 }
 
 impl HandshakeUpdateArgs {
@@ -11618,9 +11512,6 @@ impl HandshakeUpdateArgs {
         if self.pow_required {
             pow_update.required = Some(true);
         }
-        if self.pow_optional {
-            pow_update.required = Some(false);
-        }
         if let Some(value) = self.pow_difficulty {
             pow_update.difficulty = Some(value);
         }
@@ -11634,7 +11525,6 @@ impl HandshakeUpdateArgs {
             pow_update.ticket_ttl_secs = Some(value);
         }
         let mut pow_touched = self.pow_required
-            || self.pow_optional
             || self.pow_difficulty.is_some()
             || self.pow_max_future_skew.is_some()
             || self.pow_min_ttl.is_some()
@@ -11642,9 +11532,6 @@ impl HandshakeUpdateArgs {
         let mut puzzle_update = SoranetHandshakePuzzleUpdate::default();
         if self.pow_puzzle_enable {
             puzzle_update.enabled = Some(true);
-        }
-        if self.pow_puzzle_disable {
-            puzzle_update.enabled = Some(false);
         }
         if let Some(value) = self.pow_puzzle_memory {
             puzzle_update.memory_kib = Some(value);
@@ -11656,7 +11543,6 @@ impl HandshakeUpdateArgs {
             puzzle_update.lanes = Some(value);
         }
         let puzzle_touched = self.pow_puzzle_enable
-            || self.pow_puzzle_disable
             || self.pow_puzzle_memory.is_some()
             || self.pow_puzzle_time.is_some()
             || self.pow_puzzle_lanes.is_some();
@@ -11685,19 +11571,11 @@ impl HandshakeUpdateArgs {
         if self.require_sm_handshake_match {
             network_update.require_sm_handshake_match = Some(true);
         }
-        if self.allow_sm_handshake_mismatch {
-            network_update.require_sm_handshake_match = Some(false);
-        }
         if self.require_sm_openssl_preview_match {
             network_update.require_sm_openssl_preview_match = Some(true);
         }
-        if self.allow_sm_openssl_preview_mismatch {
-            network_update.require_sm_openssl_preview_match = Some(false);
-        }
-        let network_touched = self.require_sm_handshake_match
-            || self.allow_sm_handshake_mismatch
-            || self.require_sm_openssl_preview_match
-            || self.allow_sm_openssl_preview_mismatch;
+        let network_touched =
+            self.require_sm_handshake_match || self.require_sm_openssl_preview_match;
         let network_update = if network_touched {
             Some(network_update)
         } else {
@@ -13696,6 +13574,7 @@ impl Run for GatewayDirectModeEnableArgs {
             .wrap_err_with(|| format!("failed to read plan from `{}`", self.plan.display()))?;
         let plan: DirectModePlanOutput =
             norito::json::from_slice(&bytes).wrap_err("failed to parse plan JSON")?;
+        validate_direct_mode_enable_plan(&plan)?;
         context.println(render_direct_mode_enable_snippet(&plan))
     }
 }
@@ -13878,13 +13757,133 @@ fn capability_type_label(cap: CapabilityType) -> &'static str {
     }
 }
 
+fn validate_direct_mode_enable_plan(plan: &DirectModePlanOutput) -> Result<()> {
+    let provider_id = parse_hex_array::<32>(&plan.provider_id_hex, "provider_id_hex")?;
+    let canonical_provider_id_hex = encode(provider_id);
+    if plan.provider_id_hex != canonical_provider_id_hex {
+        return Err(eyre!(
+            "provider_id_hex must be canonical lowercase hex; expected {canonical_provider_id_hex}"
+        ));
+    }
+
+    let manifest_digest = parse_hex_array::<32>(&plan.manifest_digest_hex, "manifest_digest_hex")?;
+    let canonical_manifest_digest_hex = encode(manifest_digest);
+    if plan.manifest_digest_hex != canonical_manifest_digest_hex {
+        return Err(eyre!(
+            "manifest_digest_hex must be canonical lowercase hex; expected {canonical_manifest_digest_hex}"
+        ));
+    }
+
+    if plan.chain_id.trim().is_empty() {
+        return Err(eyre!("chain_id must not be empty"));
+    }
+    if !plan.capabilities.requires_manifest_envelope {
+        return Err(eyre!(
+            "direct-mode enable requires capabilities.requires_manifest_envelope=true; regenerate the manifest with envelope enforcement metadata"
+        ));
+    }
+    if !plan.capabilities.direct_car_supported {
+        return Err(eyre!(
+            "direct-mode enable requires capabilities.direct_car_supported=true; advertise capability.direct_car=true before emitting config"
+        ));
+    }
+
+    let host_input = HostMappingInput {
+        chain_id: plan.chain_id.as_str(),
+        provider_id: &provider_id,
+    };
+    let expected_hosts = host_input.to_summary();
+    if plan.hosts.canonical != expected_hosts.canonical {
+        return Err(eyre!(
+            "direct-mode plan canonical host mismatch: expected `{}`, got `{}`",
+            expected_hosts.canonical,
+            plan.hosts.canonical
+        ));
+    }
+    if plan.hosts.vanity != expected_hosts.vanity {
+        return Err(eyre!(
+            "direct-mode plan vanity host mismatch: expected `{}`, got `{}`",
+            expected_hosts.vanity,
+            plan.hosts.vanity
+        ));
+    }
+
+    let expected_direct_car = host_input
+        .direct_car_locator("https", &canonical_manifest_digest_hex)
+        .wrap_err("failed to derive expected direct-CAR locators")?;
+    validate_direct_mode_url(
+        &plan.direct_car.canonical_url,
+        "direct_car.canonical_url",
+        &expected_direct_car.canonical_url,
+    )?;
+    validate_direct_mode_url(
+        &plan.direct_car.vanity_url,
+        "direct_car.vanity_url",
+        &expected_direct_car.vanity_url,
+    )
+}
+
+fn validate_direct_mode_url(value: &str, label: &str, expected: &str) -> Result<()> {
+    let parsed = reqwest::Url::parse(value)
+        .wrap_err_with(|| format!("{label} must be a valid direct-CAR URL"))?;
+    if parsed.scheme() != "https" {
+        return Err(eyre!("{label} must use https"));
+    }
+    if parsed.host_str().is_none() {
+        return Err(eyre!("{label} must include a host"));
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(eyre!("{label} must not include userinfo"));
+    }
+    if parsed.query().is_some() || parsed.fragment().is_some() {
+        return Err(eyre!(
+            "{label} must not include query or fragment components"
+        ));
+    }
+    if value != expected {
+        return Err(eyre!(
+            "{label} mismatch: expected `{expected}`, got `{value}`"
+        ));
+    }
+    Ok(())
+}
+
+fn escape_toml_basic_string(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\u{08}' => escaped.push_str("\\b"),
+            '\u{0c}' => escaped.push_str("\\f"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            ch if ch.is_control() => {
+                write!(&mut escaped, "\\u{:04X}", ch as u32)
+                    .expect("writing to a String cannot fail");
+            }
+            ch => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
 fn render_direct_mode_enable_snippet(plan: &DirectModePlanOutput) -> String {
+    let provider = escape_toml_basic_string(&plan.provider_id_hex);
+    let chain = escape_toml_basic_string(&plan.chain_id);
+    let canonical = escape_toml_basic_string(&plan.hosts.canonical);
+    let vanity = escape_toml_basic_string(&plan.hosts.vanity);
+    let direct_canonical = escape_toml_basic_string(&plan.direct_car.canonical_url);
+    let direct_vanity = escape_toml_basic_string(&plan.direct_car.vanity_url);
+    let digest = escape_toml_basic_string(&plan.manifest_digest_hex);
+
     format!(
-        r#"# Direct-mode configuration snippet (generated)
+        r#"# Direct-mode configuration snippet (generated; enforcement remains enabled)
 [torii.sorafs_gateway]
-require_manifest_envelope = false
-enforce_admission = false
-enforce_capabilities = false
+require_manifest_envelope = true
+enforce_admission = true
+enforce_capabilities = true
 
 [torii.sorafs_gateway.direct_mode]
 provider_id_hex = "{provider}"
@@ -13895,13 +13894,6 @@ direct_car_canonical = "{direct_canonical}"
 direct_car_vanity = "{direct_vanity}"
 manifest_digest_hex = "{digest}"
 "#,
-        provider = plan.provider_id_hex,
-        chain = plan.chain_id,
-        canonical = plan.hosts.canonical,
-        vanity = plan.hosts.vanity,
-        direct_canonical = plan.direct_car.canonical_url,
-        direct_vanity = plan.direct_car.vanity_url,
-        digest = plan.manifest_digest_hex,
     )
 }
 
@@ -13955,9 +13947,6 @@ pub struct GatewayUpdateDenylistArgs {
     /// Permit replacing existing descriptors when merging additions.
     #[arg(long = "allow-replacement")]
     pub allow_replacement: bool,
-    /// Do not error if a requested removal is missing from the base.
-    #[arg(long = "allow-missing-removals")]
-    pub allow_missing_removals: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -14068,9 +14057,9 @@ impl Run for GatewayUpdateDenylistArgs {
             for descriptor in unique {
                 if entries.remove(&descriptor).is_some() {
                     removed += 1;
-                } else if !self.allow_missing_removals {
+                } else {
                     return Err(eyre!(
-                        "descriptor `{descriptor}` not found in base denylist; pass --allow-missing-removals to continue"
+                        "descriptor `{descriptor}` not found in base denylist"
                     ));
                 }
             }
@@ -16203,7 +16192,6 @@ mod gateway_tests {
             label: Some("test-run".to_owned()),
             force: false,
             allow_replacement: false,
-            allow_missing_removals: false,
         };
 
         let mut ctx = TestContext::new();
@@ -16277,7 +16265,6 @@ mod gateway_tests {
             label: None,
             force: true,
             allow_replacement: false,
-            allow_missing_removals: false,
         };
 
         let mut ctx = TestContext::new();
@@ -16285,6 +16272,52 @@ mod gateway_tests {
         assert!(
             result.is_err(),
             "duplicate descriptor should be rejected without allow-replacement"
+        );
+    }
+
+    #[test]
+    fn denylist_update_rejects_missing_removal_descriptor() {
+        let temp = TempDir::new().expect("tempdir");
+        let base_path = temp.path().join("base.json");
+        let output_path = temp.path().join("updated.json");
+
+        let base = r#"
+        [
+            {
+                "kind": "provider",
+                "provider_id_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "policy_tier": "standard",
+                "issued_at": "2026-02-01T00:00:00Z",
+                "expires_at": "2026-03-01T00:00:00Z"
+            }
+        ]
+        "#;
+        fs::write(&base_path, base).expect("write base denylist");
+
+        let args = GatewayUpdateDenylistArgs {
+            base_path,
+            add_paths: Vec::new(),
+            remove_descriptors: vec![format!("provider:{}", "b".repeat(64))],
+            output_path: Some(output_path.clone()),
+            snapshot_out: None,
+            snapshot_norito_out: None,
+            evidence_out: None,
+            label: None,
+            force: false,
+            allow_replacement: false,
+        };
+
+        let mut ctx = TestContext::new();
+        let err = args
+            .run(&mut ctx)
+            .expect_err("missing removal descriptor must abort");
+        assert!(
+            err.to_string().contains("not found in base denylist"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !output_path.exists(),
+            "missing removal descriptor must fail before writing output"
         );
     }
 
@@ -17037,7 +17070,6 @@ fn transparency_publication_canary_evidence_json<F>(
     torii_url: &str,
     cycle_ids: &[String],
     limit: Option<u32>,
-    require_publisher_identity: bool,
     fetch: &mut F,
 ) -> Result<Value>
 where
@@ -17049,7 +17081,6 @@ where
         "cycles_list",
         None,
         limit,
-        require_publisher_identity,
         fetch,
     )?);
     for cycle_id in cycle_ids {
@@ -17058,7 +17089,6 @@ where
             "cycle_publication",
             Some(cycle_id),
             limit,
-            require_publisher_identity,
             fetch,
         )?);
     }
@@ -17100,10 +17130,7 @@ where
         "cycle_detail_probe_count".into(),
         Value::from(cycle_ids.len() as u64),
     );
-    evidence.insert(
-        "publisher_identity_required".into(),
-        Value::Bool(require_publisher_identity),
-    );
+    evidence.insert("publisher_identity_required".into(), Value::Bool(true));
     evidence.insert("payload_bytes_included".into(), Value::Bool(false));
     evidence.insert("publication_bodies_included".into(), Value::Bool(false));
     evidence.insert("private_payloads_included".into(), Value::Bool(false));
@@ -17116,7 +17143,6 @@ fn transparency_publication_canary_probe_route<F>(
     route_name: &'static str,
     cycle_id: Option<&str>,
     limit: Option<u32>,
-    require_publisher_identity: bool,
     fetch: &mut F,
 ) -> Result<Value>
 where
@@ -17193,10 +17219,8 @@ where
     } else {
         true
     };
-    let passed = schema_ok
-        && anchor_metadata_present
-        && verification_valid
-        && (!require_publisher_identity || publisher_identity_present);
+    let passed =
+        schema_ok && anchor_metadata_present && verification_valid && publisher_identity_present;
 
     route.insert("passed".into(), Value::Bool(passed));
     route.insert("schema".into(), Value::from(actual_schema.to_string()));
@@ -22129,7 +22153,7 @@ mod tests {
     fn handshake_update_accepts_pow_overrides() {
         let args = HandshakeUpdateArgs {
             descriptor_commit: Some("aa".into()),
-            pow_optional: true,
+            pow_required: true,
             pow_difficulty: Some(7),
             pow_max_future_skew: Some(120),
             ..Default::default()
@@ -22137,7 +22161,7 @@ mod tests {
         let update = args.into_update().expect("update should succeed");
         assert_eq!(update.descriptor_commit_hex.as_deref(), Some("aa"));
         let pow = update.pow.expect("pow overrides present");
-        assert_eq!(pow.required, Some(false));
+        assert_eq!(pow.required, Some(true));
         assert_eq!(pow.difficulty, Some(7));
         assert_eq!(pow.max_future_skew_secs, Some(120));
         assert!(pow.min_ticket_ttl_secs.is_none());
@@ -22484,6 +22508,13 @@ mod tests {
 
     fn read_state(path: &Path) -> IncentivesState {
         load_incentives_state(path).expect("decode incentives state")
+    }
+
+    fn write_state_without_budget(path: &Path) {
+        let config_file = write_reward_config_with_budget(None);
+        let reward_config = read_reward_config(config_file.path()).expect("reward config");
+        let state = IncentivesState::new(&reward_config, sample_account_id("treasury"));
+        save_incentives_state(path, &state).expect("write incentives state");
     }
 
     #[test]
@@ -23329,7 +23360,6 @@ mod tests {
             cycle_ids: vec![cycle_id],
             limit: Some(3),
             timeout_secs: 1,
-            allow_missing_publisher_identity: false,
             out: Some(out.clone()),
         };
         let mut ctx = TestContext::new();
@@ -23401,7 +23431,6 @@ mod tests {
             cycle_ids: vec!["not-a-cycle-id".to_string()],
             limit: Some(3),
             timeout_secs: 1,
-            allow_missing_publisher_identity: false,
             out: None,
         };
         let mut ctx = TestContext::new();
@@ -23426,7 +23455,6 @@ mod tests {
             cycle_ids: Vec::new(),
             limit: Some(3),
             timeout_secs: 1,
-            allow_missing_publisher_identity: false,
             out: None,
         };
         let mut ctx = TestContext::new();
@@ -23463,7 +23491,6 @@ mod tests {
             cycle_ids: Vec::new(),
             limit: Some(3),
             timeout_secs: 1,
-            allow_missing_publisher_identity: false,
             out: None,
         };
         let mut ctx = TestContext::new();
@@ -28438,26 +28465,49 @@ mod tests {
         assert_eq!(metadata.len(), 2);
     }
 
-    #[test]
-    fn direct_mode_enable_renders_snippet() {
-        let plan = DirectModePlanOutput::from_components(
-            "nexus",
-            [0x33; 32],
-            "feedface".to_owned(),
-            HostMappingSummary {
-                canonical: "33333333.nexus.sorafs".to_owned(),
-                vanity: "3333.nexus.direct.sorafs".to_owned(),
-            },
-            DirectCarLocator {
-                canonical_url: "https://33333333.nexus.sorafs/direct/v1/car/feedface".to_owned(),
-                vanity_url: "https://3333.nexus.direct.sorafs/direct/v1/car/feedface".to_owned(),
-            },
-            ManifestCapabilitySummary::default(),
-        );
+    fn direct_mode_enable_capabilities() -> ManifestCapabilitySummary {
+        ManifestCapabilitySummary {
+            direct_car_supported: true,
+            ..ManifestCapabilitySummary::default()
+        }
+    }
+
+    fn direct_mode_enable_test_plan(
+        capabilities: ManifestCapabilitySummary,
+    ) -> DirectModePlanOutput {
+        let chain_id = "nexus";
+        let provider = [0x33; 32];
+        let manifest_digest_hex = "fe".repeat(32);
+        let host_input = HostMappingInput {
+            chain_id,
+            provider_id: &provider,
+        };
+        let hosts = host_input.to_summary();
+        let direct_car = host_input
+            .direct_car_locator("https", &manifest_digest_hex)
+            .expect("direct CAR locator");
+        DirectModePlanOutput::from_components(
+            chain_id,
+            provider,
+            manifest_digest_hex,
+            hosts,
+            direct_car,
+            capabilities,
+        )
+    }
+
+    fn write_direct_mode_plan(plan: &DirectModePlanOutput) -> NamedTempFile {
         let mut plan_file = NamedTempFile::new().expect("temp plan");
         plan_file
-            .write_all(&norito::json::to_vec(&plan).expect("serialize plan"))
+            .write_all(&norito::json::to_vec(plan).expect("serialize plan"))
             .expect("write plan");
+        plan_file
+    }
+
+    #[test]
+    fn direct_mode_enable_renders_snippet() {
+        let plan = direct_mode_enable_test_plan(direct_mode_enable_capabilities());
+        let plan_file = write_direct_mode_plan(&plan);
 
         let args = GatewayDirectModeEnableArgs {
             plan: plan_file.path().to_path_buf(),
@@ -28466,9 +28516,75 @@ mod tests {
         args.run(&mut ctx).expect("enable command runs");
         assert_eq!(ctx.outputs().len(), 1);
         let snippet = &ctx.outputs()[0];
-        assert!(snippet.contains("require_manifest_envelope = false"));
+        assert!(snippet.contains("require_manifest_envelope = true"));
+        assert!(snippet.contains("enforce_admission = true"));
+        assert!(snippet.contains("enforce_capabilities = true"));
+        assert!(!snippet.contains(" = false"));
         assert!(snippet.contains("direct_car_canonical"));
         assert!(snippet.contains(&plan.provider_id_hex));
+        let _: toml::Value = toml::from_str(snippet).expect("snippet must parse as TOML");
+    }
+
+    #[test]
+    fn direct_mode_enable_rejects_missing_direct_car_capability() {
+        let plan = direct_mode_enable_test_plan(ManifestCapabilitySummary::default());
+        let plan_file = write_direct_mode_plan(&plan);
+        let args = GatewayDirectModeEnableArgs {
+            plan: plan_file.path().to_path_buf(),
+        };
+        let mut ctx = TestContext::new();
+        let err = args
+            .run(&mut ctx)
+            .expect_err("missing direct-CAR capability must fail");
+        assert!(format!("{err:#}").contains("capabilities.direct_car_supported=true"));
+        assert!(ctx.outputs().is_empty());
+    }
+
+    #[test]
+    fn direct_mode_enable_rejects_manifest_envelope_disabled() {
+        let capabilities = ManifestCapabilitySummary {
+            requires_manifest_envelope: false,
+            direct_car_supported: true,
+            ..ManifestCapabilitySummary::default()
+        };
+        let plan = direct_mode_enable_test_plan(capabilities);
+        let plan_file = write_direct_mode_plan(&plan);
+        let args = GatewayDirectModeEnableArgs {
+            plan: plan_file.path().to_path_buf(),
+        };
+        let mut ctx = TestContext::new();
+        let err = args
+            .run(&mut ctx)
+            .expect_err("disabled envelope enforcement must fail");
+        assert!(format!("{err:#}").contains("requires_manifest_envelope=true"));
+        assert!(ctx.outputs().is_empty());
+    }
+
+    #[test]
+    fn direct_mode_enable_rejects_tampered_direct_car_locator() {
+        let mut plan = direct_mode_enable_test_plan(direct_mode_enable_capabilities());
+        plan.direct_car.canonical_url = format!(
+            "https://evil.example/direct/v1/car/{}",
+            plan.manifest_digest_hex
+        );
+        let plan_file = write_direct_mode_plan(&plan);
+        let args = GatewayDirectModeEnableArgs {
+            plan: plan_file.path().to_path_buf(),
+        };
+        let mut ctx = TestContext::new();
+        let err = args
+            .run(&mut ctx)
+            .expect_err("tampered direct-CAR locator must fail");
+        assert!(format!("{err:#}").contains("direct_car.canonical_url mismatch"));
+        assert!(ctx.outputs().is_empty());
+    }
+
+    #[test]
+    fn direct_mode_toml_string_escape_blocks_config_injection() {
+        assert_eq!(
+            escape_toml_basic_string("nexus\"\nenforce_admission = false\\"),
+            "nexus\\\"\\nenforce_admission = false\\\\"
+        );
     }
 
     #[test]
@@ -28878,7 +28994,6 @@ mod tests {
             config: config_file.path().to_path_buf(),
             treasury_account: sample_account_literal("treasury"),
             force: false,
-            allow_missing_budget_approval: true,
         };
         let mut init_ctx = TestContext::new();
         init_args.run(&mut init_ctx).expect("init command runs");
@@ -28999,7 +29114,6 @@ mod tests {
             metrics_dir: metrics_dir.clone(),
             report_out: None,
             pretty: true,
-            allow_missing_budget_approval: false,
         };
 
         let mut ctx = TestContext::new();
@@ -29026,6 +29140,36 @@ mod tests {
                 .iter()
                 .any(|relay| relay["warning_epochs"].as_u64() == Some(1))
         );
+    }
+
+    #[test]
+    fn incentives_service_shadow_run_rejects_state_without_budget_id() {
+        let tmp_dir = tempfile::tempdir().expect("temp dir");
+        let state_path = tmp_dir.path().join("payout_state.json");
+        write_state_without_budget(&state_path);
+
+        let metrics_dir = tmp_dir.path().join("metrics");
+        fs::create_dir_all(&metrics_dir).expect("create metrics dir");
+        let config_path = tmp_dir.path().join("shadow_config.json");
+        fs::write(&config_path, r#"{"relays": []}"#).expect("write config");
+
+        let args = IncentivesServiceShadowRunArgs {
+            state: state_path,
+            config: config_path,
+            metrics_dir,
+            report_out: None,
+            pretty: true,
+        };
+
+        let mut ctx = TestContext::new();
+        let err = args
+            .run(&mut ctx)
+            .expect_err("shadow run must require budget approval id");
+        assert!(
+            err.to_string().contains("budget_approval_id"),
+            "unexpected error: {err}"
+        );
+        assert!(ctx.outputs().is_empty());
     }
 
     #[test]
@@ -29102,31 +29246,36 @@ mod tests {
     }
 
     #[test]
-    fn incentives_service_process_requires_budget_id() {
-        let mut config = sample_reward_config_json();
-        if let Some(object) = config.as_object_mut() {
-            object.insert("budget_approval_id".to_string(), Value::Null);
-        }
-
-        let config_file = NamedTempFile::new().expect("config file");
-        fs::write(
-            config_file.path(),
-            norito::json::to_vec_pretty(&config).expect("encode config"),
-        )
-        .expect("write config");
-
+    fn incentives_service_init_rejects_missing_budget_id() {
+        let config_file = write_reward_config_with_budget(None);
         let tmp_dir = tempfile::tempdir().expect("temp dir");
         let state_path = tmp_dir.path().join("payout_state.json");
 
-        let init_args = IncentivesServiceInitArgs {
+        let args = IncentivesServiceInitArgs {
             state: state_path.clone(),
             config: config_file.path().to_path_buf(),
             treasury_account: sample_account_literal("treasury"),
             force: false,
-            allow_missing_budget_approval: true,
         };
-        let mut init_ctx = TestContext::new();
-        init_args.run(&mut init_ctx).expect("init command runs");
+        let mut ctx = TestContext::new();
+        let err = args
+            .run(&mut ctx)
+            .expect_err("init must require budget approval id");
+        assert!(
+            err.to_string().contains("budget_approval_id"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !state_path.exists(),
+            "init must not write state without budget approval"
+        );
+    }
+
+    #[test]
+    fn incentives_service_process_rejects_state_without_budget_id() {
+        let tmp_dir = tempfile::tempdir().expect("temp dir");
+        let state_path = tmp_dir.path().join("payout_state.json");
+        write_state_without_budget(&state_path);
 
         let metrics_file = write_metrics_file(&sample_metrics());
         let bond_file = write_bond_file(&sample_bond_entry(2_000));
@@ -29163,7 +29312,6 @@ mod tests {
             config: config_file.path().to_path_buf(),
             treasury_account: sample_account_literal("treasury"),
             force: false,
-            allow_missing_budget_approval: true,
         };
         let mut init_ctx = TestContext::new();
         init_args.run(&mut init_ctx).expect("init command runs");
@@ -29284,7 +29432,6 @@ mod tests {
             config: config_file.path().to_path_buf(),
             treasury_account: sample_account_literal("treasury"),
             force: false,
-            allow_missing_budget_approval: false,
         };
 
         let mut ctx = TestContext::new();
@@ -29313,7 +29460,6 @@ mod tests {
             config: config_file.path().to_path_buf(),
             treasury_account: sample_account_literal("treasury"),
             force: false,
-            allow_missing_budget_approval: true,
         };
         let mut init_ctx = TestContext::new();
         init_args.run(&mut init_ctx).expect("init command runs");
@@ -29358,20 +29504,10 @@ mod tests {
     }
 
     #[test]
-    fn incentives_daemon_rejects_missing_budget_without_override() {
-        let config_file = write_reward_config_with_budget(None);
+    fn incentives_daemon_rejects_state_without_budget_id() {
         let tmp_dir = tempfile::tempdir().expect("temp dir");
         let state_path = tmp_dir.path().join("payout_state.json");
-
-        let init_args = IncentivesServiceInitArgs {
-            state: state_path.clone(),
-            config: config_file.path().to_path_buf(),
-            treasury_account: sample_account_literal("treasury"),
-            force: false,
-            allow_missing_budget_approval: true,
-        };
-        let mut init_ctx = TestContext::new();
-        init_args.run(&mut init_ctx).expect("init command runs");
+        write_state_without_budget(&state_path);
 
         let metrics_dir = tmp_dir.path().join("metrics");
         fs::create_dir_all(&metrics_dir).expect("create metrics dir");
@@ -29413,7 +29549,6 @@ mod tests {
             poll_interval: 1,
             once: true,
             pretty: true,
-            allow_missing_budget_approval: false,
         };
 
         let mut ctx = TestContext::new();
@@ -29427,114 +29562,7 @@ mod tests {
     }
 
     #[test]
-    fn incentives_daemon_allows_missing_budget_with_override() {
-        let config_file = write_reward_config_with_budget(None);
-        let tmp_dir = tempfile::tempdir().expect("temp dir");
-        let state_path = tmp_dir.path().join("payout_state.json");
-
-        let init_args = IncentivesServiceInitArgs {
-            state: state_path.clone(),
-            config: config_file.path().to_path_buf(),
-            treasury_account: sample_account_literal("treasury"),
-            force: false,
-            allow_missing_budget_approval: true,
-        };
-        let mut init_ctx = TestContext::new();
-        init_args.run(&mut init_ctx).expect("init command runs");
-
-        let metrics_dir = tmp_dir.path().join("metrics");
-        fs::create_dir_all(&metrics_dir).expect("create metrics dir");
-
-        let metrics = sample_metrics();
-        let relay_hex = relay_id_to_hex(metrics.relay_id);
-        let metrics_path =
-            metrics_dir.join(format!("relay-{relay_hex}-epoch-{}.to", metrics.epoch));
-        fs::write(
-            &metrics_path,
-            to_bytes(&metrics).expect("encode metrics snapshot"),
-        )
-        .expect("write metrics");
-
-        let bond_entry = sample_bond_entry(2_000);
-        let bond_file = write_bond_file(&bond_entry);
-
-        let mut relay_entry = Map::new();
-        relay_entry.insert("relay_id".to_string(), Value::String(relay_hex));
-        relay_entry.insert(
-            "beneficiary".to_string(),
-            Value::String(sample_account_literal("relay-a")),
-        );
-        relay_entry.insert(
-            "bond_path".to_string(),
-            Value::String(bond_file.path().display().to_string()),
-        );
-
-        let mut root = Map::new();
-        root.insert(
-            "relays".to_string(),
-            Value::Array(vec![Value::Object(relay_entry)]),
-        );
-        let config_path = tmp_dir.path().join("daemon_config.json");
-        fs::write(
-            &config_path,
-            norito::json::to_vec_pretty(&root).expect("encode config"),
-        )
-        .expect("write config");
-
-        let daemon_args = IncentivesServiceDaemonArgs {
-            state: state_path,
-            config: config_path,
-            metrics_dir,
-            instruction_out_dir: None,
-            transfer_out_dir: None,
-            archive_dir: None,
-            poll_interval: 1,
-            once: true,
-            pretty: true,
-            allow_missing_budget_approval: true,
-        };
-
-        let mut ctx = TestContext::new();
-        daemon_args
-            .run(&mut ctx)
-            .expect("daemon run succeeds when enforcement disabled");
-        assert!(
-            !ctx.outputs().is_empty(),
-            "expected at least one daemon output entry"
-        );
-
-        let summary: norito::json::Value = ctx
-            .outputs()
-            .iter()
-            .find_map(|line| norito::json::from_str(line).ok())
-            .expect("parse daemon summary");
-        let processed_len = summary["processed"].as_array().map_or(0, Vec::len);
-        assert!(
-            processed_len >= 1,
-            "expected at least one processed payout, got {processed_len}"
-        );
-        assert!(
-            summary["missing_budget_approval"]
-                .as_u64()
-                .is_some_and(|count| count >= 1),
-            "expected at least one missing budget approval, got {:?}",
-            summary["missing_budget_approval"]
-        );
-        assert_eq!(summary["mismatched_budget_approval"].as_u64(), Some(0));
-        assert!(summary["expected_budget_approval"].as_str().is_none());
-        let processed = summary["processed"]
-            .as_array()
-            .expect("processed payouts present");
-        assert!(
-            processed
-                .first()
-                .and_then(|payout| payout.get("budget_approval_id"))
-                .is_some_and(Value::is_null)
-        );
-    }
-
-    #[test]
-    fn incentives_daemon_reports_budget_hash_with_allow_flag() {
+    fn incentives_daemon_reports_budget_hash() {
         let config_file = write_sample_reward_config_file();
         let tmp_dir = tempfile::tempdir().expect("temp dir");
         let state_path = tmp_dir.path().join("payout_state.json");
@@ -29544,7 +29572,6 @@ mod tests {
             config: config_file.path().to_path_buf(),
             treasury_account: sample_account_literal("treasury"),
             force: false,
-            allow_missing_budget_approval: true,
         };
         let mut init_ctx = TestContext::new();
         init_args.run(&mut init_ctx).expect("init command runs");
@@ -29598,7 +29625,6 @@ mod tests {
             poll_interval: 1,
             once: true,
             pretty: true,
-            allow_missing_budget_approval: true,
         };
 
         let mut ctx = TestContext::new();
@@ -29629,7 +29655,6 @@ mod tests {
             config: config_file.path().to_path_buf(),
             treasury_account: sample_account_literal("treasury"),
             force: false,
-            allow_missing_budget_approval: false,
         };
         let mut init_ctx = TestContext::new();
         init_args.run(&mut init_ctx).expect("init command runs");

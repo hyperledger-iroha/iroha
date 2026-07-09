@@ -28,12 +28,12 @@ Foydali CLI xabarlarini ko'rsatish uchun tajriba o'tkazayotganda `export RUST_LO
 
 ## 1. Deterministik moslamalarni yangilang
 
-Kanonik SF-1 bo'linish vektorlarini qayta tiklang. Buyruq shuningdek, imzolangan xabarni chiqaradi
-`--signing-key` taqdim etilganda manifest konvertlari; `--allow-unsigned` dan foydalaning
-faqat mahalliy rivojlanish davrida.
+Regenerate the canonical SF-1 chunking vectors. The command verifies the
+existing council signature file, or appends a signature when `--signing-key` is
+supplied.
 
 ```bash
-cargo run -p sorafs_chunker --bin export_vectors -- --allow-unsigned
+cargo run -p sorafs_chunker --bin export_vectors -- --signing-key=<ed25519-private-key-hex>
 ```
 
 Chiqishlar:
@@ -78,7 +78,7 @@ cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   --manifest-out=/tmp/docs.manifest \
   --manifest-signatures-out=/tmp/docs.manifest_signatures.json \
   --json-out=/tmp/docs.report.json \
-  --allow-unsigned
+  --council-signature=<signerhex>:<signaturehex>
 ```
 
 `/tmp/docs.report.json`ni ko'rib chiqing:
@@ -88,9 +88,9 @@ cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
 - `manifest.manifest_blake3` – manifest konvertda imzolangan BLAKE3 dayjesti.
 - `chunk_fetch_specs[]` - orkestrlar uchun buyurtma qilingan yuklash ko'rsatmalari.
 
-Haqiqiy imzolarni taqdim etishga tayyor bo'lgach, `--signing-key` va `--signer` qo'shing
-argumentlar. Buyruq yozishdan oldin har bir Ed25519 imzosini tekshiradi
-konvert.
+The `--council-signature` value must be a reviewed council signer public key and
+Ed25519 signature pair. The command verifies every Ed25519 signature before
+writing the envelope.
 
 ## 4. Ko'p provayderlarni qidirishni taqlid qiling
 

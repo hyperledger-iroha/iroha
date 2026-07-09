@@ -10,6 +10,8 @@
 dist/sorafs-gateway-compliance-rollout-evidence
 --summary-out
 dist/sorafs-gateway-compliance-rollout-evidence/rollout-summary.json
+--require-kind
+feed_promotion,controller_runtime,moderation_toggle,gateway_reload,enforcement_probe,honey_audit,appeal_override,transparency_publication,observability,governance_approval
 --now-unix
 1800009000
 --max-evidence-age-secs

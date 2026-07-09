@@ -23,11 +23,13 @@ use iroha_config::parameters::actual::{
 use iroha_crypto::HashOf;
 pub use iroha_data_model::block::consensus::{
     BlockSubject, CertPhase, Certificate, ConsensusBlockHeader, ConsensusGenesisParams, Evidence,
-    EvidenceKind, EvidencePayload, ExecKv, ExecWitness, ExecWitnessMsg, Height, NPOS_TAG,
-    NposGenesisParams, PERMISSIONED_TAG, PROTO_VERSION, PayloadRequest, PayloadResponse, Proposal,
-    Qc, QcAggregate, QcRef, QcVote, QuorumPolicy, RbcChunk, RbcChunkRequest, RbcDeliver, RbcInit,
-    RbcInitRequest, RbcReady, RbcReadySignature, Reconfig, RoundId, ValidatorIndex, ValidatorSetId,
-    View, VrfCommit, VrfReveal, default_chain_order_hash,
+    EvidenceKind, EvidencePayload, ExecKv, ExecWitness, ExecWitnessMsg, Height,
+    LaneBlockDescriptorV1, LaneBlockProposalPayloadHintV1, LaneBlockProposalV1, LaneBlockQcV1,
+    LaneBlockVoteBodyV1, NPOS_TAG, NposGenesisParams, PERMISSIONED_TAG, PROTO_VERSION,
+    PayloadRequest, PayloadResponse, Proposal, Qc, QcAggregate, QcRef, QcVote, QuorumPolicy,
+    RbcChunk, RbcChunkRequest, RbcDeliver, RbcInit, RbcInitRequest, RbcReady, RbcReadySignature,
+    Reconfig, RoundId, ValidatorIndex, ValidatorSetId, View, VrfCommit, VrfReveal,
+    default_chain_order_hash,
 };
 
 /// Commit-certificate phase (prepare/commit/new-view).

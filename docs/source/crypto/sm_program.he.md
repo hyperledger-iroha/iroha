@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/crypto/sm_program.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 08e2e1e4a54390d9142d6788aad2385e93282a33423b9fc7f3418e3633f3f86a
+source_hash: 2d65304e93effdc04fc35690fe3d4fb1c11ed5fd5963cdda9d84f617891b8ca5
 source_last_modified: "2026-01-23T18:50:10.586502+00:00"
 translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
@@ -80,7 +80,7 @@ translator: machine-google-reviewed
 מחובר ב-`WARN`, אך צמתי קונצנזוס צריכים לשמור על ברירת המחדל מופעלת כדי למנוע מקרי
 הבדל בין עמיתים מודעים ל-SM ובעלי מוגבלויות ל-SM.
 ה-CLI מציג את המיתגים הללו באמצעות עדכון לחיצת היד של 'iroha_cli app soafs
---allow-sm-handshake-mismatch` and `--allow-sm-openssl-preview-mismatch`, or the matching `--require-*`
+--require-sm-handshake-match` and `--require-sm-openssl-preview-match`, or the matching `--require-*`
 דגלים כדי להחזיר אכיפה קפדנית.#### תצוגה מקדימה של OpenSSL/Tongsuo (`sm-ffi-openssl`)
 - **היקף.** בונה תבנית תצוגה מקדימה בלבד של ספק (`OpenSslProvider`) המאמתת את זמינות זמן הריצה של OpenSSL וחושפת SM3 hashing מגובת OpenSSL, אימות SM2 ו-SM4-GCM הצפנה/פענוח, תוך שמירה על הסכמה. קבצי קונצנזוס בינאריים חייבים להמשיך להשתמש בנתיב RustCrypto; הקצה האחורי של FFI הוא בהחלט הסכמה לאימות קצה/חתימת טייסים.
 - **בנה דרישות מוקדמות.** הרכיב עם `cargo build -p iroha_crypto --features "sm sm-ffi-openssl"` והבטח את קישורי שרשרת הכלים נגד OpenSSL/Tongsuo 3.0+ (`libcrypto` עם תמיכה ב-SM2/SM3/SM4). קישור סטטי אינו מעודד; העדיפו ספריות דינמיות המנוהלות על ידי המפעיל.

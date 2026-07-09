@@ -4576,6 +4576,79 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
             norito::json::to_value(ownership).expect("serialize lane payload ownership to JSON")
         })
         .collect();
+    let committed_lane_blocks: Vec<Value> = wire
+        .committed_lane_blocks
+        .iter()
+        .map(|entry| {
+            let mut map = Map::new();
+            map.insert(
+                "lane_id".into(),
+                Value::from(u64::from(entry.lane_id.as_u32())),
+            );
+            map.insert(
+                "dataspace_id".into(),
+                Value::from(entry.dataspace_id.as_u64()),
+            );
+            map.insert(
+                "lane_block_height".into(),
+                Value::from(entry.lane_block_height),
+            );
+            map.insert("lane_block_view".into(), Value::from(entry.lane_block_view));
+            map.insert(
+                "descriptor_hash".into(),
+                Value::from(format!("{}", entry.descriptor_hash)),
+            );
+            map.insert(
+                "proposal_hash".into(),
+                Value::from(format!("{}", entry.proposal_hash)),
+            );
+            map.insert(
+                "execution_status".into(),
+                Value::from(entry.execution_status.clone()),
+            );
+            map.insert(
+                "executable_payload_available".into(),
+                Value::from(entry.executable_payload_available),
+            );
+            map.insert(
+                "subject_hash".into(),
+                Value::from(format!("{}", entry.subject_hash)),
+            );
+            map.insert(
+                "payload_ownership_hash".into(),
+                Value::from(format!("{}", entry.payload_ownership_hash)),
+            );
+            map.insert(
+                "rbc_instance_hash".into(),
+                Value::from(format!("{}", entry.rbc_instance_hash)),
+            );
+            map.insert("qc_mode_tag".into(), Value::from(entry.qc_mode_tag.clone()));
+            map.insert(
+                "validator_count".into(),
+                Value::from(u64::from(entry.validator_count)),
+            );
+            map.insert(
+                "min_quorum".into(),
+                Value::from(u64::from(entry.min_quorum)),
+            );
+            map.insert(
+                "prepare_qc_signer_count".into(),
+                Value::from(u64::from(entry.prepare_qc_signer_count)),
+            );
+            map.insert(
+                "commit_qc_signer_count".into(),
+                Value::from(u64::from(entry.commit_qc_signer_count)),
+            );
+            Value::Object(map)
+        })
+        .collect();
+    let lane_block_sessions: Vec<Value> = wire
+        .lane_block_sessions
+        .iter()
+        .map(|entry| {
+            norito::json::to_value(entry).expect("serialize lane-block session status to JSON")
+        })
+        .collect();
     let lane_governance: Vec<Value> = wire
         .lane_governance
         .iter()
@@ -4870,6 +4943,14 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
     root.insert(
         "lane_payload_ownerships".into(),
         Value::Array(lane_payload_ownerships),
+    );
+    root.insert(
+        "committed_lane_blocks".into(),
+        Value::Array(committed_lane_blocks),
+    );
+    root.insert(
+        "lane_block_sessions".into(),
+        Value::Array(lane_block_sessions),
     );
     root.insert(
         "lane_governance_sealed_total".into(),
@@ -19780,6 +19861,8 @@ mod tests {
             lane_settlement_commitments: vec![settlement],
             lane_relay_envelopes: vec![relay_envelope.clone()],
             lane_payload_ownerships: Vec::new(),
+            committed_lane_blocks: Vec::new(),
+            lane_block_sessions: Vec::new(),
             lane_governance_sealed_total: 0,
             lane_governance_sealed_aliases: Vec::new(),
             lane_governance: vec![iroha_data_model::block::consensus::SumeragiLaneGovernance {
@@ -23355,6 +23438,8 @@ mod tests {
             lane_settlement_commitments: vec![settlement],
             lane_relay_envelopes: vec![relay],
             lane_payload_ownerships: Vec::new(),
+            committed_lane_blocks: Vec::new(),
+            lane_block_sessions: Vec::new(),
             lane_governance_sealed_total: 0,
             lane_governance_sealed_aliases: Vec::new(),
             lane_governance: vec![iroha_data_model::block::consensus::SumeragiLaneGovernance {
@@ -23599,6 +23684,16 @@ mod tests {
             qc_mode_tag: relay_envelope
                 .lane_qc_mode_tag("iroha2-consensus::permissioned-sumeragi@v1"),
             accepted_candidate_indices: vec![0, 2],
+            accepted_transaction_hashes: vec![
+                Hash::prehashed([0xBA; Hash::LENGTH]),
+                Hash::prehashed([0xBB; Hash::LENGTH]),
+            ],
+            previous_lane_block_height: 2,
+            previous_lane_block_descriptor_hash: Some(Hash::prehashed([0xBF; Hash::LENGTH])),
+            lane_block_descriptor_hash: Some(Hash::prehashed([0xBE; Hash::LENGTH])),
+            lane_block_descriptor_validator_set: Vec::new(),
+            lane_block_descriptor_validator_count: 0,
+            lane_block_descriptor_min_quorum: 0,
             payload_ownership_hash: Hash::prehashed([0xBC; Hash::LENGTH]),
             rbc_instance_hash: Hash::prehashed([0xBD; Hash::LENGTH]),
         };
@@ -23834,6 +23929,8 @@ mod tests {
             lane_settlement_commitments: vec![settlement.clone()],
             lane_relay_envelopes: vec![relay_envelope.clone()],
             lane_payload_ownerships: vec![lane_payload_ownership.clone()],
+            committed_lane_blocks: Vec::new(),
+            lane_block_sessions: Vec::new(),
             lane_governance_sealed_total: 0,
             lane_governance_sealed_aliases: Vec::new(),
             lane_governance: vec![iroha_data_model::block::consensus::SumeragiLaneGovernance {
@@ -24270,6 +24367,14 @@ mod tests {
         assert_eq!(
             ownership_entries[0], expected_ownership,
             "lane payload ownership mismatch"
+        );
+        let committed_lane_blocks = root
+            .get("committed_lane_blocks")
+            .and_then(Value::as_array)
+            .expect("committed lane block entries array");
+        assert!(
+            committed_lane_blocks.is_empty(),
+            "sample status should project an empty committed lane block list"
         );
 
         let highest_qc = root

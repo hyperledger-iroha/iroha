@@ -946,9 +946,6 @@ pub mod bindings {
                     if hint.validator_lane {
                         obj.insert("validator_lane".into(), Value::Bool(true));
                     }
-                    if hint.masque_bypass_allowed {
-                        obj.insert("masque_bypass_allowed".into(), Value::Bool(true));
-                    }
                     Value::Object(obj)
                 })
                 .collect();
@@ -1010,14 +1007,9 @@ pub mod bindings {
                     "circuit_ttl_secs".into(),
                     Value::from(cfg.circuit_ttl().as_secs()),
                 );
-                circuit.insert(
-                    "validator_masque_bypass".into(),
-                    Value::Bool(cfg.validator_masque_bypass()),
-                );
             }
             None => {
                 circuit.insert("enabled".into(), Value::Bool(false));
-                circuit.insert("validator_masque_bypass".into(), Value::Bool(false));
             }
         }
         root.insert("circuit_manager".into(), Value::Object(circuit));
@@ -1147,15 +1139,27 @@ pub mod bindings {
                 .ok_or_else(|| ConfigJsonError::new("fetch must be a JSON object"))?;
 
             if let Some(verify_lengths) = fetch.get("verify_lengths") {
-                config.fetch.verify_lengths = verify_lengths.as_bool().ok_or_else(|| {
+                let verify_lengths = verify_lengths.as_bool().ok_or_else(|| {
                     ConfigJsonError::new("fetch.verify_lengths must be a boolean")
                 })?;
+                if !verify_lengths {
+                    return Err(ConfigJsonError::new(
+                        "fetch.verify_lengths must remain true in first-release SoraFS configs",
+                    ));
+                }
+                config.fetch.verify_lengths = true;
             }
 
             if let Some(verify_digests) = fetch.get("verify_digests") {
-                config.fetch.verify_digests = verify_digests.as_bool().ok_or_else(|| {
+                let verify_digests = verify_digests.as_bool().ok_or_else(|| {
                     ConfigJsonError::new("fetch.verify_digests must be a boolean")
                 })?;
+                if !verify_digests {
+                    return Err(ConfigJsonError::new(
+                        "fetch.verify_digests must remain true in first-release SoraFS configs",
+                    ));
+                }
+                config.fetch.verify_digests = true;
             }
 
             if let Some(retry_budget) = fetch.get("retry_budget") {
@@ -1279,17 +1283,12 @@ pub mod bindings {
                         .get("validator_lane")
                         .and_then(json::Value::as_bool)
                         .unwrap_or(false);
-                    let masque_bypass_allowed = obj
-                        .get("masque_bypass_allowed")
-                        .and_then(json::Value::as_bool)
-                        .unwrap_or(false);
                     let hint = RelayPathHint::from_hex(
                         relay_id_hex,
                         avg_rtt_ms,
                         region,
                         asn,
                         validator_lane,
-                        masque_bypass_allowed,
                     )
                     .map_err(ConfigJsonError::new)?;
                     hints.push(hint);
@@ -1659,22 +1658,14 @@ pub mod bindings {
                         .get("validator_lane")
                         .and_then(Value::as_bool)
                         .unwrap_or(false);
-                    let masque_bypass_allowed = obj
-                        .get("masque_bypass_allowed")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false);
 
-                    let hint = RelayPathHint::from_hex(
-                        relay_hex,
-                        avg_rtt_ms,
-                        region,
-                        asn,
-                        validator_lane,
-                        masque_bypass_allowed,
-                    )
-                    .map_err(|err| {
-                        ConfigJsonError::new(format!("relay_path_hints[{index}] is invalid: {err}"))
-                    })?;
+                    let hint =
+                        RelayPathHint::from_hex(relay_hex, avg_rtt_ms, region, asn, validator_lane)
+                            .map_err(|err| {
+                                ConfigJsonError::new(format!(
+                                    "relay_path_hints[{index}] is invalid: {err}"
+                                ))
+                            })?;
                     hints.push(hint);
                 }
                 config.relay_path_hints = hints;
@@ -1839,14 +1830,17 @@ pub mod bindings {
                         "circuit_manager.circuit_ttl_secs must be at least 1 second",
                     ));
                 }
-                let masque_bypass = circuit_obj
+                if circuit_obj
                     .get("validator_masque_bypass")
                     .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                config.circuit_manager = Some(
-                    CircuitManagerConfig::new(Duration::from_secs(ttl_secs))
-                        .with_validator_masque_bypass(masque_bypass),
-                );
+                    .unwrap_or(false)
+                {
+                    return Err(ConfigJsonError::new(
+                        "circuit_manager.validator_masque_bypass is not supported in the first release",
+                    ));
+                }
+                config.circuit_manager =
+                    Some(CircuitManagerConfig::new(Duration::from_secs(ttl_secs)));
             } else {
                 config.circuit_manager = None;
             }
@@ -5705,6 +5699,9 @@ pub enum GatewayOrchestratorError {
     /// Scoreboard excluded all providers, leaving no candidates for streaming.
     #[error("no eligible providers available for SoraFS fetch")]
     NoEligibleProviders,
+    /// Integrity verification was disabled by an in-memory config.
+    #[error("SoraFS fetch integrity verification must remain enabled")]
+    IntegrityVerificationDisabled,
     /// Underlying orchestrator failed during scoreboard construction or fetch.
     #[error(transparent)]
     Orchestrator(#[from] OrchestratorError),
@@ -5809,10 +5806,12 @@ pub async fn fetch_via_gateway(
                 .map_or(limit, |existing| existing.min(limit)),
         );
     }
+    if !config.fetch.verify_lengths || !config.fetch.verify_digests {
+        return Err(GatewayOrchestratorError::IntegrityVerificationDisabled);
+    }
 
     let telemetry_snapshot = telemetry.map_or_else(TelemetrySnapshot::default, Clone::clone);
 
-    let should_verify_manifest = config.fetch.verify_lengths || config.fetch.verify_digests;
     let orchestrator = Orchestrator::new(config);
     let scoreboard = orchestrator.build_scoreboard(plan, &metadata, &telemetry_snapshot)?;
 
@@ -5830,13 +5829,11 @@ pub async fn fetch_via_gateway(
         .await
         .map_err(GatewayOrchestratorError::from)?;
 
-    if should_verify_manifest {
-        let gateway_manifest = context.fetch_manifest().await?;
-        let verification_context = ManifestVerificationContext::from(&gateway_manifest);
-        session
-            .verify_against_manifest(plan, verification_context)
-            .map_err(GatewayOrchestratorError::from)?;
-    }
+    let gateway_manifest = context.fetch_manifest().await?;
+    let verification_context = ManifestVerificationContext::from(&gateway_manifest);
+    session
+        .verify_against_manifest(plan, verification_context)
+        .map_err(GatewayOrchestratorError::from)?;
 
     Ok(session)
 }
@@ -6593,7 +6590,7 @@ mod tests {
     }
 
     #[test]
-    fn config_json_roundtrip_includes_path_hints_and_masque_bypass() {
+    fn config_json_roundtrip_includes_path_hints_and_circuit_ttl() {
         let relay_id = [0x11; 32];
         let hints = vec![RelayPathHint {
             relay_id,
@@ -6601,21 +6598,37 @@ mod tests {
             region: Some("eu-central".to_string()),
             asn: Some(64_600),
             validator_lane: true,
-            masque_bypass_allowed: true,
         }];
         let config = OrchestratorConfig::default()
             .with_relay_path_hints(hints.clone())
-            .with_circuit_manager(Some(
-                CircuitManagerConfig::new(Duration::from_secs(9))
-                    .with_validator_masque_bypass(true),
-            ));
+            .with_circuit_manager(Some(CircuitManagerConfig::new(Duration::from_secs(9))));
 
         let value = config_to_json(&config);
         let parsed = config_from_json(&value).expect("parse config json");
         assert_eq!(parsed.relay_path_hints, hints);
         let circuit = parsed.circuit_manager.expect("circuit manager");
-        assert!(circuit.validator_masque_bypass());
         assert_eq!(circuit.circuit_ttl(), Duration::from_secs(9));
+    }
+
+    #[test]
+    fn config_json_rejects_validator_masque_bypass() {
+        let value = norito::json!({
+            "circuit_manager": {
+                "enabled": true,
+                "circuit_ttl_secs": 9_u64,
+                "validator_masque_bypass": true
+            }
+        });
+
+        let err = match config_from_json(&value) {
+            Ok(_) => panic!("bypass must be rejected"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string()
+                .contains("validator_masque_bypass is not supported"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -9101,7 +9114,7 @@ mod tests {
         config.scoreboard.telemetry_grace_period = Duration::from_mins(10);
         config.scoreboard.persist_path = Some(PathBuf::from("/tmp/sorafs_scoreboard.json"));
         config.scoreboard.now_unix_secs = 1_700_000_000;
-        config.fetch.verify_lengths = false;
+        config.fetch.verify_lengths = true;
         config.fetch.verify_digests = true;
         config.fetch.per_chunk_retry_limit = Some(5);
         config.fetch.provider_failure_threshold = 2;
@@ -9116,7 +9129,6 @@ mod tests {
             region: Some("eu-west".to_string()),
             asn: Some(64500),
             validator_lane: true,
-            masque_bypass_allowed: true,
         }];
 
         let value = bindings::config_to_json(&config);
@@ -9170,7 +9182,30 @@ mod tests {
         assert_eq!(parsed_hint.region.as_deref(), Some("eu-west"));
         assert_eq!(parsed_hint.asn, Some(64500));
         assert!(parsed_hint.validator_lane);
-        assert!(parsed_hint.masque_bypass_allowed);
+    }
+
+    #[test]
+    fn config_json_rejects_disabled_fetch_integrity_verification() {
+        for field in ["verify_lengths", "verify_digests"] {
+            let mut value = bindings::config_to_json(&OrchestratorConfig::default());
+            let fetch = value
+                .as_object_mut()
+                .expect("config JSON should be an object")
+                .get_mut("fetch")
+                .expect("fetch config should be present")
+                .as_object_mut()
+                .expect("fetch config should be an object");
+            fetch.insert(field.to_string(), Value::Bool(false));
+
+            let err = match bindings::config_from_json(&value) {
+                Ok(_) => panic!("disabled fetch integrity verification must be rejected"),
+                Err(err) => err,
+            };
+            assert!(
+                err.to_string().contains(field),
+                "unexpected error for {field}: {err}"
+            );
+        }
     }
 
     #[cfg(feature = "local-quic-proxy")]

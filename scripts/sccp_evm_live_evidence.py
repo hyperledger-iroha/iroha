@@ -117,14 +117,25 @@ def _parse_hex32(value: str, *, label: str) -> bytes:
     return _parse_hex_bytes(value, label=label, byte_length=32)
 
 
+def _summary_has_exact_key(record: dict[Any, Any], field: str) -> bool:
+    return any(type(key) is str and key == field for key in record)
+
+
+def _summary_get_exact_key(record: dict[Any, Any], field: str) -> Any:
+    for key, value in record.items():
+        if type(key) is str and key == field:
+            return value
+    return None
+
+
 def _summary_hex_bytes(
-    record: dict[str, Any],
+    record: dict[Any, Any],
     field: str,
     *,
     label: str,
     byte_length: int,
 ) -> bytes:
-    value = record.get(field)
+    value = _summary_get_exact_key(record, field)
     if type(value) is not str:
         raise ValueError(f"{label} must be an exact hex string") from None
     try:
@@ -136,35 +147,35 @@ def _summary_hex_bytes(
     return raw
 
 
-def _summary_hex32(record: dict[str, Any], field: str, *, label: str) -> bytes:
+def _summary_hex32(record: dict[Any, Any], field: str, *, label: str) -> bytes:
     return _summary_hex_bytes(record, field, label=label, byte_length=32)
 
 
-def _summary_address(record: dict[str, Any], field: str, *, label: str) -> bytes:
+def _summary_address(record: dict[Any, Any], field: str, *, label: str) -> bytes:
     return _summary_hex_bytes(record, field, label=label, byte_length=20)
 
 
-def _summary_exact_string(record: dict[str, Any], field: str, *, label: str) -> str:
-    value = record.get(field)
+def _summary_exact_string(record: dict[Any, Any], field: str, *, label: str) -> str:
+    value = _summary_get_exact_key(record, field)
     if type(value) is not str or not value or value != value.strip():
         raise ValueError(f"{label} must be an exact non-empty string") from None
     return value
 
 
-def _summary_exact_u32(record: dict[str, Any], field: str, *, label: str) -> int:
-    value = record.get(field)
+def _summary_exact_u32(record: dict[Any, Any], field: str, *, label: str) -> int:
+    value = _summary_get_exact_key(record, field)
     if type(value) is not int or value < 0 or value > 0xFFFFFFFF:
         raise ValueError(f"{label} must be an exact u32 integer") from None
     return value
 
 
 def _summary_exact_positive_u64(
-    record: dict[str, Any],
+    record: dict[Any, Any],
     field: str,
     *,
     label: str,
 ) -> int:
-    value = record.get(field)
+    value = _summary_get_exact_key(record, field)
     if type(value) is not int or value <= 0 or value > 0xFFFFFFFFFFFFFFFF:
         raise ValueError(f"{label} must be an exact positive u64 integer") from None
     return value
@@ -264,7 +275,7 @@ def parse_block_tag(value: str) -> str:
 
 def _summary_block_tag(summary: dict[str, Any]) -> str:
     try:
-        return parse_block_tag(summary.get("block_tag"))
+        return parse_block_tag(_summary_get_exact_key(summary, "block_tag"))
     except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise ValueError("EVM block tag metadata is invalid") from None
 
@@ -1460,8 +1471,8 @@ def _collect_route_canary_transaction_evidence(
         opener=opener,
         timeout=timeout,
     )
-    expected_source_domain = destination.get("source_domain")
-    expected_target_domain = destination.get("target_domain")
+    expected_source_domain = _summary_get_exact_key(destination, "source_domain")
+    expected_target_domain = _summary_get_exact_key(destination, "target_domain")
     if type(expected_source_domain) is not int or type(expected_target_domain) is not int:
         raise RuntimeError("destination bridge domains must be integers")
     if block_tag == "finalized":
@@ -1821,7 +1832,14 @@ def _offline_args(summary: dict[str, Any]) -> list[str]:
         "--verifier-key-hash",
         _hex(_summary_hex32(destination, "verifier_key_hash", label="verifier key hash")),
     ]
-    if destination.get("expected_destination_binding_hash_matches") is True:
+    destination_binding_matches = (
+        _summary_get_exact_key(
+            destination,
+            "expected_destination_binding_hash_matches",
+        )
+        is True
+    )
+    if destination_binding_matches:
         args.extend(
             [
                 "--expected-destination-binding-hash",
@@ -1834,11 +1852,8 @@ def _offline_args(summary: dict[str, Any]) -> list[str]:
                 ),
             ]
         )
-    route_hash = summary.get("route_allowlist_hash")
-    if (
-        type(route_hash) is str
-        and destination.get("expected_destination_binding_hash_matches") is True
-    ):
+    route_hash = _summary_get_exact_key(summary, "route_allowlist_hash")
+    if type(route_hash) is str and destination_binding_matches:
         args.extend(
             [
                 "--route-allowlist-hash",
@@ -1851,7 +1866,7 @@ def _offline_args(summary: dict[str, Any]) -> list[str]:
                 ),
             ]
         )
-        source_record_hashes = summary.get("source_record_hashes")
+        source_record_hashes = _summary_get_exact_key(summary, "source_record_hashes")
         if type(source_record_hashes) is not dict:
             raise ValueError("route allowlist TOML requires source record hashes")
         args.extend(
@@ -1874,7 +1889,7 @@ def _offline_args(summary: dict[str, Any]) -> list[str]:
                 ),
             ]
         )
-        route_canary = summary.get("route_canary")
+        route_canary = _summary_get_exact_key(summary, "route_canary")
         if type(route_canary) is dict:
             args.extend(
                 [
@@ -1888,8 +1903,24 @@ def _offline_args(summary: dict[str, Any]) -> list[str]:
                     ),
                 ]
             )
-        route_canary_transaction = summary.get("route_canary_transaction")
+        route_canary_transaction = _summary_get_exact_key(
+            summary,
+            "route_canary_transaction",
+        )
         if type(route_canary_transaction) is dict:
+            # Source-inventory marker: route-canary transaction message_proof_used uses exact-key access.
+            route_canary_used_message_proof = (
+                _summary_get_exact_key(route_canary_transaction, "message_proof_used")
+                is True
+            )
+            # Source-inventory marker: route-canary transaction receipt_block_finalized uses exact-key access.
+            route_canary_receipt_block_finalized = (
+                _summary_get_exact_key(
+                    route_canary_transaction,
+                    "receipt_block_finalized",
+                )
+                is True
+            )
             args.extend(
                 [
                     "--route-canary-transaction-hash",
@@ -2029,21 +2060,25 @@ def _offline_args(summary: dict[str, Any]) -> list[str]:
                         )
                     ),
                     "--route-canary-used-message-proof",
-                    "true"
-                    if route_canary_transaction.get("message_proof_used") is True
-                    else "false",
+                    "true" if route_canary_used_message_proof else "false",
                     "--route-canary-receipt-block-finalized",
-                    "true"
-                    if route_canary_transaction.get("receipt_block_finalized") is True
-                    else "false",
+                    "true" if route_canary_receipt_block_finalized else "false",
                 ]
             )
     return args
 
 
 def _torii_destination_query_params(summary: dict[str, Any]) -> dict[str, str] | None:
-    destination = summary["destination_bridge"]
-    if destination.get("expected_destination_binding_hash_matches") is not True:
+    destination = _summary_get_exact_key(summary, "destination_bridge")
+    if type(destination) is not dict:
+        return None
+    if (
+        _summary_get_exact_key(
+            destination,
+            "expected_destination_binding_hash_matches",
+        )
+        is not True
+    ):
         return None
     return {
         "network_id_hex": _hex(
@@ -2072,14 +2107,14 @@ def _torii_destination_query_params(summary: dict[str, Any]) -> dict[str, str] |
 
 
 def _validate_destination_summary(summary: dict[str, Any]) -> None:
-    destination = summary.get("destination_bridge")
+    destination = _summary_get_exact_key(summary, "destination_bridge")
     if type(destination) is not dict:
         raise ValueError("destination bridge evidence is required")
-    domain = destination.get("domain")
+    domain = _summary_get_exact_key(destination, "domain")
     if type(domain) is not int or domain not in EXPECTED_RPC_CHAIN_IDS:
         raise ValueError("destination domain must be an EVM-family SCCP lane")
     expected_chain = evidence.DOMAIN_PROFILES[domain]["chain"]
-    if destination.get("chain") != expected_chain:
+    if _summary_get_exact_key(destination, "chain") != expected_chain:
         raise ValueError("destination chain metadata must match domain")
     rpc_chain_id = _summary_exact_u32(
         destination,
@@ -2126,8 +2161,10 @@ def _validate_destination_summary(summary: dict[str, Any]) -> None:
     if evidence.runtime_bytecode_hash(bridge_runtime) != bridge_code_hash:
         raise ValueError("bridge runtime bytecode hash must match bridge_code_hash")
     if (
-        destination.get("expected_bridge_code_hash_matches") is True
-        and destination.get("expected_bridge_code_hash") != _hex(bridge_code_hash)
+        _summary_get_exact_key(destination, "expected_bridge_code_hash_matches")
+        is True
+        and _summary_get_exact_key(destination, "expected_bridge_code_hash")
+        != _hex(bridge_code_hash)
     ):
         raise ValueError("expected bridge code hash metadata must match bridge_code_hash")
     verifier_code_hash = _summary_hex32(
@@ -2173,13 +2210,13 @@ def _validate_destination_summary(summary: dict[str, Any]) -> None:
         != expected_family_hash
     ):
         raise ValueError("proof family hash metadata is not stark-fri-v1")
-    destination_source_domain = destination.get("source_domain")
+    destination_source_domain = _summary_get_exact_key(destination, "source_domain")
     if (
         type(destination_source_domain) is not int
         or destination_source_domain != evidence.SCCP_DOMAIN_SORA
     ):
         raise ValueError("destination source domain metadata must be SORA")
-    destination_target_domain = destination.get("target_domain")
+    destination_target_domain = _summary_get_exact_key(destination, "target_domain")
     if (
         type(destination_target_domain) is not int
         or destination_target_domain != domain
@@ -2205,13 +2242,18 @@ def _validate_destination_summary(summary: dict[str, Any]) -> None:
             "destination binding hash metadata must match canonical live inputs"
         )
     if (
-        destination.get("expected_network_id_matches") is True
-        and destination.get("expected_network_id") != _hex(network_id)
+        _summary_get_exact_key(destination, "expected_network_id_matches") is True
+        and _summary_get_exact_key(destination, "expected_network_id")
+        != _hex(network_id)
     ):
         raise ValueError("expected network id metadata must match networkId()")
     if (
-        destination.get("expected_destination_binding_hash_matches") is True
-        and destination.get("expected_destination_binding_hash")
+        _summary_get_exact_key(
+            destination,
+            "expected_destination_binding_hash_matches",
+        )
+        is True
+        and _summary_get_exact_key(destination, "expected_destination_binding_hash")
         != _hex(destination_binding_hash)
     ):
         raise ValueError(
@@ -2226,41 +2268,44 @@ def _validate_destination_summary(summary: dict[str, Any]) -> None:
         verifier_code_hash=verifier_code_hash,
         verifier_key_hash=verifier_key_hash,
     )
-    if destination.get("destination_binding_key") != expected_binding_key:
+    if (
+        _summary_get_exact_key(destination, "destination_binding_key")
+        != expected_binding_key
+    ):
         raise ValueError("destination binding key metadata must match canonical inputs")
 
 
 def _route_canary_transaction_verified(summary: dict[str, Any]) -> bool:
-    route_canary = summary.get("route_canary")
-    transaction = summary.get("route_canary_transaction")
+    route_canary = _summary_get_exact_key(summary, "route_canary")
+    transaction = _summary_get_exact_key(summary, "route_canary_transaction")
     if type(route_canary) is not dict or type(transaction) is not dict:
         return False
     return (
-        route_canary.get("evidence_source")
+        _summary_get_exact_key(route_canary, "evidence_source")
         == "evm_message_proof_accepted_transaction"
-        and route_canary.get("evidence_hash")
-        == transaction.get("route_canary_evidence_hash")
-        and transaction.get("event_matches") is True
-        and transaction.get("call_matches") is True
-        and transaction.get("message_proof_used") is True
-        and transaction.get("receipt_block_matches") is True
-        and transaction.get("receipt_block_finalized") is True
-        and transaction.get("transaction_block_matches") is True
-        and type(transaction.get("block_number")) is int
-        and type(transaction.get("block_hash")) is str
-        and type(transaction.get("transaction_block_number")) is int
-        and type(transaction.get("transaction_block_hash")) is str
-        and type(transaction.get("block_receipts_root")) is str
+        and _summary_get_exact_key(route_canary, "evidence_hash")
+        == _summary_get_exact_key(transaction, "route_canary_evidence_hash")
+        and _summary_get_exact_key(transaction, "event_matches") is True
+        and _summary_get_exact_key(transaction, "call_matches") is True
+        and _summary_get_exact_key(transaction, "message_proof_used") is True
+        and _summary_get_exact_key(transaction, "receipt_block_matches") is True
+        and _summary_get_exact_key(transaction, "receipt_block_finalized") is True
+        and _summary_get_exact_key(transaction, "transaction_block_matches") is True
+        and type(_summary_get_exact_key(transaction, "block_number")) is int
+        and type(_summary_get_exact_key(transaction, "block_hash")) is str
+        and type(_summary_get_exact_key(transaction, "transaction_block_number")) is int
+        and type(_summary_get_exact_key(transaction, "transaction_block_hash")) is str
+        and type(_summary_get_exact_key(transaction, "block_receipts_root")) is str
     )
 
 
 def _validate_copied_route_summary_metadata(summary: dict[str, Any]) -> None:
-    if "block_tag" in summary:
+    if _summary_has_exact_key(summary, "block_tag"):
         _summary_block_tag(summary)
-    route_hash = summary.get("route_allowlist_hash")
+    route_hash = _summary_get_exact_key(summary, "route_allowlist_hash")
     if route_hash is not None:
         _summary_hex32(summary, "route_allowlist_hash", label="route allowlist hash")
-    source_record_hashes = summary.get("source_record_hashes")
+    source_record_hashes = _summary_get_exact_key(summary, "source_record_hashes")
     if type(source_record_hashes) is dict:
         _summary_hex32(
             source_record_hashes,
@@ -2272,7 +2317,7 @@ def _validate_copied_route_summary_metadata(summary: dict[str, Any]) -> None:
             "source_adapter_engine_deployment_hash",
             label="source adapter engine deployment hash",
         )
-    route_canary = summary.get("route_canary")
+    route_canary = _summary_get_exact_key(summary, "route_canary")
     if type(route_canary) is dict:
         _summary_hex32(
             route_canary,
@@ -2283,31 +2328,34 @@ def _validate_copied_route_summary_metadata(summary: dict[str, Any]) -> None:
 
 def _full_toml_prerequisites(summary: dict[str, Any]) -> list[str]:
     missing: list[str] = []
-    destination = summary.get("destination_bridge")
+    destination = _summary_get_exact_key(summary, "destination_bridge")
     if type(destination) is not dict:
         return ["destination bridge evidence"]
-    destination_domain = destination.get("domain")
+    destination_domain = _summary_get_exact_key(destination, "domain")
     if (
         type(destination_domain) is int
         and destination_domain == evidence.SCCP_DOMAIN_ETH
-        and summary.get("block_tag") != "finalized"
+        and _summary_get_exact_key(summary, "block_tag") != "finalized"
     ):
         missing.append("--block-tag finalized")
-    if destination.get("expected_rpc_chain_id_matches") is not True:
+    if _summary_get_exact_key(destination, "expected_rpc_chain_id_matches") is not True:
         missing.append("--expected-rpc-chain-id")
-    if destination.get("expected_network_id_matches") is not True:
+    if _summary_get_exact_key(destination, "expected_network_id_matches") is not True:
         missing.append("--expected-network-id")
-    if destination.get("expected_bridge_code_hash_matches") is not True:
+    if _summary_get_exact_key(destination, "expected_bridge_code_hash_matches") is not True:
         missing.append("--expected-bridge-code-hash")
-    if destination.get("expected_destination_binding_hash_matches") is not True:
+    if (
+        _summary_get_exact_key(destination, "expected_destination_binding_hash_matches")
+        is not True
+    ):
         missing.append("--expected-destination-binding-hash")
-    if type(summary.get("route_allowlist_hash")) is not str:
+    if type(_summary_get_exact_key(summary, "route_allowlist_hash")) is not str:
         missing.append("--route-allowlist-hash")
-    if type(summary.get("route_canary")) is not dict:
+    if type(_summary_get_exact_key(summary, "route_canary")) is not dict:
         missing.append("--route-canary-evidence-hash")
     if not _route_canary_transaction_verified(summary):
         missing.append("--route-canary-transaction-hash")
-    source_record_hashes = summary.get("source_record_hashes")
+    source_record_hashes = _summary_get_exact_key(summary, "source_record_hashes")
     if type(source_record_hashes) is not dict:
         missing.append("source record hashes")
     return missing
@@ -2320,7 +2368,7 @@ def render_offline_toml(summary: dict[str, Any]) -> str:
     _validate_copied_route_summary_metadata(summary)
     missing = _full_toml_prerequisites(summary)
     if missing:
-        raise ValueError("TOML output requires " + ", ".join(missing))
+        raise ValueError("TOML output requires " + ", ".join(missing)) from None
     destination = summary["destination_bridge"]
     parser = evidence.build_parser()
     offline_args = _offline_args(summary)
@@ -2450,7 +2498,13 @@ def _validate_route_allowlist_hash(
             "--route-allowlist-hash requires --source-verifier-material-hash "
             "and --source-adapter-engine-deployment-hash"
         )
-    if destination.get("expected_destination_binding_hash_matches") is not True:
+    if (
+        _summary_get_exact_key(
+            destination,
+            "expected_destination_binding_hash_matches",
+        )
+        is not True
+    ):
         raise ValueError(
             "--route-allowlist-hash requires --expected-destination-binding-hash"
         )
@@ -2787,10 +2841,15 @@ def collect_live_evidence(
             label="route canary proof source domain",
         )
         args.route_canary_used_message_proof = (
-            route_canary_transaction.get("message_proof_used") is True
+            _summary_get_exact_key(route_canary_transaction, "message_proof_used")
+            is True
         )
         args.route_canary_receipt_block_finalized = (
-            route_canary_transaction.get("receipt_block_finalized") is True
+            _summary_get_exact_key(
+                route_canary_transaction,
+                "receipt_block_finalized",
+            )
+            is True
         )
     if route_allowlist_hash is not None:
         summary.update(
@@ -2799,13 +2858,13 @@ def collect_live_evidence(
                 destination,
                 include_route_canary=(
                     route_canary_transaction is None
-                    or route_canary_transaction.get("receipt_block_finalized") is True
+                    or args.route_canary_receipt_block_finalized is True
                 ),
             )
         )
         if route_canary_transaction is not None:
             summary["route_canary_transaction"] = route_canary_transaction
-            route_canary = summary.get("route_canary")
+            route_canary = _summary_get_exact_key(summary, "route_canary")
             if type(route_canary) is dict:
                 route_canary["transaction"] = route_canary_transaction
         if not _full_toml_prerequisites(summary):

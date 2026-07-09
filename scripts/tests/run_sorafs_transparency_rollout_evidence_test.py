@@ -30,10 +30,8 @@ def complete_args(tmp_path: Path) -> list[str]:
     args = [
         "--iroha-bin",
         "/usr/local/bin/iroha",
-        "--iroha-arg",
-        "--config",
-        "--iroha-arg",
-        "/runtime/client.toml",
+        "--iroha-arg=--config",
+        "--iroha-arg=/runtime/client.toml",
         "--torii-url",
         "https://torii.example",
         "--deployment-id",
@@ -42,6 +40,10 @@ def complete_args(tmp_path: Path) -> list[str]:
         "staging",
         "--out-dir",
         str(tmp_path / "evidence"),
+        "--now-unix",
+        "1800400000",
+        "--max-evidence-age-secs",
+        "604800",
         "--cycle-id",
         "11" * 16,
         "--limit",
@@ -134,6 +136,10 @@ def test_dry_run_prints_complete_rollout_plan(tmp_path: Path, capsys) -> None:
     assert "--torii-url" in publication
     verifier = plan["steps"][5]["command"]
     assert "check_sorafs_transparency_rollout_evidence.py" in verifier[1]
+    assert "--now-unix" in verifier
+    assert "1800400000" in verifier
+    assert "--max-evidence-age-secs" in verifier
+    assert "604800" in verifier
 
 
 def test_plan_json_shape_is_validated(tmp_path: Path) -> None:
@@ -426,6 +432,26 @@ def test_malformed_source_entry_sanitizes_exception_text(
     assert bad_message not in "\n".join(errors)
 
 
+def test_invalid_freshness_args_fail_before_plan(tmp_path: Path, capsys) -> None:
+    cases = (
+        ("--now-unix", "0", "must be positive"),
+        ("--max-evidence-age-secs", "-1", "must be non-negative"),
+    )
+
+    for option, value, diagnostic in cases:
+        case_dir = tmp_path / option.removeprefix("--").replace("-", "_")
+        case_dir.mkdir()
+        args = complete_args(case_dir)
+        value_index = args.index(option) + 1
+        args[value_index] = value
+
+        assert MODULE.main([*args, "--dry-run"]) == 2
+
+        captured = capsys.readouterr()
+        assert diagnostic in captured.err
+        assert captured.out == ""
+
+
 def test_malformed_source_entry_does_not_echo_spec(tmp_path: Path) -> None:
     args = complete_args(tmp_path)
     bad_spec = "source-entry-private-key-placeholder"
@@ -437,6 +463,30 @@ def test_malformed_source_entry_does_not_echo_spec(tmp_path: Path) -> None:
     diagnostics = "\n".join(errors)
     assert "--source-entry must use KIND=PATH form" in diagnostics
     assert bad_spec not in diagnostics
+
+
+def test_source_entry_rejects_padded_or_unicode_components_without_trimming(
+    tmp_path: Path,
+) -> None:
+    parsed_args = MODULE.parse_args(complete_args(tmp_path))
+    source_kind = MODULE.DEFAULT_REQUIRED_SOURCE_KINDS[0]
+    source_path = tmp_path / "payloads" / "source-entry-0.json"
+    cases = (
+        f" {source_kind}={source_path}",
+        f"{source_kind}={source_path} ",
+        f"{source_kind}\u200d={source_path}",
+        f"{source_kind}={source_path}\u202e",
+    )
+
+    for spec in cases:
+        parsed_args.source_entry = [spec]
+        errors = MODULE.validate_inputs(parsed_args)
+        diagnostics = "\n".join(errors)
+        escaped_spec = spec.encode("unicode_escape").decode("ascii")
+
+        assert "--source-entry must use KIND=PATH form" in diagnostics
+        assert spec not in diagnostics
+        assert escaped_spec not in diagnostics
 
 
 def test_generated_artifact_read_error_is_sanitized(
@@ -794,12 +844,28 @@ def test_iroha_arg_rejects_secret_bearing_value_without_leaking(
     tmp_path: Path, capsys
 ) -> None:
     args = complete_args(tmp_path)
-    args.extend(["--iroha-arg", "--private-key=/runtime/signing.key"])
+    args.append("--iroha-arg=--private-key=/runtime/signing.key")
 
     assert MODULE.main([*args, "--dry-run"]) == 2
 
     captured = capsys.readouterr()
     assert "SoraFS runner passthrough arguments must not contain" in captured.err
+    assert "private-key" not in captured.err
+    assert "signing.key" not in captured.err
+    assert captured.out == ""
+
+
+def test_split_iroha_arg_form_fails_without_leaking_value(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = complete_args(tmp_path)
+    args.extend(["--iroha-arg", "--private-key=/runtime/signing.key"])
+
+    assert MODULE.main([*args, "--dry-run"]) == 2
+
+    captured = capsys.readouterr()
+    assert MODULE.IROHA_ARG_EQUALS_FORM_DIAGNOSTIC in captured.err
     assert "private-key" not in captured.err
     assert "signing.key" not in captured.err
     assert captured.out == ""
@@ -820,6 +886,20 @@ def test_unreviewed_deployment_context_fails_before_plan(
         in captured.err
     )
     assert "environment must be one of" in captured.err
+
+
+def test_environment_must_be_exact_reviewed_label_before_plan(
+    tmp_path: Path, capsys
+) -> None:
+    args = complete_args(tmp_path)
+    args[args.index("--environment") + 1] = "STAGING"
+
+    assert MODULE.main([*args, "--dry-run"]) == 2
+
+    captured = capsys.readouterr()
+    assert "environment must be one of" in captured.err
+    assert "STAGING" not in captured.err
+    assert captured.out == ""
 
 
 def test_cycle_id_is_required_for_publication_detail(tmp_path: Path, capsys) -> None:

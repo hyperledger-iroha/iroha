@@ -275,6 +275,7 @@ fn nexus_with_lane_catalog(
 ) -> iroha_config::parameters::actual::Nexus {
     use std::collections::BTreeSet;
 
+    use iroha_config::parameters::actual::LaneRoutingPolicy;
     use iroha_data_model::nexus::{DataSpaceCatalog, DataSpaceMetadata};
 
     let mut dataspace_ids: BTreeSet<DataSpaceId> = lane_catalog
@@ -300,9 +301,23 @@ fn nexus_with_lane_catalog(
     )
     .expect("dataspace catalog derived from lane catalog");
 
+    let default_lane = lane_catalog
+        .lanes()
+        .first()
+        .expect("lane catalog contains at least one lane");
+    let routing_policy = LaneRoutingPolicy {
+        default_lane: default_lane.id,
+        default_dataspace: default_lane.dataspace_id,
+        rules: Vec::new(),
+    };
+    let lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
+
     iroha_config::parameters::actual::Nexus {
+        enabled: true,
+        lane_config,
         lane_catalog,
         dataspace_catalog,
+        routing_policy,
         ..iroha_config::parameters::actual::Nexus::default()
     }
 }
@@ -319,16 +334,29 @@ fn axt_policy_snapshot_refreshes_current_slot() {
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::new(), kura, query_handle);
 
-    // Seed block hashes so height > 0 and current_slot is non-zero.
+    let dsid = DataSpaceId::new(9);
+    let target_lane = LaneId::new(3);
+    let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+        nonzero!(4_u32),
+        vec![iroha_data_model::nexus::LaneConfig {
+            id: target_lane,
+            dataspace_id: dsid,
+            alias: "slot-refresh".into(),
+            ..iroha_data_model::nexus::LaneConfig::default()
+        }],
+    )
+    .expect("slot refresh lane catalog");
+    *state.nexus.get_mut() = nexus_with_lane_catalog(lane_catalog);
+
+    // Seed block hashes so the synthetic state exposes a non-zero AXT slot.
     let h1 = iroha_crypto::Hash::prehashed([0xAA; 32]);
     let typed: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader> =
         iroha_crypto::HashOf::from_untyped_unchecked(h1);
     state.push_block_hash_for_testing(typed);
 
-    let dsid = DataSpaceId::new(9);
     let entry = AxtPolicyEntry {
         manifest_root: [0x11; 32],
-        target_lane: LaneId::new(3),
+        target_lane,
         min_handle_era: 2,
         min_sub_nonce: 5,
         current_slot: 0,
@@ -1421,6 +1449,17 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::new(), kura, query);
+    let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+        nonzero!(1_u32),
+        vec![iroha_data_model::nexus::LaneConfig {
+            id: target_lane,
+            dataspace_id: dsid,
+            alias: "replay-host-rebuild".into(),
+            ..iroha_data_model::nexus::LaneConfig::default()
+        }],
+    )
+    .expect("replay host rebuild lane catalog");
+    *state.nexus.get_mut() = nexus_with_lane_catalog(lane_catalog);
     state.nexus.get_mut().axt.replay_retention_slots =
         NonZeroU64::new(64).expect("retention slots");
     state.set_axt_policy(

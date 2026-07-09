@@ -1217,8 +1217,8 @@ def _is_canonical_tron_address_text(value: Any) -> bool:
     return raw is not None and raw[0] == 0x41 and any(raw[1:])
 
 
-def _required_hex_bytes(record: dict[str, Any], field: str, *, byte_length: int) -> bytes:
-    raw = _hex_bytes(record.get(field), byte_length=byte_length)
+def _required_hex_bytes(record: dict[Any, Any], field: str, *, byte_length: int) -> bytes:
+    raw = _hex_bytes(_public_mapping_get_string_key(record, field), byte_length=byte_length)
     if raw is None:
         raise ValueError(f"{field} must be a {byte_length}-byte hex value")
     return raw
@@ -1247,12 +1247,15 @@ def _exact_hex_bytes(value: Any, *, byte_length: int) -> bytes | None:
 
 
 def _required_exact_hex_bytes(
-    record: dict[str, Any],
+    record: dict[Any, Any],
     field: str,
     *,
     byte_length: int,
 ) -> bytes:
-    raw = _exact_hex_bytes(record.get(field), byte_length=byte_length)
+    raw = _exact_hex_bytes(
+        _public_mapping_get_string_key(record, field),
+        byte_length=byte_length,
+    )
     if raw is None:
         raise ValueError(f"{field} must be an exact {byte_length}-byte hex value")
     return raw
@@ -1505,7 +1508,9 @@ def _number_repeated_blocker_list_diagnostics(
 
 
 def _blocker_list_errors(record: dict[str, Any], label: str) -> list[str]:
-    blockers = record.get("blockers", [])
+    blockers = _public_mapping_get_string_key(record, "blockers")
+    if blockers is None:
+        blockers = []
     if type(blockers) is not list:
         return [f"{label} blockers must be a list of non-empty canonical strings"]
     errors: list[str] = []
@@ -1578,7 +1583,7 @@ def _load_sibling_module(filename: str) -> Any:
 
 
 def _expect(errors: list[str], record: dict[str, Any], field: str, expected: Any) -> None:
-    actual = record.get(field)
+    actual = _public_mapping_get_string_key(record, field)
     if type(actual) is not type(expected) or actual != expected:
         errors.append(f"{field} must be {expected!r}")
 
@@ -1590,7 +1595,10 @@ def _expect_nonzero_hex(
     *,
     byte_length: int = 32,
 ) -> None:
-    if not _nonzero_hex(record.get(field), byte_length=byte_length):
+    if not _nonzero_hex(
+        _public_mapping_get_string_key(record, field),
+        byte_length=byte_length,
+    ):
         errors.append(f"{field} must be a non-zero {byte_length}-byte hex value")
 
 
@@ -1601,7 +1609,10 @@ def _expect_empty_hex_or_absent(
     *,
     byte_length: int = 32,
 ) -> None:
-    if not _empty_hex_or_absent(record.get(field), byte_length=byte_length):
+    if not _empty_hex_or_absent(
+        _public_mapping_get_string_key(record, field),
+        byte_length=byte_length,
+    ):
         errors.append(f"{field} must be empty for this lane")
 
 
@@ -1614,7 +1625,7 @@ def _expect_role_hash_fields_are_distinct(
 ) -> None:
     seen: dict[bytes, str] = {}
     for field in fields:
-        raw = _hex_bytes(record.get(field), byte_length=32)
+        raw = _hex_bytes(_public_mapping_get_string_key(record, field), byte_length=32)
         if raw is None or not any(raw):
             continue
         previous_field = seen.get(raw)
@@ -1696,7 +1707,7 @@ def _reject_source_material_template_hashes(
     template_hashes = _source_material_template_hashes(profile)
     template_hash_values = _source_material_template_hash_values(profile)
     for field in template_hashes:
-        raw = _hex_bytes(record.get(field), byte_length=32)
+        raw = _hex_bytes(_public_mapping_get_string_key(record, field), byte_length=32)
         if raw in template_hash_values:
             errors.append(
                 f"{field} must be deployed evidence, not built-in template material"
@@ -1711,14 +1722,14 @@ def _reject_source_adapter_deployment_template_hashes(
     template_hashes = _source_material_template_hashes(profile)
     template_hash_values = _source_material_template_hash_values(profile)
     for field in template_hashes:
-        raw = _hex_bytes(record.get(field), byte_length=32)
+        raw = _hex_bytes(_public_mapping_get_string_key(record, field), byte_length=32)
         if raw in template_hash_values:
             errors.append(
                 f"{field} must be deployed source-adapter evidence, "
                 "not built-in template material"
             )
     for field in ("adapter_verifier_vk_hash", "deployment_receipt_hash"):
-        raw = _hex_bytes(record.get(field), byte_length=32)
+        raw = _hex_bytes(_public_mapping_get_string_key(record, field), byte_length=32)
         if raw is None:
             continue
         if raw in template_hash_values:
@@ -1736,7 +1747,7 @@ def _reject_source_adapter_audit_template_hashes(
 ) -> None:
     template_hashes = _source_material_template_hash_values(profile)
     for field in fields:
-        raw = _hex_bytes(record.get(field), byte_length=32)
+        raw = _hex_bytes(_public_mapping_get_string_key(record, field), byte_length=32)
         if raw is None:
             continue
         if raw in template_hashes:
@@ -1783,55 +1794,71 @@ def _check_source_role_shape(
     label: str,
 ) -> None:
     if profile.source_state_verifier_id:
-        if record.get("source_state_verifier_id") != profile.source_state_verifier_id:
+        if (
+            _public_mapping_get_string_key(record, "source_state_verifier_id")
+            != profile.source_state_verifier_id
+        ):
             errors.append(
                 f"{label} source_state_verifier_id must be "
                 f"{profile.source_state_verifier_id!r}"
             )
-        if not _nonzero_hex(record.get("source_state_verifier_hash"), byte_length=32):
+        if not _nonzero_hex(
+            _public_mapping_get_string_key(record, "source_state_verifier_hash"),
+            byte_length=32,
+        ):
             errors.append(
                 f"{label} source_state_verifier_hash must be a non-zero 32-byte hex value"
             )
     else:
-        if not _scalar_absent(record.get("source_state_verifier_id")):
+        if not _scalar_absent(
+            _public_mapping_get_string_key(record, "source_state_verifier_id")
+        ):
             errors.append(f"{label} source_state_verifier_id must be empty for this lane")
-        if not _empty_hex_or_absent(record.get("source_state_verifier_hash"), byte_length=32):
+        if not _empty_hex_or_absent(
+            _public_mapping_get_string_key(record, "source_state_verifier_hash"),
+            byte_length=32,
+        ):
             errors.append(f"{label} source_state_verifier_hash must be empty for this lane")
 
     if profile.source_bridge_emitter_id:
-        if record.get("source_bridge_emitter_id") != profile.source_bridge_emitter_id:
+        if (
+            _public_mapping_get_string_key(record, "source_bridge_emitter_id")
+            != profile.source_bridge_emitter_id
+        ):
             errors.append(
                 f"{label} source_bridge_emitter_id must be "
                 f"{profile.source_bridge_emitter_id!r}"
             )
         if not _nonzero_hex(
-            record.get("source_bridge_emitter_address"),
+            _public_mapping_get_string_key(record, "source_bridge_emitter_address"),
             byte_length=20,
         ):
             errors.append(
                 f"{label} source_bridge_emitter_address must be a non-zero 20-byte hex value"
             )
         if not _nonzero_hex(
-            record.get("source_bridge_emitter_code_hash"),
+            _public_mapping_get_string_key(record, "source_bridge_emitter_code_hash"),
             byte_length=32,
         ):
             errors.append(
                 f"{label} source_bridge_emitter_code_hash must be a non-zero 32-byte hex value"
             )
     else:
-        if not _scalar_absent(record.get("source_bridge_emitter_id")):
+        if not _scalar_absent(
+            _public_mapping_get_string_key(record, "source_bridge_emitter_id")
+        ):
             errors.append(
                 f"{label} source_bridge_emitter_id must be empty for this lane"
             )
         if not _empty_hex_or_absent(
-            record.get("source_bridge_emitter_address"),
+            _public_mapping_get_string_key(record, "source_bridge_emitter_address"),
             byte_length=20,
         ):
             errors.append(
                 f"{label} source_bridge_emitter_address must be empty for this lane"
             )
         if not _empty_hex_or_absent(
-            record.get("source_bridge_emitter_code_hash"),
+            _public_mapping_get_string_key(record, "source_bridge_emitter_code_hash"),
             byte_length=32,
         ):
             errors.append(
@@ -1908,7 +1935,7 @@ def _reject_lane_foreign_fields(
     if actual_chain in allowed:
         return
     for field in fields:
-        if not _scalar_absent(record.get(field)):
+        if not _scalar_absent(_public_mapping_get_string_key(record, field)):
             errors.append(f"{field} is only valid for {label}")
 
 
@@ -1929,7 +1956,7 @@ def _records_by_domain(
         if type(record) is not dict:
             errors.append(f"record {index} must be a table")
             continue
-        domain = record.get(domain_field)
+        domain = _public_mapping_get_string_key(record, domain_field)
         if type(domain) is not int:
             errors.append(f"record {index} missing integer {domain_field}")
             continue
@@ -1944,7 +1971,9 @@ def _records_by_domain(
     return by_domain, errors
 
 
-def _load_toml(text: str, *, label: str) -> dict[str, Any]:
+def _load_toml(text: object, *, label: str) -> dict[str, Any]:
+    if type(text) is not str:
+        raise ValueError(f"{label}: invalid TOML") from None
     if tomllib is None:
         return _load_toml_minimal(text, label=label)
     try:
@@ -1953,7 +1982,9 @@ def _load_toml(text: str, *, label: str) -> dict[str, Any]:
         raise ValueError(f"{label}: invalid TOML") from None
 
 
-def _parse_minimal_toml_value(value: str, *, label: str, line_number: int) -> Any:
+def _parse_minimal_toml_value(value: object, *, label: str, line_number: int) -> Any:
+    if type(value) is not str:
+        raise ValueError(f"{label}:{line_number}: unsupported TOML value")
     text = value.strip()
     if text in ("true", "false"):
         return text == "true"
@@ -2131,7 +2162,9 @@ def _is_canonical_solana_pubkey_text(value: Any) -> bool:
     return len(raw) == 32 and any(raw)
 
 
-def _load_toml_minimal(text: str, *, label: str) -> dict[str, Any]:
+def _load_toml_minimal(text: object, *, label: str) -> dict[str, Any]:
+    if type(text) is not str:
+        raise ValueError(f"{label}: invalid TOML") from None
     document: dict[str, Any] = {"zk": {name: [] for name in SECTION_NAMES}}
     current: dict[str, Any] | None = None
     for line_number, raw_line in enumerate(text.splitlines(), start=1):
@@ -2166,7 +2199,9 @@ def _load_toml_minimal(text: str, *, label: str) -> dict[str, Any]:
     return document
 
 
-def _comment_toml_value(value: str, *, label: str, line_number: int) -> str:
+def _comment_toml_value(value: object, *, label: str, line_number: int) -> str:
+    if type(value) is not str:
+        raise ValueError(f"{label}:{line_number}: invalid metadata comment") from None
     try:
         parsed = json.loads(value.strip())
     except json.JSONDecodeError:
@@ -2420,7 +2455,9 @@ def _check_source_material(profile: LaneProfile, record: dict[str, Any]) -> list
         )
         _expect_nonzero_hex(errors, record, "source_state_verifier_hash")
     else:
-        if not _scalar_absent(record.get("source_state_verifier_id")):
+        if not _scalar_absent(
+            _public_mapping_get_string_key(record, "source_state_verifier_id")
+        ):
             errors.append("source_state_verifier_id must be empty for this lane")
         _expect_empty_hex_or_absent(errors, record, "source_state_verifier_hash")
 
@@ -2441,7 +2478,9 @@ def _check_source_material(profile: LaneProfile, record: dict[str, Any]) -> list
         if profile.chain in ("eth", "bsc"):
             errors.extend(_check_evm_live_source_bridge_evidence(profile, record))
     else:
-        if not _scalar_absent(record.get("source_bridge_emitter_id")):
+        if not _scalar_absent(
+            _public_mapping_get_string_key(record, "source_bridge_emitter_id")
+        ):
             errors.append("source_bridge_emitter_id must be empty for this lane")
         _expect_empty_hex_or_absent(
             errors,
@@ -2493,9 +2532,12 @@ def _check_source_material(profile: LaneProfile, record: dict[str, Any]) -> list
 def _check_tron_live_source_bridge_evidence(record: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     module = _load_sibling_module("sccp_tron_source_bridge_evidence.py")
-    address = record.get("_comment_tron_source_bridge_address")
+    address = _public_mapping_get_string_key(
+        record,
+        "_comment_tron_source_bridge_address",
+    )
     material_address = _exact_hex_bytes(
-        record.get("source_bridge_emitter_address"),
+        _public_mapping_get_string_key(record, "source_bridge_emitter_address"),
         byte_length=20,
     )
     try:
@@ -2519,11 +2561,14 @@ def _check_tron_live_source_bridge_evidence(record: dict[str, Any]) -> list[str]
         )
 
     bridge_code_hash = _exact_hex_bytes(
-        record.get("_comment_tron_source_bridge_code_hash"),
+        _public_mapping_get_string_key(
+            record,
+            "_comment_tron_source_bridge_code_hash",
+        ),
         byte_length=32,
     )
     material_code_hash = _exact_hex_bytes(
-        record.get("source_bridge_emitter_code_hash"),
+        _public_mapping_get_string_key(record, "source_bridge_emitter_code_hash"),
         byte_length=32,
     )
     if bridge_code_hash is None or not any(bridge_code_hash):
@@ -2536,8 +2581,9 @@ def _check_tron_live_source_bridge_evidence(record: dict[str, Any]) -> list[str]
             "TRON source bridge runtime code hash metadata must match "
             "source_bridge_emitter_code_hash"
         )
-    bridge_runtime_bytecode = record.get(
-        "_comment_tron_source_bridge_runtime_bytecode_hex"
+    bridge_runtime_bytecode = _public_mapping_get_string_key(
+        record,
+        "_comment_tron_source_bridge_runtime_bytecode_hex",
     )
     if not _is_nonempty_string(bridge_runtime_bytecode):
         errors.append("TRON source bridge runtime bytecode metadata must be present")
@@ -2564,11 +2610,14 @@ def _check_tron_live_source_bridge_evidence(record: dict[str, Any]) -> list[str]
                 )
 
     bridge_config_hash = _exact_hex_bytes(
-        record.get("_comment_tron_source_bridge_config_hash"),
+        _public_mapping_get_string_key(
+            record,
+            "_comment_tron_source_bridge_config_hash",
+        ),
         byte_length=32,
     )
     material_config_hash = _exact_hex_bytes(
-        record.get("source_bridge_config_hash"),
+        _public_mapping_get_string_key(record, "source_bridge_config_hash"),
         byte_length=32,
     )
     if bridge_config_hash is None or not any(bridge_config_hash):
@@ -2594,7 +2643,10 @@ def _check_evm_live_source_bridge_evidence(
         if profile.domain == SCCP_DOMAIN_ETH
         else "sccp_bsc_source_bridge_evidence.py"
     )
-    rpc_chain_id = record.get("_comment_evm_source_rpc_chain_id")
+    rpc_chain_id = _public_mapping_get_string_key(
+        record,
+        "_comment_evm_source_rpc_chain_id",
+    )
     expected_chain_id = EVM_EXPECTED_RPC_CHAIN_IDS[profile.domain]
     if not _is_canonical_decimal_text(rpc_chain_id, positive=True):
         errors.append(
@@ -2609,7 +2661,10 @@ def _check_evm_live_source_bridge_evidence(
     # Source-inventory marker: Ethereum source live block-tag metadata must be finalized
     # Source-inventory marker: BSC source live block-tag metadata must be latest
     expected_block_tag = "finalized" if profile.domain == SCCP_DOMAIN_ETH else "latest"
-    source_block_tag = record.get("_comment_evm_source_block_tag")
+    source_block_tag = _public_mapping_get_string_key(
+        record,
+        "_comment_evm_source_block_tag",
+    )
     if (
         type(source_block_tag) is not str
         or source_block_tag != expected_block_tag
@@ -2620,11 +2675,11 @@ def _check_evm_live_source_bridge_evidence(
         )
 
     bridge_address = _hex_bytes(
-        record.get("_comment_evm_source_bridge_address"),
+        _public_mapping_get_string_key(record, "_comment_evm_source_bridge_address"),
         byte_length=20,
     )
     material_address = _hex_bytes(
-        record.get("source_bridge_emitter_address"),
+        _public_mapping_get_string_key(record, "source_bridge_emitter_address"),
         byte_length=20,
     )
     if bridge_address is None or not any(bridge_address):
@@ -2638,11 +2693,14 @@ def _check_evm_live_source_bridge_evidence(
         )
 
     bridge_code_hash = _hex_bytes(
-        record.get("_comment_evm_source_bridge_code_hash"),
+        _public_mapping_get_string_key(
+            record,
+            "_comment_evm_source_bridge_code_hash",
+        ),
         byte_length=32,
     )
     material_code_hash = _hex_bytes(
-        record.get("source_bridge_emitter_code_hash"),
+        _public_mapping_get_string_key(record, "source_bridge_emitter_code_hash"),
         byte_length=32,
     )
     if bridge_code_hash is None or not any(bridge_code_hash):
@@ -2655,8 +2713,9 @@ def _check_evm_live_source_bridge_evidence(
             "EVM source bridge runtime code hash metadata must match "
             "source_bridge_emitter_code_hash"
         )
-    bridge_runtime_bytecode = record.get(
-        "_comment_evm_source_bridge_runtime_bytecode_hex"
+    bridge_runtime_bytecode = _public_mapping_get_string_key(
+        record,
+        "_comment_evm_source_bridge_runtime_bytecode_hex",
     )
     if not _is_nonempty_string(bridge_runtime_bytecode):
         errors.append("EVM source bridge runtime bytecode metadata must be present")
@@ -2689,7 +2748,10 @@ def _check_evm_live_source_bridge_evidence(
                 )
 
     receipt_tx = _hex_bytes(
-        record.get("_comment_evm_source_deployment_transaction_hash"),
+        _public_mapping_get_string_key(
+            record,
+            "_comment_evm_source_deployment_transaction_hash",
+        ),
         byte_length=32,
     )
     if receipt_tx is None or not any(receipt_tx):
@@ -2698,7 +2760,10 @@ def _check_evm_live_source_bridge_evidence(
             "32-byte hex value"
         )
     transaction_block_hash = _hex_bytes(
-        record.get("_comment_evm_source_deployment_transaction_block_hash"),
+        _public_mapping_get_string_key(
+            record,
+            "_comment_evm_source_deployment_transaction_block_hash",
+        ),
         byte_length=32,
     )
     if transaction_block_hash is None or not any(transaction_block_hash):
@@ -2706,8 +2771,9 @@ def _check_evm_live_source_bridge_evidence(
             "EVM source deployment transaction block hash metadata must be a "
             "non-zero 32-byte hex value"
         )
-    transaction_block_number = record.get(
-        "_comment_evm_source_deployment_transaction_block_number"
+    transaction_block_number = _public_mapping_get_string_key(
+        record,
+        "_comment_evm_source_deployment_transaction_block_number",
     )
     if not _is_canonical_decimal_text(transaction_block_number, positive=True):
         errors.append(
@@ -2715,7 +2781,10 @@ def _check_evm_live_source_bridge_evidence(
             "positive integer"
         )
     transaction_input_sha256 = _hex_bytes(
-        record.get("_comment_evm_source_deployment_transaction_input_sha256"),
+        _public_mapping_get_string_key(
+            record,
+            "_comment_evm_source_deployment_transaction_input_sha256",
+        ),
         byte_length=32,
     )
     if transaction_input_sha256 is None or not any(transaction_input_sha256):
@@ -2723,10 +2792,16 @@ def _check_evm_live_source_bridge_evidence(
             "EVM source deployment transaction input SHA-256 metadata must be a "
             "non-zero 32-byte hex value"
         )
-    receipt_status = record.get("_comment_evm_source_deployment_receipt_status")
+    receipt_status = _public_mapping_get_string_key(
+        record,
+        "_comment_evm_source_deployment_receipt_status",
+    )
     if receipt_status != "0x1":
         errors.append("EVM source deployment receipt status metadata must be 0x1")
-    receipt_contract = record.get("_comment_evm_source_deployment_contract_address")
+    receipt_contract = _public_mapping_get_string_key(
+        record,
+        "_comment_evm_source_deployment_contract_address",
+    )
     contract_address = _hex_bytes(receipt_contract, byte_length=20)
     if contract_address is None or not any(contract_address):
         errors.append(
@@ -2738,7 +2813,10 @@ def _check_evm_live_source_bridge_evidence(
             "EVM source deployment contract address metadata must match "
             "source_bridge_emitter_address"
         )
-    receipt_block_hash = record.get("_comment_evm_source_deployment_block_hash")
+    receipt_block_hash = _public_mapping_get_string_key(
+        record,
+        "_comment_evm_source_deployment_block_hash",
+    )
     block_hash = _hex_bytes(receipt_block_hash, byte_length=32)
     if block_hash is None or not any(block_hash):
         errors.append(
@@ -2754,7 +2832,10 @@ def _check_evm_live_source_bridge_evidence(
             "EVM source deployment transaction block hash metadata must match "
             "deployment receipt block hash metadata"
         )
-    receipt_block_number = record.get("_comment_evm_source_deployment_block_number")
+    receipt_block_number = _public_mapping_get_string_key(
+        record,
+        "_comment_evm_source_deployment_block_number",
+    )
     if not _is_canonical_decimal_text(receipt_block_number, positive=True):
         errors.append(
             "EVM source deployment block number metadata must be a positive integer"
@@ -2771,8 +2852,9 @@ def _check_evm_live_source_bridge_evidence(
             "EVM source deployment transaction block number metadata must match "
             "deployment receipt block number metadata"
         )
-    receipt_block_receipts_root = record.get(
-        "_comment_evm_source_deployment_block_receipts_root"
+    receipt_block_receipts_root = _public_mapping_get_string_key(
+        record,
+        "_comment_evm_source_deployment_block_receipts_root",
     )
     receipts_root = _hex_bytes(receipt_block_receipts_root, byte_length=32)
     if receipts_root is None or not any(receipts_root):
@@ -2812,7 +2894,10 @@ def _check_deployment(
         "finality_policy_hash",
     )
     for field in shared_fields:
-        if not _builtin_scalar_equal(record.get(field), material.get(field)):
+        if not _builtin_scalar_equal(
+            _public_mapping_get_string_key(record, field),
+            _public_mapping_get_string_key(material, field),
+        ):
             errors.append(f"{field} must match source verifier material")
 
     optional_shared = (
@@ -2826,8 +2911,8 @@ def _check_deployment(
         "source_bridge_config_hash",
     )
     for field in optional_shared:
-        material_value = material.get(field)
-        deployment_value = record.get(field)
+        material_value = _public_mapping_get_string_key(material, field)
+        deployment_value = _public_mapping_get_string_key(record, field)
         if _scalar_absent(material_value) and _scalar_absent(deployment_value):
             continue
         if not _builtin_scalar_equal(deployment_value, material_value):
@@ -2911,8 +2996,8 @@ def _source_adapter_args(
     deployment: dict[str, Any],
 ) -> SimpleNamespace:
     return SimpleNamespace(
-        source_domain=material["source_domain"],
-        target_domain=deployment["target_domain"],
+        source_domain=_public_mapping_get_string_key(material, "source_domain"),
+        target_domain=_public_mapping_get_string_key(deployment, "target_domain"),
         source_trust_anchor_hash=_required_hex_bytes(
             material,
             "source_trust_anchor_hash",
@@ -2956,8 +3041,8 @@ def _evm_source_bridge_args(
     deployment: dict[str, Any],
 ) -> SimpleNamespace:
     return SimpleNamespace(
-        source_domain=material["source_domain"],
-        target_domain=deployment["target_domain"],
+        source_domain=_public_mapping_get_string_key(material, "source_domain"),
+        target_domain=_public_mapping_get_string_key(deployment, "target_domain"),
         source_trust_anchor_hash=_required_hex_bytes(
             material,
             "source_trust_anchor_hash",
@@ -3007,8 +3092,8 @@ def _tron_source_bridge_args(
     deployment: dict[str, Any],
 ) -> SimpleNamespace:
     return SimpleNamespace(
-        source_domain=material["source_domain"],
-        target_domain=deployment["target_domain"],
+        source_domain=_public_mapping_get_string_key(material, "source_domain"),
+        target_domain=_public_mapping_get_string_key(deployment, "target_domain"),
         source_trust_anchor_hash=_required_exact_hex_bytes(
             material,
             "source_trust_anchor_hash",
@@ -3277,11 +3362,14 @@ def route_allowlist_hash_for_lane_evidence(
 
 def _expected_route_allowlist_hash(
     profile: LaneProfile,
-    source_record_hashes: dict[str, str],
-    destination_binding: dict[str, Any],
+    source_record_hashes: dict[Any, Any],
+    destination_binding: dict[Any, Any],
 ) -> bytes:
     source_verifier_material_hash = _hex_bytes(
-        source_record_hashes.get("source_verifier_material_hash"),
+        _public_mapping_get_string_key(
+            source_record_hashes,
+            "source_verifier_material_hash",
+        ),
         byte_length=32,
     )
     if source_verifier_material_hash is None or not any(source_verifier_material_hash):
@@ -3289,7 +3377,10 @@ def _expected_route_allowlist_hash(
             "source_verifier_material_hash must be a non-zero 32-byte hex value"
         )
     source_adapter_engine_deployment_hash = _hex_bytes(
-        source_record_hashes.get("source_adapter_engine_deployment_hash"),
+        _public_mapping_get_string_key(
+            source_record_hashes,
+            "source_adapter_engine_deployment_hash",
+        ),
         byte_length=32,
     )
     if source_adapter_engine_deployment_hash is None or not any(
@@ -3299,7 +3390,10 @@ def _expected_route_allowlist_hash(
             "source_adapter_engine_deployment_hash must be a non-zero 32-byte hex value"
         )
     destination_binding_hash = _hex_bytes(
-        destination_binding.get("expected_destination_binding_hash"),
+        _public_mapping_get_string_key(
+            destination_binding,
+            "expected_destination_binding_hash",
+        ),
         byte_length=32,
     )
     if destination_binding_hash is None or not any(destination_binding_hash):
@@ -3485,7 +3579,7 @@ def _source_adapter_gate_summary(
     gate_hash = ""
     if deployment is not None:
         for field in required_fields:
-            value = deployment.get(field)
+            value = _public_mapping_get_string_key(deployment, field)
             if type(value) is str:
                 audit_hashes[field] = value
             if field == gate_field and type(value) is str:
@@ -3502,21 +3596,32 @@ def _source_adapter_gate_summary(
         blockers.extend(gate_checker(material, deployment))
     source_material_hash = source_record_hashes.get("source_verifier_material_hash")
     if source_material_hash is None and material is not None:
-        source_material_hash = material.get("_comment_source_verifier_material_hash")
+        source_material_hash = _public_mapping_get_string_key(
+            material,
+            "_comment_source_verifier_material_hash",
+        )
     source_deployment_hash = source_record_hashes.get(
         "source_adapter_engine_deployment_hash"
     )
     if source_deployment_hash is None and deployment is not None:
-        source_deployment_hash = deployment.get(
-            "_comment_source_adapter_engine_deployment_hash"
+        source_deployment_hash = _public_mapping_get_string_key(
+            deployment,
+            "_comment_source_adapter_engine_deployment_hash",
         )
-    route_canary_evidence_hash = route_allowlist_summary.get("route_canary", {}).get(
-        "evidence_hash"
+    route_canary_summary = _public_mapping_get_string_key(
+        route_allowlist_summary,
+        "route_canary",
+    )
+    route_canary_evidence_hash = (
+        _public_mapping_get_string_key(route_canary_summary, "evidence_hash")
+        if type(route_canary_summary) is dict
+        else None
     )
     if route_canary_evidence_hash is None and route_record is not None:
-        route_canary_evidence_hash = route_record.get(
+        route_canary_evidence_hash = _first_record_value(
+            route_record,
             "route_canary_evidence_hash",
-            route_record.get("_comment_route_canary_evidence_hash"),
+            "_comment_route_canary_evidence_hash",
         )
     role_fields: list[tuple[str, bytes | None]] = [
         (
@@ -3536,14 +3641,20 @@ def _source_adapter_gate_summary(
         (
             "destination_binding_hash",
             _hex_bytes(
-                destination_binding.get("destination_binding_hash"),
+                _public_mapping_get_string_key(
+                    destination_binding,
+                    "destination_binding_hash",
+                ),
                 byte_length=32,
             ),
         ),
         (
             "route_allowlist_hash",
             _hex_bytes(
-                route_allowlist_summary.get("route_allowlist_hash"),
+                _public_mapping_get_string_key(
+                    route_allowlist_summary,
+                    "route_allowlist_hash",
+                ),
                 byte_length=32,
             ),
         ),
@@ -3555,7 +3666,6 @@ def _source_adapter_gate_summary(
             ),
         ),
     ]
-    route_canary_summary = route_allowlist_summary.get("route_canary")
     if type(route_canary_summary) is dict or route_record is not None:
         route_canary_summary_map = (
             route_canary_summary if type(route_canary_summary) is dict else {}
@@ -3565,7 +3675,10 @@ def _source_adapter_gate_summary(
         for field in _public_lane_route_canary_source_gate_hash_role_fields(
             profile.domain
         ):
-            route_canary_value = route_canary_summary_map.get(field)
+            route_canary_value = _public_mapping_get_string_key(
+                route_canary_summary_map,
+                field,
+            )
             if route_canary_value is None and route_record is not None:
                 comment_fields = [
                     f"_comment_route_canary_{field}",
@@ -3577,8 +3690,11 @@ def _source_adapter_gate_summary(
                         f"_comment_ton_route_canary_{field.removeprefix('ton_')}"
                     )
                 for comment_field in comment_fields:
-                    if comment_field in route_record:
-                        route_canary_value = route_record.get(comment_field)
+                    if _public_mapping_has_string_key(route_record, comment_field):
+                        route_canary_value = _public_mapping_get_string_key(
+                            route_record,
+                            comment_field,
+                        )
                         break
             role_fields.append(
                 (
@@ -3623,7 +3739,7 @@ def _check_tron_source_bridge_config_hash(material: dict[str, Any]) -> list[str]
                 "source_bridge_network_id",
                 byte_length=32,
             ),
-            source_domain=material["source_domain"],
+            source_domain=_public_mapping_get_string_key(material, "source_domain"),
             target_domain=SCCP_DOMAIN_SORA,
             owner_address=_required_exact_hex_bytes(
                 material,
@@ -3662,7 +3778,7 @@ def _check_eth_source_bridge_config_hash(material: dict[str, Any]) -> list[str]:
                 "source_bridge_network_id",
                 byte_length=32,
             ),
-            source_domain=material["source_domain"],
+            source_domain=_public_mapping_get_string_key(material, "source_domain"),
             target_domain=SCCP_DOMAIN_SORA,
         )
         configured = _required_exact_hex_bytes(
@@ -3689,7 +3805,10 @@ def _check_required_hash_comment(
     label: str,
 ) -> None:
     expected = _hex_bytes(expected_hash, byte_length=32)
-    observed = _hex_bytes(record.get(comment_field), byte_length=32)
+    observed = _hex_bytes(
+        _public_mapping_get_string_key(record, comment_field),
+        byte_length=32,
+    )
     if observed is None or not any(observed):
         errors.append(f"{label} metadata must be a non-zero 32-byte hex value")
     elif expected is not None and observed != expected:
@@ -3731,7 +3850,7 @@ def _check_source_record_hash_comments(
 
 def _first_record_value(record: dict[str, Any], *fields: str) -> Any:
     for field in fields:
-        value = record.get(field)
+        value = _public_mapping_get_string_key(record, field)
         if value is None:
             continue
         if type(value) is str and value == "":
@@ -3749,8 +3868,8 @@ def _check_hex_comment_matches_record(
     label: str,
     byte_length: int,
 ) -> None:
-    value = record.get(field)
-    comment = record.get(comment_field)
+    value = _public_mapping_get_string_key(record, field)
+    comment = _public_mapping_get_string_key(record, comment_field)
     if value is None or comment is None:
         return
     if (type(value) is str and value == "") or (
@@ -3776,8 +3895,8 @@ def _check_string_comment_matches_record(
     *,
     label: str,
 ) -> None:
-    value = record.get(field)
-    comment = record.get(comment_field)
+    value = _public_mapping_get_string_key(record, field)
+    comment = _public_mapping_get_string_key(record, comment_field)
     if value is None or comment is None:
         return
     if (type(value) is str and value == "") or (
@@ -3835,7 +3954,7 @@ def _expected_destination_binding(
             source_domain=SCCP_DOMAIN_SORA,
             target_domain=profile.domain,
             verifier_address=module.parse_evm_address(
-                destination["verifier_identity"],
+                _public_mapping_get_string_key(destination, "verifier_identity"),
                 label="verifier_identity",
             ),
             bridge_address=bridge_address,
@@ -3855,7 +3974,7 @@ def _expected_destination_binding(
             source_domain=SCCP_DOMAIN_SORA,
             target_domain=profile.domain,
             verifier_address=module.parse_evm_address(
-                destination["verifier_identity"],
+                _public_mapping_get_string_key(destination, "verifier_identity"),
                 label="verifier_identity",
             ),
             bridge_address=bridge_address,
@@ -3914,7 +4033,10 @@ def _expected_destination_binding(
             "network_id": network_id,
             "source_domain": SCCP_DOMAIN_SORA,
             "target_domain": SCCP_DOMAIN_TRON,
-            "verifier_address": destination["verifier_identity"],
+            "verifier_address": _public_mapping_get_string_key(
+                destination,
+                "verifier_identity",
+            ),
             "verifier_code_hash": verifier_code_hash,
             "verifier_key_hash": verifier_key_hash,
             "proof_family": SCCP_PROOF_FAMILY_STARK_FRI,
@@ -4104,14 +4226,18 @@ def _check_destination_rollout(profile: LaneProfile, record: dict[str, Any]) -> 
     _expect(errors, record, "immutable_verifier_ready", True)
     _expect(errors, record, "anchors_ready", True)
     _expect(errors, record, "anchor_id", profile.destination_anchor_id)
-    if not _is_nonempty_string(record.get("verifier_identity")):
+    if not _is_nonempty_string(
+        _public_mapping_get_string_key(record, "verifier_identity")
+    ):
         errors.append("verifier_identity must be present")
     else:
         errors.extend(_check_destination_verifier_identity(profile, record))
     _expect_nonzero_hex(errors, record, "verifier_code_hash")
     if profile.destination_verifier_key_hash_required:
         _expect_nonzero_hex(errors, record, "verifier_key_hash")
-    elif not _scalar_absent(record.get("verifier_key_hash")):
+    elif not _scalar_absent(
+        _public_mapping_get_string_key(record, "verifier_key_hash")
+    ):
         errors.append("verifier_key_hash must be absent for this lane")
     if profile.chain in ("eth", "bsc"):
         errors.extend(_check_evm_live_bridge_evidence(profile, record))
@@ -4130,7 +4256,10 @@ def _check_tron_live_destination_verifier_evidence(
 ) -> list[str]:
     errors: list[str] = []
     module = _load_sibling_module("sccp_tron_source_bridge_evidence.py")
-    address = record.get("_comment_tron_destination_verifier_address")
+    address = _public_mapping_get_string_key(
+        record,
+        "_comment_tron_destination_verifier_address",
+    )
     try:
         observed_address = (
             module.parse_tron_address(address, label="TRON destination verifier")
@@ -4138,7 +4267,7 @@ def _check_tron_live_destination_verifier_evidence(
             else None
         )
         expected_address = module.parse_tron_address(
-            record.get("verifier_identity"),
+            _public_mapping_get_string_key(record, "verifier_identity"),
             label="verifier_identity",
         )
     except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
@@ -4156,11 +4285,14 @@ def _check_tron_live_destination_verifier_evidence(
         )
 
     verifier_code_hash = _exact_hex_bytes(
-        record.get("_comment_tron_destination_verifier_code_hash"),
+        _public_mapping_get_string_key(
+            record,
+            "_comment_tron_destination_verifier_code_hash",
+        ),
         byte_length=32,
     )
     configured_code_hash = _exact_hex_bytes(
-        record.get("verifier_code_hash"),
+        _public_mapping_get_string_key(record, "verifier_code_hash"),
         byte_length=32,
     )
     if verifier_code_hash is None or not any(verifier_code_hash):
@@ -4173,8 +4305,9 @@ def _check_tron_live_destination_verifier_evidence(
             "TRON destination verifier runtime code hash metadata must match "
             "verifier_code_hash"
         )
-    verifier_runtime_bytecode = record.get(
-        "_comment_tron_destination_verifier_runtime_bytecode_hex"
+    verifier_runtime_bytecode = _public_mapping_get_string_key(
+        record,
+        "_comment_tron_destination_verifier_runtime_bytecode_hex",
     )
     if not _is_nonempty_string(verifier_runtime_bytecode):
         errors.append(
@@ -4204,11 +4337,14 @@ def _check_tron_live_destination_verifier_evidence(
                     "verifier_code_hash"
                 )
     verifier_key_hash = _exact_hex_bytes(
-        record.get("_comment_tron_destination_verifier_key_hash"),
+        _public_mapping_get_string_key(
+            record,
+            "_comment_tron_destination_verifier_key_hash",
+        ),
         byte_length=32,
     )
     configured_key_hash = _exact_hex_bytes(
-        record.get("verifier_key_hash"),
+        _public_mapping_get_string_key(record, "verifier_key_hash"),
         byte_length=32,
     )
     if verifier_key_hash is None or not any(verifier_key_hash):
@@ -4222,7 +4358,10 @@ def _check_tron_live_destination_verifier_evidence(
             "verifier_key_hash"
         )
     verifier_backend_hash = _exact_hex_bytes(
-        record.get("_comment_tron_destination_verifier_backend_hash"),
+        _public_mapping_get_string_key(
+            record,
+            "_comment_tron_destination_verifier_backend_hash",
+        ),
         byte_length=32,
     )
     expected_backend_hash = module._keccak_256(
@@ -4239,7 +4378,10 @@ def _check_tron_live_destination_verifier_evidence(
             "tron-groth16-bn254-v1"
         )
     proof_family_hash = _exact_hex_bytes(
-        record.get("_comment_tron_destination_proof_family_hash"),
+        _public_mapping_get_string_key(
+            record,
+            "_comment_tron_destination_proof_family_hash",
+        ),
         byte_length=32,
     )
     expected_proof_family_hash = module._keccak_256(
@@ -4263,9 +4405,12 @@ def _check_evm_live_bridge_evidence(
 ) -> list[str]:
     errors: list[str] = []
     module = _load_sibling_module("sccp_evm_destination_evidence.py")
-    verifier_address = _hex_bytes(record.get("verifier_identity"), byte_length=20)
+    verifier_address = _hex_bytes(
+        _public_mapping_get_string_key(record, "verifier_identity"),
+        byte_length=20,
+    )
     bridge_address = _hex_bytes(
-        record.get("destination_bridge_address"),
+        _public_mapping_get_string_key(record, "destination_bridge_address"),
         byte_length=20,
     )
     if (
@@ -4277,7 +4422,7 @@ def _check_evm_live_bridge_evidence(
             "EVM destination verifier_identity must differ from destination_bridge_address"
         )
 
-    rpc_chain_id = record.get("_comment_evm_rpc_chain_id")
+    rpc_chain_id = _public_mapping_get_string_key(record, "_comment_evm_rpc_chain_id")
     expected_chain_id = EVM_EXPECTED_RPC_CHAIN_IDS[profile.domain]
     if not _is_canonical_decimal_text(rpc_chain_id, positive=True):
         errors.append(
@@ -4292,7 +4437,10 @@ def _check_evm_live_bridge_evidence(
     # Source-inventory marker: Ethereum destination live block-tag metadata must be finalized
     # Source-inventory marker: BSC destination live block-tag metadata must be latest
     expected_block_tag = "finalized" if profile.domain == SCCP_DOMAIN_ETH else "latest"
-    destination_block_tag = record.get("_comment_evm_block_tag")
+    destination_block_tag = _public_mapping_get_string_key(
+        record,
+        "_comment_evm_block_tag",
+    )
     if (
         type(destination_block_tag) is not str
         or destination_block_tag != expected_block_tag
@@ -4303,7 +4451,7 @@ def _check_evm_live_bridge_evidence(
         )
 
     bridge_code_hash = _hex_bytes(
-        record.get("_comment_evm_bridge_code_hash"),
+        _public_mapping_get_string_key(record, "_comment_evm_bridge_code_hash"),
         byte_length=32,
     )
     if bridge_code_hash is None or not any(bridge_code_hash):
@@ -4311,7 +4459,10 @@ def _check_evm_live_bridge_evidence(
             "EVM bridge runtime code hash metadata must be a non-zero "
             "32-byte hex value"
         )
-    bridge_runtime_bytecode = record.get("_comment_evm_bridge_runtime_bytecode_hex")
+    bridge_runtime_bytecode = _public_mapping_get_string_key(
+        record,
+        "_comment_evm_bridge_runtime_bytecode_hex",
+    )
     if not _is_nonempty_string(bridge_runtime_bytecode):
         errors.append("EVM bridge runtime bytecode metadata must be present")
     else:
@@ -4334,11 +4485,11 @@ def _check_evm_live_bridge_evidence(
                 )
 
     verifier_code_hash = _hex_bytes(
-        record.get("_comment_evm_verifier_code_hash"),
+        _public_mapping_get_string_key(record, "_comment_evm_verifier_code_hash"),
         byte_length=32,
     )
     configured_verifier_code_hash = _hex_bytes(
-        record.get("verifier_code_hash"),
+        _public_mapping_get_string_key(record, "verifier_code_hash"),
         byte_length=32,
     )
     if verifier_code_hash is None or not any(verifier_code_hash):
@@ -4350,7 +4501,10 @@ def _check_evm_live_bridge_evidence(
         errors.append(
             "EVM verifier runtime code hash metadata must match verifier_code_hash"
         )
-    verifier_runtime_bytecode = record.get("_comment_evm_verifier_runtime_bytecode_hex")
+    verifier_runtime_bytecode = _public_mapping_get_string_key(
+        record,
+        "_comment_evm_verifier_runtime_bytecode_hex",
+    )
     if not _is_nonempty_string(verifier_runtime_bytecode):
         errors.append("EVM verifier runtime bytecode metadata must be present")
     else:
@@ -4380,11 +4534,11 @@ def _check_evm_live_bridge_evidence(
                 )
 
     verifier_key_hash = _hex_bytes(
-        record.get("_comment_evm_verifier_key_hash"),
+        _public_mapping_get_string_key(record, "_comment_evm_verifier_key_hash"),
         byte_length=32,
     )
     configured_verifier_key_hash = _hex_bytes(
-        record.get("verifier_key_hash"),
+        _public_mapping_get_string_key(record, "verifier_key_hash"),
         byte_length=32,
     )
     if verifier_key_hash is None or not any(verifier_key_hash):
@@ -4395,7 +4549,7 @@ def _check_evm_live_bridge_evidence(
         errors.append("EVM verifier key hash metadata must match verifier_key_hash")
 
     verifier_backend_hash = _hex_bytes(
-        record.get("_comment_evm_verifier_backend_hash"),
+        _public_mapping_get_string_key(record, "_comment_evm_verifier_backend_hash"),
         byte_length=32,
     )
     expected_backend_hash = module.evm_verifier_backend_hash()
@@ -4409,7 +4563,7 @@ def _check_evm_live_bridge_evidence(
         )
 
     proof_family_hash = _hex_bytes(
-        record.get("_comment_evm_proof_family_hash"),
+        _public_mapping_get_string_key(record, "_comment_evm_proof_family_hash"),
         byte_length=32,
     )
     expected_proof_family_hash = module.evm_proof_family_hash()
@@ -4427,7 +4581,7 @@ def _check_solana_live_programdata_evidence(record: dict[str, Any]) -> list[str]
     module = _load_sibling_module("sccp_solana_destination_evidence.py")
 
     def parse_positive_decimal(field: str, label: str) -> int | None:
-        value = record.get(field)
+        value = _public_mapping_get_string_key(record, field)
         if not _is_canonical_decimal_text(value, positive=True):
             errors.append(f"{label} must be a positive decimal string")
             return None
@@ -4438,7 +4592,7 @@ def _check_solana_live_programdata_evidence(record: dict[str, Any]) -> list[str]
         return parsed
 
     def decode_comment_base64(field: str, label: str) -> bytes | None:
-        value = record.get(field)
+        value = _public_mapping_get_string_key(record, field)
         if not _is_nonempty_string(value):
             errors.append(f"{label} must be present")
             return None
@@ -4455,8 +4609,8 @@ def _check_solana_live_programdata_evidence(record: dict[str, Any]) -> list[str]
             return None
 
     def require_matching_string(actual_key: str, comment_key: str, label: str) -> None:
-        actual = record.get(actual_key)
-        comment = record.get(comment_key)
+        actual = _public_mapping_get_string_key(record, actual_key)
+        comment = _public_mapping_get_string_key(record, comment_key)
         if actual is None or comment is None:
             return
         if type(actual) is not str or type(comment) is not str:
@@ -4466,8 +4620,8 @@ def _check_solana_live_programdata_evidence(record: dict[str, Any]) -> list[str]
             errors.append(f"{label} field must match {comment_key} comment")
 
     def require_matching_bool(actual_key: str, comment_key: str, label: str) -> None:
-        actual = record.get(actual_key)
-        comment = record.get(comment_key)
+        actual = _public_mapping_get_string_key(record, actual_key)
+        comment = _public_mapping_get_string_key(record, comment_key)
         if actual is None or comment is None:
             return
         if (
@@ -4481,7 +4635,7 @@ def _check_solana_live_programdata_evidence(record: dict[str, Any]) -> list[str]
             errors.append(f"{label} field must match {comment_key} comment")
 
     def exact_comment_value(field: str) -> str | None:
-        value = record.get(field)
+        value = _public_mapping_get_string_key(record, field)
         if type(value) is str:
             return value
         return None
@@ -4577,7 +4731,10 @@ def _check_solana_live_programdata_evidence(record: dict[str, Any]) -> list[str]
     ):
         errors.append("Solana Program account data length metadata must be 36 bytes")
 
-    programdata_address = record.get("_comment_solana_programdata_address")
+    programdata_address = _public_mapping_get_string_key(
+        record,
+        "_comment_solana_programdata_address",
+    )
     programdata_raw: bytes | None = None
     if not _is_nonempty_string(programdata_address):
         errors.append(
@@ -4594,7 +4751,10 @@ def _check_solana_live_programdata_evidence(record: dict[str, Any]) -> list[str]
                 programdata_address,
                 label="Solana ProgramData account",
             )
-            verifier_identity = record.get("verifier_identity")
+            verifier_identity = _public_mapping_get_string_key(
+                record,
+                "verifier_identity",
+            )
             if (
                 _is_nonempty_string(verifier_identity)
                 and programdata_address == verifier_identity
@@ -4672,7 +4832,10 @@ def _check_solana_live_programdata_evidence(record: dict[str, Any]) -> list[str]
         )
 
     programdata_metadata_hash = _hex_bytes(
-        record.get("_comment_solana_programdata_metadata_blake2b256"),
+        _public_mapping_get_string_key(
+            record,
+            "_comment_solana_programdata_metadata_blake2b256",
+        ),
         byte_length=32,
     )
     if programdata_metadata_hash is None or not any(programdata_metadata_hash):
@@ -4720,7 +4883,10 @@ def _check_solana_live_programdata_evidence(record: dict[str, Any]) -> list[str]
                 )
 
     programdata_code_hash = _hex_bytes(
-        record.get("_comment_solana_programdata_code_hash"),
+        _public_mapping_get_string_key(
+            record,
+            "_comment_solana_programdata_code_hash",
+        ),
         byte_length=32,
     )
     if programdata_code_hash is None or not any(programdata_code_hash):
@@ -4729,13 +4895,17 @@ def _check_solana_live_programdata_evidence(record: dict[str, Any]) -> list[str]
             "32-byte hex value"
         )
     else:
-        verifier_code_hash = _hex_bytes(record.get("verifier_code_hash"), byte_length=32)
+        verifier_code_hash = _hex_bytes(
+            _public_mapping_get_string_key(record, "verifier_code_hash"),
+            byte_length=32,
+        )
         if verifier_code_hash != programdata_code_hash:
             errors.append(
                 "Solana ProgramData executable hash must match verifier_code_hash"
             )
-    programdata_executable_base64 = record.get(
-        "_comment_solana_programdata_executable_base64"
+    programdata_executable_base64 = _public_mapping_get_string_key(
+        record,
+        "_comment_solana_programdata_executable_base64",
     )
     if not _is_nonempty_string(programdata_executable_base64):
         errors.append("Solana ProgramData executable base64 metadata must be present")
@@ -4754,7 +4924,7 @@ def _check_solana_live_programdata_evidence(record: dict[str, Any]) -> list[str]
             )
         else:
             verifier_code_hash = _hex_bytes(
-                record.get("verifier_code_hash"),
+                _public_mapping_get_string_key(record, "verifier_code_hash"),
                 byte_length=32,
             )
             if (
@@ -4785,8 +4955,8 @@ def _check_ton_live_account_evidence(record: dict[str, Any]) -> list[str]:
         *,
         label: str,
     ) -> None:
-        actual = record.get(actual_key)
-        comment = record.get(comment_key)
+        actual = _public_mapping_get_string_key(record, actual_key)
+        comment = _public_mapping_get_string_key(record, comment_key)
         if not _is_nonempty_string(comment):
             errors.append(f"TON {label} comment must be present")
             return
@@ -4796,7 +4966,7 @@ def _check_ton_live_account_evidence(record: dict[str, Any]) -> list[str]:
         if actual != comment:
             errors.append(f"TON {label} comment must match {actual_key}")
 
-    account_status = record.get("ton_account_status")
+    account_status = _public_mapping_get_string_key(record, "ton_account_status")
     require_matching_comment(
         "ton_account_status",
         "_comment_ton_account_status",
@@ -4806,7 +4976,7 @@ def _check_ton_live_account_evidence(record: dict[str, Any]) -> list[str]:
         errors.append("TON live account status metadata must be active")
 
     account_state_hash = _hex_bytes(
-        record.get("ton_account_state_hash"),
+        _public_mapping_get_string_key(record, "ton_account_state_hash"),
         byte_length=32,
     )
     require_matching_comment(
@@ -4819,7 +4989,10 @@ def _check_ton_live_account_evidence(record: dict[str, Any]) -> list[str]:
             "TON account state hash metadata must be a non-zero 32-byte hex value"
         )
 
-    last_transaction_lt = record.get("ton_last_transaction_lt")
+    last_transaction_lt = _public_mapping_get_string_key(
+        record,
+        "ton_last_transaction_lt",
+    )
     require_matching_comment(
         "ton_last_transaction_lt",
         "_comment_ton_last_transaction_lt",
@@ -4831,7 +5004,7 @@ def _check_ton_live_account_evidence(record: dict[str, Any]) -> list[str]:
         errors.append("TON last transaction LT metadata must be a positive decimal string")
 
     last_transaction_hash = _hex_bytes(
-        record.get("ton_last_transaction_hash"),
+        _public_mapping_get_string_key(record, "ton_last_transaction_hash"),
         byte_length=32,
     )
     require_matching_comment(
@@ -4844,8 +5017,14 @@ def _check_ton_live_account_evidence(record: dict[str, Any]) -> list[str]:
             "TON last transaction hash metadata must be a non-zero 32-byte hex value"
         )
 
-    verifier_code_hash = _hex_bytes(record.get("verifier_code_hash"), byte_length=32)
-    code_hash = _hex_bytes(record.get("_comment_ton_code_hash"), byte_length=32)
+    verifier_code_hash = _hex_bytes(
+        _public_mapping_get_string_key(record, "verifier_code_hash"),
+        byte_length=32,
+    )
+    code_hash = _hex_bytes(
+        _public_mapping_get_string_key(record, "_comment_ton_code_hash"),
+        byte_length=32,
+    )
     if code_hash is None or not any(code_hash):
         errors.append(
             "TON code hash metadata must be a non-zero 32-byte hex value"
@@ -4854,7 +5033,7 @@ def _check_ton_live_account_evidence(record: dict[str, Any]) -> list[str]:
         errors.append("TON code hash metadata must match verifier_code_hash")
 
     code_boc_root_hash = _hex_bytes(
-        record.get("ton_verifier_code_boc_root_hash"),
+        _public_mapping_get_string_key(record, "ton_verifier_code_boc_root_hash"),
         byte_length=32,
     )
     require_matching_comment(
@@ -4869,11 +5048,14 @@ def _check_ton_live_account_evidence(record: dict[str, Any]) -> list[str]:
     elif verifier_code_hash is not None and code_boc_root_hash != verifier_code_hash:
         errors.append("TON code BoC root hash metadata must match verifier_code_hash")
 
-    code_boc_hash_matches = record.get("_comment_ton_code_boc_hash_matches")
+    code_boc_hash_matches = _public_mapping_get_string_key(
+        record,
+        "_comment_ton_code_boc_hash_matches",
+    )
     if type(code_boc_hash_matches) is not str or code_boc_hash_matches != "true":
         errors.append("TON code BoC hash match metadata must be true")
 
-    code_boc_hex = record.get("ton_verifier_code_boc")
+    code_boc_hex = _public_mapping_get_string_key(record, "ton_verifier_code_boc")
     if not _is_nonempty_string(code_boc_hex):
         errors.append("TON verifier code BoC metadata must be present")
     else:
@@ -4897,7 +5079,10 @@ def _check_ton_live_account_evidence(record: dict[str, Any]) -> list[str]:
             if verifier_code_hash is not None and derived_code_boc_root_hash != verifier_code_hash:
                 errors.append("TON verifier code BoC root must match verifier_code_hash")
 
-            code_boc_base64 = record.get("_comment_ton_code_boc_base64")
+            code_boc_base64 = _public_mapping_get_string_key(
+                record,
+                "_comment_ton_code_boc_base64",
+            )
             if not _is_nonempty_string(code_boc_base64):
                 errors.append("TON code BoC base64 metadata must be present")
             else:
@@ -4963,7 +5148,10 @@ def _check_route_allowlist(
     _expect_nonzero_hex(errors, record, "route_allowlist_hash")
     errors.extend(_blocker_list_errors(record, "route allowlist"))
 
-    supplied_hash_raw = _hex_bytes(record.get("route_allowlist_hash"), byte_length=32)
+    supplied_hash_raw = _hex_bytes(
+        _public_mapping_get_string_key(record, "route_allowlist_hash"),
+        byte_length=32,
+    )
     if supplied_hash_raw is not None and any(supplied_hash_raw):
         summary["route_allowlist_hash"] = _hex(supplied_hash_raw)
     try:
@@ -5042,8 +5230,8 @@ def _check_route_canary_decimal_comment_matches_record(
     if type(positive) is not bool:
         raise ValueError("route canary decimal comment positive must be a boolean")
 
-    value = record.get(field)
-    comment = record.get(comment_field)
+    value = _public_mapping_get_string_key(record, field)
+    comment = _public_mapping_get_string_key(record, comment_field)
     if _route_canary_scalar_absent(value) or _route_canary_scalar_absent(comment):
         return
 
@@ -5078,8 +5266,8 @@ def _check_route_canary_log_index_comment_matches_record(
     *,
     label: str,
 ) -> None:
-    value = record.get(field)
-    comment = record.get(comment_field)
+    value = _public_mapping_get_string_key(record, field)
+    comment = _public_mapping_get_string_key(record, comment_field)
     if _route_canary_scalar_absent(value) or _route_canary_scalar_absent(comment):
         return
 
@@ -5101,8 +5289,8 @@ def _check_route_canary_bool_comment_matches_record(
     *,
     label: str,
 ) -> None:
-    value = record.get(field)
-    comment = record.get(comment_field)
+    value = _public_mapping_get_string_key(record, field)
+    comment = _public_mapping_get_string_key(record, comment_field)
     if _route_canary_scalar_absent(value):
         return
 
@@ -5173,7 +5361,8 @@ def _check_evm_route_canary_transaction_evidence(
         "_comment_evm_route_canary_used_message_proof",
     )
     if not any(
-        not _route_canary_scalar_absent(record.get(field)) for field in fields
+        not _route_canary_scalar_absent(_public_mapping_get_string_key(record, field))
+        for field in fields
     ):
         return ["EVM route canary transaction metadata must be present"]
     errors: list[str] = []
@@ -5620,7 +5809,9 @@ def _check_evm_route_canary_transaction_evidence(
     )
     if network_id is None or not any(network_id):
         errors.append("EVM route canary network id metadata must be a non-zero bytes32")
-    destination_domain = _canonical_route_canary_log_index(destination_record.get("domain"))
+    destination_domain = _canonical_route_canary_log_index(
+        _public_mapping_get_string_key(destination_record, "domain")
+    )
     if destination_domain not in (SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC):
         errors.append("EVM route canary destination domain metadata must be ETH or BSC")
     if target_domain is not None and destination_domain is not None:
@@ -5629,7 +5820,10 @@ def _check_evm_route_canary_transaction_evidence(
                 "EVM route canary target domain metadata must match destination rollout"
             )
     verifier_backend_hash = _exact_hex_bytes(
-        destination_record.get("_comment_evm_verifier_backend_hash"),
+        _public_mapping_get_string_key(
+            destination_record,
+            "_comment_evm_verifier_backend_hash",
+        ),
         byte_length=32,
     )
     if verifier_backend_hash is None or not any(verifier_backend_hash):
@@ -5637,7 +5831,10 @@ def _check_evm_route_canary_transaction_evidence(
             "EVM route canary verifier backend hash metadata must be a non-zero bytes32"
         )
     proof_family_hash = _exact_hex_bytes(
-        destination_record.get("_comment_evm_proof_family_hash"),
+        _public_mapping_get_string_key(
+            destination_record,
+            "_comment_evm_proof_family_hash",
+        ),
         byte_length=32,
     )
     if proof_family_hash is None or not any(proof_family_hash):
@@ -5775,7 +5972,8 @@ def _check_tron_route_canary_transaction_evidence(
         "_comment_tron_route_canary_signature_recovers_to_owner",
     )
     if not any(
-        not _route_canary_scalar_absent(record.get(field)) for field in fields
+        not _route_canary_scalar_absent(_public_mapping_get_string_key(record, field))
+        for field in fields
     ):
         return ["TRON route canary transaction metadata must be present"]
     errors: list[str] = []
@@ -6254,7 +6452,10 @@ def _check_tron_route_canary_transaction_evidence(
     if network_id is None or not any(network_id):
         errors.append("TRON route canary network id metadata must be a non-zero bytes32")
     verifier_backend_hash = _exact_hex_bytes(
-        destination_record.get("_comment_tron_destination_verifier_backend_hash"),
+        _public_mapping_get_string_key(
+            destination_record,
+            "_comment_tron_destination_verifier_backend_hash",
+        ),
         byte_length=32,
     )
     if verifier_backend_hash is None or not any(verifier_backend_hash):
@@ -6262,7 +6463,10 @@ def _check_tron_route_canary_transaction_evidence(
             "TRON route canary verifier backend hash metadata must be a non-zero bytes32"
         )
     proof_family_hash = _exact_hex_bytes(
-        destination_record.get("_comment_tron_destination_proof_family_hash"),
+        _public_mapping_get_string_key(
+            destination_record,
+            "_comment_tron_destination_proof_family_hash",
+        ),
         byte_length=32,
     )
     if proof_family_hash is None or not any(proof_family_hash):
@@ -6498,7 +6702,10 @@ def _check_ton_route_canary_live_account_evidence(
         )
 
     module = _load_sibling_module("sccp_ton_destination_evidence.py")
-    raw_verifier_identity = destination_record.get("verifier_identity")
+    raw_verifier_identity = _public_mapping_get_string_key(
+        destination_record,
+        "verifier_identity",
+    )
     if not _is_nonempty_string(raw_verifier_identity):
         errors.append("TON route canary verifier identity is invalid")
         verifier_identity = None
@@ -6512,7 +6719,7 @@ def _check_ton_route_canary_live_account_evidence(
             errors.append("TON route canary verifier identity is invalid")
             verifier_identity = None
     verifier_code_hash = _exact_hex_bytes(
-        destination_record.get("verifier_code_hash"),
+        _public_mapping_get_string_key(destination_record, "verifier_code_hash"),
         byte_length=32,
     )
     if verifier_code_hash is None or not any(verifier_code_hash):
@@ -6641,7 +6848,7 @@ def _check_solana_route_canary_live_program_evidence(
         errors.append("Solana route canary evidence requires source record hashes")
 
     verifier_code_hash = _hex_bytes(
-        destination_record.get("verifier_code_hash"),
+        _public_mapping_get_string_key(destination_record, "verifier_code_hash"),
         byte_length=32,
     )
     if verifier_code_hash is None or not any(verifier_code_hash):
@@ -6650,14 +6857,14 @@ def _check_solana_route_canary_live_program_evidence(
         )
 
     def parse_positive_u64(field: str, label: str) -> int | None:
-        value = destination_record.get(field)
+        value = _public_mapping_get_string_key(destination_record, field)
         if not _is_canonical_decimal_text(value, positive=True):
             errors.append(f"{label} must be a canonical positive decimal")
             return None
         return int(value, 10)
 
     def decode_base64(field: str, label: str) -> bytes | None:
-        value = destination_record.get(field)
+        value = _public_mapping_get_string_key(destination_record, field)
         if not _is_nonempty_string(value):
             errors.append(f"{label} must be present")
             return None
@@ -6699,8 +6906,9 @@ def _check_solana_route_canary_live_program_evidence(
     )
     module = _load_sibling_module("sccp_solana_destination_evidence.py")
     programdata_executable: bytes | None = None
-    programdata_executable_base64 = destination_record.get(
-        "_comment_solana_programdata_executable_base64"
+    programdata_executable_base64 = _public_mapping_get_string_key(
+        destination_record,
+        "_comment_solana_programdata_executable_base64",
     )
     if not _is_nonempty_string(programdata_executable_base64):
         errors.append("Solana route canary ProgramData executable must be present")
@@ -6714,7 +6922,7 @@ def _check_solana_route_canary_live_program_evidence(
             errors.append("Solana route canary ProgramData executable is invalid")
 
     def exact_string(field: str, label: str) -> str | None:
-        value = destination_record.get(field)
+        value = _public_mapping_get_string_key(destination_record, field)
         if not _is_nonempty_string(value):
             errors.append(f"{label} must be present")
             return None
@@ -6861,18 +7069,20 @@ def _check_route_canary_evidence(
         byte_length=32,
     )
 
-    status = record.get(
+    status = _first_record_value(
+        record,
         "route_canary_status",
-        record.get("_comment_route_canary_status"),
+        "_comment_route_canary_status",
     )
     canary["status"] = status
     if status != "passed":
         errors.append("route canary status metadata must be passed")
 
     evidence_hash = _hex_bytes(
-        record.get(
+        _first_record_value(
+            record,
             "route_canary_evidence_hash",
-            record.get("_comment_route_canary_evidence_hash"),
+            "_comment_route_canary_evidence_hash",
         ),
         byte_length=32,
     )
@@ -6889,9 +7099,10 @@ def _check_route_canary_evidence(
         canary["evidence_hash"] = _hex(evidence_hash)
 
     canary_route_hash = _hex_bytes(
-        record.get(
+        _first_record_value(
+            record,
             "route_canary_route_allowlist_hash",
-            record.get("_comment_route_canary_route_allowlist_hash"),
+            "_comment_route_canary_route_allowlist_hash",
         ),
         byte_length=32,
     )
@@ -6907,14 +7118,15 @@ def _check_route_canary_evidence(
             )
 
     canary_destination_binding_hash = _hex_bytes(
-        record.get(
+        _first_record_value(
+            record,
             "route_canary_destination_binding_hash",
-            record.get("_comment_route_canary_destination_binding_hash"),
+            "_comment_route_canary_destination_binding_hash",
         ),
         byte_length=32,
     )
     expected_destination_binding_hash = _hex_bytes(
-        destination_binding.get("destination_binding_hash"),
+        _public_mapping_get_string_key(destination_binding, "destination_binding_hash"),
         byte_length=32,
     )
     if canary_destination_binding_hash is None or not any(
@@ -7026,7 +7238,9 @@ def _check_route_canary_evidence(
         "_comment_ton_route_canary_last_transaction_lt",
         "_comment_ton_route_canary_last_transaction_hash",
     ):
-        if profile.chain != "ton" and not _scalar_absent(record.get(field)):
+        if profile.chain != "ton" and not _scalar_absent(
+            _public_mapping_get_string_key(record, field)
+        ):
             errors.append(f"{field} is only valid for TON route canary evidence")
     for field in (
         "tron_route_canary_transaction_id",
@@ -7066,7 +7280,9 @@ def _check_route_canary_evidence(
         "_comment_tron_route_canary_signature_recovered_address",
         "_comment_tron_route_canary_signature_recovers_to_owner",
     ):
-        if profile.chain != "tron" and not _scalar_absent(record.get(field)):
+        if profile.chain != "tron" and not _scalar_absent(
+            _public_mapping_get_string_key(record, field)
+        ):
             errors.append(f"{field} is only valid for TRON route canary evidence")
     for field in (
         "evm_route_canary_transaction_hash",
@@ -7106,7 +7322,9 @@ def _check_route_canary_evidence(
         "_comment_evm_route_canary_proof_source_domain",
         "_comment_evm_route_canary_used_message_proof",
     ):
-        if profile.chain not in ("eth", "bsc") and not _scalar_absent(record.get(field)):
+        if profile.chain not in ("eth", "bsc") and not _scalar_absent(
+            _public_mapping_get_string_key(record, field)
+        ):
             errors.append(f"{field} is only valid for EVM route canary evidence")
 
     canary["evidence_bound"] = not errors
@@ -7121,9 +7339,10 @@ def _check_route_canary_evidence_hashes_unique(
     seen: dict[bytes, int] = {}
     for domain, record in sorted(routes.items()):
         evidence_hash = _hex_bytes(
-            record.get(
+            _first_record_value(
+                record,
                 "route_canary_evidence_hash",
-                record.get("_comment_route_canary_evidence_hash"),
+                "_comment_route_canary_evidence_hash",
             ),
             byte_length=32,
         )
@@ -7495,12 +7714,12 @@ def _source_adapter_gate_release_metadata_blockers(
     gate_blockers = _public_mapping_get_string_key(source_adapter_gate, "blockers")
     if expected_audit_fields and gate_required is not True:
         blockers.extend(
-            _source_adapter_gate_template_hash_blockers(
-                lane_label,
-                lane.get("domain"),
-                field_label="source adapter gate hash",
-                value=gate_hash,
-            )
+                _source_adapter_gate_template_hash_blockers(
+                    lane_label,
+                    _public_mapping_get_string_key(lane, "domain"),
+                    field_label="source adapter gate hash",
+                    value=gate_hash,
+                )
         )
         if type(audit_hashes) is dict:
             for field in expected_audit_fields:
@@ -7708,26 +7927,26 @@ def _release_checklist_route_canary_proof_context_blockers(
     blockers: list[str] = []
 
     def require_positive_int(field: str) -> None:
-        raw = canary.get(field)
+        raw = _public_mapping_get_string_key(canary, field)
         if type(raw) is not int or raw <= 0:
             blockers.append(
                 f"{lane_label}: route canary {field} must be a positive integer"
             )
 
     def require_nonnegative_int(field: str) -> None:
-        raw = canary.get(field)
+        raw = _public_mapping_get_string_key(canary, field)
         if type(raw) is not int or raw < 0:
             blockers.append(
                 f"{lane_label}: route canary {field} must be a non-negative integer"
             )
 
     def require_u32(field: str) -> None:
-        raw = canary.get(field)
+        raw = _public_mapping_get_string_key(canary, field)
         if type(raw) is not int or raw < 0 or raw > 0xFFFF_FFFF:
             blockers.append(f"{lane_label}: route canary {field} must be a u32 integer")
 
     def require_lane_domain(field: str) -> None:
-        raw = canary.get(field)
+        raw = _public_mapping_get_string_key(canary, field)
         if type(raw) is not int:
             blockers.append(f"{lane_label}: route canary {field} must be an integer")
         elif raw != domain:
@@ -7736,40 +7955,46 @@ def _release_checklist_route_canary_proof_context_blockers(
             )
 
     def require_int_constant(field: str, expected: int, expected_label: str) -> None:
-        raw = canary.get(field)
+        raw = _public_mapping_get_string_key(canary, field)
         if type(raw) is not int:
             blockers.append(f"{lane_label}: route canary {field} must be an integer")
         elif raw != expected:
             blockers.append(f"{lane_label}: route canary {field} must be {expected_label}")
 
     def require_canonical_string(field: str) -> None:
-        raw = canary.get(field)
+        raw = _public_mapping_get_string_key(canary, field)
         if type(raw) is not str or not raw or raw.strip() != raw:
             blockers.append(
                 f"{lane_label}: route canary {field} must be a non-empty canonical string"
             )
 
     def require_solana_pubkey(field: str) -> None:
-        if not _is_canonical_solana_pubkey_text(canary.get(field)):
+        if not _is_canonical_solana_pubkey_text(
+            _public_mapping_get_string_key(canary, field)
+        ):
             blockers.append(
                 f"{lane_label}: route canary {field} must be a non-zero "
                 "canonical base58 Solana address"
             )
 
     def require_positive_decimal_string(field: str) -> None:
-        if not _is_canonical_decimal_text(canary.get(field), positive=True):
+        if not _is_canonical_decimal_text(
+            _public_mapping_get_string_key(canary, field),
+            positive=True,
+        ):
             blockers.append(
                 f"{lane_label}: route canary {field} must be a canonical positive decimal string"
             )
 
     def tron_address(field: str) -> bytes | None:
-        if not _is_canonical_tron_address_text(canary.get(field)):
+        value = _public_mapping_get_string_key(canary, field)
+        if not _is_canonical_tron_address_text(value):
             blockers.append(
                 f"{lane_label}: route canary {field} must be a non-zero "
                 "canonical 0x41-prefixed 21-byte hex string"
             )
             return None
-        raw = _hex_bytes(canary.get(field), byte_length=21)
+        raw = _hex_bytes(value, byte_length=21)
         assert raw is not None
         return raw
 
@@ -7848,7 +8073,10 @@ def _release_checklist_route_canary_transcript_hash_blockers(
 
     blockers: list[str] = []
     for field in fields:
-        raw = _hex_bytes(canary.get(field), byte_length=32)
+        raw = _hex_bytes(
+            _public_mapping_get_string_key(canary, field),
+            byte_length=32,
+        )
         if raw is None or not any(raw):
             blockers.append(
                 f"{lane_label}: route canary {field} must be a canonical non-zero bytes32"
@@ -7974,8 +8202,11 @@ def _release_checklist(
         records_blockers.extend(
             _release_checklist_lane_metadata_blockers(lane_label, lane)
         )
+        copied_lane_blockers = _public_mapping_get_string_key(lane, "blockers")
+        if copied_lane_blockers is None:
+            copied_lane_blockers = []
         lane_blockers, lane_blocker_schema_errors = _canonical_blocker_list(
-            lane.get("blockers", []),
+            copied_lane_blockers,
             f"{lane_label}: lane",
         )
         if lane_blocker_schema_errors:
@@ -7986,7 +8217,9 @@ def _release_checklist(
             for item in lane_blockers:
                 append_unresolved(f"{lane_label}: {item}")
 
-        records = lane.get("records", {})
+        records = _public_mapping_get_string_key(lane, "records")
+        if records is None:
+            records = {}
         if type(records) is not dict:
             records_blockers.append(f"{lane_label}: lane record summary is malformed")
             records = {}
@@ -8000,14 +8233,19 @@ def _release_checklist(
         missing_records = [
             label
             for key, label in record_labels.items()
-            if records.get(key) is not True
+            if _public_mapping_get_string_key(records, key) is not True
         ]
         if missing_records:
             records_blockers.append(
                 f"{lane_label}: missing {', '.join(missing_records)}"
             )
 
-        source_record_hashes = lane.get("source_record_hashes", {})
+        source_record_hashes = _public_mapping_get_string_key(
+            lane,
+            "source_record_hashes",
+        )
+        if source_record_hashes is None:
+            source_record_hashes = {}
         if type(source_record_hashes) is not dict:
             records_blockers.append(
                 f"{lane_label}: source record hashes summary is malformed"
@@ -8021,26 +8259,44 @@ def _release_checklist(
                 PUBLIC_LANE_SOURCE_RECORD_HASH_FIELDS,
             )
         source_material_hash = _hex_bytes(
-            source_record_hashes.get("source_verifier_material_hash"),
+            _public_mapping_get_string_key(
+                source_record_hashes,
+                "source_verifier_material_hash",
+            ),
             byte_length=32,
         )
         source_deployment_hash = _hex_bytes(
-            source_record_hashes.get("source_adapter_engine_deployment_hash"),
+            _public_mapping_get_string_key(
+                source_record_hashes,
+                "source_adapter_engine_deployment_hash",
+            ),
             byte_length=32,
         )
-        if records.get("source_verifier_material") is True:
+        source_material_record_ready = (
+            _public_mapping_get_string_key(records, "source_verifier_material") is True
+        )
+        source_deployment_record_ready = (
+            _public_mapping_get_string_key(records, "source_adapter_deployment") is True
+        )
+        destination_record_ready = (
+            _public_mapping_get_string_key(records, "destination_rollout") is True
+        )
+        route_record_ready = (
+            _public_mapping_get_string_key(records, "route_allowlist") is True
+        )
+        if source_material_record_ready:
             if source_material_hash is None or not any(source_material_hash):
                 records_blockers.append(
                     f"{lane_label}: source verifier material hash must be a canonical non-zero bytes32"
                 )
-        if records.get("source_adapter_deployment") is True:
+        if source_deployment_record_ready:
             if source_deployment_hash is None or not any(source_deployment_hash):
                 records_blockers.append(
                     f"{lane_label}: source adapter engine deployment hash must be a canonical non-zero bytes32"
                 )
         if (
-            records.get("source_verifier_material") is True
-            and records.get("source_adapter_deployment") is True
+            source_material_record_ready
+            and source_deployment_record_ready
             and source_material_hash is not None
             and any(source_material_hash)
             and source_deployment_hash is not None
@@ -8051,11 +8307,16 @@ def _release_checklist(
                 f"{lane_label}: source adapter engine deployment hash must not reuse source verifier material hash"
             )
 
-        if records.get("source_adapter_deployment") is not True:
+        if not source_deployment_record_ready:
             deployment_blockers.append(
                 f"{lane_label}: source adapter deployment evidence is missing"
             )
-        source_adapter_gate = lane.get("source_adapter_gate", {})
+        source_adapter_gate = _public_mapping_get_string_key(
+            lane,
+            "source_adapter_gate",
+        )
+        if source_adapter_gate is None:
+            source_adapter_gate = {}
         if type(source_adapter_gate) is not dict:
             deployment_blockers.append(
                 f"{lane_label}: source adapter gate summary is malformed"
@@ -8067,10 +8328,19 @@ def _release_checklist(
                 source_adapter_gate,
                 PUBLIC_LANE_SOURCE_ADAPTER_GATE_FIELDS,
             )
-            gate_required = source_adapter_gate.get("required")
-            gate_ready = source_adapter_gate.get("ready")
+            gate_required = _public_mapping_get_string_key(
+                source_adapter_gate,
+                "required",
+            )
+            gate_ready = _public_mapping_get_string_key(source_adapter_gate, "ready")
+            copied_gate_blockers = _public_mapping_get_string_key(
+                source_adapter_gate,
+                "blockers",
+            )
+            if copied_gate_blockers is None:
+                copied_gate_blockers = []
             gate_errors, gate_schema_errors = _canonical_blocker_list(
-                source_adapter_gate.get("blockers", []),
+                copied_gate_blockers,
                 f"{lane_label}: source adapter gate",
             )
             if gate_schema_errors:
@@ -8100,8 +8370,11 @@ def _release_checklist(
                         deployment_blockers.append(
                             f"{lane_label}: source adapter gate is not ready"
                         )
-        if "evm_live_metadata" in lane:
-            evm_live_metadata = lane.get("evm_live_metadata")
+        if _public_mapping_has_string_key(lane, "evm_live_metadata"):
+            evm_live_metadata = _public_mapping_get_string_key(
+                lane,
+                "evm_live_metadata",
+            )
             if type(evm_live_metadata) is not dict:
                 deployment_blockers.append(
                     f"{lane_label}: EVM live metadata summary is malformed"
@@ -8113,11 +8386,16 @@ def _release_checklist(
                     evm_live_metadata,
                     PUBLIC_LANE_EVM_LIVE_METADATA_FIELDS,
                 )
-        if records.get("destination_rollout") is not True:
+        if not destination_record_ready:
             deployment_blockers.append(
                 f"{lane_label}: destination rollout evidence is missing"
             )
-        destination_binding = lane.get("destination_binding", {})
+        destination_binding = _public_mapping_get_string_key(
+            lane,
+            "destination_binding",
+        )
+        if destination_binding is None:
+            destination_binding = {}
         if type(destination_binding) is not dict:
             deployment_blockers.append(
                 f"{lane_label}: destination binding summary is malformed"
@@ -8131,14 +8409,17 @@ def _release_checklist(
                 PUBLIC_LANE_DESTINATION_BINDING_FIELDS,
             )
         if (
-            records.get("destination_rollout") is True
-            and destination_binding.get("expected_destination_binding_hash_matches")
+            destination_record_ready
+            and _public_mapping_get_string_key(
+                destination_binding,
+                "expected_destination_binding_hash_matches",
+            )
             is not True
         ):
             deployment_blockers.append(
                 f"{lane_label}: destination binding hash is not bound to rollout evidence"
             )
-        if records.get("destination_rollout") is True:
+        if destination_record_ready:
             deployment_blockers.extend(
                 _public_lane_required_true_errors(
                     destination_binding,
@@ -8157,7 +8438,7 @@ def _release_checklist(
                 _public_lane_destination_family_errors(
                     destination_binding,
                     f"{lane_label}: destination binding",
-                    lane.get("domain"),
+                    _public_mapping_get_string_key(lane, "domain"),
                 )
             )
             deployment_blockers.extend(
@@ -8168,14 +8449,20 @@ def _release_checklist(
                 )
             )
         destination_hash = _hex_bytes(
-            destination_binding.get("destination_binding_hash"),
+            _public_mapping_get_string_key(
+                destination_binding,
+                "destination_binding_hash",
+            ),
             byte_length=32,
         )
         expected_destination_hash = _hex_bytes(
-            destination_binding.get("expected_destination_binding_hash"),
+            _public_mapping_get_string_key(
+                destination_binding,
+                "expected_destination_binding_hash",
+            ),
             byte_length=32,
         )
-        if records.get("destination_rollout") is True:
+        if destination_record_ready:
             if destination_hash is None or not any(destination_hash):
                 deployment_blockers.append(
                     f"{lane_label}: destination binding hash must be a canonical non-zero bytes32"
@@ -8213,18 +8500,22 @@ def _release_checklist(
             deployment_blockers.extend(
                 _release_checklist_template_hash_blockers(
                     lane_label,
-                    lane.get("domain"),
+                    _public_mapping_get_string_key(lane, "domain"),
                     label="destination binding",
                     hashes=(
                         # Source-inventory marker: destination binding hashes must be destination binding evidence, not built-in template material
                         (
                             "destination binding hash",
-                            destination_binding.get("destination_binding_hash"),
+                            _public_mapping_get_string_key(
+                                destination_binding,
+                                "destination_binding_hash",
+                            ),
                             "destination binding evidence",
                         ),
                         (
                             "expected destination binding hash",
-                            destination_binding.get(
+                            _public_mapping_get_string_key(
+                                destination_binding,
                                 "expected_destination_binding_hash"
                             ),
                             "destination binding evidence",
@@ -8233,7 +8524,9 @@ def _release_checklist(
                 )
             )
 
-        route_summary = lane.get("route_allowlist", {})
+        route_summary = _public_mapping_get_string_key(lane, "route_allowlist")
+        if route_summary is None:
+            route_summary = {}
         if type(route_summary) is not dict:
             route_blockers.append(f"{lane_label}: route allowlist summary is malformed")
             route_summary = {}
@@ -8244,21 +8537,30 @@ def _release_checklist(
                 route_summary,
                 PUBLIC_LANE_ROUTE_ALLOWLIST_FIELDS,
             )
-        if records.get("route_allowlist") is not True:
+        if not route_record_ready:
             route_blockers.append(f"{lane_label}: route allowlist evidence is missing")
-        elif route_summary.get("expected_route_allowlist_hash_matches") is not True:
+        elif (
+            _public_mapping_get_string_key(
+                route_summary,
+                "expected_route_allowlist_hash_matches",
+            )
+            is not True
+        ):
             route_blockers.append(
                 f"{lane_label}: route allowlist hash is not bound to source and destination evidence"
             )
         route_hash = _hex_bytes(
-            route_summary.get("route_allowlist_hash"),
+            _public_mapping_get_string_key(route_summary, "route_allowlist_hash"),
             byte_length=32,
         )
         expected_route_hash = _hex_bytes(
-            route_summary.get("expected_route_allowlist_hash"),
+            _public_mapping_get_string_key(
+                route_summary,
+                "expected_route_allowlist_hash",
+            ),
             byte_length=32,
         )
-        if records.get("route_allowlist") is True:
+        if route_record_ready:
             if route_hash is None or not any(route_hash):
                 route_blockers.append(
                     f"{lane_label}: route allowlist hash must be a canonical non-zero bytes32"
@@ -8298,18 +8600,24 @@ def _release_checklist(
             route_blockers.extend(
                 _release_checklist_template_hash_blockers(
                     lane_label,
-                    lane.get("domain"),
+                    _public_mapping_get_string_key(lane, "domain"),
                     label="route allowlist",
                     hashes=(
                         # Source-inventory marker: route allowlist hashes must be route binding evidence, not built-in template material
                         (
                             "route allowlist hash",
-                            route_summary.get("route_allowlist_hash"),
+                            _public_mapping_get_string_key(
+                                route_summary,
+                                "route_allowlist_hash",
+                            ),
                             "route binding evidence",
                         ),
                         (
                             "expected route allowlist hash",
-                            route_summary.get("expected_route_allowlist_hash"),
+                            _public_mapping_get_string_key(
+                                route_summary,
+                                "expected_route_allowlist_hash",
+                            ),
                             "route binding evidence",
                         ),
                     ),
@@ -8323,11 +8631,13 @@ def _release_checklist(
                 )
             )
 
-        canary = route_summary.get("route_canary", {})
+        canary = _public_mapping_get_string_key(route_summary, "route_canary")
+        if canary is None:
+            canary = {}
         if type(canary) is not dict:
             canary_blockers.append(f"{lane_label}: route canary summary is malformed")
             canary = {}
-        canary_status = canary.get("status")
+        canary_status = _public_mapping_get_string_key(canary, "status")
         if _scalar_absent(canary_status):
             canary_blockers.append(
                 f"{lane_label}: route canary status is not passed"
@@ -8343,7 +8653,7 @@ def _release_checklist(
             canary_blockers.append(
                 f"{lane_label}: route canary status is not passed"
             )
-        canary_evidence_hash = canary.get("evidence_hash")
+        canary_evidence_hash = _public_mapping_get_string_key(canary, "evidence_hash")
         parsed_canary_evidence_hash = _hex_bytes(
             canary_evidence_hash,
             byte_length=32,
@@ -8365,15 +8675,19 @@ def _release_checklist(
                 (
                     "source_verifier_material_hash",
                     _hex_bytes(
-                        source_record_hashes.get("source_verifier_material_hash"),
+                        _public_mapping_get_string_key(
+                            source_record_hashes,
+                            "source_verifier_material_hash",
+                        ),
                         byte_length=32,
                     ),
                 ),
                 (
                     "source_adapter_engine_deployment_hash",
                     _hex_bytes(
-                        source_record_hashes.get(
-                            "source_adapter_engine_deployment_hash"
+                        _public_mapping_get_string_key(
+                            source_record_hashes,
+                            "source_adapter_engine_deployment_hash",
                         ),
                         byte_length=32,
                     ),
@@ -8386,12 +8700,18 @@ def _release_checklist(
                     (
                         "source_adapter_gate_hash",
                         _hex_bytes(
-                            source_adapter_gate.get("gate_hash"),
+                            _public_mapping_get_string_key(
+                                source_adapter_gate,
+                                "gate_hash",
+                            ),
                             byte_length=32,
                         ),
                     )
                 )
-                audit_hashes = source_adapter_gate.get("audit_hashes")
+                audit_hashes = _public_mapping_get_string_key(
+                    source_adapter_gate,
+                    "audit_hashes",
+                )
                 if type(audit_hashes) is dict:
                     governed_hash_roles.extend(
                         (
@@ -8414,10 +8734,10 @@ def _release_checklist(
                         f"{lane_label}: route canary evidence hash must be distinct from {role}"
                     )
         canary_route_hash = _hex_bytes(
-            canary.get("route_allowlist_hash"),
+            _public_mapping_get_string_key(canary, "route_allowlist_hash"),
             byte_length=32,
         )
-        if records.get("route_allowlist") is True:
+        if route_record_ready:
             if canary_route_hash is None or not any(canary_route_hash):
                 canary_blockers.append(
                     f"{lane_label}: route canary route allowlist hash must be a canonical non-zero bytes32"
@@ -8431,10 +8751,10 @@ def _release_checklist(
                     f"{lane_label}: route canary route allowlist hash must match route_allowlist_hash"
                 )
         canary_destination_hash = _hex_bytes(
-            canary.get("destination_binding_hash"),
+            _public_mapping_get_string_key(canary, "destination_binding_hash"),
             byte_length=32,
         )
-        if records.get("destination_rollout") is True:
+        if destination_record_ready:
             if canary_destination_hash is None or not any(canary_destination_hash):
                 canary_blockers.append(
                     f"{lane_label}: route canary destination binding hash must be a canonical non-zero bytes32"
@@ -8447,7 +8767,7 @@ def _release_checklist(
                 canary_blockers.append(
                     f"{lane_label}: route canary destination binding hash must match destination_binding_hash"
                 )
-        lane_domain = lane.get("domain")
+        lane_domain = _public_mapping_get_string_key(lane, "domain")
         exact_lane_domain = (
             lane_domain
             if type(lane_domain) is int and lane_domain in LANE_PROFILES
@@ -8464,7 +8784,10 @@ def _release_checklist(
         expected_evidence_source = ROUTE_CANARY_EVIDENCE_SOURCE_BY_DOMAIN.get(
             exact_lane_domain
         )
-        canary_evidence_source = canary.get("evidence_source")
+        canary_evidence_source = _public_mapping_get_string_key(
+            canary,
+            "evidence_source",
+        )
         if _scalar_absent(canary_evidence_source):
             canary_blockers.append(
                 f"{lane_label}: live route canary evidence source is missing"
@@ -8485,8 +8808,9 @@ def _release_checklist(
                 f"{lane_label}: live route canary evidence source must be {expected_evidence_source}"
             )
         if (
-            "evidence_bound" in canary
-            and type(canary.get("evidence_bound")) is not bool
+            _public_mapping_has_string_key(canary, "evidence_bound")
+            and type(_public_mapping_get_string_key(canary, "evidence_bound"))
+            is not bool
         ):
             canary_blockers.append(
                 f"{lane_label}: route canary evidence_bound must be boolean"
@@ -8516,13 +8840,14 @@ def _release_checklist(
                 "route canary signature must recover to owner",
             ),
         ):
-            if field not in canary:
+            if not _public_mapping_has_string_key(canary, field):
                 if field in required_true_fields:
                     canary_blockers.append(f"{lane_label}: {semantic_blocker}")
                 continue
-            if type(canary.get(field)) is not bool:
+            field_value = _public_mapping_get_string_key(canary, field)
+            if type(field_value) is not bool:
                 canary_blockers.append(f"{lane_label}: {schema_blocker}")
-            elif canary.get(field) is not True:
+            elif field_value is not True:
                 canary_blockers.append(f"{lane_label}: {semantic_blocker}")
         canary_blockers.extend(
             _release_checklist_route_canary_proof_context_blockers(
@@ -8547,7 +8872,7 @@ def _release_checklist(
                 canary,
             )
         )
-        if canary.get("evidence_bound") is not True:
+        if _public_mapping_get_string_key(canary, "evidence_bound") is not True:
             canary_blockers.append(
                 f"{lane_label}: route canary evidence is not bound"
             )
@@ -8626,8 +8951,8 @@ def _release_checklist(
 def _release_checklist_lane_label(lane: dict[str, Any]) -> str:
     """Return a bounded label for a copied all-lanes checklist lane."""
 
-    domain = lane.get("domain")
-    chain = lane.get("chain")
+    domain = _public_mapping_get_string_key(lane, "domain")
+    chain = _public_mapping_get_string_key(lane, "chain")
     known_chains = {profile.chain for profile in LANE_PROFILES.values()}
     if type(domain) is int and type(chain) is str and chain in known_chains:
         return f"domain {domain} ({chain})"
@@ -8645,12 +8970,12 @@ def _release_checklist_lane_metadata_blockers(
     """Return blockers for malformed copied all-lanes lane identity."""
 
     blockers: list[str] = []
-    domain = lane.get("domain")
+    domain = _public_mapping_get_string_key(lane, "domain")
     if type(domain) is not int:
         blockers.append(f"{lane_label}: lane domain must be an integer")
     elif domain not in LANE_PROFILES:
         blockers.append(f"{lane_label}: lane domain must be a production remote domain")
-    chain = lane.get("chain")
+    chain = _public_mapping_get_string_key(lane, "chain")
     if type(chain) is not str or not chain or chain.strip() != chain:
         blockers.append(f"{lane_label}: lane chain must be a non-empty canonical string")
     elif type(domain) is int and domain in LANE_PROFILES:
@@ -8670,7 +8995,7 @@ def _evm_live_metadata_summary(
     def exact_comment(record: dict[str, Any] | None, field: str) -> str:
         if record is None:
             return ""
-        value = record.get(field)
+        value = _public_mapping_get_string_key(record, field)
         if type(value) is str:
             return value
         return ""
@@ -8729,27 +9054,35 @@ def _evidence_bundle_root_errors(records: Any) -> tuple[dict[str, Any], list[str
     return records, errors
 
 
+def _evidence_section_records(records: dict[Any, Any], section: str) -> Any:
+    """Return an exact public evidence section or an empty list when absent."""
+
+    if not _public_mapping_has_string_key(records, section):
+        return []
+    return _public_mapping_get_string_key(records, section)
+
+
 def validate_evidence_bundle(records: dict[str, list[dict[str, Any]]] | Any) -> dict[str, Any]:
     """Return a production-readiness summary for a merged SCCP evidence bundle."""
 
     records, global_errors = _evidence_bundle_root_errors(records)
     materials, material_errors = _records_by_domain(
-        records.get("sccp_source_verifier_materials", []),
+        _evidence_section_records(records, "sccp_source_verifier_materials"),
         "source_domain",
         allowed_domains=set(SCCP_CORE_REMOTE_DOMAINS),
     )
     deployments, deployment_errors = _records_by_domain(
-        records.get("sccp_source_adapter_engine_deployments", []),
+        _evidence_section_records(records, "sccp_source_adapter_engine_deployments"),
         "source_domain",
         allowed_domains=set(SCCP_CORE_REMOTE_DOMAINS),
     )
     destinations, destination_errors = _records_by_domain(
-        records.get("sccp_destination_rollouts", []),
+        _evidence_section_records(records, "sccp_destination_rollouts"),
         "domain",
         allowed_domains=set(SCCP_CORE_REMOTE_DOMAINS),
     )
     routes, route_errors = _records_by_domain(
-        records.get("sccp_route_allowlists", []),
+        _evidence_section_records(records, "sccp_route_allowlists"),
         "domain",
         allowed_domains=set(SCCP_CORE_REMOTE_DOMAINS),
     )
@@ -8843,9 +9176,15 @@ def validate_evidence_bundle(records: dict[str, list[dict[str, Any]]] | Any) -> 
             material,
             destination,
         )
-        if source_adapter_gate.get("required") is True:
+        if _public_mapping_get_string_key(source_adapter_gate, "required") is True:
+            gate_blockers = _public_mapping_get_string_key(
+                source_adapter_gate,
+                "blockers",
+            )
+            if gate_blockers is None:
+                gate_blockers = []
             gate_blockers, gate_schema_errors = _canonical_blocker_list(
-                source_adapter_gate.get("blockers", []),
+                gate_blockers,
                 "source adapter gate",
             )
             for gate_blocker in [*gate_schema_errors, *gate_blockers]:
@@ -9005,14 +9344,14 @@ def _public_release_checklist_errors(
             f"all-lanes summary release_checklist {_unexpected_record_field_detail(field)}"
         )
 
-    ready = value.get("ready")
+    ready = _public_mapping_get_string_key(value, "ready")
     if type(ready) is not bool:
         errors.append("all-lanes summary release_checklist ready must be a boolean")
     elif require_ready and ready is not True:
         errors.append("all-lanes summary release_checklist ready must be true")
     require_item_ready = require_ready or ready is True
 
-    items = value.get("items")
+    items = _public_mapping_get_string_key(value, "items")
     if type(items) is not list:
         errors.append("all-lanes summary release_checklist items must be a list")
         return errors
@@ -9026,7 +9365,7 @@ def _public_release_checklist_errors(
         for field in _public_unknown_fields(item, RELEASE_CHECKLIST_ITEM_FIELDS):
             errors.append(f"{item_label} {_unexpected_record_field_detail(field)}")
 
-        item_id = item.get("id")
+        item_id = _public_mapping_get_string_key(item, "id")
         if (
             type(item_id) is not str
             or not item_id
@@ -9044,19 +9383,19 @@ def _public_release_checklist_errors(
             seen_ids.add(item_id)
             item_key = item_id
 
-        title = item.get("title")
+        title = _public_mapping_get_string_key(item, "title")
         if type(title) is not str or not title or title.strip() != title:
             errors.append(f"{item_label} title must be a non-empty canonical string")
         elif item_key is None or title != RELEASE_CHECKLIST_TITLES[item_key]:
             errors.append(f"{item_label} title must match the canonical checklist title")
 
-        item_ready = item.get("ready")
+        item_ready = _public_mapping_get_string_key(item, "ready")
         if type(item_ready) is not bool:
             errors.append(f"{item_label} ready must be a boolean")
         elif require_item_ready and item_ready is not True:
             errors.append(f"{item_label} ready must be true")
 
-        blockers = item.get("blockers")
+        blockers = _public_mapping_get_string_key(item, "blockers")
         canonical_blockers, blocker_errors = _canonical_blocker_list(
             blockers,
             item_label,
@@ -9587,17 +9926,20 @@ def _public_lane_destination_binding_recompute_errors(
     # Source-inventory marker: destination_binding_hash must recompute from destination_binding_key
     if type(destination_binding) is not dict:
         return []
-    domain = lane.get("domain")
+    domain = _public_mapping_get_string_key(lane, "domain")
     profile = LANE_PROFILES.get(domain) if type(domain) is int else None
-    key = destination_binding.get("destination_binding_key")
+    key = _public_mapping_get_string_key(destination_binding, "destination_binding_key")
     if profile is None or not _is_nonempty_string(key):
         return []
     supplied_hash = _hex_bytes(
-        destination_binding.get("destination_binding_hash"),
+        _public_mapping_get_string_key(destination_binding, "destination_binding_hash"),
         byte_length=32,
     )
     expected_hash = _hex_bytes(
-        destination_binding.get("expected_destination_binding_hash"),
+        _public_mapping_get_string_key(
+            destination_binding,
+            "expected_destination_binding_hash",
+        ),
         byte_length=32,
     )
     if supplied_hash is None or not any(supplied_hash):
@@ -9635,7 +9977,7 @@ def _public_lane_destination_binding_recompute_errors(
     expected_network_id = expected.get("destination_network_id")
     if expected_network_id is not None:
         supplied_network_id = _hex_bytes(
-            destination_binding.get("destination_network_id"),
+            _public_mapping_get_string_key(destination_binding, "destination_network_id"),
             byte_length=32,
         )
         if (
@@ -9649,7 +9991,10 @@ def _public_lane_destination_binding_recompute_errors(
     expected_bridge_address = expected.get("destination_bridge_address")
     if expected_bridge_address is not None:
         supplied_bridge_address = _hex_bytes(
-            destination_binding.get("destination_bridge_address"),
+            _public_mapping_get_string_key(
+                destination_binding,
+                "destination_bridge_address",
+            ),
             byte_length=20,
         )
         if (
@@ -10482,8 +10827,13 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
         errors.extend(
             _public_lane_missing_field_errors(lane, lane_label, PUBLIC_LANE_FIELDS)
         )
+        lane = {
+            key: value
+            for key, value in lane.items()
+            if type(key) is str
+        }
 
-        raw_domain = lane.get("domain")
+        raw_domain = _public_mapping_get_string_key(lane, "domain")
         domain: int | None = None
         expected_chain: str | None = None
         if type(raw_domain) is not int:
@@ -10497,13 +10847,13 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                 errors.append(f"all-lanes summary lane domain {domain} is duplicated")
             seen_domains.add(domain)
 
-        chain = lane.get("chain")
+        chain = _public_mapping_get_string_key(lane, "chain")
         if type(chain) is not str or not chain or chain.strip() != chain:
             errors.append(f"{lane_label} chain must be a non-empty canonical string")
         elif expected_chain is not None and chain != expected_chain:
             errors.append(f"{lane_label} chain must match the lane domain")
 
-        lane_ready = lane.get("production_ready")
+        lane_ready = _public_mapping_get_string_key(lane, "production_ready")
         if type(lane_ready) is not bool:
             errors.append(f"{lane_label} production_ready must be a boolean")
         elif (require_ready or domain == SCCP_DOMAIN_ETH) and lane_ready is not True:
@@ -10513,40 +10863,68 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
         )
         lane_require_structure = domain in LANE_PROFILES
 
-        records = lane.get("records")
+        records = _public_mapping_get_string_key(lane, "records")
         if type(records) is not dict:
             errors.append(f"{lane_label} records must be an object")
             record_flags: dict[str, Any] = {}
         else:
             for field in _public_unknown_fields(records, PUBLIC_LANE_RECORD_FIELDS):
                 errors.append(f"{lane_label} records {_unexpected_record_field_detail(field)}")
+            records = {
+                key: value
+                for key, value in records.items()
+                if type(key) is str
+            }
             for field in PUBLIC_LANE_RECORD_FIELDS:
-                if type(records.get(field)) is not bool:
+                record_value = _public_mapping_get_string_key(records, field)
+                if type(record_value) is not bool:
                     errors.append(f"{lane_label} records.{field} must be a boolean")
-                elif lane_require_ready and records.get(field) is not True:
+                elif lane_require_ready and record_value is not True:
                     errors.append(f"{lane_label} records.{field} must be true")
             record_flags = records
         copied_source_records_present = (
-            record_flags.get("source_verifier_material") is True
-            and record_flags.get("source_adapter_deployment") is True
+            _public_mapping_get_string_key(record_flags, "source_verifier_material")
+            is True
+            and _public_mapping_get_string_key(
+                record_flags,
+                "source_adapter_deployment",
+            )
+            is True
         )
         copied_destination_record_present = (
-            record_flags.get("destination_rollout") is True
+            _public_mapping_get_string_key(record_flags, "destination_rollout") is True
         )
-        copied_route_record_present = record_flags.get("route_allowlist") is True
+        copied_route_record_present = (
+            _public_mapping_get_string_key(record_flags, "route_allowlist") is True
+        )
         copied_live_records_present = all(
-            record_flags.get(field) is True for field in PUBLIC_LANE_RECORD_FIELDS
+            _public_mapping_get_string_key(record_flags, field) is True
+            for field in PUBLIC_LANE_RECORD_FIELDS
         )
         source_records_require_ready = (
             lane_require_ready or copied_source_records_present
         )
         route_allowlist_require_ready = lane_require_ready or copied_route_record_present
         live_metadata_require_ready = lane_require_ready or copied_live_records_present
+        source_record_hashes = _public_mapping_get_string_key(
+            lane,
+            "source_record_hashes",
+        )
+        source_adapter_gate = _public_mapping_get_string_key(
+            lane,
+            "source_adapter_gate",
+        )
+        evm_live_metadata = _public_mapping_get_string_key(lane, "evm_live_metadata")
+        destination_binding = _public_mapping_get_string_key(
+            lane,
+            "destination_binding",
+        )
+        route_allowlist = _public_mapping_get_string_key(lane, "route_allowlist")
         copied_evm_live_metadata_present = (
-            type(lane.get("evm_live_metadata")) is dict
+            type(evm_live_metadata) is dict
             and any(
-                type(lane["evm_live_metadata"].get(field)) is str
-                and lane["evm_live_metadata"].get(field)
+                type(_public_mapping_get_string_key(evm_live_metadata, field)) is str
+                and _public_mapping_get_string_key(evm_live_metadata, field)
                 for field in (
                     "source_rpc_chain_id",
                     "destination_rpc_chain_id",
@@ -10558,17 +10936,17 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
         source_records_require_structure = (
             lane_require_ready
             or copied_source_records_present
-            or bool(lane.get("source_record_hashes"))
+            or (type(source_record_hashes) is dict and bool(source_record_hashes))
         )
         destination_binding_require_structure = (
             lane_require_ready
             or copied_destination_record_present
-            or bool(lane.get("destination_binding"))
+            or (type(destination_binding) is dict and bool(destination_binding))
         )
         route_allowlist_require_structure = (
             lane_require_ready
             or copied_route_record_present
-            or bool(lane.get("route_allowlist"))
+            or (type(route_allowlist) is dict and bool(route_allowlist))
         )
         live_metadata_require_structure = (
             lane_require_ready
@@ -10578,14 +10956,14 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
 
         errors.extend(
             _public_lane_object_field_errors(
-                lane.get("source_record_hashes"),
+                source_record_hashes,
                 f"{lane_label}.source_record_hashes",
                 PUBLIC_LANE_SOURCE_RECORD_HASH_FIELDS,
             )
         )
         errors.extend(
             _public_lane_optional_bytes32_errors(
-                lane.get("source_record_hashes"),
+                source_record_hashes,
                 f"{lane_label}.source_record_hashes",
                 PUBLIC_LANE_SOURCE_RECORD_HASH_FIELDS,
             )
@@ -10593,26 +10971,25 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
         if source_records_require_structure:
             errors.extend(
                 _public_lane_missing_field_errors(
-                    lane.get("source_record_hashes"),
+                    source_record_hashes,
                     f"{lane_label}.source_record_hashes",
                     PUBLIC_LANE_SOURCE_RECORD_HASH_FIELDS,
                 )
             )
             errors.extend(
                 _public_lane_required_bytes32_errors(
-                    lane.get("source_record_hashes"),
+                    source_record_hashes,
                     f"{lane_label}.source_record_hashes",
                     PUBLIC_LANE_SOURCE_RECORD_HASH_FIELDS,
                 )
             )
         errors.extend(
             _public_lane_source_record_template_hash_errors(
-                lane.get("source_record_hashes"),
+                source_record_hashes,
                 f"{lane_label}.source_record_hashes",
                 domain,
             )
         )
-        source_adapter_gate = lane.get("source_adapter_gate")
         errors.extend(
             _public_lane_object_field_errors(
                 source_adapter_gate,
@@ -10628,7 +11005,15 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
             )
         )
         if type(source_adapter_gate) is dict:
-            audit_hashes = source_adapter_gate.get("audit_hashes")
+            source_adapter_gate = {
+                key: value
+                for key, value in source_adapter_gate.items()
+                if type(key) is str
+            }
+            audit_hashes = _public_mapping_get_string_key(
+                source_adapter_gate,
+                "audit_hashes",
+            )
             if type(audit_hashes) is not dict:
                 errors.append(
                     f"{lane_label}.source_adapter_gate.audit_hashes must be an object"
@@ -10665,8 +11050,11 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                         audit_fields,
                     )
                 )
-            gate_required = source_adapter_gate.get("required")
-            gate_ready = source_adapter_gate.get("ready")
+            gate_required = _public_mapping_get_string_key(
+                source_adapter_gate,
+                "required",
+            )
+            gate_ready = _public_mapping_get_string_key(source_adapter_gate, "ready")
             if type(gate_required) is not bool:
                 errors.append(
                     f"{lane_label}.source_adapter_gate.required must be a boolean"
@@ -10696,8 +11084,14 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                         domain,
                     )
                 )
+            raw_gate_blockers = _public_mapping_get_string_key(
+                source_adapter_gate,
+                "blockers",
+            )
+            if raw_gate_blockers is None:
+                raw_gate_blockers = []
             gate_blockers, gate_blocker_errors = _canonical_blocker_list(
-                source_adapter_gate.get("blockers", []),
+                raw_gate_blockers,
                 f"{lane_label}.source_adapter_gate",
             )
             errors.extend(gate_blocker_errors)
@@ -10718,19 +11112,24 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                 )
         errors.extend(
             _public_lane_object_field_errors(
-                lane.get("evm_live_metadata"),
+                evm_live_metadata,
                 f"{lane_label}.evm_live_metadata",
                 PUBLIC_LANE_EVM_LIVE_METADATA_FIELDS,
             )
         )
         errors.extend(
             _public_lane_missing_field_errors(
-                lane.get("evm_live_metadata"),
+                evm_live_metadata,
                 f"{lane_label}.evm_live_metadata",
                 PUBLIC_LANE_EVM_LIVE_METADATA_FIELDS,
             )
         )
-        evm_live_metadata = lane.get("evm_live_metadata")
+        if type(evm_live_metadata) is dict:
+            evm_live_metadata = {
+                key: value
+                for key, value in evm_live_metadata.items()
+                if type(key) is str
+            }
         errors.extend(
             _public_lane_optional_bool_errors(
                 evm_live_metadata,
@@ -10837,14 +11236,14 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
             )
         errors.extend(
             _public_lane_object_field_errors(
-                lane.get("destination_binding"),
+                destination_binding,
                 f"{lane_label}.destination_binding",
                 PUBLIC_LANE_DESTINATION_BINDING_FIELDS,
             )
         )
         errors.extend(
             _public_lane_optional_bytes32_errors(
-                lane.get("destination_binding"),
+                destination_binding,
                 f"{lane_label}.destination_binding",
                 (
                     "destination_binding_hash",
@@ -10855,14 +11254,14 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
         if destination_binding_require_structure:
             errors.extend(
                 _public_lane_missing_field_errors(
-                    lane.get("destination_binding"),
+                    destination_binding,
                     f"{lane_label}.destination_binding",
                     PUBLIC_LANE_DESTINATION_BINDING_REQUIRED_FIELDS,
                 )
             )
             errors.extend(
                 _public_lane_required_bytes32_errors(
-                    lane.get("destination_binding"),
+                    destination_binding,
                     f"{lane_label}.destination_binding",
                     (
                         "destination_binding_hash",
@@ -10872,21 +11271,21 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
             )
         errors.extend(
             _public_lane_optional_bool_errors(
-                lane.get("destination_binding"),
+                destination_binding,
                 f"{lane_label}.destination_binding",
                 ("expected_destination_binding_hash_matches", "recomputed"),
             )
         )
         errors.extend(
             _public_lane_optional_true_errors(
-                lane.get("destination_binding"),
+                destination_binding,
                 f"{lane_label}.destination_binding",
                 ("expected_destination_binding_hash_matches", "recomputed"),
             )
         )
         errors.extend(
             _public_lane_optional_canonical_string_errors(
-                lane.get("destination_binding"),
+                destination_binding,
                 f"{lane_label}.destination_binding",
                 (
                     "destination_binding_key",
@@ -10898,14 +11297,14 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
         if destination_binding_require_structure:
             errors.extend(
                 _public_lane_destination_family_errors(
-                    lane.get("destination_binding"),
+                    destination_binding,
                     f"{lane_label}.destination_binding",
                     domain,
                 )
             )
         errors.extend(
             _public_lane_matching_field_errors(
-                lane.get("destination_binding"),
+                destination_binding,
                 f"{lane_label}.destination_binding",
                 "expected_destination_binding_hash",
                 "destination_binding_hash",
@@ -10915,12 +11314,12 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
             _public_lane_destination_binding_recompute_errors(
                 lane,
                 f"{lane_label}.destination_binding",
-                lane.get("destination_binding"),
+                destination_binding,
             )
         )
         errors.extend(
             _public_lane_template_hash_errors(
-                lane.get("destination_binding"),
+                destination_binding,
                 f"{lane_label}.destination_binding",
                 domain,
                 fields=(
@@ -10933,19 +11332,18 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
         if lane_require_ready:
             errors.extend(
                 _public_lane_required_true_errors(
-                    lane.get("destination_binding"),
+                    destination_binding,
                     f"{lane_label}.destination_binding",
                     ("expected_destination_binding_hash_matches", "recomputed"),
                 )
             )
             errors.extend(
                 _public_lane_required_canonical_string_errors(
-                    lane.get("destination_binding"),
+                    destination_binding,
                     f"{lane_label}.destination_binding",
                     ("destination_binding_key",),
                 )
             )
-        route_allowlist = lane.get("route_allowlist")
         errors.extend(
             _public_lane_object_field_errors(
                 route_allowlist,
@@ -11031,12 +11429,18 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                 )
             )
         if type(route_allowlist) is dict:
-            route_canary = route_allowlist.get("route_canary")
+            route_canary = _public_mapping_get_string_key(
+                route_allowlist,
+                "route_canary",
+            )
             route_canary_fields = PUBLIC_LANE_ROUTE_CANARY_FIELDS_BY_DOMAIN.get(
                 domain,
                 PUBLIC_LANE_ROUTE_CANARY_FIELDS,
             )
-            if route_allowlist_require_structure or "route_canary" in route_allowlist:
+            if route_allowlist_require_structure or _public_mapping_has_string_key(
+                route_allowlist,
+                "route_canary",
+            ):
                 errors.extend(
                     _public_lane_object_field_errors(
                         route_canary,
@@ -11223,18 +11627,23 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                     route_canary,
                     canary_label,
                     "route_allowlist_hash",
-                    route_allowlist.get("route_allowlist_hash"),
+                    _public_mapping_get_string_key(
+                        route_allowlist,
+                        "route_allowlist_hash",
+                    ),
                     "lane route_allowlist_hash",
                 )
             )
-            destination_binding = lane.get("destination_binding")
             if type(destination_binding) is dict:
                 errors.extend(
                     _public_lane_matching_value_errors(
                         route_canary,
                         canary_label,
                         "destination_binding_hash",
-                        destination_binding.get("destination_binding_hash"),
+                        _public_mapping_get_string_key(
+                            destination_binding,
+                            "destination_binding_hash",
+                        ),
                         "lane destination_binding_hash",
                     )
                 )
@@ -11667,8 +12076,11 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                         )
                     )
 
+        raw_lane_blockers = _public_mapping_get_string_key(lane, "blockers")
+        if raw_lane_blockers is None:
+            raw_lane_blockers = []
         canonical_blockers, blocker_errors = _canonical_blocker_list(
-            lane.get("blockers", []),
+            raw_lane_blockers,
             lane_label,
         )
         errors.extend(blocker_errors)
@@ -11694,9 +12106,9 @@ def _public_domain_list_errors(summary: dict[str, Any]) -> tuple[list[str], dict
     invalid_fields: dict[str, str] = {}
     parsed: dict[str, list[int]] = {}
     for field, (expected, detail) in PUBLIC_DOMAIN_LISTS.items():
-        if field not in summary:
+        if not _public_mapping_has_string_key(summary, field):
             continue
-        value = summary.get(field)
+        value = _public_mapping_get_string_key(summary, field)
         contains_duplicate_domains = False
         if type(value) is list:
             seen_domains: set[int] = set()
@@ -11771,23 +12183,23 @@ def _public_summary_payload(summary: Any) -> dict[str, Any]:
             f"all-lanes summary {_unexpected_record_field_detail(field)}"
         )
     for field in ALL_LANES_PUBLIC_SUMMARY_FIELDS:
-        if field not in summary and field != "blockers":
+        if not _public_mapping_has_string_key(summary, field) and field != "blockers":
             blockers.append(f"all-lanes summary {field} missing")
 
     summary_has_public_blockers = False
-    if "blockers" not in summary:
+    if not _public_mapping_has_string_key(summary, "blockers"):
         blockers.append("all-lanes summary blockers missing")
         summary_has_public_blockers = True
     else:
         canonical_blockers, blocker_errors = _canonical_blocker_list(
-            summary.get("blockers"),
+            _public_mapping_get_string_key(summary, "blockers"),
             "all-lanes summary",
         )
         summary_has_public_blockers = bool(canonical_blockers or blocker_errors)
         blockers.extend(canonical_blockers)
         blockers.extend(blocker_errors)
 
-    production_ready = summary.get("production_ready")
+    production_ready = _public_mapping_get_string_key(summary, "production_ready")
     if type(production_ready) is not bool:
         blockers.append("all-lanes summary production_ready must be boolean")
     enforce_ready_shape = production_ready is True and not summary_has_public_blockers
@@ -11796,8 +12208,8 @@ def _public_summary_payload(summary: Any) -> dict[str, Any]:
     domain_list_errors, invalid_domain_fields = _public_domain_list_errors(summary)
     blockers.extend(domain_list_errors)
     root_errors.update(invalid_domain_fields)
-    lanes = summary.get("lanes")
-    if "lanes" in summary:
+    lanes = _public_mapping_get_string_key(summary, "lanes")
+    if _public_mapping_has_string_key(summary, "lanes"):
         lane_errors = _public_lanes_errors(
             lanes,
             require_ready=enforce_ready_shape,
@@ -11808,12 +12220,15 @@ def _public_summary_payload(summary: Any) -> dict[str, Any]:
             else:
                 blockers.extend(lane_errors)
                 root_errors["lanes"] = "all-lanes summary lanes are invalid"
-    release_checklist = summary.get("release_checklist")
-    if "release_checklist" in summary and type(release_checklist) is not dict:
+    release_checklist = _public_mapping_get_string_key(summary, "release_checklist")
+    if (
+        _public_mapping_has_string_key(summary, "release_checklist")
+        and type(release_checklist) is not dict
+    ):
         root_errors["release_checklist"] = (
             "all-lanes summary release_checklist must be an object"
         )
-    elif "release_checklist" in summary:
+    elif _public_mapping_has_string_key(summary, "release_checklist"):
         release_checklist_errors = _public_release_checklist_errors(
             release_checklist,
             require_ready=enforce_ready_shape,
@@ -11826,9 +12241,9 @@ def _public_summary_payload(summary: Any) -> dict[str, Any]:
     blockers.extend(root_errors.values())
 
     public_summary = {
-        field: summary[field]
+        field: _public_mapping_get_string_key(summary, field)
         for field in ALL_LANES_PUBLIC_SUMMARY_FIELDS
-        if field in summary and field not in root_errors
+        if _public_mapping_has_string_key(summary, field) and field not in root_errors
     }
     public_summary["production_ready"] = production_ready is True and not blockers
     public_summary["blockers"] = blockers

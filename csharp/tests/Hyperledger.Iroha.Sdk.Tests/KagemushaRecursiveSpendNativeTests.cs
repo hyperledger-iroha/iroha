@@ -295,9 +295,6 @@ public sealed class KagemushaRecursiveSpendNativeTests
             "kagemusha-recursive-aggregation-v1",
             KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1);
         Assert.Equal(
-            "kagemusha-recursive-spend-lineage-v1",
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1);
-        Assert.Equal(
             "kagemusha-recursive-spend-lineage-onehop-v1",
             KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1);
         Assert.Equal(
@@ -349,9 +346,9 @@ public sealed class KagemushaRecursiveSpendNativeTests
             string.Empty,
             KagemushaRecursiveSpendNative.NormalizeAppendOutputCircuitId(""));
         Assert.Equal(
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
+            "kagemusha-recursive-spend-lineage-v1",
             KagemushaRecursiveSpendNative.NormalizeAppendOutputCircuitId(
-                KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1));
+                "kagemusha-recursive-spend-lineage-v1"));
         Assert.Equal(
             "unknown-kagemusha-recursive-spend-circuit",
             KagemushaRecursiveSpendNative.NormalizeAppendOutputCircuitId(
@@ -361,15 +358,15 @@ public sealed class KagemushaRecursiveSpendNativeTests
         Assert.True(KagemushaRecursiveSpendNative.IsSupportedAppendOutputCircuitId(
             KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1));
         Assert.False(KagemushaRecursiveSpendNative.IsSupportedAppendOutputCircuitId(
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1));
+            "kagemusha-recursive-spend-lineage-v1"));
         Assert.True(KagemushaRecursiveSpendNative.IsSupportedAppendOutputCircuitId(
             KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1));
         Assert.False(KagemushaRecursiveSpendNative.IsSupportedAppendOutputCircuitId(
             KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1));
         Assert.False(KagemushaRecursiveSpendNative.IsSupportedAppendOutputCircuitId(
             "unknown-kagemusha-recursive-spend-circuit"));
-        Assert.True(KagemushaRecursiveSpendNative.IsLineageProofCircuitId(
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1));
+        Assert.False(KagemushaRecursiveSpendNative.IsLineageProofCircuitId(
+            "kagemusha-recursive-spend-lineage-v1"));
         Assert.True(KagemushaRecursiveSpendNative.IsLineageProofCircuitId(
             KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1));
         Assert.True(KagemushaRecursiveSpendNative.IsLineageProofCircuitId(
@@ -744,7 +741,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
             "proof_circuit_id",
             "artifacts",
             () => KagemushaRecursiveSpendNative.LineageKeyArtifacts(
-                KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
+                "kagemusha-recursive-spend-lineage-v1",
                 128,
                 KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend,
                 new byte[] { 1 },
@@ -791,7 +788,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
                 new byte[] { 1 },
                 Array.Empty<byte>()));
         Assert.False(KagemushaRecursiveSpendNative.RequiresLineageKeyArtifactsForAppendOutput(
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1));
+            "kagemusha-recursive-spend-lineage-v1"));
         Assert.True(KagemushaRecursiveSpendNative.RequiresLineageKeyArtifactsForAppendOutput(
             KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1));
         Assert.False(KagemushaRecursiveSpendNative.RequiresLineageKeyArtifactsForAppendOutput(null));
@@ -804,8 +801,8 @@ public sealed class KagemushaRecursiveSpendNativeTests
             "unknown-kagemusha-recursive-spend-circuit"));
         Assert.True(KagemushaRecursiveSpendNative.IsSupportedPreviousProofCircuitId(
             KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1));
-        Assert.True(KagemushaRecursiveSpendNative.IsSupportedPreviousProofCircuitId(
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1));
+        Assert.False(KagemushaRecursiveSpendNative.IsSupportedPreviousProofCircuitId(
+            "kagemusha-recursive-spend-lineage-v1"));
         Assert.True(KagemushaRecursiveSpendNative.IsSupportedPreviousProofCircuitId(
             KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1));
         Assert.True(KagemushaRecursiveSpendNative.IsSupportedPreviousProofCircuitId(
@@ -814,8 +811,8 @@ public sealed class KagemushaRecursiveSpendNativeTests
             "unknown-kagemusha-recursive-spend-circuit"));
         Assert.False(KagemushaRecursiveSpendNative.RequiresPreviousLineageVerifierRecordForAppend(
             KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1));
-        Assert.True(KagemushaRecursiveSpendNative.RequiresPreviousLineageVerifierRecordForAppend(
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1));
+        Assert.False(KagemushaRecursiveSpendNative.RequiresPreviousLineageVerifierRecordForAppend(
+            "kagemusha-recursive-spend-lineage-v1"));
         Assert.True(KagemushaRecursiveSpendNative.RequiresPreviousLineageVerifierRecordForAppend(
             KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1));
         Assert.True(KagemushaRecursiveSpendNative.RequiresPreviousLineageVerifierRecordForAppend(
@@ -828,24 +825,24 @@ public sealed class KagemushaRecursiveSpendNativeTests
         Assert.False(KagemushaRecursiveSpendNative.IsSupportedAppendProofTransition(
             KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
             ""));
-        Assert.True(KagemushaRecursiveSpendNative.IsSupportedAppendProofTransition(
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
+        Assert.False(KagemushaRecursiveSpendNative.IsSupportedAppendProofTransition(
+            "kagemusha-recursive-spend-lineage-v1",
             KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1));
         Assert.False(KagemushaRecursiveSpendNative.IsSupportedAppendProofTransition(
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1));
-        Assert.True(KagemushaRecursiveSpendNative.IsSupportedAppendProofTransition(
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
+            "kagemusha-recursive-spend-lineage-v1",
+            "kagemusha-recursive-spend-lineage-v1"));
+        Assert.False(KagemushaRecursiveSpendNative.IsSupportedAppendProofTransition(
+            "kagemusha-recursive-spend-lineage-v1",
             KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1));
         Assert.False(KagemushaRecursiveSpendNative.IsSupportedAppendProofTransition(
             KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1),
+            "kagemusha-recursive-spend-lineage-v1"),
             "semantic previous proofs cannot select Reserved-lineage output");
         Assert.False(KagemushaRecursiveSpendNative.IsSupportedAppendProofTransition(
             "unknown-kagemusha-recursive-spend-circuit",
             KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1));
         Assert.False(KagemushaRecursiveSpendNative.IsSupportedAppendProofTransition(
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
+            "kagemusha-recursive-spend-lineage-v1",
             "unknown-kagemusha-recursive-spend-circuit"));
         Assert.Equal(
             KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
@@ -874,7 +871,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
             KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
             KagemushaRecursiveSpendNative.CompactTokenMaxHops));
         Assert.False(KagemushaRecursiveSpendNative.CanProveAppendOutputCircuitId(
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
+            "kagemusha-recursive-spend-lineage-v1",
             1u));
         Assert.True(KagemushaRecursiveSpendNative.CanProveAppendOutputCircuitId(
             KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
@@ -883,10 +880,10 @@ public sealed class KagemushaRecursiveSpendNativeTests
             KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1,
             1u));
         Assert.False(KagemushaRecursiveSpendNative.CanProveAppendOutputCircuitId(
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
+            "kagemusha-recursive-spend-lineage-v1",
             63u));
         Assert.False(KagemushaRecursiveSpendNative.CanProveAppendOutputCircuitId(
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
+            "kagemusha-recursive-spend-lineage-v1",
             64u));
         Assert.False(KagemushaRecursiveSpendNative.CanProveAppendOutputCircuitId(
             "unknown-kagemusha-recursive-spend-circuit",
@@ -895,8 +892,8 @@ public sealed class KagemushaRecursiveSpendNativeTests
             KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
             KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
             1u));
-        Assert.True(KagemushaRecursiveSpendNative.CanSelectAppendOutputCircuitId(
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
+        Assert.False(KagemushaRecursiveSpendNative.CanSelectAppendOutputCircuitId(
+            "kagemusha-recursive-spend-lineage-v1",
             KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
             1u));
         Assert.False(KagemushaRecursiveSpendNative.CanSelectAppendOutputCircuitId(
@@ -905,15 +902,15 @@ public sealed class KagemushaRecursiveSpendNativeTests
             1u));
         Assert.False(KagemushaRecursiveSpendNative.CanSelectAppendOutputCircuitId(
             KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
+            "kagemusha-recursive-spend-lineage-v1",
             1u),
             "semantic previous proofs cannot select Reserved-lineage output");
         Assert.False(KagemushaRecursiveSpendNative.CanSelectAppendOutputCircuitId(
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
+            "kagemusha-recursive-spend-lineage-v1",
+            "kagemusha-recursive-spend-lineage-v1",
             1u));
-        Assert.True(KagemushaRecursiveSpendNative.CanSelectAppendOutputCircuitId(
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
+        Assert.False(KagemushaRecursiveSpendNative.CanSelectAppendOutputCircuitId(
+            "kagemusha-recursive-spend-lineage-v1",
             KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
             1u));
         Assert.True(KagemushaRecursiveSpendNative.CanSelectAppendOutputCircuitId(
@@ -928,8 +925,8 @@ public sealed class KagemushaRecursiveSpendNativeTests
             KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
             KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
             0u));
-        Assert.True(KagemushaRecursiveSpendNative.CanRedeemWitnessless(
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
+        Assert.False(KagemushaRecursiveSpendNative.CanRedeemWitnessless(
+            "kagemusha-recursive-spend-lineage-v1",
             1u));
         Assert.True(KagemushaRecursiveSpendNative.CanRedeemWitnessless(
             KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1,
@@ -937,28 +934,28 @@ public sealed class KagemushaRecursiveSpendNativeTests
         Assert.True(KagemushaRecursiveSpendNative.CanRedeemWitnessless(
             KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
             2u));
-        Assert.False(KagemushaRecursiveSpendNative.RequiresLineageWitnessForRedeem(
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
+        Assert.True(KagemushaRecursiveSpendNative.RequiresLineageWitnessForRedeem(
+            "kagemusha-recursive-spend-lineage-v1",
             1u));
-        Assert.True(KagemushaRecursiveSpendNative.CanRedeemWitnessless(
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
+        Assert.False(KagemushaRecursiveSpendNative.CanRedeemWitnessless(
+            "kagemusha-recursive-spend-lineage-v1",
             KagemushaRecursiveSpendNative.RecursiveSpendLineageWitnesslessMaxHopsV1));
-        Assert.False(KagemushaRecursiveSpendNative.RequiresLineageWitnessForRedeem(
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
+        Assert.True(KagemushaRecursiveSpendNative.RequiresLineageWitnessForRedeem(
+            "kagemusha-recursive-spend-lineage-v1",
             KagemushaRecursiveSpendNative.RecursiveSpendLineageWitnesslessMaxHopsV1));
         Assert.False(KagemushaRecursiveSpendNative.CanRedeemWitnessless(
             KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
             1u));
         Assert.False(KagemushaRecursiveSpendNative.CanRedeemWitnessless(
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
+            "kagemusha-recursive-spend-lineage-v1",
             0u));
-        Assert.False(KagemushaRecursiveSpendNative.RequiresLineageWitnessForRedeem(
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
+        Assert.True(KagemushaRecursiveSpendNative.RequiresLineageWitnessForRedeem(
+            "kagemusha-recursive-spend-lineage-v1",
             2u));
         Assert.True(KagemushaRecursiveSpendNative.RequiresLineageWitnessForRedeem(null, 1u));
         foreach (var (circuitId, hopCount) in new (string?, uint)[]
         {
-            (KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1, uint.MaxValue),
+            ("kagemusha-recursive-spend-lineage-v1", uint.MaxValue),
             (KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1, 0u),
             (KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1, uint.MaxValue),
             ("", 1u),
@@ -975,16 +972,16 @@ public sealed class KagemushaRecursiveSpendNativeTests
         Assert.False(KagemushaRecursiveSpendNative.CanAppendWitnesslessLineage(64u));
         Assert.False(KagemushaRecursiveSpendNative.CanAppendWitnesslessLineage(uint.MaxValue));
         Assert.False(KagemushaRecursiveSpendNative.RequiresPreviousProofOpenEnvelopesForAppend(
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
+            "kagemusha-recursive-spend-lineage-v1",
             1u));
         Assert.True(KagemushaRecursiveSpendNative.RequiresPreviousProofOpenEnvelopesForAppend(
             KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
             1u));
         Assert.False(KagemushaRecursiveSpendNative.RequiresPreviousProofOpenEnvelopesForAppend(
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
+            "kagemusha-recursive-spend-lineage-v1",
             64u));
         Assert.False(KagemushaRecursiveSpendNative.RequiresPreviousProofOpenEnvelopesForAppend(
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
+            "kagemusha-recursive-spend-lineage-v1",
             0u));
         Assert.False(KagemushaRecursiveSpendNative.RequiresPreviousProofOpenEnvelopesForAppend(
             KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
@@ -1005,7 +1002,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
             "hasLineageVerifierRecord",
             () => KagemushaRecursiveSpendNative.Verify(
                 malformedRequestArchive,
-                KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
+                KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
                 hasLineageVerifierRecord: false));
 
         AssertArgumentDiagnostic(
@@ -1060,7 +1057,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
             "hasLineageVerifierRecord",
             () => KagemushaRecursiveSpendNative.Redeem(
                 requestArchive,
-                KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
+                KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
                 1u,
                 hasLineageWitness: true,
                 hasLineageVerifierRecord: false));
@@ -1070,7 +1067,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
             "lineageVerifierRecordCount",
             () => KagemushaRecursiveSpendNative.Redeem(
                 requestArchive,
-                KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
+                KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
                 1u,
                 hasLineageWitness: true,
                 hasLineageVerifierRecord: false,
@@ -1080,7 +1077,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
             "lineageVerifierRecords count must be non-negative",
             "lineageVerifierRecordCount",
             () => KagemushaRecursiveSpendNative.ValidateRedeemLineagePreflight(
-                KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
+                KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
                 1u,
                 hasLineageWitness: true,
                 hasLineageVerifierRecord: false,
@@ -1176,7 +1173,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
             hasLineageWitness: false,
             hasLineageVerifierRecord: true);
         KagemushaRecursiveSpendNative.ValidateRedeemLineagePreflight(
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
             1u,
             hasLineageWitness: true,
             hasLineageVerifierRecord: false,
@@ -1901,7 +1898,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
             KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
             2u));
         Assert.False(KagemushaRecursiveSpendNative.CanRedeemWitnessless(
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
+            "kagemusha-recursive-spend-lineage-v1",
             65u));
     }
 

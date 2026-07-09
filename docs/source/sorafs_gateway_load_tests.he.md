@@ -4,12 +4,12 @@ direction: rtl
 source: docs/source/sorafs_gateway_load_tests.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 445b7826aa0c572d208cdffbdf94d16c10c5dd53e460334a078a8739d7098bda
-source_last_modified: "2026-07-04T22:32:05.290792+00:00"
-translation_last_reviewed: 2026-07-05
+source_hash: 0858f2f9e247f05e7eb84915ed1d840a5285ea29648e7ec73a67d79aefaf595f
+source_last_modified: "2026-07-06T19:15:17.129960+00:00"
+translation_last_reviewed: 2026-07-06
 title: SoraFS Gateway Load Testing Plan
 summary: Deterministic load harness and follow-up tasks for the SF-5a trustless delivery profile.
-source_mtime: 2026-07-04T22:32:05.290792+00:00
+source_mtime: 2026-07-06T19:15:17.129960+00:00
 ---
 
 # SoraFS Gateway Load Testing Plan
@@ -145,6 +145,8 @@ applicable, reviewed staging provider names using
 `gateway-load-provider-*` labels whose unique inventory matches
 `--provider-count`, reviewed `gateway-load-hardware-*` hardware-profile labels,
 reviewed cache-state modes,
+rejects `--http3-endpoint-committed` until a reviewed SoraFS HTTP/3 gateway
+endpoint is committed,
 generated `gateway-load-stream-*` per-stream inventory labels matching
 `--stream-count`, suite/staging
 digest bindings, SLO threshold facts, and
@@ -176,7 +178,10 @@ promotion can report ready. Aggregate promotion also rechecks the lane-proven
 digest relationships: suite-bound artifact fingerprints must match
 `valid_suite_report_digests`, staging-bound artifact fingerprints must match
 `valid_staging_report_digests`, and policy-bound artifact fingerprints must
-match `valid_policy_digests`.
+match `valid_policy_digests`. Gateway-load rollout summaries must expose
+exactly one active local conformance suite digest, one active staging-load
+report digest, and one active policy digest; mixed valid anchors fail closed
+before final promotion can report ready.
 
 ## Failure Injection Coverage
 

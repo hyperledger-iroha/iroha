@@ -5,20 +5,105 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from html import unescape
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
+from sorafs_evidence_sensitivity import (
+    COMMON_SENSITIVE_KEYS,
+    COMMON_SENSITIVE_KEY_NORMALIZED,
+    HIGH_RISK_SENSITIVE_KEY_FRAGMENTS,
+    MAX_SENSITIVE_KEY_DECODE_PASSES,
+    PAYLOAD_FREE_SENSITIVE_REFERENCE_SUFFIXES,
+    normalize_sensitive_key,
+)
 from sorafs_evidence_paths import (
     EVIDENCE_FILE_INSPECTION_DIAGNOSTIC,
     EVIDENCE_FILE_MISSING_DIAGNOSTIC,
     EVIDENCE_FILE_SYMLINK_DIAGNOSTIC,
     validate_evidence_parent_chain,
 )
-from sorafs_path_identity import error_diagnostic_label
+from sorafs_path_identity import diagnostic_text_is_canonical, error_diagnostic_label
 
 CHUNK_BYTES = 1024 * 1024
 EVIDENCE_JSON_LOAD_DIAGNOSTIC = "failed to load evidence JSON"
 EVIDENCE_JSON_READ_DIAGNOSTIC = "evidence JSON cannot be read"
+JSON_DUPLICATE_KEY_EXTRA_SENSITIVE_KEYS = frozenset(
+    {
+        "access_log_entries",
+        "account_private_key",
+        "account_id",
+        "audit_log_entries",
+        "billing_statement",
+        "body",
+        "canonical_account",
+        "challenge",
+        "challenge_bytes",
+        "credential",
+        "credential_body",
+        "credential_bytes",
+        "credential_payload",
+        "customer_email",
+        "dag_block",
+        "dag_head",
+        "drand_randomness",
+        "drand_signature",
+        "evidence_json",
+        "fetch_transcript",
+        "gateway_private_key",
+        "head_bytes",
+        "holder_identity",
+        "honey_response",
+        "honey_responses",
+        "identity_document",
+        "leaf_merkle_path",
+        "manifest_signing_key",
+        "mnemonic",
+        "nonce",
+        "norito_bytes",
+        "payload",
+        "payload_b64",
+        "payload_body",
+        "payload_bytes",
+        "raw",
+        "raw_archive",
+        "raw_body",
+        "raw_evidence",
+        "raw_payload",
+        "raw_request",
+        "raw_response",
+        "response_bodies",
+        "segment_merkle_path",
+        "signature_key",
+        "signed_auditor_request",
+        "signed_transaction",
+        "signed_url",
+        "signed_urls",
+        "snapshot_b64",
+        "snapshot_bytes",
+        "token_b64",
+        "url_signature",
+        "vrf_output",
+        "watermark_key",
+        "watermark_secret",
+        "webauthn_assertion",
+    }
+)
+JSON_DUPLICATE_KEY_SENSITIVE_NORMALIZED_MARKERS = frozenset(
+    {
+        "body",
+        "credential",
+        "ledger",
+        "payload",
+        "private",
+        "proof",
+        "receipt",
+    }
+)
+JSON_DUPLICATE_KEY_PAYLOAD_FREE_REFERENCE_SUFFIXES = (
+    PAYLOAD_FREE_SENSITIVE_REFERENCE_SUFFIXES | frozenset({"blake3hex", "sha256hex"})
+)
 
 
 class EvidenceFileTooLargeError(ValueError):
@@ -35,11 +120,7 @@ def _require_error_list(errors: Any) -> list[str]:
     for error in errors:
         if not isinstance(error, str):
             raise ValueError("evidence JSON errors must be a list of strings")
-        if (
-            not error.strip()
-            or error != error.strip()
-            or any(ord(character) < 32 or ord(character) == 127 for character in error)
-        ):
+        if not diagnostic_text_is_canonical(error):
             raise ValueError(
                 "evidence JSON errors must contain non-empty canonical strings"
             )
@@ -53,14 +134,61 @@ def reject_non_standard_json_constant(value: str) -> None:
 
 
 def _json_key_label(key: Any) -> str:
-    if (
-        isinstance(key, str)
-        and key.strip()
-        and key == key.strip()
-        and not any(ord(character) < 32 or ord(character) == 127 for character in key)
-    ):
+    if isinstance(key, str) and diagnostic_text_is_canonical(key):
+        if _json_key_is_sensitive(key):
+            return "`<sensitive-key>`"
         return f"`{key}`"
     return "`<non-canonical>`"
+
+
+def _decoded_json_key_variants(key: str) -> tuple[str, ...]:
+    variants = [key]
+    seen = {key}
+    current = key
+    for _ in range(MAX_SENSITIVE_KEY_DECODE_PASSES):
+        decoded = unescape(unquote(current))
+        if decoded == current or decoded in seen:
+            break
+        variants.append(decoded)
+        seen.add(decoded)
+        current = decoded
+    return tuple(variants)
+
+
+def _is_payload_free_sensitive_reference(normalized_key: str) -> bool:
+    return any(
+        normalized_key.endswith(suffix)
+        for suffix in JSON_DUPLICATE_KEY_PAYLOAD_FREE_REFERENCE_SUFFIXES
+    )
+
+
+def _json_key_is_sensitive(key: str) -> bool:
+    exact_sensitive_keys = COMMON_SENSITIVE_KEYS | JSON_DUPLICATE_KEY_EXTRA_SENSITIVE_KEYS
+    normalized_sensitive_keys = COMMON_SENSITIVE_KEY_NORMALIZED | frozenset(
+        normalize_sensitive_key(key_name) for key_name in exact_sensitive_keys
+    )
+    for variant in _decoded_json_key_variants(key):
+        normalized_key = normalize_sensitive_key(variant)
+        if (
+            variant.lower() in exact_sensitive_keys
+            or normalized_key in normalized_sensitive_keys
+            or (
+                normalized_key.startswith("raw")
+                and not _is_payload_free_sensitive_reference(normalized_key)
+            )
+            or any(
+                fragment in normalized_key
+                and not _is_payload_free_sensitive_reference(normalized_key)
+                for fragment in HIGH_RISK_SENSITIVE_KEY_FRAGMENTS
+            )
+            or any(
+                marker in normalized_key
+                and not _is_payload_free_sensitive_reference(normalized_key)
+                for marker in JSON_DUPLICATE_KEY_SENSITIVE_NORMALIZED_MARKERS
+            )
+        ):
+            return True
+    return False
 
 
 def _error_label(

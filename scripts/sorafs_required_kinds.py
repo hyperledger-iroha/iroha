@@ -5,13 +5,11 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from sorafs_path_identity import diagnostic_text_is_canonical
+
 
 def _is_canonical_kind_name(value: str) -> bool:
-    return (
-        bool(value)
-        and value == value.strip()
-        and not any(ord(character) < 32 or ord(character) == 127 for character in value)
-    )
+    return diagnostic_text_is_canonical(value)
 
 
 def _validate_allowed_kinds(allowed_kinds: Any) -> Mapping[str, object]:

@@ -56,10 +56,10 @@ fixtures e emite os seguintes arquivos em `fixtures/sorafs_chunker/`:
 
 ### Politica de assinaturas
 
-A regeneracao de fixtures **deve** incluir uma assinatura valida do conselho. O gerador
-rejeita saida sem assinatura a menos que `--allow-unsigned` seja passado explicitamente (destinado
-apenas para experimentacao local). Os envelopes de assinatura sao append-only e
-sao deduplicados por signatario.
+Fixture regeneration **must** include a valid council signature. The generator
+rejects unsigned output in every mode; use `--signing-key` to create or append a
+council signature, or keep the existing verified `manifest_signatures.json`
+unchanged. Signature envelopes are append-only and deduplicated per signer.
 
 Para adicionar uma assinatura do conselho:
 

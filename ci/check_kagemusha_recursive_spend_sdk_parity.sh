@@ -7016,7 +7016,7 @@ def check_recursive_compact_surface(texts, errors):
             "hasLineageWitness: false",
             "lineageWitness is required for this bundle",
             "AssertArgumentDiagnostic(\n            \"lineageWitness is required for this bundle\",\n            \"hasLineageWitness\",",
-            "RecursiveSpendLineageProofCircuitIdV1",
+            "RecursiveSpendLineageAppendProofCircuitIdV1",
             "AssertArgumentDiagnostic(\n            \"lineageVerifierRecord is required for reserved-lineage bundles\",\n            \"hasLineageVerifierRecord\",",
             "hasLineageVerifierRecord: false",
             "lineageVerifierRecordCount: 0",
@@ -15679,7 +15679,8 @@ def check_javascript(texts, errors):
         "KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES = 128",
         'KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND = "halo2/ipa"',
         '"kagemusha-recursive-aggregation-v1"',
-        '"kagemusha-recursive-spend-lineage-v1"',
+        '"kagemusha-recursive-spend-lineage-onehop-v1"',
+        '"kagemusha-recursive-spend-lineage-append-v1"',
         '"iroha:kagemusha:v1:recursive-spend-accumulator"',
         '"iroha:kagemusha:v1:recursive-spend-transition-profile"',
         '"iroha:kagemusha:v1:recursive-spend-transition-profile-digest"',
@@ -15696,6 +15697,13 @@ def check_javascript(texts, errors):
         "javascript/iroha_js/dist/crypto.browser.js",
     ):
         require_contains(texts, relative, constants, f"{relative} constants", errors)
+        require_not_regex(
+            texts,
+            relative,
+            r"KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1",
+            f"{relative} removed generic Reserved-lineage alias",
+            errors,
+        )
         require_contains(texts, relative, REQUIRED_JS_PUBLIC_EXPORTS, f"{relative} public API", errors)
         require_regex(
             texts,
@@ -18974,7 +18982,7 @@ def check_javascript(texts, errors):
             relative,
             (
                 "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1",
-                "proofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1",
+                "isKagemushaRecursiveSpendLineageProofCircuitId(proofCircuitId)",
                 "Number.isInteger(hopCount)",
                 "hopCount >= 1",
                 "hopCount <= KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1",
@@ -21124,7 +21132,8 @@ def check_python(texts, errors):
             "KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES = 128",
             'KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND = "halo2/ipa"',
             '"kagemusha-recursive-aggregation-v1"',
-            '"kagemusha-recursive-spend-lineage-v1"',
+            '"kagemusha-recursive-spend-lineage-onehop-v1"',
+            '"kagemusha-recursive-spend-lineage-append-v1"',
             '"iroha:kagemusha:v1:recursive-spend-transition-profile"',
             '"iroha:kagemusha:v1:recursive-spend-transition-profile-digest"',
             '"iroha:kagemusha:v1:recursive-spend-transition-profile-binding-digest"',
@@ -21134,6 +21143,20 @@ def check_python(texts, errors):
             '"iroha:kagemusha:recursive-spend-lineage-append-boundary-final-note:v1"',
         ),
         "Python SDK constants",
+        errors,
+    )
+    require_not_regex(
+        texts,
+        wrapper,
+        r"KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1",
+        "Python removed generic Reserved-lineage alias",
+        errors,
+    )
+    require_not_regex(
+        texts,
+        init,
+        r"KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1",
+        "Python package removed generic Reserved-lineage alias re-export",
         errors,
     )
     require_contains(
@@ -21424,7 +21447,8 @@ def check_python(texts, errors):
         wrapper,
         (
             "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1",
-            "and proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1",
+            "proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1",
+            "proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1",
             "1 <= hop_count <= KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1",
             "1 <= previous_hop_count < KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1",
         ),
@@ -23838,7 +23862,8 @@ def check_swift(texts, errors):
             "recursiveSpendLineageAppendBoundaryChainAssetBindingDomainV1",
             "recursiveSpendLineageAppendBoundaryFinalNoteBindingDomainV1",
             '"kagemusha-recursive-aggregation-v1"',
-            '"kagemusha-recursive-spend-lineage-v1"',
+            '"kagemusha-recursive-spend-lineage-onehop-v1"',
+            '"kagemusha-recursive-spend-lineage-append-v1"',
             '"iroha:kagemusha:v1:recursive-spend-transition-profile"',
             '"iroha:kagemusha:v1:recursive-spend-transition-profile-digest"',
             '"iroha:kagemusha:v1:recursive-spend-transition-profile-binding-digest"',
@@ -23848,6 +23873,13 @@ def check_swift(texts, errors):
             '"iroha:kagemusha:recursive-spend-lineage-append-boundary-final-note:v1"',
         ),
         "Swift constants",
+        errors,
+    )
+    require_not_regex(
+        texts,
+        prover,
+        r"recursiveSpendLineageProofCircuitIdV1",
+        "Swift removed generic Reserved-lineage alias",
         errors,
     )
     require_contains(
@@ -24295,7 +24327,7 @@ def check_swift(texts, errors):
         prover,
         (
             "recursiveSpendLineageTransitionCircuitWiredV1",
-            "circuitId == recursiveSpendLineageProofCircuitIdV1",
+            "isLineageProofCircuitId(circuitId)",
             "hopCount >= 1",
             "hopCount <= recursiveSpendLineageWitnesslessMaxHopsV1",
             "previousHopCount >= 1",
@@ -28862,7 +28894,8 @@ def check_java_kotlin(texts, errors):
                 "RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1",
                 "isSupportedAppendProofTransition",
                 '"kagemusha-recursive-aggregation-v1"',
-                '"kagemusha-recursive-spend-lineage-v1"',
+                '"kagemusha-recursive-spend-lineage-onehop-v1"',
+                '"kagemusha-recursive-spend-lineage-append-v1"',
                 '"iroha:kagemusha:v1:recursive-spend-transition-profile"',
                 '"iroha:kagemusha:v1:recursive-spend-transition-profile-digest"',
                 '"iroha:kagemusha:v1:recursive-spend-transition-profile-binding-digest"',
@@ -28872,6 +28905,13 @@ def check_java_kotlin(texts, errors):
                 '"iroha:kagemusha:recursive-spend-lineage-append-boundary-final-note:v1"',
             ),
             f"{label} constants",
+            errors,
+        )
+        require_not_regex(
+            texts,
+            relative,
+            r"RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1",
+            f"{label} removed generic Reserved-lineage alias",
             errors,
         )
         require_contains(
@@ -29394,7 +29434,7 @@ def check_java_kotlin(texts, errors):
         java,
         (
             "RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1",
-            "RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.equals(circuitId)",
+            "isLineageProofCircuitId(circuitId)",
             "hopCount >= 1",
             "hopCount <= RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1",
             "previousHopCount >= 1",
@@ -29418,7 +29458,8 @@ def check_java_kotlin(texts, errors):
         kotlin,
         (
             "RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1",
-            "circuitId == RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 &&",
+            "circuitId == RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1 &&",
+            "circuitId == RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1 &&",
             "hopCount >= 1",
             "hopCount <= RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1",
             "previousHopCount >= 1",
@@ -31079,7 +31120,8 @@ def check_csharp(texts, errors):
             "RecursiveSpendLineageWitnessWireName",
             "RecursiveSpendAccumulatorDomain",
             '"kagemusha-recursive-aggregation-v1"',
-            '"kagemusha-recursive-spend-lineage-v1"',
+            '"kagemusha-recursive-spend-lineage-onehop-v1"',
+            '"kagemusha-recursive-spend-lineage-append-v1"',
             '"iroha_data_model::offline::model::KagemushaRecursiveSpendBundleV1"',
             '"iroha_data_model::offline::model::KagemushaRecursiveSpendVerifyResultV1"',
             '"iroha_data_model::offline::model::KagemushaRecursiveSpendLineageWitnessV1"',
@@ -31093,6 +31135,13 @@ def check_csharp(texts, errors):
             '"iroha:kagemusha:recursive-spend-lineage-append-boundary-final-note:v1"',
         ),
         "C# constants",
+        errors,
+    )
+    require_not_regex(
+        texts,
+        relative,
+        r"RecursiveSpendLineageProofCircuitIdV1",
+        "C# removed generic Reserved-lineage alias",
         errors,
     )
     require_contains(
@@ -31598,7 +31647,7 @@ def check_csharp(texts, errors):
             "AssertArgumentDiagnostic(\n            \"lineageVerifierRecord is required for reserved-lineage bundles\",\n            \"hasLineageVerifierRecord\",",
             "lineageVerifierRecord is only valid for reserved-lineage bundles",
             "AssertArgumentDiagnostic(\n            \"lineageVerifierRecord is only valid for reserved-lineage bundles\",\n            \"hasLineageVerifierRecord\",",
-            "KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,\n                hasLineageVerifierRecord: false",
+            "KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,\n                hasLineageVerifierRecord: false",
             "KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,\n                hasLineageVerifierRecord: true",
             "AssertArgumentDiagnostic(\n            \"Request archive must be a valid Norito archive.\",\n            \"requestArchive\",\n            () => KagemushaRecursiveSpendNative.Verify(",
             "KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,\n                hasLineageVerifierRecord: true));",
@@ -31981,8 +32030,7 @@ def check_csharp(texts, errors):
         texts,
         relative,
         (
-            "RecursiveSpendLineageTransitionCircuitWiredV1",
-            "circuitId == RecursiveSpendLineageProofCircuitIdV1",
+            "return RecursiveSpendLineageTransitionCircuitWiredV1\n            && IsLineageProofCircuitId(circuitId)",
             "hopCount >= 1",
             "hopCount <= RecursiveSpendLineageWitnesslessMaxHopsV1",
             "previousHopCount >= 1",
@@ -58464,9 +58512,9 @@ if mode == "--negative-control-sdk-verify-lineage-record-preflight":
                 ),
                 (
                     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
-                    "KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,\n"
+                    "KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,\n"
                     "                hasLineageVerifierRecord: false",
-                    "KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,\n"
+                    "KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,\n"
                     "                hasLineageVerifierRecord: true",
                     "C# recursive spend verify lineage-record preflight tests",
                 ),
@@ -66254,78 +66302,66 @@ if mode == "--negative-control-cross-sdk-helper-bodies":
         (
             "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
             "outputCircuitId == recursiveSpendLineageAppendProofCircuitIdV1",
-            "outputCircuitId == recursiveSpendLineageProofCircuitIdV1",
+            'outputCircuitId == "kagemusha-recursive-spend-lineage-v1"',
             "Swift append output selector alias boundary",
         ),
         (
             "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
-            "circuitId == recursiveSpendLineageProofCircuitIdV1",
-            "circuitId.isEmpty",
+            "isLineageProofCircuitId(circuitId)",
+            'circuitId == "kagemusha-recursive-spend-lineage-v1"',
             "Swift witnessless Reserved-lineage helper bounds",
         ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
             "outputCircuitId == RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1",
-            "outputCircuitId == RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1",
+            'outputCircuitId == "kagemusha-recursive-spend-lineage-v1"',
             "Kotlin append output selector alias boundary",
         ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
-            "circuitId == RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1",
-            "circuitId.isNullOrEmpty()",
+            "circuitId == RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1 &&",
+            'circuitId == "kagemusha-recursive-spend-lineage-v1" &&',
             "Kotlin witnessless Reserved-lineage helper bounds",
         ),
         (
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
             "RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.equals(outputCircuitId)",
-            "RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.equals(outputCircuitId)",
+            '"kagemusha-recursive-spend-lineage-v1".equals(outputCircuitId)',
             "Android append output selector alias boundary",
         ),
         (
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
-            "RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.equals(circuitId)",
-            "circuitId == null",
+            "isLineageProofCircuitId(circuitId)",
+            '"kagemusha-recursive-spend-lineage-v1".equals(circuitId)',
             "Android witnessless Reserved-lineage helper bounds",
         ),
         (
             "python/iroha_python/src/iroha_python/kagemusha.py",
             "return output_proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1",
-            "return output_proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1",
+            'return output_proof_circuit_id == "kagemusha-recursive-spend-lineage-v1"',
             "Python append output selector alias boundary",
         ),
         (
             "python/iroha_python/src/iroha_python/kagemusha.py",
-            "proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1",
-            "bool(proof_circuit_id)",
+            "proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1",
+            'proof_circuit_id == "kagemusha-recursive-spend-lineage-v1"',
             "Python witnessless Reserved-lineage helper bounds",
         ),
         (
             "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
             "outputCircuitId == RecursiveSpendLineageAppendProofCircuitIdV1",
-            "outputCircuitId == RecursiveSpendLineageProofCircuitIdV1",
+            'outputCircuitId == "kagemusha-recursive-spend-lineage-v1"',
             "C# append output selector alias boundary",
         ),
         (
             "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
-            "circuitId == RecursiveSpendLineageProofCircuitIdV1",
-            "circuitId is null",
+            "return RecursiveSpendLineageTransitionCircuitWiredV1\n            && IsLineageProofCircuitId(circuitId)",
+            'return RecursiveSpendLineageTransitionCircuitWiredV1\n            && circuitId == "kagemusha-recursive-spend-lineage-v1"',
             "C# witnessless Reserved-lineage helper bounds",
         ),
     )
     def expected_cross_sdk_helper_body_label(target, old, label):
-        if (
-            label == "Kotlin witnessless Reserved-lineage helper bounds"
-            and target == "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt"
-        ):
-            marker = f"{old} &&"
-        elif (
-            label == "Python witnessless Reserved-lineage helper bounds"
-            and target == "python/iroha_python/src/iroha_python/kagemusha.py"
-        ):
-            marker = f"and {old}"
-        else:
-            marker = old
-        return f"{label} missing {marker}"
+        return f"{label} missing {old}"
 
     detected_messages = []
     for target, old, new, label in mutations:

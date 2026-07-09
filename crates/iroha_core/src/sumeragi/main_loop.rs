@@ -8,11 +8,11 @@ use std::{
     borrow::Cow,
     cell::Cell,
     cmp::Reverse,
-    collections::{BTreeMap, BTreeSet, VecDeque, btree_map::Entry},
+    collections::{BTreeMap, BTreeSet, HashSet, VecDeque, btree_map::Entry},
     convert::TryFrom,
     ffi::OsStr,
     fs,
-    num::NonZeroUsize,
+    num::{NonZeroU64, NonZeroUsize},
     ops::Bound::{Excluded, Unbounded},
     path::{Path, PathBuf},
     sync::{
@@ -445,6 +445,7 @@ mod background;
 mod block_sync;
 mod commit;
 mod kura;
+mod lane_blocks;
 mod lane_scheduler;
 mod locked_qc;
 mod mode;
@@ -13608,6 +13609,916 @@ struct ActorSubsystems {
     da_rbc: DaRbcState,
     vrf: VrfActor,
     merge: MergeLaneState,
+    lane_blocks: crate::lane_consensus::LaneBlockSessionCache,
+    committed_lane_blocks: CommittedLaneBlockQueue,
+}
+
+// Tracks certified lane blocks until their payloads are recovered, directly
+// applied, and covered by durable application receipts.
+struct CommittedLaneBlockQueue {
+    capacity: usize,
+    pending: VecDeque<crate::lane_consensus::CommittedLaneBlockSession>,
+}
+
+impl CommittedLaneBlockQueue {
+    fn new(capacity: usize) -> Self {
+        Self {
+            capacity: capacity.max(1),
+            pending: VecDeque::new(),
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.pending.len()
+    }
+
+    fn remaining_capacity(&self) -> usize {
+        self.capacity.saturating_sub(self.pending.len())
+    }
+
+    fn enqueue_ready_sessions(
+        &mut self,
+        cache: &mut crate::lane_consensus::LaneBlockSessionCache,
+    ) -> Vec<crate::lane_consensus::CommittedLaneBlockSession> {
+        let ready = cache.drain_committed_sessions_up_to(self.remaining_capacity());
+        self.pending.extend(ready.iter().cloned());
+        ready
+    }
+
+    fn hydrate_from_certified_sessions<I>(&mut self, sessions: I) -> usize
+    where
+        I: IntoIterator<Item = crate::lane_consensus::CommittedLaneBlockSession>,
+    {
+        let mut hydrated = 0_usize;
+        for session in sessions {
+            if self.remaining_capacity() == 0 {
+                break;
+            }
+            if let Err(err) = crate::lane_consensus::validate_committed_lane_block_session(&session)
+            {
+                let descriptor = &session.proposal.descriptor;
+                warn!(
+                    ?err,
+                    lane_id = ?descriptor.lane_id,
+                    dataspace_id = ?descriptor.dataspace_id,
+                    lane_block_height = descriptor.lane_block_height,
+                    lane_block_view = descriptor.lane_block_view,
+                    proposal_hash = ?session.proposal.proposal_hash,
+                    "skipping malformed committed lane-block session during queue hydration"
+                );
+                continue;
+            }
+            if self.contains_session(&session) {
+                continue;
+            }
+            self.pending.push_back(session);
+            hydrated = hydrated.saturating_add(1);
+        }
+        hydrated
+    }
+
+    fn hydrate_unapplied_from_certified_sessions<I>(
+        &mut self,
+        sessions: I,
+        kura: &crate::kura::Kura,
+    ) -> usize
+    where
+        I: IntoIterator<Item = crate::lane_consensus::CommittedLaneBlockSession>,
+    {
+        self.hydrate_from_certified_sessions(
+            sessions.into_iter().filter(|session| {
+                !kura.lane_block_application_receipt_available(&session.proposal)
+            }),
+        )
+    }
+
+    fn prune_application_receipted_sessions(&mut self, kura: &crate::kura::Kura) -> usize {
+        let before = self.pending.len();
+        self.pending
+            .retain(|session| !kura.lane_block_application_receipt_available(&session.proposal));
+        before.saturating_sub(self.pending.len())
+    }
+
+    fn unapplied_lane_ids_for_admissible_lanes(
+        &self,
+        kura: &crate::kura::Kura,
+        admissible_lane: impl Fn(LaneId, DataSpaceId, u64, u64) -> bool,
+    ) -> BTreeSet<LaneId> {
+        self.pending
+            .iter()
+            .filter_map(|session| {
+                if kura.lane_block_application_receipt_available(&session.proposal) {
+                    return None;
+                }
+                let descriptor = &session.proposal.descriptor;
+                admissible_lane(
+                    descriptor.lane_id,
+                    descriptor.dataspace_id,
+                    descriptor.lane_block_height,
+                    descriptor.proposal_height,
+                )
+                .then_some(descriptor.lane_id)
+            })
+            .collect()
+    }
+
+    fn retain_sessions_for_admissible_lanes(
+        &mut self,
+        admissible_lane: impl Fn(LaneId, DataSpaceId, u64, u64) -> bool,
+    ) -> usize {
+        let before = self.pending.len();
+        self.pending.retain(|session| {
+            let descriptor = &session.proposal.descriptor;
+            admissible_lane(
+                descriptor.lane_id,
+                descriptor.dataspace_id,
+                descriptor.lane_block_height,
+                descriptor.proposal_height,
+            )
+        });
+        before.saturating_sub(self.pending.len())
+    }
+
+    fn contains_session(&self, session: &crate::lane_consensus::CommittedLaneBlockSession) -> bool {
+        self.pending.iter().any(|pending| {
+            pending.proposal.proposal_hash == session.proposal.proposal_hash
+                && pending.proposal.descriptor.lane_id == session.proposal.descriptor.lane_id
+                && pending.proposal.descriptor.dataspace_id
+                    == session.proposal.descriptor.dataspace_id
+                && pending.proposal.descriptor.lane_block_height
+                    == session.proposal.descriptor.lane_block_height
+                && pending.proposal.descriptor.lane_block_view
+                    == session.proposal.descriptor.lane_block_view
+        })
+    }
+
+    fn status_snapshot_with_payload_availability(
+        &self,
+        kura: &crate::kura::Kura,
+        current_state_height: u64,
+        current_state_hash: Option<HashOf<BlockHeader>>,
+    ) -> Vec<super::status::CommittedLaneBlockSnapshot> {
+        self.pending
+            .iter()
+            .map(|session| {
+                let execution_status = if kura
+                    .lane_block_application_receipt_available(&session.proposal)
+                {
+                    let descriptor = &session.proposal.descriptor;
+                    match kura.read_lane_block_application_receipt(
+                        descriptor.lane_id,
+                        descriptor.lane_block_height,
+                    ) {
+                        Some(receipt)
+                            if receipt.format
+                                == crate::kura::LaneBlockApplicationReceiptArtifactFormat::DirectExecution =>
+                        {
+                            super::status::CommittedLaneBlockExecutionStatus::StateAppliedByDirectExecution
+                        }
+                        _ => {
+                            super::status::CommittedLaneBlockExecutionStatus::StateAppliedByCanonicalBlock
+                        }
+                    }
+                } else if kura
+                    .lane_block_application_receipt_conflicts_with_preflight(&session.proposal)
+                {
+                    super::status::CommittedLaneBlockExecutionStatus::ApplicationReceiptConflictsWithPreflight
+                } else if !kura
+                    .lane_block_predecessor_application_receipt_available(&session.proposal)
+                {
+                    super::status::CommittedLaneBlockExecutionStatus::AwaitingPredecessorApplication
+                } else if kura
+                    .read_preflighted_lane_block_execution_input_for_application(
+                        &session.proposal,
+                        current_state_height,
+                        current_state_hash.clone(),
+                    )
+                    .is_some()
+                {
+                    super::status::CommittedLaneBlockExecutionStatus::PayloadPreflightedAwaitingStateApplication
+                } else if let Some(true) = kura
+                    .lane_block_execution_preflight_has_rejections(
+                        &session.proposal,
+                        current_state_height,
+                        current_state_hash.clone(),
+                    )
+                {
+                    super::status::CommittedLaneBlockExecutionStatus::PayloadPreflightRejectedAwaitingStateApplication
+                } else if kura
+                    .lane_block_execution_input_available(&session.proposal)
+                {
+                    super::status::CommittedLaneBlockExecutionStatus::PayloadRecoveredAwaitingStateApplication
+                } else if kura
+                    .lane_block_payload_availability(&session.proposal)
+                    .is_available()
+                {
+                    super::status::CommittedLaneBlockExecutionStatus::PayloadAvailableAwaitingExecutor
+                } else {
+                    super::status::CommittedLaneBlockExecutionStatus::AwaitingExecutablePayload
+                };
+                super::status::CommittedLaneBlockSnapshot::from_committed_session_with_execution_status(
+                    session,
+                    execution_status,
+                )
+            })
+            .collect()
+    }
+
+    fn status_snapshot_for_state(
+        &self,
+        state: &crate::state::State,
+    ) -> Vec<super::status::CommittedLaneBlockSnapshot> {
+        let durable_applied = Self::durable_applied_status_snapshot_for_state(state);
+        let pending = self.status_snapshot_with_payload_availability(
+            state.kura(),
+            u64::try_from(state.committed_height()).unwrap_or(u64::MAX),
+            Some(state.lane_execution_state_hash()),
+        );
+        merge_committed_lane_block_statuses(durable_applied, pending)
+    }
+
+    fn durable_applied_status_snapshot_for_state(
+        state: &crate::state::State,
+    ) -> Vec<super::status::CommittedLaneBlockSnapshot> {
+        let mut latest_by_lane =
+            BTreeMap::<(LaneId, DataSpaceId), super::status::CommittedLaneBlockSnapshot>::new();
+        for session in state.certified_lane_block_sessions_snapshot_cached() {
+            let Some(execution_status) =
+                Self::application_receipted_session_status(state.kura(), &session)
+            else {
+                continue;
+            };
+            let snapshot =
+                super::status::CommittedLaneBlockSnapshot::from_committed_session_with_execution_status(
+                    &session,
+                    execution_status,
+                );
+            let key = (snapshot.lane_id, snapshot.dataspace_id);
+            match latest_by_lane.entry(key) {
+                Entry::Vacant(entry) => {
+                    entry.insert(snapshot);
+                }
+                Entry::Occupied(mut entry) => {
+                    let existing = entry.get();
+                    if snapshot.lane_block_height > existing.lane_block_height
+                        || (snapshot.lane_block_height == existing.lane_block_height
+                            && snapshot.lane_block_view >= existing.lane_block_view)
+                    {
+                        entry.insert(snapshot);
+                    }
+                }
+            }
+        }
+        latest_by_lane.into_values().collect()
+    }
+
+    fn application_receipted_session_status(
+        kura: &crate::kura::Kura,
+        session: &crate::lane_consensus::CommittedLaneBlockSession,
+    ) -> Option<super::status::CommittedLaneBlockExecutionStatus> {
+        if !kura.lane_block_application_receipt_available(&session.proposal) {
+            return None;
+        }
+        let descriptor = &session.proposal.descriptor;
+        let receipt = kura.read_lane_block_application_receipt(
+            descriptor.lane_id,
+            descriptor.lane_block_height,
+        )?;
+        if receipt.format == crate::kura::LaneBlockApplicationReceiptArtifactFormat::DirectExecution
+        {
+            Some(super::status::CommittedLaneBlockExecutionStatus::StateAppliedByDirectExecution)
+        } else {
+            Some(super::status::CommittedLaneBlockExecutionStatus::StateAppliedByCanonicalBlock)
+        }
+    }
+
+    fn recover_available_payloads_into_kura(&self, kura: &crate::kura::Kura) -> usize {
+        let mut recovered = 0_usize;
+        for session in &self.pending {
+            if !kura.lane_block_predecessor_application_receipt_available(&session.proposal) {
+                continue;
+            }
+            if kura.lane_block_execution_input_available(&session.proposal) {
+                continue;
+            }
+            let payload = match kura.recover_lane_block_payload(&session.proposal) {
+                Ok(payload) => payload,
+                Err(_) => continue,
+            };
+            if let Err(err) = kura.persist_lane_block_execution_input(&payload) {
+                warn!(
+                    ?err,
+                    lane_id = ?session.proposal.descriptor.lane_id,
+                    dataspace_id = ?session.proposal.descriptor.dataspace_id,
+                    lane_block_height = session.proposal.descriptor.lane_block_height,
+                    lane_block_view = session.proposal.descriptor.lane_block_view,
+                    "failed to persist recovered lane-block execution input"
+                );
+                continue;
+            }
+            recovered = recovered.saturating_add(1);
+        }
+        recovered
+    }
+
+    fn payload_hint_repair_candidates(
+        &self,
+        kura: &crate::kura::Kura,
+    ) -> Vec<crate::sumeragi::consensus::LaneBlockProposalV1> {
+        self.pending
+            .iter()
+            .filter_map(|session| {
+                let proposal = &session.proposal;
+                proposal.payload_block_hint.as_ref()?;
+                if kura.lane_block_application_receipt_available(proposal)
+                    || kura.lane_block_execution_input_available(proposal)
+                    || kura
+                        .lane_block_payload_availability(proposal)
+                        .is_available()
+                {
+                    return None;
+                }
+                Some(proposal.clone())
+            })
+            .collect()
+    }
+
+    fn preflight_recovered_execution_inputs_into_kura(&self, state: &crate::state::State) -> usize {
+        let current_state_height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
+        let current_state_hash = Some(state.lane_execution_state_hash());
+        let inputs = self
+            .pending
+            .iter()
+            .filter_map(|session| {
+                if !state
+                    .kura()
+                    .lane_block_predecessor_application_receipt_available(&session.proposal)
+                {
+                    return None;
+                }
+                if state
+                    .kura()
+                    .lane_block_application_receipt_available(&session.proposal)
+                {
+                    return None;
+                }
+                if state
+                    .kura()
+                    .lane_block_execution_preflight_has_rejections(
+                        &session.proposal,
+                        current_state_height,
+                        current_state_hash.clone(),
+                    )
+                    .is_some()
+                {
+                    return None;
+                }
+                let descriptor = &session.proposal.descriptor;
+                state.kura().read_lane_block_execution_input(
+                    descriptor.lane_id,
+                    descriptor.lane_block_height,
+                )
+            })
+            .collect::<Vec<_>>();
+        if inputs.is_empty() {
+            return 0;
+        }
+
+        let next_height = current_state_height.saturating_add(1).max(1);
+        let header = BlockHeader::new(
+            std::num::NonZeroU64::new(next_height).expect("next block height is non-zero"),
+            current_state_hash.clone(),
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let mut preflighted = 0_usize;
+        for input in inputs {
+            let descriptor = &input.proposal.descriptor;
+            let mut state_block = state.block_and_revert(header.clone());
+            match state_block
+                .validate_lane_block_execution_input_with_routing_context(&input, &mut ivm_cache)
+            {
+                Ok(results) => {
+                    let rejected = results
+                        .iter()
+                        .filter(|(_, _, result)| result.is_err())
+                        .count();
+                    let entrypoints = results.len();
+                    let results = results
+                        .into_iter()
+                        .map(|(_, _, result)| {
+                            iroha_data_model::transaction::signed::TransactionResult(result)
+                        })
+                        .collect::<Vec<_>>();
+                    if let Err(err) = state.kura().persist_lane_block_execution_preflight(
+                        &input,
+                        current_state_height,
+                        current_state_hash.clone(),
+                        results,
+                    ) {
+                        warn!(
+                            ?err,
+                            lane_id = ?descriptor.lane_id,
+                            dataspace_id = ?descriptor.dataspace_id,
+                            lane_block_height = descriptor.lane_block_height,
+                            lane_block_view = descriptor.lane_block_view,
+                            "failed to persist recovered lane-block execution preflight"
+                        );
+                        break;
+                    }
+                    preflighted = preflighted.saturating_add(1);
+                    debug!(
+                        lane_id = ?descriptor.lane_id,
+                        dataspace_id = ?descriptor.dataspace_id,
+                        lane_block_height = descriptor.lane_block_height,
+                        lane_block_view = descriptor.lane_block_view,
+                        entrypoints,
+                        rejected,
+                        "preflighted recovered lane-block execution input"
+                    );
+                }
+                Err(err) => {
+                    warn!(
+                        lane_id = ?descriptor.lane_id,
+                        dataspace_id = ?descriptor.dataspace_id,
+                        lane_block_height = descriptor.lane_block_height,
+                        lane_block_view = descriptor.lane_block_view,
+                        err,
+                        "recovered lane-block execution input failed direct executor preflight"
+                    );
+                }
+            }
+        }
+        preflighted
+    }
+
+    fn repair_missing_direct_application_receipts_from_state(state: &crate::state::State) -> usize {
+        let mut repaired = 0_usize;
+        for (key, marker) in state.direct_lane_block_application_markers_snapshot() {
+            if key != marker.key() {
+                warn!(
+                    key_lane_id = ?key.lane_id,
+                    key_lane_block_height = key.lane_block_height,
+                    marker_lane_id = ?marker.lane_id,
+                    marker_dataspace_id = ?marker.dataspace_id,
+                    marker_lane_block_height = marker.lane_block_height,
+                    "skipping direct lane application receipt repair for malformed state marker key"
+                );
+                continue;
+            }
+            if !state.direct_lane_block_application_marker_targets_active_lane(&marker) {
+                warn!(
+                    lane_id = ?marker.lane_id,
+                    dataspace_id = ?marker.dataspace_id,
+                    lane_block_height = marker.lane_block_height,
+                    "skipping direct lane application receipt repair for inactive lane marker"
+                );
+                continue;
+            }
+            let Some(input) = state
+                .kura()
+                .read_lane_block_execution_input(marker.lane_id, marker.lane_block_height)
+            else {
+                continue;
+            };
+            let Some(preflight) = state
+                .kura()
+                .read_lane_block_execution_preflight(marker.lane_id, marker.lane_block_height)
+            else {
+                continue;
+            };
+            let Some(receipt) =
+                crate::kura::LaneBlockApplicationReceiptArtifact::new_direct_execution(
+                    &input, &preflight,
+                )
+            else {
+                continue;
+            };
+            let Some(expected_marker) =
+                crate::state::DirectLaneBlockApplicationMarker::from_direct_receipt(&receipt)
+            else {
+                continue;
+            };
+            if expected_marker != marker {
+                warn!(
+                    lane_id = ?marker.lane_id,
+                    dataspace_id = ?marker.dataspace_id,
+                    lane_block_height = marker.lane_block_height,
+                    "skipping direct lane application receipt repair because marker and preflight evidence diverge"
+                );
+                continue;
+            }
+            if Self::repair_direct_committed_transaction_membership(state, &input, &receipt) {
+                debug!(
+                    lane_id = ?marker.lane_id,
+                    dataspace_id = ?marker.dataspace_id,
+                    lane_block_height = marker.lane_block_height,
+                    "repaired direct lane application transaction membership from committed state marker"
+                );
+            }
+            if state
+                .kura()
+                .lane_block_application_receipt_available(&receipt.proposal)
+            {
+                continue;
+            }
+            match state
+                .kura()
+                .persist_direct_lane_block_application_receipt(&input, &preflight)
+            {
+                Ok(()) => repaired = repaired.saturating_add(1),
+                Err(err) => warn!(
+                    ?err,
+                    lane_id = ?marker.lane_id,
+                    dataspace_id = ?marker.dataspace_id,
+                    lane_block_height = marker.lane_block_height,
+                    "failed to repair direct lane application receipt from committed state marker"
+                ),
+            }
+        }
+        repaired
+    }
+
+    fn replay_direct_application_receipts_into_state(state: &crate::state::State) -> usize {
+        let mut replayed = 0_usize;
+        let replay_limit = state
+            .kura()
+            .direct_lane_block_application_receipts_snapshot()
+            .len();
+        for _ in 0..replay_limit {
+            let mut made_progress = false;
+            for receipt in state
+                .kura()
+                .direct_lane_block_application_receipts_snapshot()
+            {
+                let descriptor = &receipt.proposal.descriptor;
+                if state.direct_lane_block_application_marker_matches(&receipt) {
+                    if let Some(input) = state.kura().read_lane_block_execution_input(
+                        descriptor.lane_id,
+                        descriptor.lane_block_height,
+                    ) && Self::repair_direct_committed_transaction_membership(
+                        state, &input, &receipt,
+                    ) {
+                        debug!(
+                            lane_id = ?descriptor.lane_id,
+                            dataspace_id = ?descriptor.dataspace_id,
+                            lane_block_height = descriptor.lane_block_height,
+                            lane_block_view = descriptor.lane_block_view,
+                            "repaired direct lane application transaction membership from durable receipt"
+                        );
+                    }
+                    continue;
+                }
+                let Some(input) = state.kura().read_lane_block_execution_input(
+                    descriptor.lane_id,
+                    descriptor.lane_block_height,
+                ) else {
+                    continue;
+                };
+                match Self::apply_direct_lane_block_receipt_to_state(state, &input, &receipt) {
+                    Ok(true) => {
+                        replayed = replayed.saturating_add(1);
+                        made_progress = true;
+                        debug!(
+                            lane_id = ?descriptor.lane_id,
+                            dataspace_id = ?descriptor.dataspace_id,
+                            lane_block_height = descriptor.lane_block_height,
+                            lane_block_view = descriptor.lane_block_view,
+                            "replayed direct lane-block application receipt into state"
+                        );
+                        break;
+                    }
+                    Ok(false) => continue,
+                    Err(err) => {
+                        warn!(
+                            err,
+                            lane_id = ?descriptor.lane_id,
+                            dataspace_id = ?descriptor.dataspace_id,
+                            lane_block_height = descriptor.lane_block_height,
+                            lane_block_view = descriptor.lane_block_view,
+                            "failed to replay direct lane-block application receipt"
+                        );
+                    }
+                }
+            }
+            if !made_progress {
+                break;
+            }
+        }
+        replayed
+    }
+
+    fn apply_preflighted_execution_inputs_to_state(&self, state: &crate::state::State) -> usize {
+        let mut applied = 0_usize;
+        for session in &self.pending {
+            let current_state_height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
+            let current_state_hash = Some(state.lane_execution_state_hash());
+            let Some(input) = state
+                .kura()
+                .read_preflighted_lane_block_execution_input_for_application(
+                    &session.proposal,
+                    current_state_height,
+                    current_state_hash,
+                )
+            else {
+                continue;
+            };
+            let descriptor = &session.proposal.descriptor;
+            let Some(preflight) = state.kura().read_lane_block_execution_preflight(
+                descriptor.lane_id,
+                descriptor.lane_block_height,
+            ) else {
+                continue;
+            };
+            let Some(receipt) =
+                crate::kura::LaneBlockApplicationReceiptArtifact::new_direct_execution(
+                    &input, &preflight,
+                )
+            else {
+                continue;
+            };
+            match Self::apply_direct_lane_block_receipt_to_state(state, &input, &receipt) {
+                Ok(true) => {
+                    applied = applied.saturating_add(1);
+                    match state
+                        .kura()
+                        .persist_direct_lane_block_application_receipt(&input, &preflight)
+                    {
+                        Ok(()) => {
+                            debug!(
+                                lane_id = ?descriptor.lane_id,
+                                dataspace_id = ?descriptor.dataspace_id,
+                                lane_block_height = descriptor.lane_block_height,
+                                lane_block_view = descriptor.lane_block_view,
+                                "directly applied preflighted lane-block execution input to state"
+                            );
+                            break;
+                        }
+                        Err(err) => {
+                            warn!(
+                                ?err,
+                                lane_id = ?descriptor.lane_id,
+                                dataspace_id = ?descriptor.dataspace_id,
+                                lane_block_height = descriptor.lane_block_height,
+                                lane_block_view = descriptor.lane_block_view,
+                                "direct lane-block state commit succeeded but receipt persistence failed"
+                            );
+                            break;
+                        }
+                    }
+                }
+                Ok(false) => continue,
+                Err(err) => {
+                    warn!(
+                        err,
+                        lane_id = ?descriptor.lane_id,
+                        dataspace_id = ?descriptor.dataspace_id,
+                        lane_block_height = descriptor.lane_block_height,
+                        lane_block_view = descriptor.lane_block_view,
+                        "failed to directly apply preflighted lane-block execution input"
+                    );
+                }
+            }
+        }
+        applied
+    }
+
+    fn apply_direct_lane_block_receipt_to_state(
+        state: &crate::state::State,
+        input: &crate::kura::LaneBlockExecutionInputArtifact,
+        receipt: &crate::kura::LaneBlockApplicationReceiptArtifact,
+    ) -> core::result::Result<bool, String> {
+        if state.direct_lane_block_application_marker_matches(receipt) {
+            return Ok(false);
+        }
+        if !state.direct_lane_block_application_receipt_targets_active_lane(receipt) {
+            return Ok(false);
+        }
+        let current_state_height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
+        let current_state_hash = state.lane_execution_state_hash();
+        if receipt.application_block_height != current_state_height
+            || receipt.application_block_hash != current_state_hash
+        {
+            return Ok(false);
+        }
+        if input.proposal != receipt.proposal
+            || input.artifact != receipt.artifact
+            || input.entrypoint_hashes != receipt.entrypoint_hashes
+        {
+            return Err("direct lane input does not match application receipt".to_owned());
+        }
+        let next_height = current_state_height.saturating_add(1).max(1);
+        let header = BlockHeader::new(
+            NonZeroU64::new(next_height).expect("next lane application height is non-zero"),
+            Some(current_state_hash),
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut state_block = state.lane_application_block(header);
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let results = state_block
+            .validate_lane_block_execution_input_with_routing_context(input, &mut ivm_cache)
+            .map_err(str::to_owned)?;
+        let entrypoint_indices = results
+            .iter()
+            .map(|(index, _, _)| *index)
+            .collect::<Vec<_>>();
+        let entrypoint_hashes = results
+            .iter()
+            .map(|(_, hash, _)| Hash::from(*hash))
+            .collect::<Vec<_>>();
+        let transaction_results = results
+            .into_iter()
+            .map(|(_, _, result)| iroha_data_model::transaction::signed::TransactionResult(result))
+            .collect::<Vec<_>>();
+        let result_hashes = transaction_results
+            .iter()
+            .map(|result| Hash::from(result.hash()))
+            .collect::<Vec<_>>();
+        if entrypoint_indices != receipt.entrypoint_indices
+            || entrypoint_hashes != receipt.entrypoint_hashes
+            || result_hashes != receipt.result_hashes
+            || transaction_results != receipt.results
+        {
+            return Err("direct lane execution result diverged from durable receipt".to_owned());
+        }
+        if transaction_results.iter().any(|result| result.0.is_err()) {
+            return Err(
+                "direct lane application receipt contains rejected transaction results".to_owned(),
+            );
+        }
+        state_block
+            .stage_direct_committed_transactions(Self::direct_committed_transaction_hashes(input));
+        state_block
+            .stage_direct_lane_block_application_marker(receipt)
+            .map_err(str::to_owned)?;
+        state_block
+            .commit()
+            .map_err(|err| format!("direct lane state commit failed: {err}"))?;
+        Ok(true)
+    }
+
+    fn repair_direct_committed_transaction_membership(
+        state: &crate::state::State,
+        input: &crate::kura::LaneBlockExecutionInputArtifact,
+        receipt: &crate::kura::LaneBlockApplicationReceiptArtifact,
+    ) -> bool {
+        if !state.direct_lane_block_application_marker_matches(receipt) {
+            return false;
+        }
+        if !state.direct_lane_block_application_receipt_targets_active_lane(receipt) {
+            return false;
+        }
+        if input.proposal != receipt.proposal
+            || input.artifact != receipt.artifact
+            || input.entrypoint_hashes != receipt.entrypoint_hashes
+        {
+            return false;
+        }
+        let missing_transaction_hashes = Self::direct_committed_transaction_hashes(input)
+            .into_iter()
+            .filter(|hash| !state.has_committed_transaction(*hash))
+            .collect::<HashSet<_>>();
+        if missing_transaction_hashes.is_empty() {
+            return false;
+        }
+        state.record_direct_committed_transactions(
+            missing_transaction_hashes,
+            Self::direct_application_transaction_height(receipt.application_block_height),
+        );
+        true
+    }
+
+    fn direct_application_transaction_height(application_block_height: u64) -> NonZeroUsize {
+        let direct_height = application_block_height.saturating_add(1).max(1);
+        NonZeroUsize::new(usize::try_from(direct_height).unwrap_or(usize::MAX))
+            .expect("direct application transaction height is non-zero")
+    }
+
+    fn direct_committed_transaction_hashes(
+        input: &crate::kura::LaneBlockExecutionInputArtifact,
+    ) -> HashSet<HashOf<SignedTransaction>> {
+        if input
+            .entrypoints
+            .iter()
+            .all(|entrypoint| matches!(entrypoint, TransactionEntrypoint::External(_)))
+        {
+            return input
+                .entrypoints
+                .iter()
+                .filter_map(|entrypoint| match entrypoint {
+                    TransactionEntrypoint::External(tx) => Some(
+                        crate::tx::AcceptedTransaction::prepare_signed_metadata(tx).signed_hash,
+                    ),
+                    _ => None,
+                })
+                .collect();
+        }
+
+        input
+            .entrypoints
+            .iter()
+            .map(|entrypoint| {
+                HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(entrypoint.hash()))
+            })
+            .collect()
+    }
+
+    fn record_available_payload_application_receipts_into_kura(
+        &self,
+        kura: &crate::kura::Kura,
+    ) -> usize {
+        let mut recorded = 0_usize;
+        for session in &self.pending {
+            if kura.lane_block_application_receipt_available(&session.proposal) {
+                continue;
+            }
+            if !kura.lane_block_predecessor_application_receipt_available(&session.proposal) {
+                continue;
+            }
+            match kura.persist_lane_block_application_receipt_if_ready(&session.proposal) {
+                Ok(true) => recorded = recorded.saturating_add(1),
+                Ok(false) => continue,
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        lane_id = ?session.proposal.descriptor.lane_id,
+                        dataspace_id = ?session.proposal.descriptor.dataspace_id,
+                        lane_block_height = session.proposal.descriptor.lane_block_height,
+                        lane_block_view = session.proposal.descriptor.lane_block_view,
+                        "failed to persist lane-block application receipt"
+                    );
+                    continue;
+                }
+            }
+        }
+        recorded
+    }
+
+    fn lane_block_tips_snapshot_for_admissible_lanes(
+        &self,
+        admissible_lane: impl Fn(LaneId, DataSpaceId, u64) -> bool,
+    ) -> Vec<lane_scheduler::LaneBlockTip> {
+        self.pending
+            .iter()
+            .filter_map(|session| {
+                let descriptor = &session.proposal.descriptor;
+                admissible_lane(
+                    descriptor.lane_id,
+                    descriptor.dataspace_id,
+                    descriptor.lane_block_height,
+                )
+                .then_some(lane_scheduler::LaneBlockTip {
+                    lane_id: descriptor.lane_id,
+                    dataspace_id: descriptor.dataspace_id,
+                    latest_lane_block_height: descriptor.lane_block_height,
+                    latest_lane_block_descriptor_hash: Some(descriptor.descriptor_hash),
+                })
+            })
+            .collect()
+    }
+
+    #[cfg(test)]
+    fn front(&self) -> Option<&crate::lane_consensus::CommittedLaneBlockSession> {
+        self.pending.front()
+    }
+}
+
+fn merge_committed_lane_block_statuses(
+    mut retained: Vec<super::status::CommittedLaneBlockSnapshot>,
+    final_pending: Vec<super::status::CommittedLaneBlockSnapshot>,
+) -> Vec<super::status::CommittedLaneBlockSnapshot> {
+    for snapshot in final_pending {
+        if let Some(existing) = retained
+            .iter_mut()
+            .find(|existing| committed_lane_block_statuses_match_session(existing, &snapshot))
+        {
+            *existing = snapshot;
+        } else {
+            retained.push(snapshot);
+        }
+    }
+    retained
+}
+
+fn committed_lane_block_statuses_match_session(
+    left: &super::status::CommittedLaneBlockSnapshot,
+    right: &super::status::CommittedLaneBlockSnapshot,
+) -> bool {
+    left.lane_id == right.lane_id
+        && left.dataspace_id == right.dataspace_id
+        && left.lane_block_height == right.lane_block_height
+        && left.lane_block_view == right.lane_block_view
+        && left.descriptor_hash == right.descriptor_hash
+        && left.proposal_hash == right.proposal_hash
+        && left.proposal == right.proposal
+        && left.prepare_qc == right.prepare_qc
+        && left.commit_qc == right.commit_qc
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21293,7 +22204,7 @@ impl Actor {
             last_successful_proposal: None,
             propose_attempt_monitor: ProposeAttemptMonitor::new(),
         };
-        let subsystems = ActorSubsystems {
+        let mut subsystems = ActorSubsystems {
             validation: ValidationState::new(),
             qc_verify: QcVerifyState::new(),
             vote_verify: VoteVerifyState::new(),
@@ -21311,7 +22222,134 @@ impl Actor {
                 lane_relay,
                 committee: MergeCommitteeState::new(),
             },
+            lane_blocks: crate::lane_consensus::LaneBlockSessionCache::new(
+                config.recovery.pending_proposal_cap.max(1),
+            ),
+            committed_lane_blocks: CommittedLaneBlockQueue::new(
+                config.recovery.pending_proposal_cap.max(1),
+            ),
         };
+        let repaired_direct_lane_application_receipts =
+            CommittedLaneBlockQueue::repair_missing_direct_application_receipts_from_state(&state);
+        let replayed_direct_lane_application_receipts =
+            CommittedLaneBlockQueue::replay_direct_application_receipts_into_state(&state);
+        if let Err(err) = state.ensure_da_indexes_hydrated() {
+            warn!(
+                ?err,
+                "failed to hydrate DA reset watermarks before certified lane-block recovery"
+            );
+        }
+        let hydrated_committed_lane_blocks = subsystems
+            .committed_lane_blocks
+            .hydrate_unapplied_from_certified_sessions(
+                state.certified_lane_block_sessions_snapshot_cached(),
+                state.kura(),
+            );
+        let recovered_lane_block_execution_inputs = subsystems
+            .committed_lane_blocks
+            .recover_available_payloads_into_kura(state.kura());
+        let recorded_lane_block_application_receipts_before_preflight = subsystems
+            .committed_lane_blocks
+            .record_available_payload_application_receipts_into_kura(state.kura());
+        let pruned_canonical_receipted_committed_lane_blocks = subsystems
+            .committed_lane_blocks
+            .prune_application_receipted_sessions(state.kura());
+        let preflighted_lane_block_execution_inputs = subsystems
+            .committed_lane_blocks
+            .preflight_recovered_execution_inputs_into_kura(&state);
+        let mut directly_applied_lane_block_inputs = 0_usize;
+        let mut preflighted_lane_block_execution_inputs = preflighted_lane_block_execution_inputs;
+        let direct_application_limit = subsystems.committed_lane_blocks.len();
+        for _ in 0..direct_application_limit {
+            let applied = subsystems
+                .committed_lane_blocks
+                .apply_preflighted_execution_inputs_to_state(&state);
+            if applied == 0 {
+                break;
+            }
+            directly_applied_lane_block_inputs =
+                directly_applied_lane_block_inputs.saturating_add(applied);
+            preflighted_lane_block_execution_inputs = preflighted_lane_block_execution_inputs
+                .saturating_add(
+                    subsystems
+                        .committed_lane_blocks
+                        .preflight_recovered_execution_inputs_into_kura(&state),
+                );
+        }
+        let repaired_direct_lane_application_receipts = repaired_direct_lane_application_receipts
+            .saturating_add(
+                CommittedLaneBlockQueue::repair_missing_direct_application_receipts_from_state(
+                    &state,
+                ),
+            );
+        let recorded_lane_block_application_receipts = subsystems
+            .committed_lane_blocks
+            .record_available_payload_application_receipts_into_kura(state.kura())
+            .saturating_add(recorded_lane_block_application_receipts_before_preflight);
+        let pruned_applied_committed_lane_blocks = subsystems
+            .committed_lane_blocks
+            .prune_application_receipted_sessions(state.kura())
+            .saturating_add(pruned_canonical_receipted_committed_lane_blocks);
+        let committed_lane_block_status = subsystems
+            .committed_lane_blocks
+            .status_snapshot_for_state(&state);
+        super::status::set_committed_lane_blocks(committed_lane_block_status);
+        if hydrated_committed_lane_blocks > 0 {
+            debug!(
+                hydrated = hydrated_committed_lane_blocks,
+                pending = subsystems.committed_lane_blocks.len(),
+                "hydrated committed lane-block sessions from certified Kura sidecars"
+            );
+        }
+        if recovered_lane_block_execution_inputs > 0 {
+            debug!(
+                recovered = recovered_lane_block_execution_inputs,
+                pending = subsystems.committed_lane_blocks.len(),
+                "persisted recovered lane-block execution inputs from Kura payloads"
+            );
+        }
+        if preflighted_lane_block_execution_inputs > 0 {
+            debug!(
+                preflighted = preflighted_lane_block_execution_inputs,
+                pending = subsystems.committed_lane_blocks.len(),
+                "persisted lane-block execution preflights from recovered inputs"
+            );
+        }
+        if replayed_direct_lane_application_receipts > 0 {
+            debug!(
+                replayed = replayed_direct_lane_application_receipts,
+                pending = subsystems.committed_lane_blocks.len(),
+                "replayed direct lane-block application receipts into state"
+            );
+        }
+        if directly_applied_lane_block_inputs > 0 {
+            debug!(
+                applied = directly_applied_lane_block_inputs,
+                pending = subsystems.committed_lane_blocks.len(),
+                "directly applied preflighted lane-block inputs during startup"
+            );
+        }
+        if repaired_direct_lane_application_receipts > 0 {
+            debug!(
+                repaired = repaired_direct_lane_application_receipts,
+                pending = subsystems.committed_lane_blocks.len(),
+                "repaired missing direct lane-block application receipts from state markers"
+            );
+        }
+        if recorded_lane_block_application_receipts > 0 {
+            debug!(
+                recorded = recorded_lane_block_application_receipts,
+                pending = subsystems.committed_lane_blocks.len(),
+                "persisted lane-block application receipts from canonical block results"
+            );
+        }
+        if pruned_applied_committed_lane_blocks > 0 {
+            debug!(
+                pruned = pruned_applied_committed_lane_blocks,
+                pending = subsystems.committed_lane_blocks.len(),
+                "pruned application-receipted committed lane-block sessions from the execution queue"
+            );
+        }
         super::log_sumeragi_startup_trace(
             "sumeragi.actor_init.subsystems.ready",
             startup_trace_started_at,
@@ -22929,6 +23967,14 @@ impl Actor {
             // commit height advances mid-tick.
             progress |= self.tick_mode_management();
         }
+        let lane_block_vote_progress = {
+            let _view_ctx = StateViewContextGuard::new("sumeragi.tick.lane_block_votes");
+            self.broadcast_ready_local_lane_block_votes()
+        };
+        let committed_lane_block_progress = {
+            let _view_ctx = StateViewContextGuard::new("sumeragi.tick.committed_lane_blocks");
+            self.queue_committed_lane_block_sessions()
+        };
         let deferred_qc_progress = {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.replay_deferred_qcs");
             self.try_replay_deferred_qcs()
@@ -23047,6 +24093,8 @@ impl Actor {
             || adaptive_progress
             || refresh_progress
             || committed_progress
+            || lane_block_vote_progress
+            || committed_lane_block_progress
             || deferred_qc_progress
             || deferred_missing_payload_progress
             || deferred_vote_progress
@@ -23778,21 +24826,36 @@ impl Actor {
 
     fn maybe_cache_rehydrated_kura_body(&self, block: &SignedBlock) {
         let block_hash = block.hash();
-        if !matches!(
+        if matches!(
             self.kura.block_body_status_by_hash(block_hash),
             Some(
                 crate::kura::BlockBodyStatus::RemoteOnly { .. }
                     | crate::kura::BlockBodyStatus::Missing
             )
-        ) {
-            return;
-        }
-        if let Err(err) = self.kura.cache_block_body(block) {
+        ) && let Err(err) = self.kura.cache_block_body(block)
+        {
             warn!(
                 ?err,
                 height = block.header().height().get(),
                 block = %block_hash,
                 "failed to cache rehydrated Kura block body"
+            );
+        }
+
+        let height = block.header().height().get();
+        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let has_lane_payload_ownerships = block
+            .execution_context()
+            .is_some_and(|bundle| !bundle.lane_payload_ownerships.is_empty());
+        if height <= committed_height
+            && has_lane_payload_ownerships
+            && let Err(err) = self.kura.store_block(Arc::new(block.clone()))
+        {
+            warn!(
+                ?err,
+                height,
+                block = %block_hash,
+                "failed to refresh Kura lane payload sidecars from certified block body"
             );
         }
     }
@@ -23999,6 +25062,13 @@ impl Actor {
                             super::status::ConsensusMessageReason::FutureWindow,
                         );
                     }
+                    BlockMessage::LaneBlockProposal(_) => {
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::LaneBlockProposal,
+                            super::status::ConsensusMessageOutcome::Dropped,
+                            super::status::ConsensusMessageReason::FutureWindow,
+                        );
+                    }
                     BlockMessage::QcVote(_) => {
                         self.record_consensus_message_handling(
                             super::status::ConsensusMessageKind::QcVote,
@@ -24009,6 +25079,20 @@ impl Actor {
                     BlockMessage::Qc(_) => {
                         self.record_consensus_message_handling(
                             super::status::ConsensusMessageKind::Qc,
+                            super::status::ConsensusMessageOutcome::Dropped,
+                            super::status::ConsensusMessageReason::FutureWindow,
+                        );
+                    }
+                    BlockMessage::LaneBlockVote(_) => {
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::LaneBlockVote,
+                            super::status::ConsensusMessageOutcome::Dropped,
+                            super::status::ConsensusMessageReason::FutureWindow,
+                        );
+                    }
+                    BlockMessage::LaneBlockQc(_) => {
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::LaneBlockQc,
                             super::status::ConsensusMessageOutcome::Dropped,
                             super::status::ConsensusMessageReason::FutureWindow,
                         );
@@ -24146,6 +25230,11 @@ impl Actor {
             BlockMessage::RbcDeliver(deliver) => self.handle_rbc_deliver(deliver),
             BlockMessage::FetchPendingBlock(request) => self.handle_fetch_pending_block(request),
             BlockMessage::Proposal(proposal) => self.handle_proposal(proposal),
+            BlockMessage::LaneBlockProposal(proposal) => {
+                self.handle_incoming_lane_block_proposal(proposal)
+            }
+            BlockMessage::LaneBlockVote(vote) => self.handle_lane_block_vote(vote, sender.as_ref()),
+            BlockMessage::LaneBlockQc(qc) => self.handle_lane_block_qc(qc),
         };
         if defer_committed_block_poll {
             self.process_committed_blocks_before_consensus("VrfMetadataPostHandle");
@@ -26431,6 +27520,9 @@ impl Actor {
             | BlockMessage::KuraReplicaAdvert(_)
             | BlockMessage::ConsensusParams(_)
             | BlockMessage::ExecWitness(_)
+            | BlockMessage::LaneBlockProposal(_)
+            | BlockMessage::LaneBlockQc(_)
+            | BlockMessage::LaneBlockVote(_)
             | BlockMessage::RbcInitRequest(_)
             | BlockMessage::RbcChunkRequest(_)
             | BlockMessage::ProposalHint(_)
@@ -26502,6 +27594,9 @@ impl Actor {
                     | BlockMessage::BlockCreated(_)
                     | BlockMessage::FetchBlockBody(_)
                     | BlockMessage::BlockBodyResponse(_)
+                    | BlockMessage::LaneBlockProposal(_)
+                    | BlockMessage::LaneBlockQc(_)
+                    | BlockMessage::LaneBlockVote(_)
                     | BlockMessage::Qc(_)
                     | BlockMessage::QcVote(_)
                     | BlockMessage::RbcInitRequest(_)
@@ -26516,6 +27611,9 @@ impl Actor {
                 msg.as_ref(),
                 BlockMessage::Proposal(_)
                     | BlockMessage::ProposalHint(_)
+                    | BlockMessage::LaneBlockProposal(_)
+                    | BlockMessage::LaneBlockQc(_)
+                    | BlockMessage::LaneBlockVote(_)
                     | BlockMessage::BlockCreated(_)
                     | BlockMessage::BlockBodyResponse(_)
                     | BlockMessage::RbcInit(_)
@@ -26811,6 +27909,9 @@ impl Actor {
             | BlockMessage::VrfCommit(_)
             | BlockMessage::VrfReveal(_)
             | BlockMessage::FetchPendingBlock(_)
+            | BlockMessage::LaneBlockProposal(_)
+            | BlockMessage::LaneBlockVote(_)
+            | BlockMessage::LaneBlockQc(_)
             | BlockMessage::KuraReplicaAdvert(_) => None,
             BlockMessage::FetchBlockBody(request) => Some((request.height, request.view)),
             BlockMessage::BlockBodyResponse(response) => Some((response.height, response.view)),
@@ -26865,8 +27966,13 @@ impl Actor {
             }
             BlockMessage::ProposalHint(_) => super::status::ConsensusMessageKind::ProposalHint,
             BlockMessage::Proposal(_) => super::status::ConsensusMessageKind::Proposal,
+            BlockMessage::LaneBlockProposal(_) => {
+                super::status::ConsensusMessageKind::LaneBlockProposal
+            }
             BlockMessage::QcVote(_) => super::status::ConsensusMessageKind::QcVote,
             BlockMessage::Qc(_) => super::status::ConsensusMessageKind::Qc,
+            BlockMessage::LaneBlockVote(_) => super::status::ConsensusMessageKind::LaneBlockVote,
+            BlockMessage::LaneBlockQc(_) => super::status::ConsensusMessageKind::LaneBlockQc,
             BlockMessage::VrfCommit(_) => super::status::ConsensusMessageKind::VrfCommit,
             BlockMessage::VrfReveal(_) => super::status::ConsensusMessageKind::VrfReveal,
             BlockMessage::ExecWitness(_) => super::status::ConsensusMessageKind::ExecWitness,
@@ -26924,6 +28030,17 @@ impl Actor {
             BlockMessage::KuraReplicaAdvert(_) => "KuraReplicaAdvert",
             BlockMessage::ProposalHint(_) => "ProposalHint",
             BlockMessage::Proposal(_) => "Proposal",
+            BlockMessage::LaneBlockProposal(_) => "LaneBlockProposal",
+            BlockMessage::LaneBlockVote(vote) => match vote.body.phase {
+                crate::sumeragi::consensus::Phase::Prepare => "LaneBlockPrepareVote",
+                crate::sumeragi::consensus::Phase::Commit => "LaneBlockVote",
+                crate::sumeragi::consensus::Phase::NewView => "LaneBlockNewViewVote",
+            },
+            BlockMessage::LaneBlockQc(qc) => match qc.body.phase {
+                crate::sumeragi::consensus::Phase::Prepare => "LaneBlockPrepareCert",
+                crate::sumeragi::consensus::Phase::Commit => "LaneBlockCert",
+                crate::sumeragi::consensus::Phase::NewView => "LaneBlockNewViewCert",
+            },
         }
     }
 

@@ -116,6 +116,38 @@ class HostileTonSourceStateBytearray(bytearray):
         raise AssertionError("secret-token TON source bytearray hashed")
 
 
+class HostileTonSourceStateString(str):
+    def __new__(cls, value):
+        return str.__new__(cls, value)
+
+    def strip(self, *args, **kwargs):
+        raise AssertionError("secret-token TON source string was stripped")
+
+    def startswith(self, *args, **kwargs):
+        raise AssertionError("secret-token TON source string prefix was checked")
+
+    def isascii(self):
+        raise AssertionError("secret-token TON source string ascii was checked")
+
+    def isdecimal(self):
+        raise AssertionError("secret-token TON source string decimal was checked")
+
+    def __len__(self):
+        raise AssertionError("secret-token TON source string length was read")
+
+    def __str__(self):
+        raise AssertionError("secret-token TON source string was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token TON source string was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token TON source string was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token TON source string was compared")
+
+
 class HostileTomlString(str):
     def __new__(cls):
         return str.__new__(cls, "blocked")
@@ -483,6 +515,44 @@ def test_ton_source_domain_parser_requires_canonical_ascii_decimal():
             assert "must be a u32" in str(exc)
         else:
             raise AssertionError(f"noncanonical TON domain {value!r} was accepted")
+
+
+def test_ton_source_state_exact_string_parsers_reject_subclasses_without_hooks():
+    module = load_evidence_module()
+    hostile_hex = HostileTonSourceStateString("0x" + "11" * 32)
+    hostile_decimal = HostileTonSourceStateString("4")
+
+    cases = (
+        (
+            lambda: module._strip_lower_0x_hex(
+                hostile_hex,
+                label="source trust anchor hash",
+            ),
+            "source trust anchor hash must be canonical lowercase 0x hex",
+        ),
+        (
+            lambda: module.parse_hex_bytes(
+                hostile_hex,
+                label="source trust anchor hash",
+                byte_length=32,
+            ),
+            "source trust anchor hash must be canonical lowercase 0x hex",
+        ),
+        (
+            lambda: module.parse_u32(hostile_decimal, label="source domain"),
+            "source domain must be a u32",
+        ),
+    )
+    for parse, expected_message in cases:
+        try:
+            parse()
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("TON source-state parser accepted a string subclass")
 
 
 def test_ton_toml_rendering_carries_mainnet_profile_ids():

@@ -74,8 +74,9 @@ cargo xtask sorafs-fetch-fixture \
   --out fixtures/sorafs_chunker
 ```
 
-Манифест басқа URL мекенжайында болса, `--manifest` өтіңіз. Қол қойылмаған конверттер
-жергілікті түтін шығару үшін `--allow-unsigned` орнатылмаса, бас тартылады.
+Pass `--manifest` if the manifest lives at a different URL or path. The
+command refuses unsigned envelopes; use the Parliament-published envelope or a
+locally generated council-signed envelope for smoke runs.
 
 - Кезеңдік шлюз арқылы манифестті тексеру кезінде, орнына Torii мақсат қойыңыз
   Жергілікті пайдалы жүктемелер:

@@ -869,6 +869,22 @@ def test_evidence_viewer_session_inventory_must_use_reviewed_labels_before_write
     assert not canary_path(tmp_path, "evidence_viewer").exists()
 
 
+def test_validate_inputs_rejects_parser_returned_unicode_control_session_before_build(
+    tmp_path: Path,
+) -> None:
+    session = "moderation-viewer-session-00\u200d"
+    args = MODULE.parse_args(args_for("evidence_viewer", tmp_path))
+    args.viewer_session = [session]
+
+    errors = MODULE.validate_inputs(args)
+    rendered = "\n".join(errors)
+
+    assert "--viewer-session[0] must be a non-empty canonical string" in errors
+    assert session not in rendered
+    assert session.encode("unicode_escape").decode("ascii") not in rendered
+    assert not canary_path(tmp_path, "evidence_viewer").exists()
+
+
 def test_juror_notification_inventory_must_match_notification_count(
     tmp_path: Path,
     capsys,

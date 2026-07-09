@@ -398,6 +398,8 @@ def test_plan_json_rejects_unrequired_external_evidence_and_contracts(
         [
             "--out-dir",
             str(tmp_path / "evidence"),
+            "--now-unix",
+            "1800009000",
             "--require-kind",
             "feed_promotion",
             "--feed-promotion-evidence",
@@ -571,6 +573,8 @@ def test_subset_gate_requires_only_selected_kind(tmp_path: Path, capsys) -> None
         [
             "--out-dir",
             str(tmp_path / "evidence"),
+            "--now-unix",
+            "1800009000",
             "--require-kind",
             "feed_promotion",
             "--feed-promotion-evidence",

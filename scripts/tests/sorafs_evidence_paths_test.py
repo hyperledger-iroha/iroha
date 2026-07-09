@@ -190,6 +190,19 @@ def test_explicit_evidence_symlink_fails_closed(tmp_path: Path) -> None:
     assert str(symlink) not in errors[0]
 
 
+def test_explicit_evidence_broken_symlink_fails_closed(tmp_path: Path) -> None:
+    symlink = tmp_path / "evidence.json"
+    symlink.symlink_to(tmp_path / "missing-target.json")
+
+    errors: list[str] = []
+    files = discover_evidence_files([], [symlink], errors)
+
+    assert files == []
+    assert errors == [EVIDENCE_FILE_SYMLINK_DIAGNOSTIC]
+    assert str(symlink) not in errors[0]
+    assert "missing-target" not in errors[0]
+
+
 def test_explicit_evidence_parent_symlink_directory_fails_closed(
     tmp_path: Path,
 ) -> None:
@@ -261,6 +274,25 @@ def test_discovered_json_symlink_fails_closed_without_hiding_files(
     assert str(symlink) not in errors[0]
 
 
+def test_discovered_json_broken_symlink_fails_closed_without_hiding_files(
+    tmp_path: Path,
+) -> None:
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+    symlink = evidence_dir / "link.json"
+    regular_file = evidence_dir / "regular.json"
+    regular_file.write_text("{}", encoding="utf-8")
+    symlink.symlink_to(evidence_dir / "missing-target.json")
+
+    errors: list[str] = []
+    files = discover_evidence_files([evidence_dir], [], errors)
+
+    assert files == [regular_file]
+    assert errors == [EVIDENCE_FILE_SYMLINK_DIAGNOSTIC]
+    assert str(symlink) not in errors[0]
+    assert "missing-target" not in errors[0]
+
+
 def test_noncanonical_missing_explicit_evidence_file_label_is_sanitized(
     tmp_path: Path,
 ) -> None:
@@ -297,6 +329,19 @@ def test_evidence_directory_symlink_fails_closed(tmp_path: Path) -> None:
     assert str(symlink) not in errors[0]
 
 
+def test_evidence_directory_broken_symlink_fails_closed(tmp_path: Path) -> None:
+    symlink = tmp_path / "evidence"
+    symlink.symlink_to(tmp_path / "missing-target", target_is_directory=True)
+
+    errors: list[str] = []
+    files = discover_evidence_files([symlink], [], errors)
+
+    assert files == []
+    assert errors == [EVIDENCE_DIRECTORY_SYMLINK_DIAGNOSTIC]
+    assert str(symlink) not in errors[0]
+    assert "missing-target" not in errors[0]
+
+
 def test_evidence_directory_parent_symlink_directory_fails_closed(
     tmp_path: Path,
 ) -> None:
@@ -314,6 +359,22 @@ def test_evidence_directory_parent_symlink_directory_fails_closed(
     assert files == []
     assert errors == [EVIDENCE_DIRECTORY_PARENT_SYMLINK_DIAGNOSTIC]
     assert str(parent) not in errors[0]
+
+
+def test_evidence_directory_broken_parent_symlink_fails_closed(
+    tmp_path: Path,
+) -> None:
+    parent = tmp_path / "evidence-root"
+    parent.symlink_to(tmp_path / "missing-target", target_is_directory=True)
+    evidence_dir = parent / "evidence"
+
+    errors: list[str] = []
+    files = discover_evidence_files([evidence_dir], [], errors)
+
+    assert files == []
+    assert errors == [EVIDENCE_DIRECTORY_PARENT_SYMLINK_DIAGNOSTIC]
+    assert str(parent) not in errors[0]
+    assert "missing-target" not in errors[0]
 
 
 def test_non_path_evidence_directory_fails_closed_without_traceback() -> None:
@@ -387,7 +448,14 @@ def test_evidence_path_collection_rejects_malformed_error_container() -> None:
 
 
 def test_evidence_path_collection_rejects_malformed_existing_error_text() -> None:
-    for errors in ([""], [" old"], ["old "], ["old\nerror"]):
+    for errors in (
+        [""],
+        [" old"],
+        ["old "],
+        ["old\nerror"],
+        ["old\u200derror"],
+        ["old\u202eerror"],
+    ):
         try:
             evidence_path_collection([], errors, label="evidence file")
         except ValueError as error:
@@ -400,7 +468,15 @@ def test_evidence_path_collection_rejects_malformed_existing_error_text() -> Non
 
 
 def test_evidence_path_collection_rejects_malformed_labels() -> None:
-    for label in ("", " evidence", "evidence ", "evidence\nfile", 7):
+    for label in (
+        "",
+        " evidence",
+        "evidence ",
+        "evidence\nfile",
+        "evidence\u200dfile",
+        "evidence\u202efile",
+        7,
+    ):
         errors: list[str] = []
         try:
             evidence_path_collection([], errors, label=label)
@@ -847,6 +923,26 @@ def test_reserved_output_conflict_evidence_directory_symlink_fails_closed(
     assert str(symlink) not in errors[0]
 
 
+def test_reserved_output_conflict_evidence_directory_broken_symlink_fails_closed(
+    tmp_path: Path,
+) -> None:
+    symlink = tmp_path / "evidence"
+    symlink.symlink_to(tmp_path / "missing-target", target_is_directory=True)
+
+    errors: list[str] = []
+    record_reserved_output_evidence_conflicts(
+        [symlink],
+        [],
+        [tmp_path / "summary.json"],
+        errors,
+        reserved_label="--summary-out",
+    )
+
+    assert errors == [EVIDENCE_DIRECTORY_SYMLINK_DIAGNOSTIC]
+    assert str(symlink) not in errors[0]
+    assert "missing-target" not in errors[0]
+
+
 def test_reserved_output_conflict_evidence_directory_parent_symlink_fails_closed(
     tmp_path: Path,
 ) -> None:
@@ -869,6 +965,27 @@ def test_reserved_output_conflict_evidence_directory_parent_symlink_fails_closed
 
     assert errors == [EVIDENCE_DIRECTORY_PARENT_SYMLINK_DIAGNOSTIC]
     assert str(parent) not in errors[0]
+
+
+def test_reserved_output_conflict_evidence_directory_broken_parent_symlink_fails_closed(
+    tmp_path: Path,
+) -> None:
+    parent = tmp_path / "evidence-root"
+    parent.symlink_to(tmp_path / "missing-target", target_is_directory=True)
+    evidence_dir = parent / "evidence"
+
+    errors: list[str] = []
+    record_reserved_output_evidence_conflicts(
+        [evidence_dir],
+        [],
+        [tmp_path / "summary.json"],
+        errors,
+        reserved_label="--summary-out",
+    )
+
+    assert errors == [EVIDENCE_DIRECTORY_PARENT_SYMLINK_DIAGNOSTIC]
+    assert str(parent) not in errors[0]
+    assert "missing-target" not in errors[0]
 
 
 def test_reserved_output_conflict_explicit_evidence_directory_fails_closed(
@@ -911,6 +1028,26 @@ def test_reserved_output_conflict_explicit_evidence_symlink_fails_closed(
     assert str(symlink) not in errors[0]
 
 
+def test_reserved_output_conflict_explicit_evidence_broken_symlink_fails_closed(
+    tmp_path: Path,
+) -> None:
+    symlink = tmp_path / "evidence.json"
+    symlink.symlink_to(tmp_path / "missing-target.json")
+
+    errors: list[str] = []
+    record_reserved_output_evidence_conflicts(
+        [],
+        [symlink],
+        [tmp_path / "summary.json"],
+        errors,
+        reserved_label="--summary-out",
+    )
+
+    assert errors == [EVIDENCE_FILE_SYMLINK_DIAGNOSTIC]
+    assert str(symlink) not in errors[0]
+    assert "missing-target" not in errors[0]
+
+
 def test_reserved_output_conflict_explicit_evidence_parent_symlink_fails_closed(
     tmp_path: Path,
 ) -> None:
@@ -932,6 +1069,27 @@ def test_reserved_output_conflict_explicit_evidence_parent_symlink_fails_closed(
 
     assert errors == [EVIDENCE_FILE_PARENT_SYMLINK_DIAGNOSTIC]
     assert str(parent) not in errors[0]
+
+
+def test_reserved_output_conflict_explicit_evidence_broken_parent_symlink_fails_closed(
+    tmp_path: Path,
+) -> None:
+    parent = tmp_path / "evidence-root"
+    parent.symlink_to(tmp_path / "missing-target", target_is_directory=True)
+    evidence = parent / "evidence.json"
+
+    errors: list[str] = []
+    record_reserved_output_evidence_conflicts(
+        [],
+        [evidence],
+        [tmp_path / "summary.json"],
+        errors,
+        reserved_label="--summary-out",
+    )
+
+    assert errors == [EVIDENCE_FILE_PARENT_SYMLINK_DIAGNOSTIC]
+    assert str(parent) not in errors[0]
+    assert "missing-target" not in errors[0]
 
 
 def test_reserved_output_conflict_discovered_json_directory_fails_closed(
@@ -976,6 +1134,28 @@ def test_reserved_output_conflict_discovered_json_symlink_fails_closed(
 
     assert errors == [EVIDENCE_FILE_SYMLINK_DIAGNOSTIC]
     assert str(symlink) not in errors[0]
+
+
+def test_reserved_output_conflict_discovered_json_broken_symlink_fails_closed(
+    tmp_path: Path,
+) -> None:
+    evidence_dir = tmp_path / "evidence"
+    symlink = evidence_dir / "link.json"
+    evidence_dir.mkdir()
+    symlink.symlink_to(evidence_dir / "missing-target.json")
+
+    errors: list[str] = []
+    record_reserved_output_evidence_conflicts(
+        [evidence_dir],
+        [],
+        [tmp_path / "summary.json"],
+        errors,
+        reserved_label="--summary-out",
+    )
+
+    assert errors == [EVIDENCE_FILE_SYMLINK_DIAGNOSTIC]
+    assert str(symlink) not in errors[0]
+    assert "missing-target" not in errors[0]
 
 
 def test_reserved_output_helpers_reject_malformed_path_collections(tmp_path: Path) -> None:
@@ -1030,6 +1210,73 @@ def test_reserved_output_path_identities_rejects_symlink(tmp_path: Path) -> None
 
     assert identities == {}
     assert errors == [f"--summary-out `{reserved}` must not be a symlink"]
+
+
+def test_reserved_output_path_identities_rejects_secret_symlink_without_leak(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "target.json"
+    reserved = tmp_path / "private_key_summary.json"
+    target.write_text("{}", encoding="utf-8")
+    reserved.symlink_to(target)
+
+    errors: list[str] = []
+    identities = reserved_output_path_identities(
+        [reserved],
+        errors,
+        label="--summary-out",
+    )
+
+    assert identities == {}
+    assert errors == ["--summary-out `<secret-looking-path>` must not be a symlink"]
+    assert "private_key" not in errors[0]
+
+
+def test_reserved_output_path_identities_rejects_broken_symlink(
+    tmp_path: Path,
+) -> None:
+    reserved = tmp_path / "summary.json"
+    reserved.symlink_to(tmp_path / "missing-target.json")
+
+    errors: list[str] = []
+    identities = reserved_output_path_identities(
+        [reserved],
+        errors,
+        label="--summary-out",
+    )
+
+    assert identities == {}
+    assert errors == [f"--summary-out `{reserved}` must not be a symlink"]
+    assert "missing-target" not in errors[0]
+
+
+def test_reserved_output_path_identities_secret_inspection_failure_sanitizes_error(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    reserved = tmp_path / "private_key_summary.json"
+    original_is_symlink = Path.is_symlink
+
+    def is_symlink(path: Path) -> bool:
+        if path == reserved:
+            raise RuntimeError("private_key read denied")
+        return original_is_symlink(path)
+
+    monkeypatch.setattr(Path, "is_symlink", is_symlink)
+
+    errors: list[str] = []
+    identities = reserved_output_path_identities(
+        [reserved],
+        errors,
+        label="--summary-out",
+    )
+
+    assert identities == {}
+    assert errors == [
+        "--summary-out `<secret-looking-path>` cannot be inspected: "
+        "<non-canonical-error>"
+    ]
+    assert "private_key" not in errors[0]
 
 
 def test_reserved_output_path_identities_rejects_parent_symlink_directory(
@@ -1120,6 +1367,27 @@ def test_discover_evidence_files_stops_after_reserved_output_symlink(
     assert errors == [f"reserved output `{reserved}` must not be a symlink"]
 
 
+def test_discover_evidence_files_stops_after_broken_reserved_output_symlink(
+    tmp_path: Path,
+) -> None:
+    evidence = tmp_path / "evidence.json"
+    reserved = tmp_path / "summary.json"
+    evidence.write_text("{}", encoding="utf-8")
+    reserved.symlink_to(tmp_path / "missing-target.json")
+
+    errors: list[str] = []
+    files = discover_evidence_files(
+        [],
+        [evidence],
+        errors,
+        reserved_output_paths=[reserved],
+    )
+
+    assert files == []
+    assert errors == [f"reserved output `{reserved}` must not be a symlink"]
+    assert "missing-target" not in errors[0]
+
+
 def test_reserved_output_conflict_scan_stops_after_duplicate_reserved_outputs(
     tmp_path: Path,
 ) -> None:
@@ -1165,6 +1433,27 @@ def test_reserved_output_conflict_scan_rejects_reserved_output_parent_symlink(
     assert errors == [f"--summary-out parent `{parent}` must not be a symlink"]
 
 
+def test_reserved_output_conflict_scan_rejects_broken_reserved_output_symlink(
+    tmp_path: Path,
+) -> None:
+    evidence = tmp_path / "evidence.json"
+    reserved = tmp_path / "summary.json"
+    evidence.write_text("{}", encoding="utf-8")
+    reserved.symlink_to(tmp_path / "missing-target.json")
+
+    errors: list[str] = []
+    record_reserved_output_evidence_conflicts(
+        [],
+        [evidence],
+        [reserved],
+        errors,
+        reserved_label="--summary-out",
+    )
+
+    assert errors == [f"--summary-out `{reserved}` must not be a symlink"]
+    assert "missing-target" not in errors[0]
+
+
 def test_reserved_output_helpers_reject_malformed_error_container(
     tmp_path: Path,
 ) -> None:
@@ -1191,7 +1480,15 @@ def test_reserved_output_helpers_reject_malformed_error_container(
 
 
 def test_reserved_output_helpers_reject_malformed_labels(tmp_path: Path) -> None:
-    for label in ("", " --summary-out", "--summary-out ", "summary\nout", 7):
+    for label in (
+        "",
+        " --summary-out",
+        "--summary-out ",
+        "summary\nout",
+        "summary\u200dout",
+        "summary\u202eout",
+        7,
+    ):
         errors: list[str] = []
         try:
             reserved_output_path_identities([], errors, label=label)
@@ -1203,7 +1500,15 @@ def test_reserved_output_helpers_reject_malformed_labels(tmp_path: Path) -> None
         else:
             raise AssertionError(f"accepted malformed label {label!r}")
 
-    for label in ("", " --summary-out", "--summary-out ", "summary\nout", 7):
+    for label in (
+        "",
+        " --summary-out",
+        "--summary-out ",
+        "summary\nout",
+        "summary\u200dout",
+        "summary\u202eout",
+        7,
+    ):
         errors = []
         try:
             record_reserved_output_evidence_conflicts(

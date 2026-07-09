@@ -36,6 +36,15 @@ SOLANA_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_WITH_AUDIT_HASH_VECTOR = (
 SOLANA_FULL_LIGHT_CLIENT_GATE_HASH_VECTOR = (
     "e23b2c175909e222c1ebe371661bda8c0687cf8d7e7acf2b62957a51c420be02"
 )
+SOLANA_TESTNET_SOURCE_VERIFIER_MATERIAL_HASH_VECTOR = (
+    "16cf131e100ac00a370f9130ad1b0b160b0c93b7e807e74911f0838a3b417677"
+)
+SOLANA_TESTNET_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_WITH_AUDIT_HASH_VECTOR = (
+    "fb3576901e879d2410870fec80f76199b681cc0a2e0d37f239ea70a4f38b1a22"
+)
+SOLANA_TESTNET_FULL_LIGHT_CLIENT_GATE_HASH_VECTOR = (
+    "f1053b96f3e1ce85be4cd50adc20352ea817ccf2f5b6980d19ec5a8add81b71d"
+)
 
 
 def load_evidence_module():
@@ -133,6 +142,38 @@ class HostileSolanaSourceStateBytearray(bytearray):
         raise AssertionError("secret-token Solana source bytearray hashed")
 
 
+class HostileSolanaSourceStateString(str):
+    def __new__(cls, value):
+        return str.__new__(cls, value)
+
+    def strip(self, *args, **kwargs):
+        raise AssertionError("secret-token Solana source string was stripped")
+
+    def startswith(self, *args, **kwargs):
+        raise AssertionError("secret-token Solana source string prefix was checked")
+
+    def isascii(self):
+        raise AssertionError("secret-token Solana source string ascii was checked")
+
+    def isdecimal(self):
+        raise AssertionError("secret-token Solana source string decimal was checked")
+
+    def __len__(self):
+        raise AssertionError("secret-token Solana source string length was read")
+
+    def __str__(self):
+        raise AssertionError("secret-token Solana source string was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token Solana source string was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token Solana source string was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token Solana source string was compared")
+
+
 class HostileTomlString(str):
     def __new__(cls):
         return str.__new__(cls, "blocked")
@@ -173,6 +214,7 @@ def solana_args(module):
     return SimpleNamespace(
         source_domain=3,
         target_domain=0,
+        solana_network="mainnet-beta",
         source_trust_anchor_hash=bytes.fromhex("44" * 32),
         consensus_verifier_hash=bytes.fromhex("55" * 32),
         message_inclusion_verifier_hash=bytes.fromhex("66" * 32),
@@ -519,6 +561,44 @@ def test_solana_source_domain_parser_requires_canonical_ascii_decimal():
             raise AssertionError(f"noncanonical Solana domain {value!r} was accepted")
 
 
+def test_solana_source_state_exact_string_parsers_reject_subclasses_without_hooks():
+    module = load_evidence_module()
+    hostile_hex = HostileSolanaSourceStateString("0x" + "11" * 32)
+    hostile_decimal = HostileSolanaSourceStateString("3")
+
+    cases = (
+        (
+            lambda: module._strip_lower_0x_hex(
+                hostile_hex,
+                label="source trust anchor hash",
+            ),
+            "source trust anchor hash must be canonical lowercase 0x hex",
+        ),
+        (
+            lambda: module.parse_hex_bytes(
+                hostile_hex,
+                label="source trust anchor hash",
+                byte_length=32,
+            ),
+            "source trust anchor hash must be canonical lowercase 0x hex",
+        ),
+        (
+            lambda: module.parse_u32(hostile_decimal, label="source domain"),
+            "source domain must be a u32",
+        ),
+    )
+    for parse, expected_message in cases:
+        try:
+            parse()
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("Solana source-state parser accepted a string subclass")
+
+
 def test_solana_toml_rendering_carries_mainnet_profile_ids():
     module = load_evidence_module()
     args = solana_args(module)
@@ -569,6 +649,65 @@ def test_solana_toml_rendering_carries_mainnet_profile_ids():
     assert 'deployment_receipt_hash = "0x' + "aa" * 32 + '"' in rendered
     assert "# full_light_client_evidence_ready = true" in rendered
     assert "sccp:sol:light-client:tower-replay-mainnet-beta:v1" in rendered
+
+
+def test_solana_toml_rendering_carries_testnet_profile_ids():
+    module = load_evidence_module()
+    args = solana_args(module)
+    args.solana_network = "testnet"
+    args.tower_replay_verifier_hash = bytes.fromhex("bb" * 32)
+    args.full_accountsdb_lattice_verifier_hash = bytes.fromhex("cc" * 32)
+    args.bank_fork_choice_verifier_hash = bytes.fromhex("dd" * 32)
+    args.expected_source_verifier_material_hash = bytes.fromhex(
+        SOLANA_TESTNET_SOURCE_VERIFIER_MATERIAL_HASH_VECTOR
+    )
+    args.expected_source_adapter_engine_deployment_hash = bytes.fromhex(
+        SOLANA_TESTNET_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_WITH_AUDIT_HASH_VECTOR
+    )
+    args.expected_full_light_client_gate_hash = bytes.fromhex(
+        SOLANA_TESTNET_FULL_LIGHT_CLIENT_GATE_HASH_VECTOR
+    )
+    rendered = module.render_toml(args)
+
+    assert module.parse_solana_network("solana-testnet") == "testnet"
+    assert (
+        '# sccp_solana_source_verifier_material_hash = "0x'
+        + SOLANA_TESTNET_SOURCE_VERIFIER_MATERIAL_HASH_VECTOR
+        + '"'
+        in rendered
+    )
+    assert 'solana_network = "solana-testnet"' in rendered
+    assert (
+        'source_state_verifier_id = "sccp:sol:accounts-db-verifier:accounts-lt-hash-testnet:v1"'
+        in rendered
+    )
+    assert "mainnet-beta" not in rendered
+    assert "# full_light_client_evidence_ready = true" in rendered
+    assert "sccp:sol:light-client:tower-replay-testnet:v1" in rendered
+
+    summary = module._json_summary(args)
+    assert summary["solana_network"] == "solana-testnet"
+    assert (
+        summary["solana_genesis_hash"]
+        == "4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY"
+    )
+    assert (
+        summary["source_verifier_material_hash"]
+        == "0x" + SOLANA_TESTNET_SOURCE_VERIFIER_MATERIAL_HASH_VECTOR
+    )
+    assert summary["full_toml_ready"] is True
+
+
+def test_solana_network_parser_rejects_unknown_profiles():
+    module = load_evidence_module()
+
+    for value in ("", "devnet", " mainnet-beta", "solana-mainnet"):
+        try:
+            module.parse_solana_network(value)
+        except module.argparse.ArgumentTypeError as exc:
+            assert "mainnet-beta or testnet" in str(exc)
+        else:
+            raise AssertionError(f"unsupported Solana network {value!r} accepted")
 
 
 def test_solana_source_state_toml_renderer_rejects_string_subclasses_without_hooks():

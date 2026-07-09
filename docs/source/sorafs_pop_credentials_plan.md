@@ -48,6 +48,9 @@ fingerprints. The aggregate production-readiness gate also rechecks the
 juror-client sync tuple before final promotion: synced roots in
 `valid_juror_sync_bindings` must appear in `valid_root_digests`, and synced
 revocation lists must appear in `valid_revocation_list_digests`.
+PoP rollout summaries must expose exactly one active root digest, revocation-list
+digest, verifier policy digest, and moderation PoP snapshot digest; mixed valid
+anchors fail closed before downstream evidence can satisfy the rollout gate.
 Aggregate promotion also rechecks the lane-proven PoP digest relationships:
 root-bound artifact fingerprints must match `valid_root_digests`,
 revocation-bound artifact fingerprints must match

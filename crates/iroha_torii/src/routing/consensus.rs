@@ -7,9 +7,10 @@ use iroha_data_model::{
         NativeAmxAttestationBodyV1, NativeAmxAttestationQcV1, NativeAmxLegRecord, NativeAmxPhase,
         NativeAmxReceipt, SumeragiBlockSyncRosterStatus, SumeragiCommitInflightStatus,
         SumeragiCommitPipelineStatus, SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus,
-        SumeragiConsensusMessageHandlingEntry, SumeragiConsensusMessageHandlingStatus,
-        SumeragiDataspaceCommitment, SumeragiLaneCommitment, SumeragiLaneGovernance,
-        SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
+        SumeragiCommittedLaneBlock, SumeragiConsensusMessageHandlingEntry,
+        SumeragiConsensusMessageHandlingStatus, SumeragiDataspaceCommitment,
+        SumeragiLaneCommitment, SumeragiLaneGovernance, SumeragiMembershipMismatchStatus,
+        SumeragiMembershipStatus,
         SumeragiNposRepairCoverageStatus, SumeragiNposTimeoutsStatus, SumeragiPeerKeyPolicyStatus,
         SumeragiPendingRbcEntry, SumeragiPendingRbcStatus, SumeragiProposalGateStatus,
         SumeragiQcEntry, SumeragiQcStatus, SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus,
@@ -1921,6 +1922,85 @@ fn native_amx_attestation_qc_json(qc: &NativeAmxAttestationQcV1) -> Value {
     ])
 }
 
+fn lane_block_qc_signer_count(qc: &iroha_data_model::block::consensus::LaneBlockQcV1) -> u32 {
+    qc
+        .signers_bitmap
+        .iter()
+        .map(|byte| byte.count_ones())
+        .sum::<u32>()
+}
+
+fn lane_block_qc_summary_json(
+    qc: &iroha_data_model::block::consensus::LaneBlockQcV1,
+) -> Value {
+    let signer_count = lane_block_qc_signer_count(qc);
+    json_object(vec![
+        json_entry("phase", format!("{:?}", qc.body.phase).to_ascii_lowercase()),
+        json_entry("validator_set_hash_version", qc.validator_set_hash_version),
+        json_entry(
+            "validator_set_hash",
+            hash_with_prefix(qc.validator_set_hash),
+        ),
+        json_entry("validator_count", u64::from(qc.body.validator_count)),
+        json_entry("min_quorum", u64::from(qc.body.min_quorum)),
+        json_entry("signer_count", u64::from(signer_count)),
+    ])
+}
+
+fn committed_lane_block_wire(
+    entry: &sumeragi::status::CommittedLaneBlockSnapshot,
+) -> SumeragiCommittedLaneBlock {
+    SumeragiCommittedLaneBlock {
+        lane_id: entry.lane_id,
+        dataspace_id: entry.dataspace_id,
+        lane_block_height: entry.lane_block_height,
+        lane_block_view: entry.lane_block_view,
+        descriptor_hash: entry.descriptor_hash,
+        proposal_hash: entry.proposal_hash,
+        execution_status: entry.execution_status.as_str().to_owned(),
+        executable_payload_available: entry.executable_payload_available(),
+        subject_hash: entry.proposal.descriptor.subject_hash,
+        payload_ownership_hash: entry.proposal.descriptor.payload_ownership_hash,
+        rbc_instance_hash: entry.proposal.descriptor.rbc_instance_hash,
+        qc_mode_tag: entry.proposal.descriptor.qc_mode_tag.clone(),
+        validator_count: entry.proposal.descriptor.validator_count,
+        min_quorum: entry.proposal.descriptor.min_quorum,
+        prepare_qc_signer_count: lane_block_qc_signer_count(&entry.prepare_qc),
+        commit_qc_signer_count: lane_block_qc_signer_count(&entry.commit_qc),
+    }
+}
+
+fn committed_lane_block_json(entry: &sumeragi::status::CommittedLaneBlockSnapshot) -> Value {
+    json_object(vec![
+        json_entry("lane_id", Value::from(u64::from(entry.lane_id.as_u32()))),
+        json_entry("dataspace_id", Value::from(entry.dataspace_id.as_u64())),
+        json_entry("lane_block_height", entry.lane_block_height),
+        json_entry("lane_block_view", entry.lane_block_view),
+        json_entry("descriptor_hash", hash_with_prefix(entry.descriptor_hash)),
+        json_entry("proposal_hash", hash_with_prefix(entry.proposal_hash)),
+        json_entry("execution_status", entry.execution_status.as_str()),
+        json_entry(
+            "executable_payload_available",
+            entry.executable_payload_available(),
+        ),
+        json_entry(
+            "subject_hash",
+            hash_with_prefix(entry.proposal.descriptor.subject_hash),
+        ),
+        json_entry(
+            "payload_ownership_hash",
+            hash_with_prefix(entry.proposal.descriptor.payload_ownership_hash),
+        ),
+        json_entry(
+            "rbc_instance_hash",
+            hash_with_prefix(entry.proposal.descriptor.rbc_instance_hash),
+        ),
+        json_entry("qc_mode_tag", entry.proposal.descriptor.qc_mode_tag.clone()),
+        json_entry("prepare_qc", lane_block_qc_summary_json(&entry.prepare_qc)),
+        json_entry("commit_qc", lane_block_qc_summary_json(&entry.commit_qc)),
+    ])
+}
+
 fn native_amx_leg_json(leg: &NativeAmxLegRecord) -> Value {
     json_object(vec![
         json_entry("lane_id", leg.lane_id),
@@ -3097,6 +3177,20 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             })
             .collect(),
     );
+    let committed_lane_blocks = Value::Array(
+        snap.committed_lane_blocks
+            .iter()
+            .map(committed_lane_block_json)
+            .collect(),
+    );
+    let lane_block_sessions = Value::Array(
+        snap.lane_block_sessions
+            .iter()
+            .map(|entry| {
+                json::to_value(entry).expect("serialize lane-block session status for status")
+            })
+            .collect(),
+    );
     let dataspace_commitments = Value::Array(
         snap.dataspace_commitments
             .iter()
@@ -3824,6 +3918,8 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("membership_mismatch", membership_mismatch),
         json_entry("lane_commitments", lane_commitments),
         json_entry("lane_settlement_commitments", lane_settlement_commitments),
+        json_entry("committed_lane_blocks", committed_lane_blocks),
+        json_entry("lane_block_sessions", lane_block_sessions),
         json_entry("dataspace_commitments", dataspace_commitments),
         json_entry(
             "lane_governance_sealed_total",
@@ -3881,7 +3977,8 @@ mod status_tests {
     use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey};
     use iroha_data_model::{
         block::consensus::{
-            LaneBlockCommitment, LaneLiquidityProfile, LaneSettlementReceipt, LaneSwapMetadata,
+            CertPhase, LaneBlockCommitment, LaneBlockDescriptorV1, LaneBlockProposalV1,
+            LaneBlockQcV1, LaneLiquidityProfile, LaneSettlementReceipt, LaneSwapMetadata,
             LaneVolatilityClass, NativeAmxAttestationBodyV1, NativeAmxAttestationQcV1,
             NativeAmxLegRecord, NativeAmxPhase, NativeAmxReceipt,
         },
@@ -3899,6 +3996,67 @@ mod status_tests {
                 .public_key()
                 .clone(),
         )
+    }
+
+    fn committed_lane_block_status_fixture() -> status::CommittedLaneBlockSnapshot {
+        let validator = checked_status_peer(91, "committed-lane-block-status");
+        let validator_set = vec![validator];
+        let mut descriptor = LaneBlockDescriptorV1 {
+            lane_id: LaneId::new(7),
+            dataspace_id: DataSpaceId::new(11),
+            proposal_height: 13,
+            previous_lane_block_height: 12,
+            previous_lane_block_descriptor_hash: Some(Hash::prehashed([0x61; Hash::LENGTH])),
+            lane_block_height: 13,
+            lane_block_view: 2,
+            subject_hash: Hash::prehashed([0x62; Hash::LENGTH]),
+            payload_ownership_hash: Hash::prehashed([0x63; Hash::LENGTH]),
+            rbc_instance_hash: Hash::prehashed([0x64; Hash::LENGTH]),
+            accepted_candidate_indices: vec![0],
+            accepted_transaction_hashes: vec![Hash::prehashed([0x65; Hash::LENGTH])],
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set: validator_set.clone(),
+            validator_count: 1,
+            min_quorum: 1,
+            qc_mode_tag: "permissioned:lane:7:dataspace:11".to_string(),
+            descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
+        };
+        descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
+        let mut proposal = LaneBlockProposalV1 {
+            descriptor,
+            proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+            payload_block_hint: None,
+        };
+        proposal.proposal_hash = proposal.computed_proposal_hash();
+        let prepare_qc = LaneBlockQcV1 {
+            body: proposal.vote_body(CertPhase::Prepare),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set: validator_set.clone(),
+            signers_bitmap: vec![0b0000_0001],
+            bls_aggregate_signature: vec![0xA1],
+        };
+        let commit_qc = LaneBlockQcV1 {
+            body: proposal.vote_body(CertPhase::Commit),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set,
+            signers_bitmap: vec![0b0000_0001],
+            bls_aggregate_signature: vec![0xA2],
+        };
+        status::CommittedLaneBlockSnapshot {
+            lane_id: proposal.descriptor.lane_id,
+            dataspace_id: proposal.descriptor.dataspace_id,
+            lane_block_height: proposal.descriptor.lane_block_height,
+            lane_block_view: proposal.descriptor.lane_block_view,
+            descriptor_hash: proposal.descriptor.descriptor_hash,
+            proposal_hash: proposal.proposal_hash,
+            execution_status: status::CommittedLaneBlockExecutionStatus::AwaitingExecutablePayload,
+            proposal,
+            prepare_qc,
+            commit_qc,
+        }
     }
 
     #[test]
@@ -4255,6 +4413,212 @@ mod status_tests {
                 .expect("native AMX receipts array")
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn status_snapshot_json_serializes_committed_lane_blocks() {
+        let committed = committed_lane_block_status_fixture();
+        let mut payload_available = committed.clone();
+        payload_available.execution_status =
+            status::CommittedLaneBlockExecutionStatus::PayloadAvailableAwaitingExecutor;
+        let mut payload_recovered = committed.clone();
+        payload_recovered.execution_status =
+            status::CommittedLaneBlockExecutionStatus::PayloadRecoveredAwaitingStateApplication;
+        let mut payload_preflighted = committed.clone();
+        payload_preflighted.execution_status =
+            status::CommittedLaneBlockExecutionStatus::PayloadPreflightedAwaitingStateApplication;
+        let mut payload_preflight_rejected = committed.clone();
+        payload_preflight_rejected.execution_status = status::CommittedLaneBlockExecutionStatus::PayloadPreflightRejectedAwaitingStateApplication;
+        let mut receipt_conflict = committed.clone();
+        receipt_conflict.execution_status =
+            status::CommittedLaneBlockExecutionStatus::ApplicationReceiptConflictsWithPreflight;
+        let mut predecessor_blocked = committed.clone();
+        predecessor_blocked.execution_status =
+            status::CommittedLaneBlockExecutionStatus::AwaitingPredecessorApplication;
+        let mut state_applied = committed.clone();
+        state_applied.execution_status =
+            status::CommittedLaneBlockExecutionStatus::StateAppliedByCanonicalBlock;
+        let mut direct_applied = committed.clone();
+        direct_applied.execution_status =
+            status::CommittedLaneBlockExecutionStatus::StateAppliedByDirectExecution;
+        let snap = sumeragi::StatusSnapshot {
+            committed_lane_blocks: vec![
+                committed.clone(),
+                payload_available.clone(),
+                payload_recovered.clone(),
+                payload_preflighted.clone(),
+                payload_preflight_rejected.clone(),
+                receipt_conflict.clone(),
+                predecessor_blocked.clone(),
+                state_applied.clone(),
+                direct_applied.clone(),
+            ],
+            ..Default::default()
+        };
+
+        let payload = status_snapshot_json(&snap);
+        let entries = payload
+            .get("committed_lane_blocks")
+            .and_then(Value::as_array)
+            .expect("committed lane block array");
+        assert_eq!(entries.len(), 9);
+        let entry = entries[0].as_object().expect("committed lane block object");
+        assert_eq!(entry.get("lane_id").and_then(Value::as_u64), Some(7));
+        assert_eq!(entry.get("dataspace_id").and_then(Value::as_u64), Some(11));
+        assert_eq!(
+            entry.get("lane_block_height").and_then(Value::as_u64),
+            Some(committed.lane_block_height)
+        );
+        assert_eq!(
+            entry.get("descriptor_hash").and_then(Value::as_str),
+            Some(hash_with_prefix(committed.descriptor_hash).as_str())
+        );
+        assert_eq!(
+            entry.get("proposal_hash").and_then(Value::as_str),
+            Some(hash_with_prefix(committed.proposal_hash).as_str())
+        );
+        assert_eq!(
+            entry.get("execution_status").and_then(Value::as_str),
+            Some(committed.execution_status.as_str())
+        );
+        assert_eq!(
+            entry
+                .get("executable_payload_available")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        let available_entry = entries[1]
+            .as_object()
+            .expect("payload-available committed lane block object");
+        assert_eq!(
+            available_entry
+                .get("execution_status")
+                .and_then(Value::as_str),
+            Some(payload_available.execution_status.as_str())
+        );
+        assert_eq!(
+            available_entry
+                .get("executable_payload_available")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        let recovered_entry = entries[2]
+            .as_object()
+            .expect("payload-recovered committed lane block object");
+        assert_eq!(
+            recovered_entry
+                .get("execution_status")
+                .and_then(Value::as_str),
+            Some(payload_recovered.execution_status.as_str())
+        );
+        assert_eq!(
+            recovered_entry
+                .get("executable_payload_available")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        let preflighted_entry = entries[3]
+            .as_object()
+            .expect("preflighted committed lane block object");
+        assert_eq!(
+            preflighted_entry
+                .get("execution_status")
+                .and_then(Value::as_str),
+            Some(payload_preflighted.execution_status.as_str())
+        );
+        assert_eq!(
+            preflighted_entry
+                .get("executable_payload_available")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        let preflight_rejected_entry = entries[4]
+            .as_object()
+            .expect("preflight-rejected committed lane block object");
+        assert_eq!(
+            preflight_rejected_entry
+                .get("execution_status")
+                .and_then(Value::as_str),
+            Some(payload_preflight_rejected.execution_status.as_str())
+        );
+        assert_eq!(
+            preflight_rejected_entry
+                .get("executable_payload_available")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        let receipt_conflict_entry = entries[5]
+            .as_object()
+            .expect("receipt-conflict committed lane block object");
+        assert_eq!(
+            receipt_conflict_entry
+                .get("execution_status")
+                .and_then(Value::as_str),
+            Some(receipt_conflict.execution_status.as_str())
+        );
+        assert_eq!(
+            receipt_conflict_entry
+                .get("executable_payload_available")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        let predecessor_blocked_entry = entries[6]
+            .as_object()
+            .expect("predecessor-blocked committed lane block object");
+        assert_eq!(
+            predecessor_blocked_entry
+                .get("execution_status")
+                .and_then(Value::as_str),
+            Some(predecessor_blocked.execution_status.as_str())
+        );
+        assert_eq!(
+            predecessor_blocked_entry
+                .get("executable_payload_available")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        let applied_entry = entries[7]
+            .as_object()
+            .expect("state-applied committed lane block object");
+        assert_eq!(
+            applied_entry
+                .get("execution_status")
+                .and_then(Value::as_str),
+            Some(state_applied.execution_status.as_str())
+        );
+        assert_eq!(
+            applied_entry
+                .get("executable_payload_available")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        let direct_applied_entry = entries[8]
+            .as_object()
+            .expect("direct-applied committed lane block object");
+        assert_eq!(
+            direct_applied_entry
+                .get("execution_status")
+                .and_then(Value::as_str),
+            Some(direct_applied.execution_status.as_str())
+        );
+        assert_eq!(
+            direct_applied_entry
+                .get("executable_payload_available")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        let prepare_qc = entry
+            .get("prepare_qc")
+            .and_then(Value::as_object)
+            .expect("prepare QC summary");
+        let commit_qc = entry
+            .get("commit_qc")
+            .and_then(Value::as_object)
+            .expect("commit QC summary");
+        assert_eq!(prepare_qc.get("phase").and_then(Value::as_str), Some("prepare"));
+        assert_eq!(commit_qc.get("phase").and_then(Value::as_str), Some("commit"));
+        assert_eq!(prepare_qc.get("signer_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(commit_qc.get("signer_count").and_then(Value::as_u64), Some(1));
     }
 
     #[test]
@@ -6011,6 +6375,12 @@ pub async fn handle_v1_sumeragi_status(
             lane_settlement_commitments: snap.lane_settlement_commitments.clone(),
             lane_relay_envelopes: snap.lane_relay_envelopes.clone(),
             lane_payload_ownerships: snap.lane_payload_ownerships.clone(),
+            committed_lane_blocks: snap
+                .committed_lane_blocks
+                .iter()
+                .map(committed_lane_block_wire)
+                .collect(),
+            lane_block_sessions: snap.lane_block_sessions.clone(),
             lane_governance_sealed_total: snap.lane_governance_sealed_total,
             lane_governance_sealed_aliases: snap.lane_governance_sealed_aliases.clone(),
             lane_governance: snap

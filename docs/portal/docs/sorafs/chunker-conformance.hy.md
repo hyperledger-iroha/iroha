@@ -53,10 +53,10 @@ translator: machine-google-reviewed
 
 ### Ստորագրման քաղաքականություն
 
-Սարքավորումների վերականգնումը **պետք է** ներառի խորհրդի վավեր ստորագրություն: Գեներատորը
-մերժում է անստորագիր ելքը, քանի դեռ `--allow-unsigned`-ը հստակ չի փոխանցվել (նախատեսված
-միայն տեղական փորձերի համար): Ստորագրության ծրարները միայն կցվում են և
-կրկնօրինակված է յուրաքանչյուր ստորագրողի համար:
+Fixture regeneration **must** include a valid council signature. The generator
+rejects unsigned output in every mode; use `--signing-key` to create or append a
+council signature, or keep the existing verified `manifest_signatures.json`
+unchanged. Signature envelopes are append-only and deduplicated per signer.
 
 Ավագանու ստորագրություն ավելացնելու համար.
 

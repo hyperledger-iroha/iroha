@@ -13440,6 +13440,38 @@
         "x-iroha-tool-effect": "write"
       }
     },
+    "/v1/offline/v2/kagemusha/topup": {
+      "post": {
+        "description": "POST a recursive Kagemusha online-to-offline top-up request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one non-empty exact proof field: signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Retired X-Iroha-* app-auth headers are rejected on this endpoint. Production top-up requires topup_request_norito_base64 as canonical standard-base64 KagemushaRecursiveSpendTopUpRequestV1 bytes with no surrounding whitespace. The authenticated account_id is charged for the archive-bound asset_definition_id, and retired Offline Note issue fields plus raw init-request top-up fields are rejected.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OfflineIssuerBodyAuthRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Top up recursive Kagemusha offline cash.",
+        "tags": [
+          "Offline"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
     "/v1/offline/v2/keys/refill": {
       "post": {
         "description": "POST Offline V2 issuer key-refill material. The JSON body must include account_id, timestamp_ms, nonce, and exactly one non-empty exact proof field: signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Retired X-Iroha-* app-auth headers are rejected on this endpoint.",
@@ -13474,7 +13506,7 @@
     },
     "/v1/offline/v2/notes/issue": {
       "post": {
-        "description": "Classic Offline V2 note issuance is retired and this retired route fails closed. Use Kagemusha online-to-offline top-up flows. Retired X-Iroha-* app-auth headers are rejected on this endpoint.",
+        "description": "Classic Offline V2 note issuance is retired and this retired route fails closed. Use /v1/offline/v2/kagemusha/topup for Kagemusha online-to-offline top-up. Retired X-Iroha-* app-auth headers are rejected on this endpoint.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -17136,6 +17168,70 @@
         "x-iroha-tool-effect": "write"
       }
     },
+    "/v1/sorafs/moderation/ballots/challenges": {
+      "post": {
+        "description": "Raise a payload-free local SoraFS moderation ballot challenge during the post-commit challenge window. The canonical request signer must match challenger_id, the evidence digest must be a non-zero 32-byte hex value, and pending or accepted challenges block local reveal and tally progress.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Raise a local moderation ballot challenge.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/sorafs/moderation/ballots/challenges/resolve": {
+      "post": {
+        "description": "Resolve a local SoraFS moderation ballot challenge before reveal progress. The canonical request signer must match resolved_by; rejected challenges unblock local reveal and tally progress, while accepted challenges keep the ballot blocked for higher-level dispute handling.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Resolve a local moderation ballot challenge.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
     "/v1/sorafs/moderation/ballots/commits": {
       "post": {
         "description": "Submit a base64 Norito SoraFsModerationBallotCommitV1 payload. The canonical request signer must match the canonical juror account id in the commitment.",
@@ -17170,7 +17266,7 @@
     },
     "/v1/sorafs/moderation/ballots/events": {
       "get": {
-        "description": "Fetch sequenced local SoraFS moderation ballot events with optional since and limit filters and ETag cache validation.",
+        "description": "Fetch sequenced local SoraFS moderation ballot lifecycle and challenge events with optional since and limit filters and ETag cache validation.",
         "parameters": [
           {
             "description": "Return events with sequence greater than this value.",
@@ -17322,6 +17418,48 @@
           }
         },
         "summary": "Fetch a local moderation ballot.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/sorafs/moderation/ballots/{case_id}/{round_id}/no-show-plan": {
+      "get": {
+        "description": "Fetch the payload-free local no-show penalty plan for a closed SoraFS moderation ballot. The route uses server-side network time, rejects open reveal windows and unresolved or accepted challenges, and returns only counts, juror identifiers, and the penalty-plan digest.",
+        "parameters": [
+          {
+            "description": "Moderation or appeal case identifier.",
+            "in": "path",
+            "name": "case_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Moderation ballot round identifier.",
+            "in": "path",
+            "name": "round_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fetch a local moderation ballot no-show plan.",
         "tags": [
           "SoraFS"
         ],
@@ -17749,6 +17887,92 @@
         "x-iroha-tool-effect": "write"
       }
     },
+    "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/viewer-access": {
+      "post": {
+        "description": "Append one payload-free local SFM-4b3 evidence viewer access-log event for a session bound to the requested quarantine record. The request logs view, seek, pause, screenshot-attempt, download-attempt, annotation, session-expiry, and attestation-failure metadata by digest, rejects raw evidence, signed URLs, runtime session tokens, response bodies, and raw access logs, persists the local evidence-viewer checkpoint when storage is enabled, and requires X-Iroha canonical app authentication from an account assigned the sorafs_moderation_operator role.",
+        "parameters": [
+          {
+            "description": "16-byte local quarantine id encoded as hexadecimal.",
+            "in": "path",
+            "name": "quarantine_id_hex",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Append a payload-free local moderation evidence viewer access event.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/viewer-sessions": {
+      "post": {
+        "description": "Create or return one short-lived, payload-free local SFM-4b3 evidence viewer session record for an existing encrypted quarantine object. The request binds viewer, role, attestation digest, watermark metadata digest, nonce digest, legal-hold metadata, object id, and evidence digest, rejects raw evidence, signed URLs, runtime session tokens, and watermark secrets, persists the local evidence-viewer checkpoint when storage is enabled, and requires X-Iroha canonical app authentication from an account assigned the sorafs_moderation_operator role. This endpoint does not issue streaming URLs or return evidence bytes.",
+        "parameters": [
+          {
+            "description": "16-byte local quarantine id encoded as hexadecimal.",
+            "in": "path",
+            "name": "quarantine_id_hex",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Issue a payload-free local moderation evidence viewer session record.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
     "/v1/sorafs/moderation/screening-results": {
       "get": {
         "description": "List local SFM-4a moderation screening results and quarantine records. The returned arrays are bounded by `limit` (default 50, max 500) while full counts remain visible.",
@@ -17807,6 +18031,70 @@
           }
         },
         "summary": "Record a local moderation screening result.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/sorafs/moderation/viewer-audit-reports": {
+      "post": {
+        "description": "Derive one closed-window, payload-free local SFM-4b3 evidence viewer audit report from local session/access records and record it as an EvidenceAccess transparency source entry for later ledger/Governance DAG publication. The request accepts a report window and optional policy digest, rejects raw evidence, raw access logs, viewer accounts, signed URLs, runtime session tokens, and response bodies, and requires X-Iroha canonical app authentication from an account assigned the sorafs_moderation_operator role. This endpoint does not issue streaming URLs, return evidence bytes, or expose raw viewer identities.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Record a payload-free local moderation evidence viewer audit report.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/sorafs/moderation/viewer-audit-reports/publish-due": {
+      "post": {
+        "description": "Trigger one scheduler tick for local SFM-4b3 evidence viewer audit reports. The endpoint uses the configured sorafs.storage.evidence_viewer_audits cadence when request cadence fields are omitted, derives the oldest due closed window from local payload-free session/access records, records the report as an EvidenceAccess transparency source entry, publishes the matching transparency ledger cycle through the configured Governance DAG publisher when present, suppresses duplicate cycle publication, and requires X-Iroha canonical app authentication from an account assigned the sorafs_moderation_operator role.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Publish a due payload-free moderation evidence viewer audit report cycle.",
         "tags": [
           "SoraFS"
         ],

@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/crypto/sm_program.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 08e2e1e4a54390d9142d6788aad2385e93282a33423b9fc7f3418e3633f3f86a
+source_hash: 2d65304e93effdc04fc35690fe3d4fb1c11ed5fd5963cdda9d84f617891b8ca5
 source_last_modified: "2026-01-23T18:50:10.586502+00:00"
 translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
@@ -80,7 +80,7 @@ Ed25519 のみのオブザーバーが SM 対応のバリデーターに接続�
 `WARN` でログに記録されますが、コンセンサス ノードは偶発的な事故を防ぐためにデフォルトを有効にしておく必要があります。
 SM を認識するピアと SM が無効なピアの間の相違。
 CLI は、「iroha_cli app sorafs handshake update」を介してこれらの切り替えを表示します。
---allow-sm-handshake-mismatch` and `--allow-sm-openssl-preview-mismatch`, or the matching `--require-*`
+--require-sm-handshake-match` and `--require-sm-openssl-preview-match`, or the matching `--require-*`
 厳格な施行を復元するためのフラグ。#### OpenSSL/Tongsuo プレビュー (`sm-ffi-openssl`)
 - **スコープ。** OpenSSL ランタイムの可用性を検証し、オプトインのままで OpenSSL を利用した SM3 ハッシュ、SM2 検証、および SM4-GCM 暗号化/復号化を公開するプレビュー専用のプロバイダー シム (`OpenSslProvider`) を構築します。コンセンサスバイナリは RustCrypto パスを使用し続ける必要があります。 FFI バックエンドはエッジ検証/署名パイロットに対して厳密にオプトインされています。
 - **ビルドの前提条件。** `cargo build -p iroha_crypto --features "sm sm-ffi-openssl"` でコンパイルし、ツールチェーンが OpenSSL/Tongsuo 3.0+ (SM2/SM3/SM4 をサポートする `libcrypto`) に対してリンクしていることを確認します。静的リンクは推奨されません。オペレータによって管理される動的ライブラリを優先します。

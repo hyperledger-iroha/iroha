@@ -340,10 +340,21 @@ async fn sumeragi_status_endpoint_json_and_norito_payloads_match_semantics() {
         subject_hash: Hash::prehashed([0x41; Hash::LENGTH]),
         qc_mode_tag: "test-lane-qc-mode".to_string(),
         accepted_candidate_indices: vec![0, 2],
+        accepted_transaction_hashes: vec![
+            Hash::prehashed([0x44; Hash::LENGTH]),
+            Hash::prehashed([0x45; Hash::LENGTH]),
+        ],
+        previous_lane_block_height: 1,
+        previous_lane_block_descriptor_hash: Some(Hash::prehashed([0x47; Hash::LENGTH])),
+        lane_block_descriptor_hash: Some(Hash::prehashed([0x46; Hash::LENGTH])),
+        lane_block_descriptor_validator_set: Vec::new(),
+        lane_block_descriptor_validator_count: 0,
+        lane_block_descriptor_min_quorum: 0,
         payload_ownership_hash: Hash::prehashed([0x42; Hash::LENGTH]),
         rbc_instance_hash: Hash::prehashed([0x43; Hash::LENGTH]),
     };
     iroha_core::sumeragi::status::set_lane_payload_ownerships(vec![ownership.clone()]);
+    iroha_core::sumeragi::status::set_committed_lane_blocks(Vec::new());
     let app = build_status_router();
 
     let json_resp = app
@@ -539,7 +550,16 @@ async fn sumeragi_status_endpoint_json_and_norito_payloads_match_semantics() {
             .map(Vec::len),
         Some(ownership.accepted_candidate_indices.len())
     );
-    iroha_core::sumeragi::status::set_lane_payload_ownerships(Vec::new());
+    let json_committed_lane_blocks = json_root
+        .get("committed_lane_blocks")
+        .and_then(norito::json::Value::as_array)
+        .expect("committed_lane_blocks array");
+    assert_eq!(
+        json_committed_lane_blocks.len(),
+        norito_wire.committed_lane_blocks.len()
+    );
+    iroha_core::sumeragi::status::clear_lane_payload_ownerships();
+    iroha_core::sumeragi::status::set_committed_lane_blocks(Vec::new());
 }
 
 #[allow(clippy::await_holding_lock)]

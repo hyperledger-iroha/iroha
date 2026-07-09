@@ -461,6 +461,8 @@ def test_plan_json_external_summaries_shape_is_validated(tmp_path: Path) -> None
             str(tmp_path / "out"),
             "--verifier",
             str(CHECKER_PATH),
+            "--now-unix",
+            "1800800000",
             "--gateway-load-summary",
             str(gateway_summary),
             "--require-gate",
@@ -714,6 +716,49 @@ def test_plan_json_rejects_unsafe_rendered_paths(tmp_path: Path) -> None:
     assert "private_key_summary" not in "\n".join(errors)
 
 
+def test_plan_json_rejects_tampered_unsafe_rendered_path_positions(
+    tmp_path: Path,
+) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    plan = MODULE.build_command_plan(args)
+    unsafe_path = str(tmp_path / "bearer%26%2395%3Btoken-summary.json")
+
+    def rendered_with_mutation(position: str) -> dict:
+        rendered = MODULE.plan_json(plan, args)
+        if position == "external_summaries":
+            rendered["external_summaries"]["gateway_load"] = [unsafe_path]
+        elif position == "artifact":
+            rendered["steps"][0]["artifact"] = unsafe_path
+        elif position == "verifier":
+            rendered["steps"][0]["command"][1] = unsafe_path
+        elif position == "evidence":
+            evidence_index = rendered["steps"][0]["command"].index("--evidence") + 1
+            rendered["steps"][0]["command"][evidence_index] = unsafe_path
+        elif position == "summary_out":
+            summary_index = rendered["steps"][0]["command"].index("--summary-out") + 1
+            rendered["steps"][0]["command"][summary_index] = unsafe_path
+        else:  # pragma: no cover - fixed local matrix
+            raise AssertionError(position)
+        return rendered
+
+    for position in (
+        "external_summaries",
+        "artifact",
+        "verifier",
+        "evidence",
+        "summary_out",
+    ):
+        errors = MODULE.validate_plan_json(
+            rendered_with_mutation(position),
+            plan,
+            args,
+        )
+        diagnostics = "\n".join(errors)
+        assert MODULE.PLAN_RENDERED_PATH_ERROR in errors
+        assert "bearer%26%2395%3Btoken-summary" not in diagnostics
+        assert "bearer_token" not in diagnostics
+
+
 def test_rendered_plan_path_guard_ignores_non_path_command_values(
     tmp_path: Path,
 ) -> None:
@@ -941,6 +986,8 @@ def test_narrowed_required_gate_plan(tmp_path: Path, capsys) -> None:
             str(tmp_path / "out"),
             "--verifier",
             str(CHECKER_PATH),
+            "--now-unix",
+            "1800800000",
             "--gateway-load-summary",
             str(gateway_summary),
             "--require-gate",
@@ -1057,6 +1104,20 @@ def test_numbered_staging_deployment_id_fails(tmp_path: Path) -> None:
         in errors
     )
     assert "gateway-staging1-a" not in "\n".join(errors)
+
+
+def test_compact_staging_deployment_id_fails(tmp_path: Path) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    args.deployment_id = "gateway-stagingready-a"
+
+    errors = MODULE.validate_inputs(args)
+
+    assert (
+        "production readiness runner deployment_id must not contain "
+        "non-production deployment markers ['staging']"
+        in errors
+    )
+    assert "gateway-stagingready-a" not in "\n".join(errors)
 
 
 def test_joined_nonproduction_deployment_id_fails(tmp_path: Path) -> None:
@@ -1381,6 +1442,105 @@ def test_plan_rendered_verifier_path_components_must_be_plan_safe(
     assert "private_key" not in captured.err
 
 
+def test_encoded_plan_rendered_output_path_components_must_be_plan_safe(
+    tmp_path: Path, capsys
+) -> None:
+    gateway_summary = write_json(tmp_path / "gateway-load.json")
+    encoded_output = tmp_path / "private%26%2395%3Bkey-output"
+
+    exit_code = MODULE.main(
+        [
+            "--out-dir",
+            str(encoded_output),
+            "--verifier",
+            str(CHECKER_PATH),
+            "--gateway-load-summary",
+            str(gateway_summary),
+            "--require-gate",
+            "gateway_load",
+            "--deployment-id",
+            "sorafs-mainnet-2026-06",
+            "--environment",
+            "production",
+            "--dry-run",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert MODULE.PLAN_RENDERED_PATH_ERROR in captured.err
+    assert captured.out == ""
+    assert "private%26%2395%3Bkey-output" not in captured.err
+    assert "private_key" not in captured.err
+
+
+def test_encoded_plan_rendered_summary_output_path_components_must_be_plan_safe(
+    tmp_path: Path, capsys
+) -> None:
+    gateway_summary = write_json(tmp_path / "gateway-load.json")
+    encoded_summary = tmp_path / "bearer%26%2395%3Btoken-summary.json"
+
+    exit_code = MODULE.main(
+        [
+            "--out-dir",
+            str(tmp_path / "out"),
+            "--summary-out",
+            str(encoded_summary),
+            "--verifier",
+            str(CHECKER_PATH),
+            "--gateway-load-summary",
+            str(gateway_summary),
+            "--require-gate",
+            "gateway_load",
+            "--deployment-id",
+            "sorafs-mainnet-2026-06",
+            "--environment",
+            "production",
+            "--dry-run",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert MODULE.PLAN_RENDERED_PATH_ERROR in captured.err
+    assert captured.out == ""
+    assert "bearer%26%2395%3Btoken-summary" not in captured.err
+    assert "bearer_token" not in captured.err
+
+
+def test_encoded_plan_rendered_verifier_path_components_must_be_plan_safe(
+    tmp_path: Path, capsys
+) -> None:
+    gateway_summary = write_json(tmp_path / "gateway-load.json")
+    encoded_verifier = tmp_path / "private%26%2395%3Bkey-verifier.py"
+    encoded_verifier.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+
+    exit_code = MODULE.main(
+        [
+            "--out-dir",
+            str(tmp_path / "out"),
+            "--verifier",
+            str(encoded_verifier),
+            "--gateway-load-summary",
+            str(gateway_summary),
+            "--require-gate",
+            "gateway_load",
+            "--deployment-id",
+            "sorafs-mainnet-2026-06",
+            "--environment",
+            "production",
+            "--dry-run",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert MODULE.PLAN_RENDERED_PATH_ERROR in captured.err
+    assert captured.out == ""
+    assert "private%26%2395%3Bkey-verifier" not in captured.err
+    assert "private_key" not in captured.err
+
+
 def test_plan_rendered_path_safety_rejects_drive_prefix() -> None:
     assert not MODULE.plan_rendered_path_is_safe(Path("C:/sorafs/summary.json"))
 
@@ -1394,6 +1554,8 @@ def test_summary_input_path_safety_accepts_digest_labels(tmp_path: Path) -> None
             str(tmp_path / "out"),
             "--verifier",
             str(CHECKER_PATH),
+            "--now-unix",
+            "1800800000",
             "--gateway-load-summary",
             str(safe_summary),
             "--require-gate",

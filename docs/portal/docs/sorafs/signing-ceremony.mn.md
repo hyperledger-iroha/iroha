@@ -74,8 +74,9 @@ cargo xtask sorafs-fetch-fixture \
   --out fixtures/sorafs_chunker
 ```
 
-Хэрэв манифест өөр URL дээр амьдардаг бол `--manifest`-г дамжуулна уу. Гарын үсэг зураагүй дугтуйнууд
-`--allow-unsigned`-г орон нутгийн утааны урсгалд тохируулаагүй тохиолдолд татгалзана.
+Pass `--manifest` if the manifest lives at a different URL or path. The
+command refuses unsigned envelopes; use the Parliament-published envelope or a
+locally generated council-signed envelope for smoke runs.
 
 - Тайлбарын гарцаар дамжуулан манифестийг баталгаажуулахдаа Torii-ийн оронд зорилтот
   орон нутгийн ачаалал:

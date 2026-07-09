@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/crypto/sm_program.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 08e2e1e4a54390d9142d6788aad2385e93282a33423b9fc7f3418e3633f3f86a
+source_hash: 2d65304e93effdc04fc35690fe3d4fb1c11ed5fd5963cdda9d84f617891b8ca5
 source_last_modified: "2026-01-23T23:46:10.134857+00:00"
 translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
@@ -80,7 +80,7 @@ translator: machine-google-reviewed
 შესულია `WARN`-ზე, მაგრამ კონსენსუსის კვანძებმა უნდა შეინარჩუნონ ნაგულისხმევი პარამეტრები, რათა თავიდან აიცილონ შემთხვევითი
 განსხვავებები SM-ცნობილ და SM-შეზღუდულ თანატოლებს შორის.
 CLI ასახავს ამ გადამრთველებს `iroha_cli app sorafs handshake განახლების მეშვეობით
---allow-sm-handshake-mismatch` and `--allow-sm-openssl-preview-mismatch`, or the matching `--require-*`
+--require-sm-handshake-match` and `--require-sm-openssl-preview-match`, or the matching `--require-*`
 დროშები მკაცრი აღსრულების აღსადგენად.#### OpenSSL/Tongsuo გადახედვა (`sm-ffi-openssl`)
 - **ფარგლები.** აშენებს მხოლოდ წინასწარი გადახედვის პროვაიდერის შიმს (`OpenSslProvider`), რომელიც ამოწმებს OpenSSL გაშვების დროის ხელმისაწვდომობას და ავლენს OpenSSL-ის მხარდაჭერით SM3 ჰეშინგს, SM2 ვერიფიკაციას და SM4-GCM დაშიფვრას/გაშიფვრას, თანაც მონაწილეობის გარეშე. კონსენსუსის ორობითი ფაილები უნდა გააგრძელონ RustCrypto ბილიკის გამოყენება; FFI backend მკაცრად ირჩევს ზღვარზე გადამოწმების/ხელმოწერის პილოტებს.
 - **შექმენით წინაპირობები.** შეადგინეთ `cargo build -p iroha_crypto --features "sm sm-ffi-openssl"`-ით და უზრუნველყოთ ინსტრუმენტთა ჯაჭვის ბმულები OpenSSL/Tongsuo 3.0+-თან (`libcrypto` SM2/SM3/SM4 მხარდაჭერით). სტატიკური დაკავშირება აკრძალულია; უპირატესობა მიანიჭეთ ოპერატორის მიერ მართულ დინამიურ ბიბლიოთეკებს.

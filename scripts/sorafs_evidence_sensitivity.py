@@ -103,6 +103,20 @@ JWT_LIKE_VALUE_RE = re.compile(
 URL_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
 
 
+def _diagnostic_text_is_canonical(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and bool(value.strip())
+        and value == value.strip()
+        and not any(
+            ord(character) < 32
+            or ord(character) == 127
+            or unicodedata.category(character).startswith("C")
+            for character in value
+        )
+    )
+
+
 def _require_error_list(errors: Any) -> list[str]:
     """Return a mutable sensitivity error list or reject malformed sinks."""
 
@@ -111,11 +125,7 @@ def _require_error_list(errors: Any) -> list[str]:
     for error in errors:
         if not isinstance(error, str):
             raise ValueError("sensitive field errors must be a list of strings")
-        if (
-            not error.strip()
-            or error != error.strip()
-            or any(ord(character) < 32 or ord(character) == 127 for character in error)
-        ):
+        if not _diagnostic_text_is_canonical(error):
             raise ValueError(
                 "sensitive field errors must contain non-empty canonical strings"
             )
@@ -136,11 +146,7 @@ def _require_diagnostic_string(
         return None
     if allow_empty and value == "":
         return value
-    if (
-        not value.strip()
-        or value != value.strip()
-        or any(ord(character) < 32 or ord(character) == 127 for character in value)
-    ):
+    if not _diagnostic_text_is_canonical(value):
         errors.append(f"{label} must be a non-empty canonical string")
         return None
     return value
@@ -149,7 +155,8 @@ def _require_diagnostic_string(
 def normalize_sensitive_key(key: str) -> str:
     """Return a punctuation-insensitive key form for secret-field checks."""
 
-    return "".join(char.lower() for char in key if char.isalnum())
+    normalized = unicodedata.normalize("NFKC", key)
+    return "".join(char.lower() for char in normalized if char.isalnum())
 
 
 COMMON_SENSITIVE_KEY_NORMALIZED = frozenset(
@@ -174,18 +181,21 @@ def _decoded_key_variants(key: str) -> tuple[str, ...]:
 
 
 def _value_scan_variants(value: str) -> tuple[str, ...]:
-    """Return decoded value variants plus Unicode format-control-free aliases."""
+    """Return decoded value variants plus Unicode-normalized aliases."""
 
     variants: list[str] = []
     seen: set[str] = set()
     for decoded in _decoded_key_variants(value):
+        without_format_controls = "".join(
+            character
+            for character in decoded
+            if unicodedata.category(character) != "Cf"
+        )
         for candidate in (
             decoded,
-            "".join(
-                character
-                for character in decoded
-                if unicodedata.category(character) != "Cf"
-            ),
+            unicodedata.normalize("NFKC", decoded),
+            without_format_controls,
+            unicodedata.normalize("NFKC", without_format_controls),
         ):
             if candidate not in seen:
                 variants.append(candidate)

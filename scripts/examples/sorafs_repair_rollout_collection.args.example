@@ -5,6 +5,10 @@
 artifacts/sorafs/repair/staged
 --summary-out
 artifacts/sorafs/repair/staged/rollout-summary.json
+--require-kind
+auditor_roster,failure_capture,auditor_api,worker_lifecycle,event_streams,governance_handoff,observability,governance_approval
+--now-unix
+1800400000
 --max-evidence-age-secs
 604800
 --max-route-latency-ms

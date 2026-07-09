@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_appeal_pricing_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 6ae8774928fcc0bc9f51b211be3acf8491944c45b0e5f1f5ecc8f3d10c9fb57a
+source_hash: d6a71083998d5c4859d95c20e16d35f51dda7d09131595341b8c693f5554931e
 source_last_modified: 2026-07-04T23:34:52.288080+00:00
 translation_last_reviewed: 2026-07-05
 source_mtime: 2026-07-04T23:34:52.288080+00:00
@@ -583,7 +583,10 @@ duplicate or unknown metric entries before promotion can report ready. The
 summary exports the sorted reviewed `metrics` inventory plus
 `metric_count_values`, and the aggregate production-readiness gate requires
 those fields to match the dashboard metrics artifact fingerprint before final
-promotion can report ready. Multi-peer
+promotion can report ready. The appeal-finance gate fail-closes when more than
+one valid config or policy anchor appears, and clears the mixed
+`valid_config_digests` or `valid_policy_digests` set before aggregate promotion
+can report ready. Multi-peer
 reconciliation artifacts also bind `peer_count`, `validator_count`, and
 `case_count` to the unique canonical `peers[].name`, `validators[].name`, and
 `cases[].name` inventories, require those names to use reviewed

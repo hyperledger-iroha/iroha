@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs/signing_ceremony.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 8b950fba8f334478f58ba3176a10640b656610d59cc86ba44de535c0128b871e
+source_hash: 1afdd94c82f6206ac50f66f6a753cb9fa8838f76df04dbb3be6ea6e5e38715ea
 source_last_modified: "2025-11-02T04:40:40.197754+00:00"
 translation_last_reviewed: "2026-01-30"
 ---
@@ -71,8 +71,8 @@ el.
   ```
 
   Pasar `--manifest` si el manifiesto vive en una URL o ruta distinta. El
-  comando rechaza sobres sin firma salvo que se provea `--allow-unsigned` para
-  smoke runs locales.
+  comando rechaza sobres sin firma; usa el sobre publicado por el Parlamento o
+  un sobre firmado localmente por el council para smoke runs locales.
   Al validar el manifiesto publicado contra un gateway de staging, apuntar
   `sorafs-fetch` al host Torii en lugar de payloads locales:
 

@@ -53,10 +53,10 @@ translator: machine-google-reviewed
 
 ### ხელმოწერის პოლიტიკა
 
-მოწყობილობების რეგენერაცია **უნდა** შეიცავდეს საბჭოს მოქმედ ხელმოწერას. გენერატორი
-უარყოფს ხელმოუწერელ გამომავალს, თუ `--allow-unsigned` არ არის ცალსახად გადაცემული (განზრახული
-მხოლოდ ადგილობრივი ექსპერიმენტებისთვის). ხელმოწერის კონვერტები მხოლოდ დამატებულია და
-ამოღებულია თითო ხელმომწერზე.
+Fixture regeneration **must** include a valid council signature. The generator
+rejects unsigned output in every mode; use `--signing-key` to create or append a
+council signature, or keep the existing verified `manifest_signatures.json`
+unchanged. Signature envelopes are append-only and deduplicated per signer.
 
 საბჭოს ხელმოწერის დასამატებლად:
 

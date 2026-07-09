@@ -4,10 +4,10 @@ direction: rtl
 source: docs/source/sorafs_repair_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b5728f722bb994f3aa63e1a1e785206525c97287a2b9db9b537d1c90e8c52c0b
-source_last_modified: "2026-07-04T23:13:28.702455+00:00"
+source_hash: 63c424bbc734c2879e5b019f3b5844d54828549420517a5b0f09a74b93b9aa10
+source_last_modified: "2026-07-06T19:45:48.800622+00:00"
 translation_last_reviewed: 2026-07-03
-source_mtime: "2026-07-04T23:13:28.702455+00:00"
+source_mtime: "2026-07-06T19:45:48.800622+00:00"
 ---
 
 # SoraFS Repair Automation & Auditor API
@@ -88,7 +88,9 @@ rejects duplicate or unknown failure-source, route, lifecycle-status,
 handoff-target, and metric inputs before writing,
 auditor-roster and failure-bundle digest bindings, governance handoff digest
 bindings, auditor minimum counts, reviewed `repair-auditor-*` labels and
-`repair-failure-event-*` failure events matching their counts, derived
+`repair-failure-event-*` failure events matching their counts, default
+`--failure-event-count` values derived from the reviewed failure-source
+inventory, derived
 `status_count` and `handoff_target_count`
 fields for reviewed lifecycle-status and handoff-target inventories, route,
 event-lag, and repair-latency threshold facts,
@@ -472,6 +474,10 @@ before promotion can report ready.
 The summary exports the sorted reviewed `metrics` inventory plus
 `metric_count_values`, and the aggregate production-readiness gate requires
 those fields to match the observability artifact fingerprint before final
+promotion can report ready. The repair gate fail-closes when more than one
+valid roster, failure bundle, handoff, or policy anchor appears, and clears the
+mixed `valid_roster_digests`, `valid_failure_bundle_digests`,
+`valid_handoff_digests`, or `valid_policy_digests` set before aggregate
 promotion can report ready.
 Aggregate promotion also rechecks the lane-proven repair digest relationships:
 roster-bound artifact fingerprints must match `valid_roster_digests`,

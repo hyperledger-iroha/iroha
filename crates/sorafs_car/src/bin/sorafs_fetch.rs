@@ -133,9 +133,6 @@ fn run() -> Result<(), String> {
     let mut use_scoreboard = true;
     let mut expect_payload_digest: Option<[u8; 32]> = None;
     let mut expect_payload_len: Option<u64> = None;
-    let mut skip_verify_digest = false;
-    let mut skip_verify_length = false;
-    let mut allow_insecure = false;
     let mut allow_implicit_metadata = false;
     let mut gateway_manifest_id: Option<String> = None;
     let mut gateway_manifest_envelope: Option<String> = None;
@@ -306,12 +303,6 @@ fn run() -> Result<(), String> {
             } else {
                 manifest_bytes_source = Some(BinarySource::File(PathBuf::from(rest)));
             }
-        } else if arg == "--no-verify-digest" {
-            skip_verify_digest = true;
-        } else if arg == "--no-verify-length" {
-            skip_verify_length = true;
-        } else if arg == "--allow-insecure" {
-            allow_insecure = true;
         } else if arg == "--allow-implicit-provider-metadata" {
             allow_implicit_metadata = true;
         } else if let Some(rest) = arg.strip_prefix("--expect-payload-digest=") {
@@ -379,12 +370,6 @@ fn run() -> Result<(), String> {
         } else if arg.starts_with("--") {
             return Err(format!("unknown option: {arg}"));
         }
-    }
-
-    if (skip_verify_digest || skip_verify_length) && !allow_insecure {
-        return Err(
-            "refusing to disable integrity verification without --allow-insecure".to_string(),
-        );
     }
 
     if provider_specs.is_empty() && gateway_specs.is_empty() {
@@ -676,12 +661,6 @@ fn run() -> Result<(), String> {
         });
     let mut fetch_options = multi_fetch::FetchOptions::default();
     let mut max_providers_limit: Option<usize> = None;
-    if skip_verify_digest {
-        fetch_options.verify_digests = false;
-    }
-    if skip_verify_length {
-        fetch_options.verify_lengths = false;
-    }
     if let Some(limit) = retry_budget {
         fetch_options.per_chunk_retry_limit = Some(limit.max(1));
     }
@@ -1040,12 +1019,11 @@ const USAGE: &str = concat!(
      [--max-peers=n] \
      [--retry-budget=n] \
      [--retry-limit=n] \
-	     [--provider-failure-threshold=n] \
-	     [--allow-implicit-provider-metadata] \
-	     [--allow-insecure] [--no-verify-digest] [--no-verify-length] \
-	     [--expect-payload-digest=hex] \
-	     [--expect-payload-len=bytes] \
-	     [--assume-now=unix_secs]\n\
+     [--provider-failure-threshold=n] \
+     [--allow-implicit-provider-metadata] \
+     [--expect-payload-digest=hex] \
+     [--expect-payload-len=bytes] \
+     [--assume-now=unix_secs]\n\
 \n\
 JSON outputs (`--json-out`, `--provider-metrics-out`) include provider metadata \
 fields (`metadata.range_capability`, `metadata.stream_budget`, \

@@ -15,6 +15,8 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from check_sorafs_reputation_rollout_evidence import (  # noqa: E402
+    DEFAULT_MAX_INGEST_LAG_SECS,
+    DEFAULT_MAX_SNAPSHOT_AGE_SECS,
     DEFAULT_REQUIRED_KINDS,
     EVIDENCE_REQUIRED_FIELDS,
     KIND_BY_NAME,
@@ -26,6 +28,7 @@ from sorafs_response_args import (  # noqa: E402
     non_negative_int_arg,
     positive_int_arg,
 )
+from sorafs_path_identity import diagnostic_text_is_canonical  # noqa: E402
 from sorafs_path_identity import error_diagnostic_label  # noqa: E402
 from sorafs_runner_preflight import (  # noqa: E402
     emit_runner_error_block,
@@ -68,9 +71,13 @@ class CommandPlan:
 
 def split_provider_proof_spec(spec: str) -> tuple[str, Path]:
     provider_id, separator, path = spec.partition("=")
-    provider_id = provider_id.strip()
-    path = path.strip()
-    if not separator or not provider_id or not path:
+    if (
+        not separator
+        or not provider_id
+        or not path
+        or not diagnostic_text_is_canonical(provider_id)
+        or not diagnostic_text_is_canonical(path)
+    ):
         raise ValueError("--provider-proof must use PROVIDER_ID=PATH form")
     return provider_id, Path(path)
 
@@ -84,8 +91,8 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
         errors.append("at least one --provider-id is required")
     seen_provider_ids: set[str] = set()
     for provider_id in args.provider_id:
-        if not provider_id.strip():
-            errors.append("--provider-id must be non-empty")
+        if not diagnostic_text_is_canonical(provider_id):
+            errors.append("--provider-id must be canonical")
             continue
         if provider_id in seen_provider_ids:
             errors.append("duplicate --provider-id")
@@ -122,6 +129,10 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
     errors.extend(require_existing_files([args.transport_evidence], "--transport-evidence", seen=seen_input_files))
     errors.extend(require_existing_files([args.consumption_evidence], "--consumption-evidence", seen=seen_input_files))
 
+    require_runner_positive_int(args, "now_unix", errors, allow_none=True)
+    require_runner_positive_int(args, "max_snapshot_age_secs", errors)
+    require_runner_positive_int(args, "max_ingest_lag_secs", errors)
+    require_runner_non_negative_int(args, "watch_since", errors)
     require_runner_positive_int(args, "watch_limit", errors)
     require_runner_positive_int(args, "watch_max_polls", errors)
     require_runner_non_negative_int(args, "watch_poll_interval_ms", errors)
@@ -234,7 +245,13 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
         f"consumption={args.consumption_evidence}",
         "--summary-out",
         str(summary_out),
+        "--max-snapshot-age-secs",
+        str(args.max_snapshot_age_secs),
+        "--max-ingest-lag-secs",
+        str(args.max_ingest_lag_secs),
     ]
+    if args.now_unix is not None:
+        verifier_command.extend(["--now-unix", str(args.now_unix)])
     for provider_id in args.provider_id:
         verifier_command.extend(["--require-provider", provider_id])
     plan.append(CommandPlan("rollout_evidence_gate", summary_out, verifier_command))
@@ -365,6 +382,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--summary-out",
         type=Path,
         help="Optional verifier summary path. Defaults under --out-dir.",
+    )
+    parser.add_argument(
+        "--now-unix",
+        type=positive_int_arg,
+        help="Validator clock used for verifier freshness checks.",
+    )
+    parser.add_argument(
+        "--max-snapshot-age-secs",
+        type=positive_int_arg,
+        default=DEFAULT_MAX_SNAPSHOT_AGE_SECS,
+        help="Maximum accepted latest snapshot age passed to the verifier.",
+    )
+    parser.add_argument(
+        "--max-ingest-lag-secs",
+        type=positive_int_arg,
+        default=DEFAULT_MAX_INGEST_LAG_SECS,
+        help="Maximum accepted reputation ingest lag passed to the verifier.",
     )
     parser.add_argument("--watch-since", type=non_negative_int_arg, default=0, help="Initial event cursor.")
     parser.add_argument("--watch-limit", type=positive_int_arg, default=100, help="Event watch limit.")

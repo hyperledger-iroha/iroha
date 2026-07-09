@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import re
+import unicodedata
 from collections.abc import Callable, Collection, Hashable, Mapping, Sequence
 from html import unescape
 from pathlib import Path
@@ -20,7 +21,7 @@ from sorafs_evidence_sensitivity import (
     normalize_sensitive_key,
     visit_sensitive_fields,
 )
-from sorafs_path_identity import resolve_path_identity
+from sorafs_path_identity import diagnostic_text_is_canonical, resolve_path_identity
 from sorafs_runner_preflight import runner_url_arg_is_plan_safe
 
 
@@ -41,17 +42,19 @@ EVIDENCE_PATH_FIELD_ERROR = (
 
 
 def _decoded_text_variants(value: str) -> tuple[str, ...]:
-    """Return raw plus repeatedly percent/HTML-decoded text variants."""
+    """Return raw plus decoded and Unicode-normalized text variants."""
 
-    variants = [value]
-    seen = {value}
+    variants: list[str] = []
+    seen: set[str] = set()
     current = value
-    for _ in range(4):
+    for _ in range(5):
+        for candidate in (current, unicodedata.normalize("NFKC", current)):
+            if candidate not in seen:
+                variants.append(candidate)
+                seen.add(candidate)
         decoded = unescape(unquote(current))
         if decoded == current or decoded in seen:
             break
-        variants.append(decoded)
-        seen.add(decoded)
         current = decoded
     return tuple(variants)
 
@@ -99,12 +102,10 @@ def _archive_path_component_is_portable(component: str) -> bool:
 
     for variant in _decoded_text_variants(component):
         if (
-            not variant
-            or variant != variant.strip()
+            not diagnostic_text_is_canonical(variant)
             or variant in {".", ".."}
             or "/" in variant
             or "\\" in variant
-            or any(ord(character) < 32 or ord(character) == 127 for character in variant)
             or _path_component_has_windows_drive_prefix(variant)
             or _path_component_has_uri_scheme_prefix(variant)
             or _path_component_has_sensitive_label(variant)
@@ -117,11 +118,9 @@ def is_archive_portable_artifact_path(label: str) -> bool:
     """Return whether an artifact label is portable inside release archives."""
 
     if (
-        not label
-        or label != label.strip()
+        not diagnostic_text_is_canonical(label)
         or label.startswith(("/", "\\"))
         or "\\" in label
-        or any(ord(character) < 32 or ord(character) == 127 for character in label)
     ):
         return False
     if len(label) >= 2 and label[1] == ":" and label[0].isalpha():
@@ -169,11 +168,7 @@ def _require_error_list(errors: Any) -> list[str]:
             raise ValueError(
                 "evidence validation summary errors must be a list of strings"
             )
-        if (
-            not error.strip()
-            or error != error.strip()
-            or any(ord(character) < 32 or ord(character) == 127 for character in error)
-        ):
+        if not diagnostic_text_is_canonical(error):
             raise ValueError(
                 "evidence validation summary errors must contain non-empty canonical strings"
             )
@@ -187,11 +182,7 @@ def _evidence_validation_path_label(path: Any, errors: list[str]) -> str | None:
         errors.append("evidence validation path must be a path")
         return None
     label = str(path)
-    if (
-        not label
-        or label != label.strip()
-        or any(ord(character) < 32 or ord(character) == 127 for character in label)
-    ):
+    if not diagnostic_text_is_canonical(label):
         errors.append("evidence validation path must be a canonical path")
         return None
     return label
@@ -209,12 +200,7 @@ def _validation_error_messages(
     messages = tuple(validation_errors)
     if not all(isinstance(error, str) for error in messages):
         return None
-    if any(
-        not error
-        or error != error.strip()
-        or any(ord(character) < 32 or ord(character) == 127 for character in error)
-        for error in messages
-    ):
+    if not all(diagnostic_text_is_canonical(error) for error in messages):
         return ()
     return messages
 
@@ -227,12 +213,7 @@ def _require_validation_label(
 ) -> str | None:
     """Return a canonical validation label or record a closed failure."""
 
-    if (
-        not isinstance(label, str)
-        or not label.strip()
-        or label != label.strip()
-        or any(ord(character) < 32 or ord(character) == 127 for character in label)
-    ):
+    if not diagnostic_text_is_canonical(label):
         errors.append(f"{label_name} must be a non-empty canonical string")
         return None
     return label
@@ -1011,11 +992,7 @@ def _diagnostic_mentions_missing_value(message: Any, value: Any) -> bool:
         value_label = str(value)
     except Exception:
         return False
-    if (
-        not value_label.strip()
-        or value_label != value_label.strip()
-        or any(ord(character) < 32 or ord(character) == 127 for character in value_label)
-    ):
+    if not diagnostic_text_is_canonical(value_label):
         return False
     return value_label in message
 
@@ -1345,20 +1322,20 @@ def record_snapshot_bound_evidence_artifact(
             for error in anchor_errors:
                 record_artifact_error(artifact, error, [])
             return
-        valid_snapshot_bindings.add((snapshot_label.lower(), merkle_label.lower()))
+        valid_snapshot_bindings.add((snapshot_label, merkle_label))
         return
     if kind_label in bound_kind_names:
         snapshot_bound_artifacts.append(artifact)
 
 
 def _snapshot_binding_pair_set(bindings: Any) -> set[tuple[str, str]] | None:
-    """Return normalized snapshot binding pairs or reject malformed containers."""
+    """Return exact snapshot binding pairs or reject malformed containers."""
 
     if isinstance(bindings, (str, bytes, bytearray, Mapping)) or not isinstance(
         bindings, Collection
     ):
         return None
-    normalized_bindings: set[tuple[str, str]] = set()
+    bindings_label: set[tuple[str, str]] = set()
     for binding in bindings:
         if isinstance(binding, (str, bytes, bytearray)) or not isinstance(
             binding, Sequence
@@ -1380,8 +1357,8 @@ def _snapshot_binding_pair_set(bindings: Any) -> set[tuple[str, str]] | None:
         )
         if snapshot_label is None or merkle_label is None:
             return None
-        normalized_bindings.add((snapshot_label.lower(), merkle_label.lower()))
-    return normalized_bindings
+        bindings_label.add((snapshot_label, merkle_label))
+    return bindings_label
 
 
 def _snapshot_bound_artifact_rows(artifacts: Any) -> tuple[dict[str, Any], ...] | None:
@@ -1655,15 +1632,7 @@ def record_custom_required_evidence_artifact(
         row_errors.append(malformed_errors_message)
     else:
         artifact_errors = tuple(errors)
-        if not all(
-            isinstance(error, str)
-            and error
-            and error == error.strip()
-            and not any(
-                ord(character) < 32 or ord(character) == 127 for character in error
-            )
-            for error in artifact_errors
-        ):
+        if not all(diagnostic_text_is_canonical(error) for error in artifact_errors):
             row_errors.append(malformed_errors_message)
         else:
             row_errors.extend(artifact_errors)
@@ -1728,14 +1697,7 @@ def _artifact_validation_error_list(validation_errors: Any) -> list[str]:
     """Return a stable artifact validation-error list."""
 
     def has_canonical_errors(errors: Sequence[str]) -> bool:
-        return all(
-            error
-            and error == error.strip()
-            and not any(
-                ord(character) < 32 or ord(character) == 127 for character in error
-            )
-            for error in errors
-        )
+        return all(diagnostic_text_is_canonical(error) for error in errors)
 
     if isinstance(validation_errors, list) and all(
         isinstance(error, str) for error in validation_errors
@@ -1814,11 +1776,7 @@ def _artifact_path_or_error(path: Any, errors: list[str]) -> str:
         _record_artifact_builder_error(errors, "artifact path must be a path")
         return "<unknown>"
     label = str(path)
-    if (
-        not label
-        or label != label.strip()
-        or any(ord(character) < 32 or ord(character) == 127 for character in label)
-    ):
+    if not diagnostic_text_is_canonical(label):
         _record_artifact_builder_error(errors, "artifact path must be a canonical path")
         return "<unknown>"
     return label
@@ -1827,12 +1785,6 @@ def _artifact_path_or_error(path: Any, errors: list[str]) -> str:
 def _artifact_kind_name_or_error(kind_name: Any, errors: list[str]) -> str:
     """Return a non-empty artifact kind name or record a builder error."""
 
-    if not isinstance(kind_name, str) or not kind_name.strip():
-        _record_artifact_builder_error(
-            errors,
-            "artifact kind must be a non-empty string",
-        )
-        return "<unknown>"
     label_errors: list[str] = []
     kind_label = _require_validation_label(
         kind_name,
@@ -1876,12 +1828,6 @@ def _merge_artifact_fingerprint_values(
         return
     values_to_merge: list[tuple[str, Any]] = []
     for key, value in fingerprint_values.items():
-        if not isinstance(key, str) or not key.strip():
-            _record_artifact_builder_error(
-                errors,
-                "artifact fingerprint value keys must be non-empty strings",
-            )
-            return
         label_errors: list[str] = []
         key_label = _require_validation_label(
             key,
@@ -2184,13 +2130,7 @@ def evidence_gate_status(errors: Any) -> str:
 
     if not isinstance(errors, list):
         return "blocked"
-    if not all(
-        isinstance(error, str)
-        and error
-        and error == error.strip()
-        and not any(ord(character) < 32 or ord(character) == 127 for character in error)
-        for error in errors
-    ):
+    if not all(diagnostic_text_is_canonical(error) for error in errors):
         return "blocked"
     return "blocked" if errors else "ready"
 
@@ -2378,7 +2318,7 @@ def require_string_value_in(
     *,
     message: str,
 ) -> str | None:
-    """Return a normalized string value that belongs to an allowed set."""
+    """Return a string value only when it exactly belongs to an allowed set."""
 
     message_label = _require_validation_label(
         message,
@@ -2397,7 +2337,6 @@ def require_string_value_in(
     )
     if value_label is None:
         return None
-    normalized = value_label.lower()
     if isinstance(allowed, (str, bytes, bytearray, Mapping)) or not isinstance(
         allowed, Collection
     ):
@@ -2415,11 +2354,11 @@ def require_string_value_in(
         )
         if allowed_label is None:
             return None
-        allowed_values.add(allowed_label.lower())
-    if normalized not in allowed_values:
+        allowed_values.add(allowed_label)
+    if value_label not in allowed_values:
         errors.append(message_label)
         return None
-    return normalized
+    return value_label
 
 
 def require_string_tuple_in(
@@ -2429,7 +2368,7 @@ def require_string_tuple_in(
     *,
     message: str,
 ) -> tuple[str, ...] | None:
-    """Return a normalized string tuple that belongs to an allowed set."""
+    """Return a string tuple only when it exactly belongs to an allowed set."""
 
     message_label = _require_validation_label(
         message,
@@ -2446,22 +2385,20 @@ def require_string_tuple_in(
     if not values:
         errors.append(message_label)
         return None
-    normalized_values: list[str] = []
+    values_label: list[str] = []
     for value in values:
         if not isinstance(value, str) or not value:
             errors.append(message_label)
             return None
-        if (
-            _require_validation_label(
-                value,
-                errors,
-                label_name="validation tuple value",
-            )
-            is None
-        ):
+        value_label = _require_validation_label(
+            value,
+            errors,
+            label_name="validation tuple value",
+        )
+        if value_label is None:
             return None
-        normalized_values.append(value.lower())
-    binding = tuple(normalized_values)
+        values_label.append(value_label)
+    binding = tuple(values_label)
     if isinstance(allowed, (str, bytes, bytearray, Mapping)) or not isinstance(
         allowed, Collection
     ):
@@ -2478,7 +2415,7 @@ def require_string_tuple_in(
         if not raw_allowed:
             errors.append(message_label)
             return None
-        normalized_allowed: list[str] = []
+        allowed_labels: list[str] = []
         for allowed_value in raw_allowed:
             if not isinstance(allowed_value, str) or not allowed_value:
                 errors.append(message_label)
@@ -2490,8 +2427,8 @@ def require_string_tuple_in(
             )
             if allowed_label is None:
                 return None
-            normalized_allowed.append(allowed_label.lower())
-        allowed_bindings.add(tuple(normalized_allowed))
+            allowed_labels.append(allowed_label)
+        allowed_bindings.add(tuple(allowed_labels))
     if binding not in allowed_bindings:
         errors.append(message_label)
         return None
@@ -2587,7 +2524,7 @@ def evidence_artifact_digest_set(
     artifacts: Sequence[dict[str, Any]],
     digest_field: Any,
 ) -> set[str]:
-    """Return normalized digest values from valid evidence artifacts."""
+    """Return exact digest values from valid evidence artifacts."""
 
     field_name = _fingerprint_field_name(digest_field, [])
     if field_name is None:
@@ -2610,7 +2547,7 @@ def evidence_artifact_digest_set(
         )
         if digest_label is None:
             return set()
-        values.add(digest_label.lower())
+        values.add(digest_label)
     return values
 
 
@@ -2618,7 +2555,7 @@ def _canonical_digest_value_set(
     digests: Any,
     errors: list[str],
 ) -> set[str] | None:
-    """Return normalized digest values or reject malformed containers."""
+    """Return exact digest values or reject malformed containers."""
 
     if isinstance(digests, (str, bytes, bytearray, Mapping)) or not isinstance(
         digests, Collection
@@ -2638,7 +2575,7 @@ def _canonical_digest_value_set(
         if digest_label is None:
             has_malformed_value = True
             continue
-        values.add(digest_label.lower())
+        values.add(digest_label)
     if has_malformed_value:
         return None
     return values
@@ -2648,7 +2585,7 @@ def _canonical_tuple_binding_set(
     bindings: Any,
     errors: list[str],
 ) -> set[tuple[str, ...]] | None:
-    """Return normalized tuple bindings or reject malformed containers."""
+    """Return exact tuple bindings or reject malformed containers."""
 
     if isinstance(bindings, (str, bytes, bytearray, Mapping)) or not isinstance(
         bindings, Collection
@@ -2686,7 +2623,7 @@ def _canonical_tuple_binding_set(
                 has_malformed_binding = True
                 binding_has_malformed_value = True
                 continue
-            binding_values.append(binding_label.lower())
+            binding_values.append(binding_label)
         if not binding_has_malformed_value:
             values.add(tuple(binding_values))
     if has_malformed_binding:
@@ -3026,9 +2963,6 @@ def require_string_in(
         errors.append("validation quote_values must be a boolean")
         return ""
     value = payload.get(field_name)
-    if not isinstance(value, str) or not value.strip():
-        errors.append(f"{allowed_path} must be a non-empty string")
-        return ""
     value_label = _require_validation_label(
         value,
         errors,
@@ -3276,6 +3210,10 @@ ROLLOUT_DEPLOYMENT_ID_PATTERN = re.compile(
     r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$"
 )
 ASCII_DIGITS = "0123456789"
+COMPACT_NON_PRODUCTION_MARKER_AFFIXES = frozenset(
+    {"prod", "production", "release", "review", "ready"}
+)
+MIN_COMPACT_NON_PRODUCTION_MARKER_LENGTH = 4
 
 
 def numbered_rollout_marker_token(
@@ -3288,6 +3226,96 @@ def numbered_rollout_marker_token(
     if stripped != token and stripped in markers:
         return stripped
     return None
+
+
+def compact_rollout_marker_tokens(
+    token: str,
+    markers: Collection[str],
+) -> set[str]:
+    """Return markers hidden inside compact token-edge aliases."""
+
+    token_label = token.lower()
+    affix_pattern = "|".join(
+        re.escape(affix)
+        for affix in sorted(COMPACT_NON_PRODUCTION_MARKER_AFFIXES, key=len, reverse=True)
+    )
+    forbidden: set[str] = set()
+    for marker in markers:
+        if not isinstance(marker, str) or not marker:
+            continue
+        marker_label = marker.lower()
+        if token_label == marker_label:
+            continue
+        if len(marker_label) >= MIN_COMPACT_NON_PRODUCTION_MARKER_LENGTH and (
+            token_label.startswith(marker_label) or token_label.endswith(marker_label)
+        ):
+            forbidden.add(marker_label)
+            continue
+        if any(
+            token_label in {f"{marker_label}{affix}", f"{affix}{marker_label}"}
+            for affix in COMPACT_NON_PRODUCTION_MARKER_AFFIXES
+        ):
+            forbidden.add(marker_label)
+            continue
+        if re.fullmatch(
+            rf"(?:(?:{affix_pattern}))?{re.escape(marker_label)}[0-9]*"
+            rf"(?:(?:{affix_pattern}))?",
+            token_label,
+        ) is not None:
+            forbidden.add(marker_label)
+            continue
+        if any(
+            re.fullmatch(
+                rf"(?:{re.escape(marker_label)}[0-9]+{re.escape(affix)}|"
+                rf"{re.escape(affix)}{re.escape(marker_label)}[0-9]+)",
+                token_label,
+            )
+            is not None
+            for affix in COMPACT_NON_PRODUCTION_MARKER_AFFIXES
+        ):
+            forbidden.add(marker_label)
+    return {
+        marker
+        for marker in forbidden
+        if not any(marker != other and marker in other for other in forbidden)
+    }
+
+
+def forbidden_non_production_markers(
+    value: Any,
+    markers: Collection[str],
+) -> list[str]:
+    """Return sorted non-production markers, including compact aliases."""
+
+    if isinstance(value, str):
+        raw_tokens = re.split(r"[^a-z0-9]+", value.lower())
+    elif isinstance(value, Collection) and not isinstance(
+        value, (bytes, bytearray, Mapping)
+    ):
+        raw_tokens = value
+    else:
+        return []
+    tokens = [
+        token.lower()
+        for token in raw_tokens
+        if isinstance(token, str) and token
+    ]
+    forbidden = {
+        token
+        for token in tokens
+        if token in markers
+    }
+    forbidden.update(
+        marker
+        for token in tokens
+        if (marker := numbered_rollout_marker_token(token, markers)) is not None
+    )
+    forbidden.update(
+        marker
+        for token in tokens
+        for marker in compact_rollout_marker_tokens(token, markers)
+    )
+    return sorted(forbidden)
 
 
 def _require_canonical_payload_string(
@@ -3308,9 +3336,6 @@ def _require_canonical_payload_string(
     if field_name is None:
         return ""
     value = payload.get(field_name)
-    if not isinstance(value, str) or not value.strip():
-        errors.append(f"{field_name} must be a non-empty string")
-        return ""
     value_label = _require_validation_label(
         value,
         errors,
@@ -3415,13 +3440,12 @@ def require_rollout_environment(
     value = _require_canonical_payload_string(payload, field, errors)
     if not value:
         return ""
-    normalized = value.lower()
-    if normalized not in ALLOWED_ROLLOUT_ENVIRONMENTS:
+    if value not in ALLOWED_ROLLOUT_ENVIRONMENTS:
         errors.append(
             f"{field} must be one of {sorted(ALLOWED_ROLLOUT_ENVIRONMENTS)}"
         )
         return ""
-    return normalized
+    return value
 
 
 def require_rollout_deployment_context_review(
@@ -3527,7 +3551,7 @@ def require_status_in(
 
 
 def is_hex(value: str, length: int) -> bool:
-    """Return whether a string is exactly the requested hexadecimal length."""
+    """Return whether a string is exactly the requested lowercase hex length."""
 
     if (
         not isinstance(value, str)
@@ -3536,9 +3560,7 @@ def is_hex(value: str, length: int) -> bool:
         or length <= 0
     ):
         return False
-    return len(value) == length and all(
-        char in "0123456789abcdefABCDEF" for char in value
-    )
+    return len(value) == length and all(char in "0123456789abcdef" for char in value)
 
 
 def _require_hex_length(length: Any, errors: list[str]) -> int | None:
@@ -3558,7 +3580,7 @@ def require_hex(
     *,
     path: str | None = None,
 ) -> str:
-    """Return a lowercase hex string field or append a validation error."""
+    """Return an exact lowercase hex string field or append a validation error."""
 
     if not isinstance(payload, Mapping):
         errors.append("payload must be an object")
@@ -3587,9 +3609,11 @@ def require_hex(
         errors.append(f"{diagnostic_label} must be a non-empty string")
         return ""
     if value and not is_hex(value, hex_length):
-        errors.append(f"{diagnostic_label} must be {hex_length} hex characters")
+        errors.append(
+            f"{diagnostic_label} must be {hex_length} lowercase hex characters"
+        )
         return ""
-    return value.lower()
+    return value
 
 
 POLICY_DIGEST_HEX_LEN = 64
@@ -3602,7 +3626,7 @@ def require_policy_digest(
     field: str = "policy_digest_hex",
     length: int = POLICY_DIGEST_HEX_LEN,
 ) -> str:
-    """Return a normalized governance policy digest or append an error."""
+    """Return an exact governance policy digest or append an error."""
 
     return require_hex(payload, field, length, errors)
 
@@ -3632,7 +3656,9 @@ def require_optional_hex(
     if value is None:
         return
     if not isinstance(value, str) or not is_hex(value, hex_length):
-        errors.append(f"{field_name} must be null or {hex_length} hex characters")
+        errors.append(
+            f"{field_name} must be null or {hex_length} lowercase hex characters"
+        )
 
 
 def require_hex_string_array(
@@ -3647,7 +3673,7 @@ def require_hex_string_array(
     unique: bool = False,
     path: str | None = None,
 ) -> list[str]:
-    """Return normalized hex strings from an array field or append errors."""
+    """Return exact lowercase hex strings from an array field or append errors."""
 
     if not isinstance(payload, Mapping):
         errors.append("payload must be an object")
@@ -3706,24 +3732,23 @@ def require_hex_string_array(
         errors.append(f"{diagnostic_label} length must equal {expected_label}")
         has_array_error = True
 
-    normalized_values: list[str] = []
+    hex_values: list[str] = []
     seen: set[str] = set()
     for index, value in enumerate(values):
         if not isinstance(value, str) or not is_hex(value, hex_length):
             errors.append(
-                f"{diagnostic_label}[{index}] must be {hex_length} hex characters"
+                f"{diagnostic_label}[{index}] must be {hex_length} lowercase hex characters"
             )
             has_array_error = True
             continue
-        normalized = value.lower()
-        if unique and normalized in seen:
+        if unique and value in seen:
             errors.append(f"{diagnostic_label}[{index}] must be unique")
             has_array_error = True
-        seen.add(normalized)
-        normalized_values.append(normalized)
+        seen.add(value)
+        hex_values.append(value)
     if has_array_error:
         return []
-    return normalized_values
+    return hex_values
 
 
 def require_bool_true(
@@ -4547,9 +4572,9 @@ def collect_string_values(
     field: str,
     *,
     allow_scalar_items: bool = True,
-    trim_values: bool = True,
+    trim_values: bool = False,
 ) -> set[str]:
-    """Collect non-empty string values from an evidence array field."""
+    """Collect non-empty string values from an evidence array field exactly."""
 
     values: set[str] = set()
     if not isinstance(payload, Mapping):
@@ -4636,15 +4661,11 @@ def require_string_coverage(
     errors: list[str],
     *,
     allow_scalar_items: bool = True,
-    trim_values: bool = True,
 ) -> None:
     """Append an error for each required string value missing from evidence."""
 
     if not isinstance(allow_scalar_items, bool):
         errors.append("validation allow_scalar_items must be a boolean")
-        return
-    if not isinstance(trim_values, bool):
-        errors.append("validation trim_values must be a boolean")
         return
     if not isinstance(payload, Mapping):
         errors.append("payload must be an object")
@@ -4673,7 +4694,6 @@ def require_string_coverage(
         errors,
         allow_scalar_items=allow_scalar_items,
     )
-    _ = trim_values
     required_strings = _required_string_values(required_values)
     if required_strings is None:
         errors.append(f"{array_name} required values must be a sequence of strings")

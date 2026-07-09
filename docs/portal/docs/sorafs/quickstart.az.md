@@ -28,12 +28,12 @@ Faydalı CLI mesajlarını üzə çıxarmaq üçün təcrübə apararkən `expor
 
 ## 1. Deterministik qurğuları yeniləyin
 
-Kanonik SF-1 parçalanma vektorlarını bərpa edin. Əmr də imzalı yayır
-`--signing-key` verildikdə manifest zərfləri; `--allow-unsigned` istifadə edin
-yalnız yerli inkişaf zamanı.
+Regenerate the canonical SF-1 chunking vectors. The command verifies the
+existing council signature file, or appends a signature when `--signing-key` is
+supplied.
 
 ```bash
-cargo run -p sorafs_chunker --bin export_vectors -- --allow-unsigned
+cargo run -p sorafs_chunker --bin export_vectors -- --signing-key=<ed25519-private-key-hex>
 ```
 
 Çıxışlar:
@@ -78,7 +78,7 @@ cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   --manifest-out=/tmp/docs.manifest \
   --manifest-signatures-out=/tmp/docs.manifest_signatures.json \
   --json-out=/tmp/docs.report.json \
-  --allow-unsigned
+  --council-signature=<signerhex>:<signaturehex>
 ```
 
 `/tmp/docs.report.json`-i nəzərdən keçirin:
@@ -88,9 +88,9 @@ cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
 - `manifest.manifest_blake3` – manifest zərfində imzalanmış BLAKE3 həzm.
 - `chunk_fetch_specs[]` – orkestrlər üçün sifarişli gətirmə təlimatları.
 
-Həqiqi imzaları təqdim etməyə hazır olduqda, `--signing-key` və `--signer` əlavə edin
-arqumentlər. Komanda hər bir Ed25519 imzasını yazmadan əvvəl yoxlayır
-zərf.
+The `--council-signature` value must be a reviewed council signer public key and
+Ed25519 signature pair. The command verifies every Ed25519 signature before
+writing the envelope.
 
 ## 4. Çox provayder axtarışını simulyasiya edin
 

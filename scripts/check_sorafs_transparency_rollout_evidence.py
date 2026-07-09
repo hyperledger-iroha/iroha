@@ -31,6 +31,7 @@ from sorafs_evidence_json import (  # noqa: E402
 )
 from sorafs_evidence_validation import (  # noqa: E402
     archive_artifact_path_label,
+    forbidden_non_production_markers,
     build_evidence_artifact,
     count_evidence_artifacts,
     recognized_evidence_artifacts,
@@ -71,11 +72,14 @@ from sorafs_required_kinds import (  # noqa: E402
 from sorafs_response_args import (  # noqa: E402
     EvidenceArgumentParser,
     expand_response_args,
+    non_negative_int_arg,
+    positive_int_arg,
 )
 
 
 SUMMARY_SCHEMA = "sorafs.transparency.rollout_evidence_gate.v1"
 MAX_EVIDENCE_BYTES = 2 * 1024 * 1024
+DEFAULT_MAX_EVIDENCE_AGE_SECS = 7 * 24 * 60 * 60
 HEX64_LEN = 64
 CYCLE_DETAIL_PROBE_LABEL_PATTERN = re.compile(
     r"^transparency-cycle-detail-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
@@ -110,6 +114,14 @@ class EvidenceKind:
     name: str
     schema: str
     required_false_flags: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ValidationOptions:
+    """Reviewer-controlled freshness options for transparency evidence."""
+
+    now_unix: int
+    max_evidence_age_secs: int
 
 
 EVIDENCE_KINDS: tuple[EvidenceKind, ...] = (
@@ -282,7 +294,7 @@ def require_only_required_values(
             value = item.get(field)
         else:
             value = item
-        if not isinstance(value, str) or value.strip() not in allowed:
+        if not isinstance(value, str) or value not in allowed:
             errors.append(f"{array_field} must not include unknown values")
             return
 
@@ -307,11 +319,7 @@ def require_inventory_label(
     label_tokens = frozenset(
         token for token in re.split(r"[^a-z0-9]+", label) if token
     )
-    forbidden = sorted(
-        marker
-        for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
-        if marker in label_tokens
-    )
+    forbidden = forbidden_non_production_markers(label_tokens, FORBIDDEN_INVENTORY_LABEL_MARKERS)
     if forbidden:
         errors.append(f"{path} must not contain non-production markers {forbidden}")
         return ""
@@ -450,7 +458,6 @@ def validate_route_inventory(
         required_routes,
         errors,
         allow_scalar_items=False,
-        trim_values=False,
     )
     require_only_required_values(payload, "routes", "name", required_routes, errors)
     require_string_inventory_count_match(
@@ -480,7 +487,6 @@ def validate_kind_specific(kind: EvidenceKind, payload: dict[str, Any], errors: 
             DEFAULT_REQUIRED_SOURCE_KINDS,
             errors,
             allow_scalar_items=False,
-            trim_values=False,
         )
         require_only_required_values(
             payload,
@@ -522,7 +528,6 @@ def validate_kind_specific(kind: EvidenceKind, payload: dict[str, Any], errors: 
             REQUIRED_PUBLICATION_CYCLE_DETAIL_PROBES,
             errors,
             allow_scalar_items=False,
-            trim_values=False,
         )
         require_only_required_values(
             payload,
@@ -607,7 +612,6 @@ def validate_kind_specific(kind: EvidenceKind, payload: dict[str, Any], errors: 
             REQUIRED_PRIVACY_AGGREGATE_ACTIONS,
             errors,
             allow_scalar_items=False,
-            trim_values=False,
         )
         require_only_required_values(
             payload,
@@ -667,7 +671,6 @@ def validate_kind_specific(kind: EvidenceKind, payload: dict[str, Any], errors: 
             REQUIRED_PROOF_TOKEN_ISSUANCE_ACTIONS,
             errors,
             allow_scalar_items=False,
-            trim_values=False,
         )
         require_only_required_values(
             payload,
@@ -718,7 +721,10 @@ def validate_kind_specific(kind: EvidenceKind, payload: dict[str, Any], errors: 
         validate_routes(payload, errors)
 
 
-def validate_evidence_payload(payload: dict[str, Any]) -> tuple[str | None, list[str]]:
+def validate_evidence_payload(
+    payload: dict[str, Any],
+    options: ValidationOptions,
+) -> tuple[str | None, list[str]]:
     kind_name, errors = validate_standard_evidence_payload(
         payload,
         SCHEMA_TO_KIND,
@@ -729,9 +735,42 @@ def validate_evidence_payload(payload: dict[str, Any]) -> tuple[str | None, list
         require_reviewed_deployment_context=True,
     )
     if kind_name is not None:
-        require_positive_int(payload, "generated_at_unix", errors)
+        require_recent_timestamp(
+            payload,
+            "generated_at_unix",
+            errors,
+            now_unix=options.now_unix,
+            max_age_secs=options.max_evidence_age_secs,
+        )
     return kind_name, errors
 
+
+def require_single_active_digest(
+    digests: set[str],
+    errors: list[str],
+    *,
+    label: str,
+) -> set[str]:
+    """Return one active rollout digest or fail closed on mixed anchors."""
+
+    if len(digests) <= 1:
+        return digests
+    errors.append(f"{label} must contain exactly one active digest")
+    return set()
+
+
+def require_single_active_binding(
+    bindings: set[Any],
+    errors: list[str],
+    *,
+    label: str,
+) -> set[Any]:
+    """Return one active rollout binding or fail closed on mixed anchors."""
+
+    if len(bindings) <= 1:
+        return bindings
+    errors.append(f"{label} must contain exactly one active binding")
+    return set()
 
 
 def build_summary(
@@ -739,6 +778,7 @@ def build_summary(
     evidence_files: list[Path],
     required_kinds: tuple[str, ...],
     summary_out: Path | None,
+    options: ValidationOptions,
 ) -> tuple[dict[str, Any], list[str]]:
     errors: list[str] = []
     artifacts_by_kind = init_evidence_artifact_buckets(DEFAULT_REQUIRED_KINDS)
@@ -763,7 +803,7 @@ def build_summary(
         if loaded is None:
             continue
         payload, digest = loaded
-        kind_name, validation_errors = validate_evidence_payload(payload)
+        kind_name, validation_errors = validate_evidence_payload(payload, options)
         if kind_name is None:
             record_explicit_evidence_validation_errors(
                 path, explicit, validation_errors, errors
@@ -781,7 +821,7 @@ def build_summary(
             source_batch = fingerprint.get("source_batch_digest_hex")
             cycle_digest = fingerprint.get("cycle_digest_hex")
             if kind_name == "source_entry" and isinstance(source_batch, str):
-                valid_source_batch_digests.add(source_batch.lower())
+                valid_source_batch_digests.add(source_batch)
             elif kind_name in SOURCE_BOUND_KINDS:
                 source_bound_artifacts.append((kind_name, artifact))
             if kind_name == "publication" and isinstance(cycle_digest, str):
@@ -791,7 +831,11 @@ def build_summary(
         record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         record_evidence_validation_errors(path, validation_errors, errors)
 
-
+    valid_source_batch_digests = require_single_active_digest(
+        valid_source_batch_digests,
+        errors,
+        label="valid_source_batch_digests",
+    )
     validate_bound_evidence_digest_references(
         required_kinds=required_kinds,
         missing_anchor_required_kinds=tuple(KIND_BY_NAME),
@@ -815,13 +859,23 @@ def build_summary(
             source_batch = fingerprint.get("source_batch_digest_hex")
             cycle_digest = fingerprint.get("cycle_digest_hex")
             if isinstance(source_batch, str) and isinstance(cycle_digest, str):
-                source_batch_digest = source_batch.lower()
-                cycle_digest_value = cycle_digest.lower()
+                source_batch_digest = source_batch
+                cycle_digest_value = cycle_digest
                 valid_cycle_digests.add(cycle_digest_value)
                 valid_publication_bindings.add(
                     (source_batch_digest, cycle_digest_value)
                 )
 
+    valid_cycle_digests = require_single_active_digest(
+        valid_cycle_digests,
+        errors,
+        label="valid_cycle_digests",
+    )
+    valid_publication_bindings = require_single_active_binding(
+        valid_publication_bindings,
+        errors,
+        label="valid_publication_bindings",
+    )
     validate_bound_evidence_digest_references(
         required_kinds=required_kinds,
         missing_anchor_required_kinds=tuple(KIND_BY_NAME),
@@ -853,6 +907,7 @@ def build_summary(
         "required_kinds": required_evidence_kind_names(required_kinds),
         "thresholds": {
             "max_evidence_bytes": MAX_EVIDENCE_BYTES,
+            "max_evidence_age_secs": options.max_evidence_age_secs,
         },
         "evidence_file_count": count_evidence_files(files),
         "recognized_artifact_count": count_evidence_artifacts(artifacts_by_kind),
@@ -903,6 +958,17 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="Optional summary JSON output path.",
     )
+    parser.add_argument(
+        "--now-unix",
+        type=positive_int_arg,
+        required=True,
+        help="Required reviewed validator clock used for age checks.",
+    )
+    parser.add_argument(
+        "--max-evidence-age-secs",
+        type=non_negative_int_arg,
+        default=DEFAULT_MAX_EVIDENCE_AGE_SECS,
+    )
     try:
         expanded = expand_response_args(sys.argv[1:] if argv is None else argv, parser)
     except ValueError as error:
@@ -923,13 +989,21 @@ def main(argv: list[str] | None = None) -> int:
         emit_checker_exception(error)
         return 2
 
+    options = ValidationOptions(
+        now_unix=args.now_unix,
+        max_evidence_age_secs=args.max_evidence_age_secs,
+    )
     preflight_errors = validate_checker_preflight(args)
     if preflight_errors:
         emit_checker_error_lines(preflight_errors)
         return 2
 
     summary, errors = build_summary(
-        args.evidence_dir, args.evidence, required_kinds, args.summary_out
+        args.evidence_dir,
+        args.evidence,
+        required_kinds,
+        args.summary_out,
+        options,
     )
     rendered_summary, summary_errors = render_and_write_checker_summary(
         args.summary_out, summary

@@ -128,7 +128,9 @@ Swift SDK (`IrohaSwift/Sources/IrohaSwift/SorafsOptions.swift`) میں استع�
 - **Retries:** `per_chunk_retry_limit` کو `4` سے اوپر بڑھانے سے recovery وقت بڑھتا ہے مگر provider faults چھپ سکتے ہیں۔ بہتر ہے `4` کو ceiling رکھا جائے اور provider rotation پر بھروسہ کیا جائے تاکہ کمزور performers سامنے آئیں۔
 - **Failure threshold:** `provider_failure_threshold` طے کرتا ہے کہ provider کب سیشن کے باقی حصے کے لیے disable ہو۔ اس ویلیو کو retry پالیسی سے ہم آہنگ رکھیں: اگر threshold retry budget سے کم ہو تو orchestrator تمام retries ختم ہونے سے پہلے peer کو نکال دیتا ہے۔
 - **Concurrency:** `global_parallel_limit` کو `None` رکھیں جب تک مخصوص ماحول advertised ranges کو saturate نہ کر سکے۔ اگر سیٹ کریں تو ویلیو providers کے stream budgets کے مجموعے سے ≤ ہو تاکہ starvation نہ ہو۔
-- **Verification toggles:** `verify_lengths` اور `verify_digests` پروڈکشن میں فعال رہنے چاہئیں۔ یہ mixed provider fleets میں determinism کی ضمانت دیتے ہیں؛ انہیں صرف isolated fuzzing environments میں ہی بند کریں۔
+- **Verification fields:** `verify_lengths` and `verify_digests` must remain
+  enabled. First-release parsers reject `false` values so every fetch validates
+  chunk length and BLAKE3 digest before accepting provider bytes.
 
 ## 4. ٹرانسپورٹ اور انانیمٹی اسٹیجنگ
 

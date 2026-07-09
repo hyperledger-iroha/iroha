@@ -40,9 +40,9 @@ fixtures and emits the following files under `fixtures/sorafs_chunker/`:
 ### Signing Policy
 
 Fixture regeneration **must** include a valid council signature. The generator
-rejects unsigned output unless `--allow-unsigned` is passed explicitly (intended
-only for local experimentation). Signature envelopes are append-only and
-deduplicated per signer.
+rejects unsigned output in every mode; use `--signing-key` to create or append a
+council signature, or keep the existing verified `manifest_signatures.json`
+unchanged. Signature envelopes are append-only and deduplicated per signer.
 
 To add a council signature:
 

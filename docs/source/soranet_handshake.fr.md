@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/soranet_handshake.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: db9a54e63ba9aa289dc6f6ec19efdcc314596135b60bd0f52eaba62b56cb1e5e
+source_hash: 851bc83daa3b81b7653618cda48745398d4b2dd1f6df177ba9d02890d5329c39
 source_last_modified: "2026-01-22T15:38:30.719627+00:00"
 translation_last_reviewed: 2026-01-30
 ---
@@ -177,7 +177,7 @@ population.
 ### Argon2 Puzzle Service (SNNet-6a)
 
 SNNet-16D the Argon2 path ships enabled-by-default; deployments only fall back to
-hashcash if they explicitly disable the puzzle (`pow.puzzle.enabled = false`). The
+hashcash fallback is not an operator-facing first-release mode; live updates reject attempts to disable the puzzle gate. The
 relay verifies the incoming ticket by hashing the client solution against the
 descriptor commitment with Argon2id. Tickets retain the exact same on-wire layout
 (version/difficulty/expiry/nonces) so clients can submit a single frame regardless
@@ -832,7 +832,7 @@ interactive media latency remains minimal.
 ### Torii CLI helpers
 
 - `iroha app sorafs handshake show` fetches `/v1/config` and prints the live descriptor commit, capability vectors, negotiated suite identifiers, resume hash, and PoW admission window. Operators can diff this output against the directory bundle before rotating relays.
-- `iroha app sorafs handshake update --descriptor-commit <hex> --client-capabilities <hex> --relay-capabilities <hex> --resume-hash <hex> --pow-difficulty <u8> ...` submits a partial update via `/v1/config`. Any combination of flags is accepted, and `--clear-resume-hash` removes the advertisement entirely. The command reuses the existing logger settings so the update remains idempotent with other config knobs.
+- `iroha app sorafs handshake update --descriptor-commit <hex> --client-capabilities <hex> --relay-capabilities <hex> --resume-hash <hex> --pow-difficulty <u8> ...` submits a partial update via `/v1/config`. Relaxation flags are not accepted, and `--clear-resume-hash` removes the advertisement entirely. The command reuses the existing logger settings so the update remains idempotent with other config knobs.
 
 ## Open Design Items
 

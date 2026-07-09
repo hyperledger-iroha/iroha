@@ -6567,6 +6567,86 @@ impl Actor {
         exact_authoritative_owner || cached_proposal_matches_pending
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn stale_higher_view_local_precommit_allows_recovery_precommit(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        conflicting_vote: &crate::sumeragi::consensus::Vote,
+        now: Instant,
+        topology: &super::network_topology::Topology,
+        signature_topology: &super::network_topology::Topology,
+        local_idx: ValidatorIndex,
+        parent_hash: Option<HashOf<BlockHeader>>,
+        pending_roots: Option<(Hash, Hash)>,
+    ) -> bool {
+        let candidate_parent_hash =
+            parent_hash.or_else(|| self.parent_hash_for(block_hash, height));
+        if !self.config.resilience.enabled
+            || !matches!(
+                conflicting_vote.phase,
+                crate::sumeragi::consensus::Phase::Commit
+            )
+            || conflicting_vote.height != height
+            || conflicting_vote.view <= view
+            || height != self.committed_height_snapshot().saturating_add(1)
+            || self
+                .locked_qc
+                .is_some_and(|locked| locked.height >= height)
+            || !pending_extends_tip(
+                height,
+                candidate_parent_hash,
+                self.state.committed_height(),
+                self.state.latest_block_hash_fast(),
+            )
+        {
+            return false;
+        }
+
+        if self.same_height_block_has_recoverable_qc(
+            conflicting_vote.block_hash,
+            height,
+            conflicting_vote.view,
+        ) || self.same_height_block_has_observed_qc(
+            conflicting_vote.block_hash,
+            height,
+            conflicting_vote.view,
+        ) || self.same_height_has_recoverable_qc(height)
+            || self.local_same_height_vote_has_live_proposal_material(
+                height,
+                conflicting_vote.block_hash,
+            )
+        {
+            return false;
+        }
+
+        let hard_stale_age = self
+            .quorum_timeout(self.runtime_da_enabled())
+            .max(self.frontier_slot_lag_window())
+            .max(Duration::from_millis(1))
+            .saturating_mul(3);
+        let higher_view_recovery_exhausted = self
+            .stale_same_height_recovery_age(height, conflicting_vote.view, now)
+            .is_some_and(|age| age >= hard_stale_age);
+        let candidate_recovery_exhausted = self
+            .stale_same_height_recovery_age(height, view, now)
+            .is_some_and(|age| age >= hard_stale_age);
+        if !higher_view_recovery_exhausted && !candidate_recovery_exhausted {
+            return false;
+        }
+
+        self.candidate_commit_quorum_completes_with_local_vote(
+            block_hash,
+            height,
+            view,
+            topology,
+            signature_topology,
+            local_idx,
+            pending_roots,
+        )
+    }
+
     #[allow(clippy::too_many_lines)]
     #[allow(clippy::too_many_arguments)]
     pub(super) fn emit_precommit_vote(
@@ -6683,12 +6763,28 @@ impl Actor {
                 });
             let stale_vote_can_rotate = !self
                 .local_same_height_vote_blocks_fresh_proposal(height, view, &conflict, now, true);
+            let stale_higher_view_can_complete_recovery = self
+                .stale_higher_view_local_precommit_allows_recovery_precommit(
+                    block_hash,
+                    height,
+                    view,
+                    &conflict,
+                    now,
+                    &topology,
+                    &signature_topology,
+                    local_idx,
+                    parent_hash,
+                    pending_roots,
+                );
             let conflict_has_recoverable_qc = self.same_height_block_has_recoverable_qc(
                 conflict.block_hash,
                 height,
                 conflict.view,
             ) || self.same_height_has_recoverable_qc(height);
-            if new_view_qc_supersedes || stale_vote_can_rotate {
+            if new_view_qc_supersedes
+                || stale_vote_can_rotate
+                || stale_higher_view_can_complete_recovery
+            {
                 info!(
                     height,
                     view,
@@ -6700,6 +6796,7 @@ impl Actor {
                     signer = local_idx,
                     new_view_qc_supersedes,
                     stale_vote_can_rotate,
+                    stale_higher_view_can_complete_recovery,
                     conflict_has_recoverable_qc,
                     "allowing precommit: same-height local vote is superseded"
                 );
@@ -6713,6 +6810,7 @@ impl Actor {
                     previous_phase = ?conflict.phase,
                     previous_block = ?conflict.block_hash,
                     signer = local_idx,
+                    stale_higher_view_can_complete_recovery,
                     conflict_has_recoverable_qc,
                     "skipping precommit: local validator already voted for a different same-height block"
                 );

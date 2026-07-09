@@ -9,4 +9,10 @@
 --evidence-dir
 dist/sorafs-ai-prescreen-rollout-evidence
 --summary-out
-dist/sorafs-ai-prescreen-rollout-evidence/summary.json
+dist/sorafs-ai-prescreen-rollout-evidence/rollout-summary.json
+--require-kind
+runner,committee,operator_workflow,notification_transport,commit_reveal_executor,transparency_publication,governance_dag,end_to_end_workflow
+--now-unix
+1800400000
+--max-evidence-age-secs
+604800

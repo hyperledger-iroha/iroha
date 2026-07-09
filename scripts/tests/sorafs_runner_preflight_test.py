@@ -161,7 +161,14 @@ def test_require_runner_positive_int_rejects_malformed_error_container() -> None
 
 
 def test_require_runner_positive_int_rejects_malformed_existing_error_text() -> None:
-    for errors in ([""], [" old"], ["old "], ["old\nerror"]):
+    for errors in (
+        [""],
+        [" old"],
+        ["old "],
+        ["old\nerror"],
+        ["old\u200derror"],
+        ["old\u202eerror"],
+    ):
         try:
             require_runner_positive_int(
                 argparse.Namespace(limit=1),
@@ -409,6 +416,23 @@ def test_runner_preflight_sanitizes_malformed_non_path_targets(
     assert errors == ["--summary-out `<non-path>` must be a path"]
 
 
+def test_runner_preflight_requires_reviewed_now_unix(tmp_path: Path) -> None:
+    verifier = tmp_path / "verifier.py"
+    verifier.write_text("", encoding="utf-8")
+
+    errors = validate_runner_preflight(
+        argparse.Namespace(
+            verifier=verifier,
+            out_dir=tmp_path / "evidence",
+            summary_out=None,
+            now_unix=None,
+        ),
+        summary_filename="rollout-summary.json",
+    )
+
+    assert "--now-unix is required" in errors
+
+
 def test_plan_rendered_path_safety_rejects_unsafe_components() -> None:
     assert plan_rendered_path_is_safe(Path("artifacts/sorafs/digest-summary.json"))
     assert plan_rendered_path_is_safe(Path("artifacts/sorafs/gateway_load_digest.json"))
@@ -424,13 +448,22 @@ def test_plan_rendered_path_safety_rejects_unsafe_components() -> None:
         Path("artifacts") / "%2570rivate_key_output" / "summary.json",
         Path("artifacts") / "private&#95;key_output" / "summary.json",
         Path("artifacts") / "private%26%2395%3Bkey_output" / "summary.json",
+        Path("artifacts")
+        / (
+            "\uff50\uff52\uff49\uff56\uff41\uff54\uff45"
+            "\uff3f\uff4b\uff45\uff59_output"
+        )
+        / "summary.json",
         Path("artifacts") / "nested" / ".." / "summary.json",
         Path("artifacts") / "%2e%2e" / "summary.json",
         Path("artifacts") / "bad%2Fsummary.json",
+        Path("artifacts") / "bad\uff0fsummary.json",
         Path("artifacts") / "bad&#47;summary.json",
         Path("."),
         Path("artifacts") / "bad\\summary.json",
         Path("artifacts") / "bad\nsummary.json",
+        Path("artifacts") / "bad\u200dsummary.json",
+        Path("artifacts") / "bad\u202esummary.json",
         Path("C:/sorafs/summary.json"),
         Path("artifacts") / "C%3A" / "summary.json",
         Path("artifacts") / "C&#58;" / "summary.json",
@@ -585,9 +618,11 @@ def test_runner_url_arg_safety_rejects_secret_bearing_urls() -> None:
         "https://%70rivate-key.example",
         "https://private&#45;key.example",
         "https://private%26%2345%3Bkey.example",
+        "https://\uff50\uff52\uff49\uff56\uff41\uff54\uff45-key.example",
         "https://%2e%2e.example",
         "https://C%3A.example",
         "https://C&#58;.example",
+        "https://\uff23\uff1a.example",
         "https://http%3A.example",
         "https://http&#58;.example",
         "https://torii.example/private_key/hook",
@@ -606,10 +641,19 @@ def test_runner_url_arg_safety_rejects_secret_bearing_urls() -> None:
         "https://torii.example/bearer%255Ftoken/hook",
         "https://torii.example/bearer&#95;token/hook",
         "https://torii.example/bearer%26%2395%3Btoken/hook",
+        (
+            "https://torii.example/"
+            "\uff42\uff45\uff41\uff52\uff45\uff52\uff3f"
+            "\uff54\uff4f\uff4b\uff45\uff4e/hook"
+        ),
         "https://torii.example/%2e%2e/admin",
         "https://torii.example/%252e%252e/admin",
         "https://torii.example/bad%2Fpath",
+        "https://torii.example/bad\uff0fpath",
         "https://torii.example/bad&#47;path",
+        "https://torii.example/bad\u200dpath",
+        "https://torii.example/bad%E2%80%8Dpath",
+        "https://torii\u202e.example/path",
         "https://torii.example/C%3A/summary",
         "https://torii.example/C&#58;/summary",
         "https://torii.example/http%3A/summary",
@@ -669,6 +713,7 @@ def test_runner_passthrough_arg_safety_rejects_secret_like_arguments() -> None:
         "--private-key",
         "--%70rivate-key",
         "--private&#45;key",
+        "--\uff50\uff52\uff49\uff56\uff41\uff54\uff45-key",
         "--api-token",
         "--auth-token=runtime-secret",
         "--auth&#45;token=runtime-secret",
@@ -696,6 +741,7 @@ def test_runner_passthrough_arg_safety_rejects_secret_like_arguments() -> None:
         "private%5Fkey",
         "private&#95;key",
         "private%26%2395%3Bkey",
+        "\uff50\uff52\uff49\uff56\uff41\uff54\uff45\uff3f\uff4b\uff45\uff59",
         "/runtime/private_key/client.toml",
         "/runtime/api-token/client.toml",
         "/runtime/id-token/client.toml",
@@ -706,10 +752,17 @@ def test_runner_passthrough_arg_safety_rejects_secret_like_arguments() -> None:
         "/runtime/password/client.toml",
         "/runtime/%70rivate_key/client.toml",
         "/runtime/private&#95;key/client.toml",
+        (
+            "/runtime/\uff42\uff45\uff41\uff52\uff45\uff52"
+            "\uff3f\uff54\uff4f\uff4b\uff45\uff4e/client.toml"
+        ),
         "https://user:private_key@torii.example",
         "https%3A%2F%2Fuser%3Aprivate_key%40torii.example",
         "https%3A%2F%2Fuser%3Aprivate%26%2395%3Bkey%40torii.example",
         "bad\narg",
+        "bad\u200darg",
+        "--flag=bad%E2%80%AEarg",
+        "--bad\u202eoption",
     ):
         assert not runner_passthrough_arg_is_plan_safe(value)
 
@@ -957,7 +1010,14 @@ def test_runner_path_inspectors_reject_malformed_existing_error_text(
         inspect_runner_path_size,
         inspect_runner_path_is_dir,
     ):
-        for errors in ([""], [" old"], ["old "], ["old\nerror"]):
+        for errors in (
+            [""],
+            [" old"],
+            ["old "],
+            ["old\nerror"],
+            ["old\u200derror"],
+            ["old\u202eerror"],
+        ):
             try:
                 helper(tmp_path, errors, label="--out-dir")
             except ValueError as error:
@@ -979,7 +1039,15 @@ def test_runner_path_inspectors_reject_malformed_labels(tmp_path: Path) -> None:
         inspect_runner_path_size,
         inspect_runner_path_is_dir,
     ):
-        for label in ("", " --out-dir", "--out-dir ", "--out\nDir", 7):
+        for label in (
+            "",
+            " --out-dir",
+            "--out-dir ",
+            "--out\nDir",
+            "--out\u200dDir",
+            "--out\u202eDir",
+            7,
+        ):
             errors: list[str] = []
             try:
                 helper(tmp_path, errors, label=label)
@@ -1013,7 +1081,15 @@ def test_validate_runner_output_parent_rejects_malformed_label(
 ) -> None:
     out_dir = tmp_path / "out"
 
-    for label in ("", " --out-dir", "--out-dir ", "--out\nDir", 7):
+    for label in (
+        "",
+        " --out-dir",
+        "--out-dir ",
+        "--out\nDir",
+        "--out\u200dDir",
+        "--out\u202eDir",
+        7,
+    ):
         errors: list[str] = []
         try:
             validate_runner_output_parent(out_dir, errors, label=label)
@@ -1043,7 +1119,15 @@ def test_validate_runner_output_dir_rejects_malformed_error_container(
 def test_validate_runner_output_dir_rejects_malformed_label(tmp_path: Path) -> None:
     out_dir = tmp_path / "out"
 
-    for label in ("", " --out-dir", "--out-dir ", "--out\nDir", 7):
+    for label in (
+        "",
+        " --out-dir",
+        "--out-dir ",
+        "--out\nDir",
+        "--out\u200dDir",
+        "--out\u202eDir",
+        7,
+    ):
         errors: list[str] = []
         try:
             validate_runner_output_dir(out_dir, errors, label=label)
@@ -1551,7 +1635,15 @@ def test_input_file_rejects_scalar_and_mapping_path_collections() -> None:
 def test_input_file_rejects_malformed_label(tmp_path: Path) -> None:
     evidence = tmp_path / "evidence.json"
 
-    for label in ("", " --evidence", "--evidence ", "--evidence\npath", 7):
+    for label in (
+        "",
+        " --evidence",
+        "--evidence ",
+        "--evidence\npath",
+        "--evidence\u200dpath",
+        "--evidence\u202epath",
+        7,
+    ):
         try:
             require_existing_files([evidence], label)
         except ValueError as error:
@@ -1729,7 +1821,15 @@ def test_input_directory_rejects_scalar_and_mapping_path_collections() -> None:
 def test_input_directory_rejects_malformed_label(tmp_path: Path) -> None:
     bundle = tmp_path / "bundle"
 
-    for label in ("", " --bundle", "--bundle ", "--bundle\npath", 7):
+    for label in (
+        "",
+        " --bundle",
+        "--bundle ",
+        "--bundle\npath",
+        "--bundle\u200dpath",
+        "--bundle\u202epath",
+        7,
+    ):
         try:
             require_existing_dirs([bundle], label)
         except ValueError as error:
@@ -1861,8 +1961,10 @@ def test_validate_command_plan_step_shapes_rejects_malformed_fields(
             Step("empty_command", None, []),
             Step("empty_executable", None, [""]),
             Step("blank_executable", None, [" "]),
+            Step("unicode_control_executable", None, ["bad\u200dexe"]),
             Step("nul_arg", None, ["true", "bad\0arg"]),
             Step("newline_arg", None, ["true", "bad\narg"]),
+            Step("unicode_control_arg", None, ["true", "bad\u200darg"]),
             argparse.Namespace(label=" bad_label", artifact=None, command=["true"]),
             argparse.Namespace(
                 label="bad_artifact",
@@ -1886,9 +1988,11 @@ def test_validate_command_plan_step_shapes_rejects_malformed_fields(
         "empty_command command must be a non-empty list of strings",
         "empty_executable command executable must be a non-empty canonical string",
         "blank_executable command executable must be a non-empty canonical string",
+        "unicode_control_executable command executable must be a non-empty canonical string",
         "nul_arg command argument 1 must not contain NUL bytes",
         "newline_arg command argument 1 must not contain control characters",
-        "command-plan step 5 label must be a non-empty canonical string",
+        "unicode_control_arg command argument 1 must not contain control characters",
+        "command-plan step 7 label must be a non-empty canonical string",
         "bad_artifact artifact `summary.json` must be a path",
         "tuple_command command must be a non-empty list of strings",
         "non_string_command command must be a non-empty list of strings",
@@ -2249,7 +2353,15 @@ def test_validate_runner_plan_steps_rejects_unrenderable_plan(
 
 def test_canonical_runner_plan_string_rejects_blank_trimmed_and_control_values() -> None:
     assert canonical_runner_plan_string("alpha") == "alpha"
-    for value in ("", " alpha", "alpha ", "bad\nvalue", 7):
+    for value in (
+        "",
+        " alpha",
+        "alpha ",
+        "bad\nvalue",
+        "bad\u200dvalue",
+        "bad\u202evalue",
+        7,
+    ):
         assert canonical_runner_plan_string(value) is None
 
 
@@ -3121,7 +3233,14 @@ def test_emit_runner_error_lines_rejects_malformed_messages(capsys) -> None:
 
 
 def test_emit_runner_error_lines_rejects_malformed_message_content(capsys) -> None:
-    for errors in ([""], [" old"], ["old "], ["old\nerror"]):
+    for errors in (
+        [""],
+        [" old"],
+        ["old "],
+        ["old\nerror"],
+        ["old\u200derror"],
+        ["old\u202eerror"],
+    ):
         try:
             emit_runner_error_lines(errors)
         except ValueError as error:
@@ -3179,7 +3298,14 @@ def test_emit_runner_error_block_rejects_malformed_messages_before_heading(
 def test_emit_runner_error_block_rejects_malformed_message_content_before_heading(
     capsys,
 ) -> None:
-    for errors in ([""], [" old"], ["old "], ["old\nerror"]):
+    for errors in (
+        [""],
+        [" old"],
+        ["old "],
+        ["old\nerror"],
+        ["old\u200derror"],
+        ["old\u202eerror"],
+    ):
         try:
             emit_runner_error_block("ERROR: runner inputs are incomplete:", errors)
         except ValueError as error:
@@ -3203,7 +3329,14 @@ def test_emit_runner_notice_writes_stderr(capsys) -> None:
 
 
 def test_emit_runner_notice_rejects_malformed_message(capsys) -> None:
-    for message in ("", " RUN step", "RUN step\nnext", 7):
+    for message in (
+        "",
+        " RUN step",
+        "RUN step\nnext",
+        "RUN step\u200dnext",
+        "RUN step\u202enext",
+        7,
+    ):
         try:
             emit_runner_notice(message)
         except ValueError as error:
@@ -3317,6 +3450,10 @@ def test_run_command_plan_rejects_malformed_command_entries_before_output_creati
         ([""], "ERROR: gate command executable must be a non-empty canonical string\n"),
         (
             [" "],
+            "ERROR: gate command executable must be a non-empty canonical string\n",
+        ),
+        (
+            ["bad\u200dexe"],
             "ERROR: gate command executable must be a non-empty canonical string\n",
         ),
         (

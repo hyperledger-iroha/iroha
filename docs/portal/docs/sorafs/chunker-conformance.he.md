@@ -52,9 +52,10 @@ fixtures ומוציא את הקבצים הבאים תחת `fixtures/sorafs_chunk
 
 ### מדיניות חתימה
 
-רגנרציה של fixtures **חייבת** לכלול חתימה תקפה של המועצה. המחולל דוחה פלט לא חתום
-אלא אם `--allow-unsigned` נמסר במפורש (מיועד לניסויים מקומיים בלבד). מעטפות החתימה הן append-only
-ומבצעות דה-דופליקציה לפי חותם.
+Fixture regeneration **must** include a valid council signature. The generator
+rejects unsigned output in every mode; use `--signing-key` to create or append a
+council signature, or keep the existing verified `manifest_signatures.json`
+unchanged. Signature envelopes are append-only and deduplicated per signer.
 
 כדי להוסיף חתימת מועצה:
 

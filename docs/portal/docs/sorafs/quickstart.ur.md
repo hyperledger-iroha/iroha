@@ -27,12 +27,12 @@ fetch فلو پر لے جاتی ہے۔ ڈیزائن نوٹس اور CLI فلیگ
 
 ## 1. deterministic fixtures تازہ کریں
 
-SF-1 کے canonical chunking vectors دوبارہ تیار کریں۔ جب `--signing-key` فراہم کیا
-جائے تو یہ کمانڈ signed manifest envelopes بھی بناتی ہے؛ `--allow-unsigned` صرف
-مقامی ڈیولپمنٹ میں استعمال کریں۔
+Regenerate the canonical SF-1 chunking vectors. The command verifies the
+existing council signature file, or appends a signature when `--signing-key` is
+supplied.
 
 ```bash
-cargo run -p sorafs_chunker --bin export_vectors -- --allow-unsigned
+cargo run -p sorafs_chunker --bin export_vectors -- --signing-key=<ed25519-private-key-hex>
 ```
 
 آؤٹ پٹ:
@@ -77,7 +77,7 @@ cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   --manifest-out=/tmp/docs.manifest \
   --manifest-signatures-out=/tmp/docs.manifest_signatures.json \
   --json-out=/tmp/docs.report.json \
-  --allow-unsigned
+  --council-signature=<signerhex>:<signaturehex>
 ```
 
 `/tmp/docs.report.json` میں دیکھیں:
@@ -86,8 +86,9 @@ cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
 - `manifest.manifest_blake3` – manifest envelope میں سائن کیا گیا BLAKE3 digest۔
 - `chunk_fetch_specs[]` – orchestrators کے لیے ترتیب وار fetch ہدایات۔
 
-جب حقیقی signatures دینے کے لیے تیار ہوں تو `--signing-key` اور `--signer` arguments شامل
-کریں۔ کمانڈ envelope لکھنے سے پہلے ہر Ed25519 signature کی توثیق کرتی ہے۔
+The `--council-signature` value must be a reviewed council signer public key and
+Ed25519 signature pair. The command verifies every Ed25519 signature before
+writing the envelope.
 
 ## 4. multi-provider retrieval کی سمیولیشن
 

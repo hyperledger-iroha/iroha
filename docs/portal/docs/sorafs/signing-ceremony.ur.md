@@ -70,8 +70,9 @@ cargo xtask sorafs-fetch-fixture \
   --out fixtures/sorafs_chunker
 ```
 
-اگر manifest کسی اور URL پر ہو تو `--manifest` پاس کریں۔ غیر دستخط شدہ envelopes رد کر دیے جاتے ہیں
-جب تک مقامی smoke runs کے لیے `--allow-unsigned` سیٹ نہ ہو۔
+Pass `--manifest` if the manifest lives at a different URL or path. The
+command refuses unsigned envelopes; use the Parliament-published envelope or a
+locally generated council-signed envelope for smoke runs.
 
 - Staging gateway کے ذریعے manifest validate کرنے کے لیے مقامی payloads کے بجائے Torii کو ہدف بنائیں:
 

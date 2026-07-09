@@ -6,12 +6,19 @@ import argparse
 import json
 import os
 import sys
+import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
+from html import unescape
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 from sorafs_evidence_paths import record_reserved_output_evidence_conflicts
-from sorafs_path_identity import error_diagnostic_label, path_diagnostic_label
+from sorafs_path_identity import (
+    diagnostic_text_is_canonical,
+    error_diagnostic_label,
+    path_diagnostic_label,
+)
 from sorafs_path_identity import resolve_path_identity
 from sorafs_runner_preflight import plan_rendered_path_is_safe
 
@@ -21,6 +28,7 @@ CHECKER_RENDERED_PATH_ERROR = (
     "control-character, parent, current, drive-prefix, or platform-specific "
     "components"
 )
+CHECKER_EVIDENCE_SPEC_ERROR = "--evidence must use canonical path or KIND=PATH spec"
 
 
 def _require_error_list(errors: Any) -> list[str]:
@@ -29,11 +37,7 @@ def _require_error_list(errors: Any) -> list[str]:
     for error in errors:
         if not isinstance(error, str):
             raise ValueError("checker preflight errors must be a list of strings")
-        if (
-            not error.strip()
-            or error != error.strip()
-            or any(ord(character) < 32 or ord(character) == 127 for character in error)
-        ):
+        if not diagnostic_text_is_canonical(error):
             raise ValueError(
                 "checker preflight errors must contain non-empty canonical strings"
             )
@@ -41,12 +45,7 @@ def _require_error_list(errors: Any) -> list[str]:
 
 
 def _require_label(label: Any) -> str:
-    if (
-        not isinstance(label, str)
-        or not label.strip()
-        or label != label.strip()
-        or any(ord(character) < 32 or ord(character) == 127 for character in label)
-    ):
+    if not diagnostic_text_is_canonical(label):
         raise ValueError("checker preflight label must be a non-empty canonical string")
     return label
 
@@ -63,11 +62,7 @@ def _checker_error_messages(errors: Any) -> tuple[str, ...]:
     for error in messages:
         if not isinstance(error, str):
             raise ValueError("checker error messages must be a sequence of strings")
-        if (
-            not error.strip()
-            or error != error.strip()
-            or any(ord(character) < 32 or ord(character) == 127 for character in error)
-        ):
+        if not diagnostic_text_is_canonical(error):
             raise ValueError(
                 "checker error message must be a non-empty canonical string"
             )
@@ -77,12 +72,7 @@ def _checker_error_messages(errors: Any) -> tuple[str, ...]:
 def _checker_notice_message(message: Any) -> str:
     """Return a checker notice message or reject unsafe stderr text."""
 
-    if (
-        not isinstance(message, str)
-        or not message.strip()
-        or message != message.strip()
-        or any(ord(character) < 32 or ord(character) == 127 for character in message)
-    ):
+    if not diagnostic_text_is_canonical(message):
         raise ValueError("checker notice message must be a non-empty canonical string")
     return message
 
@@ -153,12 +143,7 @@ def fsync_checker_output_parent(path: Path, *, label: str) -> list[str]:
 def _checker_artifact_error_message(message: Any, *, label: str) -> str:
     """Return a canonical artifact error message or reject unsafe text."""
 
-    if (
-        not isinstance(message, str)
-        or not message.strip()
-        or message != message.strip()
-        or any(ord(character) < 32 or ord(character) == 127 for character in message)
-    ):
+    if not diagnostic_text_is_canonical(message):
         raise ValueError(f"{label} must be a non-empty canonical string")
     return message
 
@@ -186,10 +171,52 @@ def _checker_evidence_rendered_paths(paths: Sequence[Any]) -> tuple[Path, ...]:
         if isinstance(path, Path):
             rendered_paths.append(path)
             continue
-        if isinstance(path, str) and path.strip() and path == path.strip():
-            _kind, separator, spec_path = path.partition("=")
-            rendered_paths.append(Path(spec_path.strip() if separator else path))
+        if isinstance(path, str):
+            rendered_path = _checker_evidence_string_path(path)
+            if rendered_path is not None:
+                rendered_paths.append(rendered_path)
     return tuple(rendered_paths)
+
+
+def _checker_evidence_text_variants(value: str) -> tuple[str, ...]:
+    """Return raw plus decoded and Unicode-normalized evidence text variants."""
+
+    variants: list[str] = []
+    seen: set[str] = set()
+    current = value
+    for _ in range(5):
+        for candidate in (current, unicodedata.normalize("NFKC", current)):
+            if candidate not in seen:
+                variants.append(candidate)
+                seen.add(candidate)
+        decoded = unescape(unquote(current))
+        if decoded == current or decoded in seen:
+            break
+        current = decoded
+    return tuple(variants)
+
+
+def _checker_evidence_spec_separator_present(value: str) -> bool:
+    """Return whether evidence text contains a literal or encoded spec separator."""
+
+    return any("=" in variant for variant in _checker_evidence_text_variants(value))
+
+
+def _checker_evidence_string_path(value: str) -> Path | None:
+    """Return a checker evidence path only when the string is exact-canonical."""
+
+    if not diagnostic_text_is_canonical(value):
+        return None
+    if "=" not in value and _checker_evidence_spec_separator_present(value):
+        return None
+    kind, separator, spec_path = value.partition("=")
+    if separator:
+        if not diagnostic_text_is_canonical(
+            kind
+        ) or not diagnostic_text_is_canonical(spec_path):
+            return None
+        return Path(spec_path)
+    return Path(value)
 
 
 def validate_checker_rendered_paths(paths: Iterable[Any], errors: list[str]) -> None:
@@ -496,12 +523,12 @@ def validate_checker_evidence_inputs(args: argparse.Namespace) -> list[str]:
     for evidence_file in evidence_file_items:
         if isinstance(evidence_file, Path):
             continue
-        if (
-            isinstance(evidence_file, str)
-            and evidence_file.strip()
-            and evidence_file == evidence_file.strip()
-        ):
-            continue
+        if isinstance(evidence_file, str):
+            if _checker_evidence_string_path(evidence_file) is not None:
+                continue
+            if _checker_evidence_spec_separator_present(evidence_file):
+                errors.append(CHECKER_EVIDENCE_SPEC_ERROR)
+                continue
         errors.append(
             f"--evidence `{path_diagnostic_label(evidence_file)}` "
             "must be a path or evidence spec"
@@ -520,12 +547,7 @@ def _validate_checker_summary_keys(value: Any) -> None:
 
     if isinstance(value, Mapping):
         for key, nested_value in value.items():
-            if (
-                not isinstance(key, str)
-                or not key.strip()
-                or key != key.strip()
-                or any(ord(character) < 32 or ord(character) == 127 for character in key)
-            ):
+            if not diagnostic_text_is_canonical(key):
                 raise ValueError(
                     "checker summary keys must be non-empty canonical strings"
                 )
@@ -649,12 +671,7 @@ def artifact_path_label(artifact: Any) -> str:
     if not isinstance(artifact, Mapping):
         return "<unknown>"
     path = artifact.get("path")
-    if (
-        isinstance(path, str)
-        and path
-        and path == path.strip()
-        and not any(ord(character) < 32 or ord(character) == 127 for character in path)
-    ):
+    if isinstance(path, str) and diagnostic_text_is_canonical(path):
         return path
     return "<unknown>"
 

@@ -253,8 +253,9 @@ CREATE TABLE reputation_snapshots (
   least one provider ID to appear in both proof and verification evidence.
   Event-watch evidence must carry a positive `limit`, keep `count` equal to the
   `events[]` length, bind `count` to duplicate-free `events[].sequence` values,
-  and reject `count` values above that limit before transport evidence can
-  report ready.
+  reject `count` values above that limit, and require every `events[]` row to
+  be V1 with the same snapshot id, Merkle root, and provider count before
+  transport evidence can report ready.
   Transport evidence must bind `sse_event_count` and `websocket_event_count` to
   the unique canonical `sse_events[].name` and `websocket_events[].name`
   inventories, require reviewed `reputation-sse-event-*` and
@@ -432,7 +433,8 @@ Completed local foundations:
   coverage from satisfying readiness. Event-watch canaries and externally
   supplied event artifacts must also prove a positive polling `limit`, exact
   `count`/`events[]` length agreement, duplicate-free `events[].sequence`
-  inventory binding, and `count <= limit` before readiness is reported. Metrics
+  inventory binding, `count <= limit`, and V1 event rows with consistent
+  snapshot id, Merkle root, and provider count before readiness is reported. Metrics
   canaries and externally supplied metrics artifacts must present
   `snapshot_age_seconds` and `ingest_lag_seconds` as non-negative integer
   seconds before the SFM-3 freshness/lag ceilings can pass.

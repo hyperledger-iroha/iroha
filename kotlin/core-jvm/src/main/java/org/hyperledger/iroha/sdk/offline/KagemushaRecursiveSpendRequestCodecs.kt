@@ -701,21 +701,6 @@ object KagemushaRecursiveSpendRequestCodecs {
     }
 
     @JvmStatic
-    fun buildVerifiedFoldRecordBundle(
-        hopProofOutputArchives: List<ByteArray>?,
-        hopVerifierRecords: List<VerifierRecordRef>?,
-    ): ByteArray {
-        require(!hopProofOutputArchives.isNullOrEmpty()) { "hopProofOutputArchives must not be empty" }
-        require(hopVerifierRecords != null && hopVerifierRecords.size == hopProofOutputArchives.size) {
-            "hopVerifierRecords must match hopProofOutputArchives"
-        }
-        throw IllegalArgumentException(
-            "chainId, asset, and rootAfter are required to build KagemushaVerifiedFoldRecordBundle; " +
-                "use VerifiedFoldHopEvidence inputs instead",
-        )
-    }
-
-    @JvmStatic
     fun buildVerifiedFoldRecordBundle(hops: List<VerifiedFoldHopEvidence>?): ByteArray {
         require(!hops.isNullOrEmpty()) { "hops must not be empty" }
         require(hops.size <= KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS) {

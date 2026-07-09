@@ -97,6 +97,28 @@ class HostileTronLiveString(str):
         raise AssertionError("secret-token TRON live exact string encoded")
 
 
+class HostileTronLiveFieldName(str):
+    """String-subclass mapping key that exact-key lookups must ignore safely."""
+
+    def __new__(cls, value):
+        return str.__new__(cls, value)
+
+    def __str__(self):
+        raise AssertionError("secret-token TRON live field name was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token TRON live field name was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token TRON live field name was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token TRON live field name was compared")
+
+    def __hash__(self):
+        return str.__hash__(self)
+
+
 class HostileTronLiveBytes(bytes):
     """Bytes subclass that TRON live helpers must reject before hooks."""
 
@@ -9990,6 +10012,176 @@ def test_live_evidence_full_toml_rejects_non_string_route_canary_metadata_withou
 
         assert module._route_canary_transaction_verified(tampered_summary) is False
         assert module._offline_full_toml_args(tampered_summary) is None, case_id
+
+
+def test_live_evidence_full_toml_rejects_copied_key_aliases_without_stringifying():
+    module = load_live_module()
+    setup = route_canary_full_rollout_setup(
+        module,
+        route_canary_transaction_id=TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR,
+    )
+
+    summary = module.collect_live_evidence(
+        live_full_rollout_args(
+            setup.fake,
+            setup.expected,
+            source_code_hash=setup.source_code_hash,
+            route_canary_transaction_id=bytes.fromhex(
+                TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR
+            ),
+        ),
+        opener=setup.fake.opener,
+    )
+    full_toml = module.render_offline_full_toml(summary)
+
+    def replace_with_hostile_key(copied_summary, path):
+        target = copied_summary
+        for segment in path[:-1]:
+            target = target[segment]
+        field = path[-1]
+        target[HostileTronLiveFieldName(field)] = target.pop(field)
+
+    readiness_cases = (
+        ("source-root", ("source_bridge",), False),
+        (
+            "source-config-match",
+            ("source_bridge", "expected_source_bridge_config_hash_matches"),
+            False,
+        ),
+        (
+            "source-runtime-bytecode",
+            ("source_bridge", "source_bridge_runtime_bytecode_hex"),
+            False,
+        ),
+        (
+            "source-record-match",
+            ("source_records", "expected_source_verifier_material_hash_matches"),
+            False,
+        ),
+        (
+            "source-record-input",
+            ("source_record_inputs", "expected_source_verifier_material_hash"),
+            False,
+        ),
+        ("destination-root", ("destination_verifier",), True),
+        (
+            "destination-binding-match",
+            ("destination_verifier", "expected_destination_binding_hash_matches"),
+            False,
+        ),
+        (
+            "destination-bytecode-match",
+            ("destination_verifier", "bytecode_hash_matches_verifier_code_hash"),
+            False,
+        ),
+        ("route-allowlist", ("route_allowlist_hash",), True),
+        ("route-canary-evidence", ("route_canary", "evidence_hash"), True),
+        (
+            "route-canary-transaction-copy",
+            ("route_canary", "transaction", "route_canary_evidence_hash"),
+            True,
+        ),
+        (
+            "transaction-evidence",
+            ("route_canary_transaction", "route_canary_evidence_hash"),
+            True,
+        ),
+        (
+            "transaction-used-proof",
+            ("route_canary_transaction", "message_proof_used"),
+            True,
+        ),
+        (
+            "trigger-owner-binding",
+            (
+                "route_canary_transaction",
+                "trigger_contract",
+                "raw_data_owner_matches_transaction",
+            ),
+            True,
+        ),
+        (
+            "trigger-signature-binding",
+            (
+                "route_canary_transaction",
+                "trigger_contract",
+                "signature_recovers_to_owner",
+            ),
+            True,
+        ),
+    )
+    for case_id, path, route_verifier_should_fail in readiness_cases:
+        tampered_summary = json.loads(json.dumps(summary))
+        replace_with_hostile_key(tampered_summary, path)
+
+        if route_verifier_should_fail:
+            assert (
+                module._route_canary_transaction_verified(tampered_summary) is False
+            ), case_id
+        assert module._offline_full_toml_args(tampered_summary) is None, case_id
+        try:
+            module.render_offline_full_toml(tampered_summary)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert "full TOML" in rendered or "destination" in rendered, case_id
+            assert "secret-token" not in rendered, case_id
+        else:
+            raise AssertionError(
+                f"TRON full TOML rendered hostile copied key {case_id}"
+            )
+
+    annotation_cases = (
+        ("source-address", ("source_bridge", "address")),
+        ("source-code-hash", ("source_bridge", "source_bridge_emitter_code_hash")),
+        (
+            "source-runtime-bytecode",
+            ("source_bridge", "source_bridge_runtime_bytecode_hex"),
+        ),
+        ("destination-address", ("destination_verifier", "address")),
+        (
+            "destination-runtime-hash",
+            ("destination_verifier", "tron_getcontract_bytecode_hash"),
+        ),
+        (
+            "destination-bytecode",
+            ("destination_verifier", "destination_verifier_runtime_bytecode_hex"),
+        ),
+        ("destination-binding-match", ("destination_verifier", "destination_binding_hash")),
+        ("transaction-id", ("route_canary_transaction", "transaction_id")),
+        (
+            "trigger-owner",
+            ("route_canary_transaction", "trigger_contract", "owner_address"),
+        ),
+        ("transaction-log-index", ("route_canary_transaction", "log_index")),
+        (
+            "trigger-call-data",
+            ("route_canary_transaction", "trigger_contract", "call_data_sha256"),
+        ),
+        (
+            "trigger-used-proof",
+            ("route_canary_transaction", "message_proof_used"),
+        ),
+        (
+            "trigger-signature",
+            (
+                "route_canary_transaction",
+                "trigger_contract",
+                "signature_recovers_to_owner",
+            ),
+        ),
+    )
+    for case_id, path in annotation_cases:
+        tampered_summary = json.loads(json.dumps(summary))
+        replace_with_hostile_key(tampered_summary, path)
+
+        try:
+            module._annotate_full_toml_with_live_metadata(full_toml, tampered_summary)
+        except (ValueError, RuntimeError) as exc:
+            assert "secret-token" not in str(exc), case_id
+        else:
+            raise AssertionError(
+                f"TRON full TOML annotated hostile copied key {case_id}"
+            )
 
 
 def test_live_evidence_route_canary_verification_rejects_non_string_call_summary_fields_without_stringifying(

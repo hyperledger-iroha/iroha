@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs/chunker_conformance.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b0e2cf1e1bd738a7f6cf022886a687873972f7dadb485a41d2bfb277be5062d4
+source_hash: 45c160396c139af8b3c220487501a12af18ba1485f7315f806de6a2a3ffd296f
 source_last_modified: "2025-11-10T04:30:01.561891+00:00"
 translation_last_reviewed: "2026-01-30"
 ---
@@ -53,9 +53,10 @@ fixtures y emite los siguientes archivos bajo `fixtures/sorafs_chunker/`:
 ### Politica de firmado
 
 La regeneracion de fixtures **debe** incluir una firma valida del council. El
- generador rechaza output sin firma salvo que se pase `--allow-unsigned`
-explicitamente (intencionado solo para experimentos locales). Los sobres de
-firma son append-only y se deduplican por firmante.
+generador rechaza output sin firma en todos los modos; usa `--signing-key` para
+crear o agregar una firma del council, o conserva sin cambios el
+`manifest_signatures.json` verificado existente. Los sobres de firma son
+append-only y se deduplican por firmante.
 
 Para agregar una firma del council:
 

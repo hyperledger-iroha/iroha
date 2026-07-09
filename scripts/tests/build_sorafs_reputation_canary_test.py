@@ -279,6 +279,22 @@ def test_duplicate_provider_proof_sibling_fails_before_write(
     assert not canary_path(tmp_path, "provider").exists()
 
 
+def test_invalid_provider_proof_sibling_does_not_seed_duplicate_tracking(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("provider", tmp_path)
+    args.extend(["--sibling-hex", "aa" * 32])
+    args.extend(["--sibling-hex", "AA" * 32])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--sibling-hex must be exact lowercase hex length 64" in captured.err
+    assert "duplicate --sibling-hex" not in captured.err
+    assert not canary_path(tmp_path, "provider").exists()
+
+
 def test_metrics_thresholds_fail_before_write(tmp_path: Path, capsys) -> None:
     args = args_for("metrics", tmp_path)
     args.extend(["--snapshot-age-seconds", "691201", "--ingest-lag-seconds", "901"])

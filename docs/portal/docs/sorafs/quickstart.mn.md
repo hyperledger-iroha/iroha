@@ -28,12 +28,12 @@ SoraFS-ийн үндэс болсон манифест гарын үсэг, ол
 
 ## 1. Тодорхойлогч бэхэлгээг сэргээ
 
-Каноник SF-1 ангилах векторуудыг дахин үүсгэнэ. Тушаал нь мөн гарын үсэг зурдаг
-`--signing-key` нийлүүлэх үед манифест дугтуй; `--allow-unsigned` ашиглах
-зөвхөн орон нутгийн хөгжлийн явцад.
+Regenerate the canonical SF-1 chunking vectors. The command verifies the
+existing council signature file, or appends a signature when `--signing-key` is
+supplied.
 
 ```bash
-cargo run -p sorafs_chunker --bin export_vectors -- --allow-unsigned
+cargo run -p sorafs_chunker --bin export_vectors -- --signing-key=<ed25519-private-key-hex>
 ```
 
 Гаралт:
@@ -78,7 +78,7 @@ cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   --manifest-out=/tmp/docs.manifest \
   --manifest-signatures-out=/tmp/docs.manifest_signatures.json \
   --json-out=/tmp/docs.report.json \
-  --allow-unsigned
+  --council-signature=<signerhex>:<signaturehex>
 ```
 
 `/tmp/docs.report.json`-г хянан үзэх:
@@ -88,9 +88,9 @@ cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
 - `manifest.manifest_blake3` – Манифестийн дугтуйнд гарын үсэг зурсан BLAKE3 дижест.
 - `chunk_fetch_specs[]` – найрал хөгжимчдийн захиалсан дуудах заавар.
 
-Бодит гарын үсгийг нийлүүлэхэд бэлэн болмогц `--signing-key` болон `--signer` нэмнэ үү.
-аргументууд. Тушаал нь бичихээсээ өмнө Ed25519 гарын үсэг бүрийг шалгадаг
-дугтуй.
+The `--council-signature` value must be a reviewed council signer public key and
+Ed25519 signature pair. The command verifies every Ed25519 signature before
+writing the envelope.
 
 ## 4. Олон үйлчилгээ үзүүлэгчийн хайлтыг дуурайлгана
 

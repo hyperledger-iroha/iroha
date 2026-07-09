@@ -53,10 +53,10 @@ armatura o'rnatadi va `fixtures/sorafs_chunker/` ostida quyidagi fayllarni chiqa
 
 ### Imzolash siyosati
 
-Armatura regeneratsiyasi **kerak** amaldagi kengash imzosini o'z ichiga olishi kerak. Generator
-`--allow-unsigned` aniq o'tkazilmasa (mo'ljallangan) imzosiz chiqishni rad etadi
-faqat mahalliy tajriba uchun). Imzo konvertlari faqat ilova qilinadi va
-har bir imzolovchi uchun nusxalangan.
+Fixture regeneration **must** include a valid council signature. The generator
+rejects unsigned output in every mode; use `--signing-key` to create or append a
+council signature, or keep the existing verified `manifest_signatures.json`
+unchanged. Signature envelopes are append-only and deduplicated per signer.
 
 Kengash imzosini qo'shish uchun:
 

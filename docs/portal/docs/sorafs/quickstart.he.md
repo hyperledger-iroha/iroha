@@ -27,11 +27,12 @@ translation_last_reviewed: 2026-01-30
 
 ## 1. רענון ה‑fixtures הדטרמיניסטיות
 
-צרו מחדש את וקטורי ה‑chunking הקנוניים של SF-1. הפקודה גם מפיקה מעטפות מניפסט
-חתומות כאשר מספקים `--signing-key`; השתמשו ב‑`--allow-unsigned` רק במהלך פיתוח מקומי.
+Regenerate the canonical SF-1 chunking vectors. The command verifies the
+existing council signature file, or appends a signature when `--signing-key` is
+supplied.
 
 ```bash
-cargo run -p sorafs_chunker --bin export_vectors -- --allow-unsigned
+cargo run -p sorafs_chunker --bin export_vectors -- --signing-key=<ed25519-private-key-hex>
 ```
 
 תוצרים:
@@ -76,7 +77,7 @@ cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   --manifest-out=/tmp/docs.manifest \
   --manifest-signatures-out=/tmp/docs.manifest_signatures.json \
   --json-out=/tmp/docs.report.json \
-  --allow-unsigned
+  --council-signature=<signerhex>:<signaturehex>
 ```
 
 בדקו את `/tmp/docs.report.json` עבור:
@@ -86,8 +87,9 @@ cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
 - `manifest.manifest_blake3` – דיגסט BLAKE3 שנחתם במעטפת המניפסט.
 - `chunk_fetch_specs[]` – הוראות שליפה מסודרות לאורקסטרטורים.
 
-כשאתם מוכנים לספק חתימות אמיתיות, הוסיפו את הארגומנטים `--signing-key` ו‑`--signer`.
-הפקודה מאמתת כל חתימת Ed25519 לפני כתיבת המעטפת.
+The `--council-signature` value must be a reviewed council signer public key and
+Ed25519 signature pair. The command verifies every Ed25519 signature before
+writing the envelope.
 
 ## 4. סימולציה של שליפה מרובת ספקים
 

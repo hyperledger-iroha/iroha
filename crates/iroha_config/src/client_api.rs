@@ -3526,7 +3526,7 @@ mod test {
                     sig_id: 1,
                     resume_hash_hex: None,
                     pow: SoranetHandshakePowSummary {
-                        required: false,
+                        required: true,
                         difficulty: 0,
                         max_future_skew_secs: 300,
                         min_ticket_ttl_secs: 30,
@@ -3622,7 +3622,7 @@ mod test {
                   "sig_id": 1,
                   "resume_hash_hex": null,
                   "pow": {
-                    "required": false,
+                    "required": true,
                     "difficulty": 0,
                     "max_future_skew_secs": 300,
                     "min_ticket_ttl_secs": 30,

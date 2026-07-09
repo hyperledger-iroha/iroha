@@ -44,6 +44,73 @@ def test_load_chunker_fixture_rejects_symlink_before_open(
         raise AssertionError("symlinked chunker fixture was accepted")
 
 
+def test_load_chunker_fixture_rejects_sensitive_duplicate_key_without_leaking(
+    tmp_path: Path,
+) -> None:
+    fixture = tmp_path / "fixtures" / "sorafs_chunker" / "sf1_profile_v1.json"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text(
+        '{"private&#95;key":"first","private&#95;key":"shadow"}',
+        encoding="utf-8",
+    )
+
+    try:
+        MODULE.load_chunker_fixture(tmp_path)
+    except ValueError as error:
+        message = str(error)
+        assert "evidence JSON object contains duplicate key `<sensitive-key>`" in (
+            message
+        )
+        assert "private&#95;key" not in message
+        assert "private_key" not in message
+    else:
+        raise AssertionError("duplicate sensitive chunker fixture key was accepted")
+
+
+def test_load_chunker_fixture_rejects_non_standard_numeric_constants(
+    tmp_path: Path,
+) -> None:
+    fixture = tmp_path / "fixtures" / "sorafs_chunker" / "sf1_profile_v1.json"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text('{"chunk_lengths":[NaN]}', encoding="utf-8")
+
+    try:
+        MODULE.load_chunker_fixture(tmp_path)
+    except ValueError as error:
+        assert "non-standard JSON constant `NaN` is not allowed" in str(error)
+    else:
+        raise AssertionError("non-standard chunker fixture numeric constant was accepted")
+
+
+def test_load_chunker_fixture_read_error_is_sanitized(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    fixture = tmp_path / "fixtures" / "sorafs_chunker" / "sf1_profile_v1.json"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text('{"chunk_lengths":[1]}', encoding="utf-8")
+    raw_error = "read denied\nprivate_key"
+
+    def open_path(path: Path, _flags: int, *args, **kwargs):
+        if path == fixture:
+            raise OSError(raw_error)
+        return os.open(path, _flags, *args, **kwargs)
+
+    monkeypatch.setattr(MODULE.os, "open", open_path)
+
+    try:
+        MODULE.load_chunker_fixture(tmp_path)
+    except ValueError as error:
+        message = str(error)
+        assert message == (
+            f"failed to read chunker fixture `{fixture}`: <non-canonical-error>"
+        )
+        assert raw_error not in message
+        assert "private_key" not in message
+    else:
+        raise AssertionError("chunker fixture read ignored descriptor open failure")
+
+
 def test_write_json_uses_no_follow_descriptor_open(
     tmp_path: Path,
     monkeypatch,
@@ -122,21 +189,28 @@ def test_write_json_fsyncs_descriptor_before_close(
     assert len(fsynced) == 2
 
 
-def test_write_json_propagates_fsync_failure(
+def test_write_json_propagates_fsync_failure_without_leaking_error(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     output = tmp_path / "fixture.json"
+    raw_error = "fsync denied\nprivate_key"
 
     def fsync(_fd: int) -> None:
-        raise OSError("fsync denied")
+        raise OSError(raw_error)
 
     monkeypatch.setattr(MODULE.os, "fsync", fsync)
 
     try:
         MODULE.write_json(output, {"ready": True})
-    except OSError as error:
-        assert "fsync denied" in str(error)
+    except ValueError as error:
+        message = str(error)
+        assert message == (
+            "failed to write orchestrator fixture output "
+            f"`{output}`: <non-canonical-error>"
+        )
+        assert raw_error not in message
+        assert "private_key" not in message
     else:
         raise AssertionError("fixture write ignored fsync failure")
 
@@ -192,6 +266,52 @@ def test_ensure_fixture_directory_rejects_symlink_before_create(
         raise AssertionError("symlinked output directory was accepted")
 
 
+def test_ensure_fixture_directory_mkdir_error_is_sanitized(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    output = tmp_path / "output"
+    raw_error = "mkdir denied\nprivate_key"
+    original_mkdir = Path.mkdir
+
+    def mkdir(path: Path, *args, **kwargs):
+        if path == output:
+            raise OSError(raw_error)
+        return original_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", mkdir)
+
+    try:
+        MODULE.ensure_fixture_directory(output, "orchestrator fixture output directory")
+    except ValueError as error:
+        message = str(error)
+        assert message == (
+            "failed to create orchestrator fixture output directory "
+            f"`{output}`: <non-canonical-error>"
+        )
+        assert raw_error not in message
+        assert "private_key" not in message
+    else:
+        raise AssertionError("orchestrator fixture output directory mkdir failure was ignored")
+
+
+def test_validate_fixture_path_rejects_secret_looking_path_without_leaking(
+    tmp_path: Path,
+) -> None:
+    secret_path = tmp_path / "private%26%2395%3Bkey"
+
+    try:
+        MODULE.validate_fixture_path(secret_path, "orchestrator fixture output")
+    except ValueError as error:
+        message = str(error)
+        assert message == MODULE.FIXTURE_PATH_DIAGNOSTIC
+        assert "private%26%2395%3Bkey" not in message
+        assert "private&#95;key" not in message
+        assert "private_key" not in message
+    else:
+        raise AssertionError("secret-looking orchestrator fixture path was accepted")
+
+
 def test_fixture_file_size_uses_no_follow_descriptor_fstat(
     tmp_path: Path,
     monkeypatch,
@@ -212,6 +332,32 @@ def test_fixture_file_size_uses_no_follow_descriptor_fstat(
     assert opened["flags"] == MODULE.read_open_flags()
     if hasattr(os, "O_NOFOLLOW"):
         assert opened["flags"] & os.O_NOFOLLOW
+
+
+def test_fixture_file_size_fstat_error_is_sanitized(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    payload = tmp_path / "payload.bin"
+    payload.write_bytes(b"fixture")
+    raw_error = "fstat denied\nprivate_key"
+
+    def fstat(_fd: int):
+        raise OSError(raw_error)
+
+    monkeypatch.setattr(MODULE.os, "fstat", fstat)
+
+    try:
+        MODULE.fixture_file_size(payload, "chunker payload")
+    except ValueError as error:
+        message = str(error)
+        assert message == (
+            f"failed to inspect chunker payload `{payload}`: <non-canonical-error>"
+        )
+        assert raw_error not in message
+        assert "private_key" not in message
+    else:
+        raise AssertionError("fixture file size ignored fstat failure")
 
 
 def test_build_telemetry_includes_reputation_score() -> None:

@@ -57,13 +57,6 @@ pub struct RewardConfig {
 impl RewardConfig {
     /// Validate the reward configuration, ensuring weights fall within expected bounds.
     pub fn validate(&self) -> Result<(), RewardConfigError> {
-        self.validate_with_budget_policy(true)
-    }
-
-    fn validate_with_budget_policy(
-        &self,
-        require_budget_approval: bool,
-    ) -> Result<(), RewardConfigError> {
         let total = self
             .uptime_weight_per_mille
             .saturating_add(self.bandwidth_weight_per_mille);
@@ -84,15 +77,11 @@ impl RewardConfig {
             });
         }
 
-        if require_budget_approval && self.budget_approval_id.is_none() {
+        if self.budget_approval_id.is_none() {
             return Err(RewardConfigError::MissingBudgetApprovalId);
         }
 
         Ok(())
-    }
-
-    fn validate_allowing_missing_budget(&self) -> Result<(), RewardConfigError> {
-        self.validate_with_budget_policy(false)
     }
 }
 
@@ -151,21 +140,6 @@ impl RelayRewardEngine {
     pub fn new(config: RewardConfig) -> Result<Self, RewardConfigError> {
         config.validate()?;
         Self::build(config)
-    }
-
-    /// Construct a reward engine while optionally allowing missing budget approvals.
-    ///
-    /// This override should only be used for lab or staging replays where governance manifests are unavailable.
-    pub fn new_allowing_missing_budget(
-        config: RewardConfig,
-        allow_missing_budget_approval: bool,
-    ) -> Result<Self, RewardConfigError> {
-        if allow_missing_budget_approval {
-            config.validate_allowing_missing_budget()?;
-            Self::build(config)
-        } else {
-            Self::new(config)
-        }
     }
 
     fn build(config: RewardConfig) -> Result<Self, RewardConfigError> {
@@ -726,29 +700,6 @@ mod tests {
             RelayRewardEngine::new(config),
             Err(RewardConfigError::MissingBudgetApprovalId)
         ));
-    }
-
-    #[test]
-    fn missing_budget_approval_can_be_overridden_for_replays() {
-        let config = RewardConfig {
-            policy: policy(),
-            base_reward: numeric(100),
-            uptime_weight_per_mille: 500,
-            bandwidth_weight_per_mille: 500,
-            compliance_penalty_basis_points: 0,
-            bandwidth_target_bytes: 1_000,
-            budget_approval_id: None,
-            metrics_log_path: None,
-        };
-        let engine = RelayRewardEngine::new_allowing_missing_budget(config, true)
-            .expect("override permits missing budget");
-        let instruction = engine.compute_reward(
-            &metrics(1_000, 1_000),
-            &bond_entry(5_000, true),
-            sample_account(),
-            Metadata::default(),
-        );
-        assert!(instruction.budget_approval_id.is_none());
     }
 
     #[test]

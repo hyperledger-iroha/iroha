@@ -173,6 +173,8 @@ pub enum LocalFetchError {
     Fetch(String),
     #[error("unknown chunker handle '{0}'")]
     UnknownChunkerHandle(String),
+    #[error("{0} must remain enabled for first-release SoraFS fetch integrity")]
+    IntegrityVerificationDisabled(&'static str),
 }
 
 /// Execute a local multi-provider fetch using preloaded provider descriptors.
@@ -229,7 +231,7 @@ pub fn execute_local_fetch(
         options.max_peers,
     )?;
 
-    let fetch_options = build_fetch_options(&options);
+    let fetch_options = build_fetch_options(&options)?;
     let outcome = run_fetch(&plan, fetch_providers, path_lookup, fetch_options)?;
 
     Ok(LocalFetchResult {
@@ -467,13 +469,17 @@ fn build_fetch_providers(
     Ok(list)
 }
 
-fn build_fetch_options(options: &LocalFetchOptions) -> FetchOptions {
+fn build_fetch_options(options: &LocalFetchOptions) -> Result<FetchOptions, LocalFetchError> {
     let mut fetch_options = FetchOptions::default();
-    if let Some(flag) = options.verify_digests {
-        fetch_options.verify_digests = flag;
+    if matches!(options.verify_digests, Some(false)) {
+        return Err(LocalFetchError::IntegrityVerificationDisabled(
+            "verify_digests",
+        ));
     }
-    if let Some(flag) = options.verify_lengths {
-        fetch_options.verify_lengths = flag;
+    if matches!(options.verify_lengths, Some(false)) {
+        return Err(LocalFetchError::IntegrityVerificationDisabled(
+            "verify_lengths",
+        ));
     }
     if let Some(limit) = options.retry_budget {
         fetch_options.per_chunk_retry_limit = Some(limit.max(1) as usize);
@@ -491,7 +497,7 @@ fn build_fetch_options(options: &LocalFetchOptions) -> FetchOptions {
         );
         fetch_options.score_policy = Some(Arc::new(policy));
     }
-    fetch_options
+    Ok(fetch_options)
 }
 
 fn run_fetch(
@@ -689,6 +695,38 @@ impl From<&crate::multi_fetch::TransportHint> for TransportHintInput {
             protocol: value.protocol.clone(),
             protocol_id: value.protocol_id,
             priority: value.priority,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_fetch_options_rejects_disabled_integrity_verification() {
+        for (field, options) in [
+            (
+                "verify_digests",
+                LocalFetchOptions {
+                    verify_digests: Some(false),
+                    ..LocalFetchOptions::default()
+                },
+            ),
+            (
+                "verify_lengths",
+                LocalFetchOptions {
+                    verify_lengths: Some(false),
+                    ..LocalFetchOptions::default()
+                },
+            ),
+        ] {
+            let err = build_fetch_options(&options)
+                .expect_err("disabled fetch integrity verification must fail");
+            assert!(
+                err.to_string().contains(field),
+                "unexpected error for {field}: {err}"
+            );
         }
     }
 }

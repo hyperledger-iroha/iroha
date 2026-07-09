@@ -5,6 +5,10 @@
 artifacts/sorafs/governance-dag/staged
 --summary-out
 artifacts/sorafs/governance-dag/staged/rollout-summary.json
+--require-kind
+ingest_service,publisher_service,mirror_datastore,operator_recovery,dashboard_api,observability,ipfs_ipns_e2e,governance_approval
+--now-unix
+1800400000
 --max-evidence-age-secs
 604800
 --max-route-latency-ms

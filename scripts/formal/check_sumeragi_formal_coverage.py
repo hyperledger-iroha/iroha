@@ -1284,6 +1284,33 @@ SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS = (
         "top-level Byzantine vote-first commit spec",
     ),
 )
+SUMERAGI_COMMIT_PROGRESS_FAIR_ACTION_NAMES = frozenset(
+    set(SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS)
+    | {
+        action
+        for (
+            _module_path,
+            _spec_operator,
+            _fairness_operator,
+            _next_closure,
+            actions,
+            _root_kind,
+        ) in SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS
+        for action in actions
+    }
+    | {
+        action
+        for (
+            _module_path,
+            _spec_operator,
+            _fairness_operator,
+            _next_closure,
+            actions,
+            _root_kind,
+        ) in SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS
+        for action in actions
+    }
+)
 SUMERAGI_PROJECTION_GATE_IMPLICATION_CONTRACT_ROWS = (
     (
         "ProjectionBridgeCoversOrderedTopCorridors",
@@ -1870,6 +1897,14 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Source and top-level nested progress transition aggregates must recursively obey the same branch contract",
     "Single-reference progress transition wrappers must expose nested aggregate contracts",
     "Source and top-level single-reference progress transition wrappers must expose nested aggregate contracts",
+    "Progress transition boolean disjunct operands must inherit recursive resolution for onward aliases inside named helper operands",
+    "Source and top-level progress transition boolean disjunct operands must inherit recursive resolution for onward aliases inside named helper operands",
+    "Progress transition boolean action-witness operands must expose transitive mixed action witnesses",
+    "Source and top-level progress transition boolean action-witness operands must expose transitive mixed action witnesses",
+    "Progress transition boolean aggregate disjunct operands must expose nested aggregate contracts",
+    "Source and top-level progress transition boolean aggregate disjunct operands must expose nested aggregate contracts",
+    "Progress transition boolean aggregate helper operands must expose transitive nested aggregate contracts",
+    "Source and top-level progress transition boolean aggregate helper operands must expose transitive nested aggregate contracts",
     "Progress transition disjunct inventories must stay duplicate-free",
     "Source and top-level progress transition disjunct inventories must stay duplicate-free",
     "Progress transition action witness inventories must stay duplicate-free",
@@ -1889,6 +1924,8 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Source and top-level progress transition helper wrappers must be acyclic",
     "Progress transition boolean-gated helper wrappers must be acyclic",
     "Source and top-level progress transition boolean-gated helper wrappers must be acyclic",
+    "Progress transition boolean helper operands must inherit recursive resolution for onward aliases inside named helper operands",
+    "Source and top-level progress transition boolean helper operands must inherit recursive resolution for onward aliases inside named helper operands",
     "Progress transition identity-gated helper wrappers must be acyclic",
     "Source and top-level progress transition identity-gated helper wrappers must be acyclic",
     "Progress transition helper cycle diagnostics must precede nested aggregate expansion",
@@ -2009,65 +2046,127 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Progress fairness action module-alias conjuncts must resolve through named local INSTANCE declarations",
     "Source and top-level progress fairness action module-alias conjuncts must resolve through named local INSTANCE declarations",
     "Progress fairness action module-alias conjuncts must resolve to local action modules",
+    "Source and top-level progress fairness action module-alias conjuncts must resolve to local action modules",
     "Progress fairness action module-alias conjuncts must resolve to defined zero-arity actions",
+    "Source and top-level progress fairness action module-alias conjuncts must resolve to defined zero-arity actions",
     "Progress fairness action module-alias conjuncts must resolve to inspectable action definitions",
+    "Source and top-level progress fairness action module-alias conjuncts must resolve to inspectable action definitions",
     "Progress fairness action module-alias boolean operands must not hide composed fair actions",
+    "Source and top-level progress fairness action module-alias boolean operands must not hide composed fair actions",
     "Progress fairness action module-alias boolean operands must be acyclic",
+    "Source and top-level progress fairness action module-alias boolean operands must be acyclic",
     "Progress fairness action module-alias boolean operands must inherit multi-hop recursive helper guards behind imported module-alias chains",
+    "Source and top-level progress fairness action module-alias boolean operands must inherit multi-hop recursive helper guards behind imported module-alias chains",
     "Progress fairness action module-alias boolean operands must resolve through named local INSTANCE declarations",
+    "Source and top-level progress fairness action module-alias boolean operands must resolve through named local INSTANCE declarations",
     "Progress fairness action module-alias boolean operands must resolve to local action modules",
+    "Source and top-level progress fairness action module-alias boolean operands must resolve to local action modules",
     "Progress fairness action module-alias boolean operands must resolve to defined zero-arity actions",
+    "Source and top-level progress fairness action module-alias boolean operands must resolve to defined zero-arity actions",
     "Progress fairness action module-alias boolean operands must resolve to inspectable action definitions",
+    "Source and top-level progress fairness action module-alias boolean operands must resolve to inspectable action definitions",
     "Progress fairness action aliases must be acyclic",
+    "Source and top-level progress fairness action aliases must be acyclic",
     "Progress fairness action aliases must not resolve directly to other fair actions",
+    "Source and top-level progress fairness action aliases must not resolve directly to other fair actions",
     "Progress fairness action aliases must not resolve to definitions that compose other fair actions",
+    "Source and top-level progress fairness action aliases must not resolve to definitions that compose other fair actions",
     "Progress fairness action aliases must not resolve to definitions that hide other fair actions in boolean structure",
+    "Source and top-level progress fairness action aliases must not resolve to definitions that hide other fair actions in boolean structure",
     "Progress fairness action aliases must not resolve through helper wrappers that compose other fair actions",
+    "Source and top-level progress fairness action aliases must not resolve through helper wrappers that compose other fair actions",
     "Progress fairness action aliases must inherit helper-wrapper multi-hop local-helper composed-action guards inside imported action targets",
+    "Source and top-level progress fairness action aliases must inherit helper-wrapper multi-hop local-helper composed-action guards inside imported action targets",
     "Progress fairness action aliases must resolve helper references to defined zero-arity helper definitions",
+    "Source and top-level progress fairness action aliases must resolve helper references to defined zero-arity helper definitions",
     "Progress fairness action aliases must resolve helper references to inspectable helper definitions",
+    "Source and top-level progress fairness action aliases must resolve helper references to inspectable helper definitions",
     "Progress fairness action aliases must inherit helper-reference multi-hop recursive local-helper guards inside imported action targets",
+    "Source and top-level progress fairness action aliases must inherit helper-reference multi-hop recursive local-helper guards inside imported action targets",
     "Progress fairness action aliases must resolve through acyclic helper wrappers",
+    "Source and top-level progress fairness action aliases must resolve through acyclic helper wrappers",
     "Progress fairness action aliases must not resolve through helper actions that compose other fair actions",
+    "Source and top-level progress fairness action aliases must not resolve through helper actions that compose other fair actions",
     "Progress fairness action aliases must inherit helper-action multi-hop local-helper composed-action guards inside imported action targets",
+    "Source and top-level progress fairness action aliases must inherit helper-action multi-hop local-helper composed-action guards inside imported action targets",
     "Progress fairness action aliases must resolve through acyclic helper actions",
+    "Source and top-level progress fairness action aliases must resolve through acyclic helper actions",
     "Progress fairness action aliases must not resolve through helper aliases that compose other fair actions",
+    "Source and top-level progress fairness action aliases must not resolve through helper aliases that compose other fair actions",
     "Progress fairness action aliases must resolve through acyclic helper aliases",
+    "Source and top-level progress fairness action aliases must resolve through acyclic helper aliases",
     "Progress fairness action aliases must inherit helper-alias multi-hop module-alias cycle guards inside imported action targets",
+    "Source and top-level progress fairness action aliases must inherit helper-alias multi-hop module-alias cycle guards inside imported action targets",
     "Progress fairness action aliases must resolve helper aliases through named local INSTANCE declarations",
+    "Source and top-level progress fairness action aliases must resolve helper aliases through named local INSTANCE declarations",
     "Progress fairness action aliases must resolve helper aliases to local action modules",
+    "Source and top-level progress fairness action aliases must resolve helper aliases to local action modules",
     "Progress fairness action aliases must resolve helper aliases to defined zero-arity actions",
+    "Source and top-level progress fairness action aliases must resolve helper aliases to defined zero-arity actions",
     "Progress fairness action aliases must resolve helper-alias helper references to defined zero-arity helper definitions",
+    "Source and top-level progress fairness action aliases must resolve helper-alias helper references to defined zero-arity helper definitions",
     "Progress fairness action aliases must resolve helper-alias helper references to inspectable helper definitions",
+    "Source and top-level progress fairness action aliases must resolve helper-alias helper references to inspectable helper definitions",
     "Progress fairness action aliases must inherit helper-alias multi-hop recursive helper guards inside imported action targets",
+    "Source and top-level progress fairness action aliases must inherit helper-alias multi-hop recursive helper guards inside imported action targets",
     "Progress fairness action aliases must not resolve through module-alias conjuncts that compose other fair actions",
+    "Source and top-level progress fairness action aliases must not resolve through module-alias conjuncts that compose other fair actions",
     "Progress fairness action aliases must resolve through acyclic module-alias conjuncts",
+    "Source and top-level progress fairness action aliases must resolve through acyclic module-alias conjuncts",
     "Progress fairness action aliases must inherit module-alias conjunct multi-hop cycle guards behind imported module-alias chains",
+    "Source and top-level progress fairness action aliases must inherit module-alias conjunct multi-hop cycle guards behind imported module-alias chains",
     "Progress fairness action aliases must resolve module-alias conjuncts through named local INSTANCE declarations",
+    "Source and top-level progress fairness action aliases must resolve module-alias conjuncts through named local INSTANCE declarations",
     "Progress fairness action aliases must resolve module-alias conjuncts to local action modules",
+    "Source and top-level progress fairness action aliases must resolve module-alias conjuncts to local action modules",
     "Progress fairness action aliases must resolve module-alias conjuncts to defined zero-arity actions",
+    "Source and top-level progress fairness action aliases must resolve module-alias conjuncts to defined zero-arity actions",
     "Progress fairness action aliases must resolve module-alias conjuncts to inspectable action definitions",
+    "Source and top-level progress fairness action aliases must resolve module-alias conjuncts to inspectable action definitions",
     "Progress fairness action aliases must inherit module-alias conjunct multi-hop recursive helper guards behind imported module-alias chains",
+    "Source and top-level progress fairness action aliases must inherit module-alias conjunct multi-hop recursive helper guards behind imported module-alias chains",
     "Progress fairness action aliases must not resolve through module-alias boolean operands that compose other fair actions",
+    "Source and top-level progress fairness action aliases must not resolve through module-alias boolean operands that compose other fair actions",
     "Progress fairness action aliases must resolve through acyclic module-alias boolean operands",
+    "Source and top-level progress fairness action aliases must resolve through acyclic module-alias boolean operands",
     "Progress fairness action aliases must inherit module-alias boolean operand multi-hop cycle guards behind imported module-alias chains",
+    "Source and top-level progress fairness action aliases must inherit module-alias boolean operand multi-hop cycle guards behind imported module-alias chains",
     "Progress fairness action aliases must resolve module-alias boolean operands through named local INSTANCE declarations",
+    "Source and top-level progress fairness action aliases must resolve module-alias boolean operands through named local INSTANCE declarations",
     "Progress fairness action aliases must resolve module-alias boolean operands to local action modules",
+    "Source and top-level progress fairness action aliases must resolve module-alias boolean operands to local action modules",
     "Progress fairness action aliases must resolve module-alias boolean operands to defined zero-arity actions",
+    "Source and top-level progress fairness action aliases must resolve module-alias boolean operands to defined zero-arity actions",
     "Progress fairness action aliases must resolve module-alias boolean operands to inspectable action definitions",
+    "Source and top-level progress fairness action aliases must resolve module-alias boolean operands to inspectable action definitions",
     "Progress fairness action aliases must inherit module-alias boolean operand multi-hop recursive helper guards behind imported module-alias chains",
+    "Source and top-level progress fairness action aliases must inherit module-alias boolean operand multi-hop recursive helper guards behind imported module-alias chains",
     "Progress fairness action aliases must resolve through named local INSTANCE declarations",
+    "Source and top-level progress fairness action aliases must resolve through named local INSTANCE declarations",
     "Progress fairness action aliases must resolve to local action modules",
+    "Source and top-level progress fairness action aliases must resolve to local action modules",
     "Progress fairness action aliases must resolve to defined zero-arity actions",
+    "Source and top-level progress fairness action aliases must resolve to defined zero-arity actions",
     "Progress fairness action aliases must resolve to inspectable actions",
+    "Source and top-level progress fairness action aliases must resolve to inspectable actions",
     "Progress fairness action aliases must inherit multi-hop module-alias cycle guards behind imported action targets",
+    "Source and top-level progress fairness action aliases must inherit multi-hop module-alias cycle guards behind imported action targets",
     "Progress fairness action aliases must not resolve through onward action aliases inside imported action targets",
+    "Source and top-level progress fairness action aliases must not resolve through onward action aliases inside imported action targets",
     "Progress fairness action aliases must resolve to action definitions without fairness clauses",
+    "Source and top-level progress fairness action aliases must resolve to action definitions without fairness clauses",
     "Progress fairness action aliases must resolve to transition definitions without fairness or temporal operators",
+    "Source and top-level progress fairness action aliases must resolve to transition definitions without fairness or temporal operators",
     "Progress fairness action aliases must resolve to transition definitions that mention next-state updates or UNCHANGED",
+    "Source and top-level progress fairness action aliases must resolve to transition definitions that mention next-state updates or UNCHANGED",
     "Progress transition closures must keep static [][Next]_vars shape",
+    "Source and top-level progress transition closures must keep static [][Next]_vars shape",
     "Progress transition operators must be defined zero-arity operators",
+    "Source and top-level progress transition operators must be defined zero-arity operators",
     "Progress fairness actions must be reachable from the checked transition closure",
+    "Source and top-level progress fairness actions must be reachable from the checked transition closure",
+    "Progress fairness action reachability must follow transitive boolean local helper operands",
+    "Source and top-level progress fairness action reachability must follow transitive boolean local helper operands",
     "Source commit progress spec contract inventories must stay duplicate-free",
     "Top-level commit spec contract inventories must stay duplicate-free",
     "Progress finality property contract inventories must stay duplicate-free",
@@ -12959,7 +13058,7 @@ def fairness_action_alias_target_module_alias_operand_resolution_errors(
                 operand_path,
                 operator_name,
                 frozenset(),
-                False,
+                True,
             )
 
     extend_for_aliases(
@@ -13306,8 +13405,22 @@ def fairness_action_alias_resolution_errors(
     target_body_lines = tla_single_expression_operator_definition_body_lines(
         target_path
     ).get(operator_name, (target_line, ()))[1]
+    target_body_alias = tla_module_operator_alias(target_body)
     nested_fairness_occurrences = tla_wf_vars_operand_occurrences(target_body_lines)
     errors: list[str] = []
+    if target_body_alias is not None:
+        target_alias_name, target_operator_name = target_body_alias
+        errors.append(
+            f"{display_path(module_path)}:{fairness_line} defines "
+            f"{fairness_operator}, but references WF_vars action {action} "
+            f"at {line_number_context(action_reference_lines)} whose "
+            f"definition at line {action_line} aliases "
+            f"{alias_name}!{operator_name}, but target "
+            f"{display_path(target_path)}:{target_line} resolves onward "
+            f"through {target_alias_name}!{target_operator_name}; "
+            f"{root_kind} fairness action aliases must not resolve through "
+            "onward action aliases inside imported action targets"
+        )
     if nested_fairness_occurrences:
         errors.append(
             f"{display_path(module_path)}:{fairness_line} defines "
@@ -13573,7 +13686,9 @@ def fairness_action_alias_resolution_errors(
             f"{root_kind} fairness action aliases must not resolve through "
             "module-alias boolean operands that compose other fair actions"
         )
-    if not tla_expression_mentions_next_state_marker(target_body):
+    if target_body_alias is None and not tla_expression_mentions_next_state_marker(
+        target_body
+    ):
         errors.append(
             f"{display_path(module_path)}:{fairness_line} defines "
             f"{fairness_operator}, but references WF_vars action {action} "
@@ -13709,6 +13824,7 @@ def transition_module_alias_cycle_errors(
     alias: tuple[str, str],
     root_kind: str,
     seen: frozenset[tuple[Path, str]],
+    validate_action_shaped_targets: bool = True,
 ) -> list[str]:
     """Return transition cycle errors reached through a module alias."""
 
@@ -13725,6 +13841,7 @@ def transition_module_alias_cycle_errors(
         target_operator,
         root_kind,
         seen,
+        validate_action_shaped_targets,
     )
 
 
@@ -13797,6 +13914,157 @@ def transition_module_alias_disjunct_resolution_errors(
             "transition module-alias disjuncts must resolve to inspectable "
             "transition operators"
         ]
+    return []
+
+
+def transition_action_shaped_target_body_errors(
+    target_path: Path,
+    target_operator: str,
+    target_line: int,
+    target_body: str,
+    root_kind: str,
+    seen: frozenset[tuple[Path, str]],
+) -> list[str] | None:
+    """Return errors for an imported action-shaped transition target body."""
+
+    if not (
+        tla_expression_mentions_next_state_marker(target_body)
+        and not tla_expression_mentions_fairness_or_temporal_marker(target_body)
+    ):
+        return None
+    if len(tla_top_level_disjuncts(target_body)) > 1:
+        return progress_transition_direct_disjunct_errors(
+            target_path,
+            target_operator,
+            root_kind,
+            seen,
+        )
+
+    compact_target_body = " ".join(strip_static_outer_parentheses(target_body).split())
+    nested_seen = seen | frozenset({(target_path, target_operator)})
+    alias_errors: list[str] = []
+    seen_aliases: set[tuple[str, str]] = set()
+    for nested_alias in (
+        tla_module_operator_conjunct_aliases(target_body)
+        + tla_module_operator_boolean_aliases(target_body)
+    ):
+        if nested_alias in seen_aliases:
+            continue
+        seen_aliases.add(nested_alias)
+        cycle_errors = transition_module_alias_cycle_errors(
+            target_path,
+            nested_alias,
+            root_kind,
+            nested_seen,
+        )
+        if cycle_errors:
+            return cycle_errors
+        alias_errors.extend(
+            transition_module_alias_disjunct_resolution_errors(
+                target_path,
+                nested_alias,
+                compact_target_body,
+                target_operator,
+                target_line,
+                root_kind,
+            )
+        )
+    if alias_errors:
+        return alias_errors
+
+    witnesses = transition_disjunct_action_witnesses(target_path, target_body)
+    if len(witnesses) > 1:
+        return [
+            f"{display_path(target_path)}:{target_line} defines {root_kind} "
+            f"transition operator {target_operator}, but direct transition "
+            f"disjunct {compact_target_body or '<empty>'} mixes multiple "
+            f"action witnesses {', '.join(sorted(witnesses))}; guarded "
+            "transition disjuncts must not mix multiple action witnesses"
+        ]
+    if witnesses and not (
+        transition_disjunct_is_bare_named_reference(target_body)
+        or tla_module_operator_alias(target_body) is not None
+    ):
+        return [
+            f"{display_path(target_path)}:{target_line} defines {root_kind} "
+            f"transition operator {target_operator}, but direct transition "
+            f"disjunct {compact_target_body or '<empty>'} is not a bare named "
+            f"action or aggregate reference; {root_kind} transition disjuncts "
+            "must stay bare named action or aggregate references"
+        ]
+    return []
+
+
+def transition_module_alias_action_shaped_target_errors(
+    module_path: Path,
+    alias: tuple[str, str],
+    root_kind: str,
+    seen: frozenset[tuple[Path, str]],
+) -> list[str]:
+    """Return action-shaped target errors reached through a module alias."""
+
+    alias_name, target_operator = alias
+    instance = tla_instance_alias_modules(module_path).get(alias_name)
+    if instance is None:
+        return []
+    _alias_line, target_module = instance
+    target_path = module_path.with_name(f"{target_module}.tla")
+    if not target_path.exists():
+        return []
+    target_signature = tla_operator_signatures(target_path).get(target_operator)
+    if target_signature is None:
+        return []
+    target_line, target_arity = target_signature
+    if target_arity != 0:
+        return []
+    target_definition = tla_single_expression_operator_definitions(target_path).get(
+        target_operator
+    )
+    if target_definition is None:
+        return []
+    _target_definition_line, target_body = target_definition
+    target_body_errors = transition_action_shaped_target_body_errors(
+        target_path,
+        target_operator,
+        target_line,
+        target_body,
+        root_kind,
+        seen,
+    )
+    if target_body_errors is not None:
+        return target_body_errors
+    witness_errors = transition_reference_action_witness_errors(
+        target_path,
+        target_operator,
+        root_kind,
+        seen,
+    )
+    if witness_errors:
+        return witness_errors
+    non_bare_helper_errors = transition_reference_helper_non_bare_action_witness_errors(
+        target_path,
+        target_operator,
+        root_kind,
+        seen,
+    )
+    if non_bare_helper_errors:
+        return non_bare_helper_errors
+    helper_aggregate_errors = transition_reference_helper_aggregate_branch_errors(
+        target_path,
+        target_operator,
+        root_kind,
+        seen,
+    )
+    if helper_aggregate_errors:
+        return helper_aggregate_errors
+    aggregate_errors = progress_transition_direct_disjunct_errors(
+        target_path,
+        target_operator,
+        root_kind,
+        seen,
+    )
+    if aggregate_errors:
+        return aggregate_errors
     return []
 
 
@@ -13935,12 +14203,32 @@ def transition_reference_action_witnesses(
 
     if tla_expression_mentions_fairness_or_temporal_marker(body):
         return set()
-    if tla_expression_mentions_next_state_marker(body):
-        return {reference}
 
     witnesses: set[str] = set()
+    if reference not in SUMERAGI_COMMIT_PROGRESS_FAIR_ACTION_NAMES:
+        for disjunct in tla_top_level_disjuncts(body):
+            seen_aliases: set[tuple[str, str]] = set()
+            for nested_alias in (
+                tla_module_operator_conjunct_aliases(disjunct)
+                + tla_module_operator_boolean_aliases(disjunct)
+            ):
+                if nested_alias in seen_aliases:
+                    continue
+                seen_aliases.add(nested_alias)
+                witnesses.update(
+                    transition_module_alias_action_witnesses(
+                        module_path,
+                        nested_alias,
+                        seen | frozenset({key}),
+                    )
+                )
+    if tla_expression_mentions_next_state_marker(body):
+        witnesses.add(reference)
+        return witnesses
     for disjunct in tla_top_level_disjuncts(body):
-        for nested_reference in transition_direct_named_references(disjunct):
+        nested_references = set(transition_direct_named_references(disjunct))
+        nested_references.update(tla_zero_arity_boolean_references(disjunct))
+        for nested_reference in sorted(nested_references):
             witnesses.update(
                 transition_reference_action_witnesses(
                     module_path,
@@ -13990,9 +14278,244 @@ def transition_disjunct_action_witnesses(
         witnesses.update(
             transition_module_alias_action_witnesses(module_path, direct_alias)
         )
-    for reference in transition_direct_named_references(expression):
+    seen_aliases: set[tuple[str, str]] = set()
+    for alias in (
+        tla_module_operator_conjunct_aliases(expression)
+        + tla_module_operator_boolean_aliases(expression)
+    ):
+        if alias in seen_aliases:
+            continue
+        seen_aliases.add(alias)
+        witnesses.update(transition_module_alias_action_witnesses(module_path, alias))
+    references = set(transition_direct_named_references(expression))
+    references.update(tla_zero_arity_boolean_references(expression))
+    for reference in sorted(references):
         witnesses.update(transition_reference_action_witnesses(module_path, reference))
     return witnesses
+
+
+def transition_helper_body_action_witness_errors(
+    module_path: Path,
+    helper_name: str,
+    helper_line: int,
+    helper_body: str,
+    root_kind: str,
+) -> list[str]:
+    """Return errors when a helper body hides multiple action witnesses."""
+
+    if (
+        transition_disjunct_is_bare_named_reference(helper_body)
+        or tla_module_operator_alias(helper_body) is not None
+    ):
+        return []
+    if len(tla_top_level_disjuncts(helper_body)) > 1:
+        return []
+    witnesses = transition_disjunct_action_witnesses(module_path, helper_body)
+    if len(witnesses) <= 1:
+        return []
+    compact_body = " ".join(strip_static_outer_parentheses(helper_body).split())
+    return [
+        f"{display_path(module_path)}:{helper_line} defines {root_kind} "
+        f"transition helper {helper_name}, but direct transition disjunct "
+        f"{compact_body or '<empty>'} mixes multiple action witnesses "
+        f"{', '.join(sorted(witnesses))}; guarded transition disjuncts must "
+        "not mix multiple action witnesses"
+    ]
+
+
+def transition_reference_action_witness_errors(
+    module_path: Path,
+    reference: str,
+    root_kind: str,
+    seen: frozenset[tuple[Path, str]] = frozenset(),
+) -> list[str]:
+    """Return errors when a bare helper reference hides multiple witnesses."""
+
+    key = (module_path, reference)
+    if key in seen:
+        return []
+    signature = tla_operator_signatures(module_path).get(reference)
+    if signature is None or signature[1] != 0:
+        return []
+    definition = tla_single_expression_operator_definitions(module_path).get(reference)
+    if definition is None:
+        return []
+    helper_line, body = definition
+    alias = tla_module_operator_alias(body)
+    if alias is not None:
+        alias_name, target_operator = alias
+        instance = tla_instance_alias_modules(module_path).get(alias_name)
+        if instance is None:
+            return []
+        _alias_line, target_module = instance
+        target_path = module_path.with_name(f"{target_module}.tla")
+        if not target_path.exists():
+            return []
+        return transition_reference_action_witness_errors(
+            target_path,
+            target_operator,
+            root_kind,
+            seen | frozenset({key}),
+        )
+    if (
+        tla_expression_mentions_fairness_or_temporal_marker(body)
+        or tla_expression_mentions_next_state_marker(body)
+    ):
+        return []
+    nested_aggregate_errors = transition_disjunct_nested_aggregate_errors(
+        module_path,
+        body,
+        root_kind,
+        seen | frozenset({key}),
+    )
+    if nested_aggregate_errors:
+        return nested_aggregate_errors
+    witness_errors = transition_helper_body_action_witness_errors(
+        module_path,
+        reference,
+        helper_line,
+        body,
+        root_kind,
+    )
+    if witness_errors:
+        return witness_errors
+    disjuncts = tla_top_level_disjuncts(body)
+    if len(disjuncts) != 1 or not transition_disjunct_is_bare_named_reference(
+        disjuncts[0]
+    ):
+        return []
+    nested_references = transition_direct_named_references(disjuncts[0])
+    if len(nested_references) != 1:
+        return []
+    return transition_reference_action_witness_errors(
+        module_path,
+        next(iter(nested_references)),
+        root_kind,
+        seen | frozenset({key}),
+    )
+
+
+def transition_reference_helper_aggregate_branch_errors(
+    module_path: Path,
+    reference: str,
+    root_kind: str,
+    seen: frozenset[tuple[Path, str]] = frozenset(),
+) -> list[str]:
+    """Return branch errors for aggregate helpers behind an imported target body."""
+
+    key = (module_path, reference)
+    if key in seen:
+        return []
+    signature = tla_operator_signatures(module_path).get(reference)
+    if signature is None or signature[1] != 0:
+        return []
+    definition = tla_single_expression_operator_definitions(module_path).get(reference)
+    if definition is None:
+        return []
+    _helper_line, body = definition
+    alias = tla_module_operator_alias(body)
+    if alias is not None:
+        alias_name, target_operator = alias
+        instance = tla_instance_alias_modules(module_path).get(alias_name)
+        if instance is None:
+            return []
+        _alias_line, target_module = instance
+        target_path = module_path.with_name(f"{target_module}.tla")
+        if not target_path.exists():
+            return []
+        return transition_reference_helper_aggregate_branch_errors(
+            target_path,
+            target_operator,
+            root_kind,
+            seen | frozenset({key}),
+        )
+    disjuncts = tla_top_level_disjuncts(body)
+    has_nested_disjunction = tla_expression_contains_nested_disjunction(body)
+    if tla_expression_mentions_next_state_marker(body):
+        if len(disjuncts) > 1 or has_nested_disjunction:
+            return progress_transition_direct_disjunct_errors(
+                module_path,
+                reference,
+                root_kind,
+                seen,
+        )
+        return []
+    if has_nested_disjunction:
+        return progress_transition_direct_disjunct_errors(
+            module_path,
+            reference,
+            root_kind,
+            seen,
+        )
+    if tla_expression_mentions_fairness_or_temporal_marker(body):
+        return []
+    if len(disjuncts) != 1 or not transition_disjunct_is_bare_named_reference(
+        disjuncts[0]
+    ):
+        return []
+    nested_references = transition_direct_named_references(disjuncts[0])
+    if len(nested_references) != 1:
+        return []
+    return transition_reference_helper_aggregate_branch_errors(
+        module_path,
+        next(iter(nested_references)),
+        root_kind,
+        seen | frozenset({key}),
+    )
+
+
+def transition_reference_helper_non_bare_action_witness_errors(
+    module_path: Path,
+    reference: str,
+    root_kind: str,
+    seen: frozenset[tuple[Path, str]] = frozenset(),
+) -> list[str]:
+    """Return non-bare helper action errors behind an imported target body."""
+
+    key = (module_path, reference)
+    if key in seen:
+        return []
+    signature = tla_operator_signatures(module_path).get(reference)
+    if signature is None or signature[1] != 0:
+        return []
+    definition = tla_single_expression_operator_definitions(module_path).get(reference)
+    if definition is None:
+        return []
+    helper_line, body = definition
+    if (
+        tla_expression_mentions_fairness_or_temporal_marker(body)
+        or tla_expression_mentions_next_state_marker(body)
+    ):
+        return []
+    disjuncts = tla_top_level_disjuncts(body)
+    if len(disjuncts) != 1:
+        return []
+    if transition_disjunct_is_bare_named_reference(body):
+        nested_references = transition_direct_named_references(body)
+        if len(nested_references) != 1:
+            return []
+        return transition_reference_helper_non_bare_action_witness_errors(
+            module_path,
+            next(iter(nested_references)),
+            root_kind,
+            seen | frozenset({key}),
+        )
+    if (
+        tla_module_operator_alias(body) is not None
+        or tla_expression_contains_nested_disjunction(body)
+    ):
+        return []
+    witnesses = transition_disjunct_action_witnesses(module_path, body)
+    if len(witnesses) != 1:
+        return []
+    compact_body = " ".join(strip_static_outer_parentheses(body).split())
+    return [
+        f"{display_path(module_path)}:{helper_line} defines {root_kind} "
+        f"transition helper {reference}, but direct transition disjunct "
+        f"{compact_body or '<empty>'} is not a bare named action or "
+        f"aggregate reference; {root_kind} transition helper bodies must "
+        "stay bare named action or aggregate references"
+    ]
 
 
 def transition_reference_aggregate_targets(
@@ -14037,7 +14560,8 @@ def transition_reference_aggregate_targets(
     if len(disjuncts) > 1:
         return {key}
     if len(disjuncts) == 1:
-        references = transition_direct_named_references(disjuncts[0])
+        references = set(transition_direct_named_references(disjuncts[0]))
+        references.update(tla_zero_arity_boolean_references(disjuncts[0]))
         if len(references) == 1:
             if not transition_disjunct_is_bare_named_reference(disjuncts[0]):
                 return {key}
@@ -14046,7 +14570,57 @@ def transition_reference_aggregate_targets(
                 next(iter(references)),
                 seen | frozenset({key}),
             )
+        aggregate_targets: set[tuple[Path, str]] = set()
+        for nested_reference in references:
+            aggregate_targets.update(
+                transition_reference_aggregate_targets(
+                    module_path,
+                    nested_reference,
+                    seen | frozenset({key}),
+                )
+            )
+        if aggregate_targets:
+            return aggregate_targets
+        aliases: list[tuple[str, str]] = []
+        for alias in (
+            tla_module_operator_conjunct_aliases(disjuncts[0])
+            + tla_module_operator_boolean_aliases(disjuncts[0])
+        ):
+            if alias not in aliases:
+                aliases.append(alias)
+        for alias in aliases:
+            aggregate_targets.update(
+                transition_module_alias_aggregate_targets(
+                    module_path,
+                    alias,
+                    seen | frozenset({key}),
+                )
+            )
+        if aggregate_targets:
+            return aggregate_targets
     return set()
+
+
+def transition_module_alias_aggregate_targets(
+    module_path: Path,
+    alias: tuple[str, str],
+    seen: frozenset[tuple[Path, str]] = frozenset(),
+) -> set[tuple[Path, str]]:
+    """Return aggregate transition operators reached through a module alias."""
+
+    alias_name, target_operator = alias
+    instance = tla_instance_alias_modules(module_path).get(alias_name)
+    if instance is None:
+        return set()
+    _alias_line, target_module = instance
+    target_path = module_path.with_name(f"{target_module}.tla")
+    if not target_path.exists():
+        return set()
+    return transition_reference_aggregate_targets(
+        target_path,
+        target_operator,
+        seen,
+    )
 
 
 def transition_disjunct_nested_aggregate_errors(
@@ -14058,10 +14632,36 @@ def transition_disjunct_nested_aggregate_errors(
     """Return errors from nested aggregate helpers used by a transition disjunct."""
 
     errors: list[str] = []
-    for reference in transition_direct_named_references(expression):
+    references = set(transition_direct_named_references(expression))
+    references.update(tla_zero_arity_boolean_references(expression))
+    for reference in sorted(references):
         for target_path, target_operator in transition_reference_aggregate_targets(
             module_path,
             reference,
+            seen,
+        ):
+            errors.extend(
+                progress_transition_direct_disjunct_errors(
+                    target_path,
+                    target_operator,
+                    root_kind,
+                    seen,
+                )
+            )
+    aliases: list[tuple[str, str]] = []
+    direct_alias = tla_module_operator_alias(expression)
+    if direct_alias is not None:
+        aliases.append(direct_alias)
+    for alias in (
+        tla_module_operator_conjunct_aliases(expression)
+        + tla_module_operator_boolean_aliases(expression)
+    ):
+        if alias not in aliases:
+            aliases.append(alias)
+    for alias in aliases:
+        for target_path, target_operator in transition_module_alias_aggregate_targets(
+            module_path,
+            alias,
             seen,
         ):
             errors.extend(
@@ -14080,6 +14680,7 @@ def transition_reference_cycle_errors(
     reference: str,
     root_kind: str,
     seen: frozenset[tuple[Path, str]] = frozenset(),
+    validate_action_shaped_targets: bool = True,
 ) -> list[str]:
     """Return errors for transition helper wrappers that cycle."""
 
@@ -14107,6 +14708,10 @@ def transition_reference_cycle_errors(
         return []
 
     next_seen = seen | frozenset({key})
+    validate_current_targets = (
+        validate_action_shaped_targets
+        and reference not in SUMERAGI_COMMIT_PROGRESS_FAIR_ACTION_NAMES
+    )
     alias = tla_module_operator_alias(body)
     if alias is not None:
         cycle_errors = transition_module_alias_cycle_errors(
@@ -14114,10 +14719,11 @@ def transition_reference_cycle_errors(
             alias,
             root_kind,
             next_seen,
+            validate_current_targets,
         )
         if cycle_errors:
             return cycle_errors
-        return transition_module_alias_helper_resolution_errors(
+        resolution_errors = transition_module_alias_helper_resolution_errors(
             module_path,
             alias,
             reference,
@@ -14125,6 +14731,16 @@ def transition_reference_cycle_errors(
             root_kind,
             "module-alias helper wrappers",
         )
+        if resolution_errors:
+            return resolution_errors
+        if validate_current_targets:
+            return transition_module_alias_action_shaped_target_errors(
+                module_path,
+                alias,
+                root_kind,
+                next_seen,
+            )
+        return []
 
     identity_reference = transition_identity_gated_single_reference(body)
     if identity_reference is not None and not transition_disjunct_is_bare_named_reference(
@@ -14135,7 +14751,8 @@ def transition_reference_cycle_errors(
             identity_reference,
             root_kind,
             next_seen,
-    )
+            validate_current_targets,
+        )
     identity_alias = transition_identity_gated_single_module_alias(body)
     if identity_alias is not None:
         cycle_errors = transition_module_alias_cycle_errors(
@@ -14143,10 +14760,11 @@ def transition_reference_cycle_errors(
             identity_alias,
             root_kind,
             next_seen,
+            validate_current_targets,
         )
         if cycle_errors:
             return cycle_errors
-        return transition_module_alias_helper_resolution_errors(
+        resolution_errors = transition_module_alias_helper_resolution_errors(
             module_path,
             identity_alias,
             reference,
@@ -14154,6 +14772,103 @@ def transition_reference_cycle_errors(
             root_kind,
             "identity-gated module-alias helper wrappers",
         )
+        if resolution_errors:
+            return resolution_errors
+        if validate_current_targets:
+            target_errors = transition_module_alias_action_shaped_target_errors(
+                module_path,
+                identity_alias,
+                root_kind,
+                next_seen,
+            )
+            if target_errors:
+                return target_errors
+        witness_errors = transition_helper_body_action_witness_errors(
+            module_path,
+            reference,
+            reference_line,
+            body,
+            root_kind,
+        )
+        if witness_errors:
+            return witness_errors
+        return []
+
+    embedded_aliases: list[tuple[str, str]] = []
+    for alias in (
+        tla_module_operator_conjunct_aliases(body)
+        + tla_module_operator_boolean_aliases(body)
+    ):
+        if alias not in embedded_aliases:
+            embedded_aliases.append(alias)
+    if embedded_aliases:
+        cycle_errors: list[str] = []
+        for alias in embedded_aliases:
+            cycle_errors.extend(
+                transition_module_alias_cycle_errors(
+                    module_path,
+                    alias,
+                    root_kind,
+                    next_seen,
+                    validate_current_targets,
+                )
+            )
+        if cycle_errors:
+            return cycle_errors
+        resolution_errors: list[str] = []
+        for alias in embedded_aliases:
+            resolution_errors.extend(
+                transition_module_alias_helper_resolution_errors(
+                    module_path,
+                    alias,
+                    reference,
+                    reference_line,
+                    root_kind,
+                    "module-alias helper wrappers",
+                )
+            )
+        if resolution_errors:
+            return resolution_errors
+        if validate_current_targets:
+            target_errors: list[str] = []
+            for alias in embedded_aliases:
+                target_errors.extend(
+                    transition_module_alias_action_shaped_target_errors(
+                        module_path,
+                        alias,
+                        root_kind,
+                        next_seen,
+                    )
+                )
+            if target_errors:
+                return target_errors
+        witness_errors = transition_helper_body_action_witness_errors(
+            module_path,
+            reference,
+            reference_line,
+            body,
+            root_kind,
+        )
+        if witness_errors:
+            return witness_errors
+
+    boolean_reference_errors: list[str] = []
+    seen_references: set[str] = set()
+    for nested_reference in tla_zero_arity_boolean_references(body):
+        if nested_reference in seen_references:
+            continue
+        seen_references.add(nested_reference)
+        boolean_reference_errors.extend(
+            transition_reference_cycle_errors(
+                module_path,
+                nested_reference,
+                root_kind,
+                next_seen,
+                validate_current_targets,
+            )
+        )
+    if boolean_reference_errors:
+        return boolean_reference_errors
 
     disjuncts = tla_top_level_disjuncts(body)
     if len(disjuncts) != 1:
@@ -14168,6 +14883,7 @@ def transition_reference_cycle_errors(
         next(iter(references)),
         root_kind,
         next_seen,
+        validate_current_targets,
     )
 
 
@@ -14187,6 +14903,28 @@ def transition_action_keys_from_operator(
         return set()
 
     _line, body = definition
+    transition_keys: set[str] = set()
+
+    def add_nested_module_alias_transition_keys(
+        current_path: Path,
+        expression: str,
+    ) -> None:
+        seen_aliases: set[tuple[str, str]] = set()
+        for alias in (
+            tla_module_operator_conjunct_aliases(expression)
+            + tla_module_operator_boolean_aliases(expression)
+        ):
+            if alias in seen_aliases:
+                continue
+            seen_aliases.add(alias)
+            transition_keys.update(
+                transition_module_alias_transition_keys(
+                    current_path,
+                    alias,
+                    seen | frozenset({key}),
+                )
+            )
+
     alias = tla_module_operator_alias(body)
     if alias is not None:
         return transition_module_alias_transition_keys(
@@ -14195,7 +14933,6 @@ def transition_action_keys_from_operator(
             seen | frozenset({key}),
         )
 
-    transition_keys: set[str] = set()
     for disjunct in tla_top_level_disjuncts(body):
         direct_alias = tla_module_operator_alias(disjunct)
         if direct_alias is not None:
@@ -14206,19 +14943,52 @@ def transition_action_keys_from_operator(
                     seen | frozenset({key}),
                 )
             )
-        for reference in transition_direct_named_references(disjunct):
-            transition_keys.add(reference)
+        add_nested_module_alias_transition_keys(module_path, disjunct)
+        direct_references = set(transition_direct_named_references(disjunct))
+        references = set(direct_references)
+        references.update(
+            reference
+            for reference in tla_zero_arity_boolean_references(disjunct)
+            if reference in definitions
+        )
+        for reference in sorted(references):
             reference_definition = definitions.get(reference)
             if reference_definition is None:
+                if reference in direct_references:
+                    transition_keys.add(reference)
                 continue
+            transition_keys.add(reference)
             _reference_line, reference_body = reference_definition
             if (
                 tla_module_operator_alias(reference_body) is None
                 and len(tla_top_level_disjuncts(reference_body)) <= 1
             ):
-                if not tla_expression_mentions_next_state_marker(reference_body):
-                    nested_references = transition_direct_named_references(
-                        reference_body
+                if tla_expression_mentions_next_state_marker(reference_body):
+                    if (
+                        reference not in SUMERAGI_COMMIT_PROGRESS_FAIR_ACTION_NAMES
+                        and not tla_expression_mentions_fairness_or_temporal_marker(
+                            reference_body
+                        )
+                    ):
+                        add_nested_module_alias_transition_keys(
+                            module_path,
+                            reference_body,
+                        )
+                else:
+                    add_nested_module_alias_transition_keys(
+                        module_path,
+                        reference_body,
+                    )
+                    direct_nested_references = set(
+                        transition_direct_named_references(reference_body)
+                    )
+                    nested_references = set(direct_nested_references)
+                    nested_references.update(
+                        reference
+                        for reference in tla_zero_arity_boolean_references(
+                            reference_body
+                        )
+                        if reference in definitions
                     )
                     if len(nested_references) == 1:
                         nested_reference = next(iter(nested_references))
@@ -14368,11 +15138,24 @@ def progress_transition_direct_disjunct_errors(
                 "operators"
             ]
         _target_definition_line, target_body = target_definition
-        if (
-            tla_expression_mentions_next_state_marker(target_body)
-            and not tla_expression_mentions_fairness_or_temporal_marker(target_body)
-        ):
-            return []
+        target_body_errors = transition_action_shaped_target_body_errors(
+            target_path,
+            target_operator,
+            target_line,
+            target_body,
+            root_kind,
+            seen | frozenset({key}),
+        )
+        if target_body_errors is not None:
+            return target_body_errors
+        witness_errors = transition_reference_action_witness_errors(
+            target_path,
+            target_operator,
+            root_kind,
+            seen | frozenset({key}),
+        )
+        if witness_errors:
+            return witness_errors
         return progress_transition_direct_disjunct_errors(
             target_path,
             target_operator,
@@ -14425,6 +15208,75 @@ def progress_transition_direct_disjunct_errors(
                 "inventories must stay duplicate-free"
             )
 
+    if len(direct_disjuncts) > 1 and any(
+        tla_static_boolean_literal(disjunct) == "FALSE"
+        for disjunct in direct_disjuncts
+    ):
+        nested_aggregate_errors: list[str] = []
+        for disjunct in direct_disjuncts:
+            nested_aggregate_errors.extend(
+                transition_disjunct_nested_aggregate_errors(
+                    module_path,
+                    disjunct,
+                    root_kind,
+                    seen | frozenset({key}),
+                )
+            )
+        if nested_aggregate_errors:
+            errors.extend(nested_aggregate_errors)
+            return errors
+        hidden_alias_errors: list[str] = []
+        for disjunct in direct_disjuncts:
+            if tla_static_boolean_literal(disjunct) == "FALSE":
+                continue
+            compact_disjunct = " ".join(
+                strip_static_outer_parentheses(disjunct).split()
+            )
+            aliases: list[tuple[str, str]] = []
+            direct_alias = tla_module_operator_alias(disjunct)
+            if direct_alias is not None:
+                aliases.append(direct_alias)
+            for alias in (
+                tla_module_operator_conjunct_aliases(disjunct)
+                + tla_module_operator_boolean_aliases(disjunct)
+            ):
+                if alias not in aliases:
+                    aliases.append(alias)
+            for alias in aliases:
+                alias_errors: list[str] = []
+                alias_errors.extend(
+                    transition_module_alias_cycle_errors(
+                        module_path,
+                        alias,
+                        root_kind,
+                        seen | frozenset({key}),
+                    )
+                )
+                alias_errors.extend(
+                    transition_module_alias_disjunct_resolution_errors(
+                        module_path,
+                        alias,
+                        compact_disjunct,
+                        next_operator,
+                        next_line,
+                        root_kind,
+                    )
+                )
+                alias_errors.extend(
+                    transition_module_alias_action_shaped_target_errors(
+                        module_path,
+                        alias,
+                        root_kind,
+                        seen | frozenset({key}),
+                    )
+                )
+                for error in alias_errors:
+                    if error not in hidden_alias_errors:
+                        hidden_alias_errors.append(error)
+        if hidden_alias_errors:
+            errors.extend(hidden_alias_errors)
+            return errors
+
     for disjunct in direct_disjuncts:
         compact_disjunct = " ".join(
             strip_static_outer_parentheses(disjunct).split()
@@ -14457,7 +15309,10 @@ def progress_transition_direct_disjunct_errors(
             transition_disjunct_is_bare_named_reference(disjunct)
             or direct_alias is not None
         )
+        boolean_references = set(tla_zero_arity_boolean_references(disjunct))
+        hidden_boolean_references = boolean_references - set(direct_references)
         cycle_references = set(direct_references)
+        cycle_references.update(boolean_references)
         if identity_reference is not None:
             cycle_references.add(identity_reference)
         cycle_aliases: set[tuple[str, str]] = set()
@@ -14465,6 +15320,11 @@ def progress_transition_direct_disjunct_errors(
             cycle_aliases.add(direct_alias)
         if identity_alias is not None:
             cycle_aliases.add(identity_alias)
+        for alias in (
+            tla_module_operator_conjunct_aliases(disjunct)
+            + tla_module_operator_boolean_aliases(disjunct)
+        ):
+            cycle_aliases.add(alias)
         if direct_alias is not None:
             cycle_errors: list[str] = []
             for alias in sorted(cycle_aliases):
@@ -14490,8 +15350,24 @@ def progress_transition_direct_disjunct_errors(
             if instance_errors:
                 errors.extend(instance_errors)
                 continue
+            target_errors = transition_module_alias_action_shaped_target_errors(
+                module_path,
+                direct_alias,
+                root_kind,
+                seen | frozenset({key}),
+            )
+            if target_errors:
+                errors.extend(target_errors)
+                continue
         if (
-            ("progress" in root_kind.lower() or identity_alias is not None)
+            (
+                "progress" in root_kind.lower()
+                or identity_alias is not None
+                or (
+                    root_kind.startswith("top-level ")
+                    and (cycle_aliases or hidden_boolean_references)
+                )
+            )
             and (cycle_references or cycle_aliases)
             and not is_bare_action_or_module_alias
         ):
@@ -14531,6 +15407,28 @@ def progress_transition_direct_disjunct_errors(
                 )
             if instance_errors:
                 errors.extend(instance_errors)
+                continue
+            target_errors: list[str] = []
+            for alias in sorted(cycle_aliases):
+                target_errors.extend(
+                    transition_module_alias_action_shaped_target_errors(
+                        module_path,
+                        alias,
+                        root_kind,
+                        seen | frozenset({key}),
+                    )
+                )
+            if target_errors:
+                errors.extend(target_errors)
+                continue
+            nested_aggregate_errors = transition_disjunct_nested_aggregate_errors(
+                module_path,
+                disjunct,
+                root_kind,
+                seen | frozenset({key}),
+            )
+            if nested_aggregate_errors:
+                errors.extend(nested_aggregate_errors)
                 continue
             witnesses = transition_disjunct_action_witnesses(module_path, disjunct)
             if len(witnesses) > 1:
@@ -14585,6 +15483,20 @@ def progress_transition_direct_disjunct_errors(
         if cycle_errors:
             errors.extend(cycle_errors)
             continue
+        if transition_disjunct_is_bare_named_reference(disjunct):
+            witness_errors: list[str] = []
+            for reference in sorted(cycle_references):
+                witness_errors.extend(
+                    transition_reference_action_witness_errors(
+                        module_path,
+                        reference,
+                        root_kind,
+                        seen | frozenset({key}),
+                    )
+                )
+            if witness_errors:
+                errors.extend(witness_errors)
+                continue
         nested_aggregate_errors = transition_disjunct_nested_aggregate_errors(
             module_path,
             disjunct,
@@ -19517,6 +20429,47 @@ def tla_top_level_disjuncts(expression: str) -> list[str]:
     if part:
         disjuncts.append(part)
     return disjuncts
+
+
+def tla_expression_contains_nested_disjunction(expression: str) -> bool:
+    """Return whether expression contains a parenthesized disjunction."""
+
+    text = strip_static_outer_parentheses(expression).strip()
+    depth = 0
+    in_string = False
+    escaped = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            index += 1
+            continue
+        if text.startswith("<<", index):
+            depth += 1
+            index += 2
+            continue
+        if text.startswith(">>", index) and depth > 0:
+            depth -= 1
+            index += 2
+            continue
+        if char in "([{":
+            depth += 1
+        elif char in ")]}" and depth > 0:
+            depth -= 1
+        if depth > 0 and text.startswith("\\/", index):
+            return True
+        index += 1
+    return False
 
 
 def tla_top_level_implication_operands(expression: str) -> list[str]:

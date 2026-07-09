@@ -23,6 +23,7 @@ NOW_UNIX = 1_800_200_000
 GENERATED_AT = NOW_UNIX - 120
 DIGEST = "ab" * 32
 DIGEST_2 = "cd" * 32
+DIGEST_3 = "ef" * 32
 
 
 def order_refs(count: int) -> list[str]:
@@ -1340,6 +1341,40 @@ def test_all_policy_bound_artifacts_reject_contract_policy_mismatch(
             f"{kind_name} policy_digest_hex must reference a valid "
             "contract_surface policy_digest_hex"
         ) in artifact["errors"]
+
+
+def test_multiple_valid_contract_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = contract_surface()
+    payload["contract_digest_hex"] = DIGEST_3
+    write_json(tmp_path / "contract-surface-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_contract_digests"] == []
+    assert (
+        "valid_contract_digests must contain exactly one active digest"
+        in result["errors"]
+    )
+
+
+def test_multiple_valid_policy_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = contract_surface()
+    payload["policy_digest_hex"] = DIGEST_3
+    write_json(tmp_path / "contract-surface-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_policy_digests"] == []
+    assert (
+        "valid_policy_digests must contain exactly one active digest"
+        in result["errors"]
+    )
 
 
 def test_reconciliation_source_count_must_match_unique_sources(

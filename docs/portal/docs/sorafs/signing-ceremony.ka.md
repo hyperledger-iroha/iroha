@@ -74,8 +74,9 @@ cargo xtask sorafs-fetch-fixture \
   --out fixtures/sorafs_chunker
 ```
 
-გაიარეთ `--manifest`, თუ მანიფესტი ცხოვრობს სხვა URL-ზე. ხელმოუწერელი კონვერტები
-უარი თქვეს, თუ `--allow-unsigned` არ არის დაყენებული ადგილობრივი კვამლებისთვის.
+Pass `--manifest` if the manifest lives at a different URL or path. The
+command refuses unsigned envelopes; use the Parliament-published envelope or a
+locally generated council-signed envelope for smoke runs.
 
 - მანიფესტის ვალიდაციისას დადგმის კარიბჭის მეშვეობით, მიმართეთ Torii-ის ნაცვლად
   ადგილობრივი დატვირთვები:

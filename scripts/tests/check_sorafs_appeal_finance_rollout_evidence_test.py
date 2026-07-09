@@ -658,7 +658,7 @@ def test_deployment_context_is_required(tmp_path: Path) -> None:
 
     result = json.loads(summary.read_text(encoding="utf-8"))
     artifact = result["required"]["pricing_config"]["artifacts"][0]
-    assert "deployment_id must be a non-empty string" in artifact["errors"]
+    assert "deployment_id must be a non-empty canonical string" in artifact["errors"]
 
 
 def test_unreviewed_deployment_context_fails(tmp_path: Path) -> None:
@@ -1020,6 +1020,30 @@ def test_quote_api_dimensions_must_not_include_unknown_values(
         artifact = result["required"]["quote_api"]["artifacts"][0]
         assert artifact["valid"] is False
         assert f"{field} must not include unknown values" in artifact["errors"]
+
+
+def test_unique_scalar_inventory_count_rejects_unicode_controls_before_counting() -> None:
+    for value in ("standard ", "standard\u200d", "standard\u202e", "standard\ue000"):
+        errors: list[str] = []
+
+        count = MODULE.unique_scalar_inventory_count(
+            {"classes": ["standard", value]},
+            "classes",
+            errors,
+        )
+
+        assert count == 0
+        assert errors == []
+
+    errors = []
+    count = MODULE.unique_scalar_inventory_count(
+        {"classes": ["standard", "standard"]},
+        "classes",
+        errors,
+    )
+
+    assert count == 1
+    assert errors == ["classes must not contain duplicate values"]
 
 
 def test_quote_api_max_route_latency_must_be_integer(tmp_path: Path) -> None:
@@ -1765,6 +1789,40 @@ def test_all_policy_bound_artifacts_reject_pricing_policy_mismatch(
             f"{kind_name} policy_digest_hex must reference a valid "
             "pricing_config policy_digest_hex"
         ) in artifact["errors"]
+
+
+def test_multiple_valid_config_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = pricing_config()
+    payload["config_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "pricing-config-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_config_digests"] == []
+    assert (
+        "valid_config_digests must contain exactly one active digest"
+        in result["errors"]
+    )
+
+
+def test_multiple_valid_policy_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = pricing_config()
+    payload["policy_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "pricing-config-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_policy_digests"] == []
+    assert (
+        "valid_policy_digests must contain exactly one active digest"
+        in result["errors"]
+    )
 
 
 def test_stale_pricing_config_does_not_anchor_config_bound_evidence(tmp_path: Path) -> None:

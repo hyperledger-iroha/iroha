@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import importlib
 import json
@@ -9162,6 +9163,59 @@ def test_release_readiness_report_guards_release_corridor_phase_transcript_gate_
         'name == "CARGO_TARGET_DIR"',
         "def _dotnet_phase_block_bridge_path_matches_target_dir(",
         'bridge_path == f"{target_dir}/debug/connect_norito_bridge.dll"',
+        "PHASE_PREFIX_ENV_ASSIGNMENT_TYPE_ERROR",
+        "phase prefix environment assignment must be an exact string",
+        "PHASE_COMMAND_TEXT_TYPE_ERROR",
+        "phase command text must be an exact string",
+        "PHASE_COMMAND_TOKEN_TYPE_ERROR",
+        "phase command token must be an exact string",
+        "PHASE_OUTPUT_LINE_TYPE_ERROR",
+        "phase output line must be an exact string",
+        "PHASE_BLOCK_TEXT_TYPE_ERROR",
+        "phase block text must be an exact string",
+        "PHASE_TRANSCRIPT_TEXT_TYPE_ERROR",
+        "phase transcript text must be an exact string",
+        "PHASE_DIAGNOSTIC_FRAGMENT_TYPE_ERROR",
+        "phase diagnostic fragment must be an exact string",
+        "type(command) is not str",
+        "type(phase_block) is not str",
+        "type(transcript) is not str",
+        "type(path) is not str",
+        "type(value) is not str",
+        "type(bridge_library_dir) is not str",
+        "type(line) is not str",
+        "type(fragment) is not str",
+        "type(phase) is not str",
+        "type(option) is not str",
+        "type(expected) is not str",
+        "type(expected_path) is not str",
+        "type(suffix) is not str",
+        "type(fallback_position) is not int",
+        "type(ceiling_position) is not int",
+        "type(option) is str for option in options_with_values",
+        "type(task) is not str",
+        "def _phase_command_tokens_are_exact_strings(",
+        "any(type(token) is not str for token in tokens)",
+        "def _phase_position_values_are_exact_ints(",
+        "any(type(position) is not int for position in positions)",
+        '_public_mapping_get_string_key(artifact, "path")',
+        "phase name must be an exact string",
+        "not _phase_command_tokens_are_exact_strings(tokens)",
+        "not _phase_command_tokens_are_exact_strings(raw_tokens)",
+        "not _phase_command_tokens_are_exact_strings(test_selectors)",
+        "test_release_readiness_phase_prefix_env_assignments_rejects_token_subclasses",
+        "test_release_readiness_phase_effective_command_tokens_reject_token_subclasses",
+        "test_release_readiness_phase_command_tokens_reject_command_text_subclasses",
+        "test_release_readiness_command_option_helpers_reject_token_subclasses",
+        "test_release_readiness_command_diagnostic_helpers_reject_text_subclasses",
+        "test_release_readiness_phase_output_helpers_reject_line_subclasses",
+        "test_release_readiness_phase_block_helpers_reject_text_subclasses",
+        "test_release_readiness_dotnet_diagnostic_helpers_reject_text_subclasses",
+        "test_release_readiness_phase_command_matcher_helpers_reject_text_subclasses",
+        "test_release_readiness_phase_success_window_helpers_reject_subclasses",
+        "test_release_readiness_phase_transcript_rejects_unreadable_artifacts",
+        "HostileArtifactKey",
+        "HostilePhaseName",
         "path_list_has_empty_segment()",
         "validate_nonempty_path_list()",
         "no empty path-list segments before native bridge loader setup",
@@ -9904,6 +9958,30 @@ def test_release_readiness_phase_transcript_rejects_unreadable_artifacts(
     directory_log = tmp_path / "js-sdk-directory.log"
     directory_log.mkdir()
 
+    class HostileArtifactKey(str):
+        __hash__ = str.__hash__
+
+        def __eq__(self, other):
+            raise AssertionError("secret-token transcript artifact key eq hook")
+
+        def __str__(self):
+            raise AssertionError("secret-token transcript artifact key str hook")
+
+        def __repr__(self):
+            return "secret-token-transcript-artifact-key"
+
+    class HostilePhaseName(str):
+        __hash__ = str.__hash__
+
+        def __eq__(self, other):
+            raise AssertionError("secret-token transcript phase eq hook")
+
+        def __str__(self):
+            raise AssertionError("secret-token transcript phase str hook")
+
+        def __repr__(self):
+            return "secret-token-transcript-phase"
+
     hostile_path, hostile_errors = report._phase_transcript_artifact_path(
         {"path": HostileMarkdownString("real-js-sdk.log")}
     )
@@ -9911,6 +9989,19 @@ def test_release_readiness_phase_transcript_rejects_unreadable_artifacts(
     assert hostile_errors == [
         "evidence artifact cannot be checked: missing artifact path"
     ]
+
+    hostile_key_path, hostile_key_errors = report._phase_transcript_artifact_path(
+        {HostileArtifactKey("path"): "real-js-sdk.log"}
+    )
+    assert hostile_key_path is None
+    assert hostile_key_errors == [
+        "evidence artifact cannot be checked: missing artifact path"
+    ]
+
+    assert report._phase_transcript_errors(
+        HostilePhaseName("js-sdk"),
+        {"path": "real-js-sdk.log"},
+    ) == ["evidence artifact cannot be checked: phase name must be an exact string"]
 
     for artifact_path in (
         "js-sdk-symlink.log",
@@ -10546,6 +10637,30 @@ def test_release_readiness_markdown_table_containers_reject_subclasses_without_l
     helper_sets_with_hostile_list[first_sdk] = HostileMarkdownList(
         helper_sets[first_sdk]
     )
+    hostile_artifact_aliases = {
+        HostileReportFieldName("path"): "secret-token-input-alias",
+        HostileReportFieldName("bytes"): 1,
+        HostileReportFieldName("sha256"): "0x" + "11" * 32,
+    }
+
+    assert (
+        report._markdown_artifact_path_cell(
+            hostile_artifact_aliases,
+            field_label="path",
+        )
+        == "`<invalid path>`"
+    )
+    assert (
+        report._markdown_artifact_bytes_cell(hostile_artifact_aliases)
+        == "`<invalid bytes>`"
+    )
+    assert (
+        report._markdown_artifact_hash_cell(
+            hostile_artifact_aliases,
+            field_label="sha256",
+        )
+        == "`<invalid sha256>`"
+    )
 
     fragments = [
         report._audit_hashes_cell(
@@ -10615,6 +10730,7 @@ def test_release_readiness_markdown_table_containers_reject_subclasses_without_l
                 ]
             )
         ),
+        render_rows(report._input_artifact_markdown_rows([hostile_artifact_aliases])),
         render_rows(
             report._corridor_markdown_rows(
                 HostileMarkdownDict({"phases": {"all": "passed"}})
@@ -10646,6 +10762,28 @@ def test_release_readiness_markdown_table_containers_reject_subclasses_without_l
                                 "sha256": "0x" + "22" * 32,
                             }
                         )
+                    },
+                }
+            )
+        ),
+        render_rows(
+            report._corridor_markdown_rows(
+                {
+                    "phases": {"all": "passed"},
+                    "evidence_artifacts": {"all": hostile_artifact_aliases},
+                }
+            )
+        ),
+        render_rows(
+            report._corridor_markdown_rows(
+                {
+                    "phases": {"all": "passed"},
+                    "evidence_artifacts": {
+                        HostileReportFieldName("all"): {
+                            "path": "secret-token-corridor-alias",
+                            "bytes": 1,
+                            "sha256": "0x" + "33" * 32,
+                        }
                     },
                 }
             )
@@ -17535,6 +17673,118 @@ def test_release_readiness_report_rejects_public_checklist_subclasses_without_le
     assert "secret-token" not in rendered
 
 
+def test_release_readiness_report_public_checklist_uses_exact_required_keys() -> None:
+    """Public checklist required fields must not accept hostile key aliases."""
+
+    report = load_report_module()
+    item_ids = tuple(report.ACTIVE_LAUNCH_RELEASE_CHECKLIST_ITEM_IDS)
+    checklist = {
+        "ready": True,
+        "items": [
+            {
+                "id": item_id,
+                "title": report.ACTIVE_LAUNCH_RELEASE_CHECKLIST_TITLES[item_id],
+                "ready": True,
+                "blockers": [],
+            }
+            for item_id in item_ids
+        ],
+    }
+
+    root_field_errors = {
+        "ready": "readiness report release_checklist ready must be boolean",
+        "items": "readiness report release_checklist items must be a list",
+    }
+    for field, expected_error in root_field_errors.items():
+        hostile_checklist = copy.deepcopy(checklist)
+        hostile_checklist[HostileReportFieldName(field)] = hostile_checklist.pop(field)
+
+        errors = report._public_release_checklist_errors(hostile_checklist)
+        rendered = "\n".join(errors)
+
+        assert expected_error in rendered
+        assert "readiness report release_checklist contains malformed unknown field name" in rendered
+        assert "secret-token" not in rendered
+        assert "__eq__" not in rendered
+        assert "__str__" not in rendered
+
+    item_field_errors = {
+        "id": (
+            "readiness report release_checklist items[0] id must be a "
+            "non-empty canonical string"
+        ),
+        "title": (
+            "readiness report release_checklist items[0] title must be a "
+            "non-empty canonical string"
+        ),
+        "ready": "readiness report release_checklist items[0] ready must be boolean",
+        "blockers": (
+            "readiness report release_checklist items[0] blockers must be a "
+            "list of non-empty canonical strings"
+        ),
+    }
+    for field, expected_error in item_field_errors.items():
+        hostile_checklist = copy.deepcopy(checklist)
+        first_item = hostile_checklist["items"][0]
+        first_item[HostileReportFieldName(field)] = first_item.pop(field)
+
+        errors = report._public_release_checklist_errors(hostile_checklist)
+        rendered = "\n".join(errors)
+
+        assert expected_error in rendered
+        assert (
+            "readiness report release_checklist items[0] contains malformed unknown field name"
+            in rendered
+        )
+        assert "secret-token" not in rendered
+        assert "__eq__" not in rendered
+        assert "__str__" not in rendered
+
+
+def test_release_readiness_report_markdown_checklist_uses_exact_keys() -> None:
+    """Release-checklist Markdown rows must reject hostile key aliases."""
+
+    report = load_report_module()
+    checklist_id = report.ACTIVE_LAUNCH_RELEASE_CHECKLIST_ITEM_IDS[0]
+    item = {
+        "id": checklist_id,
+        "title": report.ACTIVE_LAUNCH_RELEASE_CHECKLIST_TITLES[checklist_id],
+        "ready": True,
+        "blockers": [],
+    }
+
+    hostile_root = {"items": [dict(item)]}
+    hostile_root[HostileReportFieldName("items")] = hostile_root.pop("items")
+    root_rows = report._release_checklist_markdown_rows(
+        hostile_root,
+        max_blockers_per_lane=4,
+    )
+    root_rendered = "\n".join(" | ".join(row) for row in root_rows)
+    assert root_rows == [
+        ["`<invalid id>`", "blocked", "release checklist items must be a list"]
+    ]
+    assert "secret-token" not in root_rendered
+
+    expected_cells = {
+        "id": (0, "`<invalid id>`"),
+        "ready": (1, "blocked"),
+        "blockers": (2, "`<invalid blockers>`"),
+    }
+    for field, (cell_index, expected_cell) in expected_cells.items():
+        hostile_item = dict(item)
+        hostile_item[HostileReportFieldName(field)] = hostile_item.pop(field)
+        rows = report._release_checklist_markdown_rows(
+            {"items": [hostile_item]},
+            max_blockers_per_lane=4,
+        )
+        rendered = "\n".join(" | ".join(row) for row in rows)
+
+        assert expected_cell in rows[0][cell_index]
+        assert "secret-token" not in rendered
+        assert "__eq__" not in rendered
+        assert "__str__" not in rendered
+
+
 def test_release_readiness_report_markdown_compares_row_ready_exactly(
     tmp_path: Path,
 ) -> None:
@@ -17904,6 +18154,15 @@ def test_release_readiness_report_markdown_pins_live_verifier_blockers(
             f"release evidence marker: {lane_blocker}"
         ) in errors
 
+    blocker_schema_marker = "blocked-row explanation checks"
+    assert blocker_schema_marker in markdown
+    weakened = markdown.replace(blocker_schema_marker, "blocked-row diagnostics")
+    errors = verifier._readiness_markdown_invariant_errors(readiness, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        f"release evidence marker: {blocker_schema_marker}"
+    ) in errors
+
 
 def test_release_readiness_report_markdown_requires_governed_live_verifier_blockers_on_one_line(
     tmp_path: Path,
@@ -18230,6 +18489,13 @@ def test_release_readiness_report_markdown_rejects_malformed_top_level_status(
     truthy_status["production_ready"] = "true"
     missing_status = dict(readiness)
     del missing_status["production_ready"]
+    alias_status = dict(readiness)
+    alias_status.pop("production_ready")
+    alias_status.pop("blockers")
+    alias_status[HostileReportFieldName("production_ready")] = True
+    alias_status[HostileReportFieldName("blockers")] = [
+        "operator secret-token-readiness-alias"
+    ]
 
     truthy_markdown = report._render_markdown(
         truthy_status,
@@ -18239,6 +18505,10 @@ def test_release_readiness_report_markdown_rejects_malformed_top_level_status(
         missing_status,
         max_blockers_per_lane=4,
     )
+    alias_markdown = report._render_markdown(
+        alias_status,
+        max_blockers_per_lane=4,
+    )
     scalar_markdown = report._render_markdown(
         "operator secret-token-readiness-root",
         max_blockers_per_lane=4,
@@ -18246,6 +18516,10 @@ def test_release_readiness_report_markdown_rejects_malformed_top_level_status(
 
     assert "Status: NOT READY" in truthy_markdown
     assert "Status: NOT READY" in missing_markdown
+    assert "Status: NOT READY" in alias_markdown
+    assert "Status: READY" not in alias_markdown
+    assert "- `<invalid blockers>`" in alias_markdown
+    assert "secret-token" not in alias_markdown
     assert "Status: NOT READY" in scalar_markdown
     assert "| `<invalid path>` | `<invalid bytes>` | `<invalid sha256>` |" in scalar_markdown
     assert "lane summary must be an object" in scalar_markdown
@@ -18692,10 +18966,21 @@ def test_release_readiness_native_evm_markdown_cells_ignore_hostile_aliases() ->
         {HostileReportFieldName("path"): "native-prover-artifacts/proving-key.bin"},
         field_label="proving_key",
     )
+    artifact_hash_cell = report._native_evm_artifact_hash_cell(
+        {HostileReportFieldName("sha256"): "11" * 32},
+        field_label="proving_key",
+    )
     support_artifact_cell = report._native_evm_support_artifact_cell(
         {
             HostileReportFieldName("path"): "native-prover-artifacts/proving-key.bin",
             "sha256": "11" * 32,
+        },
+        field_label="proving_key",
+    )
+    support_artifact_hash_cell = report._native_evm_support_artifact_cell(
+        {
+            "path": "native-prover-artifacts/proving-key.bin",
+            HostileReportFieldName("sha256"): "11" * 32,
         },
         field_label="proving_key",
     )
@@ -18708,11 +18993,20 @@ def test_release_readiness_native_evm_markdown_cells_ignore_hostile_aliases() ->
     )
 
     rendered = "\n".join(
-        [sdk_cell, artifact_path_cell, support_artifact_cell, *row_cells]
+        [
+            sdk_cell,
+            artifact_path_cell,
+            artifact_hash_cell,
+            support_artifact_cell,
+            support_artifact_hash_cell,
+            *row_cells,
+        ]
     )
     assert sdk_cell == "`<invalid sdk_artifacts>`"
     assert artifact_path_cell == "`<invalid proving_key>`"
+    assert artifact_hash_cell == "`<invalid proving_key.sha256>`"
     assert support_artifact_cell == "`<invalid proving_key>`"
+    assert support_artifact_hash_cell == "`<invalid proving_key>`"
     assert row_cells[0] == "no"
     assert "secret-token" not in rendered
     assert "hostile readiness" not in rendered
@@ -18765,10 +19059,10 @@ def test_release_readiness_user_prover_helper_sets_reject_hostile_sdk_aliases(
     assert "__str__" not in errors
 
 
-def test_release_readiness_native_evm_bundle_status_ignores_hostile_active_destination_alias(
+def test_release_readiness_native_evm_bundle_status_rejects_hostile_active_destination_alias(
     tmp_path: Path,
 ) -> None:
-    """Native EVM bundle comparison must use exact active destination keys."""
+    """Native EVM bundle status must require exact active destination keys."""
 
     report = load_report_module()
     evidence_path, _ = write_active_launch_evidence(tmp_path)
@@ -18784,11 +19078,81 @@ def test_release_readiness_native_evm_bundle_status_ignores_hostile_active_desti
     status = report._native_evm_prover_bundle_status(native_bundle, evidence)
     blockers = "\n".join(status["validation_blockers"])
 
-    assert status["validation_status"] == "passed"
+    assert status["validation_status"] == "blocked"
+    assert (
+        "native EVM Groth16 prover bundle expected destination_binding_hash "
+        "must be a canonical non-zero 32-byte hex value"
+    ) in status["validation_blockers"]
     assert (
         "native EVM Groth16 prover bundle destination_binding_hash must match"
         not in blockers
     )
+    assert "secret-token" not in blockers
+    assert "hostile" not in blockers
+    assert "__eq__" not in blockers
+    assert "__str__" not in blockers
+
+
+def test_release_readiness_native_evm_bundle_status_exact_key_helpers_reject_hostile_payload_keys(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Native EVM bundle status must require exact copied manifest keys."""
+
+    report = load_report_module()
+    evidence_path, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence_path)
+    evidence = report._load_evidence_summary([evidence_path])
+    original_loader = report._load_json_without_duplicate_keys
+
+    def hostile_loader(path: Path):
+        payload = original_loader(path)
+        if path == native_bundle and isinstance(payload, dict):
+            for field in (
+                "no_wasm",
+                "remote_prover_required",
+                "proof_artifact_hash",
+                "proving_key_hash",
+                "verifier_key_hash",
+                "destination_binding_hash",
+                "audit_hashes",
+            ):
+                payload[HostileReportFieldName(field)] = payload.pop(field)
+            sdk_row = dict(payload["native_sdk_artifacts"][0])
+            sdk_row[HostileReportFieldName("implementation_hash")] = sdk_row.pop(
+                "implementation_hash"
+            )
+            payload["native_sdk_artifacts"][0] = sdk_row
+        return payload
+
+    monkeypatch.setattr(report, "_load_json_without_duplicate_keys", hostile_loader)
+
+    status = report._native_evm_prover_bundle_status(native_bundle, evidence)
+    blockers = "\n".join(status["validation_blockers"])
+
+    assert status["validation_status"] == "blocked"
+    for expected in (
+        "native EVM Groth16 prover bundle missing field: no_wasm",
+        "native EVM Groth16 prover bundle missing field: remote_prover_required",
+        "native EVM Groth16 prover bundle no_wasm must be true",
+        "native EVM Groth16 prover bundle remote_prover_required must be false",
+        "native EVM Groth16 prover bundle audit_hashes must be a non-empty object",
+        "native_sdk_artifacts[0] missing field: implementation_hash",
+        (
+            f"{status['sdk_artifacts'][0]['sdk']} implementation_hash must be a "
+            "canonical non-zero 32-byte hex value"
+        ),
+    ):
+        assert expected in blockers
+    assert status["proof_artifact_hash"] == ""
+    assert status["proving_key_hash"] == ""
+    assert status["verifier_key_hash"] == ""
+    assert status["destination_binding_hash"] == ""
+    assert status["audit_hashes"] == {}
+    js_sdk_row = next(
+        row for row in status["sdk_artifacts"] if row["implementation_hash"] == ""
+    )
+    assert js_sdk_row["implementation_hash"] == ""
     assert "secret-token" not in blockers
     assert "hostile" not in blockers
     assert "__eq__" not in blockers
@@ -18885,6 +19249,39 @@ def test_release_readiness_native_evm_bundle_status_redacts_hostile_keys(
     assert "Traceback" not in rendered
 
 
+def test_release_readiness_native_evm_artifact_redaction_uses_exact_keys() -> None:
+    """Native EVM artifact redaction must ignore hostile metadata aliases."""
+
+    report = load_report_module()
+    redacted_alias_artifact = {
+        HostileReportFieldName("path"): "native-prover-artifacts/unsafe|path.bin",
+        HostileReportFieldName("bytes"): 1,
+        HostileReportFieldName("sha256"): "11" * 32,
+    }
+    exact_metadata_with_alias_path = {
+        HostileReportFieldName("path"): "native-prover-artifacts/unsafe|path.bin",
+        "bytes": 1,
+        "sha256": "11" * 32,
+    }
+
+    assert (
+        report._redacted_native_evm_artifact_summary(
+            redacted_alias_artifact,
+            redact_unsafe_path=True,
+        )
+        is None
+    )
+    redacted = report._redacted_native_evm_artifact_summary(
+        exact_metadata_with_alias_path,
+        redact_unsafe_path=True,
+    )
+
+    assert type(redacted) is dict
+    assert report._public_mapping_get_string_key(redacted, "path") is None
+    assert report._public_mapping_get_string_key(redacted, "bytes") == 1
+    assert report._public_mapping_get_string_key(redacted, "sha256") == "11" * 32
+
+
 def test_release_readiness_cryptographic_evidence_exact_key_helpers_reject_hostile_required_keys(
     tmp_path: Path,
 ) -> None:
@@ -18934,6 +19331,73 @@ def test_release_readiness_cryptographic_evidence_exact_key_helpers_reject_hosti
     assert "hostile" not in errors
     assert "__eq__" not in errors
     assert "__str__" not in errors
+
+
+def test_release_readiness_active_launch_outer_summary_uses_exact_keys(
+    tmp_path: Path,
+) -> None:
+    """Active launch summary helpers must not consume hostile outer key aliases."""
+
+    report = load_report_module()
+    evidence_path, _ = write_active_launch_evidence(tmp_path)
+    evidence = report._load_evidence_summary([evidence_path])
+    active_lane = report._active_launch_lane(evidence)
+    assert active_lane is not None
+
+    root_alias = {HostileReportFieldName("lanes"): [active_lane]}
+    assert report._active_launch_lane(root_alias) is None
+    assert report._cryptographic_evidence(root_alias) == []
+    root_markdown_rows = report._lane_readiness_markdown_rows(
+        root_alias,
+        max_blockers_per_lane=4,
+    )
+    assert root_markdown_rows[0][0] == "-"
+
+    lane = json.loads(json.dumps(active_lane))
+    for field in (
+        "records",
+        "blockers",
+        "source_record_hashes",
+        "destination_binding",
+        "route_allowlist",
+        "source_adapter_gate",
+        "evm_live_metadata",
+    ):
+        lane[HostileReportFieldName(field)] = lane.pop(field)
+    hostile_evidence = {"lanes": [lane]}
+    label = f"domain {report.ACTIVE_LAUNCH_DOMAIN} ({report.ACTIVE_LAUNCH_CHAIN})"
+
+    blockers = []
+    blockers.extend(report._active_launch_evm_live_metadata_blockers(label, lane))
+    blockers.extend(
+        report._active_launch_governed_deployment_metadata_blockers(label, lane)
+    )
+    blockers.extend(report._active_launch_route_allowlist_binding_blockers(label, lane))
+    checklist = report._active_launch_release_checklist(
+        hostile_evidence,
+        {"validation_status": "passed", "validation_blockers": []},
+    )
+    rows = report._cryptographic_evidence(hostile_evidence)
+    markdown_rows = report._lane_readiness_markdown_rows(
+        hostile_evidence,
+        max_blockers_per_lane=4,
+    )
+    rendered = "\n".join(blockers) + "\n" + json.dumps(checklist, sort_keys=True)
+
+    assert report._active_launch_lane(hostile_evidence) is lane
+    assert "source live eth_chainId must be" in rendered
+    assert "source adapter gate summary is missing" in rendered
+    assert "active route allowlist summary is malformed" in rendered
+    assert rows[0]["source_verifier_material_hash"] is None
+    assert rows[0]["destination_binding_hash"] is None
+    assert rows[0]["route_allowlist_hash"] is None
+    assert rows[0]["source_adapter_gate_hash"] == ""
+    assert rows[0]["evm_source_rpc_chain_id"] == ""
+    assert markdown_rows[0][3] == "source=no, deploy=no, dest=no, route=no"
+    assert "secret-token" not in rendered
+    assert "hostile" not in rendered
+    assert "__eq__" not in rendered
+    assert "__str__" not in rendered
 
 
 def test_release_readiness_report_rejects_hostile_native_evm_root_identity_without_comparing(
@@ -19057,10 +19521,15 @@ def test_release_readiness_report_rejects_hostile_native_evm_destination_binding
         "destination_binding_hash"
     ] = HostileDestinationHash()
 
-    # Source-inventory marker: readiness native prover destination binding hash comparison rejects hostile copied values before hooks
+    # Source-inventory marker: readiness native prover expected destination binding hash rejects hostile copied values before hooks
     status = report._native_evm_prover_bundle_status(native_bundle, hostile_evidence)
     blockers = "\n".join(status["validation_blockers"])
 
+    assert status["validation_status"] == "blocked"
+    assert (
+        "native EVM Groth16 prover bundle expected destination_binding_hash "
+        "must be a canonical non-zero 32-byte hex value"
+    ) in status["validation_blockers"]
     assert (
         "native EVM Groth16 prover bundle destination_binding_hash must match"
         not in blockers
@@ -21075,6 +21544,163 @@ def test_release_readiness_report_treats_missing_active_route_canary_blockers_as
     assert route_canary_item["blockers"] == []
 
 
+def test_release_readiness_report_active_route_canary_blocker_does_not_mask_unbound_evidence(
+    tmp_path: Path,
+) -> None:
+    """Copied route-canary blockers must not hide unbound canary evidence."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    evidence_summary = report._load_evidence_summary([evidence])
+    native_status = report._native_evm_prover_bundle_status(
+        native_bundle,
+        evidence_summary,
+    )
+    active_lane = report._active_launch_lane(evidence_summary)
+    assert active_lane is not None
+    active_lane["blockers"] = ["route canary pending operator certification"]
+    active_lane["route_allowlist"]["route_canary"]["evidence_bound"] = False
+
+    checklist = report._active_launch_release_checklist(
+        evidence_summary,
+        native_status,
+    )
+    item_by_id = {item["id"]: item for item in checklist["items"]}
+    canary_item = item_by_id["live_route_canary_evidence"]
+    blockers = "\n".join(canary_item["blockers"])
+    unbound_blocker = "domain 1 (eth): route canary evidence is not bound"
+    lane_blocker = "domain 1 (eth): route canary pending operator certification"
+
+    assert checklist["ready"] is False
+    assert canary_item["ready"] is False
+    assert unbound_blocker in blockers
+    assert lane_blocker in blockers
+
+
+def test_release_readiness_report_active_route_canary_blocker_does_not_mask_binding_hash_drift(
+    tmp_path: Path,
+) -> None:
+    """Copied route-canary blockers must not hide canary binding hash drift."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    evidence_summary = report._load_evidence_summary([evidence])
+    native_status = report._native_evm_prover_bundle_status(
+        native_bundle,
+        evidence_summary,
+    )
+    active_lane = report._active_launch_lane(evidence_summary)
+    assert active_lane is not None
+    active_lane["blockers"] = ["route canary pending operator certification"]
+    canary = active_lane["route_allowlist"]["route_canary"]
+    canary["route_allowlist_hash"] = fixed_hex32(0xFE)
+    canary["destination_binding_hash"] = fixed_hex32(0xFD)
+
+    checklist = report._active_launch_release_checklist(
+        evidence_summary,
+        native_status,
+    )
+    item_by_id = {item["id"]: item for item in checklist["items"]}
+    canary_item = item_by_id["live_route_canary_evidence"]
+    blockers = "\n".join(canary_item["blockers"])
+    # Source-inventory marker: domain 1 (eth): route canary route allowlist hash must match route_allowlist_hash
+    route_blocker = (
+        "domain 1 (eth): route canary route allowlist hash must match "
+        "route_allowlist_hash"
+    )
+    # Source-inventory marker: domain 1 (eth): route canary destination binding hash must match destination_binding_hash
+    destination_blocker = (
+        "domain 1 (eth): route canary destination binding hash must match "
+        "destination_binding_hash"
+    )
+    lane_blocker = "domain 1 (eth): route canary pending operator certification"
+
+    assert checklist["ready"] is False
+    assert canary_item["ready"] is False
+    assert route_blocker in blockers
+    assert destination_blocker in blockers
+    assert lane_blocker in blockers
+
+
+def test_release_readiness_report_route_canary_requires_sibling_binding_hashes(
+    tmp_path: Path,
+) -> None:
+    """Route-canary readiness must fail when sibling binding hashes are absent."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    sibling_binding_cases = (
+        (
+            "route_allowlist.route_allowlist_hash.missing",
+            None,
+            "route canary expected route allowlist hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "route_allowlist.route_allowlist_hash.zero",
+            "0x" + "00" * 32,
+            "route canary expected route allowlist hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "route_allowlist.route_allowlist_hash.uppercase",
+            fixed_hex32(0xB6).upper(),
+            "route canary expected route allowlist hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "destination_binding.destination_binding_hash.missing",
+            None,
+            "route canary expected destination binding hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "destination_binding.destination_binding_hash.zero",
+            "0x" + "00" * 32,
+            "route canary expected destination binding hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "destination_binding.destination_binding_hash.uppercase",
+            fixed_hex32(0xB7).upper(),
+            "route canary expected destination binding hash must be a canonical non-zero bytes32 hex string",
+        ),
+    )
+
+    for field, value, expected_blocker in sibling_binding_cases:
+        evidence_summary = report._load_evidence_summary([evidence])
+        native_status = report._native_evm_prover_bundle_status(
+            native_bundle,
+            evidence_summary,
+        )
+        active_lane = report._active_launch_lane(evidence_summary)
+        assert active_lane is not None
+        if field.startswith("route_allowlist."):
+            target = active_lane["route_allowlist"]
+            target_field = "route_allowlist_hash"
+        elif field.startswith("destination_binding."):
+            target = active_lane["destination_binding"]
+            target_field = "destination_binding_hash"
+        else:
+            raise AssertionError(field)
+        if value is None:
+            target.pop(target_field, None)
+        else:
+            target[target_field] = value
+
+        checklist = report._active_launch_release_checklist(
+            evidence_summary,
+            native_status,
+        )
+        item_by_id = {item["id"]: item for item in checklist["items"]}
+        canary_item = item_by_id["live_route_canary_evidence"]
+
+        assert checklist["ready"] is False, field
+        assert canary_item["ready"] is False, field
+        assert any(
+            expected_blocker in blocker
+            for blocker in canary_item["blockers"]
+        ), field
+
+
 def test_release_readiness_report_numbers_repeated_active_component_blocker_duplicates(
 ) -> None:
     """Active-launch component blocker duplicate groups must stay distinct."""
@@ -21797,6 +22423,50 @@ def test_release_readiness_active_source_gate_audit_hash_exact_key_helpers_rejec
     assert "__str__" not in blockers
 
 
+def test_release_readiness_active_source_gate_metadata_exact_key_helpers_reject_hostile_required_keys(
+    tmp_path: Path,
+) -> None:
+    """Active source-gate metadata must use exact builtin-string keys."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    evidence_summary = report._load_evidence_summary([evidence])
+    native_status = report._native_evm_prover_bundle_status(
+        native_bundle,
+        evidence_summary,
+    )
+    active_lane = report._active_launch_lane(evidence_summary)
+    assert active_lane is not None
+    source_gate = active_lane["source_adapter_gate"]
+    for field in ("ready", "required"):
+        source_gate[HostileReportFieldName(field)] = source_gate.pop(field)
+    source_gate.pop("blockers", None)
+    source_gate[HostileReportFieldName("blockers")] = [
+        "secret-token-source-gate-blocker"
+    ]
+
+    checklist = report._active_launch_release_checklist(
+        evidence_summary,
+        native_status,
+    )
+    item_by_id = {item["id"]: item for item in checklist["items"]}
+    deployment_item = item_by_id["governed_deployment_evidence"]
+    blockers = "\n".join(deployment_item["blockers"])
+
+    assert checklist["ready"] is False
+    assert deployment_item["ready"] is False
+    assert "source adapter gate summary must be ready" in blockers
+    assert (
+        f"active {report.ACTIVE_LAUNCH_DISPLAY} source adapter gate summary "
+        "must be required"
+    ) in blockers
+    assert "secret-token" not in blockers
+    assert "hostile" not in blockers
+    assert "__eq__" not in blockers
+    assert "__str__" not in blockers
+
+
 def test_release_readiness_active_source_hash_exact_key_helpers_reject_hostile_required_key(
     tmp_path: Path,
 ) -> None:
@@ -21837,6 +22507,44 @@ def test_release_readiness_active_source_hash_exact_key_helpers_reject_hostile_r
         "route allowlist source verifier material hash must be a canonical "
         "non-zero bytes32 hex string"
     ) in route_blockers
+    assert "secret-token" not in blockers
+    assert "hostile" not in blockers
+    assert "__eq__" not in blockers
+    assert "__str__" not in blockers
+
+
+def test_release_readiness_active_destination_blockers_exact_key_helpers_ignore_hostile_key(
+    tmp_path: Path,
+) -> None:
+    """Active destination blocker metadata must use exact builtin-string keys."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    evidence_summary = report._load_evidence_summary([evidence])
+    native_status = report._native_evm_prover_bundle_status(
+        native_bundle,
+        evidence_summary,
+    )
+    active_lane = report._active_launch_lane(evidence_summary)
+    assert active_lane is not None
+    destination = active_lane["destination_binding"]
+    destination.pop("blockers", None)
+    destination[HostileReportFieldName("blockers")] = [
+        "secret-token-destination-blocker"
+    ]
+
+    checklist = report._active_launch_release_checklist(
+        evidence_summary,
+        native_status,
+    )
+    item_by_id = {item["id"]: item for item in checklist["items"]}
+    deployment_item = item_by_id["governed_deployment_evidence"]
+    blockers = "\n".join(deployment_item["blockers"])
+
+    assert checklist["ready"] is True
+    assert deployment_item["ready"] is True
+    assert deployment_item["blockers"] == []
     assert "secret-token" not in blockers
     assert "hostile" not in blockers
     assert "__eq__" not in blockers
@@ -22468,9 +23176,19 @@ def test_release_readiness_report_classifies_malformed_active_lane_blockers(
             "domain 1 (eth): route%20canary operator launch hold",
         ),
         (
+            ["route allowlist operator launch hold"],
+            ("route_allowlist_binding",),
+            "domain 1 (eth): route allowlist operator launch hold",
+        ),
+        (
             ["Route%20Allowlist operator launch hold"],
             ("route_allowlist_binding",),
             "domain 1 (eth): Route%20Allowlist operator launch hold",
+        ),
+        (
+            ["source adapter operator launch hold"],
+            ("governed_deployment_evidence",),
+            "domain 1 (eth): source adapter operator launch hold",
         ),
         (
             ["Source%20Adapter operator launch hold"],
@@ -22680,6 +23398,9 @@ def test_release_readiness_report_active_checklist_rejects_container_subclasses_
 
     assert "domain 1 (eth): active route allowlist summary is malformed" in (
         route_items["route_allowlist_binding"]["blockers"]
+    )
+    assert "domain 1 (eth): active route allowlist summary is malformed" in (
+        route_items["live_route_canary_evidence"]["blockers"]
     )
     assert "native EVM Groth16 prover bundle manifest is required" in (
         route_items["native_evm_groth16_prover_bundle"]["blockers"]
@@ -22950,6 +23671,40 @@ def test_release_readiness_report_blocks_malformed_native_prover_blockers(
             assert "`<invalid validation_blockers>`" in markdown
         if forbidden_text is not None:
             assert forbidden_text not in markdown
+
+
+def test_release_readiness_report_active_checklist_rejects_blocked_native_prover_without_blockers(
+    tmp_path: Path,
+) -> None:
+    """A blocked native-prover checklist row must explain the validation hold."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    evidence_summary = report._load_evidence_summary([evidence])
+    native_status = report._native_evm_prover_bundle_status(
+        native_bundle,
+        evidence_summary,
+    )
+    native_status["validation_status"] = "blocked"
+    native_status["validation_blockers"] = []
+    expected_blocker = (
+        "native EVM prover validation_blockers must be non-empty when "
+        "validation_status is blocked"
+    )
+
+    # Source-inventory marker: active checklist native prover blocked status must carry validation blockers
+    # Source-inventory marker: native EVM prover validation_blockers must be non-empty when validation_status is blocked
+    checklist = report._active_launch_release_checklist(
+        evidence_summary,
+        native_status,
+    )
+    item_by_id = {item["id"]: item for item in checklist["items"]}
+    native_item = item_by_id["native_evm_groth16_prover_bundle"]
+
+    assert checklist["ready"] is False
+    assert native_item["ready"] is False
+    assert expected_blocker in native_item["blockers"]
 
 
 def test_release_readiness_report_numbers_repeated_native_prover_blocker_duplicates(
@@ -23574,6 +24329,14 @@ def test_release_readiness_report_blocks_malformed_native_evm_artifact_metadata(
         ),
         (
             {
+                HostileReportFieldName("path"): safe_path,
+                HostileReportFieldName("bytes"): 2048,
+                HostileReportFieldName("sha256"): "0" * 64,
+            },
+            "artifact path metadata is invalid",
+        ),
+        (
+            {
                 "path": safe_path,
                 "bytes": True,
                 "sha256": "0" * 64,
@@ -24000,6 +24763,181 @@ def test_release_readiness_report_cli_exit_compares_production_ready_exactly(
     assert payload["blockers"] == [
         "readiness report production_ready must be boolean"
     ]
+
+
+def test_release_readiness_report_cli_rejects_missing_ready_report_roots(
+    monkeypatch,
+    capsys,
+) -> None:
+    """Readiness CLI must not publish a ready report with missing public roots."""
+
+    report = load_report_module()
+    monkeypatch.setattr(
+        report,
+        "_build_report",
+        lambda *_args, **_kwargs: {
+            "production_ready": True,
+            "blockers": [],
+        },
+    )
+
+    exit_code = report.main(["--format", "json", "evidence.toml"])
+
+    assert exit_code == 1
+    payload = json.loads(capsys.readouterr().out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    for field in (
+        "evidence",
+        "release_checklist",
+        "corridor",
+        "inputs",
+        "input_artifacts",
+        "native_evm_prover_bundle",
+        "source_inventory",
+        "cryptographic_evidence",
+        "user_prover_submission_surfaces",
+    ):
+        assert f"readiness report missing top-level field: {field}" in blockers
+
+
+def test_release_readiness_report_cli_rejects_claimed_ready_blocked_subroots_without_leaking(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Readiness CLI must reject top-level ready claims contradicted by subroots."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_manifest = write_native_evm_prover_bundle(tmp_path, evidence)
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_manifest,
+    )
+    readiness["inputs"] = ["evidence.toml"]
+    readiness["input_artifacts"][0]["path"] = "evidence.toml"
+    native_blocker = "safe copied native claimed-ready blocker"
+    native_bundle = json.loads(json.dumps(readiness["native_evm_prover_bundle"]))
+    native_bundle["validation_status"] = "blocked"
+    native_bundle["validation_blockers"] = [native_blocker]
+    readiness["native_evm_prover_bundle"] = native_bundle
+    readiness["release_checklist"] = report._active_launch_release_checklist(
+        readiness["evidence"],
+        native_bundle,
+    )
+
+    corridor = json.loads(json.dumps(readiness["corridor"]))
+    corridor["production_ready"] = False
+    corridor["phases"]["js-sdk"] = "failed"
+    corridor["blockers"] = ["safe copied corridor claimed-ready blocker"]
+    readiness["corridor"] = corridor
+    readiness["user_prover_submission_surfaces"] = report._submission_surfaces(
+        corridor["phases"]
+    )
+
+    source_gate = sorted(readiness["source_inventory"])[0]
+    readiness["source_inventory"][source_gate] = {
+        "validation_status": "blocked",
+        "validation_blockers": ["safe copied source claimed-ready blocker"],
+    }
+    readiness["production_ready"] = True
+    readiness["blockers"] = []
+    monkeypatch.setattr(report, "_build_report", lambda *_args, **_kwargs: readiness)
+
+    exit_code = report.main(["--format", "json", str(evidence)])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    for root in (
+        "release_checklist",
+        "corridor",
+        "native_evm_prover_bundle",
+        "source_inventory",
+        "user_prover_submission_surfaces",
+    ):
+        assert root not in payload
+    assert (
+        "readiness report release_checklist must be ready when "
+        "production_ready is true"
+    ) in blockers
+    assert (
+        "readiness report corridor production_ready must be true when report "
+        "production_ready is true"
+    ) in blockers
+    assert (
+        "readiness report native_evm_prover_bundle validation_status must be "
+        "passed when production_ready is true"
+    ) in blockers
+    assert (
+        "readiness report source_inventory gates must be passed when "
+        "production_ready is true"
+    ) in blockers
+    assert (
+        "readiness report user_prover_submission_surfaces validation_status "
+        "must be passed when production_ready is true"
+    ) in blockers
+    assert "safe copied native claimed-ready blocker" not in captured.out
+    assert "safe copied corridor claimed-ready blocker" not in captured.out
+    assert "safe copied source claimed-ready blocker" not in captured.out
+    assert "js-sdk is failed" not in captured.out
+    assert "secret-token" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_release_readiness_report_cli_summarizes_not_ready_subroots_without_top_blockers(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Readiness CLI must not publish not-ready reports with empty blockers."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_manifest = write_native_evm_prover_bundle(tmp_path, evidence)
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_manifest,
+    )
+    readiness["inputs"] = ["evidence.toml"]
+    readiness["input_artifacts"][0]["path"] = "evidence.toml"
+    native_bundle = json.loads(json.dumps(readiness["native_evm_prover_bundle"]))
+    native_bundle["validation_status"] = "blocked"
+    native_bundle["validation_blockers"] = [
+        "safe copied native not-ready subroot blocker"
+    ]
+    readiness["native_evm_prover_bundle"] = native_bundle
+    readiness["release_checklist"] = report._active_launch_release_checklist(
+        readiness["evidence"],
+        native_bundle,
+    )
+    readiness["production_ready"] = False
+    readiness["blockers"] = []
+    monkeypatch.setattr(report, "_build_report", lambda *_args, **_kwargs: readiness)
+
+    exit_code = report.main(["--format", "json", str(evidence)])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["production_ready"] is False
+    assert payload["release_checklist"]["ready"] is False
+    assert payload["native_evm_prover_bundle"]["validation_status"] == "blocked"
+    assert payload["blockers"] == [
+        "readiness report release_checklist is not ready",
+        "readiness report native_evm_prover_bundle is blocked",
+    ]
+    assert "secret-token" not in captured.out
+    assert "Traceback" not in captured.err
 
 
 def test_release_readiness_report_cli_suppresses_malformed_report_blockers(
@@ -24677,6 +25615,79 @@ def test_release_readiness_report_cli_rejects_malformed_corridor_without_leaking
     assert "Traceback" not in captured.err
 
 
+def test_release_readiness_report_cli_rejects_unexplained_not_ready_corridor_without_leaking(
+    monkeypatch,
+    capsys,
+) -> None:
+    """Readiness CLI must reject not-ready copied corridor roots without blockers."""
+
+    report = load_report_module()
+    phases = report._corridor_phases()
+    monkeypatch.setattr(
+        report,
+        "_build_report",
+        lambda *_args, **_kwargs: {
+            "production_ready": True,
+            "blockers": [],
+            "corridor": {
+                "production_ready": False,
+                "phases": {phase: "passed" for phase in phases},
+                "evidence_artifacts": {},
+                "require_phase_evidence": False,
+                "blockers": [],
+            },
+        },
+    )
+
+    exit_code = report.main(["--format", "json", "evidence.toml"])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "corridor" not in payload
+    assert (
+        "readiness report corridor blockers must be non-empty when production_ready is false"
+        in blockers
+    )
+    assert (
+        "readiness report corridor production_ready must match phase readiness"
+        in blockers
+    )
+    assert "readiness report corridor is invalid" in blockers
+    assert "secret-token" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_release_readiness_corridor_not_ready_requires_public_blockers() -> None:
+    """A blocked copied corridor must explain the failed public phase state."""
+
+    report = load_report_module()
+    phases = report._corridor_phases()
+    phase_status = {phase: "passed" for phase in phases}
+    phase_status[phases[0]] = "failed"
+
+    errors = report._public_corridor_errors(
+        {
+            "production_ready": False,
+            "phases": phase_status,
+            "evidence_artifacts": {},
+            "require_phase_evidence": False,
+            "blockers": [],
+        },
+    )
+
+    assert (
+        "readiness report corridor blockers must be non-empty when production_ready is false"
+        in errors
+    )
+    assert (
+        "readiness report corridor production_ready must match phase readiness"
+        not in errors
+    )
+
+
 def test_release_readiness_corridor_phase_keys_reject_string_subclasses_without_hooks() -> None:
     """Public corridor phase keys must reject string subclasses exactly."""
 
@@ -24700,6 +25711,49 @@ def test_release_readiness_corridor_phase_keys_reject_string_subclasses_without_
         in errors
     )
     assert "secret-token" not in "\n".join(errors)
+
+
+def test_release_readiness_corridor_phase_evidence_requires_exact_keys() -> None:
+    """Passed corridor phases must not bind evidence through string-subclass keys."""
+
+    report = load_report_module()
+    phases = report._corridor_phases()
+    first_phase = phases[0]
+    phase_status = {phase: "passed" for phase in phases}
+    evidence_artifacts = {
+        phase: {
+            "path": f"corridor/{phase}.log",
+            "bytes": 1,
+            "sha256": "a" * 64,
+        }
+        for phase in phases[1:]
+    }
+    evidence_artifacts[HostileReportFieldName(first_phase)] = {
+        "path": f"corridor/{first_phase}.log",
+        "bytes": 1,
+        "sha256": "a" * 64,
+    }
+
+    errors = report._public_corridor_errors(
+        {
+            "production_ready": True,
+            "phases": phase_status,
+            "evidence_artifacts": evidence_artifacts,
+            "require_phase_evidence": True,
+            "blockers": [],
+        },
+    )
+    rendered = "\n".join(errors)
+
+    assert (
+        "readiness report corridor evidence_artifacts contains malformed phase"
+        in rendered
+    )
+    assert (
+        f"readiness report corridor phase {first_phase} has no hashed evidence artifact"
+        in rendered
+    )
+    assert "secret-token" not in rendered
 
 
 def test_release_readiness_report_cli_rejects_duplicate_corridor_evidence_artifacts_without_leaking(
@@ -25034,6 +26088,24 @@ def test_release_readiness_report_cli_rejects_string_subclass_input_artifact_pat
     assert "evidence/00-complete.toml" not in captured.out
     assert "secret-token" not in captured.out
     assert "Traceback" not in captured.err
+
+
+def test_release_readiness_input_artifact_provenance_paths_use_exact_keys() -> None:
+    """Input-artifact provenance comparison must ignore hostile path aliases."""
+
+    report = load_report_module()
+
+    paths = report._public_input_artifact_paths_for_provenance(
+        [
+            {HostileReportFieldName("path"): "evidence/secret-token-alias.toml"},
+            {
+                "path": "evidence/00-complete.toml",
+                HostileReportFieldName("not_path"): "evidence/secret-token-alias.toml",
+            },
+        ]
+    )
+
+    assert paths == [None, "evidence/00-complete.toml"]
 
 
 def test_release_readiness_report_cli_rejects_string_subclass_input_paths(
@@ -25563,6 +26635,230 @@ def test_release_readiness_report_cli_rejects_source_inventory_status_blocker_dr
     assert "Traceback" not in captured.err
 
 
+def test_release_readiness_report_public_validation_status_rejects_subclasses_without_hooks(
+) -> None:
+    """Copied validation_status values must be exact strings before comparison."""
+
+    report = load_report_module()
+    hostile_passed = HostileReportFieldName("passed")
+    hostile_blocked = HostileReportFieldName("blocked")
+
+    source_inventory_errors = "\n".join(
+        report._public_source_inventory_errors(
+            {
+                "proof_request_bundle_gate": {
+                    "validation_status": hostile_passed,
+                    "validation_blockers": [],
+                }
+            }
+        )
+    )
+    assert (
+        "readiness report source_inventory[0] validation_status must be passed "
+        "or blocked"
+    ) in source_inventory_errors
+
+    native_bundle_errors = "\n".join(
+        report._public_native_evm_prover_bundle_errors(
+            {
+                "required": True,
+                "validation_status": hostile_passed,
+                "validation_blockers": [],
+            }
+        )
+    )
+    assert (
+        "readiness report native_evm_prover_bundle validation_status must be "
+        "passed or blocked"
+    ) in native_bundle_errors
+    assert (
+        report._native_evm_bundle_status_cell(
+            {"validation_status": hostile_passed}
+        )
+        == "blocked"
+    )
+    assert (
+        report._native_evm_bundle_blockers_cell(
+            {
+                "validation_status": hostile_passed,
+                "validation_blockers": [],
+            }
+        )
+        == "`<invalid validation_status>`"
+    )
+    assert (
+        report._source_inventory_status_cell(
+            {"validation_status": hostile_passed}
+        )
+        == "blocked"
+    )
+    assert (
+        report._source_inventory_blockers_cell(
+            {
+                "validation_status": hostile_passed,
+                "validation_blockers": [],
+            }
+        )
+        == "`<invalid validation_status>`"
+    )
+
+    claimed_ready_errors = report._public_claimed_ready_subroot_errors(
+        {
+            "production_ready": True,
+            "native_evm_prover_bundle": {
+                "validation_status": hostile_passed,
+            },
+            "source_inventory": {
+                "proof_request_bundle_gate": {
+                    "validation_status": hostile_passed,
+                }
+            },
+            "user_prover_submission_surfaces": [
+                {
+                    "validation_status": hostile_passed,
+                }
+            ],
+        },
+        {},
+    )
+    assert claimed_ready_errors == {
+        "native_evm_prover_bundle": (
+            "readiness report native_evm_prover_bundle validation_status must "
+            "be passed when production_ready is true"
+        ),
+        "source_inventory": (
+            "readiness report source_inventory gates must be passed when "
+            "production_ready is true"
+        ),
+        "user_prover_submission_surfaces": (
+            "readiness report user_prover_submission_surfaces validation_status "
+            "must be passed when production_ready is true"
+        ),
+    }
+
+    ignored_ready_alias_errors = report._public_claimed_ready_subroot_errors(
+        {
+            HostileReportFieldName("production_ready"): True,
+            "release_checklist": {"ready": False},
+            "corridor": {"production_ready": False},
+        },
+        {},
+    )
+    assert ignored_ready_alias_errors == {}
+
+    claimed_ready_alias_errors = report._public_claimed_ready_subroot_errors(
+        {
+            "production_ready": True,
+            "release_checklist": {HostileReportFieldName("ready"): True},
+            "corridor": {HostileReportFieldName("production_ready"): True},
+        },
+        {},
+    )
+    assert claimed_ready_alias_errors == {
+        "release_checklist": (
+            "readiness report release_checklist must be ready when "
+            "production_ready is true"
+        ),
+        "corridor": (
+            "readiness report corridor production_ready must be true when "
+            "report production_ready is true"
+        ),
+    }
+
+    not_ready_blockers = report._public_not_ready_subroot_summary_blockers(
+        {
+            "production_ready": False,
+            "native_evm_prover_bundle": {
+                "validation_status": hostile_blocked,
+            },
+            "source_inventory": {
+                "proof_request_bundle_gate": {
+                    "validation_status": hostile_blocked,
+                }
+            },
+            "user_prover_submission_surfaces": [
+                {
+                    "validation_status": hostile_blocked,
+                }
+            ],
+        },
+        {},
+    )
+    assert not_ready_blockers == [
+        "readiness report is not production_ready but contains no blockers"
+    ]
+    not_ready_alias_blockers = report._public_not_ready_subroot_summary_blockers(
+        {
+            "production_ready": False,
+            "release_checklist": {HostileReportFieldName("ready"): False},
+            "corridor": {HostileReportFieldName("production_ready"): False},
+        },
+        {},
+    )
+    assert not_ready_alias_blockers == [
+        "readiness report is not production_ready but contains no blockers"
+    ]
+
+    alias_payload = report._public_report_payload(
+        {
+            HostileReportFieldName("production_ready"): True,
+            "blockers": [],
+        }
+    )
+    alias_blockers = "\n".join(alias_payload["blockers"])
+    assert alias_payload["production_ready"] is False
+    assert "readiness report production_ready must be boolean" in alias_blockers
+
+    rendered = "\n".join(
+        [
+            native_bundle_errors,
+            source_inventory_errors,
+            "\n".join(claimed_ready_errors.values()),
+            "\n".join(claimed_ready_alias_errors.values()),
+            "\n".join(not_ready_blockers),
+            "\n".join(not_ready_alias_blockers),
+            alias_blockers,
+        ]
+    )
+    assert "secret-token" not in rendered
+    assert "__eq__" not in rendered
+
+
+def test_release_readiness_source_inventory_markdown_helpers_use_exact_row_keys() -> None:
+    """Source-inventory Markdown helpers must ignore hostile copied row-key aliases."""
+
+    report = load_report_module()
+    hostile_inventory = {
+        HostileReportFieldName("validation_status"): "passed",
+        HostileReportFieldName("validation_blockers"): [
+            "secret-token-source-inventory-alias"
+        ],
+    }
+    expected_blockers = "`<invalid validation_status>`<br>`<invalid validation_blockers>`"
+
+    status_cell = report._source_inventory_status_cell(hostile_inventory)
+    blockers_cell = report._source_inventory_blockers_cell(hostile_inventory)
+    rows = report._source_inventory_markdown_rows(
+        {"proof_request_bundle_gate": hostile_inventory}
+    )
+    rendered = "\n".join(
+        [
+            status_cell,
+            blockers_cell,
+            *("| " + " | ".join(row) + " |" for row in rows),
+        ]
+    )
+
+    assert status_cell == "blocked"
+    assert blockers_cell == expected_blockers
+    assert rows == [["`proof_request_bundle_gate`", "blocked", expected_blockers]]
+    assert "passed" not in rendered
+    assert "secret-token" not in rendered
+    assert "hostile" not in rendered
+    assert "__eq__" not in rendered
+    assert "__str__" not in rendered
+
+
 def test_release_readiness_report_cli_rejects_duplicate_public_blocker_lists_without_leaking(
     tmp_path: Path,
     monkeypatch,
@@ -25816,6 +27112,68 @@ def test_release_readiness_report_cli_rejects_malformed_user_prover_surfaces_wit
     assert "Traceback" not in captured.err
 
 
+def test_release_readiness_report_cli_rejects_unexplained_blocked_validation_roots_without_leaking(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Blocked copied validation roots must carry public blocker explanations."""
+
+    report = load_report_module()
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_manifest = write_native_evm_prover_bundle(tmp_path, evidence)
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_manifest,
+    )
+    native_bundle = json.loads(json.dumps(readiness["native_evm_prover_bundle"]))
+    native_bundle["validation_status"] = "blocked"
+    native_bundle["validation_blockers"] = []
+    phase_status = {phase: "passed" for phase in report._corridor_phases()}
+    user_surfaces = json.loads(json.dumps(report._submission_surfaces(phase_status)))
+    user_surfaces[0]["validation_status"] = "blocked"
+    user_surfaces[0]["validation_blockers"] = []
+    user_surfaces[0]["operator_note"] = "safe unexplained user prover note"
+    monkeypatch.setattr(
+        report,
+        "_build_report",
+        lambda *_args, **_kwargs: {
+            "production_ready": True,
+            "blockers": [],
+            "native_evm_prover_bundle": native_bundle,
+            "user_prover_submission_surfaces": user_surfaces,
+        },
+    )
+
+    exit_code = report.main(["--format", "json", "evidence.toml"])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "native_evm_prover_bundle" not in payload
+    assert "user_prover_submission_surfaces" not in payload
+    # Source-inventory marker: readiness report native_evm_prover_bundle validation_blockers must be non-empty when validation_status is blocked
+    assert (
+        "readiness report native_evm_prover_bundle validation_blockers must be "
+        "non-empty when validation_status is blocked"
+    ) in blockers
+    # Source-inventory marker: readiness report user_prover_submission_surfaces[0] validation_blockers must be non-empty when validation_status is blocked
+    assert (
+        "readiness report user_prover_submission_surfaces[0] validation_blockers "
+        "must be non-empty when validation_status is blocked"
+    ) in blockers
+    assert "readiness report native_evm_prover_bundle is invalid" in blockers
+    assert "readiness report user_prover_submission_surfaces is invalid" in blockers
+    assert "safe unexplained user prover note" not in captured.out
+    assert "secret-token" not in captured.out
+    assert "Traceback" not in captured.err
+
+
 def test_release_readiness_report_cli_rejects_mixed_malformed_duplicate_user_prover_surfaces_without_leaking(
     monkeypatch,
     capsys,
@@ -25865,6 +27223,115 @@ def test_release_readiness_report_cli_rejects_mixed_malformed_duplicate_user_pro
         in blockers
     )
     assert "operator secret-token-user-surface" not in captured.out
+    assert "secret-token" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_release_readiness_report_cli_rejects_user_prover_passed_status_corridor_drift_without_leaking(
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied passed user-prover rows must match failed copied corridor phases."""
+
+    report = load_report_module()
+    phase_status = {phase: "passed" for phase in report._corridor_phases()}
+    surfaces = report._submission_surfaces(phase_status)
+    copied_corridor_phases = dict(phase_status)
+    copied_corridor_phases["js-sdk"] = "failed"
+    corridor = {
+        "production_ready": False,
+        "phases": copied_corridor_phases,
+        "evidence_artifacts": {},
+        "require_phase_evidence": False,
+        "blockers": [],
+    }
+
+    # Source-inventory marker: readiness public user-prover binding rejects passed rows when copied corridor phases fail
+    monkeypatch.setattr(
+        report,
+        "_build_report",
+        lambda *_args, **_kwargs: {
+            "production_ready": True,
+            "blockers": [],
+            "corridor": corridor,
+            "user_prover_submission_surfaces": surfaces,
+        },
+    )
+
+    exit_code = report.main(["--format", "json", "evidence.toml"])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "user_prover_submission_surfaces" not in payload
+    assert (
+        "readiness report user_prover_submission_surfaces[0] validation_status "
+        "must match copied corridor phases for lanes eth,bsc"
+    ) in blockers
+    assert (
+        "readiness report user_prover_submission_surfaces[0] validation_blockers "
+        "must match copied corridor phases for lanes eth,bsc"
+    ) in blockers
+    assert "readiness report user_prover_submission_surfaces is invalid" in blockers
+    assert "secret-token" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_release_readiness_report_cli_rejects_user_prover_blocked_status_corridor_drift_without_leaking(
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied blocked user-prover rows must match passed copied corridor phases."""
+
+    report = load_report_module()
+    phase_status = {phase: "passed" for phase in report._corridor_phases()}
+    surfaces = report._submission_surfaces(phase_status)
+    forged_blocker = "safe copied user prover blocker"
+    surfaces[0] = {
+        **surfaces[0],
+        "validation_status": "blocked",
+        "validation_blockers": [forged_blocker],
+    }
+    corridor = {
+        "production_ready": True,
+        "phases": dict(phase_status),
+        "evidence_artifacts": {},
+        "require_phase_evidence": False,
+        "blockers": [],
+    }
+
+    # Source-inventory marker: readiness public user-prover binding rejects blocked rows when copied corridor phases pass
+    monkeypatch.setattr(
+        report,
+        "_build_report",
+        lambda *_args, **_kwargs: {
+            "production_ready": True,
+            "blockers": [],
+            "corridor": corridor,
+            "user_prover_submission_surfaces": surfaces,
+        },
+    )
+
+    exit_code = report.main(["--format", "json", "evidence.toml"])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "user_prover_submission_surfaces" not in payload
+    assert (
+        "readiness report user_prover_submission_surfaces[0] validation_status "
+        "must match copied corridor phases for lanes eth,bsc"
+    ) in blockers
+    assert (
+        "readiness report user_prover_submission_surfaces[0] validation_blockers "
+        "must match copied corridor phases for lanes eth,bsc"
+    ) in blockers
+    assert "readiness report user_prover_submission_surfaces is invalid" in blockers
+    assert forged_blocker not in captured.out
     assert "secret-token" not in captured.out
     assert "Traceback" not in captured.err
 
@@ -25951,6 +27418,51 @@ def test_release_readiness_report_rejects_hostile_user_prover_submission_surface
         "`<invalid required_phases>`",
     ]
     assert cells[5].startswith("blocked: ")
+
+
+def test_release_readiness_user_prover_markdown_helpers_use_exact_row_keys() -> None:
+    """User-prover Markdown helpers must ignore hostile copied row-key aliases."""
+
+    report = load_report_module()
+    phase_status = {phase: "passed" for phase in report._corridor_phases()}
+    surface = dict(report._submission_surfaces(phase_status)[0])
+    surface["validation_blockers"] = ["secret-token-user-prover-alias"]
+    for field in (
+        "lanes",
+        "proof_backend",
+        "sdk_helper_symbols_by_sdk",
+        "on_chain_submission",
+        "required_phases",
+        "validation_status",
+        "validation_blockers",
+    ):
+        surface[HostileReportFieldName(field)] = surface.pop(field)
+
+    cells = report._user_prover_surface_markdown_row_cells(surface)
+    helper_cell = report._sdk_helper_sets_cell(surface)
+    phase_cell = report._user_prover_surface_required_phases_cell(surface)
+    validation_cell = report._user_prover_surface_validation_cell(surface)
+    rendered = "\n".join([*cells, helper_cell, phase_cell, validation_cell])
+
+    assert cells[:5] == [
+        "`<invalid lanes>`",
+        "`<invalid proof_backend>`",
+        "`<invalid sdk_helper_symbols_by_sdk>`",
+        "`<invalid on_chain_submission>`",
+        "`<invalid required_phases>`",
+    ]
+    assert cells[5] == (
+        "blocked: `<invalid validation_status>`<br>`<invalid validation_blockers>`"
+    )
+    assert helper_cell == "`<invalid sdk_helper_symbols_by_sdk>`"
+    assert phase_cell == "`<invalid required_phases>`"
+    assert validation_cell == (
+        "blocked: `<invalid validation_status>`<br>`<invalid validation_blockers>`"
+    )
+    assert "secret-token" not in rendered
+    assert "hostile" not in rendered
+    assert "__eq__" not in rendered
+    assert "__str__" not in rendered
 
 
 def test_release_readiness_report_rejects_hostile_user_prover_containers_without_hooks(
@@ -27140,6 +28652,108 @@ def test_release_readiness_report_rejects_hostile_crypto_containers_without_hook
     assert "secret-token" not in joined_errors
 
 
+def test_release_readiness_public_crypto_direct_helpers_use_exact_row_keys() -> None:
+    """Direct public crypto helpers must ignore hostile copied row-key aliases."""
+
+    report = load_report_module()
+    rows = public_crypto_rows_for_all_domains(report)
+    target_index, target_row = next(
+        (index, row)
+        for index, row in enumerate(rows)
+        if row["domain"] == report.ACTIVE_LAUNCH_DOMAIN
+    )
+    row_label = f"readiness report cryptographic_evidence[{target_index}]"
+    reused_hash = fixed_hex32(0xC7)
+
+    hostile_row = dict(target_row)
+    hostile_row[HostileReportFieldName("domain")] = hostile_row.pop("domain")
+    hostile_row.pop("source_adapter_engine_deployment_hash")
+    hostile_row[HostileReportFieldName("source_adapter_engine_deployment_hash")] = (
+        hostile_row["source_verifier_material_hash"]
+    )
+    hostile_row[HostileReportFieldName("route_canary_message_id")] = (
+        hostile_row.pop("route_canary_message_id")
+    )
+    hostile_row[HostileReportFieldName("source_adapter_gate_hash")] = (
+        hostile_row.pop("source_adapter_gate_hash")
+    )
+    hostile_audit_hashes = {
+        HostileReportFieldName("evm_source_gate_hash"): reused_hash,
+    }
+
+    markdown_cells = report._cryptographic_evidence_markdown_row_cells(hostile_row)
+    duplicate_errors = report._public_cryptographic_evidence_duplicate_domain_errors(
+        [hostile_row]
+    )
+    source_role_errors = report._public_cryptographic_source_record_hash_role_errors(
+        row_label,
+        hostile_row,
+    )
+    source_template_errors = (
+        report._public_cryptographic_source_record_template_hash_errors(
+            row_label,
+            report.ACTIVE_LAUNCH_DOMAIN,
+            hostile_row,
+        )
+    )
+    route_role_errors = report._public_cryptographic_route_canary_hash_role_errors(
+        row_label,
+        hostile_row,
+    )
+    route_template_errors = (
+        report._public_cryptographic_route_canary_template_hash_errors(
+            row_label,
+            report.ACTIVE_LAUNCH_DOMAIN,
+            hostile_row,
+        )
+    )
+    gate_role_errors = (
+        report._public_cryptographic_source_adapter_gate_hash_role_errors(
+            row_label,
+            hostile_row,
+            hostile_audit_hashes,
+        )
+    )
+    gate_template_errors = (
+        report._public_cryptographic_source_adapter_gate_template_hash_errors(
+            row_label,
+            report.ACTIVE_LAUNCH_DOMAIN,
+            reused_hash,
+            hostile_audit_hashes,
+        )
+    )
+    joined = "\n".join(
+        [
+            *duplicate_errors,
+            *source_role_errors,
+            *source_template_errors,
+            *route_role_errors,
+            *route_template_errors,
+            *gate_role_errors,
+            *gate_template_errors,
+        ]
+    )
+
+    assert markdown_cells[0] == "-"
+    assert (
+        f"readiness report cryptographic_evidence missing required domain: "
+        f"{report.ACTIVE_LAUNCH_DOMAIN}"
+    ) in duplicate_errors
+    assert source_role_errors == []
+    assert source_template_errors == []
+    assert route_role_errors == []
+    assert route_template_errors == []
+    assert gate_role_errors == []
+    assert gate_template_errors == []
+    assert "source_adapter_engine_deployment_hash must not reuse" not in joined
+    assert "route_canary hash role route_canary_message_id must not reuse" not in joined
+    assert "source_adapter_gate hash role" not in joined
+    assert "secret-token" not in joined
+    assert "hostile" not in joined
+    assert "__eq__" not in joined
+    assert "__str__" not in joined
+
+
 def test_release_readiness_report_rejects_hostile_absent_route_canary_scalars_without_comparing() -> None:
     """Absent route-canary public fields must use exact scalar classification."""
 
@@ -28278,6 +29892,128 @@ def test_release_readiness_report_public_crypto_rejects_source_gate_policy_drift
         ) in errors, domain
 
 
+def test_release_readiness_report_cli_rejects_public_crypto_lane_binding_drift_without_leaking(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Standalone readiness JSON must bind copied crypto rows to embedded lanes."""
+
+    report = load_report_module()
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_manifest = write_native_evm_prover_bundle(tmp_path, evidence)
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_manifest,
+    )
+    crypto_rows = json.loads(json.dumps(readiness["cryptographic_evidence"]))
+    evidence_root = json.loads(json.dumps(readiness["evidence"]))
+    eth_index = next(
+        index
+        for index, row in enumerate(crypto_rows)
+        if row["domain"] == report.SCCP_DOMAIN_ETH
+    )
+    forged_destination_hash = fixed_hex32(0xA6)
+    crypto_rows[eth_index]["destination_binding_hash"] = forged_destination_hash
+
+    # Source-inventory marker: readiness public crypto lane binding rejects copied row drift before JSON output
+    monkeypatch.setattr(
+        report,
+        "_build_report",
+        lambda *_args, **_kwargs: {
+            "production_ready": True,
+            "blockers": [],
+            "evidence": evidence_root,
+            "cryptographic_evidence": crypto_rows,
+        },
+    )
+
+    exit_code = report.main(["--format", "json", "evidence.toml"])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "cryptographic_evidence" not in payload
+    assert (
+        "readiness report cryptographic evidence row "
+        f"{eth_index} destination_binding_hash must match embedded lane "
+        "destination_binding.destination_binding_hash"
+    ) in blockers
+    assert "readiness report cryptographic_evidence is invalid" in blockers
+    assert forged_destination_hash not in captured.out
+    assert "secret-token" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_release_readiness_report_cli_rejects_public_crypto_missing_embedded_source_gate_without_leaking(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied source-gate booleans must fail when embedded gate roots disappear."""
+
+    report = load_report_module()
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_manifest = write_native_evm_prover_bundle(tmp_path, evidence)
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_manifest,
+    )
+    crypto_rows = json.loads(json.dumps(readiness["cryptographic_evidence"]))
+    evidence_root = json.loads(json.dumps(readiness["evidence"]))
+    eth_index = next(
+        index
+        for index, row in enumerate(crypto_rows)
+        if row["domain"] == report.SCCP_DOMAIN_ETH
+    )
+    evidence_root["lanes"][eth_index]["source_adapter_gate"] = {}
+    crypto_rows[eth_index]["source_adapter_gate_required"] = False
+    crypto_rows[eth_index]["source_adapter_gate_hash"] = ""
+    crypto_rows[eth_index]["source_adapter_gate_audit_hashes"] = {}
+
+    # Source-inventory marker: readiness public crypto lane binding rejects missing embedded source-gate required false claims
+    monkeypatch.setattr(
+        report,
+        "_build_report",
+        lambda *_args, **_kwargs: {
+            "production_ready": True,
+            "blockers": [],
+            "evidence": evidence_root,
+            "cryptographic_evidence": crypto_rows,
+        },
+    )
+
+    exit_code = report.main(["--format", "json", "evidence.toml"])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "cryptographic_evidence" not in payload
+    assert (
+        "readiness report cryptographic evidence row "
+        f"{eth_index} source_adapter_gate_required must match embedded lane "
+        "source_adapter_gate.required"
+    ) in blockers
+    assert (
+        f"readiness report cryptographic_evidence[{eth_index}] "
+        "source_adapter_gate_required must be true for this domain"
+    ) in blockers
+    assert "route_canary_evidence_bound must match embedded lane" not in blockers
+    assert "readiness report cryptographic_evidence is invalid" in blockers
+    assert "secret-token" not in captured.out
+    assert "Traceback" not in captured.err
+
+
 def test_release_readiness_report_cli_rejects_crypto_source_adapter_gate_drift_without_leaking(
     tmp_path: Path,
     monkeypatch,
@@ -28550,6 +30286,117 @@ def test_release_readiness_report_cli_rejects_ready_release_checklist_blockers_w
     ) in blockers
     assert "readiness report release_checklist is invalid" in blockers
     assert "safe copied ready checklist blocker" not in captured.out
+    assert "secret-token" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_release_readiness_report_cli_rejects_unexplained_not_ready_release_checklist_without_leaking(
+    monkeypatch,
+    capsys,
+) -> None:
+    """Not-ready checklist roots and items must carry canonical explanations."""
+
+    report = load_report_module()
+    item_ids = tuple(report.ACTIVE_LAUNCH_RELEASE_CHECKLIST_ITEM_IDS)
+    items = [
+        {
+            "id": item_id,
+            "title": report.ACTIVE_LAUNCH_RELEASE_CHECKLIST_TITLES[item_id],
+            "ready": True,
+            "blockers": [],
+        }
+        for item_id in item_ids
+    ]
+    item_blocker_errors = report._public_release_checklist_errors(
+        {
+            "ready": False,
+            "items": [
+                {
+                    **items[0],
+                    "ready": False,
+                    "blockers": [],
+                },
+                *items[1:],
+            ],
+        }
+    )
+
+    # Source-inventory marker: standalone release_checklist false item must carry a blocker
+    assert (
+        "readiness report release_checklist items[0] blockers must be non-empty "
+        "when ready is false"
+    ) in item_blocker_errors
+
+    monkeypatch.setattr(
+        report,
+        "_build_report",
+        lambda *_args, **_kwargs: {
+            "production_ready": False,
+            "blockers": [],
+            "release_checklist": {
+                "ready": False,
+                "items": items,
+            },
+        },
+    )
+
+    exit_code = report.main(["--format", "json", "evidence.toml"])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "release_checklist" not in payload
+    assert (
+        "readiness report release_checklist ready must match item readiness"
+        in blockers
+    )
+    assert "readiness report release_checklist is invalid" in blockers
+    assert "secret-token" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_release_readiness_report_cli_rejects_release_checklist_binding_drift_without_leaking(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Readiness CLI must not publish checklists that drift from copied evidence."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+    forged_checklist = json.loads(json.dumps(readiness["release_checklist"]))
+    forged_checklist["ready"] = False
+    forged_checklist["items"][0]["ready"] = False
+    forged_checklist["items"][0]["blockers"] = [
+        "safe copied checklist binding drift blocker"
+    ]
+    readiness["release_checklist"] = forged_checklist
+    monkeypatch.setattr(report, "_build_report", lambda *_args, **_kwargs: readiness)
+
+    exit_code = report.main(["--format", "json", str(evidence)])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "release_checklist" not in payload
+    assert (
+        "readiness report release_checklist does not match embedded evidence"
+        in blockers
+    )
+    assert "readiness report release_checklist is invalid" in blockers
+    assert "safe copied checklist binding drift blocker" not in captured.out
     assert "secret-token" not in captured.out
     assert "Traceback" not in captured.err
 
@@ -31838,6 +33685,126 @@ def test_release_readiness_path_helpers_reject_decoded_sensitive_marker_families
 
         assert message == "phase evidence name contains sensitive name"
         assert name not in message
+
+
+def test_release_readiness_phase_path_helpers_reject_string_subclasses_without_hooks(
+) -> None:
+    """Readiness phase/path helpers must reject copied string subclasses exactly."""
+
+    report = load_report_module()
+
+    class HostilePhasePathString(str):
+        def __new__(cls, value: str):
+            return str.__new__(cls, value)
+
+        def __contains__(self, needle: object) -> bool:
+            raise AssertionError("secret-token phase path contains hook")
+
+        def split(self, *args, **kwargs):
+            raise AssertionError("secret-token phase path split hook")
+
+        def strip(self, *args, **kwargs):
+            raise AssertionError("secret-token phase path strip hook")
+
+        def isascii(self) -> bool:
+            raise AssertionError("secret-token phase path isascii hook")
+
+        def __str__(self) -> str:
+            raise AssertionError("secret-token phase path str hook")
+
+        def __repr__(self) -> str:
+            return "secret-token-hostile-phase-path"
+
+    hostile = HostilePhasePathString("rust-sccp=passed")
+    error_cases = (
+        (
+            lambda: report._normalize_phase_status(hostile),
+            "phase result status must be an exact string",
+        ),
+        (
+            lambda: report._parse_phase_assignment_name(hostile, "phase result"),
+            "phase result name must be an exact string",
+        ),
+        (
+            lambda: report._parse_phase_results([hostile], ["rust-sccp"]),
+            "phase result must use NAME=STATUS syntax",
+        ),
+        (
+            lambda: report._parse_phase_evidence(
+                [hostile],
+                ["rust-sccp"],
+                {"rust-sccp": "passed"},
+                None,
+            ),
+            "phase evidence must use NAME=PATH syntax",
+        ),
+    )
+    for parse, expected_message in error_cases:
+        try:
+            parse()
+        except report.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("readiness phase helper accepted hostile string")
+
+    return_cases = (
+        (
+            report._phase_evidence_path_error,
+            "phase evidence path must be an exact string",
+        ),
+        (
+            report._phase_evidence_directory_path_error,
+            "phase evidence directory path must be an exact string",
+        ),
+        (
+            report._readiness_output_path_error,
+            "readiness report output path must be an exact string",
+        ),
+    )
+    for helper, expected_message in return_cases:
+        rendered = helper(hostile)
+        assert rendered == expected_message
+        assert "secret-token" not in rendered
+
+
+def test_release_readiness_output_collision_rejects_phase_assignment_subclasses_without_hooks(
+    tmp_path: Path,
+) -> None:
+    """Readiness output collision preflight must reject hostile assignments."""
+
+    report = load_report_module()
+
+    class HostilePhaseAssignment(str):
+        def __new__(cls, value: str):
+            return str.__new__(cls, value)
+
+        def __contains__(self, needle: object) -> bool:
+            raise AssertionError("secret-token output collision contains hook")
+
+        def split(self, *args, **kwargs):
+            raise AssertionError("secret-token output collision split hook")
+
+        def __str__(self) -> str:
+            raise AssertionError("secret-token output collision str hook")
+
+        def __repr__(self) -> str:
+            return "secret-token-output-collision-assignment"
+
+    output_path = tmp_path / "readiness.md"
+    error = report._readiness_output_collision_error(
+        output_path,
+        toml_paths=(),
+        phase_evidence=[HostilePhaseAssignment("rust-sccp=phase.log")],
+        phase_evidence_dir=None,
+        native_evm_prover_bundle=None,
+        phases=("rust-sccp",),
+    )
+
+    assert error == "readiness report phase evidence assignment must be an exact string"
+    assert "secret-token" not in error
 
 
 def test_release_readiness_report_requires_contract_smoke_node_success_evidence(
@@ -37139,6 +39106,617 @@ def test_release_readiness_report_rejects_dotnet_bridge_build_extra_env(
     ) in completed.stdout
     assert "secret-token" not in completed.stdout
     assert "secret-token" not in completed.stderr
+
+
+def test_release_readiness_phase_prefix_env_assignments_rejects_token_subclasses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Phase environment assignment parsing must not invoke string subclass hooks."""
+
+    report = load_report_module()
+
+    class HostileEnvToken(str):
+        def __eq__(self, other):
+            raise AssertionError("secret-token env assignment eq hook")
+
+        def startswith(self, prefix, *args):
+            raise AssertionError("secret-token env assignment startswith hook")
+
+        def partition(self, separator):
+            raise AssertionError("secret-token env assignment partition hook")
+
+        def replace(self, old, new, count=-1):
+            raise AssertionError("secret-token env assignment replace hook")
+
+        def __str__(self):
+            raise AssertionError("secret-token env assignment str hook")
+
+        def __repr__(self):
+            return "secret-token-env-assignment"
+
+    monkeypatch.setattr(
+        report,
+        "_phase_command_tokens",
+        lambda _command: [
+            HostileEnvToken("env"),
+            HostileEnvToken("ANDROID_HARNESS_MAINS=secret-token"),
+            "dotnet",
+        ],
+    )
+    monkeypatch.setattr(
+        report,
+        "_phase_effective_command_tokens",
+        lambda _command: ["dotnet"],
+    )
+
+    assert report._phase_prefix_env_assignments("+ ignored") == [
+        report.PHASE_PREFIX_ENV_ASSIGNMENT_TYPE_ERROR
+    ]
+    assert report._android_harness_mains_classes("+ ignored") == []
+    assert report._dotnet_phase_command_has_noncanonical_env_prefix("+ ignored")
+
+
+def test_release_readiness_phase_effective_command_tokens_reject_token_subclasses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Effective command parsing must reject non-exact tokens before hooks."""
+
+    report = load_report_module()
+
+    class HostileCommandToken(str):
+        def __eq__(self, other):
+            raise AssertionError("secret-token command token eq hook")
+
+        def startswith(self, prefix, *args):
+            raise AssertionError("secret-token command token startswith hook")
+
+        def partition(self, separator):
+            raise AssertionError("secret-token command token partition hook")
+
+        def __str__(self):
+            raise AssertionError("secret-token command token str hook")
+
+        def __repr__(self):
+            return "secret-token-command-token"
+
+    monkeypatch.setattr(
+        report,
+        "_phase_command_tokens",
+        lambda _command: [
+            HostileCommandToken("cd"),
+            HostileCommandToken("secret-token"),
+            HostileCommandToken("&&"),
+            HostileCommandToken("cargo"),
+        ],
+    )
+
+    assert report._phase_effective_command_tokens("+ ignored") == [
+        report.PHASE_COMMAND_TOKEN_TYPE_ERROR
+    ]
+    assert not report._effective_command_equals("+ ignored", ("cargo",))
+    assert not report._rust_sccp_command_has_fragment("+ ignored", "cargo")
+
+
+def test_release_readiness_phase_command_tokens_reject_command_text_subclasses() -> None:
+    """Phase command tokenization must reject command text subclasses first."""
+
+    report = load_report_module()
+
+    class HostileCommandText(str):
+        def strip(self, chars=None):
+            raise AssertionError("secret-token command text strip hook")
+
+        def startswith(self, prefix, *args):
+            raise AssertionError("secret-token command text startswith hook")
+
+        def __str__(self):
+            raise AssertionError("secret-token command text str hook")
+
+        def __repr__(self):
+            return "secret-token-command-text"
+
+    command = HostileCommandText("+ cargo test -p iroha_sccp")
+
+    assert report._phase_command_tokens(command) == [
+        report.PHASE_COMMAND_TEXT_TYPE_ERROR
+    ]
+    assert report._phase_effective_command_tokens(command) == [
+        report.PHASE_COMMAND_TEXT_TYPE_ERROR
+    ]
+    assert not report._effective_command_equals(command, ("cargo",))
+
+
+def test_release_readiness_command_option_helpers_reject_token_subclasses() -> None:
+    """Command option helpers must not invoke token subclass hooks."""
+
+    report = load_report_module()
+
+    class HostileOptionToken(str):
+        def __eq__(self, other):
+            raise AssertionError("secret-token command option eq hook")
+
+        def startswith(self, prefix, *args):
+            raise AssertionError("secret-token command option startswith hook")
+
+        def partition(self, separator):
+            raise AssertionError("secret-token command option partition hook")
+
+        def __str__(self):
+            raise AssertionError("secret-token command option str hook")
+
+        def __repr__(self):
+            return "secret-token-command-option"
+
+    tokens = [
+        HostileOptionToken("./gradlew"),
+        HostileOptionToken(":core-jvm:test"),
+        HostileOptionToken("--console=plain"),
+        HostileOptionToken("--tests"),
+        HostileOptionToken("secret-token"),
+    ]
+
+    assert report._command_token_basename(tokens[0]) == ""
+    assert not report._command_token_is_env_assignment(tokens[3])
+    assert report._command_option_values(tokens, "--tests") == []
+    assert not report._command_has_option_value(tokens, "--tests", "secret-token")
+    assert report._command_positional_tokens(tokens, 0, frozenset({"--tests"})) == []
+    assert report._gradle_test_command_selectors(tokens, ":core-jvm:test") == []
+
+
+def test_release_readiness_command_diagnostic_helpers_reject_text_subclasses() -> None:
+    """Command diagnostic helpers must fail closed before string hooks."""
+
+    report = load_report_module()
+
+    class HostileCommandText(str):
+        def strip(self, chars=None):
+            raise AssertionError("secret-token diagnostic command strip hook")
+
+        def startswith(self, prefix, *args):
+            raise AssertionError("secret-token diagnostic command startswith hook")
+
+        def __str__(self):
+            raise AssertionError("secret-token diagnostic command str hook")
+
+        def __repr__(self):
+            return "secret-token-diagnostic-command"
+
+    command = HostileCommandText("+ (cd secret-token && cargo test)")
+
+    assert report._phase_command_runner_cd_dir(command) is None
+    assert report._phase_command_has_unexpected_runner_cd_wrapper("rust-sccp", command)
+    assert report._phase_command_has_unsupported_parenthesized_group(command)
+    assert not report._phase_command_is_parseable(command)
+    assert report._phase_command_has_shell_comment_tail(command)
+
+
+def test_release_readiness_phase_output_helpers_reject_line_subclasses() -> None:
+    """Phase output helpers must not invoke copied line or fragment hooks."""
+
+    report = load_report_module()
+
+    class HostileOutputLine(str):
+        def lstrip(self, chars=None):
+            raise AssertionError("secret-token output line lstrip hook")
+
+        def startswith(self, prefix, *args):
+            raise AssertionError("secret-token output line startswith hook")
+
+        def find(self, sub, *args):
+            raise AssertionError("secret-token output line find hook")
+
+        def __contains__(self, item):
+            raise AssertionError("secret-token output line contains hook")
+
+        def __str__(self):
+            raise AssertionError("secret-token output line str hook")
+
+        def __repr__(self):
+            return "secret-token-output-line"
+
+    class HostileOutputFragment(str):
+        def __eq__(self, other):
+            raise AssertionError("secret-token output fragment eq hook")
+
+        def __str__(self):
+            raise AssertionError("secret-token output fragment str hook")
+
+        def __repr__(self):
+            return "secret-token-output-fragment"
+
+    line = HostileOutputLine("SCCP production corridor completed.")
+    fragment = HostileOutputFragment("SCCP production corridor completed.")
+
+    assert report._line_is_shell_xtrace_command(line)
+    assert report._phase_line_has_hidden_traced_command(line)
+    assert report._phase_output_failure_scan_line(line) == (
+        report.PHASE_OUTPUT_LINE_TYPE_ERROR
+    )
+    assert not report._phase_output_line_has_success_fragment(line, fragment)
+    assert not report._phase_output_line_has_raw_success_fragment(line, fragment)
+    assert report._phase_line_has_hidden_success_marker("dotnet-sdk", line)
+    assert report._phase_line_has_hidden_success_marker(fragment, "Passed!")
+
+
+def test_release_readiness_phase_block_helpers_reject_text_subclasses() -> None:
+    """Phase block and transcript helpers must reject copied text subclasses."""
+
+    report = load_report_module()
+
+    class HostileTranscriptText(str):
+        def splitlines(self, keepends=False):
+            raise AssertionError("secret-token transcript splitlines hook")
+
+        def strip(self, chars=None):
+            raise AssertionError("secret-token transcript strip hook")
+
+        def __eq__(self, other):
+            raise AssertionError("secret-token transcript eq hook")
+
+        def __str__(self):
+            raise AssertionError("secret-token transcript str hook")
+
+        def __repr__(self):
+            return "secret-token-transcript-text"
+
+    class HostilePhaseBlock(str):
+        def splitlines(self, keepends=False):
+            raise AssertionError("secret-token phase block splitlines hook")
+
+        def strip(self, chars=None):
+            raise AssertionError("secret-token phase block strip hook")
+
+        def lstrip(self, chars=None):
+            raise AssertionError("secret-token phase block lstrip hook")
+
+        def __eq__(self, other):
+            raise AssertionError("secret-token phase block eq hook")
+
+        def __str__(self):
+            raise AssertionError("secret-token phase block str hook")
+
+        def __repr__(self):
+            return "secret-token-phase-block"
+
+    transcript = HostileTranscriptText("==> SCCP production corridor: rust-sccp")
+    block = HostilePhaseBlock("+ cargo test -p iroha_sccp")
+
+    assert report._phase_transcript_block("rust-sccp", transcript) is None
+    assert report._unknown_corridor_phase_marker_lines(transcript) == [
+        report.PHASE_TRANSCRIPT_TEXT_TYPE_ERROR
+    ]
+    assert report._transcript_has_multiple_known_phase_markers(transcript)
+    assert report._transcript_has_nonempty_line_before_first_phase_marker(transcript)
+    assert report._phase_marker_count("rust-sccp", transcript) == 0
+    assert not report._transcript_has_full_corridor_completion(transcript)
+    assert report._transcript_has_traced_command_after_completion(transcript)
+    assert report._transcript_has_nonempty_line_after_completion(transcript)
+    assert report._phase_command_lines(block) == []
+    assert report._phase_block_command_fragment_line_indices(
+        "rust-sccp",
+        block,
+        "cargo test -p iroha_sccp",
+    ) == []
+    assert report._phase_block_output_fragment_line_indices(block, "passed") == []
+    assert not report._phase_block_has_output_fragment("rust-sccp", block, "passed")
+    assert not report._phase_block_has_exact_output_line(block, "passed")
+    assert not report._phase_block_has_completion_after_required_evidence(
+        "rust-sccp",
+        block,
+    )
+    assert report._phase_block_has_traced_command_after_completion(block)
+    assert report._phase_block_has_nonempty_line_after_completion(block)
+
+
+def test_release_readiness_dotnet_diagnostic_helpers_reject_text_subclasses() -> None:
+    """.NET marker and diagnostic helpers must reject string subclasses first."""
+
+    report = load_report_module()
+
+    class HostileDotnetLine(str):
+        def split(self, separator=None, maxsplit=-1):
+            raise AssertionError("secret-token dotnet line split hook")
+
+        def strip(self, chars=None):
+            raise AssertionError("secret-token dotnet line strip hook")
+
+        def __eq__(self, other):
+            raise AssertionError("secret-token dotnet line eq hook")
+
+        def __str__(self):
+            raise AssertionError("secret-token dotnet line str hook")
+
+        def __repr__(self):
+            return "secret-token-dotnet-line"
+
+    class HostileDotnetPath(str):
+        def replace(self, old, new, count=-1):
+            raise AssertionError("secret-token dotnet path replace hook")
+
+        def rstrip(self, chars=None):
+            raise AssertionError("secret-token dotnet path rstrip hook")
+
+        def __str__(self):
+            raise AssertionError("secret-token dotnet path str hook")
+
+        def __repr__(self):
+            return "secret-token-dotnet-path"
+
+    class HostilePhaseBlock(str):
+        def splitlines(self, keepends=False):
+            raise AssertionError("secret-token dotnet phase block splitlines hook")
+
+        def strip(self, chars=None):
+            raise AssertionError("secret-token dotnet phase block strip hook")
+
+        def __str__(self):
+            raise AssertionError("secret-token dotnet phase block str hook")
+
+        def __repr__(self):
+            return "secret-token-dotnet-phase-block"
+
+    class HostilePhaseName(str):
+        def __hash__(self):
+            raise AssertionError("secret-token phase name hash hook")
+
+        def __eq__(self, other):
+            raise AssertionError("secret-token phase name eq hook")
+
+        def __str__(self):
+            raise AssertionError("secret-token phase name str hook")
+
+        def __repr__(self):
+            return "secret-token-phase-name"
+
+    class HostileDiagnosticFragment(str):
+        def strip(self, chars=None):
+            raise AssertionError("secret-token diagnostic fragment strip hook")
+
+        def isascii(self):
+            raise AssertionError("secret-token diagnostic fragment isascii hook")
+
+        def __repr__(self):
+            raise AssertionError("secret-token diagnostic fragment repr hook")
+
+    line = HostileDotnetLine("SCCP .NET SDK RID: win-x64")
+    path = HostileDotnetPath("secret-token\\debug\\connect_norito_bridge.dll")
+    block = HostilePhaseBlock("SCCP .NET SDK RID: win-x64")
+    phase = HostilePhaseName("dotnet-sdk")
+    fragment = HostileDiagnosticFragment("secret-token")
+
+    assert not report._dotnet_test_passed_success_line_matches(line)
+    assert not report._dotnet_success_marker_line_matches(line)
+    assert not report._dotnet_bridge_path_success_line_matches(line)
+    assert report._dotnet_normalized_path_text(path) == ""
+    assert report._dotnet_phase_bridge_library_dir(block) is None
+    assert not report._dotnet_phase_block_bridge_path_matches_target_dir(block)
+    assert not report._dotnet_phase_block_rid_architecture_markers_match(block)
+    assert (
+        report._phase_block_forbidden_output_marker("dotnet-sdk", block)
+        == report.PHASE_BLOCK_TEXT_TYPE_ERROR
+    )
+    assert (
+        report._phase_block_forbidden_output_marker(phase, "")
+        == report.PHASE_BLOCK_TEXT_TYPE_ERROR
+    )
+    assert (
+        report._phase_diagnostic_fragment(fragment)
+        == report.PHASE_DIAGNOSTIC_FRAGMENT_TYPE_ERROR
+    )
+
+
+def test_release_readiness_phase_command_matcher_helpers_reject_text_subclasses() -> None:
+    """Command matcher helpers must reject direct string subclasses first."""
+
+    report = load_report_module()
+
+    class HostileMatcherToken(str):
+        def __eq__(self, other):
+            raise AssertionError("secret-token matcher token eq hook")
+
+        def startswith(self, prefix, *args):
+            raise AssertionError("secret-token matcher token startswith hook")
+
+        def endswith(self, suffix, *args):
+            raise AssertionError("secret-token matcher token endswith hook")
+
+        def replace(self, old, new, count=-1):
+            raise AssertionError("secret-token matcher token replace hook")
+
+        def __contains__(self, item):
+            raise AssertionError("secret-token matcher token contains hook")
+
+        def __str__(self):
+            raise AssertionError("secret-token matcher token str hook")
+
+        def __repr__(self):
+            return "secret-token-matcher-token"
+
+    class HostileMatcherText(str):
+        def __contains__(self, item):
+            raise AssertionError("secret-token matcher text contains hook")
+
+        def startswith(self, prefix, *args):
+            raise AssertionError("secret-token matcher text startswith hook")
+
+        def endswith(self, suffix, *args):
+            raise AssertionError("secret-token matcher text endswith hook")
+
+        def replace(self, old, new, count=-1):
+            raise AssertionError("secret-token matcher text replace hook")
+
+        def rstrip(self, chars=None):
+            raise AssertionError("secret-token matcher text rstrip hook")
+
+        def __hash__(self):
+            raise AssertionError("secret-token matcher text hash hook")
+
+        def __eq__(self, other):
+            raise AssertionError("secret-token matcher text eq hook")
+
+        def __str__(self):
+            raise AssertionError("secret-token matcher text str hook")
+
+        def __repr__(self):
+            return "secret-token-matcher-text"
+
+    tokens = [
+        HostileMatcherToken("node"),
+        HostileMatcherToken("--test"),
+        HostileMatcherToken("secret-token.test.mjs"),
+    ]
+    command = HostileMatcherText("+ node --test secret-token.test.mjs")
+    fragment = HostileMatcherText("--test secret-token.test.mjs")
+    phase = HostileMatcherText("js-sdk")
+
+    assert not report._phase_command_has_runner_cd_wrapper(tokens)
+    assert not report._dotnet_phase_command_uses_bridge_path(tokens)
+    assert not report._dotnet_phase_path_value_matches_bridge_dir(fragment, "/bridge")
+    assert not report._dotnet_phase_path_value_matches_bridge_dir("/bridge", fragment)
+    assert report._dotnet_path_list_has_empty_segment(fragment)
+    assert report._pytest_fragment_positionals(fragment) == []
+    assert report._pytest_command_positionals(tokens, 1) == []
+    assert report._pytest_expected_positionals_for_phase(phase) == ()
+    assert report._node_expected_test_files_for_phase(phase) == ()
+    assert report._node_test_command_files(tokens) == ()
+    assert not report._node_check_command_matches(tokens, "secret-token.test.mjs")
+    assert not report._node_check_command_matches(["node", "--check", "ok"], fragment)
+    assert not report._dotnet_sdk_command_matches(tokens)
+    assert not report._dotnet_setup_command_matches(tokens)
+    assert not report._java_android_harness_command_matches(command, tokens)
+    assert not report._evidence_pytest_command_has_fragment(
+        "python-sdk",
+        command,
+        "pytests/scripts/sccp_all_lanes_evidence_test.py",
+    )
+    assert not report._js_sdk_command_has_fragment(command, "secret-token.test.mjs")
+    assert not report._swift_sdk_command_has_fragment(command, "Sccp")
+    assert not report._kotlin_sdk_command_has_fragment(command, "java -version")
+    assert not report._java_android_command_has_fragment(command, "java -version")
+    assert not report._dotnet_sdk_command_has_fragment(command, "dotnet --version")
+    assert not report._contract_smoke_command_has_fragment(command, fragment)
+    assert not report._phase_command_matches_required_fragment(
+        "js-sdk",
+        command,
+        "secret-token.test.mjs",
+    )
+    assert not report._phase_command_matches_required_fragment(
+        phase,
+        "+ node --test secret-token.test.mjs",
+        "secret-token.test.mjs",
+    )
+    assert not report._path_text_endswith(fragment, "dist/NoritoBridge.xcframework")
+    assert not report._swift_sdk_setup_command_matches(tokens)
+    assert not report._phase_command_matches_known_trace("js-sdk", command)
+    assert not report._phase_command_matches_known_trace(phase, "+ node --test ok")
+
+
+def test_release_readiness_phase_success_window_helpers_reject_subclasses() -> None:
+    """Success-window helpers must reject copied text and position subclasses."""
+
+    report = load_report_module()
+
+    class HostileSuccessText(str):
+        def splitlines(self, keepends=False):
+            raise AssertionError("secret-token success text splitlines hook")
+
+        def __contains__(self, item):
+            raise AssertionError("secret-token success text contains hook")
+
+        def __hash__(self):
+            raise AssertionError("secret-token success text hash hook")
+
+        def __eq__(self, other):
+            raise AssertionError("secret-token success text eq hook")
+
+        def __str__(self):
+            raise AssertionError("secret-token success text str hook")
+
+        def __repr__(self):
+            return "secret-token-success-text"
+
+    class HostilePosition(int):
+        def __lt__(self, other):
+            raise AssertionError("secret-token success position lt hook")
+
+        def __gt__(self, other):
+            raise AssertionError("secret-token success position gt hook")
+
+        def __eq__(self, other):
+            raise AssertionError("secret-token success position eq hook")
+
+        def __repr__(self):
+            return "secret-token-success-position"
+
+    phase = HostileSuccessText("dotnet-sdk")
+    block = HostileSuccessText("+ dotnet test")
+    fragment = HostileSuccessText(report.DOTNET_TEST_PASSED_SUCCESS_FRAGMENT)
+    position = HostilePosition(2)
+
+    assert not report._phase_position_values_are_exact_ints([position])
+    assert report._phase_success_fragment_required_command_fragments(
+        phase,
+        report.DOTNET_TEST_PASSED_SUCCESS_FRAGMENT,
+    ) == ()
+    assert report._phase_success_fragment_required_command_fragments(
+        "dotnet-sdk",
+        fragment,
+    ) == ()
+    assert report._phase_success_command_windows(
+        phase,
+        "",
+        report.DOTNET_TEST_PASSED_SUCCESS_FRAGMENT,
+        0,
+    ) == []
+    assert report._phase_success_command_windows(
+        "dotnet-sdk",
+        block,
+        report.DOTNET_TEST_PASSED_SUCCESS_FRAGMENT,
+        0,
+    ) == []
+    assert report._phase_success_command_windows(
+        "dotnet-sdk",
+        "",
+        report.DOTNET_TEST_PASSED_SUCCESS_FRAGMENT,
+        position,
+    ) == []
+    assert report._phase_success_command_windows(
+        "dotnet-sdk",
+        "",
+        report.DOTNET_TEST_PASSED_SUCCESS_FRAGMENT,
+        0,
+        position,
+    ) == []
+    assert not report._phase_success_fragment_has_position_after_required_command(
+        "dotnet-sdk",
+        "",
+        report.DOTNET_TEST_PASSED_SUCCESS_FRAGMENT,
+        [position],
+        0,
+    )
+    assert not report._phase_success_fragment_positions_are_only_in_required_command_windows(
+        "dotnet-sdk",
+        "",
+        report.DOTNET_TEST_PASSED_SUCCESS_FRAGMENT,
+        [position],
+        0,
+    )
+    assert not report._phase_success_fragment_has_position_before_completion(
+        "dotnet-sdk",
+        "",
+        report.DOTNET_TEST_PASSED_SUCCESS_FRAGMENT,
+        [position],
+        0,
+        1,
+    )
+    assert not report._phase_success_fragment_has_position_before_completion(
+        "dotnet-sdk",
+        "",
+        report.DOTNET_TEST_PASSED_SUCCESS_FRAGMENT,
+        [1],
+        position,
+        3,
+    )
 
 
 def test_release_readiness_report_rejects_dotnet_test_before_restore_command(

@@ -1768,6 +1768,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
         accountId: String = "alice@hbl.sbp",
         deviceId: String = "device-1",
         lineageId: String = "lineage-1",
+        assetDefinitionId: String = "pkr#hbl.sbp",
         localStateHash: String? = nil
     ) throws -> ToriiOfflineAuditRequest {
         try ToriiOfflineAuditRequest(
@@ -1775,6 +1776,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
             accountId: accountId,
             deviceId: deviceId,
             lineageId: lineageId,
+            assetDefinitionId: assetDefinitionId,
             localRevision: 6,
             localStateHash: localStateHash ?? Self.hashHex(6),
             receipts: [],
@@ -1790,6 +1792,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
         accountId: String = "alice@hbl.sbp",
         deviceId: String = "device-1",
         lineageId: String = "lineage-1",
+        assetDefinitionId: String = "pkr#hbl.sbp",
         localStateHash: String? = nil
     ) throws -> Data {
         try JSONSerialization.data(withJSONObject: [
@@ -1797,6 +1800,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
             "account_id": accountId,
             "device_id": deviceId,
             "lineage_id": lineageId,
+            "asset_definition_id": assetDefinitionId,
             "local_revision": 6,
             "local_state_hash": localStateHash ?? Self.hashHex(6),
             "receipts": [],

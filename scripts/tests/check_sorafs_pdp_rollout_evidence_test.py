@@ -22,6 +22,7 @@ DIGEST = "ef" * 32
 DIGEST_2 = "12" * 32
 ROSTER_DIGEST = "34" * 32
 HANDOFF_DIGEST = "56" * 32
+ALT_DIGEST = "78" * 32
 
 
 def write_json(path: Path, payload: dict) -> Path:
@@ -997,6 +998,73 @@ def test_all_provider_roster_bound_artifacts_reject_generation_roster_mismatch(
         ) in artifact["errors"]
 
 
+def test_multiple_valid_proof_summary_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = proof_generation()
+    payload["proof_summary_digest_hex"] = ALT_DIGEST
+    write_json(tmp_path / "proof-generation-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_proof_summary_digests"] == []
+    assert (
+        "valid_proof_summary_digests must contain exactly one active digest"
+        in result["errors"]
+    )
+
+
+def test_multiple_valid_policy_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = proof_generation()
+    payload["policy_digest_hex"] = ALT_DIGEST
+    write_json(tmp_path / "proof-generation-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_policy_digests"] == []
+    assert (
+        "valid_policy_digests must contain exactly one active digest"
+        in result["errors"]
+    )
+
+
+def test_multiple_valid_provider_roster_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = proof_generation()
+    payload["provider_roster_digest_hex"] = ALT_DIGEST
+    write_json(tmp_path / "proof-generation-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_provider_roster_digests"] == []
+    assert (
+        "valid_provider_roster_digests must contain exactly one active digest"
+        in result["errors"]
+    )
+
+
+def test_multiple_valid_repair_handoff_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_repair(handoff_digest=ALT_DIGEST)
+    write_json(tmp_path / "governance-repair-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_repair_handoff_digests"] == []
+    assert (
+        "valid_repair_handoff_digests must contain exactly one active digest"
+        in result["errors"]
+    )
+
+
 def test_stale_proof_generation_does_not_anchor_bound_evidence(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = proof_generation()
@@ -1100,7 +1168,7 @@ def test_governance_repair_rejects_malformed_handoff_digest(
 
     result = json.loads(summary.read_text(encoding="utf-8"))
     artifact = result["required"]["governance_repair"]["artifacts"][0]
-    assert "repair_handoff_digest_hex must be 64 hex characters" in artifact["errors"]
+    assert "repair_handoff_digest_hex must be 64 lowercase hex characters" in artifact["errors"]
     assert result["valid_repair_handoff_digests"] == []
 
 

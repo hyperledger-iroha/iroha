@@ -12998,8 +12998,6 @@ mod accel_tests {
 /// PoW admission settings supplied at the user configuration layer.
 #[derive(Debug, Clone, ReadConfig)]
 pub struct SoranetHandshakePow {
-    #[config(default)]
-    required: bool,
     #[config(default = "Self::default_difficulty()")]
     difficulty: u16,
     #[config(default = "Self::default_max_future_skew()")]
@@ -13051,7 +13049,6 @@ impl SoranetHandshakePow {
 
     fn parse(self) -> actual::SoranetPow {
         let Self {
-            required,
             difficulty,
             max_future_skew_secs,
             min_ticket_ttl_secs,
@@ -13082,7 +13079,7 @@ impl SoranetHandshakePow {
         let revocation_max_ttl = Duration::from_secs(revocation_store_ttl_secs.max(1));
 
         actual::SoranetPow {
-            required,
+            required: true,
             difficulty,
             max_future_skew,
             min_ticket_ttl,
@@ -13100,8 +13097,6 @@ impl SoranetHandshakePow {
 /// Puzzle configuration supplied at the user level.
 #[derive(Debug, Clone, Copy, ReadConfig)]
 pub struct SoranetHandshakePuzzle {
-    #[config(default = "Self::default_enabled()")]
-    enabled: bool,
     #[config(default = "Self::default_memory_kib()")]
     memory_kib: u32,
     #[config(default = "Self::default_time_cost()")]
@@ -13115,10 +13110,6 @@ impl SoranetHandshakePuzzle {
         64 * 1024
     }
 
-    const fn default_enabled() -> bool {
-        true
-    }
-
     const fn default_time_cost() -> u32 {
         2
     }
@@ -13128,12 +13119,14 @@ impl SoranetHandshakePuzzle {
     }
 
     fn parse(self) -> Option<actual::SoranetPuzzle> {
-        if !self.enabled {
-            return None;
-        }
-        let memory = NonZeroU32::new(self.memory_kib.max(4_096)).unwrap();
-        let time_cost = NonZeroU32::new(self.time_cost.max(1)).unwrap();
-        let lanes = NonZeroU32::new(self.lanes.clamp(1, 16)).unwrap();
+        let Self {
+            memory_kib,
+            time_cost,
+            lanes,
+        } = self;
+        let memory = NonZeroU32::new(memory_kib.max(4_096)).unwrap();
+        let time_cost = NonZeroU32::new(time_cost.max(1)).unwrap();
+        let lanes = NonZeroU32::new(lanes.clamp(1, 16)).unwrap();
         Some(actual::SoranetPuzzle {
             memory_kib: memory,
             time_cost,

@@ -5,6 +5,10 @@
 
 --out-dir
 dist/sorafs-reserve-rent-rollout-evidence
+--summary-out
+dist/sorafs-reserve-rent-rollout-evidence/rollout-summary.json
+--require-kind
+policy_config,quote_matrix,ledger_digest,lifecycle_service,signed_routes,reserve_movement,credit_line,appeal_policy,metrics_alerts,provider_bake,governance_approval
 --now-unix
 1800007000
 --max-ledger-age-secs

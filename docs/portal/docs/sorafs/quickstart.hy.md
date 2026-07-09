@@ -28,12 +28,12 @@ translator: machine-google-reviewed
 
 ## 1. Թարմացրեք դետերմինիստական հարմարանքները
 
-Վերականգնեք կանոնական SF-1 բեկորային վեկտորները: Հրամանատարությունը թողարկում է նաև ստորագրված
-մանիֆեստի ծրարներ, երբ մատակարարվում է `--signing-key`; օգտագործել `--allow-unsigned`
-միայն տեղական զարգացման ընթացքում:
+Regenerate the canonical SF-1 chunking vectors. The command verifies the
+existing council signature file, or appends a signature when `--signing-key` is
+supplied.
 
 ```bash
-cargo run -p sorafs_chunker --bin export_vectors -- --allow-unsigned
+cargo run -p sorafs_chunker --bin export_vectors -- --signing-key=<ed25519-private-key-hex>
 ```
 
 Արդյունքներ:
@@ -78,7 +78,7 @@ cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   --manifest-out=/tmp/docs.manifest \
   --manifest-signatures-out=/tmp/docs.manifest_signatures.json \
   --json-out=/tmp/docs.report.json \
-  --allow-unsigned
+  --council-signature=<signerhex>:<signaturehex>
 ```
 
 Վերանայեք `/tmp/docs.report.json`-ը հետևյալի համար.
@@ -88,9 +88,9 @@ cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
 - `manifest.manifest_blake3` – BLAKE3 digest ստորագրված մանիֆեստի ծրարում:
 - `chunk_fetch_specs[]` – պատվիրել են բեռնելու հրահանգներ նվագախմբի համար:
 
-Երբ պատրաստ եք իրական ստորագրություններ տրամադրել, ավելացրեք `--signing-key` և `--signer`
-փաստարկներ. Հրամանը ստուգում է յուրաքանչյուր Ed25519 ստորագրությունը՝ նախքան այն գրելը
-ծրար.
+The `--council-signature` value must be a reviewed council signer public key and
+Ed25519 signature pair. The command verifies every Ed25519 signature before
+writing the envelope.
 
 ## 4. Մոդելավորել բազմապրովայդերների որոնումը
 

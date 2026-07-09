@@ -2450,9 +2450,10 @@ mod model {
         ///
         /// Encode an empty string explicitly to select the semantic
         /// `kagemusha-recursive-aggregation-v1` append output. Set this to
-        /// `kagemusha-recursive-spend-lineage-v1` to attempt the
-        /// Reserved-lineage output circuit; that selection requires
-        /// `previous_recursive_proof_open_envelopes_archive`.
+        /// `kagemusha-recursive-spend-lineage-append-v1` to attempt the
+        /// Reserved-lineage output circuit; the generic lineage family id is
+        /// not accepted as an append selector. Reserved-lineage selection
+        /// requires `previous_recursive_proof_open_envelopes_archive`.
         pub output_proof_circuit_id: String,
         /// Optional verifier record for a previous reserved-lineage recursive proof.
         ///

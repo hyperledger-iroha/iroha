@@ -31,6 +31,7 @@ CHECKER_SPEC.loader.exec_module(CHECKER)
 
 
 GENERATED_AT = 1_800_000_120
+NOW_UNIX = GENERATED_AT
 SOURCE_BATCH_DIGEST = "a" * 64
 CYCLE_DIGEST = "b" * 64
 
@@ -51,6 +52,8 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
         "production",
         "--generated-at-unix",
         str(GENERATED_AT),
+        "--now-unix",
+        str(NOW_UNIX),
     ]
     if kind in MODULE.SOURCE_BATCH_DIGEST_KINDS:
         args.extend(["--source-batch-digest-hex", SOURCE_BATCH_DIGEST])
@@ -71,6 +74,13 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
         for route in MODULE.REQUIRED_EXPLORER_ROUTES:
             args.extend(["--explorer-route", route])
     return args
+
+
+def checker_options() -> object:
+    return CHECKER.ValidationOptions(
+        now_unix=NOW_UNIX,
+        max_evidence_age_secs=CHECKER.DEFAULT_MAX_EVIDENCE_AGE_SECS,
+    )
 
 
 def assert_rejected_without_artifact(
@@ -134,7 +144,7 @@ def test_generated_canaries_pass_full_transparency_gate(tmp_path: Path) -> None:
         evidence_paths.append(canary_path(tmp_path, kind))
     summary = tmp_path / "summary.json"
 
-    command = []
+    command = ["--now-unix", str(NOW_UNIX)]
     for path in evidence_paths:
         command.extend(["--evidence", str(path)])
     command.extend(["--summary-out", str(summary)])
@@ -450,6 +460,27 @@ def test_cycle_detail_probe_count_must_match_inventory(
         in captured.err
     )
     assert not canary_path(tmp_path, "publication").exists()
+
+
+def test_default_cycle_detail_probe_count_matches_required_inventory(
+    tmp_path: Path,
+) -> None:
+    args = args_for("publication", tmp_path)
+    parsed = MODULE.parse_args(args)
+
+    assert parsed.cycle_detail_probe_count == len(
+        MODULE.REQUIRED_PUBLICATION_CYCLE_DETAIL_PROBES
+    )
+
+    assert MODULE.main(args) == 0
+
+    payload = json.loads(canary_path(tmp_path, "publication").read_text("utf-8"))
+    assert payload["cycle_detail_probe_count"] == len(
+        MODULE.REQUIRED_PUBLICATION_CYCLE_DETAIL_PROBES
+    )
+    assert [probe["name"] for probe in payload["cycle_detail_probes"]] == list(
+        MODULE.REQUIRED_PUBLICATION_CYCLE_DETAIL_PROBES
+    )
 
 
 def test_non_2xx_statuses_fail_before_write(tmp_path: Path, capsys) -> None:

@@ -453,7 +453,6 @@ public static class KagemushaRecursiveSpendNative
 {
     public const string RecursiveAggregationProofBackend = "halo2/ipa";
     public const string RecursiveAggregationProofCircuitIdV1 = "kagemusha-recursive-aggregation-v1";
-    public const string RecursiveSpendLineageProofCircuitIdV1 = "kagemusha-recursive-spend-lineage-v1";
     public const string RecursiveSpendLineageOneHopProofCircuitIdV1 = "kagemusha-recursive-spend-lineage-onehop-v1";
     public const string RecursiveSpendLineageAppendProofCircuitIdV1 = "kagemusha-recursive-spend-lineage-append-v1";
     public const string RecursiveCompactCircuitIdV1 = "kagemusha-recursive-compact-v1";
@@ -992,8 +991,7 @@ public static class KagemushaRecursiveSpendNative
 
     public static bool IsLineageProofCircuitId(string? circuitId)
     {
-        return circuitId == RecursiveSpendLineageProofCircuitIdV1
-            || circuitId == RecursiveSpendLineageOneHopProofCircuitIdV1
+        return circuitId == RecursiveSpendLineageOneHopProofCircuitIdV1
             || circuitId == RecursiveSpendLineageAppendProofCircuitIdV1;
     }
 

@@ -654,6 +654,8 @@ def test_duplicate_required_gate_fails_before_validation(capsys) -> None:
                 "gateway_load",
                 "--require-gate",
                 "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
             ]
         )
         == 2
@@ -667,7 +669,10 @@ def test_duplicate_required_gate_fails_before_validation(capsys) -> None:
 def test_unknown_required_gate_fails_before_validation(capsys) -> None:
     unknown_gate = "private-key-placeholder"
 
-    assert MODULE.main(["--require-gate", unknown_gate]) == 2
+    assert (
+        MODULE.main(["--require-gate", unknown_gate, "--now-unix", str(NOW_UNIX)])
+        == 2
+    )
 
     captured = capsys.readouterr()
     assert "unknown required evidence kind" in captured.err
@@ -677,7 +682,10 @@ def test_unknown_required_gate_fails_before_validation(capsys) -> None:
 def test_malformed_required_gate_fails_before_validation(capsys) -> None:
     malformed_gate = "gateway_load,"
 
-    assert MODULE.main(["--require-gate", malformed_gate]) == 2
+    assert (
+        MODULE.main(["--require-gate", malformed_gate, "--now-unix", str(NOW_UNIX)])
+        == 2
+    )
 
     captured = capsys.readouterr()
     assert (
@@ -751,6 +759,8 @@ def write_complete_lane_fixture_summary(
                 str(evidence_root),
                 "--summary-out",
                 str(summary),
+                "--now-unix",
+                str(fixture_module.NOW_UNIX),
             ]
         )
     elif gate_name == "reputation":
@@ -845,6 +855,21 @@ def test_required_kind_schema_contracts_cover_gate_contracts() -> None:
         for kind_name, schema in schemas.items():
             assert MODULE.canonical_string(kind_name) == kind_name
             assert MODULE.canonical_string(schema) == schema
+
+
+def test_canonical_string_rejects_unicode_controls() -> None:
+    assert MODULE.canonical_string("gateway_load") == "gateway_load"
+
+    for value in (
+        "",
+        " gateway_load",
+        "gateway_load ",
+        "gateway\nload",
+        "gateway\u200dload",
+        "gateway\u202eload",
+        "gateway\ue000load",
+    ):
+        assert MODULE.canonical_string(value) is None
 
 
 def test_payload_free_summary_metadata_fields_have_validator_coverage() -> None:
@@ -1609,6 +1634,43 @@ def test_explicit_evidence_symlink_fails_closed_without_path_leak(
     assert payload["status"] == "blocked"
 
 
+def test_explicit_evidence_broken_symlink_fails_closed_without_path_leak(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    symlink = tmp_path / "linked-summary.json"
+    symlink.symlink_to(tmp_path / "missing-target.json")
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence",
+                str(symlink),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--deployment-id",
+                DEPLOYMENT_ID,
+                "--environment",
+                ENVIRONMENT,
+            ]
+        )
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    diagnostics = "\n".join([*payload["errors"], captured.err])
+    assert "evidence file must not be a symlink" in diagnostics
+    assert "missing required gateway_load production readiness summary" in diagnostics
+    assert "linked-summary" not in diagnostics
+    assert "missing-target" not in diagnostics
+    assert "gateway_load.json" not in diagnostics
+    assert payload["summary_file_count"] == 0
+    assert payload["status"] == "blocked"
+
+
 def test_evidence_dir_symlink_fails_closed_without_path_leak(
     tmp_path: Path,
     capsys,
@@ -1644,6 +1706,236 @@ def test_evidence_dir_symlink_fails_closed_without_path_leak(
     assert "missing required gateway_load production readiness summary" in diagnostics
     assert "linked-evidence" not in diagnostics
     assert "target" not in diagnostics
+    assert payload["status"] == "blocked"
+
+
+def test_evidence_dir_broken_symlink_fails_closed_without_path_leak(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    symlink_dir = tmp_path / "linked-evidence"
+    symlink_dir.symlink_to(tmp_path / "missing-target", target_is_directory=True)
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(symlink_dir),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--deployment-id",
+                DEPLOYMENT_ID,
+                "--environment",
+                ENVIRONMENT,
+            ]
+        )
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    diagnostics = "\n".join([*payload["errors"], captured.err])
+    assert "evidence directory must not be a symlink" in diagnostics
+    assert "missing required gateway_load production readiness summary" in diagnostics
+    assert "linked-evidence" not in diagnostics
+    assert "missing-target" not in diagnostics
+    assert "gateway_load.json" not in diagnostics
+    assert payload["summary_file_count"] == 0
+    assert payload["status"] == "blocked"
+
+
+def test_explicit_evidence_parent_symlink_fails_closed_without_path_leak(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    target_parent = tmp_path / "target-parent"
+    target_parent.mkdir()
+    write_gate(target_parent, "gateway_load")
+    linked_parent = tmp_path / "linked-parent"
+    linked_parent.symlink_to(target_parent, target_is_directory=True)
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence",
+                str(linked_parent / "gateway_load.json"),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--deployment-id",
+                DEPLOYMENT_ID,
+                "--environment",
+                ENVIRONMENT,
+            ]
+        )
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    diagnostics = "\n".join([*payload["errors"], captured.err])
+    assert "evidence file parent must not be a symlink" in diagnostics
+    assert "missing required gateway_load production readiness summary" in diagnostics
+    assert "linked-parent" not in diagnostics
+    assert "target-parent" not in diagnostics
+    assert "gateway_load.json" not in diagnostics
+    assert payload["summary_file_count"] == 0
+    assert payload["status"] == "blocked"
+
+
+def test_explicit_evidence_broken_parent_symlink_fails_closed_without_path_leak(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    linked_parent = tmp_path / "linked-broken-parent"
+    linked_parent.symlink_to(tmp_path / "missing-target", target_is_directory=True)
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence",
+                str(linked_parent / "gateway_load.json"),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--deployment-id",
+                DEPLOYMENT_ID,
+                "--environment",
+                ENVIRONMENT,
+            ]
+        )
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    diagnostics = "\n".join([*payload["errors"], captured.err])
+    assert "evidence file parent must not be a symlink" in diagnostics
+    assert "missing required gateway_load production readiness summary" in diagnostics
+    assert "linked-broken-parent" not in diagnostics
+    assert "missing-target" not in diagnostics
+    assert "gateway_load.json" not in diagnostics
+    assert payload["summary_file_count"] == 0
+    assert payload["status"] == "blocked"
+
+
+def test_evidence_dir_parent_symlink_fails_closed_without_path_leak(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    target_parent = tmp_path / "target-parent"
+    target_dir = target_parent / "summaries"
+    target_dir.mkdir(parents=True)
+    write_gate(target_dir, "gateway_load")
+    linked_parent = tmp_path / "linked-parent"
+    linked_parent.symlink_to(target_parent, target_is_directory=True)
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(linked_parent / "summaries"),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--deployment-id",
+                DEPLOYMENT_ID,
+                "--environment",
+                ENVIRONMENT,
+            ]
+        )
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    diagnostics = "\n".join([*payload["errors"], captured.err])
+    assert "evidence directory parent must not be a symlink" in diagnostics
+    assert "missing required gateway_load production readiness summary" in diagnostics
+    assert "linked-parent" not in diagnostics
+    assert "target-parent" not in diagnostics
+    assert "gateway_load.json" not in diagnostics
+    assert payload["summary_file_count"] == 0
+    assert payload["status"] == "blocked"
+
+
+def test_evidence_dir_broken_parent_symlink_fails_closed_without_path_leak(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    linked_parent = tmp_path / "linked-broken-parent"
+    linked_parent.symlink_to(tmp_path / "missing-target", target_is_directory=True)
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(linked_parent / "summaries"),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--deployment-id",
+                DEPLOYMENT_ID,
+                "--environment",
+                ENVIRONMENT,
+            ]
+        )
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    diagnostics = "\n".join([*payload["errors"], captured.err])
+    assert "evidence directory parent must not be a symlink" in diagnostics
+    assert "missing required gateway_load production readiness summary" in diagnostics
+    assert "linked-broken-parent" not in diagnostics
+    assert "missing-target" not in diagnostics
+    assert "gateway_load.json" not in diagnostics
+    assert payload["summary_file_count"] == 0
+    assert payload["status"] == "blocked"
+
+
+def test_discovered_evidence_file_symlink_fails_closed_without_path_leak(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    target = write_gate(tmp_path, "gateway_load")
+    symlink = tmp_path / "linked-discovered-summary.json"
+    symlink.symlink_to(target)
+    target.unlink()
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(tmp_path),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--deployment-id",
+                DEPLOYMENT_ID,
+                "--environment",
+                ENVIRONMENT,
+            ]
+        )
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    diagnostics = "\n".join([*payload["errors"], captured.err])
+    assert "evidence file must not be a symlink" in diagnostics
+    assert "missing required gateway_load production readiness summary" in diagnostics
+    assert "linked-discovered-summary" not in diagnostics
+    assert "gateway_load.json" not in diagnostics
+    assert payload["summary_file_count"] == 0
     assert payload["status"] == "blocked"
 
 
@@ -1758,10 +2050,123 @@ def test_overlapping_evidence_dirs_fail_closed_without_path_leak(
     assert payload["status"] == "blocked"
 
 
+def test_evidence_source_conflicts_fail_closed_from_config(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    cases = [gate.name for gate in MODULE.GATE_SUMMARY_KINDS]
+    assert cases
+
+    for index, gate_name in enumerate(cases):
+        for suffix, expected_error in (
+            ("duplicate_explicit", "duplicate explicit evidence file"),
+            ("explicit_directory_overlap", "evidence file provided by multiple evidence sources"),
+            ("overlapping_directories", "duplicate evidence file"),
+        ):
+            root = tmp_path / f"{index}_{gate_name}_{suffix}"
+            root.mkdir()
+            secret_dir = root / f"runtime-only-private-source-{index:03d}-{suffix}"
+            if suffix == "overlapping_directories":
+                secret_dir.mkdir()
+                evidence = write_gate(secret_dir, gate_name)
+                evidence_args = [
+                    "--evidence-dir",
+                    str(root),
+                    "--evidence-dir",
+                    str(secret_dir),
+                ]
+            else:
+                evidence = write_gate(root, gate_name)
+                evidence_args = (
+                    ["--evidence", str(evidence), "--evidence", str(evidence)]
+                    if suffix == "duplicate_explicit"
+                    else ["--evidence-dir", str(root), "--evidence", str(evidence)]
+                )
+
+            assert (
+                MODULE.main(
+                    [
+                        *evidence_args,
+                        "--require-gate",
+                        gate_name,
+                        "--now-unix",
+                        str(NOW_UNIX),
+                        "--deployment-id",
+                        DEPLOYMENT_ID,
+                        "--environment",
+                        ENVIRONMENT,
+                    ]
+                )
+                == 1
+            )
+
+            captured = capsys.readouterr()
+            payload = json.loads(captured.out)
+            diagnostics = "\n".join([*payload["errors"], captured.err])
+            assert expected_error in diagnostics
+            assert (
+                f"missing required {gate_name} production readiness summary"
+                in diagnostics
+            )
+            assert payload["summary_file_count"] == 0
+            assert payload["status"] == "blocked"
+            assert evidence.name not in diagnostics
+            assert str(evidence) not in diagnostics
+            assert "runtime-only-private-source" not in diagnostics
+
+
 def test_missing_required_gate_fails(tmp_path: Path) -> None:
     write_gate(tmp_path, "gateway_load")
 
     assert run_gate(tmp_path) == 1
+
+
+def test_missing_required_summary_rows_fail_closed_from_config(tmp_path: Path) -> None:
+    options = MODULE.ValidationOptions(
+        now_unix=NOW_UNIX,
+        max_summary_artifact_age_secs=MODULE.DEFAULT_MAX_SUMMARY_ARTIFACT_AGE_SECS,
+        deployment_id=DEPLOYMENT_ID,
+        environment=ENVIRONMENT,
+    )
+
+    for index, gate in enumerate(MODULE.GATE_SUMMARY_KINDS):
+        evidence_root = tmp_path / f"{index}_{gate.name}"
+        evidence_root.mkdir()
+        summary, build_errors = MODULE.build_summary(
+            [evidence_root],
+            [],
+            (gate.name,),
+            options,
+            None,
+        )
+        missing_error = f"missing required {gate.name} production readiness summary"
+        assert summary["status"] == "blocked"
+        assert summary["summary_file_count"] == 0
+        assert summary["recognized_summary_count"] == 0
+        assert build_errors == [missing_error]
+        assert summary["errors"] == [missing_error]
+        assert summary["required"][gate.name] == {
+            "schema": gate.schema,
+            "present": False,
+            "valid": False,
+            "errors": [missing_error],
+        }
+
+        row_errors: list[str] = []
+        MODULE.validate_aggregate_required_row_output(
+            gate,
+            summary["required"][gate.name],
+            row_errors,
+        )
+        assert row_errors == []
+
+        summary_errors: list[str] = []
+        MODULE.validate_aggregate_summary_output(
+            summary,
+            (gate.name,),
+            summary_errors,
+        )
+        assert summary_errors == []
 
 
 def test_explicit_unrequired_gate_summary_fails(tmp_path: Path) -> None:
@@ -1862,6 +2267,93 @@ def test_unknown_sorafs_schema_in_summary_dir_fails(tmp_path: Path) -> None:
     )
 
 
+def test_unknown_sorafs_schema_fails_closed_from_config(tmp_path: Path) -> None:
+    gate_names = [gate.name for gate in MODULE.GATE_SUMMARY_KINDS]
+    assert gate_names
+
+    for index, gate_name in enumerate(gate_names):
+        root = tmp_path / f"{index}_{gate_name}"
+        root.mkdir()
+        write_gate(root, gate_name)
+        unknown_schema = f"sorafs.unknown.private-key-placeholder.{index:03d}.v1"
+        unknown_path = root / f"runtime-only-private-unknown-{index:03d}.json"
+        write_json(
+            unknown_path,
+            {
+                "schema": unknown_schema,
+                "status": "ready",
+                "errors": [],
+            },
+        )
+        summary = root / "summary.json"
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        payload = json.loads(summary.read_text(encoding="utf-8"))
+        errors = "\n".join(payload["errors"])
+        assert "unknown SoraFS readiness summary schema" in errors
+        assert payload["errors"].count("unknown SoraFS readiness summary schema") == 1
+        assert unknown_schema not in errors
+        assert str(unknown_path) not in errors
+        assert unknown_path.name not in errors
+
+
+def test_duplicate_sensitive_json_key_load_error_does_not_echo(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    evidence = tmp_path / "malformed-summary.json"
+    secret_value = "runtime-only-private-key-material"
+    evidence.write_text(
+        '{"schema":"sorafs.gateway_load.rollout_evidence_gate.v1",'
+        f'"private_key":"{secret_value}",'
+        f'"private_key":"{secret_value}-shadow"}}',
+        encoding="utf-8",
+    )
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence",
+                str(evidence),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--deployment-id",
+                DEPLOYMENT_ID,
+                "--environment",
+                ENVIRONMENT,
+                "--summary-out",
+                str(summary),
+            ]
+        )
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    diagnostics = "\n".join([*payload["errors"], captured.err, captured.out])
+    assert (
+        "failed to load evidence JSON: evidence JSON object contains duplicate key "
+        "`<sensitive-key>`"
+    ) in diagnostics
+    assert "missing required gateway_load production readiness summary" in diagnostics
+    assert "private_key" not in diagnostics
+    assert secret_value not in diagnostics
+    assert "malformed-summary.json" not in diagnostics
+
+
 def test_unknown_non_sorafs_schema_in_summary_dir_fails(tmp_path: Path) -> None:
     write_gate(tmp_path, "gateway_load")
     write_json(
@@ -1896,6 +2388,65 @@ def test_malformed_lane_summary_load_errors_fails(tmp_path: Path) -> None:
     write_json(tmp_path / "gateway_load.json", payload)
 
     assert run_gate(tmp_path, "--require-gate", "gateway_load") == 1
+
+
+def test_lane_summary_status_and_load_errors_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [gate.name for gate in MODULE.GATE_SUMMARY_KINDS]
+    assert cases
+
+    for index, gate_name in enumerate(cases):
+        for suffix, mutate, expected_errors in (
+            (
+                "blocked_status",
+                lambda payload, secret: (
+                    payload.__setitem__("status", "blocked"),
+                    payload.__setitem__("errors", [secret]),
+                ),
+                ("status must be `ready`", "errors must be empty"),
+            ),
+            (
+                "nonempty_load_errors",
+                lambda payload, secret: payload.__setitem__(
+                    "load_errors",
+                    [secret],
+                ),
+                ("load_errors must be empty",),
+            ),
+            (
+                "malformed_load_errors",
+                lambda payload, secret: payload.__setitem__("load_errors", secret),
+                ("load_errors must be an empty error list",),
+            ),
+        ):
+            root = tmp_path / f"{index}_{gate_name}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            secret = f"runtime-only-private-lane-error-{index:03d}-{suffix}"
+            mutate(payload, secret)
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            result = json.loads(result_text)
+            errors = "\n".join(result["errors"])
+            assert f"{gate_name} production readiness summary is invalid" in errors
+            for expected_error in expected_errors:
+                assert f"{gate_name}: {expected_error}" in errors
+            assert result["required"][gate_name]["valid"] is False
+            assert secret not in result_text
 
 
 def test_malformed_lane_summary_thresholds_fail(tmp_path: Path) -> None:
@@ -1936,6 +2487,93 @@ def test_lane_summary_threshold_values_must_be_non_negative_int(tmp_path: Path) 
     write_json(tmp_path / "gateway_load.json", payload)
 
     assert run_gate(tmp_path, "--require-gate", "gateway_load") == 1
+
+
+def test_lane_summary_thresholds_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [gate.name for gate in MODULE.GATE_SUMMARY_KINDS]
+    assert cases
+
+    for index, gate_name in enumerate(cases):
+        for suffix, mutate, expected_errors, forbidden_values in (
+            (
+                "missing",
+                lambda payload, _secret: payload.pop("thresholds"),
+                ("thresholds must be present",),
+                (),
+            ),
+            (
+                "scalar",
+                lambda payload, secret: payload.__setitem__("thresholds", secret),
+                ("thresholds must be an object",),
+                (f"runtime-only-private-threshold-{index:03d}-scalar",),
+            ),
+            (
+                "empty",
+                lambda payload, _secret: payload.__setitem__("thresholds", {}),
+                ("thresholds must not be empty",),
+                (),
+            ),
+            (
+                "noncanonical_key",
+                lambda payload, _secret: payload.__setitem__(
+                    "thresholds",
+                    {"bad\nkey": False},
+                ),
+                (
+                    "thresholds keys must be canonical strings",
+                    "thresholds.<invalid> must be a non-negative integer",
+                ),
+                ("bad\nkey",),
+            ),
+            (
+                "sensitive_key",
+                lambda payload, _secret: payload.__setitem__(
+                    "thresholds",
+                    {"private_key": 1},
+                ),
+                ("thresholds.<sensitive-key> must not be present",),
+                ("private_key",),
+            ),
+            (
+                "noninteger_value",
+                lambda payload, secret: payload.__setitem__(
+                    "thresholds",
+                    {"max_evidence_age_secs": {"seconds": secret}},
+                ),
+                ("thresholds.max_evidence_age_secs must be a non-negative integer",),
+                (f"runtime-only-private-threshold-{index:03d}-noninteger_value",),
+            ),
+        ):
+            root = tmp_path / f"{index}_{gate_name}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            secret = f"runtime-only-private-threshold-{index:03d}-{suffix}"
+            mutate(payload, secret)
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            result = json.loads(result_text)
+            errors = "\n".join(result["errors"])
+            assert f"{gate_name} production readiness summary is invalid" in errors
+            for expected_error in expected_errors:
+                assert f"{gate_name}: {expected_error}" in errors
+            for forbidden_value in forbidden_values:
+                assert forbidden_value not in result_text
+            assert result["required"][gate_name]["valid"] is False
 
 
 def test_malformed_threshold_key_value_diagnostic_is_sanitized(
@@ -1996,13 +2634,207 @@ def test_malformed_threshold_entries_are_not_carried_into_summary(
 
 
 def test_stale_artifact_timestamp_fails(tmp_path: Path) -> None:
+    summary = tmp_path / "summary.json"
     write_gate(
         tmp_path,
         "gateway_load",
         generated_at_unix=NOW_UNIX - MODULE.DEFAULT_MAX_SUMMARY_ARTIFACT_AGE_SECS - 1,
     )
 
-    assert run_gate(tmp_path, "--require-gate", "gateway_load") == 1
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "gateway_load",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert ".fingerprint.generated_at_unix exceeds max summary artifact age" in errors
+    assert ".artifacts[0].generated_at_unix exceeds max summary artifact age" not in errors
+    assert "recognized_artifacts[0].generated_at_unix exceeds max summary artifact age" not in errors
+
+
+def test_future_artifact_timestamp_fails_with_fingerprint_path(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("gateway_load", generated_at_unix=NOW_UNIX + 1)
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "gateway_load.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "gateway_load",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert ".fingerprint.generated_at_unix must not be future" in errors
+    assert ".artifacts[0].generated_at_unix must not be future" not in errors
+    assert "recognized_artifacts[0].generated_at_unix must not be future" not in errors
+
+
+def test_artifact_freshness_timestamps_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+    stale_generated_at = (
+        NOW_UNIX - MODULE.DEFAULT_MAX_SUMMARY_ARTIFACT_AGE_SECS - 1
+    )
+    future_generated_at = NOW_UNIX + 1
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        for suffix, generated_at, expected_error in (
+            (
+                "stale",
+                stale_generated_at,
+                ".fingerprint.generated_at_unix exceeds max summary artifact age",
+            ),
+            (
+                "future",
+                future_generated_at,
+                ".fingerprint.generated_at_unix must not be future",
+            ),
+        ):
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            payload["required"][kind_name]["artifacts"][0]["fingerprint"][
+                "generated_at_unix"
+            ] = generated_at
+            payload["recognized_artifacts"] = recognized_artifacts_from_required(
+                payload
+            )
+            recognized_index = next(
+                artifact_index
+                for artifact_index, artifact in enumerate(
+                    payload["recognized_artifacts"]
+                )
+                if artifact["kind"] == kind_name
+                and artifact["path"]
+                == payload["required"][kind_name]["artifacts"][0]["path"]
+            )
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result = json.loads(summary.read_text(encoding="utf-8"))
+            errors = "\n".join(result["errors"])
+            assert f"{gate_name} production readiness summary is invalid" in errors
+            assert (
+                f"{gate_name}.required.{kind_name}.artifacts[0]{expected_error}"
+                in errors
+            )
+            assert f"recognized_artifacts[{recognized_index}]{expected_error}" in errors
+            assert "artifacts[0].generated_at_unix" not in errors
+            assert f"recognized_artifacts[{recognized_index}].generated_at_unix" not in errors
+            assert result["required"][gate_name]["valid"] is False
+
+
+def test_artifact_generated_at_shape_fails_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        malformed_values = (
+            ("missing", None, ()),
+            ("boolean", False, ()),
+            ("zero", 0, ()),
+            ("negative", -1, ()),
+            (
+                "string",
+                f"runtime-only-generated-at-{index:03d}\nprivate_key",
+                (f"runtime-only-generated-at-{index:03d}\nprivate_key", "private_key"),
+            ),
+            (
+                "object",
+                {"private_key": f"runtime-only-generated-at-{index:03d}"},
+                ("private_key", f"runtime-only-generated-at-{index:03d}"),
+            ),
+        )
+        for suffix, generated_at, forbidden_values in malformed_values:
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            fingerprint = payload["required"][kind_name]["artifacts"][0][
+                "fingerprint"
+            ]
+            if suffix == "missing":
+                fingerprint.pop("generated_at_unix")
+            else:
+                fingerprint["generated_at_unix"] = generated_at
+            payload["recognized_artifacts"] = recognized_artifacts_from_required(
+                payload
+            )
+            recognized_index = next(
+                artifact_index
+                for artifact_index, artifact in enumerate(
+                    payload["recognized_artifacts"]
+                )
+                if artifact["kind"] == kind_name
+                and artifact["path"]
+                == payload["required"][kind_name]["artifacts"][0]["path"]
+            )
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            result = json.loads(result_text)
+            errors = "\n".join(result["errors"])
+            assert f"{gate_name} production readiness summary is invalid" in errors
+            assert (
+                f"{gate_name}.required.{kind_name}.artifacts[0].fingerprint."
+                "generated_at_unix must be positive"
+                in errors
+            )
+            assert (
+                f"recognized_artifacts[{recognized_index}].fingerprint."
+                "generated_at_unix must be positive"
+                in errors
+            )
+            assert result["required"][gate_name]["valid"] is False
+            for forbidden_value in forbidden_values:
+                assert forbidden_value not in result_text
 
 
 def test_malformed_required_artifact_digest_fails(tmp_path: Path) -> None:
@@ -2014,6 +2846,139 @@ def test_malformed_required_artifact_digest_fails(tmp_path: Path) -> None:
     assert run_gate(tmp_path, "--require-gate", "gateway_load") == 1
 
 
+def test_required_and_recognized_artifact_digests_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        for suffix, forged_digest in (
+            ("uppercase", "AB" * 32),
+            ("malformed", f"runtime-only-digest-{index:03d}"),
+        ):
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            payload["required"][kind_name]["artifacts"][0]["sha256"] = forged_digest
+            payload["recognized_artifacts"] = recognized_artifacts_from_required(
+                payload
+            )
+            recognized_index = next(
+                artifact_index
+                for artifact_index, artifact in enumerate(
+                    payload["recognized_artifacts"]
+                )
+                if artifact["kind"] == kind_name
+                and artifact["path"]
+                == payload["required"][kind_name]["artifacts"][0]["path"]
+            )
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            assert (
+                f"{gate_name}.required.{kind_name}.artifacts[0].sha256 "
+                "must be canonical lowercase SHA-256"
+                in errors
+            )
+            assert (
+                f"recognized_artifacts[{recognized_index}].sha256 "
+                "must be canonical lowercase SHA-256"
+                in errors
+            )
+            assert forged_digest not in result_text
+
+
+def test_required_and_recognized_artifact_digest_shapes_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        malformed_values = (
+            ("missing", None, ()),
+            ("boolean", True, ()),
+            (
+                "object",
+                {"private_key": f"runtime-only-digest-{index:03d}"},
+                ("private_key", f"runtime-only-digest-{index:03d}"),
+            ),
+        )
+        for suffix, malformed_digest, forbidden_values in malformed_values:
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{suffix}_digest"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            required_artifact = payload["required"][kind_name]["artifacts"][0]
+            if suffix == "missing":
+                required_artifact.pop("sha256")
+            else:
+                required_artifact["sha256"] = malformed_digest
+            payload["recognized_artifacts"] = recognized_artifacts_from_required(
+                payload
+            )
+            recognized_index = next(
+                artifact_index
+                for artifact_index, artifact in enumerate(
+                    payload["recognized_artifacts"]
+                )
+                if artifact["kind"] == kind_name
+                and artifact["path"] == required_artifact["path"]
+            )
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            result = json.loads(result_text)
+            errors = "\n".join(result["errors"])
+            assert f"{gate_name} production readiness summary is invalid" in errors
+            assert (
+                f"{gate_name}.required.{kind_name}.artifacts[0].sha256 "
+                "must be canonical lowercase SHA-256"
+                in errors
+            )
+            assert (
+                f"recognized_artifacts[{recognized_index}].sha256 "
+                "must be canonical lowercase SHA-256"
+                in errors
+            )
+            assert result["required"][gate_name]["valid"] is False
+            for forbidden_value in forbidden_values:
+                assert forbidden_value not in result_text
+
+
 def test_malformed_required_artifact_metadata_label_fails(tmp_path: Path) -> None:
     payload = gate_summary("gateway_load")
     first_required = MODULE.GATE_BY_NAME["gateway_load"].required_kinds[0]
@@ -2021,6 +2986,645 @@ def test_malformed_required_artifact_metadata_label_fails(tmp_path: Path) -> Non
     write_json(tmp_path / "gateway_load.json", payload)
 
     assert run_gate(tmp_path, "--require-gate", "gateway_load") == 1
+
+
+def test_required_and_recognized_artifact_optional_labels_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        for field in ("schema", "status"):
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{field}"
+            root.mkdir()
+            forged_label = f"runtime-only-{field}-{index:03d}\nsecret"
+            payload = gate_summary(gate_name)
+            payload["required"][kind_name]["artifacts"][0][field] = forged_label
+            payload["recognized_artifacts"] = recognized_artifacts_from_required(
+                payload
+            )
+            recognized_index = next(
+                artifact_index
+                for artifact_index, artifact in enumerate(
+                    payload["recognized_artifacts"]
+                )
+                if artifact["kind"] == kind_name
+                and artifact["path"]
+                == payload["required"][kind_name]["artifacts"][0]["path"]
+            )
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            assert f"{gate_name} production readiness summary is invalid" in errors
+            if field == "schema":
+                assert (
+                    f"{gate_name}.required.{kind_name}.artifacts[0].schema "
+                    "must be canonical"
+                    in errors
+                )
+            assert (
+                f"{gate_name}.required.{kind_name}.artifacts[0].{field} "
+                "must be canonical when present"
+                in errors
+            )
+            assert (
+                f"recognized_artifacts[{recognized_index}].{field} "
+                "must be canonical when present"
+                in errors
+            )
+            assert forged_label not in result_text
+
+
+def test_required_and_recognized_artifact_schema_shapes_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        object_schema = {"private_key": f"runtime-only-schema-{index:03d}"}
+        for surface, shape, mutate, expected_error, forbidden_values in (
+            (
+                "required",
+                "missing",
+                lambda payload: payload["required"][kind_name]["artifacts"][
+                    0
+                ].pop("schema"),
+                f"{gate_name}.required.{kind_name}.artifacts[0].schema "
+                "must be canonical",
+                (),
+            ),
+            (
+                "required",
+                "object",
+                lambda payload: payload["required"][kind_name]["artifacts"][
+                    0
+                ].__setitem__(
+                    "schema",
+                    object_schema,
+                ),
+                f"{gate_name}.required.{kind_name}.artifacts[0].schema "
+                "must be canonical",
+                ("private_key", object_schema["private_key"]),
+            ),
+            (
+                "recognized",
+                "missing",
+                lambda payload: payload["recognized_artifacts"][
+                    next(
+                        artifact_index
+                        for artifact_index, artifact in enumerate(
+                            payload["recognized_artifacts"]
+                        )
+                        if artifact["kind"] == kind_name
+                    )
+                ].pop("schema"),
+                "recognized_artifacts[{index}].schema must match the required "
+                "artifact metadata",
+                (),
+            ),
+            (
+                "recognized",
+                "object",
+                lambda payload: payload["recognized_artifacts"][
+                    next(
+                        artifact_index
+                        for artifact_index, artifact in enumerate(
+                            payload["recognized_artifacts"]
+                        )
+                        if artifact["kind"] == kind_name
+                    )
+                ].__setitem__(
+                    "schema",
+                    object_schema,
+                ),
+                "recognized_artifacts[{index}].schema must be canonical when present",
+                ("private_key", object_schema["private_key"]),
+            ),
+        ):
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{surface}_{shape}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            mutate(payload)
+            recognized_index = next(
+                artifact_index
+                for artifact_index, artifact in enumerate(
+                    payload["recognized_artifacts"]
+                )
+                if artifact["kind"] == kind_name
+            )
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            result = json.loads(result_text)
+            errors = "\n".join(result["errors"])
+            assert f"{gate_name} production readiness summary is invalid" in errors
+            if surface == "recognized":
+                expected = expected_error.format(index=recognized_index)
+            else:
+                expected = expected_error
+            assert expected in errors
+            assert result["required"][gate_name]["valid"] is False
+            for forbidden_value in forbidden_values:
+                assert forbidden_value not in result_text
+
+
+def test_non_object_artifact_fingerprint_reports_single_sanitized_error(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("gateway_load")
+    first_required = MODULE.GATE_BY_NAME["gateway_load"].required_kinds[0]
+    secret_fingerprint = "runtime-only-private-key-material"
+    payload["required"][first_required]["artifacts"][0][
+        "fingerprint"
+    ] = secret_fingerprint
+    payload["recognized_artifacts"][0]["fingerprint"] = secret_fingerprint
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "gateway_load.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "gateway_load",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert errors.count(".fingerprint must be an object") == 2
+    assert ".fingerprint.generated_at_unix" not in errors
+    assert ".fingerprint.deployment_id" not in errors
+    assert ".fingerprint.environment" not in errors
+    assert secret_fingerprint not in errors
+
+
+def test_sensitive_artifact_fingerprint_key_is_rejected_without_echo(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("gateway_load")
+    first_required = MODULE.GATE_BY_NAME["gateway_load"].required_kinds[0]
+    secret_value = "runtime-only-private-key-material"
+    payload["required"][first_required]["artifacts"][0]["fingerprint"][
+        "private_key"
+    ] = secret_value
+    payload["recognized_artifacts"][0]["fingerprint"]["private_key"] = secret_value
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "gateway_load.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "gateway_load",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert ".fingerprint.<sensitive-key> must not be present" in errors
+    assert "private_key" not in errors
+    assert secret_value not in errors
+
+
+def test_artifact_fingerprint_shape_fails_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        for suffix, mutate, expected_error, forbidden_values in (
+            (
+                "non_object",
+                lambda artifact, secret: artifact.__setitem__("fingerprint", secret),
+                ".fingerprint must be an object",
+                (f"runtime-only-private-fingerprint-{index:03d}-non_object",),
+            ),
+            (
+                "sensitive_key",
+                lambda artifact, secret: artifact["fingerprint"].__setitem__(
+                    "private_key",
+                    secret,
+                ),
+                ".fingerprint.<sensitive-key> must not be present",
+                (
+                    "private_key",
+                    f"runtime-only-private-fingerprint-{index:03d}-sensitive_key",
+                ),
+            ),
+        ):
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            secret = f"runtime-only-private-fingerprint-{index:03d}-{suffix}"
+            mutate(payload["required"][kind_name]["artifacts"][0], secret)
+            payload["recognized_artifacts"] = recognized_artifacts_from_required(
+                payload
+            )
+            recognized_index = next(
+                artifact_index
+                for artifact_index, artifact in enumerate(
+                    payload["recognized_artifacts"]
+                )
+                if artifact["kind"] == kind_name
+                and artifact["path"]
+                == payload["required"][kind_name]["artifacts"][0]["path"]
+            )
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            result = json.loads(result_text)
+            errors = "\n".join(result["errors"])
+            assert f"{gate_name} production readiness summary is invalid" in errors
+            if suffix == "sensitive_key":
+                assert (
+                    f"required.{kind_name}.artifacts[0]{expected_error} "
+                    "in SoraFS production readiness summary"
+                    in errors
+                )
+                assert (
+                    f"recognized_artifacts[{recognized_index}]{expected_error} "
+                    "in SoraFS production readiness summary"
+                    in errors
+                )
+            else:
+                assert (
+                    f"{gate_name}.required.{kind_name}.artifacts[0]{expected_error}"
+                    in errors
+                )
+                assert (
+                    f"recognized_artifacts[{recognized_index}]{expected_error}"
+                    in errors
+                )
+            for forbidden_value in forbidden_values:
+                assert forbidden_value not in result_text
+            if suffix == "non_object":
+                assert ".fingerprint.generated_at_unix" not in errors
+                assert ".fingerprint.deployment_id" not in errors
+                assert ".fingerprint.environment" not in errors
+            assert result["required"][gate_name]["valid"] is False
+
+
+def test_artifact_fingerprint_deployment_context_rejects_nonproduction_without_echo(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (
+            {"deployment_id": "gateway-staging-a"},
+            "fingerprint.deployment_id must not contain "
+            "non-production deployment markers ['staging']",
+            "gateway-staging-a",
+        ),
+        (
+            {"environment": "qa"},
+            "fingerprint.environment must be production",
+            "qa",
+        ),
+    ]
+
+    for index, (fingerprint_metadata, expected_error, raw_label) in enumerate(cases):
+        root = tmp_path / f"artifact_context_{index}"
+        root.mkdir()
+        payload = gate_summary("gateway_load")
+        add_fingerprint_metadata(payload, **fingerprint_metadata)
+        summary = root / "summary.json"
+        write_json(root / "gateway_load.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                "gateway_load",
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+        assert expected_error in errors
+        assert raw_label not in errors
+
+
+def test_artifact_fingerprint_deployment_context_rejects_nonproduction_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+    assert set(cases) == {
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in MODULE.GATE_BY_NAME[gate.name].required_kinds
+    }
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        for suffix, fingerprint_metadata, expected_error, raw_label in (
+            (
+                "deployment_id",
+                {"deployment_id": f"sorafs-staging-artifact-{index:03d}"},
+                "fingerprint.deployment_id must not contain "
+                "non-production deployment markers ['staging']",
+                f"sorafs-staging-artifact-{index:03d}",
+            ),
+            (
+                "environment",
+                {"environment": f"runtime-env-secret-{index:03d}"},
+                "fingerprint.environment must be production",
+                f"runtime-env-secret-{index:03d}",
+            ),
+        ):
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            add_fingerprint_metadata(
+                payload,
+                kind_name=kind_name,
+                **fingerprint_metadata,
+            )
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            assert expected_error in errors
+            assert raw_label not in result_text
+
+
+def test_artifact_fingerprint_deployment_context_shape_fails_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        for suffix, fingerprint_metadata, expected_error, forbidden_values in (
+            (
+                "deployment_id",
+                {"deployment_id": f"runtime-only-deployment-{index:03d}\nsecret"},
+                "fingerprint.deployment_id must be canonical",
+                (f"runtime-only-deployment-{index:03d}\nsecret",),
+            ),
+            (
+                "environment",
+                {"environment": f"runtime-only-environment-{index:03d}\nsecret"},
+                "fingerprint.environment must be canonical",
+                (f"runtime-only-environment-{index:03d}\nsecret",),
+            ),
+            (
+                "reviewed",
+                {"deployment_context_reviewed": False},
+                "fingerprint.deployment_context_reviewed must be true",
+                (),
+            ),
+        ):
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{suffix}_shape"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            add_fingerprint_metadata(
+                payload,
+                kind_name=kind_name,
+                **fingerprint_metadata,
+            )
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            result = json.loads(result_text)
+            errors = "\n".join(result["errors"])
+            assert f"{gate_name} production readiness summary is invalid" in errors
+            assert (
+                f"{gate_name}.required.{kind_name}.artifacts[0].{expected_error}"
+                in errors
+            )
+            recognized_index = next(
+                artifact_index
+                for artifact_index, artifact in enumerate(
+                    payload["recognized_artifacts"]
+                )
+                if artifact["kind"] == kind_name
+                and artifact["path"]
+                == payload["required"][kind_name]["artifacts"][0]["path"]
+            )
+            assert f"recognized_artifacts[{recognized_index}].{expected_error}" in errors
+            for forbidden_value in forbidden_values:
+                assert forbidden_value not in result_text
+
+
+def test_artifact_deployment_context_required_fields_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        for field, expected_error in (
+            ("deployment_id", "fingerprint.deployment_id must be canonical"),
+            ("environment", "fingerprint.environment must be canonical"),
+        ):
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{field}_missing"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            required_path = payload["required"][kind_name]["artifacts"][0]["path"]
+            remove_fingerprint_metadata(payload, field, kind_name=kind_name)
+            recognized_index = next(
+                artifact_index
+                for artifact_index, artifact in enumerate(
+                    payload["recognized_artifacts"]
+                )
+                if artifact["kind"] == kind_name
+                and artifact["path"] == required_path
+            )
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result = json.loads(summary.read_text(encoding="utf-8"))
+            errors = "\n".join(result["errors"])
+            assert f"{gate_name} production readiness summary is invalid" in errors
+            assert (
+                f"{gate_name}.required.{kind_name}.artifacts[0].{expected_error}"
+                in errors
+            )
+            assert f"recognized_artifacts[{recognized_index}].{expected_error}" in errors
+            assert result["required"][gate_name]["valid"] is False
+
+
+def test_artifact_deployment_context_reviewed_shape_fails_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        for suffix, reviewed_value, forbidden_values in (
+            ("missing", None, ()),
+            (
+                "string",
+                f"runtime-only-reviewed-{index:03d}\nprivate_key",
+                (f"runtime-only-reviewed-{index:03d}\nprivate_key", "private_key"),
+            ),
+            (
+                "object",
+                {"private_key": f"runtime-only-reviewed-{index:03d}"},
+                ("private_key", f"runtime-only-reviewed-{index:03d}"),
+            ),
+        ):
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{suffix}_reviewed"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            fingerprint = payload["required"][kind_name]["artifacts"][0][
+                "fingerprint"
+            ]
+            if suffix == "missing":
+                fingerprint.pop("deployment_context_reviewed")
+            else:
+                fingerprint["deployment_context_reviewed"] = reviewed_value
+            payload["recognized_artifacts"] = recognized_artifacts_from_required(
+                payload
+            )
+            recognized_index = next(
+                artifact_index
+                for artifact_index, artifact in enumerate(
+                    payload["recognized_artifacts"]
+                )
+                if artifact["kind"] == kind_name
+                and artifact["path"]
+                == payload["required"][kind_name]["artifacts"][0]["path"]
+            )
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            result = json.loads(result_text)
+            errors = "\n".join(result["errors"])
+            assert f"{gate_name} production readiness summary is invalid" in errors
+            assert (
+                f"{gate_name}.required.{kind_name}.artifacts[0].fingerprint."
+                "deployment_context_reviewed must be true"
+                in errors
+            )
+            assert (
+                f"recognized_artifacts[{recognized_index}].fingerprint."
+                "deployment_context_reviewed must be true"
+                in errors
+            )
+            assert result["required"][gate_name]["valid"] is False
+            for forbidden_value in forbidden_values:
+                assert forbidden_value not in result_text
 
 
 def test_artifact_paths_must_be_archive_portable(tmp_path: Path) -> None:
@@ -2078,6 +3682,302 @@ def test_artifact_paths_must_be_archive_portable(tmp_path: Path) -> None:
     assert encoded_drive_path not in errors
     assert html_separator_path not in errors
     assert html_drive_path not in errors
+
+
+def test_required_and_recognized_artifact_paths_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+    expected_error_suffix = (
+        "path must be archive-relative without absolute, empty, current, "
+        "parent, encoded, URI-scheme-like, platform-specific, or secret-looking "
+        "segments"
+    )
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        for suffix, forged_path in (
+            (
+                "absolute",
+                f"/tmp/runtime-only/sorafs/{gate_name}/{kind_name}/private_key.json",
+            ),
+            (
+                "encoded_parent",
+                f"artifacts/{gate_name}/%2e%2e/{kind_name}/private_key.json",
+            ),
+        ):
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            payload["required"][kind_name]["artifacts"][0]["path"] = forged_path
+            payload["recognized_artifacts"] = recognized_artifacts_from_required(
+                payload
+            )
+            recognized_index = next(
+                artifact_index
+                for artifact_index, artifact in enumerate(
+                    payload["recognized_artifacts"]
+                )
+                if artifact["kind"] == kind_name and artifact["path"] == forged_path
+            )
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            assert (
+                f"{gate_name}.required.{kind_name}.artifacts[0]."
+                f"{expected_error_suffix}"
+                in errors
+            )
+            assert (
+                f"recognized_artifacts[{recognized_index}].{expected_error_suffix}"
+                in errors
+            )
+            assert forged_path not in result_text
+            assert "private_key" not in result_text
+
+
+def test_required_and_recognized_artifact_path_shapes_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        malformed_values = (
+            ("missing", None, ()),
+            ("boolean", False, ()),
+            (
+                "object",
+                {"private_key": f"runtime-only-path-{index:03d}"},
+                ("private_key", f"runtime-only-path-{index:03d}"),
+            ),
+        )
+        for suffix, malformed_path, forbidden_values in malformed_values:
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{suffix}_path"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            required_artifact = payload["required"][kind_name]["artifacts"][0]
+            if suffix == "missing":
+                required_artifact.pop("path")
+            else:
+                required_artifact["path"] = malformed_path
+            payload["recognized_artifacts"] = recognized_artifacts_from_required(
+                payload
+            )
+            recognized_index = next(
+                artifact_index
+                for artifact_index, artifact in enumerate(
+                    payload["recognized_artifacts"]
+                )
+                if artifact["kind"] == kind_name
+            )
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            result = json.loads(result_text)
+            errors = "\n".join(result["errors"])
+            assert f"{gate_name} production readiness summary is invalid" in errors
+            assert (
+                f"{gate_name}.required.{kind_name}.artifacts[0].path "
+                "must be canonical"
+                in errors
+            )
+            assert (
+                f"recognized_artifacts[{recognized_index}].path must be canonical"
+                in errors
+            )
+            assert result["required"][gate_name]["valid"] is False
+            for forbidden_value in forbidden_values:
+                assert forbidden_value not in result_text
+
+
+def test_required_and_recognized_artifact_path_variants_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+    expected_error_suffix = (
+        "path must be archive-relative without absolute, empty, current, "
+        "parent, encoded, URI-scheme-like, platform-specific, or secret-looking "
+        "segments"
+    )
+
+    def forged_paths(gate_name: str, kind_name: str) -> tuple[tuple[str, str], ...]:
+        return (
+            (
+                "parent",
+                f"artifacts/{gate_name}/../{kind_name}/runtime-only-report.json",
+            ),
+            (
+                "encoded_separator",
+                f"artifacts/{gate_name}/bad%2F{kind_name}-runtime-only.json",
+            ),
+            (
+                "html_separator",
+                f"artifacts/{gate_name}/bad&#47;{kind_name}-runtime-only.json",
+            ),
+            (
+                "empty_segment",
+                f"artifacts/{gate_name}//{kind_name}-runtime-only.json",
+            ),
+            (
+                "platform",
+                f"C:\\runtime-only\\sorafs\\{gate_name}\\{kind_name}.json",
+            ),
+            (
+                "sensitive_label",
+                f"artifacts/{gate_name}/private_key.json",
+            ),
+        )
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        for suffix, forged_path in forged_paths(gate_name, kind_name):
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            payload["required"][kind_name]["artifacts"][0]["path"] = forged_path
+            payload["recognized_artifacts"] = recognized_artifacts_from_required(
+                payload
+            )
+            recognized_index = next(
+                artifact_index
+                for artifact_index, artifact in enumerate(
+                    payload["recognized_artifacts"]
+                )
+                if artifact["kind"] == kind_name and artifact["path"] == forged_path
+            )
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            assert (
+                f"{gate_name}.required.{kind_name}.artifacts[0]."
+                f"{expected_error_suffix}"
+                in errors
+            )
+            assert (
+                f"recognized_artifacts[{recognized_index}].{expected_error_suffix}"
+                in errors
+            )
+            assert forged_path not in result_text
+            assert "private_key" not in result_text
+
+
+def test_required_and_recognized_artifact_path_scheme_and_current_segments_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+    expected_error_suffix = (
+        "path must be archive-relative without absolute, empty, current, "
+        "parent, encoded, URI-scheme-like, platform-specific, or secret-looking "
+        "segments"
+    )
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        for suffix, forged_path in (
+            (
+                "uri_scheme",
+                f"artifacts/{gate_name}/file:runtime-only-{kind_name}.json",
+            ),
+            (
+                "current_segment",
+                f"artifacts/{gate_name}/./{kind_name}-runtime-only.json",
+            ),
+        ):
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            payload["required"][kind_name]["artifacts"][0]["path"] = forged_path
+            payload["recognized_artifacts"] = recognized_artifacts_from_required(
+                payload
+            )
+            recognized_index = next(
+                artifact_index
+                for artifact_index, artifact in enumerate(
+                    payload["recognized_artifacts"]
+                )
+                if artifact["kind"] == kind_name and artifact["path"] == forged_path
+            )
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            assert (
+                f"{gate_name}.required.{kind_name}.artifacts[0]."
+                f"{expected_error_suffix}"
+                in errors
+            )
+            assert (
+                f"recognized_artifacts[{recognized_index}].{expected_error_suffix}"
+                in errors
+            )
+            assert forged_path not in result_text
 
 
 def test_artifact_paths_reject_platform_specific_segments(tmp_path: Path) -> None:
@@ -2333,6 +4233,45 @@ def test_numbered_staging_deployment_id_cannot_promote_production_readiness(
     tmp_path: Path,
 ) -> None:
     staging_deployment = "gateway-staging1-a"
+    write_gate(tmp_path, "gateway_load", deployment_id=staging_deployment)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(tmp_path),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--summary-out",
+                str(summary),
+            ]
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    errors = "\n".join(result["errors"])
+    assert (
+        "aggregate deployment_id must not contain non-production deployment markers "
+        "['staging']"
+        in errors
+    )
+    assert (
+        "gateway_load aggregate row deployment_id must not contain "
+        "non-production deployment markers ['staging']"
+        in errors
+    )
+    assert result["status"] == "blocked"
+    assert staging_deployment not in errors
+
+
+def test_compact_staging_deployment_id_cannot_promote_production_readiness(
+    tmp_path: Path,
+) -> None:
+    staging_deployment = "gateway-stagingready-a"
     write_gate(tmp_path, "gateway_load", deployment_id=staging_deployment)
     summary = tmp_path / "summary.json"
 
@@ -3042,6 +4981,71 @@ def test_extra_top_level_lane_summary_field_fails(tmp_path: Path) -> None:
     )
 
 
+def test_payload_free_summary_fields_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [gate.name for gate in MODULE.GATE_SUMMARY_KINDS]
+    assert cases
+
+    for index, gate_name in enumerate(cases):
+        for suffix, key, value, expected_errors, forbidden_values in (
+            (
+                "extra_canonical",
+                f"debug_report_{index:03d}",
+                {"note": f"runtime-only-private-debug-{index:03d}"},
+                (f"debug_report_{index:03d} is not allowed in payload-free lane summary",),
+                (f"runtime-only-private-debug-{index:03d}",),
+            ),
+            (
+                "sensitive_canonical",
+                "private_key",
+                f"runtime-only-private-summary-key-{index:03d}",
+                (
+                    "<sensitive-key> must not be present",
+                    "<sensitive-key> is not allowed in payload-free lane summary",
+                ),
+                ("private_key", f"runtime-only-private-summary-key-{index:03d}"),
+            ),
+            (
+                "sensitive_noncanonical",
+                "private\nkey",
+                f"runtime-only-private-summary-newline-key-{index:03d}",
+                (
+                    "<sensitive-key> must not be present",
+                    "summary keys must be canonical strings",
+                ),
+                ("private\nkey", f"runtime-only-private-summary-newline-key-{index:03d}"),
+            ),
+        ):
+            root = tmp_path / f"{index}_{gate_name}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            payload[key] = value
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            result = json.loads(result_text)
+            errors = "\n".join(result["errors"])
+            assert f"{gate_name} production readiness summary is invalid" in errors
+            for expected_error in expected_errors:
+                assert f"{gate_name}: {expected_error}" in errors
+            for forbidden_value in forbidden_values:
+                assert forbidden_value not in result_text
+            assert result["required"][gate_name]["valid"] is False
+
+
 def test_allowed_top_level_lane_metadata_shape_is_validated(tmp_path: Path) -> None:
     payload = gate_summary("gateway_load")
     payload["valid_suite_report_digests"] = {"digest": SHA256}
@@ -3148,6 +5152,133 @@ def test_required_top_level_lane_metadata_lists_must_not_be_empty(
     assert "valid_policy_digests must not be empty for `gateway_load` lane metadata" in errors
 
 
+def test_required_lane_metadata_fields_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, field)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for field in sorted(MODULE.GATE_METADATA_FIELDS[gate.name])
+    ]
+    assert cases
+
+    for gate_name, field in cases:
+        root = tmp_path / f"{gate_name}_{field}_missing"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        assert field in payload
+        del payload[field]
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+        assert f"{field} is required for `{gate_name}` lane metadata" in errors
+
+
+def test_list_lane_metadata_fields_require_list_shape_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, field)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for field in sorted(
+            MODULE.GATE_METADATA_FIELDS[gate.name]
+            & MODULE.PAYLOAD_FREE_SUMMARY_LIST_METADATA_FIELDS
+        )
+    ]
+    assert cases
+
+    for gate_name, field in cases:
+        for suffix, value, expected_error in (
+            (
+                "non_list",
+                {"runtime_key": "runtime-only-private-key"},
+                f"{field} must be a payload-free metadata list",
+            ),
+            (
+                "empty",
+                [],
+                f"{field} must not be empty for `{gate_name}` lane metadata",
+            ),
+        ):
+            root = tmp_path / f"{gate_name}_{field}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            payload[field] = value
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            assert expected_error in errors
+            assert "runtime-only-private-key" not in result_text
+
+
+def test_cross_lane_metadata_fields_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases: list[tuple[str, str]] = []
+    for field in sorted(MODULE.PAYLOAD_FREE_SUMMARY_METADATA_FIELDS):
+        target_gate = next(
+            gate
+            for gate in MODULE.GATE_SUMMARY_KINDS
+            if field not in MODULE.GATE_METADATA_FIELDS[gate.name]
+        )
+        cases.append((target_gate.name, field))
+
+    covered_fields = {field for _, field in cases}
+    assert covered_fields == MODULE.PAYLOAD_FREE_SUMMARY_METADATA_FIELDS
+
+    secret = "runtime-only-private-key-cross-lane"
+    for gate_name, field in cases:
+        root = tmp_path / f"{gate_name}_{field}_disallowed"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        assert field not in MODULE.GATE_METADATA_FIELDS[gate_name]
+        payload[field] = {"private_key": secret}
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        result_text = summary.read_text(encoding="utf-8")
+        errors = "\n".join(json.loads(result_text)["errors"])
+        assert f"{field} is not allowed for `{gate_name}` lane metadata" in errors
+        assert "private_key" not in result_text
+        assert secret not in result_text
+
+
 def test_hex_list_metadata_must_match_recognized_artifact_fingerprints(
     tmp_path: Path,
 ) -> None:
@@ -3235,7 +5366,7 @@ def test_hex_list_metadata_without_owner_kind_tether_fails_closed(
 def test_anchor_hex_list_metadata_must_match_owner_kind_fingerprints(
     tmp_path: Path,
 ) -> None:
-    cases = [
+    manual_cases = [
         (
             "ai_prescreen",
             "valid_executor_summary_digests",
@@ -3365,6 +5496,12 @@ def test_anchor_hex_list_metadata_must_match_owner_kind_fingerprints(
             "provider_roster_digest_hex",
         ),
         (
+            "pdp",
+            "valid_repair_handoff_digests",
+            ("governance_repair",),
+            "repair_handoff_digest_hex",
+        ),
+        (
             "pop_credentials",
             "valid_policy_digests",
             ("verifier_service",),
@@ -3394,6 +5531,12 @@ def test_anchor_hex_list_metadata_must_match_owner_kind_fingerprints(
             "valid_seed_replay_digests",
             ("randomness",),
             "seed_replay_digest_hex",
+        ),
+        (
+            "por",
+            "valid_governance_archive_handoff_digests",
+            ("reporting_archive",),
+            "governance_archive_handoff_digest_hex",
         ),
         (
             "potr",
@@ -3480,6 +5623,12 @@ def test_anchor_hex_list_metadata_must_match_owner_kind_fingerprints(
             "smoke_output_digest_hex",
         ),
         (
+            "reputation",
+            "valid_reputation_weight_digests",
+            ("publish", "latest"),
+            "weights_digest_hex",
+        ),
+        (
             "repair",
             "valid_failure_bundle_digests",
             ("failure_capture",),
@@ -3513,8 +5662,28 @@ def test_anchor_hex_list_metadata_must_match_owner_kind_fingerprints(
         ),
     ]
 
-    for gate_name, metadata_field, owner_kinds, fingerprint_field in cases:
-        root = tmp_path / f"{gate_name}_{metadata_field}"
+    configured_cases = {
+        (
+            gate_name,
+            metadata_field,
+            owner_kinds,
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_BINDINGS[
+                metadata_field
+            ],
+        )
+        for (
+            gate_name,
+            metadata_field,
+        ), owner_kinds in MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_SOURCE_KINDS.items()
+    }
+    manual_case_set = set(manual_cases)
+    assert len(manual_cases) == len(manual_case_set)
+    assert manual_case_set == configured_cases
+
+    for gate_name, metadata_field, owner_kinds, fingerprint_field in sorted(
+        configured_cases
+    ):
+        root = tmp_path / f"{gate_name}_{metadata_field}_{fingerprint_field}"
         root.mkdir()
         payload = gate_summary(gate_name)
         for owner_kind in owner_kinds:
@@ -3579,6 +5748,55 @@ def test_digest_list_metadata_entries_are_validated(tmp_path: Path) -> None:
     )
     assert bad_digest not in errors
     assert "AB" * 32 not in errors
+
+
+def test_hex_list_metadata_entries_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, field)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for field in sorted(
+            MODULE.GATE_METADATA_FIELDS[gate.name]
+            & MODULE.PAYLOAD_FREE_SUMMARY_HEX_LIST_METADATA_FIELDS
+        )
+    ]
+    assert cases
+
+    for index, (gate_name, field) in enumerate(cases):
+        root = tmp_path / f"{index}_{gate_name}_{field}_hex_entries"
+        root.mkdir()
+        bad_label = f"private-key-{field}"
+        bad_uppercase = "AB" * 32
+        bad_object = {
+            "digest": SHA256,
+            "private_key": f"runtime-only-{field}-key",
+        }
+        payload = gate_summary(gate_name)
+        payload[field] = [bad_label, bad_uppercase, bad_object]
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        result_text = summary.read_text(encoding="utf-8")
+        errors = "\n".join(json.loads(result_text)["errors"])
+        assert f"{field}[0] must be 64 lowercase hex characters" in errors
+        assert f"{field}[1] must be 64 lowercase hex characters" in errors
+        assert f"{field}[2] must be 64 lowercase hex characters" in errors
+        assert bad_label not in result_text
+        assert bad_uppercase not in result_text
+        assert "private_key" not in result_text
+        assert bad_object["private_key"] not in result_text
 
 
 def test_digest_list_metadata_entries_must_be_unique_and_sorted(
@@ -5777,7 +7995,7 @@ def test_hex_binding_metadata_without_owner_kind_tether_fails_closed(
 def test_hex_binding_metadata_must_match_owner_kind_fingerprints(
     tmp_path: Path,
 ) -> None:
-    cases = [
+    manual_cases = [
         (
             "ai_prescreen",
             "valid_runner_bindings",
@@ -5864,8 +8082,29 @@ def test_hex_binding_metadata_must_match_owner_kind_fingerprints(
         ),
     ]
 
-    for gate_name, metadata_field, owner_kinds, fingerprint_fields in cases:
-        root = tmp_path / f"{gate_name}_{metadata_field}"
+    configured_cases = {
+        (
+            gate_name,
+            metadata_field,
+            owner_kinds,
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_BINDING_FIELDS[
+                metadata_field
+            ],
+        )
+        for (
+            gate_name,
+            metadata_field,
+        ), owner_kinds in MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_BINDING_SOURCE_KINDS.items()
+    }
+    manual_case_set = set(manual_cases)
+    assert len(manual_cases) == len(manual_case_set)
+    assert manual_case_set == configured_cases
+
+    for gate_name, metadata_field, owner_kinds, fingerprint_fields in sorted(
+        configured_cases
+    ):
+        fingerprint_suffix = "_".join(fingerprint_fields)
+        root = tmp_path / f"{gate_name}_{metadata_field}_{fingerprint_suffix}"
         root.mkdir()
         payload = gate_summary(gate_name)
         for owner_kind in owner_kinds:
@@ -5937,6 +8176,68 @@ def test_hex_binding_metadata_entries_are_validated(tmp_path: Path) -> None:
     assert "raw_response" not in errors
     assert "runtime-only-body" not in errors
     assert "not-a-binding" not in errors
+
+
+def test_hex_binding_metadata_entries_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, field, MODULE.PAYLOAD_FREE_SUMMARY_HEX_BINDING_METADATA_FIELDS[field])
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for field in sorted(
+            MODULE.GATE_METADATA_FIELDS[gate.name]
+            & MODULE.PAYLOAD_FREE_SUMMARY_HEX_BINDING_METADATA_FIELDS.keys()
+        )
+    ]
+    assert cases
+
+    for index, (gate_name, field, binding_fields) in enumerate(cases):
+        base_item = copy.deepcopy(gate_summary(gate_name)[field][0])
+        for key, expected_hex_length in sorted(binding_fields.items()):
+            root = tmp_path / f"{index}_{gate_name}_{field}_{key}_binding_entries"
+            root.mkdir()
+            uppercase_value = "AB" * (expected_hex_length // 2)
+            bad_item = copy.deepcopy(base_item)
+            bad_item[key] = uppercase_value
+            bad_item["private_key"] = f"runtime-only-{field}-{key}-key"
+            missing_item = copy.deepcopy(base_item)
+            del missing_item[key]
+            non_object = f"private-key-{field}-{key}"
+            payload = gate_summary(gate_name)
+            payload[field] = [bad_item, missing_item, non_object]
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            assert (
+                f"{field}[0].{key} must be {expected_hex_length} lowercase hex characters"
+                in errors
+            )
+            assert (
+                f"{field}[1].{key} must be {expected_hex_length} lowercase hex characters"
+                in errors
+            )
+            assert f"{field}[2] must be a payload-free binding object" in errors
+            assert (
+                f"{field}[0].<sensitive-key> is not allowed in payload-free binding metadata"
+                in errors
+            )
+            assert uppercase_value not in result_text
+            assert "private_key" not in result_text
+            assert bad_item["private_key"] not in result_text
+            assert non_object not in result_text
 
 
 def test_binding_metadata_entries_must_be_unique_and_sorted(
@@ -6523,6 +8824,49 @@ def test_provider_count_values_metadata_entries_are_positive_ints(
     assert '"3"' not in errors
 
 
+def test_positive_int_list_metadata_entries_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, field)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for field in sorted(
+            MODULE.GATE_METADATA_FIELDS[gate.name]
+            & MODULE.PAYLOAD_FREE_SUMMARY_POSITIVE_INT_LIST_METADATA_FIELDS
+        )
+    ]
+    assert cases
+
+    for index, (gate_name, field) in enumerate(cases):
+        root = tmp_path / f"{index}_{gate_name}_{field}_positive_int_entries"
+        root.mkdir()
+        bad_string = f"private-key-{field}"
+        bad_object = {"private_key": f"runtime-only-{field}-key"}
+        payload = gate_summary(gate_name)
+        payload[field] = [1, 0, -1, True, bad_string, bad_object]
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        result_text = summary.read_text(encoding="utf-8")
+        errors = "\n".join(json.loads(result_text)["errors"])
+        for item_index in range(1, 6):
+            assert f"{field}[{item_index}] must be a positive integer" in errors
+        assert bad_string not in result_text
+        assert "private_key" not in result_text
+        assert bad_object["private_key"] not in result_text
+
+
 def test_provider_count_values_metadata_must_be_unique_and_sorted(
     tmp_path: Path,
 ) -> None:
@@ -6625,6 +8969,40 @@ def test_provider_ids_secret_like_metadata_does_not_echo(tmp_path: Path) -> None
         "provider_ids[0] must not contain non-production markers "
         "['placeholder', 'private']"
     ) in errors
+    assert raw_provider_id not in result_text
+
+
+def test_provider_ids_compact_non_production_marker_does_not_echo(
+    tmp_path: Path,
+) -> None:
+    raw_provider_id = "provider-prodplaceholderreview"
+    payload = gate_summary("reputation")
+    payload["provider_ids"] = [raw_provider_id]
+    add_fingerprint_metadata(
+        payload,
+        kind_name="provider",
+        provider_id=raw_provider_id,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reputation.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reputation",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    result_text = summary.read_text(encoding="utf-8")
+    errors = "\n".join(json.loads(result_text)["errors"])
+    assert (
+        "provider_ids[0] must not contain non-production markers ['placeholder']"
+        in errors
+    )
     assert raw_provider_id not in result_text
 
 
@@ -6736,28 +9114,541 @@ def test_string_array_list_metadata_without_owner_kind_tether_fails_closed(
     assert "metrics source-kind tether is not configured for `reputation`" in errors
 
 
+def test_payload_free_metadata_owner_kind_tethers_fail_closed_from_config(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_kind_maps = {
+        "PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_SOURCE_KINDS": dict(
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_SOURCE_KINDS
+        ),
+        "PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_SCALAR_SOURCE_KINDS": dict(
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_SCALAR_SOURCE_KINDS
+        ),
+        "PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_SOURCE_KINDS": dict(
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_SOURCE_KINDS
+        ),
+        "PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_SOURCE_KINDS": dict(
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_SOURCE_KINDS
+        ),
+        "PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_SOURCE_KINDS": dict(
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_SOURCE_KINDS
+        ),
+        "PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_BINDING_SOURCE_KINDS": dict(
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_BINDING_SOURCE_KINDS
+        ),
+    }
+    assert all(source_kind_maps.values())
+
+    for map_name, original_tethers in source_kind_maps.items():
+        for gate_name, field in sorted(original_tethers):
+            root = tmp_path / f"{map_name}_{gate_name}_{field}_missing"
+            root.mkdir()
+            for reset_map_name, reset_tethers in source_kind_maps.items():
+                monkeypatch.setattr(
+                    MODULE,
+                    reset_map_name,
+                    dict(reset_tethers),
+                )
+            monkeypatch.setattr(
+                MODULE,
+                map_name,
+                {
+                    key: value
+                    for key, value in original_tethers.items()
+                    if key != (gate_name, field)
+                },
+            )
+            payload = gate_summary(gate_name)
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            errors = "\n".join(
+                json.loads(summary.read_text(encoding="utf-8"))["errors"]
+            )
+            assert (
+                f"{field} source-kind tether is not configured for `{gate_name}`"
+                in errors
+            )
+
+
 def test_string_list_metadata_must_match_owner_kind_fingerprints(
     tmp_path: Path,
 ) -> None:
-    payload = gate_summary("reputation")
-    remove_fingerprint_metadata(payload, "provider_id", kind_name="provider")
-    summary = tmp_path / "summary.json"
-    write_json(tmp_path / "reputation.json", payload)
-
-    assert (
-        run_gate(
-            tmp_path,
-            "--require-gate",
-            "reputation",
-            "--summary-out",
-            str(summary),
+    cases = [
+        (
+            gate_name,
+            metadata_field,
+            owner_kinds,
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_BINDINGS[
+                metadata_field
+            ],
         )
-        == 1
-    )
+        for (
+            gate_name,
+            metadata_field,
+        ), owner_kinds in MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_SOURCE_KINDS.items()
+    ]
 
-    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
-    assert "provider_ids must match recognized artifact fingerprints" in errors
-    assert "provider_count_values must match recognized artifact fingerprints" not in errors
+    for gate_name, metadata_field, owner_kinds, fingerprint_field in sorted(cases):
+        root = tmp_path / f"{gate_name}_{metadata_field}"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        for owner_kind in owner_kinds:
+            remove_fingerprint_metadata(
+                payload,
+                fingerprint_field,
+                kind_name=owner_kind,
+            )
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+        assert f"{metadata_field} must match recognized artifact fingerprints" in errors
+
+
+def test_string_array_list_metadata_must_match_owner_kind_fingerprints(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (
+            gate_name,
+            metadata_field,
+            owner_kinds,
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_BINDINGS[
+                metadata_field
+            ],
+        )
+        for (
+            gate_name,
+            metadata_field,
+        ), owner_kinds in MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_SOURCE_KINDS.items()
+    ]
+
+    for gate_name, metadata_field, owner_kinds, fingerprint_field in sorted(cases):
+        root = tmp_path / f"{gate_name}_{metadata_field}_{fingerprint_field}"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        for owner_kind in owner_kinds:
+            remove_fingerprint_metadata(
+                payload,
+                fingerprint_field,
+                kind_name=owner_kind,
+            )
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+        assert f"{metadata_field} must match recognized artifact fingerprints" in errors
+
+
+def test_string_list_metadata_entries_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate_name, field)
+        for source_kind_map in (
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_SOURCE_KINDS,
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_SOURCE_KINDS,
+        )
+        for gate_name, field in source_kind_map
+    ]
+    assert cases
+
+    for index, (gate_name, field) in enumerate(sorted(cases)):
+        root = tmp_path / f"{index}_{gate_name}_{field}_string_entries"
+        root.mkdir()
+        bad_string = f" private-key-{field}"
+        bad_object = {"private_key": f"runtime-only-{field}-key"}
+        payload = gate_summary(gate_name)
+        payload[field] = [bad_string, True, bad_object]
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        result_text = summary.read_text(encoding="utf-8")
+        errors = "\n".join(json.loads(result_text)["errors"])
+        assert f"{field}[0] must be a canonical string" in errors
+        assert f"{field}[1] must be a canonical string" in errors
+        assert f"{field}[2] must be a canonical string" in errors
+        assert bad_string not in result_text
+        assert "private_key" not in result_text
+        assert bad_object["private_key"] not in result_text
+
+
+def test_required_string_list_metadata_must_cover_configured_values(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate_name, metadata_field, tuple(required_values))
+        for (
+            gate_name,
+            metadata_field,
+        ), required_values in MODULE.PAYLOAD_FREE_SUMMARY_REQUIRED_STRING_LIST_VALUES.items()
+    ]
+
+    for gate_name, metadata_field, required_values in sorted(cases):
+        assert required_values
+        root = tmp_path / f"{gate_name}_{metadata_field}_missing"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        missing = required_values[0]
+        payload[metadata_field] = [
+            value for value in payload[metadata_field] if value != missing
+        ]
+        count_field = MODULE.PAYLOAD_FREE_SUMMARY_STRING_LIST_COUNT_BINDINGS.get(
+            (gate_name, metadata_field)
+        )
+        if count_field is not None:
+            count_value = len(set(payload[metadata_field]))
+            payload[count_field] = [count_value]
+            fingerprint_field = (
+                MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_BINDINGS[
+                    count_field
+                ]
+            )
+            for owner_kind in (
+                MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_SOURCE_KINDS[
+                    (gate_name, count_field)
+                ]
+            ):
+                add_fingerprint_metadata(
+                    payload,
+                    kind_name=owner_kind,
+                    **{fingerprint_field: count_value},
+                )
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+        assert f"{metadata_field} must include metadata value `{missing}`" in errors
+
+
+def test_required_string_list_metadata_rejects_unknown_values(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate_name, metadata_field, tuple(required_values))
+        for (
+            gate_name,
+            metadata_field,
+        ), required_values in MODULE.PAYLOAD_FREE_SUMMARY_REQUIRED_STRING_LIST_VALUES.items()
+    ]
+
+    for gate_name, metadata_field, _required_values in sorted(cases):
+        root = tmp_path / f"{gate_name}_{metadata_field}_unknown"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        unknown = f"sorafs_{gate_name}_{metadata_field}_unknown_total"
+        payload[metadata_field] = sorted([*payload[metadata_field], unknown])
+        count_field = MODULE.PAYLOAD_FREE_SUMMARY_STRING_LIST_COUNT_BINDINGS.get(
+            (gate_name, metadata_field)
+        )
+        fingerprint_metadata = {}
+        if count_field is not None:
+            count_value = len(set(payload[metadata_field]))
+            payload[count_field] = [count_value]
+            count_fingerprint_field = (
+                MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_BINDINGS[
+                    count_field
+                ]
+            )
+            fingerprint_metadata[count_fingerprint_field] = count_value
+        if (
+            gate_name,
+            metadata_field,
+        ) in MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_SOURCE_KINDS:
+            source_kinds = (
+                MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_SOURCE_KINDS[
+                    (gate_name, metadata_field)
+                ]
+            )
+            fingerprint_field = (
+                MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_BINDINGS[
+                    metadata_field
+                ]
+            )
+            fingerprint_metadata[fingerprint_field] = payload[metadata_field]
+        else:
+            source_kinds = (
+                MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_SOURCE_KINDS[
+                    (gate_name, metadata_field)
+                ]
+            )
+            fingerprint_field = (
+                MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_BINDINGS[
+                    metadata_field
+                ]
+            )
+            fingerprint_metadata[fingerprint_field] = unknown
+        for source_kind in source_kinds:
+            append_required_artifact(
+                payload,
+                source_kind,
+                suffix=f"{metadata_field}-unknown",
+                sha256="bc" * 32,
+                **fingerprint_metadata,
+            )
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+        assert f"{metadata_field} must not include unknown metadata values" in errors
+        assert unknown not in errors
+
+
+def test_allowed_string_list_metadata_rejects_unknown_values(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate_name, metadata_field, tuple(allowed_values))
+        for (
+            gate_name,
+            metadata_field,
+        ), allowed_values in MODULE.PAYLOAD_FREE_SUMMARY_ALLOWED_STRING_LIST_VALUES.items()
+    ]
+
+    for gate_name, metadata_field, _allowed_values in sorted(cases):
+        root = tmp_path / f"{gate_name}_{metadata_field}_allowed_unknown"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        unknown = f"{metadata_field}-unknown"
+        payload[metadata_field] = sorted([*payload[metadata_field], unknown])
+        fingerprint_field = (
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_BINDINGS[
+                metadata_field
+            ]
+        )
+        for source_kind in (
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_SOURCE_KINDS[
+                (gate_name, metadata_field)
+            ]
+        ):
+            append_required_artifact(
+                payload,
+                source_kind,
+                suffix=f"{metadata_field}-unknown",
+                sha256="bc" * 32,
+                **{fingerprint_field: unknown},
+            )
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+        assert f"{metadata_field} must not include unknown metadata values" in errors
+        assert unknown not in errors
+
+
+def test_string_list_count_bindings_must_match_configured_unique_counts(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate_name, metadata_field, count_field)
+        for (
+            gate_name,
+            metadata_field,
+        ), count_field in MODULE.PAYLOAD_FREE_SUMMARY_STRING_LIST_COUNT_BINDINGS.items()
+    ]
+
+    for gate_name, metadata_field, count_field in sorted(cases):
+        root = tmp_path / f"{gate_name}_{metadata_field}_{count_field}"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        count_value = len(set(payload[metadata_field])) + 1
+        payload[count_field] = [count_value]
+        fingerprint_field = (
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_BINDINGS[
+                count_field
+            ]
+        )
+        for owner_kind in (
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_SOURCE_KINDS[
+                (gate_name, count_field)
+            ]
+        ):
+            add_fingerprint_metadata(
+                payload,
+                kind_name=owner_kind,
+                **{fingerprint_field: count_value},
+            )
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+        assert f"{count_field} must include the unique {metadata_field} count" in errors
+
+
+def test_ordered_list_metadata_must_be_unique_and_sorted_from_config(
+    tmp_path: Path,
+) -> None:
+    def hex_value_before(value: str) -> str:
+        candidate = "00" * (len(value) // 2)
+        if candidate < value:
+            return candidate
+        return "ff" * (len(value) // 2)
+
+    def string_value_before(value: str) -> str:
+        candidate = "aaa-ordered-probe"
+        if candidate < value:
+            return candidate
+        return "zzz-ordered-probe"
+
+    def binding_value_before(field: str, item: dict) -> dict:
+        binding_fields = MODULE.PAYLOAD_FREE_SUMMARY_HEX_BINDING_METADATA_FIELDS[field]
+        candidate = copy.deepcopy(item)
+        first_field, expected_hex_length = next(iter(binding_fields.items()))
+        current = candidate[first_field]
+        lower = "00" * (expected_hex_length // 2)
+        candidate[first_field] = (
+            lower if lower < current else "ff" * (expected_hex_length // 2)
+        )
+        return candidate
+
+    def duplicate_and_unsorted_items(field: str, payload: dict) -> tuple[list, list]:
+        first = copy.deepcopy(payload[field][0])
+        duplicate = [copy.deepcopy(first), copy.deepcopy(first)]
+        if field in MODULE.PAYLOAD_FREE_SUMMARY_HEX_BINDING_METADATA_FIELDS:
+            other = binding_value_before(field, first)
+            unsorted = [first, other] if first != other else duplicate
+        elif field in MODULE.PAYLOAD_FREE_SUMMARY_POSITIVE_INT_LIST_METADATA_FIELDS:
+            unsorted = [2, 1]
+        elif field in MODULE.PAYLOAD_FREE_SUMMARY_HEX_LIST_METADATA_FIELDS:
+            other = hex_value_before(first)
+            unsorted = [first, other] if other < first else [other, first]
+        else:
+            other = string_value_before(first)
+            unsorted = [first, other] if other < first else [other, first]
+        assert duplicate[0] == duplicate[1]
+        if field in MODULE.PAYLOAD_FREE_SUMMARY_HEX_BINDING_METADATA_FIELDS:
+            assert unsorted[0] != unsorted[1]
+        else:
+            assert unsorted != sorted(unsorted)
+        return duplicate, unsorted
+
+    cases = [
+        (gate.name, field)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for field in sorted(
+            MODULE.GATE_METADATA_FIELDS[gate.name]
+            & MODULE.PAYLOAD_FREE_SUMMARY_ORDERED_LIST_METADATA_FIELDS
+        )
+    ]
+    assert cases
+
+    for gate_name, field in cases:
+        for suffix, expected_error, mutation_index in (
+            ("duplicate", f"{field} must not contain duplicate metadata entries", 0),
+            ("unsorted", f"{field} must be sorted in canonical order", 1),
+        ):
+            root = tmp_path / f"{gate_name}_{field}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            payload[field] = duplicate_and_unsorted_items(field, payload)[
+                mutation_index
+            ]
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+            assert expected_error in errors
 
 
 def test_reputation_metrics_metadata_must_match_owner_kind_fingerprints(
@@ -7061,26 +9952,47 @@ def test_positive_int_list_metadata_without_owner_kind_tether_fails_closed(
 def test_positive_int_list_metadata_must_match_owner_kind_fingerprints(
     tmp_path: Path,
 ) -> None:
-    payload = gate_summary("reputation")
-    for kind_name in ("publish", "latest"):
-        remove_fingerprint_metadata(payload, "provider_count", kind_name=kind_name)
-    summary = tmp_path / "summary.json"
-    write_json(tmp_path / "reputation.json", payload)
-
-    assert (
-        run_gate(
-            tmp_path,
-            "--require-gate",
-            "reputation",
-            "--summary-out",
-            str(summary),
+    cases = [
+        (
+            gate_name,
+            metadata_field,
+            owner_kinds,
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_BINDINGS[
+                metadata_field
+            ],
         )
-        == 1
-    )
+        for (
+            gate_name,
+            metadata_field,
+        ), owner_kinds in MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_SOURCE_KINDS.items()
+    ]
 
-    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
-    assert "provider_count_values must match recognized artifact fingerprints" in errors
-    assert "provider_ids must match recognized artifact fingerprints" not in errors
+    for gate_name, metadata_field, owner_kinds, fingerprint_field in sorted(cases):
+        root = tmp_path / f"{gate_name}_{metadata_field}"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        for owner_kind in owner_kinds:
+            remove_fingerprint_metadata(
+                payload,
+                fingerprint_field,
+                kind_name=owner_kind,
+            )
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+        assert f"{metadata_field} must match recognized artifact fingerprints" in errors
 
 
 def test_object_list_metadata_for_gate_passes(tmp_path: Path) -> None:
@@ -7145,18 +10057,20 @@ def test_object_list_metadata_must_match_required_artifact_count(
     tmp_path: Path,
 ) -> None:
     cases = [
-        ("appeal_finance", "valid_multi_peer_runs", "multi_peer_reconciliation"),
-        ("hedging_billing", "valid_billing_cycles", "billing_cycle"),
-        ("moderation_panel", "valid_e2e_runs", "e2e_panel"),
         (
-            "moderation_panel",
-            "valid_evidence_viewer_digest_sets",
-            "evidence_viewer",
-        ),
-        ("reserve_rent", "valid_provider_bakes", "provider_bake"),
+            gate_name,
+            metadata_field,
+            MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_REQUIRED_KIND_COUNTS[
+                metadata_field
+            ],
+        )
+        for (
+            gate_name,
+            metadata_field,
+        ) in MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS
     ]
 
-    for gate_name, metadata_field, required_kind in cases:
+    for gate_name, metadata_field, required_kind in sorted(cases):
         root = tmp_path / f"{gate_name}_{metadata_field}"
         root.mkdir()
         payload = gate_summary(gate_name)
@@ -7291,44 +10205,120 @@ def test_object_list_metadata_owner_kind_tether_drift_fails_closed(
     ) in errors
 
 
+def test_object_list_metadata_missing_owner_kind_tethers_fail_closed_from_config(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    original_tethers = dict(MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS)
+    assert original_tethers
+
+    for gate_name, field in sorted(original_tethers):
+        root = tmp_path / f"{gate_name}_{field}_missing_tether"
+        root.mkdir()
+        monkeypatch.setattr(
+            MODULE,
+            "PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS",
+            {
+                key: value
+                for key, value in original_tethers.items()
+                if key != (gate_name, field)
+            },
+        )
+        payload = gate_summary(gate_name)
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+        assert f"{field} source-kind tether is not configured for `{gate_name}`" in errors
+
+
+def test_object_list_metadata_owner_kind_tether_drift_fails_closed_from_config(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    original_tethers = dict(MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS)
+    cases = []
+    for gate_name, field in sorted(original_tethers):
+        expected_kind = MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_REQUIRED_KIND_COUNTS[
+            field
+        ]
+        alternate_kind = next(
+            (
+                kind
+                for kind in MODULE.GATE_BY_NAME[gate_name].required_kinds
+                if kind != expected_kind
+            ),
+            None,
+        )
+        assert alternate_kind is not None
+        cases.append((gate_name, field, alternate_kind))
+    assert cases
+
+    for gate_name, field, alternate_kind in cases:
+        root = tmp_path / f"{gate_name}_{field}_drifted_tether"
+        root.mkdir()
+        drifted_tethers = dict(original_tethers)
+        drifted_tethers[(gate_name, field)] = alternate_kind
+        monkeypatch.setattr(
+            MODULE,
+            "PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS",
+            drifted_tethers,
+        )
+        payload = gate_summary(gate_name)
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+        assert (
+            f"{field} source-kind tether must match required artifact count "
+            f"kind for `{gate_name}`"
+        ) in errors
+        assert alternate_kind not in errors
+
+
 def test_object_list_metadata_must_match_recognized_artifact_fingerprints(
     tmp_path: Path,
 ) -> None:
     cases = [
         (
-            "appeal_finance",
-            "valid_multi_peer_runs",
-            "multi_peer_reconciliation",
-            "config_digest_hex",
-        ),
-        (
-            "hedging_billing",
-            "valid_billing_cycles",
-            "billing_cycle",
-            "reference_decision_id_hex",
-        ),
-        (
-            "moderation_panel",
-            "valid_e2e_runs",
-            "e2e_panel",
-            "case_digest_hex",
-        ),
-        (
-            "moderation_panel",
-            "valid_evidence_viewer_digest_sets",
-            "evidence_viewer",
-            "audit_digest_hex",
-        ),
-        (
-            "reserve_rent",
-            "valid_provider_bakes",
-            "provider_bake",
-            "matrix_digest_hex",
-        ),
+            gate_name,
+            metadata_field,
+            source_kind,
+            fingerprint_field,
+        )
+        for (
+            gate_name,
+            metadata_field,
+        ), source_kind in MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS.items()
+        for fingerprint_field in MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_FINGERPRINT_HEX_BINDINGS[
+            metadata_field
+        ]
     ]
 
-    for gate_name, metadata_field, required_kind, fingerprint_field in cases:
-        root = tmp_path / f"{gate_name}_{metadata_field}"
+    for gate_name, metadata_field, required_kind, fingerprint_field in sorted(cases):
+        root = tmp_path / f"{gate_name}_{metadata_field}_{fingerprint_field}"
         root.mkdir()
         payload = gate_summary(gate_name)
         remove_fingerprint_metadata(
@@ -7360,42 +10350,54 @@ def test_object_list_metadata_must_match_recognized_artifact_fingerprints(
 def test_object_list_metadata_non_digest_details_must_match_fingerprints(
     tmp_path: Path,
 ) -> None:
+    def replacement_value(metadata_field: str, detail_field: str, current: object) -> object:
+        if detail_field == "cycle_id":
+            return "billing-cycle-2"
+        if detail_field == "bake_id":
+            return "reserve-bake-002"
+        if detail_field == "generated_at_unix":
+            assert isinstance(current, int)
+            return current - 1
+        if isinstance(current, int):
+            return current + 1
+        raise AssertionError(f"unhandled {metadata_field}.{detail_field}")
+
     cases = [
-        ("appeal_finance", "valid_multi_peer_runs", "peer_count", 5),
         (
-            "hedging_billing",
-            "valid_billing_cycles",
-            "cycle_id",
-            "billing-cycle-2",
-        ),
-        ("moderation_panel", "valid_e2e_runs", "validator_count", 5),
-        ("reserve_rent", "valid_provider_bakes", "provider_count", 2),
-        (
-            "reserve_rent",
-            "valid_provider_bakes",
-            "scheduled_lifecycle_canary_tick_count",
-            3,
-        ),
-        (
-            "reserve_rent",
-            "valid_provider_bakes",
-            "scheduled_lifecycle_canary_defaulted_provider_count",
-            2,
-        ),
-        (
-            "reserve_rent",
-            "valid_provider_bakes",
-            "scheduled_lifecycle_canary_last_tick_at_unix",
-            GENERATED_AT - 1,
-        ),
+            gate_name,
+            metadata_field,
+            detail_field,
+        )
+        for (
+            gate_name,
+            metadata_field,
+        ) in MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS
+        for detail_field in sorted(
+            (
+                set(
+                    MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS[
+                        metadata_field
+                    ].get("strings", ())
+                )
+                - {"deployment_id", "environment"}
+            )
+            | set(
+                MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS[
+                    metadata_field
+                ].get("positive_ints", ())
+            )
+        )
     ]
 
-    for index, (gate_name, metadata_field, detail_field, replacement) in enumerate(
-        cases
-    ):
+    for index, (gate_name, metadata_field, detail_field) in enumerate(cases):
         root = tmp_path / f"{index}_{gate_name}_{detail_field}"
         root.mkdir()
         payload = gate_summary(gate_name)
+        replacement = replacement_value(
+            metadata_field,
+            detail_field,
+            payload[metadata_field][0][detail_field],
+        )
         payload[metadata_field][0][detail_field] = replacement
         summary = root / "summary.json"
         write_json(root / f"{gate_name}.json", payload)
@@ -7421,49 +10423,69 @@ def test_object_list_metadata_non_digest_details_must_match_fingerprints(
 def test_object_list_identity_labels_replay_lane_policies_without_echo(
     tmp_path: Path,
 ) -> None:
+    def invalid_labels(
+        gate_name: str,
+        metadata_field: str,
+        key_field: str,
+        policy: dict,
+    ) -> list[tuple[str, str]]:
+        current = gate_summary(gate_name)[metadata_field][0][key_field]
+        assert isinstance(current, str)
+        marker = (
+            "placeholder"
+            if "placeholder" in policy["forbidden_markers"]
+            else sorted(policy["forbidden_markers"])[0]
+        )
+        forbidden_error = (
+            f"{metadata_field}[0].{key_field} must not contain "
+            f"non-production markers {str([marker])}"
+        )
+        prefix = current.rsplit("-", 1)[0]
+        forbidden_labels = [
+            f"{prefix}-prod{marker}review",
+            f"{current}-{marker}",
+        ]
+        for label in forbidden_labels:
+            assert policy["pattern"].fullmatch(label) is not None
+
+        pattern_label = f"{key_field}-prod-private-key"
+        assert policy["pattern"].fullmatch(pattern_label) is None
+        pattern_error = f"{metadata_field}[0].{key_field} {policy['pattern_error']}"
+        return [
+            *((label, forbidden_error) for label in forbidden_labels),
+            (pattern_label, pattern_error),
+        ]
+
     cases = [
         (
-            "hedging_billing",
-            "valid_billing_cycles",
-            "billing_cycle",
-            "cycle_id",
-            "billing-cycle-prod-placeholder",
-            "valid_billing_cycles[0].cycle_id must not contain "
-            "non-production markers ['placeholder']",
-        ),
-        (
-            "hedging_billing",
-            "valid_billing_cycles",
-            "billing_cycle",
-            "cycle_id",
-            "cycle-prod-private-key",
-            "valid_billing_cycles[0].cycle_id must match canonical "
-            "lowercase `billing-cycle-*`",
-        ),
-        (
-            "reserve_rent",
-            "valid_provider_bakes",
-            "provider_bake",
-            "bake_id",
-            "reserve-bake-prod-placeholder",
-            "valid_provider_bakes[0].bake_id must not contain "
-            "non-production markers ['placeholder']",
-        ),
-        (
-            "reserve_rent",
-            "valid_provider_bakes",
-            "provider_bake",
-            "bake_id",
-            "bake-prod-private-key",
-            "valid_provider_bakes[0].bake_id must match canonical "
-            "lowercase `reserve-bake-*`",
-        ),
+            gate_name,
+            metadata_field,
+            MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS[
+                (gate_name, metadata_field)
+            ],
+            key_field,
+            invalid_label,
+            expected_error,
+        )
+        for (
+            gate_name,
+            metadata_field,
+            key_field,
+        ), policy in sorted(
+            MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_STRING_FIELD_POLICIES.items()
+        )
+        for invalid_label, expected_error in invalid_labels(
+            gate_name,
+            metadata_field,
+            key_field,
+            policy,
+        )
     ]
 
     for index, (
         gate_name,
         metadata_field,
-        kind_name,
+        source_kind,
         key_field,
         invalid_label,
         expected_error,
@@ -7474,7 +10496,7 @@ def test_object_list_identity_labels_replay_lane_policies_without_echo(
         payload[metadata_field][0][key_field] = invalid_label
         add_fingerprint_metadata(
             payload,
-            kind_name=kind_name,
+            kind_name=source_kind,
             **{key_field: invalid_label},
         )
         if gate_name == "reserve_rent":
@@ -7555,6 +10577,114 @@ def test_object_list_metadata_entries_are_validated(tmp_path: Path) -> None:
     assert "not-a-run" not in errors
 
 
+def test_object_list_metadata_schema_fields_fail_closed_from_config() -> None:
+    cases = [
+        (
+            gate_name,
+            field,
+            MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS[field],
+        )
+        for gate_name, field in sorted(
+            MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS
+        )
+    ]
+    assert cases
+    assert {field for _, field, _ in cases} == set(
+        MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS
+    )
+
+    def validate(field: str, schema: dict, item: object) -> str:
+        errors: list[str] = []
+        MODULE.validate_payload_free_object_list_metadata(
+            field,
+            [item],
+            schema,
+            errors,
+        )
+        return "\n".join(errors)
+
+    for gate_name, field, schema in cases:
+        base_item = copy.deepcopy(gate_summary(gate_name)[field][0])
+        secret = f" private_key-runtime-{field}"
+        non_object_errors = validate(field, schema, secret)
+        assert f"{field}[0] must be a payload-free metadata object" in non_object_errors
+        assert secret not in non_object_errors
+
+        item_with_secret_key = copy.deepcopy(base_item)
+        item_with_secret_key["private_key"] = f"runtime-only-{field}-key"
+        secret_key_errors = validate(field, schema, item_with_secret_key)
+        assert (
+            f"{field}[0].<sensitive-key> is not allowed in payload-free object metadata"
+            in secret_key_errors
+        )
+        assert "private_key" not in secret_key_errors
+        assert f"runtime-only-{field}-key" not in secret_key_errors
+
+        for key in sorted(schema.get("strings", frozenset())):
+            item = copy.deepcopy(base_item)
+            item[key] = secret
+            errors = validate(field, schema, item)
+            assert f"{field}[0].{key} must be a canonical string" in errors
+            assert secret not in errors
+
+        for key in sorted(schema.get("positive_ints", frozenset())):
+            item = copy.deepcopy(base_item)
+            item[key] = True
+            errors = validate(field, schema, item)
+            assert f"{field}[0].{key} must be a positive integer" in errors
+
+        for key, expected_hex_length in sorted(schema.get("hex", {}).items()):
+            item = copy.deepcopy(base_item)
+            bad_hex = "AB" * (expected_hex_length // 2)
+            item[key] = bad_hex
+            errors = validate(field, schema, item)
+            assert (
+                f"{field}[0].{key} must be {expected_hex_length} lowercase hex characters"
+                in errors
+            )
+            assert bad_hex not in errors
+
+        for start_key, end_key in schema.get("ordered_int_pairs", ()):
+            item = copy.deepcopy(base_item)
+            item[start_key] = 2
+            item[end_key] = 1
+            errors = validate(field, schema, item)
+            assert f"{field}[0].{end_key} must be >= {start_key}" in errors
+
+
+def test_object_list_metadata_entries_must_not_duplicate_from_config() -> None:
+    cases = [
+        (
+            gate_name,
+            field,
+            MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS[field],
+        )
+        for gate_name, field in sorted(
+            MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS
+        )
+    ]
+    assert cases
+    assert {field for _, field, _ in cases} == set(
+        MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS
+    )
+
+    for gate_name, field, schema in cases:
+        original = copy.deepcopy(gate_summary(gate_name)[field][0])
+        errors: list[str] = []
+        MODULE.validate_payload_free_object_list_metadata(
+            field,
+            [copy.deepcopy(original), copy.deepcopy(original)],
+            schema,
+            errors,
+        )
+
+        result_text = "\n".join(errors)
+        assert f"{field} must not contain duplicate metadata entries" in result_text
+        for value in original.values():
+            if isinstance(value, str):
+                assert value not in result_text
+
+
 def test_evidence_viewer_digest_set_metadata_requires_every_digest(
     tmp_path: Path,
 ) -> None:
@@ -7619,149 +10749,60 @@ def test_object_list_metadata_entries_must_not_duplicate(tmp_path: Path) -> None
 
 
 def test_object_list_metadata_domain_identities_must_not_duplicate() -> None:
-    other_digest = "bc" * 32
-    third_digest = "cd" * 32
+    def replacement_value(field: str, detail_field: str, current: object) -> object:
+        schema = MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS[field]
+        if detail_field in schema.get("positive_ints", frozenset()):
+            assert isinstance(current, int)
+            return current + 1
+        if detail_field in schema.get("hex", {}):
+            expected_hex_length = schema["hex"][detail_field]
+            replacement = "bc" * (expected_hex_length // 2)
+            if replacement != current:
+                return replacement
+            return "cd" * (expected_hex_length // 2)
+        if detail_field in schema.get("strings", frozenset()):
+            assert isinstance(current, str)
+            return f"{current}-variant"
+        raise AssertionError(f"unhandled {field}.{detail_field}")
+
+    def duplicate_domain_entries(gate_name: str, field: str) -> list[dict]:
+        schema = MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS[field]
+        identity_fields = set(
+            MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_DOMAIN_IDENTITY_FIELDS[field]
+        )
+        candidate_fields = sorted(
+            (
+                set(schema.get("positive_ints", frozenset()))
+                | set(schema.get("hex", {}))
+                | set(schema.get("strings", frozenset()))
+            )
+            - identity_fields
+        )
+        assert candidate_fields
+
+        original = copy.deepcopy(gate_summary(gate_name)[field][0])
+        duplicate_entry = copy.deepcopy(original)
+        detail_field = candidate_fields[0]
+        duplicate_entry[detail_field] = replacement_value(
+            field,
+            detail_field,
+            duplicate_entry[detail_field],
+        )
+        assert duplicate_entry != original
+        return [original, duplicate_entry]
+
     cases = [
         (
-            "valid_multi_peer_runs",
-            [
-                {
-                    "deployment_id": DEPLOYMENT_ID,
-                    "environment": ENVIRONMENT,
-                    "generated_at_unix": GENERATED_AT,
-                    "peer_count": 4,
-                    "validator_count": 4,
-                    "case_count": 2,
-                    "config_digest_hex": SHA256,
-                },
-                {
-                    "deployment_id": DEPLOYMENT_ID,
-                    "environment": ENVIRONMENT,
-                    "generated_at_unix": GENERATED_AT,
-                    "peer_count": 5,
-                    "validator_count": 5,
-                    "case_count": 3,
-                    "config_digest_hex": other_digest,
-                },
-            ],
-        ),
-        (
-            "valid_billing_cycles",
-            [
-                {
-                    "cycle_id": "billing-cycle-1",
-                    "cycle_index": 1,
-                    "deployment_id": DEPLOYMENT_ID,
-                    "environment": ENVIRONMENT,
-                    "generated_at_unix": GENERATED_AT,
-                    "policy_digest_hex": SHA256,
-                    "reconciliation_digest_hex": SHA256,
-                    "reference_decision_id_hex": SHA256,
-                    "statement_bundle_digest_hex": SHA256,
-                    "statement_count": 1,
-                },
-                {
-                    "cycle_id": "billing-cycle-1",
-                    "cycle_index": 2,
-                    "deployment_id": DEPLOYMENT_ID,
-                    "environment": ENVIRONMENT,
-                    "generated_at_unix": GENERATED_AT + 60,
-                    "policy_digest_hex": SHA256,
-                    "reconciliation_digest_hex": other_digest,
-                    "reference_decision_id_hex": SHA256,
-                    "statement_bundle_digest_hex": third_digest,
-                    "statement_count": 2,
-                },
-            ],
-        ),
-        (
-            "valid_e2e_runs",
-            [
-                {
-                    "case_count": 1,
-                    "case_digest_hex": SHA256,
-                    "deployment_id": DEPLOYMENT_ID,
-                    "environment": ENVIRONMENT,
-                    "generated_at_unix": GENERATED_AT,
-                    "peer_count": 4,
-                    "roster_hash_hex": SHA256,
-                    "tally_digest_hex": SHA256,
-                    "validator_count": 4,
-                },
-                {
-                    "case_count": 2,
-                    "case_digest_hex": SHA256,
-                    "deployment_id": DEPLOYMENT_ID,
-                    "environment": ENVIRONMENT,
-                    "generated_at_unix": GENERATED_AT + 60,
-                    "peer_count": 5,
-                    "roster_hash_hex": SHA256,
-                    "tally_digest_hex": SHA256,
-                    "validator_count": 5,
-                },
-            ],
-        ),
-        (
-            "valid_evidence_viewer_digest_sets",
-            [
-                {
-                    "access_log_digest_hex": SHA256,
-                    "audit_digest_hex": SHA256,
-                    "case_digest_hex": SHA256,
-                    "legal_hold_receipt_digest_hex": SHA256,
-                    "roster_hash_hex": SHA256,
-                    "session_manifest_digest_hex": SHA256,
-                    "transparency_report_digest_hex": SHA256,
-                    "watermark_metadata_digest_hex": SHA256,
-                },
-                {
-                    "access_log_digest_hex": other_digest,
-                    "audit_digest_hex": third_digest,
-                    "case_digest_hex": SHA256,
-                    "legal_hold_receipt_digest_hex": other_digest,
-                    "roster_hash_hex": SHA256,
-                    "session_manifest_digest_hex": third_digest,
-                    "transparency_report_digest_hex": other_digest,
-                    "watermark_metadata_digest_hex": third_digest,
-                },
-            ],
-        ),
-        (
-            "valid_provider_bakes",
-            [
-                {
-                    "bake_id": "reserve-bake-001",
-                    "completed_at_unix": GENERATED_AT,
-                    "deployment_id": DEPLOYMENT_ID,
-                    "environment": ENVIRONMENT,
-                    "ledger_digest_hex": SHA256,
-                    "matrix_digest_hex": SHA256,
-                    "policy_digest_hex": SHA256,
-                    "provider_count": 3,
-                    "scheduled_lifecycle_canary_defaulted_provider_count": 1,
-                    "scheduled_lifecycle_canary_last_tick_at_unix": GENERATED_AT - 30,
-                    "scheduled_lifecycle_canary_tick_count": 2,
-                    "started_at_unix": GENERATED_AT - 60,
-                },
-                {
-                    "bake_id": "reserve-bake-001",
-                    "completed_at_unix": GENERATED_AT + 120,
-                    "deployment_id": DEPLOYMENT_ID,
-                    "environment": ENVIRONMENT,
-                    "ledger_digest_hex": other_digest,
-                    "matrix_digest_hex": third_digest,
-                    "policy_digest_hex": SHA256,
-                    "provider_count": 4,
-                    "scheduled_lifecycle_canary_defaulted_provider_count": 1,
-                    "scheduled_lifecycle_canary_last_tick_at_unix": GENERATED_AT + 90,
-                    "scheduled_lifecycle_canary_tick_count": 2,
-                    "started_at_unix": GENERATED_AT + 60,
-                },
-            ],
-        ),
+            gate_name,
+            field,
+            duplicate_domain_entries(gate_name, field),
+        )
+        for (gate_name, field) in sorted(
+            MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS
+        )
     ]
 
-    for field, entries in cases:
+    for _gate_name, field, entries in cases:
         errors: list[str] = []
         MODULE.validate_payload_free_object_list_metadata(
             field,
@@ -8611,6 +11652,81 @@ def test_deployment_context_metadata_entries_are_validated(
     assert "runtime-only-key-material" not in errors
 
 
+def test_object_metadata_fields_fail_closed_from_config(tmp_path: Path) -> None:
+    cases = [
+        (gate.name, field, tuple(sorted(object_fields)))
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for field, object_fields in MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_METADATA_FIELDS.items()
+        if field in MODULE.GATE_METADATA_FIELDS[gate.name]
+    ]
+    assert cases
+    assert {field for _, field, _ in cases} == set(
+        MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_METADATA_FIELDS
+    )
+
+    for index, (gate_name, field, object_fields) in enumerate(cases):
+        invalid_value = f"runtime-only-{field}-secret"
+        root = tmp_path / f"{index}_{gate_name}_{field}_non_object"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        payload[field] = invalid_value
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        result_text = summary.read_text(encoding="utf-8")
+        errors = "\n".join(json.loads(result_text)["errors"])
+        assert f"{field} must be a payload-free metadata object" in errors
+        assert invalid_value not in result_text
+
+        invalid_required_value = f" runtime-only-{field}-deployment"
+        private_value = f"runtime-only-{field}-key-material"
+        root = tmp_path / f"{index}_{gate_name}_{field}_invalid_entries"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        payload[field] = {
+            object_fields[0]: invalid_required_value,
+            f"bad\n{field}": f"runtime-only-{field}-control-key",
+            "private_key": private_value,
+        }
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        result_text = summary.read_text(encoding="utf-8")
+        errors = "\n".join(json.loads(result_text)["errors"])
+        assert f"{field} keys must be canonical strings" in errors
+        assert (
+            f"{field}.<sensitive-key> is not allowed in payload-free object metadata"
+            in errors
+        )
+        for object_field in object_fields:
+            assert f"{field}.{object_field} must be a canonical string" in errors
+        assert invalid_required_value.strip() not in result_text
+        assert private_value not in result_text
+        assert "private_key" not in result_text
+
+
 def test_payload_free_deployment_context_rejects_nonproduction_without_echo(
     tmp_path: Path,
 ) -> None:
@@ -8630,6 +11746,22 @@ def test_payload_free_deployment_context_rejects_nonproduction_without_echo(
             "valid_multi_peer_runs[0].deployment_id must not contain "
             "non-production deployment markers ['staging']",
             "appeal-finance-staging-a",
+        ),
+        (
+            "moderation_panel",
+            "moderation-panel-stagingready-a",
+            ENVIRONMENT,
+            "deployment_context.deployment_id must not contain "
+            "non-production deployment markers ['staging']",
+            "moderation-panel-stagingready-a",
+        ),
+        (
+            "moderation_panel",
+            "moderation-panel-staging-b",
+            ENVIRONMENT,
+            "valid_e2e_runs[0].deployment_id must not contain "
+            "non-production deployment markers ['staging']",
+            "moderation-panel-staging-b",
         ),
         (
             "hedging_billing",
@@ -8679,6 +11811,131 @@ def test_payload_free_deployment_context_rejects_nonproduction_without_echo(
         errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
         assert expected_error in errors
         assert raw_label not in errors
+
+
+def test_payload_free_deployment_context_surfaces_reject_nonproduction_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, field, False)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for field, object_fields in MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_METADATA_FIELDS.items()
+        if field in MODULE.GATE_METADATA_FIELDS[gate.name]
+        and {"deployment_id", "environment"} <= set(object_fields)
+    ]
+    cases.extend(
+        (gate.name, field, True)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for field, schema in MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS.items()
+        if field in MODULE.GATE_METADATA_FIELDS[gate.name]
+        and {"deployment_id", "environment"} <= set(schema.get("strings", frozenset()))
+    )
+    assert cases
+
+    for index, (gate_name, field, is_object_list) in enumerate(cases):
+        path = f"{field}[0]" if is_object_list else field
+        for suffix, key, value, expected_error in (
+            (
+                "deployment_id",
+                "deployment_id",
+                f"{gate_name.replace('_', '-')}-staging-a",
+                f"{path}.deployment_id must not contain "
+                "non-production deployment markers ['staging']",
+            ),
+            (
+                "environment",
+                "environment",
+                "dev",
+                f"{path}.environment must be production",
+            ),
+        ):
+            root = tmp_path / f"{index}_{gate_name}_{field}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            metadata = payload[field][0] if is_object_list else payload[field]
+            assert isinstance(metadata, dict)
+            metadata[key] = value
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            assert expected_error in errors
+            assert value not in result_text
+
+
+def test_payload_free_deployment_context_surfaces_must_match_artifacts_from_config(
+    tmp_path: Path,
+) -> None:
+    object_field_cases = [
+        (gate.name, field, False)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for field, object_fields in MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_METADATA_FIELDS.items()
+        if field in MODULE.GATE_METADATA_FIELDS[gate.name]
+        and {"deployment_id", "environment"} <= set(object_fields)
+    ]
+    object_list_field_cases = [
+        (gate.name, field, True)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for field, schema in MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS.items()
+        if field in MODULE.GATE_METADATA_FIELDS[gate.name]
+        and {"deployment_id", "environment"} <= set(schema.get("strings", frozenset()))
+    ]
+    cases = object_field_cases + object_list_field_cases
+    assert cases
+    assert {field for _, field, _ in object_field_cases} == {
+        field
+        for field, object_fields in MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_METADATA_FIELDS.items()
+        if {"deployment_id", "environment"} <= set(object_fields)
+    }
+    assert {field for _, field, _ in object_list_field_cases} == {
+        field
+        for field, schema in MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS.items()
+        if {"deployment_id", "environment"} <= set(schema.get("strings", frozenset()))
+    }
+
+    for index, (gate_name, field, is_object_list) in enumerate(cases):
+        mismatched_deployment_id = (
+            f"sorafs-mainnet-{index:02d}-{gate_name.replace('_', '-')}"
+        )
+        root = tmp_path / f"{index}_{gate_name}_{field}"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        metadata = payload[field][0] if is_object_list else payload[field]
+        assert isinstance(metadata, dict)
+        metadata["deployment_id"] = mismatched_deployment_id
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        result_text = summary.read_text(encoding="utf-8")
+        errors = "\n".join(json.loads(result_text)["errors"])
+        assert (
+            f"{gate_name} deployment context must match across artifacts and metadata"
+            in errors
+        )
+        assert mismatched_deployment_id not in result_text
 
 
 def test_object_list_metadata_deployment_context_mismatch_fails(
@@ -8903,34 +12160,105 @@ def test_scalar_metadata_without_owner_kind_tether_fails_closed(
     assert "snapshot_id_hex source-kind tether is not configured for `reputation`" in errors
 
 
+def test_scalar_hex_metadata_entries_fail_closed_from_config(tmp_path: Path) -> None:
+    cases = [
+        (
+            gate.name,
+            field,
+            MODULE.PAYLOAD_FREE_SUMMARY_HEX_METADATA_LENGTHS[field],
+        )
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for field in sorted(
+            MODULE.GATE_METADATA_FIELDS[gate.name]
+            & MODULE.PAYLOAD_FREE_SUMMARY_STRING_METADATA_FIELDS
+        )
+    ]
+    assert cases
+    assert {field for _, field, _ in cases} == set(
+        MODULE.PAYLOAD_FREE_SUMMARY_STRING_METADATA_FIELDS
+    )
+
+    for index, (gate_name, field, expected_hex_length) in enumerate(cases):
+        for suffix, value in (
+            ("malformed", f"private-key-{field}"),
+            ("uppercase", "AB" * (expected_hex_length // 2)),
+            ("object", {"private_key": f"runtime-only-{field}-key"}),
+        ):
+            root = tmp_path / f"{index}_{gate_name}_{field}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            payload[field] = value
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            assert (
+                f"{field} must be {expected_hex_length} lowercase hex characters"
+                in errors
+            )
+            if isinstance(value, str):
+                assert value not in result_text
+            else:
+                assert "private_key" not in result_text
+                assert value["private_key"] not in result_text
+
+
 def test_scalar_metadata_must_match_owner_kind_fingerprints(
     tmp_path: Path,
 ) -> None:
-    payload = gate_summary("reputation")
-    for kind_name in ("publish", "latest"):
-        remove_fingerprint_metadata(
-            payload,
-            "snapshot_id_hex",
-            "merkle_root_hex",
-            kind_name=kind_name,
+    cases = [
+        (
+            gate_name,
+            metadata_field,
+            owner_kinds,
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_SCALAR_BINDINGS[
+                metadata_field
+            ],
         )
-    summary = tmp_path / "summary.json"
-    write_json(tmp_path / "reputation.json", payload)
+        for (
+            gate_name,
+            metadata_field,
+        ), owner_kinds in MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_SCALAR_SOURCE_KINDS.items()
+    ]
 
-    assert (
-        run_gate(
-            tmp_path,
-            "--require-gate",
-            "reputation",
-            "--summary-out",
-            str(summary),
+    for gate_name, metadata_field, owner_kinds, fingerprint_field in sorted(cases):
+        root = tmp_path / f"{gate_name}_{metadata_field}_{fingerprint_field}"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        for owner_kind in owner_kinds:
+            remove_fingerprint_metadata(
+                payload,
+                fingerprint_field,
+                kind_name=owner_kind,
+            )
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
         )
-        == 1
-    )
 
-    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
-    assert "snapshot_id_hex must match recognized artifact fingerprints" in errors
-    assert "merkle_root_hex must match recognized artifact fingerprints" in errors
+        errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+        assert f"{metadata_field} must match recognized artifact fingerprints" in errors
 
 
 def test_reputation_top_level_hex_metadata_is_validated(tmp_path: Path) -> None:
@@ -9110,6 +12438,120 @@ def test_malformed_extra_required_row_label_is_sanitized(tmp_path: Path) -> None
     assert "hidden\noptional" not in errors
 
 
+def test_required_kind_inventory_fails_closed_from_config(tmp_path: Path) -> None:
+    cases = [(gate.name, gate.required_kinds) for gate in MODULE.GATE_SUMMARY_KINDS]
+    assert cases
+
+    for index, (gate_name, required_kinds) in enumerate(cases):
+        hidden_kind = f"runtime_only_hidden_kind_{index:03d}"
+        noncanonical_kind = f"runtime-only-private-kind-{index:03d}\nshadow"
+        for suffix, mutate, expected_errors, forbidden_values in (
+            (
+                "scalar_required_kinds",
+                lambda payload: payload.__setitem__(
+                    "required_kinds",
+                    f"runtime-only-private-required-kinds-{index:03d}",
+                ),
+                ("required_kinds must be a non-empty array",),
+                (f"runtime-only-private-required-kinds-{index:03d}",),
+            ),
+            (
+                "noncanonical_required_kind",
+                lambda payload: payload["required_kinds"].__setitem__(
+                    0,
+                    noncanonical_kind,
+                ),
+                (
+                    "required_kinds[0] must be canonical",
+                    f"required_kinds must match the full `{gate_name}` gate contract",
+                    "required_kinds missing full-contract kinds",
+                ),
+                (noncanonical_kind,),
+            ),
+            (
+                "narrowed_required_kinds",
+                lambda payload: payload.__setitem__(
+                    "required_kinds",
+                    list(required_kinds[:-1]),
+                ),
+                (
+                    f"required_kinds must match the full `{gate_name}` gate contract",
+                    "required_kinds missing full-contract kinds",
+                ),
+                (),
+            ),
+            (
+                "duplicate_unknown_required_kind",
+                lambda payload: payload.__setitem__(
+                    "required_kinds",
+                    [*payload["required_kinds"], hidden_kind, hidden_kind],
+                ),
+                (
+                    "required_kinds contains duplicate kind",
+                    f"required_kinds must match the full `{gate_name}` gate contract",
+                    "required_kinds contains unknown full-contract kinds",
+                ),
+                (hidden_kind,),
+            ),
+            (
+                "scalar_required",
+                lambda payload: payload.__setitem__(
+                    "required",
+                    f"runtime-only-private-required-{index:03d}",
+                ),
+                ("required must be an object",),
+                (f"runtime-only-private-required-{index:03d}",),
+            ),
+            (
+                "extra_required_row",
+                lambda payload: payload["required"].__setitem__(
+                    hidden_kind,
+                    copy.deepcopy(payload["required"][required_kinds[0]]),
+                ),
+                (
+                    f"required contains rows outside the full `{gate_name}` gate contract",
+                ),
+                (hidden_kind,),
+            ),
+            (
+                "noncanonical_required_row",
+                lambda payload: payload["required"].__setitem__(
+                    noncanonical_kind,
+                    copy.deepcopy(payload["required"][required_kinds[0]]),
+                ),
+                (
+                    "required row labels must be canonical strings",
+                    f"required contains rows outside the full `{gate_name}` gate contract",
+                ),
+                (noncanonical_kind,),
+            ),
+        ):
+            root = tmp_path / f"{index}_{gate_name}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            mutate(payload)
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            for expected_error in expected_errors:
+                assert expected_error in errors
+            for forbidden_value in forbidden_values:
+                assert forbidden_value not in result_text
+
+
 def test_extra_required_row_field_fails(tmp_path: Path) -> None:
     payload = gate_summary("gateway_load")
     first_required = MODULE.GATE_BY_NAME["gateway_load"].required_kinds[0]
@@ -9119,12 +12561,621 @@ def test_extra_required_row_field_fails(tmp_path: Path) -> None:
     assert run_gate(tmp_path, "--require-gate", "gateway_load") == 1
 
 
+def test_required_row_state_fields_fail_closed_from_config(tmp_path: Path) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        for field, expected_error in (
+            ("present", f"{gate_name}.required.{kind_name}.present must be true"),
+            ("valid", f"{gate_name}.required.{kind_name}.valid must be true"),
+            (
+                "artifact_count",
+                f"{gate_name}.required.{kind_name}.artifact_count must be positive",
+            ),
+        ):
+            forged_value = f"runtime-only-required-row-{field}-{index:03d}"
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{field}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            payload["required"][kind_name][field] = forged_value
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            assert expected_error in errors
+            assert forged_value not in result_text
+
+
+def test_required_row_presence_and_shape_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        for suffix, mutate, forged_value in (
+            (
+                "missing",
+                lambda payload: payload["required"].pop(kind_name),
+                None,
+            ),
+            (
+                "non_object",
+                lambda payload: payload["required"].__setitem__(
+                    kind_name,
+                    f"runtime-only-required-row-object-{index:03d}",
+                ),
+                f"runtime-only-required-row-object-{index:03d}",
+            ),
+        ):
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            mutate(payload)
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            assert f"{gate_name}.required.{kind_name} must be an object" in errors
+            if forged_value is not None:
+                assert forged_value not in result_text
+
+
+def test_required_and_recognized_error_lists_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        for suffix, mutate, expected_error in (
+            (
+                "row",
+                lambda payload, error_text: payload["required"][kind_name].__setitem__(
+                    "errors",
+                    [error_text],
+                ),
+                f"{gate_name}.required.{kind_name}.errors must be empty",
+            ),
+            (
+                "required_artifact",
+                lambda payload, error_text: payload["required"][kind_name][
+                    "artifacts"
+                ][0].__setitem__(
+                    "errors",
+                    [error_text],
+                ),
+                f"{gate_name}.required.{kind_name}.artifacts[0].errors must be empty",
+            ),
+            (
+                "recognized_artifact",
+                lambda payload, error_text: payload["recognized_artifacts"][
+                    next(
+                        artifact_index
+                        for artifact_index, artifact in enumerate(
+                            payload["recognized_artifacts"]
+                        )
+                        if artifact["kind"] == kind_name
+                    )
+                ].__setitem__(
+                    "errors",
+                    [error_text],
+                ),
+                "recognized_artifacts[{index}].errors must be empty",
+            ),
+        ):
+            forged_error = f"runtime-only-private-key-material-{index:03d}-{suffix}"
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            mutate(payload, forged_error)
+            recognized_index = next(
+                (
+                    artifact_index
+                    for artifact_index, artifact in enumerate(
+                        payload["recognized_artifacts"]
+                    )
+                    if isinstance(artifact, dict) and artifact.get("kind") == kind_name
+                ),
+                None,
+            )
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            if suffix == "recognized_artifact":
+                assert recognized_index is not None
+                expected = expected_error.format(index=recognized_index)
+            else:
+                expected = expected_error
+            assert expected in errors
+            assert forged_error not in result_text
+
+
+def test_required_and_recognized_malformed_error_lists_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    def set_required_row_errors(
+        payload: dict,
+        kind_name: str,
+        value: object,
+    ) -> int | None:
+        payload["required"][kind_name]["errors"] = value
+        return None
+
+    def set_required_artifact_errors(
+        payload: dict,
+        kind_name: str,
+        value: object,
+    ) -> int | None:
+        payload["required"][kind_name]["artifacts"][0]["errors"] = value
+        return None
+
+    def set_recognized_artifact_errors(
+        payload: dict,
+        kind_name: str,
+        value: object,
+    ) -> int:
+        recognized_index = next(
+            artifact_index
+            for artifact_index, artifact in enumerate(payload["recognized_artifacts"])
+            if artifact["kind"] == kind_name
+        )
+        payload["recognized_artifacts"][recognized_index]["errors"] = value
+        return recognized_index
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        for surface, mutate, expected_path in (
+            (
+                "row",
+                set_required_row_errors,
+                f"{gate_name}.required.{kind_name}.errors",
+            ),
+            (
+                "required_artifact",
+                set_required_artifact_errors,
+                f"{gate_name}.required.{kind_name}.artifacts[0].errors",
+            ),
+            (
+                "recognized_artifact",
+                set_recognized_artifact_errors,
+                "recognized_artifacts[{index}].errors",
+            ),
+        ):
+            for shape, malformed_value, expected_suffix in (
+                (
+                    "scalar",
+                    f"runtime-only-private-key-error-list-{index:03d}-{surface}",
+                    "must be an empty error list",
+                ),
+                (
+                    "noncanonical",
+                    [
+                        f"runtime-only-private-key-error-list-{index:03d}-{surface}\nforged"
+                    ],
+                    "must contain only canonical strings",
+                ),
+            ):
+                root = tmp_path / f"{index}_{gate_name}_{kind_name}_{surface}_{shape}"
+                root.mkdir()
+                payload = gate_summary(gate_name)
+                recognized_index = mutate(payload, kind_name, malformed_value)
+                summary = root / "summary.json"
+                write_json(root / f"{gate_name}.json", payload)
+
+                assert (
+                    run_gate(
+                        root,
+                        "--require-gate",
+                        gate_name,
+                        "--summary-out",
+                        str(summary),
+                    )
+                    == 1
+                )
+
+                result_text = summary.read_text(encoding="utf-8")
+                errors = "\n".join(json.loads(result_text)["errors"])
+                if surface == "recognized_artifact":
+                    assert recognized_index is not None
+                    path = expected_path.format(index=recognized_index)
+                else:
+                    path = expected_path
+                assert f"{path} {expected_suffix}" in errors
+                if isinstance(malformed_value, list):
+                    assert malformed_value[0] not in result_text
+                else:
+                    assert malformed_value not in result_text
+
+
+def test_required_and_recognized_error_list_shapes_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    def remove_required_row_errors(payload: dict, kind_name: str) -> int | None:
+        payload["required"][kind_name].pop("errors")
+        return None
+
+    def set_required_row_errors_object(
+        payload: dict,
+        kind_name: str,
+        value: object,
+    ) -> int | None:
+        payload["required"][kind_name]["errors"] = value
+        return None
+
+    def remove_required_artifact_errors(
+        payload: dict,
+        kind_name: str,
+    ) -> int | None:
+        payload["required"][kind_name]["artifacts"][0].pop("errors")
+        return None
+
+    def set_required_artifact_errors_object(
+        payload: dict,
+        kind_name: str,
+        value: object,
+    ) -> int | None:
+        payload["required"][kind_name]["artifacts"][0]["errors"] = value
+        return None
+
+    def remove_recognized_artifact_errors(payload: dict, kind_name: str) -> int:
+        recognized_index = next(
+            artifact_index
+            for artifact_index, artifact in enumerate(payload["recognized_artifacts"])
+            if artifact["kind"] == kind_name
+        )
+        payload["recognized_artifacts"][recognized_index].pop("errors")
+        return recognized_index
+
+    def set_recognized_artifact_errors_object(
+        payload: dict,
+        kind_name: str,
+        value: object,
+    ) -> int:
+        recognized_index = next(
+            artifact_index
+            for artifact_index, artifact in enumerate(payload["recognized_artifacts"])
+            if artifact["kind"] == kind_name
+        )
+        payload["recognized_artifacts"][recognized_index]["errors"] = value
+        return recognized_index
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        malformed_object = {
+            "private_key": f"runtime-only-error-list-{index:03d}",
+        }
+        for surface, shape, mutate, expected_path, forbidden_values in (
+            (
+                "row",
+                "missing",
+                lambda payload, _value: remove_required_row_errors(
+                    payload,
+                    kind_name,
+                ),
+                f"{gate_name}.required.{kind_name}.errors",
+                (),
+            ),
+            (
+                "row",
+                "object",
+                lambda payload, value: set_required_row_errors_object(
+                    payload,
+                    kind_name,
+                    value,
+                ),
+                f"{gate_name}.required.{kind_name}.errors",
+                ("private_key", malformed_object["private_key"]),
+            ),
+            (
+                "required_artifact",
+                "missing",
+                lambda payload, _value: remove_required_artifact_errors(
+                    payload,
+                    kind_name,
+                ),
+                f"{gate_name}.required.{kind_name}.artifacts[0].errors",
+                (),
+            ),
+            (
+                "required_artifact",
+                "object",
+                lambda payload, value: set_required_artifact_errors_object(
+                    payload,
+                    kind_name,
+                    value,
+                ),
+                f"{gate_name}.required.{kind_name}.artifacts[0].errors",
+                ("private_key", malformed_object["private_key"]),
+            ),
+            (
+                "recognized_artifact",
+                "missing",
+                lambda payload, _value: remove_recognized_artifact_errors(
+                    payload,
+                    kind_name,
+                ),
+                "recognized_artifacts[{index}].errors",
+                (),
+            ),
+            (
+                "recognized_artifact",
+                "object",
+                lambda payload, value: set_recognized_artifact_errors_object(
+                    payload,
+                    kind_name,
+                    value,
+                ),
+                "recognized_artifacts[{index}].errors",
+                ("private_key", malformed_object["private_key"]),
+            ),
+        ):
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{surface}_{shape}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            recognized_index = mutate(
+                payload,
+                malformed_object if shape == "object" else None,
+            )
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            result = json.loads(result_text)
+            errors = "\n".join(result["errors"])
+            if surface == "recognized_artifact":
+                assert recognized_index is not None
+                path = expected_path.format(index=recognized_index)
+            else:
+                path = expected_path
+            assert f"{path} must be an empty error list" in errors
+            assert result["required"][gate_name]["valid"] is False
+            for forbidden_value in forbidden_values:
+                assert forbidden_value not in result_text
+
+
 def test_recognized_artifact_count_mismatch_fails(tmp_path: Path) -> None:
     payload = gate_summary("gateway_load")
     payload["recognized_artifact_count"] += 1
     write_json(tmp_path / "gateway_load.json", payload)
 
     assert run_gate(tmp_path, "--require-gate", "gateway_load") == 1
+
+
+def test_recognized_artifact_inventory_shape_fails_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [gate.name for gate in MODULE.GATE_SUMMARY_KINDS]
+    assert cases
+
+    for index, gate_name in enumerate(cases):
+        for suffix, mutate, expected_errors in (
+            (
+                "missing",
+                lambda payload, _secret: payload.pop("recognized_artifacts"),
+                ("recognized_artifacts must be present",),
+            ),
+            (
+                "scalar",
+                lambda payload, secret: payload.__setitem__(
+                    "recognized_artifacts",
+                    secret,
+                ),
+                ("recognized_artifacts must be a non-empty array",),
+            ),
+            (
+                "empty",
+                lambda payload, _secret: payload.__setitem__(
+                    "recognized_artifacts",
+                    [],
+                ),
+                ("recognized_artifacts must be a non-empty array",),
+            ),
+            (
+                "count",
+                lambda payload, _secret: payload.__setitem__(
+                    "recognized_artifact_count",
+                    len(payload["recognized_artifacts"]) + 1,
+                ),
+                (
+                    "recognized_artifacts length must match recognized_artifact_count",
+                    "recognized_artifact_count must match recognized artifact object count",
+                ),
+            ),
+        ):
+            secret = f"runtime-only-private-inventory-{index:03d}-{suffix}"
+            root = tmp_path / f"{index}_{gate_name}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            mutate(payload, secret)
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            for expected_error in expected_errors:
+                assert expected_error in errors
+            assert secret not in result_text
+
+
+def test_required_artifact_inventory_shape_fails_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        base_path = f"{gate_name}.required.{kind_name}"
+        for suffix, mutate, expected_errors, forbidden_values in (
+            (
+                "missing",
+                lambda payload, _secret: payload["required"][kind_name].pop(
+                    "artifacts"
+                ),
+                (
+                    f"{base_path}.artifacts must be a non-empty array",
+                    f"{base_path}.artifact_count must match artifact object count",
+                ),
+                (),
+            ),
+            (
+                "scalar",
+                lambda payload, secret: payload["required"][kind_name].__setitem__(
+                    "artifacts",
+                    secret,
+                ),
+                (
+                    f"{base_path}.artifacts must be a non-empty array",
+                    f"{base_path}.artifact_count must match artifact object count",
+                ),
+                ("{secret}",),
+            ),
+            (
+                "empty",
+                lambda payload, _secret: payload["required"][kind_name].__setitem__(
+                    "artifacts",
+                    [],
+                ),
+                (
+                    f"{base_path}.artifacts must be a non-empty array",
+                    f"{base_path}.artifact_count must match artifact object count",
+                ),
+                (),
+            ),
+            (
+                "non_object",
+                lambda payload, secret: payload["required"][kind_name][
+                    "artifacts"
+                ].__setitem__(0, secret),
+                (
+                    f"{base_path}.artifact_count must match artifact object count",
+                    f"{base_path}.artifacts[0] must be an object",
+                ),
+                ("{secret}",),
+            ),
+            (
+                "count_drift",
+                lambda payload, _secret: payload["required"][kind_name].__setitem__(
+                    "artifact_count",
+                    payload["required"][kind_name]["artifact_count"] + 1,
+                ),
+                (f"{base_path}.artifact_count must match artifact object count",),
+                (),
+            ),
+        ):
+            secret = f"runtime-only-required-artifact-inventory-{index:03d}-{suffix}"
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            mutate(payload, secret)
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            for expected_error in expected_errors:
+                assert expected_error in errors
+            for forbidden_value in forbidden_values:
+                assert forbidden_value.format(secret=secret) not in result_text
 
 
 def test_required_artifact_count_mismatch_reports_observed_aggregate_count(
@@ -9288,6 +13339,86 @@ def test_non_object_recognized_artifact_does_not_inflate_aggregate_count(
     )
 
 
+def test_non_object_artifact_entries_do_not_inflate_aggregate_counts_from_config(
+    tmp_path: Path,
+) -> None:
+    required_cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    recognized_cases = [(gate.name, None) for gate in MODULE.GATE_SUMMARY_KINDS]
+    cases = [
+        ("required", gate_name, kind_name)
+        for gate_name, kind_name in required_cases
+    ] + [
+        ("recognized", gate_name, kind_name)
+        for gate_name, kind_name in recognized_cases
+    ]
+    assert cases
+
+    for index, (surface, gate_name, kind_name) in enumerate(cases):
+        secret = f"runtime-only-non-object-artifact-entry-{index:03d}-{surface}"
+        root = tmp_path / f"{index}_{gate_name}_{kind_name or 'recognized'}_{surface}"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        expected_object_count = sum(
+            sum(
+                1
+                for artifact in row["artifacts"]
+                if isinstance(artifact, dict)
+            )
+            for row in payload["required"].values()
+        )
+        if surface == "required":
+            assert kind_name is not None
+            artifacts = payload["required"][kind_name]["artifacts"]
+            non_object_index = len(artifacts)
+            artifacts.append(secret)
+            payload["required"][kind_name]["artifact_count"] += 1
+            expected_errors = (
+                f"{gate_name}.required.{kind_name}.artifact_count "
+                "must match artifact object count",
+                f"{gate_name}.required.{kind_name}.artifacts[{non_object_index}] "
+                "must be an object",
+            )
+        else:
+            non_object_index = len(payload["recognized_artifacts"])
+            payload["recognized_artifacts"].append(secret)
+            payload["recognized_artifact_count"] = expected_object_count + 1
+            expected_errors = (
+                f"recognized_artifacts[{non_object_index}] must be an object",
+                "recognized_artifact_count must match recognized artifact object count",
+            )
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        result_text = summary.read_text(encoding="utf-8")
+        result = json.loads(result_text)
+        row = result["required"][gate_name]
+        diagnostics = "\n".join(result["errors"] + row["errors"])
+        assert row["artifact_count"] == expected_object_count
+        assert row["recognized_artifact_count"] == expected_object_count
+        for expected_error in expected_errors:
+            assert expected_error in diagnostics
+        assert (
+            f"{gate_name} aggregate invalid row recognized_artifact_count "
+            "must match artifact_count"
+        ) not in diagnostics
+        assert secret not in result_text
+
+
 def test_empty_required_artifacts_do_not_inflate_aggregate_count(
     tmp_path: Path,
 ) -> None:
@@ -9328,6 +13459,113 @@ def test_empty_required_artifacts_do_not_inflate_aggregate_count(
         f"gateway_load.required.{first_required}.artifact_count must match artifact object count"
         in diagnostics
     )
+
+
+def test_malformed_required_artifact_inventories_do_not_inflate_counts_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    def recognized_required_artifact_objects(payload: dict) -> list[dict]:
+        artifacts = []
+        for required_kind, row in payload["required"].items():
+            row_artifacts = row.get("artifacts")
+            if not isinstance(row_artifacts, list):
+                continue
+            for required_artifact in row_artifacts:
+                if not isinstance(required_artifact, dict):
+                    continue
+                artifact = copy.deepcopy(required_artifact)
+                artifact["kind"] = required_kind
+                artifacts.append(artifact)
+        return artifacts
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        base_path = f"{gate_name}.required.{kind_name}"
+        for suffix, mutate, expected_errors, forbidden_values in (
+            (
+                "missing",
+                lambda payload, _secret: payload["required"][kind_name].pop(
+                    "artifacts"
+                ),
+                (
+                    f"{base_path}.artifacts must be a non-empty array",
+                    f"{base_path}.artifact_count must match artifact object count",
+                ),
+                (),
+            ),
+            (
+                "scalar",
+                lambda payload, secret: payload["required"][kind_name].__setitem__(
+                    "artifacts",
+                    secret,
+                ),
+                (
+                    f"{base_path}.artifacts must be a non-empty array",
+                    f"{base_path}.artifact_count must match artifact object count",
+                ),
+                ("{secret}",),
+            ),
+            (
+                "empty",
+                lambda payload, _secret: payload["required"][kind_name].__setitem__(
+                    "artifacts",
+                    [],
+                ),
+                (
+                    f"{base_path}.artifacts must be a non-empty array",
+                    f"{base_path}.artifact_count must match artifact object count",
+                ),
+                (),
+            ),
+        ):
+            secret = f"runtime-only-required-artifact-bucket-{index:03d}-{suffix}"
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            mutate(payload, secret)
+            recognized_artifacts = recognized_required_artifact_objects(payload)
+            expected_object_count = len(recognized_artifacts)
+            payload["recognized_artifacts"] = recognized_artifacts
+            payload["recognized_artifact_count"] = expected_object_count
+            payload["evidence_file_count"] = len(
+                {artifact["path"] for artifact in recognized_artifacts}
+            )
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            result = json.loads(result_text)
+            row = result["required"][gate_name]
+            diagnostics = "\n".join(result["errors"] + row["errors"])
+            assert row["artifact_count"] == expected_object_count
+            assert row["recognized_artifact_count"] == expected_object_count
+            for expected_error in expected_errors:
+                assert expected_error in diagnostics
+            assert "recognized_artifact_count must match required row artifact total" not in diagnostics
+            assert "recognized_artifacts must match required artifact counts" not in diagnostics
+            assert (
+                f"{gate_name} aggregate invalid row recognized_artifact_count "
+                "must match artifact_count"
+            ) not in diagnostics
+            for forbidden_value in forbidden_values:
+                assert forbidden_value.format(secret=secret) not in result_text
 
 
 def test_evidence_file_count_exceeds_artifacts_fails(tmp_path: Path) -> None:
@@ -9379,6 +13617,66 @@ def test_evidence_file_count_ignores_unsafe_recognized_artifact_paths(
     assert unsafe_path not in diagnostics
 
 
+def test_unsafe_recognized_artifact_paths_do_not_satisfy_evidence_count_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    expected_path_suffix = (
+        "path must be archive-relative without absolute, empty, current, "
+        "parent, encoded, URI-scheme-like, platform-specific, or secret-looking "
+        "segments"
+    )
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        unsafe_path = (
+            f"/tmp/runtime-only/sorafs/{gate_name}/{kind_name}/private_key.json"
+        )
+        root = tmp_path / f"{index}_{gate_name}_{kind_name}"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        recognized_index = next(
+            artifact_index
+            for artifact_index, artifact in enumerate(payload["recognized_artifacts"])
+            if artifact["kind"] == kind_name
+        )
+        payload["recognized_artifacts"][recognized_index]["path"] = unsafe_path
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        result_text = summary.read_text(encoding="utf-8")
+        result = json.loads(result_text)
+        row = result["required"][gate_name]
+        diagnostics = "\n".join(result["errors"] + row["errors"])
+        assert (
+            "evidence_file_count must match recognized artifact path count"
+            in diagnostics
+        )
+        assert f"recognized_artifacts[{recognized_index}].{expected_path_suffix}" in diagnostics
+        assert (
+            f"{gate_name} aggregate invalid row recognized_artifact_count "
+            "must match artifact_count"
+        ) not in diagnostics
+        assert unsafe_path not in result_text
+        assert "private_key" not in result_text
+
+
 def test_malformed_top_level_counts_fail(tmp_path: Path) -> None:
     payload = gate_summary("gateway_load")
     payload["evidence_file_count"] = 0
@@ -9386,6 +13684,88 @@ def test_malformed_top_level_counts_fail(tmp_path: Path) -> None:
     write_json(tmp_path / "gateway_load.json", payload)
 
     assert run_gate(tmp_path, "--require-gate", "gateway_load") == 1
+
+
+def test_top_level_count_invariants_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [gate.name for gate in MODULE.GATE_SUMMARY_KINDS]
+    assert cases
+
+    for index, gate_name in enumerate(cases):
+        for suffix, mutate, expected_errors in (
+            (
+                "malformed_evidence_file_count",
+                lambda payload, secret: payload.__setitem__(
+                    "evidence_file_count",
+                    secret,
+                ),
+                ("evidence_file_count must be a positive integer",),
+            ),
+            (
+                "malformed_recognized_artifact_count",
+                lambda payload, secret: payload.__setitem__(
+                    "recognized_artifact_count",
+                    secret,
+                ),
+                ("recognized_artifact_count must be a positive integer",),
+            ),
+            (
+                "evidence_exceeds_recognized",
+                lambda payload, _secret: payload.__setitem__(
+                    "evidence_file_count",
+                    payload["recognized_artifact_count"] + 1,
+                ),
+                (
+                    "evidence_file_count must not exceed recognized_artifact_count",
+                    "evidence_file_count must match recognized artifact path count",
+                ),
+            ),
+            (
+                "evidence_path_count_mismatch",
+                lambda payload, _secret: payload.__setitem__(
+                    "evidence_file_count",
+                    payload["evidence_file_count"] - 1,
+                ),
+                ("evidence_file_count must match recognized artifact path count",),
+            ),
+            (
+                "recognized_required_total_mismatch",
+                lambda payload, _secret: payload.__setitem__(
+                    "recognized_artifact_count",
+                    payload["recognized_artifact_count"] + 1,
+                ),
+                (
+                    "recognized_artifact_count must match required row artifact total",
+                    "recognized_artifacts length must match recognized_artifact_count",
+                    "recognized_artifact_count must match recognized artifact object count",
+                ),
+            ),
+        ):
+            secret = f"runtime-only-private-count-{index:03d}-{suffix}"
+            root = tmp_path / f"{index}_{gate_name}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            mutate(payload, secret)
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            for expected_error in expected_errors:
+                assert expected_error in errors
+            assert secret not in result_text
 
 
 def test_invalid_top_level_recognized_artifacts_fail(tmp_path: Path) -> None:
@@ -9427,6 +13807,249 @@ def test_required_and_recognized_artifact_status_must_be_successful(
     assert "failed" not in errors
 
 
+def test_required_and_recognized_artifact_statuses_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        forged_status = f"runtime-only-status-{index:03d}"
+        root = tmp_path / f"{index}_{gate_name}_{kind_name}"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        payload["required"][kind_name]["artifacts"][0]["status"] = forged_status
+        payload["recognized_artifacts"] = recognized_artifacts_from_required(payload)
+        recognized_index = next(
+            artifact_index
+            for artifact_index, artifact in enumerate(payload["recognized_artifacts"])
+            if artifact["kind"] == kind_name
+            and artifact["path"]
+            == payload["required"][kind_name]["artifacts"][0]["path"]
+        )
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        result_text = summary.read_text(encoding="utf-8")
+        errors = "\n".join(json.loads(result_text)["errors"])
+        assert (
+            f"{gate_name}.required.{kind_name}.artifacts[0].status "
+            "must be a successful status"
+            in errors
+        )
+        assert (
+            f"recognized_artifacts[{recognized_index}].status "
+            "must be a successful status"
+            in errors
+        )
+        assert forged_status not in result_text
+
+
+def test_required_and_recognized_artifact_status_shapes_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        for surface, shape in (
+            ("required", "missing"),
+            ("required", "object"),
+            ("recognized", "missing"),
+            ("recognized", "object"),
+        ):
+            hostile_status = {"private_key": f"runtime-only-status-{index:03d}"}
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{surface}_{shape}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            target_artifact = payload["required"][kind_name]["artifacts"][0]
+            recognized_index = next(
+                artifact_index
+                for artifact_index, artifact in enumerate(
+                    payload["recognized_artifacts"]
+                )
+                if artifact["kind"] == kind_name
+                and artifact["path"] == target_artifact["path"]
+            )
+            if surface == "required":
+                artifact = target_artifact
+                expected_error = (
+                    f"{gate_name}.required.{kind_name}.artifacts[0].status "
+                    "must be canonical"
+                )
+            else:
+                artifact = payload["recognized_artifacts"][recognized_index]
+                expected_error = (
+                    f"recognized_artifacts[{recognized_index}].status "
+                    "must be canonical"
+                )
+            if shape == "missing":
+                artifact.pop("status")
+            else:
+                artifact["status"] = hostile_status
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            result = json.loads(result_text)
+            errors = "\n".join(result["errors"])
+            assert f"{gate_name} production readiness summary is invalid" in errors
+            assert expected_error in errors
+            assert result["required"][gate_name]["valid"] is False
+            assert "private_key" not in result_text
+            assert hostile_status["private_key"] not in result_text
+
+
+def test_required_and_recognized_artifact_valid_markers_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        forged_valid = f"runtime-only-valid-{index:03d}"
+        root = tmp_path / f"{index}_{gate_name}_{kind_name}"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        payload["required"][kind_name]["artifacts"][0]["valid"] = forged_valid
+        payload["recognized_artifacts"] = recognized_artifacts_from_required(payload)
+        recognized_index = next(
+            artifact_index
+            for artifact_index, artifact in enumerate(payload["recognized_artifacts"])
+            if artifact["kind"] == kind_name
+            and artifact["path"]
+            == payload["required"][kind_name]["artifacts"][0]["path"]
+        )
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        result_text = summary.read_text(encoding="utf-8")
+        errors = "\n".join(json.loads(result_text)["errors"])
+        assert (
+            f"{gate_name}.required.{kind_name}.artifacts[0].valid must be true"
+            in errors
+        )
+        assert f"recognized_artifacts[{recognized_index}].valid must be true" in errors
+        assert forged_valid not in result_text
+
+
+def test_required_and_recognized_artifact_valid_marker_shapes_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        malformed_values = (
+            ("missing", None, ()),
+            ("false", False, ()),
+            (
+                "object",
+                {"private_key": f"runtime-only-valid-{index:03d}"},
+                ("private_key", f"runtime-only-valid-{index:03d}"),
+            ),
+        )
+        for suffix, malformed_valid, forbidden_values in malformed_values:
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{suffix}_valid"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            required_artifact = payload["required"][kind_name]["artifacts"][0]
+            if suffix == "missing":
+                required_artifact.pop("valid")
+            else:
+                required_artifact["valid"] = malformed_valid
+            payload["recognized_artifacts"] = recognized_artifacts_from_required(
+                payload
+            )
+            recognized_index = next(
+                artifact_index
+                for artifact_index, artifact in enumerate(
+                    payload["recognized_artifacts"]
+                )
+                if artifact["kind"] == kind_name
+                and artifact["path"] == required_artifact["path"]
+            )
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            result = json.loads(result_text)
+            errors = "\n".join(result["errors"])
+            assert f"{gate_name} production readiness summary is invalid" in errors
+            assert (
+                f"{gate_name}.required.{kind_name}.artifacts[0].valid "
+                "must be true"
+                in errors
+            )
+            assert (
+                f"recognized_artifacts[{recognized_index}].valid must be true"
+                in errors
+            )
+            assert result["required"][gate_name]["valid"] is False
+            for forbidden_value in forbidden_values:
+                assert forbidden_value not in result_text
+
+
 def test_required_artifact_extra_fields_fail(tmp_path: Path) -> None:
     payload = gate_summary("gateway_load")
     first_kind = payload["required_kinds"][0]
@@ -9434,6 +14057,83 @@ def test_required_artifact_extra_fields_fail(tmp_path: Path) -> None:
     write_json(tmp_path / "gateway_load.json", payload)
 
     assert run_gate(tmp_path, "--require-gate", "gateway_load") == 1
+
+
+def test_required_and_recognized_artifact_extra_fields_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    def add_required_artifact_private_key(
+        payload: dict,
+        kind_name: str,
+        secret: str,
+    ) -> int | None:
+        payload["required"][kind_name]["artifacts"][0]["private_key"] = secret
+        return None
+
+    def add_recognized_artifact_private_key(
+        payload: dict,
+        kind_name: str,
+        secret: str,
+    ) -> int:
+        recognized_index = next(
+            artifact_index
+            for artifact_index, artifact in enumerate(payload["recognized_artifacts"])
+            if artifact["kind"] == kind_name
+        )
+        payload["recognized_artifacts"][recognized_index]["private_key"] = secret
+        return recognized_index
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        for surface, mutate, expected_path in (
+            (
+                "required_artifact",
+                add_required_artifact_private_key,
+                f"{gate_name}.required.{kind_name}.artifacts[0].<sensitive-key>",
+            ),
+            (
+                "recognized_artifact",
+                add_recognized_artifact_private_key,
+                "recognized_artifacts[{index}].<sensitive-key>",
+            ),
+        ):
+            secret = f"runtime-only-private-key-artifact-field-{index:03d}-{surface}"
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{surface}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            recognized_index = mutate(payload, kind_name, secret)
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            if surface == "recognized_artifact":
+                assert recognized_index is not None
+                path = expected_path.format(index=recognized_index)
+            else:
+                path = expected_path
+            assert (
+                f"{path} is not allowed in payload-free artifact summary" in errors
+            )
+            assert "private_key" not in result_text
+            assert secret not in result_text
 
 
 def test_required_row_schema_must_match_required_evidence_schema(
@@ -9493,6 +14193,131 @@ def test_required_artifact_schema_must_match_required_evidence_schema(
     assert "sorafs.shadow.schema.v1" not in errors
 
 
+def test_required_row_schema_canonicality_fails_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        for suffix, forged_schema, forbidden_values in (
+            (
+                "padded",
+                " padded-row-schema ",
+                (" padded-row-schema ",),
+            ),
+            (
+                "newline",
+                f"runtime-only-row-schema-{index:03d}\nprivate_key",
+                (f"runtime-only-row-schema-{index:03d}\nprivate_key", "private_key"),
+            ),
+            (
+                "object",
+                {"private_key": f"runtime-only-row-schema-{index:03d}"},
+                ("private_key", f"runtime-only-row-schema-{index:03d}"),
+            ),
+        ):
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            payload["required"][kind_name]["schema"] = forged_schema
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            assert (
+                f"{gate_name}.required.{kind_name}.schema must be canonical"
+                in errors
+            )
+            for forbidden_value in forbidden_values:
+                assert forbidden_value not in result_text
+
+
+def test_required_kind_schema_bindings_fail_closed_from_config(tmp_path: Path) -> None:
+    cases = [
+        (gate.name, kind_name, schema)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name, schema in MODULE.GATE_REQUIRED_KIND_SCHEMAS[gate.name].items()
+    ]
+    assert cases
+    assert set(cases) == {
+        (
+            gate.name,
+            kind_name,
+            MODULE.GATE_REQUIRED_KIND_SCHEMAS[gate.name][kind_name],
+        )
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    }
+
+    for index, (gate_name, kind_name, _schema) in enumerate(cases):
+        forged_schema = f"sorafs.private.runtime.schema.{index:03d}.v1"
+        for suffix, mutate, expected_error in (
+            (
+                "row",
+                lambda payload: payload["required"][kind_name].__setitem__(
+                    "schema",
+                    forged_schema,
+                ),
+                f"{gate_name}.required.{kind_name}.schema "
+                "must match required evidence schema",
+            ),
+            (
+                "artifact",
+                lambda payload: payload["required"][kind_name]["artifacts"][
+                    0
+                ].__setitem__(
+                    "schema",
+                    forged_schema,
+                ),
+                f"{gate_name}.required.{kind_name}.artifacts[0].schema "
+                "must match required evidence schema",
+            ),
+        ):
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            mutate(payload)
+            if suffix == "artifact":
+                payload["recognized_artifacts"] = recognized_artifacts_from_required(
+                    payload
+                )
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            assert expected_error in errors
+            assert forged_schema not in result_text
+
+
 def test_required_artifact_kind_mismatch_fails(tmp_path: Path) -> None:
     payload = gate_summary("gateway_load")
     first_kind = payload["required_kinds"][0]
@@ -9500,6 +14325,149 @@ def test_required_artifact_kind_mismatch_fails(tmp_path: Path) -> None:
     write_json(tmp_path / "gateway_load.json", payload)
 
     assert run_gate(tmp_path, "--require-gate", "gateway_load") == 1
+
+
+def test_required_and_recognized_artifact_kind_canonicality_fails_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        forged_kind = f"runtime-only-kind-{index:03d}\nprivate_key"
+        for suffix, mutate, expected_error in (
+            (
+                "required",
+                lambda payload: payload["required"][kind_name]["artifacts"][
+                    0
+                ].__setitem__(
+                    "kind",
+                    forged_kind,
+                ),
+                f"{gate_name}.required.{kind_name}.artifacts[0].kind "
+                "must be canonical when present",
+            ),
+            (
+                "recognized",
+                lambda payload: payload["recognized_artifacts"][
+                    next(
+                        artifact_index
+                        for artifact_index, artifact in enumerate(
+                            payload["recognized_artifacts"]
+                        )
+                        if artifact["kind"] == kind_name
+                    )
+                ].__setitem__(
+                    "kind",
+                    forged_kind,
+                ),
+                "recognized_artifacts[{index}].kind must be canonical",
+            ),
+        ):
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            recognized_index = next(
+                artifact_index
+                for artifact_index, artifact in enumerate(
+                    payload["recognized_artifacts"]
+                )
+                if artifact["kind"] == kind_name
+            )
+            mutate(payload)
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            if suffix == "recognized":
+                expected = expected_error.format(index=recognized_index)
+            else:
+                expected = expected_error
+            assert expected in errors
+            assert forged_kind not in result_text
+            assert "private_key" not in result_text
+
+
+def test_required_and_recognized_artifact_kind_labels_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        forged_kind = f"runtime_only_kind_{index:03d}"
+        for suffix, mutate, expected_error in (
+            (
+                "required",
+                lambda payload: payload["required"][kind_name]["artifacts"][
+                    0
+                ].__setitem__(
+                    "kind",
+                    forged_kind,
+                ),
+                f"{gate_name}.required.{kind_name}.artifacts[0].kind "
+                "must match required row kind",
+            ),
+            (
+                "recognized",
+                lambda payload: payload["recognized_artifacts"][
+                    next(
+                        artifact_index
+                        for artifact_index, artifact in enumerate(
+                            payload["recognized_artifacts"]
+                        )
+                        if artifact["kind"] == kind_name
+                    )
+                ].__setitem__(
+                    "kind",
+                    forged_kind,
+                ),
+                "kind must be part of the full "
+                f"`{gate_name}` gate contract",
+            ),
+        ):
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            mutate(payload)
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            assert expected_error in errors
+            assert forged_kind not in result_text
 
 
 def test_required_artifact_duplicate_paths_fail(tmp_path: Path) -> None:
@@ -9535,6 +14503,123 @@ def test_required_artifact_duplicate_paths_fail(tmp_path: Path) -> None:
     errors = "\n".join(result["errors"])
     assert ".artifacts must not duplicate artifact paths" in errors
     assert "recognized_artifacts must not duplicate artifact paths" in errors
+
+
+def test_required_artifact_duplicate_paths_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        root = tmp_path / f"{index}_{gate_name}_{kind_name}"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        duplicate = copy.deepcopy(payload["required"][kind_name]["artifacts"][0])
+        duplicate["sha256"] = "cd" * 32
+        duplicate["fingerprint"] = copy.deepcopy(duplicate["fingerprint"])
+        duplicate["fingerprint"]["generated_at_unix"] = GENERATED_AT - 1
+        payload["required"][kind_name]["artifacts"].append(duplicate)
+        payload["required"][kind_name]["artifact_count"] = len(
+            payload["required"][kind_name]["artifacts"]
+        )
+        payload["recognized_artifacts"] = recognized_artifacts_from_required(payload)
+        payload["recognized_artifact_count"] = len(payload["recognized_artifacts"])
+        payload["evidence_file_count"] = len(
+            {
+                artifact["path"]
+                for artifact in payload["recognized_artifacts"]
+                if isinstance(artifact, dict)
+            }
+        )
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        result_text = summary.read_text(encoding="utf-8")
+        errors = "\n".join(json.loads(result_text)["errors"])
+        assert (
+            f"{gate_name}.required.{kind_name}.artifacts "
+            "must not duplicate artifact paths"
+            in errors
+        )
+        assert "recognized_artifacts must not duplicate artifact paths" in errors
+        assert (
+            f"{gate_name}.required.{kind_name}.artifacts "
+            "must not duplicate artifact identities"
+            not in errors
+        )
+        assert "cd" * 32 not in result_text
+
+
+def test_required_artifact_duplicate_identities_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        root = tmp_path / f"{index}_{gate_name}_{kind_name}"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        duplicate = copy.deepcopy(payload["required"][kind_name]["artifacts"][0])
+        payload["required"][kind_name]["artifacts"].append(duplicate)
+        payload["required"][kind_name]["artifact_count"] = len(
+            payload["required"][kind_name]["artifacts"]
+        )
+        payload["recognized_artifacts"] = recognized_artifacts_from_required(payload)
+        payload["recognized_artifact_count"] = len(payload["recognized_artifacts"])
+        payload["evidence_file_count"] = len(
+            {
+                artifact["path"]
+                for artifact in payload["recognized_artifacts"]
+                if isinstance(artifact, dict)
+            }
+        )
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        errors = "\n".join(result["errors"])
+        assert (
+            f"{gate_name}.required.{kind_name}.artifacts "
+            "must not duplicate artifact paths"
+            in errors
+        )
+        assert (
+            f"{gate_name}.required.{kind_name}.artifacts "
+            "must not duplicate artifact identities"
+            in errors
+        )
 
 
 def test_recognized_artifact_extra_fields_fail(tmp_path: Path) -> None:
@@ -9590,6 +14675,48 @@ def test_recognized_artifacts_must_match_required_kind_counts(tmp_path: Path) ->
     assert replaced_kind not in errors
 
 
+def test_recognized_artifact_kind_counts_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name, gate.required_kinds)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name, required_kinds) in enumerate(cases):
+        donor_kind = next(candidate for candidate in required_kinds if candidate != kind_name)
+        root = tmp_path / f"{index}_{gate_name}_{kind_name}"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        recognized_index = next(
+            artifact_index
+            for artifact_index, artifact in enumerate(payload["recognized_artifacts"])
+            if artifact["kind"] == kind_name
+        )
+        payload["recognized_artifacts"][recognized_index]["kind"] = donor_kind
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        errors = "\n".join(result["errors"])
+        assert "recognized_artifacts must match required artifact counts" in errors
+        assert "recognized_artifacts must match required artifact identities" in errors
+        assert "{'required':" not in errors
+
+
 def test_recognized_artifacts_must_match_required_artifact_identities(
     tmp_path: Path,
 ) -> None:
@@ -9601,6 +14728,52 @@ def test_recognized_artifacts_must_match_required_artifact_identities(
     write_json(tmp_path / "gateway_load.json", payload)
 
     assert run_gate(tmp_path, "--require-gate", "gateway_load") == 1
+
+
+def test_recognized_artifact_identity_drift_fails_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        root = tmp_path / f"{index}_{gate_name}_{kind_name}"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        required_artifact = payload["required"][kind_name]["artifacts"][0]
+        recognized_index = next(
+            artifact_index
+            for artifact_index, artifact in enumerate(payload["recognized_artifacts"])
+            if artifact["kind"] == kind_name
+            and artifact["path"] == required_artifact["path"]
+            and artifact["sha256"] == required_artifact["sha256"]
+        )
+        forged_digest = f"{(index + 1) % 256:02x}" * 32
+        if forged_digest == required_artifact["sha256"]:
+            forged_digest = "cd" * 32
+        payload["recognized_artifacts"][recognized_index]["sha256"] = forged_digest
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        result_text = summary.read_text(encoding="utf-8")
+        errors = "\n".join(json.loads(result_text)["errors"])
+        assert "recognized_artifacts must match required artifact identities" in errors
+        assert forged_digest not in result_text
 
 
 def test_recognized_artifacts_must_match_required_artifact_metadata(
@@ -9615,6 +14788,71 @@ def test_recognized_artifacts_must_match_required_artifact_metadata(
     write_json(tmp_path / "gateway_load.json", payload)
 
     assert run_gate(tmp_path, "--require-gate", "gateway_load") == 1
+
+
+def test_recognized_artifact_metadata_bindings_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        for metadata_field in ("schema", "status", "fingerprint"):
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{metadata_field}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            required_artifact = payload["required"][kind_name]["artifacts"][0]
+            recognized_index = next(
+                artifact_index
+                for artifact_index, artifact in enumerate(
+                    payload["recognized_artifacts"]
+                )
+                if artifact["kind"] == kind_name
+                and artifact["path"] == required_artifact["path"]
+                and artifact["sha256"] == required_artifact["sha256"]
+            )
+            recognized_artifact = payload["recognized_artifacts"][recognized_index]
+            if metadata_field == "schema":
+                forged_value = f"sorafs.private.runtime.schema.{index:03d}.v1"
+                recognized_artifact["schema"] = forged_value
+            elif metadata_field == "status":
+                forged_value = "verified"
+                assert required_artifact["status"] != forged_value
+                recognized_artifact["status"] = forged_value
+            else:
+                forged_value = f"runtime-only-fingerprint-{index:03d}"
+                recognized_artifact["fingerprint"] = dict(
+                    recognized_artifact["fingerprint"]
+                )
+                recognized_artifact["fingerprint"]["aggregate_binding_nonce"] = (
+                    forged_value
+                )
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            assert (
+                f"recognized_artifacts[{recognized_index}].{metadata_field} "
+                "must match the required artifact metadata"
+                in errors
+            )
+            assert forged_value not in result_text
 
 
 def test_recognized_artifacts_duplicate_paths_fail(tmp_path: Path) -> None:
@@ -9644,6 +14882,57 @@ def test_recognized_artifacts_duplicate_paths_fail(tmp_path: Path) -> None:
     assert "recognized_artifacts must not duplicate artifact paths" in "\n".join(
         result["errors"]
     )
+
+
+def test_recognized_artifact_duplicate_paths_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name, gate.required_kinds)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name, required_kinds) in enumerate(cases):
+        donor_kind = next(candidate for candidate in required_kinds if candidate != kind_name)
+        root = tmp_path / f"{index}_{gate_name}_{kind_name}"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        target_index = next(
+            artifact_index
+            for artifact_index, artifact in enumerate(payload["recognized_artifacts"])
+            if artifact["kind"] == kind_name
+        )
+        donor_index = next(
+            artifact_index
+            for artifact_index, artifact in enumerate(payload["recognized_artifacts"])
+            if artifact["kind"] == donor_kind
+        )
+        donor_path = payload["recognized_artifacts"][donor_index]["path"]
+        payload["recognized_artifacts"][target_index]["path"] = donor_path
+        payload["evidence_file_count"] = len(
+            {artifact["path"] for artifact in payload["recognized_artifacts"]}
+        )
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        result_text = summary.read_text(encoding="utf-8")
+        errors = "\n".join(json.loads(result_text)["errors"])
+        assert "recognized_artifacts must not duplicate artifact paths" in errors
+        assert "recognized_artifacts must match required artifact identities" in errors
+        assert donor_path not in result_text
 
 
 def test_artifact_fingerprint_metadata_must_be_payload_free(tmp_path: Path) -> None:
@@ -9828,6 +15117,137 @@ def test_aggregate_gate_row_output_shape_is_validated() -> None:
     assert "AB" * 32 not in diagnostics
 
 
+def test_aggregate_required_row_output_contracts_fail_closed_from_config() -> None:
+    cases = [(gate.name, gate) for gate in MODULE.GATE_SUMMARY_KINDS]
+    assert cases
+
+    for index, (gate_name, gate) in enumerate(cases):
+        payload = gate_summary(gate_name)
+        row, validation_errors = MODULE.validate_gate_summary(
+            gate,
+            payload,
+            MODULE.ValidationOptions(
+                now_unix=NOW_UNIX,
+                max_summary_artifact_age_secs=(
+                    MODULE.DEFAULT_MAX_SUMMARY_ARTIFACT_AGE_SECS
+                ),
+                deployment_id=DEPLOYMENT_ID,
+                environment=ENVIRONMENT,
+            ),
+        )
+        assert validation_errors == []
+        row["path"] = f"{gate_name}.json"
+        row["sha256"] = SHA256
+
+        errors: list[str] = []
+        MODULE.validate_aggregate_required_row_output(gate, row, errors)
+        assert errors == []
+
+        secret = f"runtime-only-private-row-key-{index:03d}"
+        row["private_key"] = secret
+        row["path"] = f"/tmp/runtime-only/{gate_name}.json"
+        row["sha256"] = "AB" * 32
+        row["required_kind_count"] = 0
+        row["expected_required_kind_count"] = len(gate.required_kinds) + 1
+        row["artifact_count"] = 1
+        row["recognized_artifact_count"] = 2
+        row["evidence_file_count"] = 3
+        row["expected_required_kinds"] = list(reversed(row["expected_required_kinds"]))
+        row["newest_generated_at_unix"] = row["oldest_generated_at_unix"] - 1
+        row["environment"] = "staging"
+        row["errors"] = ["row drifted"]
+        errors = []
+        MODULE.validate_aggregate_required_row_output(gate, row, errors)
+        diagnostics = "\n".join(errors)
+        assert (
+            f"{gate_name} aggregate row fields must match the schema-closed "
+            "output contract"
+            in diagnostics
+        )
+        assert f"{gate_name} aggregate row <sensitive-key> is not allowed" in diagnostics
+        assert (
+            f"{gate_name} aggregate row required_kind_count must match gate contract"
+            in diagnostics
+        )
+        assert (
+            f"{gate_name} aggregate row expected_required_kind_count must match "
+            "gate contract"
+            in diagnostics
+        )
+        assert (
+            f"{gate_name} aggregate row expected_required_kinds must match gate contract"
+            in diagnostics
+        )
+        assert (
+            f"{gate_name} aggregate row recognized_artifact_count must match "
+            "artifact_count"
+            in diagnostics
+        )
+        assert (
+            f"{gate_name} aggregate row evidence_file_count must not exceed "
+            "recognized_artifact_count"
+            in diagnostics
+        )
+        assert (
+            f"{gate_name} aggregate row newest_generated_at_unix must be >= "
+            "oldest_generated_at_unix"
+            in diagnostics
+        )
+        assert f"{gate_name} aggregate row environment must be production" in diagnostics
+        assert f"{gate_name} aggregate row errors must be empty" in diagnostics
+        assert "private_key" not in diagnostics
+        assert secret not in diagnostics
+        assert "/tmp/runtime-only" not in diagnostics
+        assert "AB" * 32 not in diagnostics
+
+        invalid_row = copy.deepcopy(row)
+        invalid_row.pop("private_key")
+        invalid_row["valid"] = False
+        invalid_row["errors"] = ["canonical invalid row diagnostic"]
+        invalid_row["evidence_file_count"] = -1
+        invalid_row["recognized_artifact_count"] = 2
+        invalid_row["artifact_count"] = 1
+        invalid_row["required_kind_count"] = 0
+        invalid_row["expected_required_kind_count"] = len(gate.required_kinds) + 1
+        invalid_row["expected_required_kinds"] = []
+        invalid_row["newest_generated_at_unix"] = invalid_row[
+            "oldest_generated_at_unix"
+        ] - 1
+        errors = []
+        MODULE.validate_aggregate_required_row_output(gate, invalid_row, errors)
+        diagnostics = "\n".join(errors)
+        assert (
+            f"{gate_name} aggregate invalid row evidence_file_count must be a "
+            "non-negative integer"
+            in diagnostics
+        )
+        assert (
+            f"{gate_name} aggregate invalid row recognized_artifact_count must "
+            "match artifact_count"
+            in diagnostics
+        )
+        assert (
+            f"{gate_name} aggregate invalid row required_kind_count must match "
+            "gate contract"
+            in diagnostics
+        )
+        assert (
+            f"{gate_name} aggregate invalid row expected_required_kind_count must "
+            "match gate contract"
+            in diagnostics
+        )
+        assert (
+            f"{gate_name} aggregate invalid row expected_required_kinds must match "
+            "gate contract"
+            in diagnostics
+        )
+        assert (
+            f"{gate_name} aggregate invalid row newest_generated_at_unix must be "
+            ">= oldest_generated_at_unix"
+            in diagnostics
+        )
+
+
 def test_aggregate_summary_output_shape_is_validated(tmp_path: Path) -> None:
     write_gate(tmp_path, "gateway_load")
     options = MODULE.ValidationOptions(
@@ -9884,6 +15304,17 @@ def test_aggregate_summary_output_shape_is_validated(tmp_path: Path) -> None:
     errors = []
     ready_summary = copy.deepcopy(summary)
     ready_summary["deployment"]["deployment_id"] = "gateway-staging-a"
+    MODULE.validate_aggregate_summary_output(ready_summary, ("gateway_load",), errors)
+    diagnostics = "\n".join(errors)
+    assert (
+        "aggregate summary deployment_id must not contain non-production "
+        "deployment markers ['staging']"
+        in diagnostics
+    )
+
+    errors = []
+    ready_summary = copy.deepcopy(summary)
+    ready_summary["deployment"]["deployment_id"] = "gateway-stagingready-a"
     MODULE.validate_aggregate_summary_output(ready_summary, ("gateway_load",), errors)
     diagnostics = "\n".join(errors)
     assert (
@@ -10023,7 +15454,7 @@ def test_aggregate_summary_output_shape_is_validated(tmp_path: Path) -> None:
         "environment": ENVIRONMENT,
         "private_key": "runtime-only-key-material",
     }
-    summary["errors"] = ["bad\nerror"]
+    summary["errors"] = ["bad\nerror", "bad\u200derror", "bad\u202eerror"]
     MODULE.validate_aggregate_summary_output(summary, ("gateway_load",), errors)
     diagnostics = "\n".join(errors)
     assert (
@@ -10046,6 +15477,247 @@ def test_aggregate_summary_output_shape_is_validated(tmp_path: Path) -> None:
     assert "private_key" not in diagnostics
     assert "runtime-only-key-material" not in diagnostics
     assert "bad\nerror" not in diagnostics
+    assert "bad\u200derror" not in diagnostics
+    assert "bad\u202eerror" not in diagnostics
+
+
+def test_aggregate_summary_output_contracts_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [gate.name for gate in MODULE.GATE_SUMMARY_KINDS]
+    assert cases
+    options = MODULE.ValidationOptions(
+        now_unix=NOW_UNIX,
+        max_summary_artifact_age_secs=MODULE.DEFAULT_MAX_SUMMARY_ARTIFACT_AGE_SECS,
+        deployment_id=DEPLOYMENT_ID,
+        environment=ENVIRONMENT,
+    )
+
+    for index, gate_name in enumerate(cases):
+        root = tmp_path / f"{index}_{gate_name}"
+        root.mkdir()
+        write_gate(root, gate_name)
+        summary, build_errors = MODULE.build_summary(
+            [root],
+            [],
+            (gate_name,),
+            options,
+            None,
+        )
+        assert build_errors == []
+        assert summary["status"] == "ready"
+
+        errors: list[str] = []
+        MODULE.validate_aggregate_summary_output(summary, (gate_name,), errors)
+        assert errors == []
+
+        hidden_gate = f"runtime_only_shadow_gate_{index:03d}"
+        bad_gate = f"bad\n{index}"
+        drifted_required_gates = copy.deepcopy(summary)
+        drifted_required_gates["required_gates"] = [
+            gate_name,
+            gate_name,
+            hidden_gate,
+            bad_gate,
+        ]
+        errors = []
+        MODULE.validate_aggregate_summary_output(
+            drifted_required_gates,
+            (gate_name,),
+            errors,
+        )
+        diagnostics = "\n".join(errors)
+        assert "aggregate summary required_gates must match requested gates" in diagnostics
+        assert (
+            "aggregate summary required_gates must contain canonical strings"
+            in diagnostics
+        )
+        assert (
+            "aggregate summary required_gates must not contain duplicate gates"
+            in diagnostics
+        )
+        assert (
+            "aggregate summary required_gates must use known gate names" in diagnostics
+        )
+        assert hidden_gate not in diagnostics
+        assert bad_gate not in diagnostics
+
+        count_drift = copy.deepcopy(summary)
+        count_drift["recognized_summary_count"] = (
+            count_drift["summary_file_count"] + 1
+        )
+        errors = []
+        MODULE.validate_aggregate_summary_output(count_drift, (gate_name,), errors)
+        diagnostics = "\n".join(errors)
+        assert (
+            "aggregate summary recognized_summary_count must not exceed summary_file_count"
+            in diagnostics
+        )
+        assert (
+            "aggregate summary recognized_summary_count must not exceed required gate count"
+            in diagnostics
+        )
+        assert (
+            "aggregate summary ready recognized_summary_count must match required gate count"
+            in diagnostics
+        )
+        assert (
+            "aggregate summary recognized_summary_count must match present required rows"
+            in diagnostics
+        )
+
+        malformed_count = copy.deepcopy(summary)
+        malformed_count["summary_file_count"] = True
+        malformed_count["recognized_summary_count"] = -1
+        errors = []
+        MODULE.validate_aggregate_summary_output(malformed_count, (gate_name,), errors)
+        diagnostics = "\n".join(errors)
+        assert (
+            "aggregate summary summary_file_count must be a non-negative integer"
+            in diagnostics
+        )
+        assert (
+            "aggregate summary recognized_summary_count must be a non-negative integer"
+            in diagnostics
+        )
+
+        secret = f"runtime-only-private-summary-{index:03d}"
+        sensitive_drift = copy.deepcopy(summary)
+        sensitive_drift["private_key"] = secret
+        sensitive_drift["deployment"]["private_key"] = secret
+        errors = []
+        MODULE.validate_aggregate_summary_output(
+            sensitive_drift,
+            (gate_name,),
+            errors,
+        )
+        diagnostics = "\n".join(errors)
+        assert (
+            "aggregate summary fields must match the schema-closed output contract"
+            in diagnostics
+        )
+        assert "aggregate summary <sensitive-key> is not allowed" in diagnostics
+        assert (
+            "aggregate summary deployment fields must be deployment_id and environment"
+            in diagnostics
+        )
+        assert (
+            "aggregate summary deployment <sensitive-key> is not allowed"
+            in diagnostics
+        )
+        assert "private_key" not in diagnostics
+        assert secret not in diagnostics
+
+        deployment_drift = copy.deepcopy(summary)
+        deployment_drift["deployment"] = {
+            "deployment_id": f"sorafs-staging-{index:03d}",
+            "environment": "staging",
+        }
+        errors = []
+        MODULE.validate_aggregate_summary_output(
+            deployment_drift,
+            (gate_name,),
+            errors,
+        )
+        diagnostics = "\n".join(errors)
+        assert (
+            "aggregate summary deployment_id must not contain non-production "
+            "deployment markers ['staging']"
+            in diagnostics
+        )
+        assert "aggregate summary environment must be production" in diagnostics
+        assert f"sorafs-staging-{index:03d}" not in diagnostics
+
+        row_drift = copy.deepcopy(summary)
+        row_drift["required"][gate_name]["deployment_id"] = (
+            f"sorafs-mainnet-{index:03d}"
+        )
+        row_drift["required"][gate_name]["environment"] = "prod"
+        errors = []
+        MODULE.validate_aggregate_summary_output(row_drift, (gate_name,), errors)
+        diagnostics = "\n".join(errors)
+        assert (
+            f"{gate_name} aggregate required row deployment_id must match "
+            "aggregate deployment_id"
+            in diagnostics
+        )
+        assert (
+            f"{gate_name} aggregate required row environment must match "
+            "aggregate environment"
+            in diagnostics
+        )
+        assert f"sorafs-mainnet-{index:03d}" not in diagnostics
+
+
+def test_aggregate_summary_output_rejects_overcounted_ready_inventory(
+    tmp_path: Path,
+) -> None:
+    write_gate(tmp_path, "gateway_load")
+    options = MODULE.ValidationOptions(
+        now_unix=NOW_UNIX,
+        max_summary_artifact_age_secs=MODULE.DEFAULT_MAX_SUMMARY_ARTIFACT_AGE_SECS,
+        deployment_id=DEPLOYMENT_ID,
+        environment=ENVIRONMENT,
+    )
+    summary, build_errors = MODULE.build_summary(
+        [tmp_path],
+        [],
+        ("gateway_load",),
+        options,
+        None,
+    )
+    assert build_errors == []
+    assert summary["status"] == "ready"
+
+    errors: list[str] = []
+    over_file_count = copy.deepcopy(summary)
+    over_file_count["recognized_summary_count"] = (
+        over_file_count["summary_file_count"] + 1
+    )
+    MODULE.validate_aggregate_summary_output(
+        over_file_count,
+        ("gateway_load",),
+        errors,
+    )
+    diagnostics = "\n".join(errors)
+    assert (
+        "aggregate summary recognized_summary_count must not exceed summary_file_count"
+        in diagnostics
+    )
+    assert (
+        "aggregate summary ready recognized_summary_count must match required gate count"
+        in diagnostics
+    )
+
+    errors = []
+    over_required_count = copy.deepcopy(summary)
+    over_required_count["summary_file_count"] = 3
+    over_required_count["recognized_summary_count"] = 2
+    MODULE.validate_aggregate_summary_output(
+        over_required_count,
+        ("gateway_load",),
+        errors,
+    )
+    diagnostics = "\n".join(errors)
+    assert (
+        "aggregate summary recognized_summary_count must not exceed required gate count"
+        in diagnostics
+    )
+
+    errors = []
+    unknown_row = copy.deepcopy(summary)
+    unknown_row["required"]["shadow_gate"] = copy.deepcopy(
+        unknown_row["required"]["gateway_load"]
+    )
+    MODULE.validate_aggregate_summary_output(
+        unknown_row,
+        ("gateway_load",),
+        errors,
+    )
+    diagnostics = "\n".join(errors)
+    assert "aggregate summary required rows must match requested gates" in diagnostics
+    assert "aggregate summary required rows must use known gate names" in diagnostics
+    assert "shadow_gate" not in diagnostics
 
 
 def test_aggregate_required_row_output_shape_is_validated(tmp_path: Path) -> None:
@@ -10097,7 +15769,7 @@ def test_aggregate_required_row_output_shape_is_validated(tmp_path: Path) -> Non
     summary["required"]["gateway_load"]["valid"] = False
     summary["required"]["gateway_load"]["errors"] = []
     summary["required"]["gateway_load"]["sha256"] = "AB" * 32
-    summary["required"]["gateway_load"]["thresholds"] = {"bad\nkey": False}
+    summary["required"]["gateway_load"]["thresholds"] = {"bad\u200dkey": False}
     summary["required"]["gateway_load"]["evidence_file_count"] = None
     summary["required"]["gateway_load"]["recognized_artifact_count"] = "1"
     summary["required"]["gateway_load"]["artifact_count"] = False
@@ -10106,7 +15778,7 @@ def test_aggregate_required_row_output_shape_is_validated(tmp_path: Path) -> Non
     summary["required"]["gateway_load"]["oldest_generated_at_unix"] = 0
     summary["required"]["gateway_load"]["newest_generated_at_unix"] = False
     summary["required"]["gateway_load"]["deployment_id"] = " runtime-only-deployment"
-    summary["required"]["gateway_load"]["environment"] = "prod\nsecret"
+    summary["required"]["gateway_load"]["environment"] = "prod\u202esecret"
     summary["required"]["reputation"]["present"] = True
     summary["required"]["reputation"]["private_key"] = "runtime-only-key-material"
     MODULE.validate_aggregate_required_row_output(
@@ -10189,6 +15861,8 @@ def test_aggregate_required_row_output_shape_is_validated(tmp_path: Path) -> Non
         "reputation aggregate required row <sensitive-key> is not allowed"
         in diagnostics
     )
+    assert "bad\u200dkey" not in diagnostics
+    assert "prod\u202esecret" not in diagnostics
     assert (
         "reputation aggregate missing row errors must match the deterministic missing summary diagnostic"
         in diagnostics
@@ -10315,3 +15989,78 @@ def test_duplicate_gate_summary_fails(tmp_path: Path) -> None:
         "aggregate summary duplicate-summary diagnostics must match duplicate summary inputs"
         in "\n".join(errors)
     )
+
+
+def test_duplicate_and_unrequired_summaries_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    gate_names = [gate.name for gate in MODULE.GATE_SUMMARY_KINDS]
+    assert len(gate_names) > 1
+
+    for index, gate_name in enumerate(gate_names):
+        root = tmp_path / f"{index}_{gate_name}_duplicate"
+        root.mkdir()
+        first = write_gate(root, gate_name)
+        for duplicate_index in (1, 2):
+            duplicate = root / f"{gate_name}_duplicate_{duplicate_index}.json"
+            duplicate.write_text(first.read_text(encoding="utf-8"), encoding="utf-8")
+        summary = root / "summary.json"
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        duplicate_error = f"duplicate {gate_name} production readiness summary"
+        row_errors = result["required"][gate_name]["errors"]
+        assert row_errors.count(duplicate_error) == 1
+        assert result["errors"].count(duplicate_error) == 2
+        assert f"{gate_name}_duplicate_" not in "\n".join(result["errors"])
+
+    for index, gate_name in enumerate(gate_names):
+        unrequired_gate = gate_names[(index + 1) % len(gate_names)]
+        root = tmp_path / f"{index}_{gate_name}_unrequired"
+        root.mkdir()
+        required_summary = write_gate(root, gate_name)
+        unrequired_summary = write_gate(root, unrequired_gate)
+        summary = root / "summary.json"
+
+        assert (
+            MODULE.main(
+                [
+                    "--evidence",
+                    str(required_summary),
+                    "--evidence",
+                    str(unrequired_summary),
+                    "--require-gate",
+                    gate_name,
+                    "--now-unix",
+                    str(NOW_UNIX),
+                    "--deployment-id",
+                    DEPLOYMENT_ID,
+                    "--environment",
+                    ENVIRONMENT,
+                    "--summary-out",
+                    str(summary),
+                ]
+            )
+            == 1
+        )
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        errors = "\n".join(result["errors"])
+        assert (
+            result["errors"].count(
+                "explicit production readiness summary belongs to unrequired gate"
+            )
+            == 1
+        )
+        assert MODULE.GATE_BY_NAME[unrequired_gate].schema not in errors
+        assert f"{unrequired_gate}` gate" not in errors

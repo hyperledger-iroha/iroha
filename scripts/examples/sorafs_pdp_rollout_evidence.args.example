@@ -3,7 +3,9 @@
 # payload-free rollout summaries. Keep proof payloads, bearer tokens, signing
 # keys, raw challenge material, and operator secrets in runtime-only locations.
 --evidence-dir /var/tmp/sorafs/pdp-rollout
---summary-out /var/tmp/sorafs/pdp-rollout-summary.json
+--summary-out /var/tmp/sorafs/pdp-rollout/rollout-summary.json
+--require-kind provider_transport,proof_generation,validator_replay,governance_repair,observability,governance_approval
+--now-unix 1800400000
 --max-evidence-age-secs 604800
 --max-route-latency-ms 1500
 --max-proof-latency-ms 90000

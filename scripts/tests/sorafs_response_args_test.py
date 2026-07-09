@@ -29,6 +29,7 @@ from sorafs_response_args import (  # noqa: E402
     non_negative_int_arg,
     parse_int_arg,
     positive_int_arg,
+    require_equals_form_option_values,
 )
 
 
@@ -70,11 +71,14 @@ def test_response_file_expands_shell_style_args(tmp_path: Path) -> None:
     ]
 
 
-def test_direct_non_string_argument_fails_without_traceback() -> None:
+def test_direct_non_string_argument_does_not_echo_value() -> None:
+    secret = b"--private-key=/runtime/signing.key"
     try:
-        expand_response_args(["--dry-run", 7], EvidenceArgumentParser())
+        expand_response_args(["--dry-run", secret], EvidenceArgumentParser())
     except ValueError as error:
-        assert "argument `7` must be a string" in str(error)
+        assert str(error) == "argument must be a string"
+        assert "private-key" not in str(error)
+        assert "signing.key" not in str(error)
     else:  # pragma: no cover - defensive
         raise AssertionError("non-string response argument was accepted")
 
@@ -116,7 +120,14 @@ def test_mapping_argument_container_fails_without_key_expansion() -> None:
 
 
 def test_malformed_direct_argument_text_fails_closed() -> None:
-    for value in ("", " --dry-run", "--dry-run ", "--dry\nrun"):
+    for value in (
+        "",
+        " --dry-run",
+        "--dry-run ",
+        "--dry\nrun",
+        "--dry\u200drun",
+        "--dry\u202erun",
+    ):
         try:
             expand_response_args([value], EvidenceArgumentParser())
         except ValueError as error:
@@ -402,9 +413,11 @@ def test_response_file_parser_returning_scalar_line_args_fails_with_line(
 def test_response_file_parser_returning_non_string_line_arg_fails_with_line(
     tmp_path: Path,
 ) -> None:
+    secret = b"--private-key=/runtime/signing.key"
+
     class BrokenParser(EvidenceArgumentParser):
         def convert_arg_line_to_args(self, arg_line: str):
-            return ["--dry-run", 7]
+            return ["--dry-run", secret]
 
     args_file = tmp_path / "broken-parser.args"
     args_file.write_text("--dry-run\n", encoding="utf-8")
@@ -414,7 +427,9 @@ def test_response_file_parser_returning_non_string_line_arg_fails_with_line(
     except ValueError as error:
         assert str(error).startswith("@ARGFILE line 1:")
         assert str(args_file) not in str(error)
-        assert "argument `7` must be a string" in str(error)
+        assert "argument must be a string" in str(error)
+        assert "private-key" not in str(error)
+        assert "signing.key" not in str(error)
     else:  # pragma: no cover - defensive
         raise AssertionError("non-string line argument was accepted")
 
@@ -422,21 +437,22 @@ def test_response_file_parser_returning_non_string_line_arg_fails_with_line(
 def test_response_file_parser_returning_malformed_line_arg_fails_with_line(
     tmp_path: Path,
 ) -> None:
-    class BrokenParser(EvidenceArgumentParser):
-        def convert_arg_line_to_args(self, arg_line: str):
-            return ["--dry-run", " bad"]
+    for malformed_argument in (" bad", "bad\u200darg", "bad\u202earg"):
+        class BrokenParser(EvidenceArgumentParser):
+            def convert_arg_line_to_args(self, arg_line: str):
+                return ["--dry-run", malformed_argument]
 
-    args_file = tmp_path / "broken-parser.args"
-    args_file.write_text("--dry-run\n", encoding="utf-8")
+        args_file = tmp_path / "broken-parser.args"
+        args_file.write_text("--dry-run\n", encoding="utf-8")
 
-    try:
-        expand_response_args([f"@{args_file}"], BrokenParser())
-    except ValueError as error:
-        assert str(error).startswith("@ARGFILE line 1:")
-        assert str(args_file) not in str(error)
-        assert "argument must be a non-empty canonical string" in str(error)
-    else:  # pragma: no cover - defensive
-        raise AssertionError("malformed line argument was accepted")
+        try:
+            expand_response_args([f"@{args_file}"], BrokenParser())
+        except ValueError as error:
+            assert str(error).startswith("@ARGFILE line 1:")
+            assert str(args_file) not in str(error)
+            assert "argument must be a non-empty canonical string" in str(error)
+        else:  # pragma: no cover - defensive
+            raise AssertionError("malformed line argument was accepted")
 
 
 def test_convert_arg_line_to_args_rejects_non_string_line() -> None:
@@ -484,6 +500,47 @@ def test_response_file_expanded_argument_limit_fails(tmp_path: Path) -> None:
         assert f"expanded arguments must be <= {MAX_EXPANDED_ARGS}" in str(error)
     else:  # pragma: no cover - defensive
         raise AssertionError("response-file expanded arguments bypassed the shared cap")
+
+
+def test_require_equals_form_option_values_accepts_exact_form() -> None:
+    args = ["--iroha-arg=--config", "--other", "value"]
+
+    assert require_equals_form_option_values(
+        args,
+        "--iroha-arg",
+        "use equals form",
+    ) == args
+
+
+def test_require_equals_form_option_values_rejects_split_form_without_value_echo() -> None:
+    try:
+        require_equals_form_option_values(
+            ["--iroha-arg", "--private-key=/runtime/signing.key"],
+            "--iroha-arg",
+            "use equals form",
+        )
+    except ValueError as error:
+        assert str(error) == "use equals form"
+        assert "private-key" not in str(error)
+        assert "signing.key" not in str(error)
+    else:  # pragma: no cover - defensive
+        raise AssertionError("split option form was accepted")
+
+
+def test_require_equals_form_option_values_rejects_malformed_inputs() -> None:
+    cases = (
+        ("--arg", "--arg", "diagnostic"),
+        (["--arg"], " bad", "diagnostic"),
+        (["--arg"], "--arg", "bad\ndiagnostic"),
+        (["bad\u200darg"], "--arg", "diagnostic"),
+    )
+    for args, option, diagnostic in cases:
+        try:
+            require_equals_form_option_values(args, option, diagnostic)
+        except ValueError as error:
+            assert "must be" in str(error) or "argument must" in str(error)
+        else:  # pragma: no cover - defensive
+            raise AssertionError("malformed equals-form arguments were accepted")
 
 
 def test_shared_integer_arg_parsers_accept_expected_values() -> None:

@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import re
 import sys
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -33,6 +32,7 @@ from sorafs_evidence_json import (  # noqa: E402
 from sorafs_evidence_fingerprint import artifact_fingerprint  # noqa: E402
 from sorafs_evidence_validation import (  # noqa: E402
     archive_artifact_path_label,
+    forbidden_non_production_markers,
     build_evidence_artifact,
     count_evidence_artifacts,
     recognized_evidence_artifacts,
@@ -86,6 +86,7 @@ from sorafs_response_args import (  # noqa: E402
     non_negative_int_arg,
     positive_int_arg,
 )
+from sorafs_path_identity import diagnostic_text_is_canonical  # noqa: E402
 
 
 SUMMARY_SCHEMA = "sorafs.reserve_rent.rollout_evidence_gate.v1"
@@ -296,7 +297,7 @@ def require_only_required_values(
             value = item.get(field)
         else:
             value = item
-        if not isinstance(value, str) or value.strip() not in allowed:
+        if not isinstance(value, str) or value not in allowed:
             errors.append(f"{array_field} must not include unknown values")
             return
 
@@ -310,9 +311,7 @@ def require_bake_id(payload: dict[str, Any], errors: list[str]) -> str:
     if BAKE_ID_PATTERN.fullmatch(bake_id) is None:
         errors.append(BAKE_ID_ERROR)
         return ""
-    forbidden = sorted(
-        marker for marker in FORBIDDEN_BAKE_ID_MARKERS if marker in bake_id.split("-")
-    )
+    forbidden = forbidden_non_production_markers(bake_id, FORBIDDEN_BAKE_ID_MARKERS)
     if forbidden:
         errors.append(f"bake_id must not contain non-production markers {forbidden}")
         return ""
@@ -328,11 +327,7 @@ def require_provider_label(record: dict[str, Any], errors: list[str]) -> str:
     if PROVIDER_LABEL_PATTERN.fullmatch(provider) is None:
         errors.append(PROVIDER_LABEL_ERROR)
         return ""
-    forbidden = sorted(
-        marker
-        for marker in FORBIDDEN_PROVIDER_LABEL_MARKERS
-        if marker in provider.split("-")
-    )
+    forbidden = forbidden_non_production_markers(provider, FORBIDDEN_PROVIDER_LABEL_MARKERS)
     if forbidden:
         errors.append(
             f"providers[].name must not contain non-production markers {forbidden}"
@@ -357,9 +352,7 @@ def require_inventory_label(
     if pattern.fullmatch(label) is None:
         errors.append(label_error)
         return ""
-    forbidden = sorted(
-        marker for marker in FORBIDDEN_CYCLE_LABEL_MARKERS if marker in label.split("-")
-    )
+    forbidden = forbidden_non_production_markers(label, FORBIDDEN_CYCLE_LABEL_MARKERS)
     if forbidden:
         errors.append(f"{path} must not contain non-production markers {forbidden}")
         return ""
@@ -791,7 +784,7 @@ def unique_scalar_inventory_count(
     labels: list[str] = []
     malformed = False
     for item in items:
-        if not isinstance(item, str) or not item or item.strip() != item:
+        if not diagnostic_text_is_canonical(item):
             malformed = True
             continue
         labels.append(item)
@@ -958,7 +951,6 @@ def validate_reserve_movement(payload: dict[str, Any], errors: list[str]) -> Non
         REQUIRED_RESERVE_MOVEMENT_ACTIONS,
         errors,
         allow_scalar_items=False,
-        trim_values=False,
     )
     require_string_inventory_count_match(
         payload,
@@ -1049,7 +1041,6 @@ def validate_credit_line(payload: dict[str, Any], errors: list[str]) -> None:
         REQUIRED_CREDIT_LINE_MUTATIONS,
         errors,
         allow_scalar_items=False,
-        trim_values=False,
     )
     require_string_inventory_count_match(
         payload,
@@ -1082,7 +1073,6 @@ def validate_credit_line(payload: dict[str, Any], errors: list[str]) -> None:
         REQUIRED_CREDIT_LINE_ACCRUAL_CYCLES,
         errors,
         allow_scalar_items=False,
-        trim_values=False,
     )
     require_string_inventory_count_match(
         payload,
@@ -1133,7 +1123,6 @@ def validate_appeal_policy(payload: dict[str, Any], errors: list[str]) -> None:
         REQUIRED_APPEAL_POLICY_PROBES,
         errors,
         allow_scalar_items=False,
-        trim_values=False,
     )
     require_string_inventory_count_match(
         payload,
@@ -1535,15 +1524,43 @@ def digest_binding(
     fingerprint: dict[str, Any],
     fields: tuple[str, ...],
 ) -> tuple[str, ...] | None:
-    """Return a normalized digest tuple if all fields are present strings."""
+    """Return an exact digest tuple if all fields are present strings."""
 
     values: list[str] = []
     for field in fields:
         value = fingerprint.get(field)
         if not isinstance(value, str):
             return None
-        values.append(value.lower())
+        values.append(value)
     return tuple(values)
+
+
+def require_single_active_digest(
+    digests: set[str],
+    errors: list[str],
+    *,
+    label: str,
+) -> set[str]:
+    """Return one active rollout digest or fail closed on mixed anchors."""
+
+    if len(digests) <= 1:
+        return digests
+    errors.append(f"{label} must contain exactly one active digest")
+    return set()
+
+
+def require_single_active_binding(
+    bindings: set[Any],
+    errors: list[str],
+    *,
+    label: str,
+) -> set[Any]:
+    """Return one active rollout binding or fail closed on mixed anchors."""
+
+    if len(bindings) <= 1:
+        return bindings
+    errors.append(f"{label} must contain exactly one active binding")
+    return set()
 
 
 def build_summary(
@@ -1601,7 +1618,7 @@ def build_summary(
             matrix_digest = fingerprint.get("matrix_digest_hex")
             ledger_digest = fingerprint.get("ledger_digest_hex")
             if kind_name == "policy_config" and isinstance(policy_digest, str):
-                valid_policy_digests.add(policy_digest.lower())
+                valid_policy_digests.add(policy_digest)
             if kind_name == "metrics_alerts":
                 record_observed_evidence_value(
                     metric_counts,
@@ -1614,6 +1631,12 @@ def build_summary(
                 ledger_bound_artifacts.append(artifact)
         record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         record_evidence_validation_errors(path, validation_errors, errors)
+
+    valid_policy_digests = require_single_active_digest(
+        valid_policy_digests,
+        errors,
+        label="valid_policy_digests",
+    )
 
     validate_bound_evidence_digest_references(
         required_kinds=required_kinds,
@@ -1655,6 +1678,11 @@ def build_summary(
         ]
         if binding is not None
     }
+    valid_policy_matrix_bindings = require_single_active_binding(
+        valid_policy_matrix_bindings,
+        errors,
+        label="valid_policy_matrix_bindings",
+    )
 
     validate_bound_evidence_tuple_references(
         required_kinds=required_kinds,
@@ -1701,6 +1729,11 @@ def build_summary(
         ]
         if binding is not None
     }
+    valid_policy_matrix_ledger_bindings = require_single_active_binding(
+        valid_policy_matrix_ledger_bindings,
+        errors,
+        label="valid_policy_matrix_ledger_bindings",
+    )
 
     validate_bound_evidence_tuple_references(
         required_kinds=required_kinds,
@@ -1845,8 +1878,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--now-unix",
         type=positive_int_arg,
-        default=int(time.time()),
-        help="Validator clock used for age checks. Defaults to current Unix time.",
+        required=True,
+        help="Required reviewed validator clock used for age checks.",
     )
     parser.add_argument(
         "--max-ledger-age-secs",

@@ -353,6 +353,44 @@ def test_controller_instance_id_accepts_gateway_prefixed_future_label(
     assert payload["controller_instance_id"] == "gateway-compliance-controller-prod-b-2"
 
 
+def test_unreviewed_deployment_id_fails_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = controller_args(tmp_path)
+    args[args.index("--deployment-id") + 1] = "sorafs-gateway-dev-20260701"
+
+    assert_rejected_without_artifact(
+        args,
+        kind="controller_runtime",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error=(
+            "--deployment-id must not contain non-reviewed deployment markers "
+            "['dev']"
+        ),
+    )
+
+
+def test_unreviewed_environment_fails_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = controller_args(tmp_path)
+    args[args.index("--environment") + 1] = "dev"
+
+    assert_rejected_without_artifact(
+        args,
+        kind="controller_runtime",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error=(
+            "--environment must be one of "
+            "['prod', 'production', 'release', 'staging']"
+        ),
+    )
+
+
 def test_builds_payload_free_moderation_toggle_canary(tmp_path: Path) -> None:
     assert MODULE.main(moderation_args(tmp_path)) == 0
 

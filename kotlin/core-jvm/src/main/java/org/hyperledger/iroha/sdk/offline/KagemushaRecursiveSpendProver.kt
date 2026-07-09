@@ -22,8 +22,6 @@ class KagemushaRecursiveSpendProver private constructor() {
             "kagemusha-recursive-compact-v1"
         const val RECURSIVE_AGGREGATION_PROOF_BACKEND =
             "halo2/ipa"
-        const val RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 =
-            "kagemusha-recursive-spend-lineage-v1"
         const val RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1 =
             "kagemusha-recursive-spend-lineage-onehop-v1"
         const val RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1 =
@@ -133,20 +131,17 @@ class KagemushaRecursiveSpendProver private constructor() {
             val hopCountSupported =
                 hopCount >= 1 &&
                     hopCount <= RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1
-            val canonicalLineage =
-                circuitId == RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 && hopCountSupported
             val oneHopLineage =
                 circuitId == RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1 && hopCountSupported
             val appendLineage =
                 circuitId == RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1 && hopCountSupported
             return RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 &&
-                (canonicalLineage || oneHopLineage || appendLineage)
+                (oneHopLineage || appendLineage)
         }
 
         @JvmStatic
         fun isLineageProofCircuitId(circuitId: String?): Boolean =
-            circuitId == RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 ||
-                circuitId == RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1 ||
+            circuitId == RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1 ||
                 circuitId == RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
 
         @JvmStatic

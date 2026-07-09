@@ -68,8 +68,9 @@ cargo xtask sorafs-fetch-fixture \
   --out fixtures/sorafs_chunker
 ```
 
-העבירו `--manifest` אם ה-manifest נמצא ב-URL אחר. envelopes ללא חתימה נדחים אלא אם
-`--allow-unsigned` הוגדר להרצות smoke מקומיות.
+Pass `--manifest` if the manifest lives at a different URL or path. The
+command refuses unsigned envelopes; use the Parliament-published envelope or a
+locally generated council-signed envelope for smoke runs.
 
 - בעת אימות manifest דרך gateway של staging, יעדו את Torii במקום payloads מקומיים:
 

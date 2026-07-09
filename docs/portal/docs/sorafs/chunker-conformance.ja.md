@@ -52,9 +52,10 @@ SIMD アクセラレーションは同一の境界と digest を生成しなけ�
 
 ### 署名ポリシー
 
-fixtures の再生成には **必ず** 有効な評議会署名を含める必要があります。ジェネレーターは
-`--allow-unsigned` を明示しない限り未署名出力を拒否します（ローカル実験のみ想定）。
-署名エンベロープは append-only で、署名者ごとに重複排除されます。
+Fixture regeneration **must** include a valid council signature. The generator
+rejects unsigned output in every mode; use `--signing-key` to create or append a
+council signature, or keep the existing verified `manifest_signatures.json`
+unchanged. Signature envelopes are append-only and deduplicated per signer.
 
 評議会署名を追加するには:
 

@@ -3782,6 +3782,83 @@ impl StateBlock<'_> {
         )
     }
 
+    /// Validate recovered standalone lane-block execution input in descriptor order.
+    ///
+    /// Successful transactions stage their state effects in this [`StateBlock`]
+    /// using the lane/dataspace routing context and the original fetched-batch
+    /// entrypoint indices from the lane descriptor. The caller owns the commit
+    /// boundary: dropping the block reverts the staged effects, while committing
+    /// the block must use a real consensus-approved block context.
+    pub(crate) fn validate_lane_block_execution_input_with_routing_context(
+        &mut self,
+        artifact: &crate::kura::LaneBlockExecutionInputArtifact,
+        ivm_cache: &mut IvmCache,
+    ) -> core::result::Result<
+        Vec<(u64, HashOf<TransactionEntrypoint>, TransactionResultInner)>,
+        &'static str,
+    > {
+        crate::kura::Kura::validate_lane_block_execution_input_artifact(artifact)?;
+        Self::validate_lane_block_execution_input_unique_entrypoints(artifact)?;
+        let descriptor = &artifact.proposal.descriptor;
+        let routing =
+            crate::queue::RoutingDecision::new(descriptor.lane_id, descriptor.dataspace_id);
+        let mut results = Vec::with_capacity(artifact.entrypoints.len());
+        for (raw_entrypoint_index, entrypoint) in descriptor
+            .accepted_candidate_indices
+            .iter()
+            .copied()
+            .zip(artifact.entrypoints.iter())
+        {
+            let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Borrowed(entrypoint));
+            let (entrypoint_hash, result) = self
+                .validate_transaction_at_entrypoint_index_and_routing(
+                    accepted,
+                    ivm_cache,
+                    Some(raw_entrypoint_index),
+                    Some(routing),
+                );
+            results.push((raw_entrypoint_index, entrypoint_hash, result));
+        }
+        Ok(results)
+    }
+
+    fn validate_lane_block_execution_input_unique_entrypoints(
+        artifact: &crate::kura::LaneBlockExecutionInputArtifact,
+    ) -> core::result::Result<(), &'static str> {
+        let mut seen_entrypoint_hashes = BTreeSet::new();
+        let mut seen_signed_hashes = BTreeSet::new();
+        let mut seen_sealed_commitments = BTreeSet::new();
+        for entrypoint in &artifact.entrypoints {
+            if !seen_entrypoint_hashes.insert(entrypoint.hash()) {
+                return Err("execution input contains duplicate entrypoints");
+            }
+            match entrypoint {
+                TransactionEntrypoint::External(signed) => {
+                    let signed_hash =
+                        AcceptedTransaction::prepare_signed_metadata(signed).signed_hash;
+                    if !seen_signed_hashes.insert(signed_hash) {
+                        return Err("execution input contains duplicate signed transactions");
+                    }
+                }
+                TransactionEntrypoint::SealedReveal(reveal) => {
+                    let signed_hash =
+                        AcceptedTransaction::prepare_signed_metadata(reveal.signed_transaction())
+                            .signed_hash;
+                    if !seen_signed_hashes.insert(signed_hash) {
+                        return Err("execution input contains duplicate signed transactions");
+                    }
+                }
+                TransactionEntrypoint::SealedCommitment(commitment) => {
+                    if !seen_sealed_commitments.insert(*commitment.commitment()) {
+                        return Err("execution input contains duplicate sealed commitments");
+                    }
+                }
+                TransactionEntrypoint::PrivateKaigi(_) | TransactionEntrypoint::Time(_) => {}
+            }
+        }
+        Ok(())
+    }
+
     fn validate_transaction_at_entrypoint_index_and_routing(
         &mut self,
         tx: AcceptedTransaction<'_>,
@@ -6064,7 +6141,10 @@ pub mod tests {
     };
     use iroha_data_model::{
         account::{Account, AccountId, MultisigMember, MultisigPolicy},
-        block::{BlockHeader, SignedBlock},
+        block::{
+            BlockHeader, SignedBlock,
+            consensus::{LaneBlockDescriptorV1, LaneBlockProposalV1, SumeragiLanePayloadOwnership},
+        },
         domain::{Domain, DomainId},
         events::{
             EventBox,
@@ -6088,6 +6168,7 @@ pub mod tests {
             LanePrivacyWitness, LaneStorageProfile, LaneVisibility, ManifestVersion,
             ParticipantSelector,
         },
+        peer::PeerId,
         permission::Permissions,
         proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
         role::{Role, RoleId},
@@ -11987,6 +12068,360 @@ pub mod tests {
             }
             other => panic!("expected base-lane NotPermitted rejection, got {other:?}"),
         }
+    }
+
+    fn lane_execution_input_artifact(
+        lane_id: TestLaneId,
+        dataspace_id: TestDataSpaceId,
+        candidate_indices: Vec<u64>,
+        entrypoints: Vec<TransactionEntrypoint>,
+        validator: PeerId,
+    ) -> crate::kura::LaneBlockExecutionInputArtifact {
+        let accepted_transaction_hashes = entrypoints
+            .iter()
+            .map(|entrypoint| Hash::from(entrypoint.hash()))
+            .collect::<Vec<_>>();
+        let validator_set = vec![validator];
+        let subject_hash = SumeragiLanePayloadOwnership::compute_replay_subject_hash(
+            lane_id,
+            dataspace_id,
+            1,
+            0,
+            &candidate_indices,
+            &accepted_transaction_hashes,
+            "tx-test-lane-execution",
+        )
+        .expect("synthetic lane subject should hash");
+        let payload_ownership_hash =
+            SumeragiLanePayloadOwnership::compute_replay_payload_ownership_hash(
+                lane_id,
+                dataspace_id,
+                1,
+                0,
+                subject_hash,
+                &candidate_indices,
+                &accepted_transaction_hashes,
+                "tx-test-lane-execution",
+            )
+            .expect("synthetic lane ownership should hash");
+        let rbc_instance_hash = SumeragiLanePayloadOwnership::compute_replay_rbc_instance_hash(
+            lane_id,
+            dataspace_id,
+            1,
+            0,
+            subject_hash,
+            payload_ownership_hash,
+        )
+        .expect("synthetic lane RBC instance should hash");
+
+        let mut descriptor = LaneBlockDescriptorV1 {
+            lane_id,
+            dataspace_id,
+            proposal_height: 1,
+            previous_lane_block_height: 0,
+            previous_lane_block_descriptor_hash: None,
+            lane_block_height: 1,
+            lane_block_view: 0,
+            subject_hash,
+            payload_ownership_hash,
+            rbc_instance_hash,
+            accepted_candidate_indices: candidate_indices.clone(),
+            accepted_transaction_hashes: accepted_transaction_hashes.clone(),
+            validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: iroha_crypto::HashOf::new(&validator_set),
+            validator_set: validator_set.clone(),
+            validator_count: 1,
+            min_quorum: 1,
+            qc_mode_tag: "tx-test-lane-execution".to_string(),
+            descriptor_hash: Hash::new(b"lane execution descriptor placeholder"),
+        };
+        descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
+
+        let ownership = SumeragiLanePayloadOwnership {
+            proposal_height: 1,
+            proposal_view: 0,
+            lane_id,
+            dataspace_id,
+            lane_block_height: 1,
+            lane_block_view: 0,
+            subject_hash,
+            qc_mode_tag: "tx-test-lane-execution".to_string(),
+            accepted_candidate_indices: candidate_indices.clone(),
+            accepted_transaction_hashes: accepted_transaction_hashes.clone(),
+            previous_lane_block_height: 0,
+            previous_lane_block_descriptor_hash: None,
+            lane_block_descriptor_hash: Some(descriptor.descriptor_hash),
+            lane_block_descriptor_validator_set: validator_set.clone(),
+            lane_block_descriptor_validator_count: 1,
+            lane_block_descriptor_min_quorum: 1,
+            payload_ownership_hash,
+            rbc_instance_hash,
+        };
+        let mut proposal = LaneBlockProposalV1 {
+            descriptor,
+            proposal_hash: Hash::new(b"lane execution proposal placeholder"),
+            payload_block_hint: None,
+        };
+        proposal.proposal_hash = proposal.computed_proposal_hash();
+        crate::kura::LaneBlockExecutionInputArtifact::new(crate::kura::RecoveredLaneBlockPayload {
+            proposal,
+            artifact: crate::kura::LaneBlockArtifact::new(
+                iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                    b"lane execution proposal block",
+                )),
+                ownership,
+            ),
+            entrypoints,
+        })
+    }
+
+    fn state_with_guarded_base_and_open_elastic_lane(chain: &ChainId, world: World) -> State {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+
+        let elastic_lane_id = TestLaneId::new(1);
+        let mut elastic_lane = LaneConfig {
+            id: elastic_lane_id,
+            alias: "elastic-lane-1".to_string(),
+            dataspace_id: TestDataSpaceId::UNIVERSAL,
+            visibility: LaneVisibility::Public,
+            ..LaneConfig::default()
+        };
+        elastic_lane
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_string(), "true".to_string());
+        elastic_lane
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "1".to_string());
+
+        {
+            let mut nexus = state.nexus.write();
+            nexus.enabled = true;
+            nexus.autoscale.enabled = true;
+            nexus.autoscale.min_lanes = nonzero!(1_u32);
+            nexus.autoscale.max_lanes = nonzero!(8_u32);
+            nexus.lane_catalog =
+                LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic_lane])
+                    .expect("autoscale lane catalog");
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        }
+
+        let mut statuses = BTreeMap::new();
+        statuses.insert(
+            TestLaneId::SINGLE,
+            LaneManifestStatus {
+                lane: TestLaneId::SINGLE,
+                alias: "base-lane".to_string(),
+                dataspace: TestDataSpaceId::UNIVERSAL,
+                visibility: LaneVisibility::Public,
+                storage: LaneStorageProfile::FullReplica,
+                governance: Some("base-governance".to_string()),
+                manifest_path: None,
+                governance_rules: None,
+                privacy_commitments: Vec::new(),
+            },
+        );
+        statuses.insert(
+            elastic_lane_id,
+            LaneManifestStatus {
+                lane: elastic_lane_id,
+                alias: "elastic-lane-1".to_string(),
+                dataspace: TestDataSpaceId::UNIVERSAL,
+                visibility: LaneVisibility::Public,
+                storage: LaneStorageProfile::FullReplica,
+                governance: None,
+                manifest_path: None,
+                governance_rules: None,
+                privacy_commitments: Vec::new(),
+            },
+        );
+        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+        state
+    }
+
+    #[test]
+    fn lane_block_execution_input_uses_descriptor_indices_and_routing_context() {
+        use iroha_data_model::transaction::{
+            Executable, TransactionBuilder, executable::IvmBytecode,
+        };
+
+        let chain: ChainId = "lane-execution-input-route".parse().unwrap();
+        let (world, authority, keypair) = world_with_authority("wonderland");
+        let validator = PeerId {
+            public_key: keypair.public_key().clone(),
+        };
+        let state = state_with_guarded_base_and_open_elastic_lane(&chain, world);
+        let mut entrypoints = Vec::new();
+        for attempt in [2_u64, 0] {
+            let mut metadata = metadata_with_gas_limit(TEST_GAS_LIMIT);
+            metadata.insert(
+                Name::from_str("lane_execution_attempt").expect("static metadata key"),
+                Json::new(attempt),
+            );
+            let tx = TransactionBuilder::new(chain.clone(), authority.clone())
+                .with_metadata(metadata)
+                .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
+                    minimal_ivm_program(1),
+                )))
+                .sign(keypair.private_key());
+            entrypoints.push(TransactionEntrypoint::External(tx));
+        }
+        let expected_hashes = entrypoints
+            .iter()
+            .map(TransactionEntrypoint::hash)
+            .collect::<Vec<_>>();
+        let artifact = lane_execution_input_artifact(
+            TestLaneId::new(1),
+            TestDataSpaceId::UNIVERSAL,
+            vec![2, 0],
+            entrypoints,
+            validator,
+        );
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut ivm_cache = IvmCache::new();
+        let results = block
+            .validate_lane_block_execution_input_with_routing_context(&artifact, &mut ivm_cache)
+            .expect("valid lane execution input should execute");
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(
+            results
+                .iter()
+                .map(|(index, _, _)| *index)
+                .collect::<Vec<_>>(),
+            vec![2, 0]
+        );
+        assert_eq!(
+            results.iter().map(|(_, hash, _)| *hash).collect::<Vec<_>>(),
+            expected_hashes
+        );
+        for (_, _, result) in results {
+            result.expect("descriptor-routed lane transaction should pass");
+        }
+    }
+
+    #[test]
+    fn lane_block_execution_input_rejects_forged_hashes_before_state_execution() {
+        use iroha_data_model::transaction::{
+            Executable, TransactionBuilder, executable::IvmBytecode,
+        };
+
+        let chain: ChainId = "lane-execution-input-forged".parse().unwrap();
+        let (world, authority, keypair) = world_with_authority("wonderland");
+        let validator = PeerId {
+            public_key: keypair.public_key().clone(),
+        };
+        let state = state_with_guarded_base_and_open_elastic_lane(&chain, world);
+        let tx = TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
+                minimal_ivm_program(1),
+            )))
+            .sign(keypair.private_key());
+        let mut artifact = lane_execution_input_artifact(
+            TestLaneId::new(1),
+            TestDataSpaceId::UNIVERSAL,
+            vec![0],
+            vec![TransactionEntrypoint::External(tx)],
+            validator,
+        );
+        artifact.entrypoint_hashes[0] = Hash::new(b"forged lane execution entrypoint hash");
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut ivm_cache = IvmCache::new();
+        let err = block
+            .validate_lane_block_execution_input_with_routing_context(&artifact, &mut ivm_cache)
+            .expect_err("forged execution input hashes must be rejected");
+
+        assert_eq!(
+            err,
+            "execution input entrypoint hashes do not match proposal descriptor"
+        );
+    }
+
+    #[test]
+    fn lane_block_execution_input_rejects_duplicate_signed_entrypoints_before_state_execution() {
+        use iroha_data_model::transaction::{
+            Executable, TransactionBuilder, executable::IvmBytecode,
+        };
+
+        let chain: ChainId = "lane-execution-input-duplicate".parse().unwrap();
+        let (world, authority, keypair) = world_with_authority("wonderland");
+        let validator = PeerId {
+            public_key: keypair.public_key().clone(),
+        };
+        let state = state_with_guarded_base_and_open_elastic_lane(&chain, world);
+        let tx = TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
+                minimal_ivm_program(1),
+            )))
+            .sign(keypair.private_key());
+        let artifact = lane_execution_input_artifact(
+            TestLaneId::new(1),
+            TestDataSpaceId::UNIVERSAL,
+            vec![0, 1],
+            vec![
+                TransactionEntrypoint::External(tx.clone()),
+                TransactionEntrypoint::External(tx),
+            ],
+            validator,
+        );
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut ivm_cache = IvmCache::new();
+        let err = block
+            .validate_lane_block_execution_input_with_routing_context(&artifact, &mut ivm_cache)
+            .expect_err("duplicate lane execution entrypoints must be rejected");
+
+        assert_eq!(err, "execution input contains duplicate entrypoints");
+    }
+
+    #[test]
+    fn lane_block_execution_input_preserves_full_width_entrypoint_indices() {
+        use iroha_data_model::transaction::{
+            Executable, TransactionBuilder, executable::IvmBytecode,
+        };
+
+        let chain: ChainId = "lane-execution-input-full-width-index".parse().unwrap();
+        let (world, authority, keypair) = world_with_authority("wonderland");
+        let validator = PeerId {
+            public_key: keypair.public_key().clone(),
+        };
+        let state = state_with_guarded_base_and_open_elastic_lane(&chain, world);
+        let tx = TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
+                minimal_ivm_program(1),
+            )))
+            .sign(keypair.private_key());
+        let artifact = lane_execution_input_artifact(
+            TestLaneId::new(1),
+            TestDataSpaceId::UNIVERSAL,
+            vec![u64::MAX],
+            vec![TransactionEntrypoint::External(tx)],
+            validator,
+        );
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut ivm_cache = IvmCache::new();
+        let results = block
+            .validate_lane_block_execution_input_with_routing_context(&artifact, &mut ivm_cache)
+            .expect("full-width entrypoint index should be preserved");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, u64::MAX);
+        results[0]
+            .2
+            .clone()
+            .expect("descriptor-routed lane transaction should pass");
     }
 
     #[test]

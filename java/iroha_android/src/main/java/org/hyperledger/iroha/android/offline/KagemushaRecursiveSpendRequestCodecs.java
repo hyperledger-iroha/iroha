@@ -135,17 +135,6 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     return KagemushaRecursiveSpendProver.buildPreviousProofOpenEnvelopesArchive(previousBundle);
   }
 
-  public static byte[] buildVerifiedFoldRecordBundle(
-      final List<byte[]> hopProofOutputArchives, final List<VerifierRecordRef> hopVerifierRecords) {
-    require(hopProofOutputArchives != null && !hopProofOutputArchives.isEmpty(),
-        "hopProofOutputArchives must not be empty");
-    require(hopVerifierRecords != null && hopVerifierRecords.size() == hopProofOutputArchives.size(),
-        "hopVerifierRecords must match hopProofOutputArchives");
-    throw new IllegalArgumentException(
-        "chainId, asset, and rootAfter are required to build KagemushaVerifiedFoldRecordBundle; "
-            + "use VerifiedFoldHopEvidence inputs instead");
-  }
-
   public static byte[] buildVerifiedFoldRecordBundle(final List<VerifiedFoldHopEvidence> hops) {
     require(hops != null && !hops.isEmpty(), "hops must not be empty");
     require(hops.size() <= KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS,

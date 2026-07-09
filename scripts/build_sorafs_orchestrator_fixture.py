@@ -22,11 +22,22 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from sorafs_checker_preflight import fsync_checker_output_parent
+from sorafs_evidence_json import (
+    json_object_without_duplicate_keys,
+    reject_non_standard_json_constant,
+)
+from sorafs_path_identity import error_diagnostic_label, path_diagnostic_label
+from sorafs_runner_preflight import plan_rendered_path_is_safe
 
 FIXTURE_NAME = "multi_peer_parity_v1"
 FIXTURE_NOW_UNIX_SECS = 1_725_000_000
 PROFILE_HANDLE = "sorafs.sf1@1.0.0"
 PROVIDER_COUNT = 4
+FIXTURE_PATH_DIAGNOSTIC = (
+    "SoraFS orchestrator fixture paths must not contain secret-looking, "
+    "control-character, parent, current, drive-prefix, or platform-specific "
+    "components"
+)
 
 
 def repo_root() -> Path:
@@ -68,30 +79,49 @@ def validate_fixture_path(path: Path, label: str) -> None:
     """Reject symlinked fixture paths and parent chains before I/O."""
 
     if not isinstance(path, Path):
-        raise ValueError(f"{label} must be a path")
+        raise ValueError(f"{label} `{path_diagnostic_label(path)}` must be a path")
+    if not plan_rendered_path_is_safe(path):
+        raise ValueError(FIXTURE_PATH_DIAGNOSTIC)
     try:
         if path.is_symlink():
-            raise ValueError(f"{label} `{path}` must not be a symlink")
+            raise ValueError(
+                f"{label} `{path_diagnostic_label(path)}` must not be a symlink"
+            )
         for parent in (path.parent, *path.parent.parents):
             if parent.is_symlink():
-                raise ValueError(f"{label} parent `{parent}` must not be a symlink")
+                raise ValueError(
+                    f"{label} parent `{path_diagnostic_label(parent)}` "
+                    "must not be a symlink"
+                )
             if parent.exists() and not parent.is_dir():
                 raise ValueError(
-                    f"{label} parent `{parent}` must be a directory when it exists"
+                    f"{label} parent `{path_diagnostic_label(parent)}` "
+                    "must be a directory when it exists"
                 )
     except ValueError:
         raise
     except OSError as error:
-        raise ValueError(f"failed to inspect {label} `{path}`: {error}") from error
+        path_label = path_diagnostic_label(path)
+        error_label = error_diagnostic_label(error, path_label=path_label)
+        raise ValueError(
+            f"failed to inspect {label} `{path_label}`: {error_label}"
+        ) from error
 
 
 def ensure_fixture_directory(path: Path, label: str) -> None:
     """Create a generated fixture directory without following symlink parents."""
 
     validate_fixture_path(path, label)
-    path.mkdir(parents=True, exist_ok=True)
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        path_label = path_diagnostic_label(path)
+        error_label = error_diagnostic_label(error, path_label=path_label)
+        raise ValueError(
+            f"failed to create {label} `{path_label}`: {error_label}"
+        ) from error
     if not path.is_dir():
-        raise ValueError(f"{label} `{path}` must be a directory")
+        raise ValueError(f"{label} `{path_diagnostic_label(path)}` must be a directory")
 
 
 def fixture_file_size(path: Path, label: str) -> int:
@@ -99,11 +129,19 @@ def fixture_file_size(path: Path, label: str) -> int:
 
     validate_fixture_path(path, label)
     if not path.is_file():
-        raise ValueError(f"{label} `{path}` must exist and be a file")
+        raise ValueError(
+            f"{label} `{path_diagnostic_label(path)}` must exist and be a file"
+        )
     fd = -1
     try:
         fd = os.open(path, read_open_flags())
         return os.fstat(fd).st_size
+    except OSError as error:
+        path_label = path_diagnostic_label(path)
+        error_label = error_diagnostic_label(error, path_label=path_label)
+        raise ValueError(
+            f"failed to inspect {label} `{path_label}`: {error_label}"
+        ) from error
     finally:
         if fd >= 0:
             os.close(fd)
@@ -113,14 +151,27 @@ def load_chunker_fixture(root: Path) -> Dict[str, Any]:
     plan_path = root / "fixtures" / "sorafs_chunker" / "sf1_profile_v1.json"
     validate_fixture_path(plan_path, "chunker fixture")
     if not plan_path.is_file():
-        raise ValueError(f"chunker fixture `{plan_path}` must exist and be a file")
+        raise ValueError(
+            "chunker fixture "
+            f"`{path_diagnostic_label(plan_path)}` must exist and be a file"
+        )
     fd = -1
     try:
         fd = os.open(plan_path, read_open_flags())
         handle = os.fdopen(fd, "r", encoding="utf-8")
         fd = -1
         with handle:
-            return json.load(handle)
+            return json.load(
+                handle,
+                parse_constant=reject_non_standard_json_constant,
+                object_pairs_hook=json_object_without_duplicate_keys,
+            )
+    except OSError as error:
+        path_label = path_diagnostic_label(plan_path)
+        error_label = error_diagnostic_label(error, path_label=path_label)
+        raise ValueError(
+            f"failed to read chunker fixture `{path_label}`: {error_label}"
+        ) from error
     finally:
         if fd >= 0:
             os.close(fd)
@@ -237,6 +288,13 @@ def write_json(path: Path, payload: Any) -> None:
         fd = os.open(path, write_open_flags(), 0o666)
         write_all(fd, rendered)
         os.fsync(fd)
+    except OSError as error:
+        path_label = path_diagnostic_label(path)
+        error_label = error_diagnostic_label(error, path_label=path_label)
+        raise ValueError(
+            "failed to write orchestrator fixture output "
+            f"`{path_label}`: {error_label}"
+        ) from error
     finally:
         if fd >= 0:
             os.close(fd)

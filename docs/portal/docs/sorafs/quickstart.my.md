@@ -28,12 +28,12 @@ SoraFS ကို နောက်ခံပြုထားသည့် သက်�
 
 ## 1. အဆုံးအဖြတ်ပေးသော ပွဲများကို ပြန်လည်စတင်ပါ။
 
-canonical SF-1 အတုံးလိုက်အကွက်များကို ပြန်ထုတ်ပါ။ အမိန့်ထုတ်သည်ကိုလည်း လက်မှတ်ရေးထိုးသည်။
-`--signing-key` ကို ပေးဆောင်သောအခါတွင် စာအိတ်များ၊ `--allow-unsigned` ကိုသုံးပါ။
-ဒေသဖွံ့ဖြိုးရေးအတွက်သာ။
+Regenerate the canonical SF-1 chunking vectors. The command verifies the
+existing council signature file, or appends a signature when `--signing-key` is
+supplied.
 
 ```bash
-cargo run -p sorafs_chunker --bin export_vectors -- --allow-unsigned
+cargo run -p sorafs_chunker --bin export_vectors -- --signing-key=<ed25519-private-key-hex>
 ```
 
 အထွက်များ-
@@ -78,7 +78,7 @@ cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   --manifest-out=/tmp/docs.manifest \
   --manifest-signatures-out=/tmp/docs.manifest_signatures.json \
   --json-out=/tmp/docs.report.json \
-  --allow-unsigned
+  --council-signature=<signerhex>:<signaturehex>
 ```
 
 `/tmp/docs.report.json` ကို သုံးသပ်ချက်-
@@ -88,9 +88,9 @@ cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
 - `manifest.manifest_blake3` – BLAKE3 digest ကို မန်နီးဖက်စ်စာအိတ်တွင် ရေးထိုးထားသည်။
 - `chunk_fetch_specs[]` - သံစုံတီးဝိုင်းအတွက် ညွှန်ကြားချက်များ ရယူရန် ညွှန်ကြားထားသည်။
 
-လက်မှတ်အစစ်များကို ပံ့ပိုးရန် အဆင်သင့်ဖြစ်သောအခါ၊ `--signing-key` နှင့် `--signer` တို့ကို ထည့်ပါ
-ဆင်ခြေများ။ အဆိုပါအမိန့်ကိုမရေးမီ Ed25519 လက်မှတ်တိုင်းကိုအတည်ပြုသည်။
-စာအိတ်။
+The `--council-signature` value must be a reviewed council signer public key and
+Ed25519 signature pair. The command verifies every Ed25519 signature before
+writing the envelope.
 
 ## 4. Multi-provider retrieve ကို အတုယူပါ။
 

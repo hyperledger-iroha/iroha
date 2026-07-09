@@ -50,6 +50,10 @@ pub struct LaneRelayEnvelope {
     /// Optional hash of the DA commitment bundle for the block payload.
     #[norito(default)]
     pub da_commitment_hash: Option<HashOf<DaCommitmentBundle>>,
+    /// Optional standalone lane block descriptor hash for this relayed lane block.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub lane_block_descriptor_hash: Option<Hash>,
     /// Settlement commitment captured at the end of the lane block.
     pub settlement_commitment: LaneBlockCommitment,
     /// Norito hash of the settlement payload for quick verification.
@@ -203,6 +207,7 @@ struct LaneRelayFastpqClaim {
     block_header: BlockHeader,
     qc: Option<Qc>,
     da_commitment_hash: Option<HashOf<DaCommitmentBundle>>,
+    lane_block_descriptor_hash: Option<Hash>,
     manifest_root: [u8; 32],
     settlement_commitment: LaneBlockCommitment,
     settlement_hash: HashOf<LaneBlockCommitment>,
@@ -218,6 +223,7 @@ struct LaneRelayMergeHint {
     parent_state_root: Hash,
     post_state_root: Hash,
     da_commitment_hash: Option<HashOf<DaCommitmentBundle>>,
+    lane_block_descriptor_hash: Option<Hash>,
     settlement_hash: HashOf<LaneBlockCommitment>,
     rbc_bytes_total: u64,
 }
@@ -245,6 +251,7 @@ pub fn lane_relay_fastpq_claim_digest(
         block_header: envelope.block_header,
         qc: envelope.qc.clone(),
         da_commitment_hash: envelope.da_commitment_hash,
+        lane_block_descriptor_hash: envelope.lane_block_descriptor_hash,
         manifest_root,
         settlement_commitment: envelope.settlement_commitment.clone(),
         settlement_hash: envelope.settlement_hash,
@@ -415,6 +422,7 @@ impl LaneRelayEnvelope {
             block_header,
             qc,
             da_commitment_hash,
+            lane_block_descriptor_hash: None,
             settlement_commitment,
             settlement_hash,
             rbc_bytes_total,
@@ -506,6 +514,7 @@ impl LaneRelayEnvelope {
             parent_state_root: qc.parent_state_root,
             post_state_root: qc.post_state_root,
             da_commitment_hash: self.da_commitment_hash,
+            lane_block_descriptor_hash: self.lane_block_descriptor_hash,
             settlement_hash: self.settlement_hash,
             rbc_bytes_total: self.rbc_bytes_total,
         };
@@ -583,6 +592,16 @@ impl LaneRelayEnvelope {
     #[must_use]
     pub fn with_manifest_root(mut self, manifest_root: Option<[u8; 32]>) -> Self {
         self.manifest_root = manifest_root;
+        self
+    }
+
+    /// Attach the standalone lane block descriptor hash to the envelope.
+    #[must_use]
+    pub fn with_lane_block_descriptor_hash(
+        mut self,
+        lane_block_descriptor_hash: Option<Hash>,
+    ) -> Self {
+        self.lane_block_descriptor_hash = lane_block_descriptor_hash;
         self
     }
 
@@ -1182,6 +1201,21 @@ mod tests {
     }
 
     #[test]
+    fn merge_hint_root_binds_lane_block_descriptor_hash() {
+        let qc = qc_with_bitmap(vec![0b0000_0001], 6, vec![0xCC; 48]);
+        let first = build_envelope(6, Some(qc.clone()))
+            .with_lane_block_descriptor_hash(Some(Hash::new(b"descriptor-a")))
+            .merge_hint_root()
+            .expect("merge hint root");
+        let second = build_envelope(6, Some(qc))
+            .with_lane_block_descriptor_hash(Some(Hash::new(b"descriptor-b")))
+            .merge_hint_root()
+            .expect("changed merge hint root");
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
     fn verify_rejects_settlement_total_mismatch_when_receipts_are_present() {
         let mut envelope = build_envelope(6, None);
         envelope.settlement_commitment.total_local_micro = envelope
@@ -1378,6 +1412,21 @@ mod tests {
         let changed = lane_relay_fastpq_claim_digest(&envelope).expect("changed claim digest");
 
         assert_ne!(original, changed);
+    }
+
+    #[test]
+    fn lane_relay_fastpq_claim_digest_binds_lane_block_descriptor_hash() {
+        let first = build_envelope(8, None)
+            .with_manifest_root(Some([0x42; 32]))
+            .with_lane_block_descriptor_hash(Some(Hash::new(b"descriptor-a")));
+        let second = build_envelope(8, None)
+            .with_manifest_root(Some([0x42; 32]))
+            .with_lane_block_descriptor_hash(Some(Hash::new(b"descriptor-b")));
+
+        assert_ne!(
+            lane_relay_fastpq_claim_digest(&first).expect("first lane relay claim digest"),
+            lane_relay_fastpq_claim_digest(&second).expect("second lane relay claim digest")
+        );
     }
 
     #[test]

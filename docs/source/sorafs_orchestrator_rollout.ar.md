@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/sorafs_orchestrator_rollout.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 82c145e1eb0220d125e349099d2fa7810db07a134aaff4aceec1c46d73a0cde8
+source_hash: 3b4449d7cb4d731286457f578c10028c7575c725de54fecb072cd7e7ec42a35e
 source_last_modified: "2026-01-04T10:50:53.682923+00:00"
 translation_last_reviewed: 2026-01-30
 ---
