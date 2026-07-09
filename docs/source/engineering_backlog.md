@@ -6511,7 +6511,7 @@ redistributable schemas, and official trust/revocation bundles.
 							  accepts fallible `rand_core` 0.9 crypto RNGs and maps spend-key entropy
 							  failures to `ConfidentialKeyError::RandomBytes`; generated confidential
 							  keysets reject all-zero RNG output before HKDF expansion while
-							  deterministic fixture derivation remains defined for every 32-byte spend key;
+							  deterministic fixture derivation remains defined only for nonzero 32-byte spend keys;
 							  SoraNet client and relay
 							  handshake construction now also uses fallible `TryCryptoRng` draws for nonce,
 							  Noise secret, and client ML-KEM seed material, returning labelled

@@ -795,6 +795,35 @@ def test_tron_api_rejects_duplicate_json_keys():
         raise AssertionError("duplicate-key TRON API response was accepted")
 
 
+def test_tron_json_object_rejects_key_subclasses_without_hooks():
+    module = load_live_module()
+
+    class HostileJsonKey(str):
+        def __new__(cls):
+            return str.__new__(cls, "secret-token-result")
+
+        def __hash__(self):
+            raise AssertionError("secret-token TRON JSON key was hashed")
+
+        def __eq__(self, _other):
+            raise AssertionError("secret-token TRON JSON key was compared")
+
+        def __str__(self):
+            raise AssertionError("secret-token TRON JSON key was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token TRON JSON key was repr'd")
+
+    try:
+        module._json_object_without_duplicate_keys([(HostileJsonKey(), {"result": True})])
+    except ValueError as exc:
+        message = str(exc)
+        assert message == "duplicate JSON keys"
+        assert "secret-token" not in message
+    else:
+        raise AssertionError("hostile TRON JSON key subclass was accepted")
+
+
 def test_tron_node_url_rejects_hidden_request_state():
     module = load_live_module()
 

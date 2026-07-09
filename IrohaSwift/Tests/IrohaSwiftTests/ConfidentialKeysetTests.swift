@@ -42,6 +42,14 @@ final class ConfidentialKeysetTests: XCTestCase {
         }
     }
 
+    func testAllZeroSpendKeyThrows() {
+        XCTAssertThrowsError(try ConfidentialKeyset.derive(from: Data(repeating: 0x00, count: 32))) { error in
+            guard case ConfidentialKeyDerivationError.inertSpendKey = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
     func testKeyDerivationFixtureParity() throws {
         let fixture = try loadKeysetFixture()
         XCTAssertEqual(fixture.formatVersion, 1)
@@ -83,8 +91,17 @@ final class ConfidentialKeysetTests: XCTestCase {
                 return XCTFail("Invalid negative seed hex for \(negative.caseId)")
             }
             XCTAssertThrowsError(try ConfidentialKeyset.derive(from: seed)) { error in
-                guard case ConfidentialKeyDerivationError.invalidSpendKeyLength = error else {
-                    return XCTFail("Unexpected error: \(error)")
+                switch negative.expectedError.kind {
+                case "invalid_length":
+                    guard case ConfidentialKeyDerivationError.invalidSpendKeyLength = error else {
+                        return XCTFail("Unexpected error: \(error)")
+                    }
+                case "inert_spend_key":
+                    guard case ConfidentialKeyDerivationError.inertSpendKey = error else {
+                        return XCTFail("Unexpected error: \(error)")
+                    }
+                default:
+                    return XCTFail("Unexpected fixture error kind: \(negative.expectedError.kind)")
                 }
                 if let expectedLength = negative.expectedError.lengthBytes {
                     XCTAssertEqual(seed.count, expectedLength)
@@ -114,6 +131,18 @@ final class ConfidentialKeysetTests: XCTestCase {
             }
             XCTAssertEqual(label, "spendKey")
             XCTAssertEqual(actual, 1)
+        }
+
+        XCTAssertThrowsError(
+            try ConfidentialKeyset(spendKey: Data(repeating: 0x00, count: 32),
+                                   nullifierKey: valid,
+                                   incomingViewKey: valid,
+                                   outgoingViewKey: valid,
+                                   fullViewKey: valid)
+        ) { error in
+            guard case ConfidentialKeyDerivationError.inertSpendKey = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
         }
     }
 

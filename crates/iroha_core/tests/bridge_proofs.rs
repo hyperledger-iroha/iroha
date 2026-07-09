@@ -3196,6 +3196,41 @@ fn submit_taira_tron_xor_diagnostic_inbound_message_rejects_structurally() {
     );
 }
 
+#[cfg(feature = "sccp-test-fixtures")]
+#[test]
+fn submit_taira_tron_xor_diagnostic_inbound_message_applies_on_taira_chain() {
+    let world = iroha_core::state::World::new();
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let telemetry = StateTelemetry::default();
+    let mut state = State::with_telemetry(world, kura, query_handle, telemetry);
+    state.chain_id = iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
+    state.zk.max_proof_size_bytes = 4 * 1024 * 1024;
+
+    let exec = Executor::default();
+    let proof = make_sccp_taira_tron_xor_diagnostic_message_bridge_proof(99);
+    let proof_id = bridge_proof_id(&proof);
+    let height =
+        std::num::NonZeroU64::new(proof.range.end_height).expect("diagnostic finality height");
+    let header = iroha_data_model::block::BlockHeader::new(height, None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+
+    let submit: InstructionBox =
+        iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof).into();
+    exec.execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
+        .expect("fixture-gated TAIRA diagnostic proof should apply on the TAIRA chain");
+
+    let rec = stx
+        .world
+        .proofs()
+        .get(&proof_id)
+        .expect("diagnostic proof recorded");
+    assert_eq!(rec.status, ProofStatus::Verified);
+    let bridge = rec.bridge.as_ref().expect("bridge metadata stored");
+    assert_eq!(bridge.commitment, proof_id.proof_hash);
+}
+
 #[test]
 fn bsc_mainnet_source_chain_proof_binds_configured_source_adapter_deployment() {
     let material = configured_bsc_source_verifier_material();

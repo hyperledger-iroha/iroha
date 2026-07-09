@@ -3029,6 +3029,10 @@ pub fn kagemusha_recursive_spend_lineage_append_vk_box(
 pub fn kagemusha_recursive_spend_lineage_vk_box_from_pallas_open_envelope_archive(
     pallas_open_envelopes_archive: &[u8],
 ) -> Result<VerifyingKeyBox, String> {
+    validate_kagemusha_pallas_open_envelope_archive_declared_count_bounds(
+        pallas_open_envelopes_archive,
+        "Kagemusha Pallas open-envelope archive",
+    )?;
     let envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
         norito::decode_from_bytes(pallas_open_envelopes_archive).map_err(|err| {
             format!("failed to decode Kagemusha Pallas open-envelope archive: {err}")
@@ -3055,6 +3059,10 @@ pub fn kagemusha_recursive_spend_lineage_vk_box_from_pallas_open_envelope_archiv
 pub fn kagemusha_recursive_spend_lineage_append_vk_box_from_pallas_open_envelope_archive(
     pallas_open_envelopes_archive: &[u8],
 ) -> Result<VerifyingKeyBox, String> {
+    validate_kagemusha_pallas_open_envelope_archive_declared_count_bounds(
+        pallas_open_envelopes_archive,
+        "Kagemusha Pallas open-envelope archive",
+    )?;
     let envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
         norito::decode_from_bytes(pallas_open_envelopes_archive).map_err(|err| {
             format!("failed to decode Kagemusha Pallas open-envelope archive: {err}")
@@ -3072,6 +3080,10 @@ fn kagemusha_recursive_spend_pallas_archive_opening_len(
     pallas_open_envelopes_archive: &[u8],
     context: &str,
 ) -> Result<u32, String> {
+    validate_kagemusha_pallas_open_envelope_archive_declared_count_bounds(
+        pallas_open_envelopes_archive,
+        &format!("Kagemusha {context} archive"),
+    )?;
     let envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
         norito::decode_from_bytes(pallas_open_envelopes_archive)
             .map_err(|err| format!("failed to decode Kagemusha {context} archive: {err}"))?;
@@ -10300,6 +10312,15 @@ pub fn kagemusha_recursive_spend_lineage_append_opening_preflight_from_archives(
         &previous_witnesses,
     )?;
 
+    let current_declared_count = kagemusha_pallas_open_envelope_archive_declared_count(
+        current_hop_pallas_open_envelopes_archive,
+        "Kagemusha current-hop Pallas open-envelope archive",
+    )?;
+    if current_declared_count != 1 {
+        return Err(format!(
+            "Kagemusha Reserved-lineage append current-hop preflight requires exactly one opening envelope (found {current_declared_count})",
+        ));
+    }
     let current_envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
         norito::decode_from_bytes(current_hop_pallas_open_envelopes_archive).map_err(|err| {
             format!("failed to decode Kagemusha current-hop Pallas open-envelope archive: {err}")
@@ -11288,11 +11309,192 @@ pub fn kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_pallas_open_envelope_archive_declared_count(
+    archive: &[u8],
+    context: &str,
+) -> Result<usize, String> {
+    type PallasOpenEnvelopeArchive = Vec<iroha_zkp_halo2::OpenVerifyEnvelope>;
+
+    let read_count = |payload: &[u8]| {
+        norito::core::read_seq_len_slice(payload)
+            .map(|(count, _)| count)
+            .map_err(|err| format!("failed to decode {context} sequence length: {err}"))
+    };
+
+    match kagemusha_pallas_open_envelope_archive_uncompressed_payload::<PallasOpenEnvelopeArchive>(
+        archive, context,
+    )? {
+        Some(payload) => read_count(payload),
+        None => {
+            let archived = norito::from_compressed_bytes::<PallasOpenEnvelopeArchive>(archive)
+                .map_err(|err| format!("failed to decode {context}: {err}"))?;
+            read_count(archived.bytes())
+        }
+    }
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_pallas_open_envelope_archive_uncompressed_payload<'a, T>(
+    archive: &'a [u8],
+    context: &str,
+) -> Result<Option<&'a [u8]>, String>
+where
+    for<'de> T: norito::NoritoDeserialize<'de>,
+{
+    const MAJOR_OFFSET: usize = 4;
+    const MINOR_OFFSET: usize = 5;
+    const SCHEMA_OFFSET: usize = 6;
+    const SCHEMA_LEN: usize = 16;
+    const COMPRESSION_OFFSET: usize = SCHEMA_OFFSET + SCHEMA_LEN;
+    const LENGTH_OFFSET: usize = COMPRESSION_OFFSET + 1;
+    const CHECKSUM_OFFSET: usize = LENGTH_OFFSET + 8;
+    const FLAGS_OFFSET: usize = CHECKSUM_OFFSET + 8;
+
+    let invalid = |reason: &str| format!("failed to decode {context}: {reason}");
+
+    if archive.len() < norito::core::Header::SIZE {
+        return Err(invalid("header is truncated"));
+    }
+    if archive[..norito::core::MAGIC.len()] != norito::core::MAGIC[..] {
+        return Err(invalid("invalid magic header"));
+    }
+    if archive[MAJOR_OFFSET] != norito::core::VERSION_MAJOR {
+        return Err(invalid("unsupported major version"));
+    }
+    if archive[MINOR_OFFSET] != norito::core::VERSION_MINOR {
+        return Err(invalid("unsupported minor version"));
+    }
+    let schema = archive
+        .get(SCHEMA_OFFSET..COMPRESSION_OFFSET)
+        .ok_or_else(|| invalid("header schema is truncated"))?;
+    let expected_schema = <T as norito::NoritoDeserialize<'static>>::schema_hash();
+    if schema != expected_schema.as_slice() {
+        return Err(invalid("schema mismatch"));
+    }
+    let compression = archive[COMPRESSION_OFFSET];
+    if compression == norito::Compression::Zstd as u8 {
+        return Ok(None);
+    }
+    if compression != norito::Compression::None as u8 {
+        return Err(invalid("unsupported compression"));
+    }
+
+    let mut length_bytes = [0_u8; 8];
+    length_bytes.copy_from_slice(
+        archive
+            .get(LENGTH_OFFSET..CHECKSUM_OFFSET)
+            .ok_or_else(|| invalid("header length is truncated"))?,
+    );
+    let payload_len_u64 = u64::from_le_bytes(length_bytes);
+    if payload_len_u64 > norito::core::max_archive_len() {
+        return Err(invalid("payload length exceeds archive limit"));
+    }
+    let payload_len =
+        usize::try_from(payload_len_u64).map_err(|_| invalid("payload length overflows usize"))?;
+
+    let mut checksum_bytes = [0_u8; 8];
+    checksum_bytes.copy_from_slice(
+        archive
+            .get(CHECKSUM_OFFSET..FLAGS_OFFSET)
+            .ok_or_else(|| invalid("header checksum is truncated"))?,
+    );
+    let checksum = u64::from_le_bytes(checksum_bytes);
+
+    let flags = *archive
+        .get(FLAGS_OFFSET)
+        .ok_or_else(|| invalid("header flags are truncated"))?;
+    norito::core::validate_header_flags(flags).map_err(|err| invalid(&err.to_string()))?;
+
+    let padding = {
+        let align = std::mem::align_of::<norito::Archived<T>>();
+        if align <= 1 {
+            0
+        } else {
+            let remainder = norito::core::Header::SIZE % align;
+            if remainder == 0 { 0 } else { align - remainder }
+        }
+    };
+    let payload_offset = norito::core::Header::SIZE
+        .checked_add(padding)
+        .ok_or_else(|| invalid("payload offset overflows usize"))?;
+    let payload_end = payload_offset
+        .checked_add(payload_len)
+        .ok_or_else(|| invalid("payload length overflows usize"))?;
+    if archive.len() != payload_end {
+        return Err(invalid("length mismatch"));
+    }
+    if archive[norito::core::Header::SIZE..payload_offset]
+        .iter()
+        .any(|byte| *byte != 0)
+    {
+        return Err(invalid("non-zero payload padding"));
+    }
+    let payload = archive
+        .get(payload_offset..payload_end)
+        .ok_or_else(|| invalid("payload is truncated"))?;
+    if norito::hardware_crc64(payload) != checksum {
+        return Err(invalid("checksum mismatch"));
+    }
+    Ok(Some(payload))
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn validate_kagemusha_pallas_open_envelope_archive_declared_count_for_fold_bundle(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    pallas_open_envelopes_archive: &[u8],
+    context: &str,
+) -> Result<(), String> {
+    let actual = u32::try_from(kagemusha_pallas_open_envelope_archive_declared_count(
+        pallas_open_envelopes_archive,
+        context,
+    )?)
+    .unwrap_or(u32::MAX);
+    let step_count = record_bundle.bundle.steps.len();
+    ensure_kagemusha_verified_step_count(step_count)?;
+    let expected = u32::try_from(step_count).unwrap_or(u32::MAX);
+    if actual != expected {
+        return Err(
+            iroha_data_model::offline::KagemushaFoldError::RecursiveAggregationWitnessCountMismatch {
+                expected,
+                actual,
+            }
+            .to_string(),
+        );
+    }
+    Ok(())
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn validate_kagemusha_pallas_open_envelope_archive_declared_count_bounds(
+    archive: &[u8],
+    context: &str,
+) -> Result<usize, String> {
+    let declared_count = kagemusha_pallas_open_envelope_archive_declared_count(archive, context)?;
+    if declared_count == 0 {
+        return Err(format!(
+            "invalid {context}: Kagemusha Pallas IPA open-envelope preflight requires at least one envelope",
+        ));
+    }
+    if declared_count > iroha_data_model::offline::KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS {
+        return Err(format!(
+            "invalid {context}: Kagemusha Pallas IPA open-envelope preflight accepts at most {} envelopes (found {declared_count})",
+            iroha_data_model::offline::KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS,
+        ));
+    }
+    Ok(declared_count)
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
 fn kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelope_archive_at_optional_height(
     record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
     pallas_open_envelopes_archive: &[u8],
     block_height: Option<u64>,
 ) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationEvidence, String> {
+    validate_kagemusha_pallas_open_envelope_archive_declared_count_for_fold_bundle(
+        record_bundle,
+        pallas_open_envelopes_archive,
+        "Kagemusha Pallas open-envelope archive",
+    )?;
     let envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
         norito::decode_from_bytes(pallas_open_envelopes_archive).map_err(|err| {
             format!("failed to decode Kagemusha Pallas open-envelope archive: {err}")
@@ -11633,6 +11835,11 @@ pub fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_b
     vk_box: &VerifyingKeyBox,
     proving_key_bytes: Option<&[u8]>,
 ) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle, String> {
+    validate_kagemusha_pallas_open_envelope_archive_declared_count_for_fold_bundle(
+        record_bundle,
+        pallas_open_envelopes_archive,
+        "Kagemusha Pallas open-envelope archive",
+    )?;
     let envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
         norito::decode_from_bytes(pallas_open_envelopes_archive).map_err(|err| {
             format!("failed to decode Kagemusha Pallas open-envelope archive: {err}")
@@ -11663,6 +11870,11 @@ pub fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_b
     proving_key_bytes: Option<&[u8]>,
     block_height: u64,
 ) -> Result<iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle, String> {
+    validate_kagemusha_pallas_open_envelope_archive_declared_count_for_fold_bundle(
+        record_bundle,
+        pallas_open_envelopes_archive,
+        "Kagemusha Pallas open-envelope archive",
+    )?;
     let envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
         norito::decode_from_bytes(pallas_open_envelopes_archive).map_err(|err| {
             format!("failed to decode Kagemusha Pallas open-envelope archive: {err}")
@@ -11681,6 +11893,22 @@ pub fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_b
 fn decode_kagemusha_recursive_compact_pallas_open_envelopes(
     pallas_open_envelopes_archive: &[u8],
 ) -> Result<Vec<iroha_zkp_halo2::OpenVerifyEnvelope>, String> {
+    let declared_count = kagemusha_pallas_open_envelope_archive_declared_count(
+        pallas_open_envelopes_archive,
+        "Kagemusha recursive compact Pallas open-envelope archive",
+    )?;
+    if declared_count == 0 {
+        return Err(
+            "invalid Kagemusha recursive compact Pallas open-envelope archive: Kagemusha Pallas IPA open-envelope preflight requires at least one envelope"
+                .to_owned(),
+        );
+    }
+    if declared_count > iroha_data_model::offline::KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS {
+        return Err(format!(
+            "invalid Kagemusha recursive compact Pallas open-envelope archive: Kagemusha Pallas IPA open-envelope preflight accepts at most {} envelopes (found {declared_count})",
+            iroha_data_model::offline::KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS,
+        ));
+    }
     let envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
         norito::decode_from_bytes(pallas_open_envelopes_archive).map_err(|err| {
             format!(
@@ -11708,6 +11936,27 @@ fn decode_kagemusha_recursive_compact_pallas_open_envelopes(
         )?;
     }
     Ok(envelopes)
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn decode_kagemusha_recursive_compact_pallas_open_envelopes_for_record_bundle(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    pallas_open_envelopes_archive: &[u8],
+) -> Result<Vec<iroha_zkp_halo2::OpenVerifyEnvelope>, String> {
+    let hop_count = record_bundle.bundle.steps.len();
+    let declared_count = kagemusha_pallas_open_envelope_archive_declared_count(
+        pallas_open_envelopes_archive,
+        "Kagemusha recursive compact Pallas open-envelope archive",
+    )?;
+    if hop_count == 0 {
+        return Err("Kagemusha recursive compact proof requires at least one hop".to_owned());
+    }
+    if declared_count != hop_count {
+        return Err(format!(
+            "Kagemusha recursive compact Pallas envelope count mismatch: expected {hop_count}, found {declared_count}",
+        ));
+    }
+    decode_kagemusha_recursive_compact_pallas_open_envelopes(pallas_open_envelopes_archive)
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
@@ -12063,8 +12312,10 @@ pub fn prove_verified_kagemusha_recursive_compact_payment_token_from_record_bund
     pallas_open_envelopes_archive: &[u8],
     proving_key_bytes: Option<&[u8]>,
 ) -> Result<iroha_data_model::offline::KagemushaCompactPaymentToken, String> {
-    let envelopes =
-        decode_kagemusha_recursive_compact_pallas_open_envelopes(pallas_open_envelopes_archive)?;
+    let envelopes = decode_kagemusha_recursive_compact_pallas_open_envelopes_for_record_bundle(
+        record_bundle,
+        pallas_open_envelopes_archive,
+    )?;
     prove_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelopes(
         record_bundle,
         &envelopes,
@@ -12087,8 +12338,10 @@ pub fn prove_verified_kagemusha_recursive_compact_payment_token_from_record_bund
     pallas_open_envelopes_archive: &[u8],
     key_artifacts: &iroha_data_model::offline::KagemushaRecursiveCompactKeyArtifactsV1,
 ) -> Result<iroha_data_model::offline::KagemushaCompactPaymentToken, String> {
-    let envelopes =
-        decode_kagemusha_recursive_compact_pallas_open_envelopes(pallas_open_envelopes_archive)?;
+    let envelopes = decode_kagemusha_recursive_compact_pallas_open_envelopes_for_record_bundle(
+        record_bundle,
+        pallas_open_envelopes_archive,
+    )?;
     prove_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelopes(
         record_bundle,
         &envelopes,
@@ -12112,8 +12365,10 @@ pub fn prove_verified_kagemusha_recursive_compact_payment_token_from_record_bund
     proving_key_bytes: Option<&[u8]>,
     block_height: u64,
 ) -> Result<iroha_data_model::offline::KagemushaCompactPaymentToken, String> {
-    let envelopes =
-        decode_kagemusha_recursive_compact_pallas_open_envelopes(pallas_open_envelopes_archive)?;
+    let envelopes = decode_kagemusha_recursive_compact_pallas_open_envelopes_for_record_bundle(
+        record_bundle,
+        pallas_open_envelopes_archive,
+    )?;
     prove_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelopes(
         record_bundle,
         &envelopes,
@@ -12137,8 +12392,10 @@ pub fn prove_verified_kagemusha_recursive_compact_payment_token_from_record_bund
     key_artifacts: &iroha_data_model::offline::KagemushaRecursiveCompactKeyArtifactsV1,
     block_height: u64,
 ) -> Result<iroha_data_model::offline::KagemushaCompactPaymentToken, String> {
-    let envelopes =
-        decode_kagemusha_recursive_compact_pallas_open_envelopes(pallas_open_envelopes_archive)?;
+    let envelopes = decode_kagemusha_recursive_compact_pallas_open_envelopes_for_record_bundle(
+        record_bundle,
+        pallas_open_envelopes_archive,
+    )?;
     prove_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelopes(
         record_bundle,
         &envelopes,
@@ -12680,6 +12937,20 @@ fn validate_kagemusha_recursive_previous_proof_open_envelopes_archive(
             previous_recursive_proof_open_envelopes_archive.len()
         ));
     }
+    let declared_count = kagemusha_pallas_open_envelope_archive_declared_count(
+        previous_recursive_proof_open_envelopes_archive,
+        "Kagemusha previous recursive proof open-envelope archive",
+    )?;
+    if declared_count == 0 {
+        return Err(
+            "Kagemusha previous recursive proof open-envelope archive must not be empty".to_owned(),
+        );
+    }
+    if declared_count != 1 {
+        return Err(format!(
+            "Kagemusha previous recursive proof open-envelope archive requires exactly one envelope (found {declared_count})",
+        ));
+    }
     let envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> = norito::decode_from_bytes(
         previous_recursive_proof_open_envelopes_archive,
     )
@@ -13073,6 +13344,11 @@ fn prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_env
             ));
         }
     }
+    validate_kagemusha_pallas_open_envelope_archive_declared_count_for_fold_bundle(
+        record_bundle,
+        pallas_open_envelopes_archive,
+        "Kagemusha Pallas open-envelope archive",
+    )?;
     let envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
         norito::decode_from_bytes(pallas_open_envelopes_archive).map_err(|err| {
             format!("failed to decode Kagemusha Pallas open-envelope archive: {err}")
@@ -16170,6 +16446,15 @@ fn recompute_kagemusha_recursive_spend_accumulator_from_lineage_witness(
         )?;
     }
 
+    let declared_count = kagemusha_pallas_open_envelope_archive_declared_count(
+        &witness.pallas_open_envelopes_archive,
+        "Kagemusha recursive lineage Pallas open-envelope archive",
+    )?;
+    if declared_count != hop_count {
+        return Err(format!(
+            "record-backed recursive Kagemusha lineage envelope count mismatch: expected {hop_count}, found {declared_count}",
+        ));
+    }
     let envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
         norito::decode_from_bytes(&witness.pallas_open_envelopes_archive).map_err(|err| {
             format!(
@@ -46416,6 +46701,42 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    fn kagemusha_pallas_open_envelope_archive_count_preflight_rejects_count_only_overflows() {
+        let archive = pallas_open_envelope_archive_with_declared_count(
+            iroha_data_model::offline::KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS + 1,
+        );
+        let err = decode_kagemusha_recursive_compact_pallas_open_envelopes(&archive)
+            .expect_err("count-only compact archive above hop cap must reject before decode");
+        assert!(
+            err.contains("accepts at most")
+                && err.contains(&format!(
+                    "found {}",
+                    iroha_data_model::offline::KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS + 1
+                )),
+            "{err}"
+        );
+
+        let accumulator = recursive_spend_accumulators(1)
+            .pop()
+            .expect("one recursive spend accumulator");
+        let previous_bundle = iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
+            recursive_proof: recursive_spend_proof(&accumulator),
+            accumulator,
+        };
+        let archive = pallas_open_envelope_archive_with_declared_count(2);
+        let err = validate_kagemusha_recursive_previous_proof_open_envelopes_archive(
+            &previous_bundle,
+            &archive,
+            true,
+        )
+        .expect_err("count-only previous proof archive with two envelopes must reject");
+        assert!(
+            err.contains("requires exactly one envelope") && err.contains("found 2"),
+            "{err}"
+        );
+    }
+
+    #[test]
     #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_compact_record_bound_pallas_preflights_before_unavailable() {
         let (bound_chain_id, bound_asset, bound_hop, bound_record) =
@@ -49689,6 +50010,20 @@ mod kagemusha_folded_real_prover_tests {
             })
             .collect::<Vec<_>>();
         norito::to_bytes(&envelopes).expect("encode Pallas open-envelope archive")
+    }
+
+    fn pallas_open_envelope_archive_with_declared_count(count: usize) -> Vec<u8> {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(
+            &u64::try_from(count)
+                .expect("test envelope count fits u64")
+                .to_le_bytes(),
+        );
+        norito::core::frame_bare_with_header_flags::<Vec<iroha_zkp_halo2::OpenVerifyEnvelope>>(
+            &payload,
+            norito::default_encode_flags(),
+        )
+        .expect("frame count-only Pallas open-envelope archive")
     }
 
     fn previous_recursive_spend_proof_pallas_open_envelope_archive(

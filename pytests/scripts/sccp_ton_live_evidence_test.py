@@ -421,6 +421,35 @@ def test_live_ton_account_states_json_rejects_duplicate_keys():
         raise AssertionError("duplicate-key TON accountStates JSON was accepted")
 
 
+def test_live_ton_json_object_rejects_key_subclasses_without_hooks():
+    module = load_live_module()
+
+    class HostileJsonKey(str):
+        def __new__(cls):
+            return str.__new__(cls, "secret-token-value")
+
+        def __hash__(self):
+            raise AssertionError("secret-token TON JSON key was hashed")
+
+        def __eq__(self, _other):
+            raise AssertionError("secret-token TON JSON key was compared")
+
+        def __str__(self):
+            raise AssertionError("secret-token TON JSON key was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token TON JSON key was repr'd")
+
+    try:
+        module._json_object_without_duplicate_keys([(HostileJsonKey(), None)])
+    except ValueError as exc:
+        message = str(exc)
+        assert message == "TON accountStates returned duplicate JSON keys"
+        assert "secret-token" not in message
+    else:
+        raise AssertionError("hostile TON JSON key subclass was accepted")
+
+
 def test_live_ton_account_states_redacts_transport_and_error_response_details():
     module = load_live_module()
 

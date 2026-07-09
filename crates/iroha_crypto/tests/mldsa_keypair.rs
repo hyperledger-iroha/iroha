@@ -369,8 +369,9 @@ mod mldsa_tests {
         let parse_err = PrivateKey::from_bytes(Algorithm::MlDsa, &secret_bytes)
             .expect_err("tampered secret must fail during import");
 
+        let rendered = parse_err.to_string();
         assert!(
-            parse_err.to_string().contains("Inconsistent"),
+            rendered.to_ascii_lowercase().contains("inconsistent"),
             "unexpected private-key import error: {parse_err:?}"
         );
     }

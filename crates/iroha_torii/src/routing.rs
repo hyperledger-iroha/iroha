@@ -9302,6 +9302,11 @@ fn sccp_message_artifact_for_material_request(
             taira_diagnostic_local_admission,
         )
     {
+        #[cfg(not(feature = "sccp-test-fixtures"))]
+        return Err(sccp_bad_request(
+            "TAIRA diagnostic local admission requires the sccp-test-fixtures feature",
+        ));
+        #[cfg(feature = "sccp-test-fixtures")]
         return Ok(iroha_sccp::build_sccp_taira_tron_xor_diagnostic_transparent_proof(bundle));
     }
     sccp_message_artifact_for_destination_material(
@@ -27160,6 +27165,44 @@ mod multisig_selector_tests {
     }
 
     #[tokio::test]
+    async fn contract_call_returns_specific_not_found_for_missing_alias() {
+        let authority = checked_multisig_selector_account_id(
+            0x6b,
+            "derive missing-contract-alias authority key",
+        );
+        let result = handle_post_contract_call(
+            Arc::new("contract-call-missing-alias".parse().expect("chain id")),
+            build_queue(),
+            build_state(World::default()),
+            MaybeTelemetry::disabled(),
+            NoritoJson(ContractCallDto {
+                authority,
+                private_key: None,
+                public_key_hex: None,
+                signature_b64: None,
+                contract_address: None,
+                contract_alias: Some("boi-preauth-ret-01::is".parse().expect("contract alias")),
+                entrypoint: Some("main".to_owned()),
+                payload: None,
+                creation_time_ms: Some(1_700_000_000_234),
+                transaction_ttl_ms: None,
+                gas_asset_id: None,
+                fee_sponsor: None,
+                gas_limit: 10_000,
+            }),
+        )
+        .await;
+
+        let err = match result {
+            Ok(_) => panic!("missing contract alias must fail"),
+            Err(err) => err,
+        };
+
+        let message = expect_app_not_found(err, "contract_alias_not_found");
+        assert!(message.contains("boi-preauth-ret-01::is"));
+    }
+
+    #[tokio::test]
     async fn multisig_contract_propose_rejects_signer_missing_from_live_spec() {
         let (
             state,
@@ -32577,17 +32620,16 @@ fn prepare_contract_call(
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
     contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
 ) -> core::result::Result<PreparedContractCall, Error> {
-    use iroha_data_model::query::error::QueryExecutionFail;
-
     let world = state.world_view();
     let binding = world
         .contract_instances()
         .get(contract_address)
         .copied()
         .ok_or_else(|| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                QueryExecutionFail::NotFound,
-            ))
+            contract_not_found_error(
+                "contract_instance_not_found",
+                format!("contract instance `{contract_address}` is not active"),
+            )
         })?;
 
     let code_bytes = world
@@ -32595,14 +32637,18 @@ fn prepare_contract_call(
         .get(&binding)
         .cloned()
         .ok_or_else(|| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                QueryExecutionFail::NotFound,
-            ))
+            contract_not_found_error(
+                "contract_code_not_found",
+                format!(
+                    "contract code `{}` is not available",
+                    hex::encode(binding.as_ref())
+                ),
+            )
         })?;
 
     let verified = ivm::verify_contract_artifact(&code_bytes).map_err(|err| {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            QueryExecutionFail::Conversion(err.to_string()),
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
         ))
     })?;
     let dataspace_id = contract_address
@@ -32614,22 +32660,30 @@ fn prepare_contract_call(
         .by_id(dataspace_id)
         .map(|entry| entry.alias.clone())
         .ok_or_else(|| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                QueryExecutionFail::NotFound,
-            ))
+            contract_not_found_error(
+                "contract_dataspace_not_found",
+                format!(
+                    "contract dataspace `{}` is not in the active catalog",
+                    dataspace_id
+                ),
+            )
         })?;
     let manifest = world
         .contract_manifests()
         .get(&binding)
         .cloned()
         .ok_or_else(|| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                QueryExecutionFail::NotFound,
-            ))
+            contract_not_found_error(
+                "contract_manifest_not_found",
+                format!(
+                    "contract manifest for code `{}` is not available",
+                    hex::encode(binding.as_ref())
+                ),
+            )
         })?;
     if manifest.signature_payload() != verified.manifest.signature_payload() {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            QueryExecutionFail::Conversion(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(
                 "stored manifest does not match the verified contract artifact".into(),
             ),
         )));
@@ -32664,9 +32718,10 @@ fn prepare_contract_call_by_alias(
     let contract_address = world
         .contract_address_by_alias_at(contract_alias, now_ms)
         .ok_or_else(|| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::NotFound,
-            ))
+            contract_not_found_error(
+                "contract_alias_not_found",
+                format!("contract alias `{contract_alias}` is not active"),
+            )
         })?;
     prepare_contract_call(state, &contract_address, Some(contract_alias.clone()))
 }
@@ -39607,6 +39662,14 @@ pub(crate) fn conversion_error(message: String) -> Error {
     Error::Query(iroha_data_model::ValidationFail::QueryFailed(
         iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
     ))
+}
+
+#[cfg(feature = "app_api")]
+fn contract_not_found_error(code: &'static str, message: impl Into<String>) -> Error {
+    Error::AppNotFound {
+        code,
+        message: message.into(),
+    }
 }
 
 fn reject_server_side_signing(endpoint: &'static str) -> Error {

@@ -198,6 +198,15 @@ enum Command {
         #[arg(long)]
         expected_asset_key: Option<String>,
     },
+    /// Build a local TAIRA/TRON XOR diagnostic SCCP message bundle for public smoke tests.
+    BuildTairaTronXorDiagnosticMessageBundle {
+        #[arg(long)]
+        nonce: u64,
+        #[arg(long)]
+        amount: u128,
+        #[arg(long)]
+        recipient: String,
+    },
 }
 
 fn print_tx_stdin_json(bytes: &[u8]) {
@@ -576,6 +585,43 @@ fn print_sccp_route_manifest_publish_output(
         manifest.source_adapter_engine.is_some().into(),
     );
     print_json_value(&norito::json::Value::Object(output))
+}
+
+fn build_taira_tron_xor_diagnostic_message_bundle(
+    nonce: u64,
+    amount: u128,
+    recipient: String,
+) -> Result<()> {
+    let bundle = iroha_sccp::test_fixtures::sample_taira_tron_xor_diagnostic_transfer_bundle(
+        nonce,
+        amount,
+        recipient.into_bytes(),
+    )
+    .ok_or_else(|| eyre!("failed to build TAIRA/TRON XOR diagnostic transfer bundle"))?;
+    if !iroha_sccp::sccp_taira_tron_xor_diagnostic_message_bundle_structure(&bundle) {
+        return Err(eyre!(
+            "TAIRA/TRON XOR diagnostic transfer bundle failed structure validation"
+        ));
+    }
+
+    let message_id = hex::encode(bundle.commitment.message_id);
+    let selected_recent_item = norito::json!({
+        "message_id_hex": (message_id.clone()),
+        "kind": "transfer",
+        "target_domain": (iroha_sccp::SCCP_DOMAIN_SORA),
+        "counterparty_domain": (iroha_sccp::SCCP_DOMAIN_TRON),
+        "route_id": (iroha_sccp::SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1),
+        "diagnostic": true,
+        "source": "local_taira_tron_xor"
+    });
+    let output = norito::json!({
+        "message_id": (message_id),
+        "route": (iroha_sccp::SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1),
+        "bundle": (norito::json::to_value(&bundle)?),
+        "proof_submit_fields": null,
+        "selected_recent_item": (selected_recent_item)
+    });
+    print_json_value(&output)
 }
 
 fn publish_sccp_route_manifest(
@@ -1042,6 +1088,11 @@ fn main() -> Result<()> {
             expected_route_id.as_deref(),
             expected_asset_key.as_deref(),
         )?,
+        Command::BuildTairaTronXorDiagnosticMessageBundle {
+            nonce,
+            amount,
+            recipient,
+        } => build_taira_tron_xor_diagnostic_message_bundle(nonce, amount, recipient)?,
     }
     Ok(())
 }

@@ -3291,9 +3291,15 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   remain enforced for carried bytes. Local RBC plan installation now moves the
   prepared session into the live session map instead of cloning it before
   broadcast, so proposal broadcast plans stop retaining a second copy of the
-  chunk buffers. If RSS still climbs during the guarded repro, inspect
-  remaining persistence caches and validation/commit inflight owners with the
-  same memory report before changing recovery pruning semantics.
+  chunk buffers. P2P runtime subscriber/control update channels are now bounded
+  and coalesce to the latest pending update, Sumeragi RBC committed-session
+  cleanup clears payload metric markers and rebroadcast cursors with the live
+  session owner, and Kagemusha Pallas open-envelope archives validate the
+  Norito frame and read the sequence-length prefix before vector decode so
+  count-only frames cannot allocate count-sized vector/offset state. If RSS
+  still climbs during the guarded repro, inspect remaining persistence caches
+  and validation/commit inflight owners with the same memory report before
+  changing recovery pruning semantics.
 - Kagemusha is now the only active chain implementation for offline payments.
   Bridge, Swift, Kotlin/JVM, and Java Android payment builders, issuer clients,
   submitters, and bridge proof generators for retired Offline Note

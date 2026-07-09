@@ -6,10 +6,14 @@ RUNTIME_BIN=""
 EXPECTED_RUNTIME_SHA=""
 LOG_LEVEL="${LOG_LEVEL:-info}"
 TORII_PORTS="29080,29081,29082,29083"
+P2P_PORTS="33337,33338,33339,33340"
 STOP_TIMEOUT_SECONDS=5
 START_AFTER=0
 APPLY=0
 DRY_RUN_HAS_WARNINGS=0
+REPAIR_STORAGE_OWNERSHIP=0
+STORAGE_OWNER_USER="${USER:-$(id -un)}"
+STORAGE_OWNER_GROUP=""
 
 usage() {
   cat <<'EOF'
@@ -34,6 +38,9 @@ Options:
   --expected-runtime-sha SHA256   Verify --runtime-bin before any mutation.
   --start                        Start DIST/start.sh after quarantine.
   --torii-ports CSV              Ports to wait for after --start (default: 29080,29081,29082,29083; empty disables wait).
+  --p2p-ports CSV                P2P listener ports to wait for after --start (default: 33337,33338,33339,33340; empty disables wait).
+  --repair-storage-ownership     Repair DIST/storage ownership and user-write bits before quarantining state.
+  --storage-owner USER[:GROUP]   Runtime owner for DIST/storage checks/repairs (default: current user and primary group).
   --log-level LEVEL              LOG_LEVEL passed to start.sh (default: info).
   --stop-timeout-seconds N       Graceful stop wait before SIGKILL (default: 5).
   --apply                        Perform mutations. Without this flag, only prints the planned actions.
@@ -52,9 +59,9 @@ is_positive_integer() {
 
 normalize_torii_ports_csv() {
   local value="$1"
-  local port trimmed port_number normalized
+  local port trimmed port_number normalized seen_ports
   local -a ports
-  declare -A seen_ports=()
+  seen_ports=" "
 
   if [[ -z "$value" ]]; then
     printf '\n'
@@ -69,8 +76,12 @@ normalize_torii_ports_csv() {
     [[ "$trimmed" =~ ^[0-9]+$ ]] || die "--torii-ports must be a comma-separated list of numeric ports"
     port_number=$((10#$trimmed))
     (( port_number >= 1 && port_number <= 65535 )) || die "--torii-ports contains out-of-range port ${trimmed}; expected 1..65535"
-    [[ -z "${seen_ports[$port_number]:-}" ]] || die "--torii-ports contains duplicate port ${port_number}"
-    seen_ports[$port_number]=1
+    case "$seen_ports" in
+      *" ${port_number} "*)
+        die "--torii-ports contains duplicate port ${port_number}"
+        ;;
+    esac
+    seen_ports="${seen_ports}${port_number} "
     if [[ -z "${normalized:-}" ]]; then
       normalized="$port_number"
     else
@@ -171,7 +182,7 @@ PY
 
 command_looks_like_peer_runtime() {
   local command_line="$1"
-  [[ "$command_line" =~ (^|[[:space:]/])(irohad|iroha3d|peer-runtime)([[:space:]]|$) ]]
+  [[ "$command_line" =~ (^|[[:space:]/])(irohad|iroha3d|peer-runtime)([.][^[:space:]/]+)?([[:space:]]|$) ]]
 }
 
 pid_exists() {
@@ -217,6 +228,73 @@ run_or_print() {
   fi
 }
 
+tcp_port_listening() {
+  local port="$1"
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | awk 'NR > 1 { found = 1 } END { exit found ? 0 : 1 }'
+    return
+  fi
+  if command -v nc >/dev/null 2>&1; then
+    nc -z 127.0.0.1 "$port" >/dev/null 2>&1
+    return
+  fi
+  die "neither lsof nor nc is available to verify P2P listener port $port"
+}
+
+storage_owner_spec() {
+  if [[ -n "$STORAGE_OWNER_GROUP" ]]; then
+    printf '%s:%s\n' "$STORAGE_OWNER_USER" "$STORAGE_OWNER_GROUP"
+  else
+    printf '%s\n' "$STORAGE_OWNER_USER"
+  fi
+}
+
+storage_access_issue_sample() {
+  local storage_root="$DIST/storage"
+  [[ -d "$storage_root" ]] || return 1
+  find "$storage_root" \( ! -user "$STORAGE_OWNER_USER" -o ! -perm -u+w \) -print -quit
+}
+
+storage_access_issue_count() {
+  local storage_root="$DIST/storage"
+  [[ -d "$storage_root" ]] || {
+    printf '0\n'
+    return 0
+  }
+  find "$storage_root" \( ! -user "$STORAGE_OWNER_USER" -o ! -perm -u+w \) -print | wc -l | awk '{print $1}'
+}
+
+warn_or_die_storage_access_issue() {
+  local sample count owner_spec message
+  sample="$(storage_access_issue_sample || true)"
+  [[ -n "$sample" ]] || return 0
+  count="$(storage_access_issue_count)"
+  owner_spec="$(storage_owner_spec)"
+  message="DIST/storage contains ${count} entr$( [[ "$count" == "1" ]] && printf 'y' || printf 'ies' ) not owned by ${STORAGE_OWNER_USER} or not user-writable; first issue: ${sample}. Repair before starting peers, or rerun with --repair-storage-ownership using an account allowed to chown/chmod. Manual repair: sudo chown -R ${owner_spec} ${DIST}/storage && chmod -R u+rwX ${DIST}/storage"
+  if [[ $APPLY -eq 1 ]]; then
+    die "$message"
+  fi
+  echo "warning: $message" >&2
+  DRY_RUN_HAS_WARNINGS=1
+}
+
+repair_storage_access() {
+  local owner_spec sample
+  [[ -d "$DIST/storage" ]] || return 0
+  owner_spec="$(storage_owner_spec)"
+  sample="$(storage_access_issue_sample || true)"
+  if [[ -z "$sample" ]]; then
+    return 0
+  fi
+  echo "==> repairing storage ownership for $DIST/storage as $owner_spec"
+  run_or_print chown -R "$owner_spec" "$DIST/storage"
+  run_or_print chmod -R u+rwX "$DIST/storage"
+  if [[ $APPLY -eq 1 ]]; then
+    sample="$(storage_access_issue_sample || true)"
+    [[ -z "$sample" ]] || die "storage ownership repair did not make DIST/storage runtime-writable; first remaining issue: $sample"
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dist)
@@ -241,6 +319,25 @@ while [[ $# -gt 0 ]]; do
     --torii-ports)
       [[ $# -ge 2 ]] || die "missing value for --torii-ports"
       TORII_PORTS="$2"
+      shift 2
+      ;;
+    --p2p-ports)
+      [[ $# -ge 2 ]] || die "missing value for --p2p-ports"
+      P2P_PORTS="$2"
+      shift 2
+      ;;
+    --repair-storage-ownership)
+      REPAIR_STORAGE_OWNERSHIP=1
+      shift
+      ;;
+    --storage-owner)
+      [[ $# -ge 2 ]] || die "missing value for --storage-owner"
+      STORAGE_OWNER_USER="${2%%:*}"
+      STORAGE_OWNER_GROUP=""
+      if [[ "$2" == *:* ]]; then
+        STORAGE_OWNER_GROUP="${2#*:}"
+      fi
+      [[ -n "$STORAGE_OWNER_USER" ]] || die "--storage-owner user must not be empty"
       shift 2
       ;;
     --log-level)
@@ -270,7 +367,16 @@ done
 [[ -n "$DIST" ]] || die "--dist is required"
 [[ -d "$DIST" ]] || die "dist directory not found: $DIST"
 is_positive_integer "$STOP_TIMEOUT_SECONDS" || die "--stop-timeout-seconds must be a positive integer"
+id -u "$STORAGE_OWNER_USER" >/dev/null 2>&1 || die "--storage-owner user does not exist: $STORAGE_OWNER_USER"
+if [[ -z "$STORAGE_OWNER_GROUP" ]]; then
+  STORAGE_OWNER_GROUP="$(id -gn "$STORAGE_OWNER_USER")"
+else
+  getent group "$STORAGE_OWNER_GROUP" >/dev/null 2>&1 || dscl . -read "/Groups/${STORAGE_OWNER_GROUP}" >/dev/null 2>&1 || {
+    die "--storage-owner group does not exist: $STORAGE_OWNER_GROUP"
+  }
+fi
 TORII_PORTS="$(normalize_torii_ports_csv "$TORII_PORTS")"
+P2P_PORTS="$(normalize_torii_ports_csv "$P2P_PORTS")"
 if [[ $START_AFTER -eq 1 ]]; then
   [[ -x "$DIST/start.sh" ]] || die "start script is not executable: $DIST/start.sh"
 fi
@@ -299,6 +405,10 @@ if [[ $APPLY -ne 1 ]]; then
 fi
 
 echo "==> dist: $DIST"
+
+if [[ $REPAIR_STORAGE_OWNERSHIP -ne 1 ]]; then
+  warn_or_die_storage_access_issue
+fi
 
 stop_pids=()
 unverified_live_pid_refs=()
@@ -369,6 +479,12 @@ for pidfile in "$DIST"/peer*.pid; do
   run_or_print rm -f "$pidfile"
 done
 
+if [[ $REPAIR_STORAGE_OWNERSHIP -eq 1 ]]; then
+  repair_storage_access
+else
+  warn_or_die_storage_access_issue
+fi
+
 echo "==> quarantining volatile consensus state"
 for storage in "$DIST"/storage/peer*; do
   [[ -d "$storage" ]] || continue
@@ -415,6 +531,7 @@ if [[ $START_AFTER -eq 1 ]]; then
   if [[ $APPLY -eq 1 && -n "$TORII_PORTS" ]]; then
     IFS=',' read -r -a ports <<<"$TORII_PORTS"
     echo "==> waiting for Torii ports: ${ports[*]}"
+    torii_ready=0
     for _ in $(seq 1 180); do
       ok=1
       for port in "${ports[@]}"; do
@@ -425,9 +542,13 @@ if [[ $START_AFTER -eq 1 ]]; then
           break
         fi
       done
-      [[ "$ok" == "1" ]] && break
+      if [[ "$ok" == "1" ]]; then
+        torii_ready=1
+        break
+      fi
       sleep 2
     done
+    [[ "$torii_ready" == "1" ]] || die "Torii readiness failed: one or more configured Torii ports did not return /v1/sumeragi/status"
 
     echo "==> local summaries"
     for port in "${ports[@]}"; do
@@ -455,6 +576,28 @@ print(json.dumps({
 PY
       fi
     done
+  fi
+
+  if [[ $APPLY -eq 1 && -n "$P2P_PORTS" ]]; then
+    IFS=',' read -r -a p2p_ports <<<"$P2P_PORTS"
+    echo "==> waiting for P2P listener ports: ${p2p_ports[*]}"
+    p2p_ready=0
+    for _ in $(seq 1 90); do
+      ok=1
+      for port in "${p2p_ports[@]}"; do
+        [[ -n "$port" ]] || continue
+        if ! tcp_port_listening "$port"; then
+          ok=0
+          break
+        fi
+      done
+      if [[ "$ok" == "1" ]]; then
+        p2p_ready=1
+        break
+      fi
+      sleep 2
+    done
+    [[ "$p2p_ready" == "1" ]] || die "P2P listener readiness failed: one or more configured P2P ports are not listening"
   fi
 fi
 

@@ -1,25 +1,10 @@
 {
   "format_version": 1,
   "notes": [
-    "Deterministic wallet derivation vectors for confidential keysets (M1 rollout). Each case feeds the 32-byte spend key into the hkdf(hmac-sha3-512) ladder used by Torii/SDKs and records the derived keys in both hex and base64 so Swift/JS/Python/Rust bindings can assert parity."
+    "Deterministic wallet derivation vectors for confidential keysets (M1 rollout). Each positive case feeds a nonzero 32-byte spend key into the hkdf(hmac-sha3-512) ladder used by Torii/SDKs and records the derived keys in both hex and base64 so Swift/JS/Python/Rust bindings can assert parity. All-zero spend keys are inert and must be rejected."
   ],
   "cases": {
     "positive": [
-      {
-        "case_id": "seed-all-zero",
-        "seed_hex": "0000000000000000000000000000000000000000000000000000000000000000",
-        "seed_base64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-        "derived": {
-          "nullifier_key_hex": "982df44a1f2e7f1d914e3da70f745f56d7f1652ab2c82186277e09e454aab32a",
-          "nullifier_key_base64": "mC30Sh8ufx2RTj2nD3RfVtfxZSqyyCGGJ34J5FSqsyo=",
-          "incoming_view_key_hex": "4aef3f316cc4e294a8dde5dedb06207e5005d0acd4dca0f10e5ed1a814ff9896",
-          "incoming_view_key_base64": "Su8/MWzE4pSo3eXe2wYgflAF0KzU3KDxDl7RqBT/mJY=",
-          "outgoing_view_key_hex": "b7b2d192766f3603954b5e794ff83bd3bfec022e46bd924c1a1e0ff48a43c676",
-          "outgoing_view_key_base64": "t7LRknZvNgOVS155T/g707/sAi5GvZJMGh4P9IpDxnY=",
-          "full_view_key_hex": "45cff7ac6465b7a162de9e43fb8d5bd1bd1d2deb8818a088f7654b9081587006",
-          "full_view_key_base64": "Rc/3rGRlt6Fi3p5D+41b0b0dLeuIGKCI92VLkIFYcAY="
-        }
-      },
       {
         "case_id": "seed-0x42",
         "seed_hex": "4242424242424242424242424242424242424242424242424242424242424242",
@@ -52,6 +37,14 @@
       }
     ],
     "negative": [
+      {
+        "case_id": "seed-all-zero",
+        "seed_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+        "expected_error": {
+          "kind": "inert_spend_key",
+          "length_bytes": 32
+        }
+      },
       {
         "case_id": "seed-too-short",
         "seed_hex": "abcd",

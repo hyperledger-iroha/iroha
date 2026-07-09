@@ -381,6 +381,35 @@ def test_solana_json_rpc_rejects_duplicate_json_keys():
         raise AssertionError("duplicate-key Solana JSON-RPC response was accepted")
 
 
+def test_solana_json_object_rejects_key_subclasses_without_hooks():
+    module = load_live_module()
+
+    class HostileJsonKey(str):
+        def __new__(cls):
+            return str.__new__(cls, "secret-token-value")
+
+        def __hash__(self):
+            raise AssertionError("secret-token Solana JSON key was hashed")
+
+        def __eq__(self, _other):
+            raise AssertionError("secret-token Solana JSON key was compared")
+
+        def __str__(self):
+            raise AssertionError("secret-token Solana JSON key was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token Solana JSON key was repr'd")
+
+    try:
+        module._json_object_without_duplicate_keys([(HostileJsonKey(), None)])
+    except ValueError as exc:
+        message = str(exc)
+        assert message == "JSON-RPC returned duplicate JSON keys"
+        assert "secret-token" not in message
+    else:
+        raise AssertionError("hostile Solana JSON key subclass was accepted")
+
+
 def test_solana_json_rpc_url_rejects_hidden_request_state():
     module = load_live_module()
 
