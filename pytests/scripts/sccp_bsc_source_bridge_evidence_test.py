@@ -636,6 +636,36 @@ def test_bsc_runtime_bytecode_file_rejects_unreadable_file_shapes(tmp_path):
         def __fspath__(self):
             raise AssertionError("secret-token BSC runtime path-like was coerced")
 
+    # Source-inventory marker: runtime bytecode file native path helpers reject path-like inputs.
+    for path in (
+        str(outside),
+        HostileRuntimeBytecodePath(),
+        HostileRuntimeBytecodePathLike(),
+    ):
+        try:
+            module._read_runtime_bytecode_file_text(
+                path,
+                label="source bridge runtime bytecode",
+            )
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            assert rendered == "source bridge runtime bytecode file cannot be read"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError("BSC runtime bytecode helper accepted hostile path")
+
+        try:
+            module._reject_runtime_bytecode_file_symlink_path(path)
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            assert rendered == "runtime bytecode file cannot be read"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("BSC runtime bytecode symlink helper accepted hostile path")
+
     for path in (
         str(symlink_input),
         str(directory_input),
@@ -853,6 +883,21 @@ def test_bsc_source_exact_string_parsers_reject_subclasses_without_hooks():
             assert exc.__cause__ is None
         else:
             raise AssertionError("BSC source parser accepted a string subclass")
+
+
+def test_bsc_source_block_tag_rejects_string_subclasses_without_hooks():
+    module = load_evidence_module()
+    args = SimpleNamespace(block_tag=HostileBscSourceString("latest"))
+
+    try:
+        module._block_tag_from_args(args)
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "block_tag must be finalized, safe, or latest"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+    else:
+        raise AssertionError("BSC source block tag accepted a string subclass")
 
 
 def test_bsc_runtime_bytecode_derives_source_bridge_code_hash():
@@ -1496,6 +1541,36 @@ def test_bsc_source_record_hashes_match_rust_vectors():
         assert "canonical BSC source-adapter verifier profile" in str(exc)
     else:
         raise AssertionError("BSC testnet source evidence accepted mainnet vk hash")
+
+
+def test_bsc_source_gate_rejects_hostile_profile_chain_without_hooks():
+    module = load_evidence_module()
+
+    class HostileBscProfileChain(str):
+        def __new__(cls):
+            return str.__new__(cls, "bsc")
+
+        def __eq__(self, _other):
+            raise AssertionError("secret-token BSC profile chain was compared")
+
+        def __ne__(self, _other):
+            raise AssertionError("secret-token BSC profile chain was compared")
+
+    original_profile = module.BSC_NETWORK_PROFILES["mainnet"]
+    hostile_profile = dict(original_profile)
+    hostile_profile["chain"] = HostileBscProfileChain()
+    module.BSC_NETWORK_PROFILES["mainnet"] = hostile_profile
+    try:
+        try:
+            module.bsc_source_gate_hash(bsc_args(module))
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == "BSC source gate is only defined for mainnet"
+            assert "secret-token" not in rendered
+        else:
+            raise AssertionError("BSC source gate accepted hostile profile chain")
+    finally:
+        module.BSC_NETWORK_PROFILES["mainnet"] = original_profile
 
 
 def test_bsc_direct_record_hashes_reject_zero_production_inputs():

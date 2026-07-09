@@ -148,6 +148,31 @@ class HostileMarkdownString(str):
         return "secret-token-hostile-markdown-string"
 
 
+class HostilePhaseStatus(str):
+    """String subclass that copied corridor status checks must reject exactly."""
+
+    def __new__(cls, value: str = "passed"):
+        return str.__new__(cls, value)
+
+    def __eq__(self, other):
+        raise AssertionError("secret-token hostile phase status __eq__")
+
+    def __ne__(self, other):
+        raise AssertionError("secret-token hostile phase status __ne__")
+
+    def __str__(self):
+        raise AssertionError("secret-token hostile phase status __str__")
+
+    def __format__(self, format_spec):
+        raise AssertionError("secret-token hostile phase status __format__")
+
+    def __repr__(self):
+        return "secret-token-hostile-phase-status"
+
+    def __hash__(self):
+        return str.__hash__(self)
+
+
 class HostileVerifierFieldName(str):
     """String subclass that verifier field-name classifiers must reject exactly."""
 
@@ -869,6 +894,41 @@ def test_release_bundle_active_evm_metadata_rejects_container_subclasses_without
     assert (
         f"{label}: active {verifier.ACTIVE_LAUNCH_DISPLAY} live metadata summary "
         "is malformed"
+    ) in blockers
+    assert "secret-token" not in rendered
+
+
+def test_release_bundle_active_evm_metadata_rejects_block_tag_subclasses_without_hooks() -> None:
+    """Strict active EVM block tags must reject string subclasses before equality."""
+
+    verifier = load_verify_helpers()
+    label = (
+        f"domain {verifier.ACTIVE_LAUNCH_DOMAIN} "
+        f"({verifier.ACTIVE_LAUNCH_CHAIN})"
+    )
+    expected_chain_id = verifier.ACTIVE_LAUNCH_EVM_DECIMAL_CHAIN_ID
+    assert expected_chain_id is not None
+    lane = {
+        "evm_live_metadata": {
+            "source_rpc_chain_id": expected_chain_id,
+            "source_block_tag": HostilePublicCryptoString("finalized"),
+            "destination_rpc_chain_id": expected_chain_id,
+            "destination_block_tag": HostilePublicCryptoString("finalized"),
+        }
+    }
+
+    # Source-inventory marker: active EVM live block-tag exactness rejects copied
+    # string subclasses before equality hooks.
+    blockers = verifier._active_launch_evm_live_metadata_blockers(label, lane)
+    rendered = "\n".join(blockers)
+
+    assert (
+        f"{label}: {verifier.ACTIVE_LAUNCH_DISPLAY} source live block tag must "
+        "be finalized"
+    ) in blockers
+    assert (
+        f"{label}: {verifier.ACTIVE_LAUNCH_DISPLAY} destination live block tag "
+        "must be finalized"
     ) in blockers
     assert "secret-token" not in rendered
 
@@ -1987,6 +2047,55 @@ def test_release_bundle_solana_pubkey_redacts_parser_exit_causes(
             ]
             assert "secret-token" not in rendered
             assert exception_type.__name__ not in rendered
+
+
+def test_release_bundle_verifier_solana_base58_decoder_rejects_string_subclasses_without_hooks(
+) -> None:
+    """Strict Solana base58 decoding must reject string subclasses before hooks."""
+
+    verifier = load_verify_helpers()
+
+    class HostileSolanaBase58(str):
+        def __new__(cls):
+            return str.__new__(cls, "11111111111111111111111111111112")
+
+        def __eq__(self, _other):
+            raise AssertionError("secret-token Solana base58 equality ran")
+
+        def strip(self, *_args, **_kwargs):
+            raise AssertionError("secret-token Solana base58 strip ran")
+
+        def __iter__(self):
+            raise AssertionError("secret-token Solana base58 was iterated")
+
+        def lstrip(self, *_args, **_kwargs):
+            raise AssertionError("secret-token Solana base58 lstrip ran")
+
+        def __str__(self):
+            raise AssertionError("secret-token Solana base58 was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token Solana base58 was repr'd")
+
+    hostile = HostileSolanaBase58()
+    try:
+        verifier._decode_solana_base58(hostile)
+    except ValueError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("strict verifier decoded hostile Solana base58 text")
+
+    assert message == "not canonical base58"
+    assert "secret-token" not in message
+    assert verifier._solana_pubkey_field_errors(
+        "strict report lane domain 3 route_canary",
+        {"solana_programdata_address": hostile},
+        "solana_programdata_address",
+    ) == [
+        "strict report lane domain 3 route_canary "
+        "solana_programdata_address must be a non-zero canonical base58 "
+        "Solana address"
+    ]
 
 
 def test_release_bundle_active_route_allowlist_metadata_rejects_exact_flag_and_role_reuse(
@@ -5895,6 +6004,165 @@ def test_release_bundle_verifier_redacts_source_inventory_read_failures(
     assert "/tmp/operator" not in rendered
 
 
+def test_release_bundle_verifier_source_inventory_rejects_pathlike_subclasses_without_hooks(
+) -> None:
+    """Shared inventory scanners must reject hostile path-like objects early."""
+
+    verifier = load_verify_helpers()
+
+    class HostileInventoryPathString(str):
+        def __new__(cls):
+            return str.__new__(cls, "pytests/scripts/sccp_release_bundle_test.py")
+
+        def __str__(self):
+            raise AssertionError("secret-token inventory path was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token inventory path was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token inventory path was coerced")
+
+    class HostileInventoryPathLike:
+        def __str__(self):
+            raise AssertionError("secret-token inventory path-like was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token inventory path-like was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token inventory path-like was coerced")
+
+    for path in (HostileInventoryPathString(), HostileInventoryPathLike()):
+        source_errors = verifier._source_marker_inventory_errors(
+            ((path, ("required marker",)),),
+            label="SCCP adversarial",
+        )
+        sdk_errors = verifier._sdk_test_inventory_errors(
+            ((path, ("required marker",)),),
+            label="SCCP adversarial SDK",
+        )
+        relative_path = verifier._source_inventory_relative_path(path)
+
+        rendered = "\n".join([*source_errors, *sdk_errors, relative_path])
+        assert source_errors == [
+            "SCCP adversarial source inventory path must be an exact string or native path"
+        ]
+        assert sdk_errors == [
+            "SCCP adversarial SDK SDK test inventory path must be an exact string or native path"
+        ]
+        assert relative_path == "<invalid inventory path>"
+        assert "secret-token" not in rendered
+
+
+def test_release_bundle_verifier_inventory_adjuncts_reject_pathlike_subclasses_without_hooks(
+) -> None:
+    """Inventory adjunct scanners must reject hostile path-like objects early."""
+
+    verifier = load_verify_helpers()
+
+    class HostileInventoryPathString(str):
+        def __new__(cls):
+            return str.__new__(cls, "pytests/scripts/sccp_release_bundle_test.py")
+
+        def __str__(self):
+            raise AssertionError("secret-token inventory adjunct path was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token inventory adjunct path was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token inventory adjunct path was coerced")
+
+    class HostileInventoryPathLike:
+        def __str__(self):
+            raise AssertionError(
+                "secret-token inventory adjunct path-like was stringified"
+            )
+
+        def __repr__(self):
+            raise AssertionError("secret-token inventory adjunct path-like was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token inventory adjunct path-like was coerced")
+
+    bypass_markers = (
+        "fn sccp_allow_unready_source_proof_bypass_enabled(allow_unready: bool) -> bool",
+        "fn sccp_allow_unready_transparent_proof_bypass_enabled(allow_unready: bool) -> bool",
+        "fn sccp_allow_unready_torii_route_bypass_enabled(allow_unready: bool) -> bool",
+    )
+
+    for path in (HostileInventoryPathString(), HostileInventoryPathLike()):
+        region, region_errors = verifier._source_region(
+            path,
+            start_marker="start",
+            end_marker="end",
+            label="SCCP adversarial region",
+        )
+        data_collection_errors = verifier._ethereum_data_collection_no_proxy_inventory_errors(
+            regions={"js": (path, "start", "end", ("marker",))},
+            gate_inventory=(),
+        )
+        launch_doc_errors = verifier._ethereum_launch_policy_documentation_inventory_errors(
+            inventory=((path, ()),),
+            forbidden_markers=("stale marker",),
+        )
+        discovery_doc_errors = verifier._sccp_public_discovery_documentation_inventory_errors(
+            inventory=((path, ()),),
+            forbidden_markers=("stale marker",),
+        )
+        retired_errors = verifier._sccp_retired_network_surface_guard_inventory_errors(
+            inventory=((path, ()),),
+            forbidden_markers=("stale marker",),
+        )
+        cargo_errors = verifier._sccp_unready_transparent_proof_test_fixture_feature_errors(
+            cargo_manifest_paths=(path,),
+        )
+        command_errors = (
+            verifier._sccp_unready_transparent_proof_release_command_feature_errors(
+                release_command_paths=(path,),
+            )
+        )
+        unready_errors = verifier._sccp_unready_transparent_proof_config_inventory_errors(
+            inventory=((path, bypass_markers),),
+            forbidden_paths=(path,),
+            forbidden_config_paths=(path,),
+            forbidden_surface_paths=(path,),
+            cargo_manifest_paths=(path,),
+            release_command_paths=(path,),
+        )
+
+        rendered = "\n".join(
+            [
+                *region_errors,
+                *data_collection_errors,
+                *launch_doc_errors,
+                *discovery_doc_errors,
+                *retired_errors,
+                *cargo_errors,
+                *command_errors,
+                *unready_errors,
+            ]
+        )
+
+        assert region is None
+        assert region_errors == ["SCCP adversarial region source path must be a native path"]
+        assert "Ethereum mainnet js data collection source path must be an exact string or native path" in data_collection_errors
+        assert "Ethereum mainnet launch-policy documentation source inventory path must be an exact string or native path" in launch_doc_errors
+        assert "SCCP public discovery documentation source inventory path must be an exact string or native path" in discovery_doc_errors
+        assert "SCCP retired network-surface guard source inventory path must be an exact string or native path" in retired_errors
+        assert "SCCP unready transparent-proof removed-surface source inventory Cargo manifest path must be an exact string or native path" in cargo_errors
+        assert "SCCP unready transparent-proof removed-surface source inventory release command source path must be an exact string or native path" in command_errors
+        assert "SCCP unready transparent-proof removed-surface source inventory path must be an exact string or native path" in unready_errors
+        assert "SCCP unready transparent-proof removed-surface source inventory source-proof bypass call-site source path must be an exact string or native path" in unready_errors
+        assert "SCCP unready transparent-proof removed-surface source inventory bypass-gate source path must be an exact string or native path" in unready_errors
+        assert "SCCP unready transparent-proof removed-surface source inventory Torii route bypass call-site source path must be an exact string or native path" in unready_errors
+        assert "SCCP unready transparent-proof removed-surface source inventory forbidden environment source path must be an exact string or native path" in unready_errors
+        assert "SCCP unready transparent-proof removed-surface source inventory forbidden config source path must be an exact string or native path" in unready_errors
+        assert "SCCP unready transparent-proof removed-surface source inventory forbidden diagnostic surface source path must be an exact string or native path" in unready_errors
+        assert "secret-token" not in rendered
+
+
 def test_release_bundle_verifier_guards_release_input_provenance_schema_inventory(
     tmp_path: Path,
 ) -> None:
@@ -6507,6 +6775,54 @@ def test_release_bundle_verifier_markdown_table_containers_reject_subclasses_wit
     assert "secret-token" not in rendered
 
 
+def test_release_bundle_verifier_corridor_markdown_helpers_use_exact_root_keys() -> None:
+    """Verifier corridor Markdown must ignore copied root/phase aliases exactly."""
+
+    verifier = load_verify_helpers()
+    phase = "rust-sccp"
+    secret_artifact = {
+        "path": "evidence/secret-token-verifier-corridor-root.log",
+        "bytes": 42,
+        "sha256": "11" * 32,
+    }
+
+    rows = [
+        *verifier._readiness_corridor_markdown_rows(
+            {
+                HostileVerifierFieldName("phases"): {phase: "passed"},
+                "evidence_artifacts": {phase: secret_artifact},
+            }
+        ),
+        *verifier._readiness_corridor_markdown_rows(
+            {
+                "phases": {phase: "passed"},
+                HostileVerifierFieldName("evidence_artifacts"): {
+                    phase: secret_artifact,
+                },
+            }
+        ),
+        *verifier._readiness_corridor_markdown_rows(
+            {
+                "phases": {HostileVerifierFieldName(phase): "passed"},
+                "evidence_artifacts": {phase: secret_artifact},
+            }
+        ),
+        *verifier._readiness_corridor_markdown_rows(
+            {
+                "phases": {phase: HostileVerifierFieldName("passed")},
+                "evidence_artifacts": {phase: secret_artifact},
+            }
+        ),
+    ]
+    rendered = "\n".join("| " + " | ".join(row) + " |" for row in rows)
+
+    assert "| `<invalid phase>` | `<invalid status>` | - | - |" in rendered
+    assert f"| `{phase}` | passed | - | - |" in rendered
+    assert "| `<invalid phase>` | passed | - | - |" in rendered
+    assert f"| `{phase}` | `<invalid status>` |" in rendered
+    assert "secret-token" not in rendered
+
+
 def test_release_bundle_verifier_markdown_native_source_containers_reject_subclasses_without_leaking() -> None:
     """Verifier native/source Markdown helpers must reject subclasses early."""
 
@@ -6648,6 +6964,38 @@ def test_release_bundle_verifier_markdown_native_source_containers_reject_subcla
     assert "`<invalid gate>`" in rendered
     assert "source inventory gate must be an object" in rendered
     assert "secret-token" not in rendered
+
+
+def test_release_bundle_verifier_input_artifact_markdown_helpers_use_exact_keys(
+) -> None:
+    """Strict input-artifact Markdown helpers must ignore hostile copied aliases."""
+
+    verifier = load_verify_helpers()
+    artifact = {
+        "path": "evidence/secret-token-verifier-input-alias.toml",
+        "bytes": 42,
+        "sha256": "11" * 32,
+    }
+    for field in ("path", "bytes", "sha256"):
+        artifact[HostileVerifierFieldName(field)] = artifact.pop(field)
+
+    path_cell = verifier._readiness_artifact_path_cell(artifact, field_label="path")
+    bytes_cell = verifier._readiness_artifact_bytes_cell(artifact)
+    hash_cell = verifier._readiness_artifact_hash_cell(
+        artifact,
+        field_label="sha256",
+    )
+    rows = verifier._readiness_input_artifact_markdown_rows([artifact])
+    rendered = "\n".join([path_cell, bytes_cell, hash_cell, *rows[0]])
+
+    assert path_cell == "`<invalid path>`"
+    assert bytes_cell == "`<invalid bytes>`"
+    assert hash_cell == "`<invalid sha256>`"
+    assert rows == [["`<invalid path>`", "`<invalid bytes>`", "`<invalid sha256>`"]]
+    assert "secret-token" not in rendered
+    assert "hostile" not in rendered
+    assert "__eq__" not in rendered
+    assert "__str__" not in rendered
 
 
 def test_release_bundle_verifier_markdown_lane_containers_reject_subclasses_without_leaking() -> None:
@@ -8140,6 +8488,70 @@ def test_generated_bundle_self_verifier_rejects_summary_container_subclasses_wit
         assert expected_error in message
         assert "secret-token" not in message
         assert "Traceback" not in message
+
+
+def test_generated_bundle_path_helpers_reject_pathlike_subclasses_without_hooks(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Generated-bundle helpers must reject hostile path-like objects early."""
+
+    module = load_bundle_module()
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    path_text = str(bundle_dir)
+
+    class HostileGeneratedBundlePathString(str):
+        def __new__(cls):
+            return str.__new__(cls, path_text)
+
+        def __str__(self):
+            raise AssertionError("secret-token generated bundle path was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token generated bundle path was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token generated bundle path was coerced")
+
+    class HostileGeneratedBundlePathLike:
+        def __str__(self):
+            raise AssertionError(
+                "secret-token generated bundle path-like was stringified"
+            )
+
+        def __repr__(self):
+            raise AssertionError("secret-token generated bundle path-like was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token generated bundle path-like was coerced")
+
+    def fail_verify_module():
+        raise AssertionError("strict verifier should not load for hostile path")
+
+    monkeypatch.setattr(module, "_verify_module", fail_verify_module)
+    boundaries = (
+        (
+            lambda path: module._verify_generated_bundle(path),
+            "generated SCCP release bundle path must be a native path",
+        ),
+        (
+            lambda path: module._write_json(path, {"ok": True}),
+            "release bundle JSON output path must be a native path",
+        ),
+        (
+            lambda path: module._bundle_artifacts(path, []),
+            "release bundle output directory must be a native path",
+        ),
+    )
+
+    for path in (HostileGeneratedBundlePathString(), HostileGeneratedBundlePathLike()):
+        for boundary, expected_error in boundaries:
+            with pytest.raises(ValueError) as exc_info:
+                boundary(path)
+            message = str(exc_info.value)
+            assert message == expected_error
+            assert "secret-token" not in message
 
 
 def test_release_bundle_verifier_cli_suppresses_malformed_summary_roots(
@@ -12223,6 +12635,39 @@ def test_release_bundle_requires_exact_corridor_phase_evidence_keys() -> None:
         in rendered
     )
     assert "secret-token" not in rendered
+
+
+def test_release_bundle_corridor_phase_statuses_use_exact_strings() -> None:
+    """Copied corridor phase statuses must reject string subclasses before comparing."""
+
+    bundle = load_bundle_module()
+    report = minimal_release_bundle_report()
+    corridor = report["corridor"]
+    assert isinstance(corridor, dict)
+    corridor["phases"] = {"rust-sccp": HostilePhaseStatus("passed")}
+    corridor["evidence_artifacts"] = {
+        "rust-sccp": {
+            "path": "corridor/rust-sccp.log",
+            "bytes": 1,
+            "sha256": "a" * 64,
+        }
+    }
+
+    errors = bundle._release_report_bundle_errors(report, label="bundled report")
+    rendered = "\n".join(errors)
+
+    assert (
+        "bundled report.corridor phase rust-sccp status must be passed or blocked"
+        in rendered
+    )
+    assert "bundled report.corridor phase rust-sccp has no hashed evidence artifact" not in (
+        rendered
+    )
+    assert "secret-token" not in rendered
+    assert "hostile phase status" not in rendered
+    assert "__eq__" not in rendered
+    assert "__ne__" not in rendered
+    assert "__str__" not in rendered
 
 
 def test_release_report_bundle_uses_exact_root_and_corridor_keys() -> None:
@@ -18036,6 +18481,82 @@ def test_release_bundle_verifier_active_launch_outer_summary_uses_exact_keys(
     assert "__str__" not in rendered
 
 
+def test_release_bundle_verifier_lane_markdown_helpers_use_exact_row_keys() -> None:
+    """Strict lane-readiness Markdown helpers must ignore hostile copied row aliases."""
+
+    verifier = load_verify_helpers()
+    lane = {
+        "domain": verifier.ACTIVE_LAUNCH_DOMAIN,
+        "chain": verifier.ACTIVE_LAUNCH_CHAIN,
+        "production_ready": True,
+        "records": {
+            "source_verifier_material": True,
+            "source_adapter_deployment": True,
+            "destination_rollout": True,
+            "route_allowlist": True,
+        },
+        "blockers": ["secret-token-lane-alias"],
+    }
+    for field in ("domain", "chain", "production_ready", "records", "blockers"):
+        lane[HostileVerifierFieldName(field)] = lane.pop(field)
+
+    cells = verifier._readiness_markdown_lane_row_cells(lane)
+    rows = verifier._readiness_lane_markdown_rows(
+        {"lanes": [lane]},
+        max_blockers_per_lane=4,
+    )
+    rendered = "\n".join(str(value) for value in (*cells, *rows[0]))
+
+    assert cells == ("-", "-", "blocked", "source=no, deploy=no, dest=no, route=no", None)
+    assert rows[0] == [
+        "-",
+        "-",
+        "blocked",
+        "source=no, deploy=no, dest=no, route=no",
+        "`<invalid blockers>`",
+    ]
+    assert "secret-token" not in rendered
+    assert "hostile" not in rendered
+    assert "__eq__" not in rendered
+    assert "__str__" not in rendered
+
+
+def test_release_bundle_verifier_lane_markdown_invariants_use_exact_row_keys() -> None:
+    """Strict lane-readiness invariants must ignore hostile copied row aliases."""
+
+    verifier = load_verify_helpers()
+    domain = verifier.ACTIVE_LAUNCH_DOMAIN
+    lane = {
+        "domain": domain,
+        "chain": verifier.ACTIVE_LAUNCH_CHAIN,
+        "production_ready": True,
+        "records": {
+            "source_verifier_material": True,
+            "source_adapter_deployment": True,
+            "destination_rollout": True,
+            "route_allowlist": True,
+        },
+        "blockers": ["secret-token-lane-invariant"],
+    }
+    for field in ("chain", "production_ready", "records", "blockers"):
+        lane[HostileVerifierFieldName(field)] = lane.pop(field)
+
+    errors = verifier._readiness_markdown_invariant_errors(
+        {"evidence": {"lanes": [lane]}, "blockers": []},
+        "",
+    )
+    rendered = "\n".join(errors)
+
+    assert (
+        "readiness report Markdown Lane Readiness section missing "
+        f"status for domain {domain}: | {domain} | - | blocked |"
+    ) in rendered
+    assert "secret-token" not in rendered
+    assert "hostile" not in rendered
+    assert "__eq__" not in rendered
+    assert "__str__" not in rendered
+
+
 def test_release_bundle_verifier_crypto_row_schema_uses_exact_keys() -> None:
     """Strict crypto row schema checks must require exact public keys."""
 
@@ -18550,6 +19071,102 @@ def test_release_bundle_bsc_testnet_no_gate_profile_is_exact_and_empty() -> None
                 no_gate_source_gate,
             )
         ), chain
+
+
+def test_release_bundle_rejects_hostile_bsc_testnet_profile_without_hooks() -> None:
+    """BSC testnet selectors must reject string subclasses before equality hooks."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    hostile_chain = HostilePublicCryptoString("bsc-testnet")
+    label = "bundled report.cryptographic_evidence[0]"
+    gate_hash = fixed_hex32(0x42)
+    row = {field: None for field in verifier.CRYPTOGRAPHIC_EVIDENCE_KEYS}
+    row.update(
+        {
+            "domain": verifier.SCCP_DOMAIN_BSC,
+            "chain": hostile_chain,
+            "evm_source_rpc_chain_id": "97",
+            "evm_source_block_tag": "latest",
+            "evm_destination_rpc_chain_id": "97",
+            "evm_destination_block_tag": "latest",
+            "source_verifier_material_hash": fixed_hex32(0x43),
+            "source_adapter_engine_deployment_hash": fixed_hex32(0x44),
+            "destination_binding_hash": fixed_hex32(0x45),
+            "route_allowlist_hash": fixed_hex32(0x46),
+            "route_canary_evidence_hash": "",
+            "route_canary_evidence_source": "",
+            "route_canary_evidence_bound": False,
+            "route_canary_message_proof_used": None,
+            "source_adapter_gate_required": False,
+            "source_adapter_gate_hash": gate_hash,
+            "source_adapter_gate_audit_hashes": {"evm_source_gate_hash": gate_hash},
+        }
+    )
+
+    # Source-inventory marker: BSC testnet public profile selectors reject string
+    # subclasses before equality hooks in verifier and bundle crypto rows.
+    assert verifier._expected_evm_rpc_chain_id(
+        verifier.SCCP_DOMAIN_BSC,
+        hostile_chain,
+    ) == 56
+    assert verifier._route_allowlist_chain_and_id(
+        verifier.SCCP_DOMAIN_BSC,
+        hostile_chain,
+    ) == ("bsc", "sccp:bsc:route-allowlist:bsc-mainnet:v1")
+    assert verifier._source_adapter_gate_audit_keys_for_domain_chain(
+        verifier.SCCP_DOMAIN_BSC,
+        hostile_chain,
+    ) == {"evm_source_gate_hash"}
+    assert (
+        verifier._source_adapter_gate_hash_key_for_domain_chain(
+            verifier.SCCP_DOMAIN_BSC,
+            hostile_chain,
+        )
+        == "evm_source_gate_hash"
+    )
+    assert bundle._expected_evm_rpc_chain_id(
+        bundle._sccp_domain_bsc(),
+        hostile_chain,
+    ) == 56
+    assert bundle._source_adapter_gate_audit_keys_for_domain_chain(
+        bundle._sccp_domain_bsc(),
+        hostile_chain,
+    ) == frozenset({"evm_source_gate_hash"})
+    assert (
+        bundle._source_adapter_gate_hash_key_for_domain_chain(
+            bundle._sccp_domain_bsc(),
+            hostile_chain,
+        )
+        == "evm_source_gate_hash"
+    )
+
+    verifier_errors = verifier._cryptographic_evidence_row_schema_errors(row)
+    bundle_errors = bundle._cryptographic_evidence_row_bundle_errors(row, label)
+    joined_errors = "\n".join([*verifier_errors, *bundle_errors])
+
+    assert "secret-token" not in joined_errors
+    assert (
+        "readiness report cryptographic evidence row chain must be a non-empty "
+        "string with no surrounding whitespace"
+    ) in verifier_errors
+    assert f"{label} chain must be a non-empty string with no surrounding whitespace" in (
+        bundle_errors
+    )
+    assert (
+        "readiness report cryptographic evidence row "
+        "evm_source_rpc_chain_id must be BSC chain id 56 for bsc"
+    ) in verifier_errors
+    assert f"{label} evm_source_rpc_chain_id must be BSC chain id 56 for bsc" in (
+        bundle_errors
+    )
+    assert (
+        "readiness report cryptographic evidence row "
+        "source_adapter_gate_required must be true for this domain"
+    ) in verifier_errors
+    assert f"{label} source_adapter_gate_required must be true for this domain" in (
+        bundle_errors
+    )
 
 
 def test_release_bundle_rejects_copied_crypto_evidence_lane_binding_before_render(
@@ -28763,6 +29380,40 @@ def test_release_bundle_path_helpers_reject_decoded_sensitive_marker_families(
         assert path_text not in message
 
 
+def test_release_bundle_path_text_helpers_reject_string_subclasses_without_hooks() -> None:
+    """Path text scanners must reject string subclasses before running hooks."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+
+    class HostilePathText(str):
+        def __new__(cls):
+            return str.__new__(cls, "operator/%2e%2e/secret-token.log")
+
+        def __iter__(self):
+            raise AssertionError("secret-token release path text was iterated")
+
+        def __contains__(self, _needle):
+            raise AssertionError("secret-token release path text containment ran")
+
+        def __hash__(self):
+            raise AssertionError("secret-token release path text was hashed")
+
+        def __str__(self):
+            raise AssertionError("secret-token release path text was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token release path text was repr'd")
+
+    hostile = HostilePathText()
+    for module in (bundle, verifier):
+        assert module._path_control_character(hostile) == "non-string path"
+        assert module._path_markdown_unsafe_character(hostile) == "non-string path"
+        assert module._path_percent_encoded_traversal(hostile) == "non-string path"
+
+    assert verifier._path_contains_sensitive_marker(hostile) is True
+
+
 def test_release_bundle_phase_path_helpers_reject_string_subclasses_without_hooks(
 ) -> None:
     """Bundle phase/path helpers must reject copied string subclasses exactly."""
@@ -28896,6 +29547,80 @@ def test_release_bundle_report_builders_reject_phase_assignment_subclasses_witho
         assert exc.__cause__ is None
     else:
         raise AssertionError("bundle preflight builder accepted hostile assignment")
+
+
+def test_release_bundle_relative_path_helpers_reject_pathlike_subclasses_without_hooks(
+    tmp_path: Path,
+) -> None:
+    """Phase and relative path helpers must reject hostile path-like objects."""
+
+    bundle = load_bundle_module()
+    root = tmp_path / "bundle"
+    root.mkdir()
+    phase_log = root / "rust-sccp.log"
+    phase_log.write_text("phase evidence\n", encoding="utf-8")
+    path_text = str(root)
+
+    class HostileBundlePathString(str):
+        def __new__(cls):
+            return str.__new__(cls, path_text)
+
+        def __str__(self):
+            raise AssertionError("secret-token bundle native path was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token bundle native path was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token bundle native path was coerced")
+
+    class HostileBundlePathLike:
+        def __str__(self):
+            raise AssertionError("secret-token bundle path-like was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token bundle path-like was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token bundle path-like was coerced")
+
+    boundaries = (
+        (
+            lambda path: bundle._phase_log_from_dir(path, "rust-sccp"),
+            "release bundle phase evidence directory must be a native path",
+        ),
+        (
+            lambda path: bundle._relative_to_bundle(path, phase_log),
+            "release bundle relative path root must be a native path",
+        ),
+        (
+            lambda path: bundle._relative_to_bundle(root, path),
+            "release bundle relative path target must be a native path",
+        ),
+        (
+            lambda path: bundle._relative_phase_evidence_arg(
+                path,
+                f"rust-sccp={phase_log}",
+            ),
+            "release bundle phase evidence root must be a native path",
+        ),
+        (
+            lambda path: bundle._absolute_from_cwd(path, root),
+            "release bundle path must be a native path",
+        ),
+        (
+            lambda path: bundle._absolute_from_cwd(phase_log, path),
+            "release bundle cwd must be a native path",
+        ),
+    )
+
+    for path in (HostileBundlePathString(), HostileBundlePathLike()):
+        for boundary, expected_error in boundaries:
+            with pytest.raises(ValueError) as exc_info:
+                boundary(path)
+            message = str(exc_info.value)
+            assert message == expected_error
+            assert "secret-token" not in message
 
 
 def test_release_bundle_rejects_markdown_phase_evidence_name_before_copy(
@@ -29431,6 +30156,117 @@ def test_release_bundle_copy_file_revalidates_regular_source_before_copy(
         raise AssertionError("non-regular copy source was accepted")
 
     assert not destination.exists()
+
+
+def test_release_bundle_source_copy_rejects_pathlike_subclasses_without_hooks(
+    tmp_path: Path,
+) -> None:
+    """Source-copy helpers must reject hostile path-like objects before coercion."""
+
+    module = load_bundle_module()
+    source = tmp_path / "complete.toml"
+    source.write_text("release evidence\n", encoding="utf-8")
+    source_text = str(source)
+    output_dir = tmp_path / "bundle"
+    output_dir_text = str(output_dir)
+
+    class HostileSourcePathString(str):
+        def __new__(cls):
+            return str.__new__(cls, source_text)
+
+        def __str__(self):
+            raise AssertionError("secret-token source-copy path was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token source-copy path was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token source-copy path was coerced")
+
+    class HostileSourcePathLike:
+        def __str__(self):
+            raise AssertionError(
+                "secret-token source-copy path-like was stringified"
+            )
+
+        def __repr__(self):
+            raise AssertionError("secret-token source-copy path-like was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token source-copy path-like was coerced")
+
+    class HostileOutputPathString(str):
+        def __new__(cls):
+            return str.__new__(cls, output_dir_text)
+
+        def __str__(self):
+            raise AssertionError("secret-token output path was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token output path was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token output path was coerced")
+
+    source_boundaries = (
+        (
+            lambda path: module._reject_path_control_characters(
+                path,
+                "release bundle source path",
+            ),
+            "release bundle source path must be a native path",
+        ),
+        (
+            lambda path: module._reject_symlink_sources([path]),
+            "release bundle source path must be a native path",
+        ),
+        (
+            lambda path: module._safe_name(path, 0),
+            "release bundle source path must be a native path",
+        ),
+        (
+            lambda path: module._copy_file(path, output_dir / "copy.toml"),
+            "release bundle source path must be a native path",
+        ),
+        (
+            lambda path: module._copy_evidence_inputs([path], output_dir),
+            "release bundle source path must be a native path",
+        ),
+        (
+            lambda path: module._evidence_input_identity(path),
+            "release bundle evidence input path must be a native path",
+        ),
+        (
+            lambda path: module._reject_duplicate_evidence_inputs([path]),
+            "release bundle evidence input path must be a native path",
+        ),
+    )
+
+    for path in (HostileSourcePathString(), HostileSourcePathLike()):
+        for boundary, expected_error in source_boundaries:
+            with pytest.raises(ValueError) as exc_info:
+                boundary(path)
+            message = str(exc_info.value)
+            assert message == expected_error
+            assert "secret-token" not in message
+
+    output_boundaries = (
+        (
+            lambda path: module._copy_file(source, path),
+            "release bundle destination path must be a native path",
+        ),
+        (
+            lambda path: module._copy_evidence_inputs([source], path),
+            "release bundle output directory must be a native path",
+        ),
+    )
+
+    for boundary, expected_error in output_boundaries:
+        with pytest.raises(ValueError) as exc_info:
+            boundary(HostileOutputPathString())
+        message = str(exc_info.value)
+        assert message == expected_error
+        assert "secret-token" not in message
 
 
 def test_release_bundle_rejects_control_character_evidence_input_before_copy(
@@ -30602,6 +31438,49 @@ def test_release_bundle_json_loader_rejects_unreadable_file_shapes(
         assert "IsADirectory" not in message
         assert "FileNotFound" not in message
         assert "Traceback" not in message
+
+
+def test_release_bundle_json_loader_rejects_pathlike_subclasses_without_hooks(
+    tmp_path: Path,
+) -> None:
+    """Bundle JSON loading must reject hostile path-like objects before coercion."""
+
+    module = load_bundle_module()
+    verifier = load_verify_helpers()
+    json_path = tmp_path / "native-prover.json"
+    json_path.write_text("{}\n", encoding="utf-8")
+    json_text = str(json_path)
+
+    class HostileJsonPathString(str):
+        def __new__(cls):
+            return str.__new__(cls, json_text)
+
+        def __str__(self):
+            raise AssertionError("secret-token bundle JSON path was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token bundle JSON path was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token bundle JSON path was coerced")
+
+    class HostileJsonPathLike:
+        def __str__(self):
+            raise AssertionError("secret-token bundle JSON path-like was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token bundle JSON path-like was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token bundle JSON path-like was coerced")
+
+    for path in (HostileJsonPathString(), HostileJsonPathLike()):
+        for loader in (module._load_json_without_duplicate_keys, verifier._load_json):
+            with pytest.raises(OSError) as exc_info:
+                loader(path)
+            message = str(exc_info.value)
+            assert message == "JSON path cannot be read"
+            assert "secret-token" not in message
 
 
 def test_release_bundle_verifier_duplicate_json_key_blocker_redacts_marker_families(
@@ -32206,6 +33085,66 @@ def test_release_bundle_rejects_existing_output_without_force_before_create(
     assert "output directory already exists" in completed.stderr
     assert "existing-bundle" not in completed.stderr
     assert output_dir.is_dir()
+
+
+def test_release_bundle_output_path_rejects_pathlike_subclasses_without_hooks(
+    tmp_path: Path,
+) -> None:
+    """Output helpers must reject hostile path-like objects before coercion."""
+
+    module = load_bundle_module()
+    output_dir = tmp_path / "bundle"
+    output_dir_text = str(output_dir)
+
+    class HostileOutputPathString(str):
+        def __new__(cls):
+            return str.__new__(cls, output_dir_text)
+
+        def __str__(self):
+            raise AssertionError("secret-token bundle output path was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token bundle output path was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token bundle output path was coerced")
+
+    class HostileOutputPathLike:
+        def __str__(self):
+            raise AssertionError(
+                "secret-token bundle output path-like was stringified"
+            )
+
+        def __repr__(self):
+            raise AssertionError("secret-token bundle output path-like was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token bundle output path-like was coerced")
+
+    boundaries = (
+        lambda path: module._reject_path_control_characters(
+            path,
+            "release bundle output directory",
+        ),
+        module._reject_symlinked_existing_output_path,
+        module._reject_existing_output_non_directory,
+        lambda path: module._validate_output_dir(
+            path,
+            input_paths=[],
+            phase_sources={},
+            native_evm_prover_bundle=None,
+            force=False,
+        ),
+        lambda path: module._prepare_output_dir(path, force=False),
+    )
+
+    for path in (HostileOutputPathString(), HostileOutputPathLike()):
+        for boundary in boundaries:
+            with pytest.raises(ValueError) as exc_info:
+                boundary(path)
+            message = str(exc_info.value)
+            assert message == "release bundle output directory must be a native path"
+            assert "secret-token" not in message
 
 
 def test_release_bundle_force_rejects_existing_output_file_before_delete(
@@ -35475,12 +36414,32 @@ def test_release_bundle_verifier_native_evm_markdown_cells_ignore_hostile_aliase
         },
         field_label="proving_key",
     )
+    bundle = {
+        "required": True,
+        "validation_status": "passed",
+        "artifact": {
+            "path": "native-prover-artifacts/proof.bin",
+            "sha256": "11" * 32,
+        },
+        "proof_artifact_hash": fixed_hex32(0x91),
+        "proving_key_hash": fixed_hex32(0x92),
+        "verifier_key_hash": fixed_hex32(0x93),
+        "destination_binding_hash": fixed_hex32(0x94),
+        "cross_sdk_fixture_parity_artifact": {
+            "path": "native-prover-artifacts/parity.json",
+            "sha256": "22" * 32,
+        },
+        "native_prover_self_test_artifact": {
+            "path": "native-prover-artifacts/self-test.json",
+            "sha256": "33" * 32,
+        },
+        "sdk_artifacts": sdk_artifacts,
+        "validation_blockers": ["secret-token-native-root-alias"],
+    }
+    for field in tuple(bundle):
+        bundle[HostileVerifierFieldName(field)] = bundle.pop(field)
     row_cells = verifier._readiness_native_evm_bundle_row_cells(
-        {
-            HostileVerifierFieldName("required"): True,
-            "validation_status": "passed",
-            "validation_blockers": [],
-        }
+        bundle
     )
 
     rendered = "\n".join(
@@ -35498,11 +36457,74 @@ def test_release_bundle_verifier_native_evm_markdown_cells_ignore_hostile_aliase
     assert artifact_hash_cell == "`<invalid proving_key.sha256>`"
     assert support_artifact_cell == "`<invalid proving_key>`"
     assert support_artifact_hash_cell == "`<invalid proving_key>`"
-    assert row_cells[0] == "no"
+    assert row_cells == [
+        "no",
+        "blocked",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "`<invalid validation_status>`<br>`<invalid validation_blockers>`",
+    ]
     assert "secret-token" not in rendered
     assert "hostile verifier" not in rendered
     assert "__eq__" not in rendered
     assert "__str__" not in rendered
+
+
+def test_release_bundle_verifier_native_markdown_invariants_use_exact_bundle_keys(
+) -> None:
+    """Native-prover Markdown invariants must ignore hostile copied root aliases."""
+
+    verifier = load_verify_helpers()
+    report = {
+        "native_evm_prover_bundle": {
+            HostileVerifierFieldName("required"): True,
+            HostileVerifierFieldName("validation_status"): "passed",
+            HostileVerifierFieldName("validation_blockers"): [
+                "secret-token-native-invariant"
+            ],
+        },
+        "blockers": [],
+    }
+
+    errors = verifier._readiness_markdown_invariant_errors(report, "")
+    rendered = "\n".join(errors)
+
+    assert "native EVM prover validation_status" not in rendered
+    assert "native EVM prover blocker cell" not in rendered
+    assert "secret-token" not in rendered
+    assert "hostile" not in rendered
+    assert "__eq__" not in rendered
+    assert "__str__" not in rendered
+
+    # Source-inventory marker: strict readiness Markdown native-prover invariant status uses exact copied strings.
+    status_alias_report = {
+        "native_evm_prover_bundle": {
+            "required": True,
+            "validation_status": HostileVerifierFieldName("passed"),
+            "validation_blockers": ["secret-token-native-status-alias"],
+        },
+        "blockers": [],
+    }
+
+    status_alias_errors = verifier._readiness_markdown_invariant_errors(
+        status_alias_report,
+        "",
+    )
+    status_alias_rendered = "\n".join(status_alias_errors)
+
+    assert "native EVM prover validation_status" not in status_alias_rendered
+    assert "native EVM prover blocker cell" not in status_alias_rendered
+    assert "secret-token" not in status_alias_rendered
+    assert "hostile" not in status_alias_rendered
+    assert "__eq__" not in status_alias_rendered
+    assert "__str__" not in status_alias_rendered
 
 
 def test_release_bundle_verifier_native_evm_status_rejects_hostile_active_destination_alias(
@@ -38435,6 +39457,64 @@ def test_release_bundle_rejects_directory_artifact_path_without_read(
         raise AssertionError("directory artifact path was accepted")
 
     assert "release artifact path must be a regular file" in message
+    assert "secret-token" not in message
+
+
+def test_release_bundle_artifact_helpers_reject_pathlike_subclasses_without_hooks(
+    tmp_path: Path,
+) -> None:
+    """Artifact hashing helpers must require native paths before path access."""
+
+    module = load_bundle_module()
+    verifier = load_verify_helpers()
+    output_dir = tmp_path / "bundle"
+    artifact = output_dir / "evidence" / "complete.toml"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("release evidence\n", encoding="utf-8")
+    artifact_text = str(artifact)
+
+    class HostileArtifactPathString(str):
+        def __new__(cls):
+            return str.__new__(cls, artifact_text)
+
+        def __str__(self):
+            raise AssertionError("secret-token bundle artifact path was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token bundle artifact path was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token bundle artifact path was coerced")
+
+    class HostileArtifactPathLike:
+        def __str__(self):
+            raise AssertionError(
+                "secret-token bundle artifact path-like was stringified"
+            )
+
+        def __repr__(self):
+            raise AssertionError("secret-token bundle artifact path-like was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token bundle artifact path-like was coerced")
+
+    for path in (HostileArtifactPathString(), HostileArtifactPathLike()):
+        with pytest.raises(ValueError) as exc_info:
+            module._artifact(path, output_dir)
+        message = str(exc_info.value)
+        assert message == "release artifact path must be a regular file"
+        assert "secret-token" not in message
+
+        with pytest.raises(ValueError) as exc_info:
+            verifier._artifact(path)
+        message = str(exc_info.value)
+        assert message == "release artifact path must be a regular file"
+        assert "secret-token" not in message
+
+    with pytest.raises(ValueError) as exc_info:
+        module._artifact(artifact, HostileArtifactPathLike())
+    message = str(exc_info.value)
+    assert message == "release artifact path must be a regular file"
     assert "secret-token" not in message
 
 
@@ -42962,6 +44042,64 @@ def test_release_bundle_verifier_corridor_phase_helpers_reject_container_subclas
 
     assert checklist == {"ready": False, "items": []}
     assert "secret-token" not in surfaces_rendered
+
+
+def test_release_bundle_verifier_corridor_phase_statuses_use_exact_strings() -> None:
+    """Verifier corridor status helpers must reject string subclasses before comparing."""
+
+    verifier = load_verify_helpers()
+    phase = "js-sdk"
+    hostile_artifact = {
+        "path": f"corridor/{phase}.log",
+        "bytes": 1,
+        "sha256": "a" * 64,
+    }
+    hostile_phase_corridor = {
+        "phases": {phase: HostilePhaseStatus("passed")},
+        "evidence_artifacts": {phase: hostile_artifact},
+    }
+    phase_status = {phase: "passed" for phase in PHASES}
+    phase_status[phase] = HostilePhaseStatus("passed")
+
+    errors = verifier._corridor_phase_errors(hostile_phase_corridor)
+    order = verifier._expected_manifest_artifact_order(
+        {"corridor": hostile_phase_corridor}
+    )
+    referenced = verifier._referenced_report_artifact_paths(
+        {"corridor": hostile_phase_corridor}
+    )
+    surfaces = verifier._expected_submission_surfaces(
+        {"corridor": {"phases": phase_status}}
+    )
+    rendered = "\n".join(
+        [
+            *errors,
+            *order,
+            *sorted(referenced),
+            *(
+                blocker
+                for surface in surfaces
+                for blocker in surface["validation_blockers"]
+            ),
+        ]
+    )
+
+    assert (
+        f"readiness report corridor phase {phase} status must be passed"
+        in errors
+    )
+    assert f"corridor/{phase}.log" not in order
+    assert f"corridor/{phase}.log" not in referenced
+    assert any(
+        f"{phase} is invalid" in blocker
+        for surface in surfaces
+        for blocker in surface["validation_blockers"]
+    )
+    assert "secret-token" not in rendered
+    assert "hostile phase status" not in rendered
+    assert "__eq__" not in rendered
+    assert "__ne__" not in rendered
+    assert "__str__" not in rendered
 
 
 def test_release_bundle_verifier_recomputes_required_corridor_phases(
@@ -49633,6 +50771,41 @@ def test_release_bundle_verifier_rejects_hostile_public_scalar_strings(
         assert hostile not in verified.stdout
 
 
+def test_release_bundle_verifier_empty_or_nonzero_fixed_hex_rejects_string_subclasses_without_hooks() -> None:
+    """Optional fixed-hex empty sentinels must be exact strings."""
+
+    verifier = load_verify_helpers()
+    label = "readiness report cryptographic evidence row"
+    field = "route_canary_signature_sha256"
+
+    assert (
+        verifier._empty_or_nonzero_fixed_hex_field_errors(
+            label,
+            {field: ""},
+            field,
+            byte_length=32,
+            type_label="bytes32",
+        )
+        == []
+    )
+
+    errors = verifier._empty_or_nonzero_fixed_hex_field_errors(
+        label,
+        {field: HostilePublicCryptoString("")},
+        field,
+        byte_length=32,
+        type_label="bytes32",
+    )
+    rendered = "\n".join(errors)
+
+    assert errors == [
+        f"{label} {field} must be empty or a non-zero canonical bytes32 hex string"
+    ]
+    assert "secret-token" not in rendered
+    assert "__eq__" not in rendered
+    assert "__str__" not in rendered
+
+
 def test_release_bundle_route_canary_common_semantics_reject_hostile_status_source_without_comparing() -> None:
     """Route-canary status/source comparisons must reject string subclasses."""
 
@@ -52288,6 +53461,22 @@ def test_release_bundle_cli_error_detail_treats_system_exit_as_opaque() -> None:
 
     assert detail == fallback
     assert safe_message not in detail
+
+
+def test_release_bundle_cli_error_detail_redacts_unstringifiable_exceptions() -> None:
+    """Top-level bundle CLI errors must fall back when stringification fails."""
+
+    bundle = load_bundle_module()
+    fallback = "SCCP release bundle generation failed"
+
+    class HostileCliException(RuntimeError):
+        def __str__(self):
+            raise AssertionError("secret-token bundle CLI exception was stringified")
+
+    detail = bundle._cli_error_detail(HostileCliException(), fallback=fallback)
+
+    assert detail == fallback
+    assert "secret-token" not in detail
 
 
 def test_release_bundle_verifier_active_launch_blockers_reject_malformed_containers(
@@ -57450,6 +58639,73 @@ def test_release_bundle_verifier_readiness_markdown_invariants_reject_input_corr
 
     assert f"evidence artifact hash for phase {phase}" in artifact_alias_errors
     assert "secret-token" not in artifact_alias_errors
+
+
+def test_release_bundle_verifier_readiness_markdown_invariants_use_exact_corridor_keys(
+    tmp_path: Path,
+) -> None:
+    """Corridor Markdown invariants must ignore copied root and phase aliases."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = verifier._render_readiness_markdown(
+        report,
+        max_blockers_per_lane=4,
+    )
+    phase = next(iter(report["corridor"]["evidence_artifacts"]))
+    secret_artifact = {
+        "path": "corridor/secret-token-alias.log",
+        "bytes": 42,
+        "sha256": "77" * 32,
+    }
+
+    root_alias_report = json.loads(json.dumps(report))
+    root_alias_report["corridor"] = {
+        HostileVerifierFieldName("phases"): {phase: "passed"},
+        "evidence_artifacts": {phase: secret_artifact},
+    }
+    root_alias_errors = "\n".join(
+        verifier._readiness_markdown_invariant_errors(
+            root_alias_report,
+            markdown,
+        )
+    )
+
+    assert "corridor malformed phases row" in root_alias_errors
+    assert "secret-token" not in root_alias_errors
+
+    artifacts_alias_report = json.loads(json.dumps(report))
+    artifacts_alias_report["corridor"] = {
+        "phases": {phase: "passed"},
+        HostileVerifierFieldName("evidence_artifacts"): {phase: secret_artifact},
+    }
+    artifacts_alias_errors = "\n".join(
+        verifier._readiness_markdown_invariant_errors(
+            artifacts_alias_report,
+            markdown,
+        )
+    )
+
+    assert f"evidence artifact row for phase {phase}" in artifacts_alias_errors
+    assert "secret-token" not in artifacts_alias_errors
+
+    phase_alias_report = json.loads(json.dumps(report))
+    phase_alias_report["corridor"] = {
+        "phases": {HostileVerifierFieldName(phase): "passed"},
+        "evidence_artifacts": {phase: secret_artifact},
+    }
+    phase_alias_errors = "\n".join(
+        verifier._readiness_markdown_invariant_errors(
+            phase_alias_report,
+            markdown,
+        )
+    )
+
+    assert "secret-token" not in phase_alias_errors
+    assert f"evidence artifact path for phase {phase}" not in phase_alias_errors
 
 
 def test_release_bundle_verifier_readiness_markdown_rejects_malformed_collection_roots(
@@ -62827,6 +64083,49 @@ def test_release_bundle_public_blocker_helpers_reject_list_subclasses_without_le
     )
 
 
+def test_release_bundle_public_blocker_decode_helpers_reject_string_subclasses_without_hooks() -> None:
+    """Shared public blocker decode helpers must reject str subclasses first."""
+
+    class HostilePublicBlockerText(str):
+        def __new__(cls):
+            return str.__new__(cls, "safe public blocker")
+
+        def __str__(self):
+            raise AssertionError("secret-token public blocker text stringified")
+
+        def __repr__(self):
+            return "secret-token-public-blocker-text"
+
+        def __len__(self):
+            raise AssertionError("secret-token public blocker text length")
+
+        def __eq__(self, _other):
+            raise AssertionError("secret-token public blocker text compared")
+
+        def __ne__(self, _other):
+            raise AssertionError("secret-token public blocker text compared")
+
+        def isascii(self):
+            raise AssertionError("secret-token public blocker text checked ASCII")
+
+        def casefold(self):
+            raise AssertionError("secret-token public blocker text casefolded")
+
+        def translate(self, _table):
+            raise AssertionError("secret-token public blocker text translated")
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+
+    for module in (bundle, verifier):
+        blocker = HostilePublicBlockerText()
+
+        assert module._decoded_public_blocker_text(blocker) == ""
+        assert module._decoded_sensitive_public_marker_text(blocker) == ""
+        assert module._decoded_public_blocker_text_issue(blocker) == "non-string value"
+        assert module._canonical_public_blocker_key(blocker) == ""
+
+
 def test_release_bundle_public_integer_helpers_reject_list_subclasses_without_leaking() -> None:
     """Shared public integer-list validators must not iterate list subclasses."""
 
@@ -64409,6 +65708,29 @@ def test_release_bundle_verifier_required_helper_inventory_matches_report() -> N
     assert verifier._expected_submission_surfaces(
         {"corridor": {"phases": phase_status}}
     ) == report._submission_surfaces(phase_status)
+
+
+def test_release_bundle_verifier_expected_submission_surfaces_use_exact_phase_keys() -> None:
+    """Verifier-owned user-prover rows must ignore copied corridor phase aliases."""
+
+    verifier = load_verify_helpers()
+    hostile_phase_status = {
+        HostileVerifierFieldName(phase): "passed" for phase in PHASES
+    }
+
+    surfaces = verifier._expected_submission_surfaces(
+        {"corridor": {"phases": hostile_phase_status}}
+    )
+    rendered = "\n".join(
+        blocker
+        for surface in surfaces
+        for blocker in surface["validation_blockers"]
+    )
+
+    assert surfaces
+    assert all(surface["validation_status"] == "blocked" for surface in surfaces)
+    assert " is missing" in rendered
+    assert "secret-token" not in rendered
 
 
 def test_release_bundle_verifier_expected_submission_surfaces_are_independent(
@@ -79111,6 +80433,10 @@ def test_release_bundle_verifier_guards_sccp_source_material_role_validation_inv
         ),
         (
             "scripts/sccp_all_lanes_evidence.py",
+            "all-lanes minimal TOML diagnostic helpers use exact strings",
+        ),
+        (
+            "scripts/sccp_all_lanes_evidence.py",
             "duplicate key with sensitive name",
         ),
         (
@@ -79144,6 +80470,10 @@ def test_release_bundle_verifier_guards_sccp_source_material_role_validation_inv
         (
             "pytests/scripts/sccp_all_lanes_evidence_test.py",
             "def test_all_lanes_minimal_toml_rejects_array_subclasses_without_hooks",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "def test_all_lanes_minimal_toml_diagnostic_helpers_reject_string_subclasses_without_hooks",
         ),
         (
             "pytests/scripts/sccp_all_lanes_evidence_test.py",

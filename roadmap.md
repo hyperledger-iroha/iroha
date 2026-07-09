@@ -846,6 +846,57 @@ SCCP all-lanes evidence section exact-key hardening was completed on
 2026-07-09: evidence-bundle canonical section selection and source-adapter gate
 blocker propagation now use exact public string-key helpers before merged
 operator evidence can satisfy all-lanes validation.
+SCCP all-lanes evidence-loader path exact-type hardening was completed on
+2026-07-09: direct all-lanes loader callers must now provide the native
+`pathlib.Path` type before labels, symlink checks, or reads run, so hostile
+string/path-like inputs cannot trigger hooks or leak path details before the
+redacted unreadable-input diagnostic.
+SCCP runtime-bytecode file helper native-path hardening was completed on
+2026-07-09: ETH source, BSC source, EVM destination, and TRON source evidence
+helpers now require direct callers to pass native `pathlib.Path` values before
+symlink traversal, file-shape checks, or runtime bytecode reads can run.
+SCCP Solana/TON/TRON file helper native-path hardening was completed on
+2026-07-09: Solana program-byte, TON code-BoC, TON live runtime text, and TRON
+live runtime text helpers now require direct callers to pass native
+`pathlib.Path` values before symlink traversal, file-shape checks, or runtime
+file reads can run.
+SCCP release path text scanner exact-string hardening was completed on
+2026-07-09: bundle generation, standalone readiness, and strict verification
+helpers now require builtin strings before control-character iteration,
+Markdown-unsafe scanning, percent-decoding, or sensitive-name checks can run.
+SCCP release JSON/artifact native-path hardening was completed on 2026-07-09:
+release bundle generation, standalone readiness, and strict verification now
+require native `pathlib.Path` inputs before duplicate-key JSON reads, artifact
+path rendering, symlink checks, filename inspection, or hashing can run.
+SCCP release-bundle source-copy native-path hardening was completed on
+2026-07-09: copied evidence source helpers now reject hostile path-like direct
+inputs before filename normalization, symlink traversal, duplicate-input
+identity calculation, destination directory creation, or file copies can run.
+SCCP release-bundle output-path native-path hardening was completed on
+2026-07-09: output-directory helpers now reject hostile path-like direct inputs
+before symlink traversal, existing-path checks, force-delete preflights, or
+directory creation can run.
+SCCP standalone readiness output-collision native-path hardening was completed
+on 2026-07-09: readiness output collision helpers now reject hostile path-like
+direct inputs before resolved-path comparisons against evidence inputs, phase
+evidence directories, or native EVM prover bundles can run.
+SCCP release-bundle generated/relative path native-path hardening was completed
+on 2026-07-09: generated bundle JSON writes, strict self-verification,
+manifest-artifact collection, phase-log discovery, relative phase-evidence
+rendering, and cwd-relative conversion now reject hostile path-like direct
+inputs before filesystem calls or path coercion can run.
+SCCP strict release-bundle source-inventory path hardening was completed on
+2026-07-09: shared source and SDK inventory scanners now reject hostile
+path-like direct inputs before marker source paths are normalized, rendered,
+read, or compared for active-lane coverage.
+SCCP strict release-bundle source-inventory adjunct hardening was completed on
+2026-07-09: source-region readers, Ethereum no-proxy inventory regions,
+launch/public-discovery documentation scans, retired network-surface guards,
+unready transparent-proof Cargo/release-command scans, bypass call-site scans,
+and forbidden environment/config/diagnostic surface scans now reject hostile
+path-like direct inputs before path coercion or source reads. The
+`iroha_sccp/test-fixtures` dev-dependency approval check also uses a stable
+repository-relative manifest key after path normalization.
 SCCP release readiness/bundle checklist and Markdown exact-key hardening was
 completed on 2026-07-09: standalone release-readiness public checklist
 validation, checklist Markdown rows, and release-bundle preflight/checklist
@@ -875,6 +926,174 @@ standalone readiness and strict bundle user-prover Markdown row and invariant
 helpers now normalize copied submission-surface rows through exact public
 string-key views before helper, phase, status, blocker, or invariant diagnostics
 can consume them.
+SCCP lane-readiness Markdown exact-key hardening was completed on 2026-07-09:
+standalone readiness and strict bundle lane-readiness Markdown row and invariant
+helpers now normalize copied lane rows through exact public string-key views
+before domain, chain, readiness, record-flag, blocker, or invariant diagnostics
+can consume them.
+SCCP native-prover Markdown invariant exact-key hardening was completed on
+2026-07-09: strict bundle native-prover Markdown invariant checks now normalize
+the copied bundle root through exact public string-key views before status,
+artifact, support-artifact, SDK-artifact, or blocker diagnostics can consume it.
+SCCP native-prover Markdown row exact-key hardening was completed on 2026-07-09:
+standalone readiness and strict bundle native-prover Markdown row helpers now
+normalize copied bundle roots through exact public string-key views before
+required, status, artifact, support-artifact, SDK-artifact, hash, or blocker
+cells can consume them.
+SCCP input-artifact Markdown exact-key hardening was completed on 2026-07-09:
+standalone readiness and strict bundle input-artifact Markdown cells now require
+exact copied artifact keys before path, byte-count, or hash cells can consume
+copied artifact metadata.
+SCCP corridor Markdown exact-root-key hardening was completed on 2026-07-09:
+standalone readiness and strict bundle production-corridor Markdown roots now
+require exact copied `phases` and `evidence_artifacts` keys, and malformed phase
+keys cannot drive evidence-artifact lookup.
+SCCP expected submission-surface exact phase-key hardening was completed on
+2026-07-09: strict bundle verifier-owned user-prover submission-surface
+derivation now ignores copied corridor phase aliases before expected rows can be
+marked passed.
+SCCP corridor Markdown invariant exact-key hardening was completed on
+2026-07-09: strict readiness Markdown invariant checks for the Production
+Corridor section now require exact copied corridor root keys, exact copied phase
+keys, and exact phase-status strings before artifact rows can be required.
+SCCP native-prover Markdown invariant status exact-string hardening was
+completed on 2026-07-09: strict readiness Markdown native-prover invariant
+checks now require an exact copied `validation_status` string before
+native-prover row diagnostics can be required.
+SCCP corridor phase-status exact-string hardening was completed on 2026-07-09:
+release-bundle and strict verifier corridor phase-status comparisons now require
+exact copied strings before phases can be treated as passed, unlock phase
+artifacts, or derive user-prover expected blockers.
+SCCP readiness public corridor phase-status exact-string hardening was completed
+on 2026-07-09: standalone readiness public corridor validation now requires
+exact copied phase-status strings before statuses can count as passed, drive
+phase-evidence checks, or derive user-prover blockers.
+SCCP optional fixed-hex empty sentinel exact-string hardening was completed on
+2026-07-09: strict release-bundle verification now requires exact copied empty
+strings before optional fixed-hex route-canary fields can be treated as empty.
+SCCP readiness native EVM redaction status exact-string hardening was completed
+on 2026-07-09: standalone readiness native EVM public redaction now requires an
+exact copied `validation_status` string before `"blocked"` can enable
+blocked-mode audit/artifact redaction.
+SCCP Solana source-network selector exact-string hardening was completed on
+2026-07-09: Solana source-state evidence CLI parsing and direct profile helper
+calls now require exact lowercase documented aliases before selecting the
+mainnet-beta or testnet source-material profile.
+SCCP EVM source-live copied-summary exact-string hardening was completed on
+2026-07-09: direct summary validation and TOML prerequisite checks now require
+exact copied `chain`, `block_tag`, and `deployment_receipt_status` strings
+before source-lane or deployment-receipt prerequisite comparisons can run.
+SCCP EVM source-live RPC receipt-status exact-string hardening was completed on
+2026-07-09: raw `eth_getTransactionReceipt.status` values must now be builtin
+strings equal to `0x1` before source-live deployment receipt evidence can pass.
+SCCP EVM destination scalar literal exact-string hardening was completed on
+2026-07-09: direct destination evidence u32/u64 decimal and true/false parsers
+now require builtin strings before whitespace or equality checks can run.
+SCCP TON destination helper exact-string hardening was completed on 2026-07-09:
+direct fixed-hex strip and raw-address workchain parsers now require builtin
+strings before prefix or signed-decimal checks can run.
+SCCP EVM strip-0x helper exact-string hardening was completed on 2026-07-09:
+EVM live and all-lanes direct `_strip_0x` helpers now require builtin strings
+before lowercase/prefix checks can run.
+SCCP EVM live function selector exact-string hardening was completed on
+2026-07-09: direct selector helper callers must now pass builtin strings before
+selector hashing can encode function signature text.
+SCCP TRON strip-0x helper exact-string hardening was completed on 2026-07-09:
+TRON source-bridge and live direct `_strip_0x` helpers now require builtin
+strings before lowercase/prefix checks can run.
+SCCP all-lanes canonical text helper exact-string hardening was completed on
+2026-07-09: direct canonical hex and base64 helpers now require builtin strings
+before prefix, lowercase, decode, or canonical equality checks can run.
+SCCP strict-verifier Solana base58 exact-string hardening was completed on
+2026-07-09: direct Solana public-key decoder callers must now pass builtin
+strings before whitespace canonicalization, iteration, leading-zero accounting,
+or numeric base58 decoding can run.
+SCCP public blocker decode helper exact-string hardening was completed on
+2026-07-09: all-lanes, release-bundle, standalone readiness, and strict verifier
+decode helpers now require builtin strings before recursive percent/entity
+decoding, homoglyph-sensitive normalization, issue scanning, or canonical key
+casefolding can run.
+SCCP per-lane public blocker decode helper exact-string hardening was completed
+on 2026-07-09: every lane CLI helper now requires builtin strings before
+recursive percent/entity decoding, unsafe-character scanning, or CLI sensitivity
+casefolding can run.
+SCCP runtime URL host-classifier exact-string hardening was completed on
+2026-07-09: EVM receipt proof, EVM source-live, EVM live, Solana live, TON live,
+and TRON live endpoint helpers now require builtin host strings before bracket
+stripping, lowercase normalization, IP parsing, or non-public DNS checks can run.
+SCCP all-lanes minimal TOML diagnostic helper exact-string hardening was
+completed on 2026-07-09: duplicate-key and unsupported-section diagnostics now
+require builtin key/section strings before sensitivity scans, ASCII checks,
+iteration, or public diagnostic rendering can run.
+SCCP runtime-bytecode file helper native-path hardening was completed on
+2026-07-09: ETH source, BSC source, EVM destination, and TRON source direct
+runtime-bytecode file helpers now require native paths before symlink traversal,
+file-shape checks, or reads can run.
+SCCP Solana/TON/TRON file helper native-path hardening was completed on
+2026-07-09: Solana program-byte, TON code-BoC, TON live runtime text, and TRON
+live runtime text helpers now require native paths before symlink traversal,
+file-shape checks, or reads can run.
+SCCP all-lanes EVM source receipt-status exact-string hardening was completed
+on 2026-07-09: all-lanes copied
+`_comment_evm_source_deployment_receipt_status` metadata must now be a builtin
+string equal to `0x1` before EVM source-live deployment evidence can pass.
+SCCP all-lanes route-canary status exact-string hardening was completed on
+2026-07-09: copied `route_canary_status` and
+`_comment_route_canary_status` metadata must now be builtin strings equal to
+`passed` before route-canary readiness can pass or the public canary summary can
+carry the status value.
+SCCP Solana live owner/commitment exact-string hardening was completed on
+2026-07-09: copied Program and ProgramData owner metadata plus the raw live TOML
+`rpc_commitment` gate now require exact strings before ownership or finalized
+commitment comparisons can run.
+SCCP Solana live summary commitment exact-string hardening was completed on
+2026-07-09: the `rpc_commitment_finalized` readiness flag now derives from the
+validated exact commitment value instead of comparing copied live metadata
+again.
+SCCP TON live account-status exact-string hardening was completed on
+2026-07-09: TON live summary validation now requires exact copied
+`account_status` strings before active-account comparison.
+SCCP ETH/BSC source block-tag exact-string hardening was completed on
+2026-07-09: offline source bridge evidence helpers now require exact copied
+`block_tag` strings before tag membership, ETH TOML finality, or BSC default
+source tag rendering can run.
+SCCP EVM live route-canary receipt-status exact-string hardening was completed
+on 2026-07-09: copied route-canary receipt `status` metadata must be an exact
+string before the successful `0x1` comparison can run.
+SCCP EVM live route-canary verifier exact-string hardening was completed on
+2026-07-09: copied route-canary `evidence_source` and route/transaction
+evidence hashes must be exact strings before equality can mark the transaction
+verified for full-TOML readiness.
+SCCP TRON live route-canary verifier exact-string hardening was completed on
+2026-07-09: copied route-canary source/hash, receipt, topic, route,
+selector/signature, transcript, and owner/signature strings must be exact
+before equality can mark the TRON canary transaction verified for full-TOML
+readiness.
+SCCP EVM live destination/full-TOML exact-string hardening was completed on
+2026-07-09: copied destination `chain` and Ethereum full-TOML `block_tag`
+metadata now pass through exact string/block-tag parsing before lane comparison
+or finalized-readiness decisions.
+SCCP TRON live route-canary verifier exact-integer hardening was completed on
+2026-07-09: copied proof byte length, proof version, proof source domain,
+public-input target domain, and signature count now pass through exact integer
+gates before equality can mark the TRON canary transaction verified for
+full-TOML readiness.
+SCCP TRON live source-event verifier exact-value hardening was completed on
+2026-07-09: copied source-event trigger endpoint/function/parameter,
+transaction/event/source-proof strings, call value, and log index now pass
+through exact string/integer gates before replay arguments can be emitted.
+SCCP TRON live transaction parser exact-string hardening was completed on
+2026-07-09: decoded source-event and route-canary receipt status, contractRet,
+contract type, and type-URL discriminator values now pass exact string gates
+before transaction evidence can be accepted.
+SCCP live/evidence exact-literal sweep was completed on 2026-07-09: EVM/Solana
+JSON-RPC protocol versions, EVM receipt-proof status/log-data literals, and the
+BSC source-gate profile chain now pass exact string gates before evidence
+acceptance.
+SCCP CLI error redaction stringification hardening was completed on 2026-07-09:
+lane evidence helpers plus the release bundle/readiness entry points now fall
+back to opaque diagnostics when exception stringification itself raises, so
+hostile exception objects cannot leak or crash redaction.
 Native EVM prover bundle validation now applies the same fail-closed expected
 binding-root rule to the active lane destination-binding hash, so a locally
 canonical native bundle cannot pass when its sibling destination evidence root
@@ -1590,11 +1809,14 @@ builtin strings before lookup, membership, or human-label rendering. Release
 bundle/readiness/verifier source-gate hash-key wrappers, native EVM
 duplicate-key diagnostics, and public sensitive-marker scanners now reject or
 ignore string subclasses before copied helper keys or decoded marker scans can
-invoke hooks, and native EVM SDK artifact labels plus SDK row grouping now
-require builtin SDK strings before copied SDK names can enter diagnostics or
-semantic maps. Release checklist item IDs/titles now enforce the same builtin
-string boundary before Markdown-safety, sensitive-marker, duplicate, or
-diagnostic-label processing. EVM live
+invoke hooks, release-bundle/verifier BSC testnet profile selectors now require
+exact public `chain` strings before chain-id, route-allowlist, source-gate, or
+diagnostic-label equality checks, active-launch EVM live block-tag summaries now
+require exact public strings before `finalized` comparisons, and native EVM SDK
+artifact labels plus SDK row grouping now require builtin SDK strings before
+copied SDK names can enter diagnostics or semantic maps. Release checklist item
+IDs/titles now enforce the same builtin string boundary before Markdown-safety,
+sensitive-marker, duplicate, or diagnostic-label processing. EVM live
 copied-summary hex/runtime strings, exact-hex parser inputs, route-canary log
 topics, receipt block numbers, readiness strings, RPC quantities, and RPC
 hex-data helpers now reject `str` subclasses at the same boundary. EVM
@@ -1606,7 +1828,13 @@ destination runtime-bytecode file parsers plus Solana program-byte, TON
 code-BoC, and TRON runtime-bytecode file parsers now also require exact builtin
 path strings before filesystem coercion or reads, and TON/TRON live auxiliary
 runtime files, including API-key files and TRON witness-schedule payload or
-transition `@file` inputs, enforce the same boundary. Solana live Program
+transition `@file` inputs, enforce the same boundary.
+Direct ETH/BSC/EVM/TRON runtime-bytecode file read helpers also now require
+native `pathlib.Path` inputs before symlink traversal, file-shape checks, or
+runtime bytecode reads can run. Direct Solana program-byte, TON code-BoC, TON
+live runtime text, and TRON live runtime text file helpers follow the same
+native-path boundary before symlink traversal, file-shape checks, or reads can
+run. Solana live Program
 account data, copied ProgramData metadata/base64, verifier id/address/hash, and
 executable base64 fields now also reject `str` subclasses before hook-bearing
 string methods can run. Solana destination fixed-hex, program-byte hex/base64,
@@ -2057,7 +2285,9 @@ source-adapter gate audit-hash summary copying.
 All-lanes fallback/minimal TOML parsing now follows the same exact builtin-string
 boundary before copied operator text reaches `.strip()`, `.splitlines()`, JSON
 metadata parsing, or metadata-comment parsing, and the route-canary scalar
-inventory pins the hostile subclass regression.
+inventory pins the hostile subclass regression. Minimal TOML duplicate-key and
+unsupported-section diagnostic helpers now apply the same boundary before
+sensitivity scans, ASCII checks, iteration, or public diagnostic rendering.
 Release readiness and bundle generation phase/output path helpers now enforce
 exact builtin strings before copied values reach `in`, `.split()`, `.strip()`,
 or `.isascii()` hooks; the phase-evidence and output-path inventories pin the
@@ -32733,22 +32963,32 @@ validation path.
   action/static aggregate branches, multi-hop module-alias-wrapped all-static,
   action/static, static/temporal, guarded nested-static, and guarded nested
   action/static aggregate branches, local helper cycles, boolean helper-wrapper
-  cycles, direct and boolean invalid helper references, module-alias helper
-  cycles, multi-hop module-alias helper cycles, onward action aliases,
+  cycles, direct, boolean, and multi-hop action-helper cycles, direct and
+  boolean invalid helper references, module-alias helper cycles, multi-hop
+  module-alias helper cycles, onward action aliases,
   fair-action definitions aliasing different imported reviewed fair actions,
   direct and multi-hop cyclic fair-action aliases, onward helper-alias
   resolution failures, multi-hop helper-alias recursive helper bad targets,
   helper aliases, direct and transitive fair-action helper aliases, boolean
   direct/transitive fair-action helper aliases, boolean helper aliases, helper
-  wrappers, and helper actions composing other fair actions, direct references to and direct,
+  wrappers, and direct and multi-hop helper actions composing other fair
+  actions, direct references to, direct and multi-hop helper-wrapper references to, and direct,
   boolean-hidden, action-shaped wrapper, and boolean-operand helper-wrapper
   compositions of other fair actions, module-alias conjunct fair-action composition plus direct,
-  boolean-helper, and transitive fair-action conjunct operands, module-alias
-  boolean fair-action composition plus direct, helper, and transitive
-  fair-action boolean operands, multi-hop module-alias operand cycles,
-  multi-hop recursive helper failures behind module-alias conjunct and
-  boolean operands, module-alias helper resolution failures, and
-  module-alias imported/target-local mixed action witnesses.
+  boolean-helper, transitive, and multi-hop static-wrapper fair-action
+  conjunct operands, module-alias boolean fair-action composition plus direct, helper,
+  transitive, and multi-hop static-wrapper fair-action boolean operands,
+  multi-hop module-alias operand cycles,
+  mixed module-alias operand cycles, module-alias operand resolution
+  failures, mixed module-alias operand resolution failures, multi-hop
+  recursive helper failures behind module-alias conjunct and boolean
+  operands, mixed multi-hop recursive helper failures behind module-alias
+  operands, mixed onward helper-target failures and mixed invalid helper
+  references behind module-alias operands, boolean
+  and conjunct mixed fair-action composition/error pairings behind
+  module-alias operands,
+  helper-alias resolution failures, module-alias helper resolution failures,
+  and module-alias imported/target-local mixed action witnesses.
   Progress transition aliases must resolve through named local INSTANCE declarations,
   so imported `Next` wrappers cannot rely on implicit or misspelled module
   aliases, including onward aliases inside imported transition targets.

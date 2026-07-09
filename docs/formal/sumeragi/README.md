@@ -32099,22 +32099,32 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   action/static aggregate branches, multi-hop module-alias-wrapped all-static,
   action/static, static/temporal, guarded nested-static, and guarded nested
   action/static aggregate branches, local helper cycles, boolean helper-wrapper
-  cycles, direct and boolean invalid helper references, module-alias helper
-  cycles, multi-hop module-alias helper cycles, onward action aliases,
+  cycles, direct, boolean, and multi-hop action-helper cycles, direct and
+  boolean invalid helper references, module-alias helper cycles, multi-hop
+  module-alias helper cycles, onward action aliases,
   fair-action definitions aliasing different imported reviewed fair actions,
   direct and multi-hop cyclic fair-action aliases, onward helper-alias
   resolution failures, multi-hop helper-alias recursive helper bad targets,
   helper aliases, direct and transitive fair-action helper aliases, boolean
   direct/transitive fair-action helper aliases, boolean helper aliases, helper
-  wrappers, and helper actions composing other fair actions, direct references to and direct,
+  wrappers, and direct and multi-hop helper actions composing other fair
+  actions, direct references to, direct and multi-hop helper-wrapper references to, and direct,
   boolean-hidden, action-shaped wrapper, and boolean-operand helper-wrapper
   compositions of other fair actions, module-alias conjunct fair-action composition plus direct,
-  boolean-helper, and transitive fair-action conjunct operands, module-alias
-  boolean fair-action composition plus direct, helper, and transitive
-  fair-action boolean operands, multi-hop module-alias operand cycles,
-  multi-hop recursive helper failures behind module-alias conjunct and
-  boolean operands, module-alias helper resolution failures, and
-  module-alias imported/target-local mixed action witnesses.
+  boolean-helper, transitive, and multi-hop static-wrapper fair-action
+  conjunct operands, module-alias boolean fair-action composition plus direct, helper,
+  transitive, and multi-hop static-wrapper fair-action boolean operands,
+  multi-hop module-alias operand cycles,
+  mixed module-alias operand cycles, module-alias operand resolution
+  failures, mixed module-alias operand resolution failures, multi-hop
+  recursive helper failures behind module-alias conjunct and boolean
+  operands, mixed multi-hop recursive helper failures behind module-alias
+  operands, mixed onward helper-target failures and mixed invalid helper
+  references behind module-alias operands, boolean
+  and conjunct mixed fair-action composition/error pairings behind
+  module-alias operands,
+  helper-alias resolution failures, module-alias helper resolution failures,
+  and module-alias imported/target-local mixed action witnesses.
   Progress transition aliases must resolve through named local INSTANCE declarations,
   so imported `Next` wrappers cannot rely on implicit or misspelled module
   aliases, including onward aliases inside imported transition targets.

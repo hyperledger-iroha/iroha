@@ -183,6 +183,9 @@ def _encode_solana_base58(raw: bytes) -> str:
 def _json_object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     decoded: dict[str, Any] = {}
     for key, value in pairs:
+        # Source-inventory marker: live JSON duplicate-key helpers use exact strings.
+        if type(key) is not str:
+            raise ValueError("JSON-RPC returned duplicate JSON keys")
         if key in decoded:
             raise ValueError("JSON-RPC returned duplicate JSON keys")
         decoded[key] = value
@@ -214,6 +217,9 @@ def _normalize_solana_rpc_url(rpc_url: str) -> str:
 
 
 def _rpc_host_is_loopback(host: str) -> bool:
+    # Source-inventory marker: runtime URL host classifiers use exact strings.
+    if type(host) is not str:
+        return False
     normalized = host.strip("[]").lower()
     try:
         return ipaddress.ip_address(normalized).is_loopback
@@ -222,6 +228,8 @@ def _rpc_host_is_loopback(host: str) -> bool:
 
 
 def _rpc_host_is_non_public_dns(host: str) -> bool:
+    if type(host) is not str:
+        return True
     normalized = host.strip("[]").lower()
     try:
         ipaddress.ip_address(normalized)
@@ -293,7 +301,9 @@ def _json_rpc(
         raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from None
     if type(decoded) is not dict:
         raise RuntimeError(f"JSON-RPC {method} returned a non-object response")
-    if decoded.get("jsonrpc") != "2.0":
+    protocol_version = decoded.get("jsonrpc")
+    # Source-inventory marker: Solana live JSON-RPC protocol version uses exact strings.
+    if type(protocol_version) is not str or protocol_version != "2.0":
         raise RuntimeError(f"JSON-RPC {method} returned an invalid protocol version")
     response_id = decoded.get("id")
     if type(response_id) is not int or response_id != 1:
@@ -609,9 +619,12 @@ def _validate_live_evidence(live: dict[str, Any]) -> tuple[dict[str, Any], bytes
     if derived_code_hash != verifier_code_hash:
         raise ValueError("Solana ProgramData executable bytes must match live verifier_code_hash")
 
-    if live.get("program_owner") != UPGRADEABLE_LOADER_ID:
+    program_owner = live.get("program_owner")
+    # Source-inventory marker: Solana live copied owner metadata uses exact strings.
+    if type(program_owner) is not str or program_owner != UPGRADEABLE_LOADER_ID:
         raise ValueError("Solana verifier program owner must be the BPF upgradeable loader")
-    if live.get("programdata_owner") != UPGRADEABLE_LOADER_ID:
+    programdata_owner = live.get("programdata_owner")
+    if type(programdata_owner) is not str or programdata_owner != UPGRADEABLE_LOADER_ID:
         raise ValueError("Solana ProgramData owner must be the BPF upgradeable loader")
     if live.get("program_immutable") is not True:
         raise ValueError("Solana verifier program must be immutable")
@@ -798,6 +811,10 @@ def _destination_args_from_live(args: argparse.Namespace, live: dict[str, Any]) 
 
 def _summary(args: argparse.Namespace, live: dict[str, Any]) -> dict[str, Any]:
     live, verifier_code_hash, program_bytes = _validate_live_evidence(live)
+    rpc_commitment = _require_rpc_commitment(
+        live.get("rpc_commitment"),
+        label="Solana live RPC commitment metadata",
+    )
     destination_args = _destination_args_from_validated_live(
         args,
         live,
@@ -860,7 +877,8 @@ def _summary(args: argparse.Namespace, live: dict[str, Any]) -> dict[str, Any]:
         expected_binding_matches,
     )
     summary.update(live)
-    summary["rpc_commitment_finalized"] = live.get("rpc_commitment") == "finalized"
+    # Source-inventory marker: Solana live summary commitment flag uses validated exact strings.
+    summary["rpc_commitment_finalized"] = rpc_commitment == "finalized"
     summary["expected_verifier_code_hash_matches"] = expected_code_hash is not None
     summary["expected_programdata_address_matches"] = expected_programdata is not None
     summary["expected_programdata_slot_matches"] = expected_programdata_slot is not None
@@ -997,7 +1015,9 @@ def _offline_args_from_summary(
 
 
 def render_toml(args: argparse.Namespace, live: dict[str, Any]) -> str:
-    if live.get("rpc_commitment") != "finalized":
+    rpc_commitment = live.get("rpc_commitment")
+    # Source-inventory marker: Solana live TOML commitment gate uses exact strings.
+    if type(rpc_commitment) is not str or rpc_commitment != "finalized":
         raise ValueError("--toml requires finalized Solana JSON-RPC commitment")
     if args.expected_verifier_code_hash is None:
         raise ValueError("--toml requires --expected-verifier-code-hash")
@@ -1268,6 +1288,9 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 
 def _decoded_public_blocker_text(value: str) -> str:
+    # Source-inventory marker: lane public blocker decode helpers use exact strings.
+    if type(value) is not str:
+        return ""
     decoded = value
     for _decode_pass in range(max(1, len(value))):
         next_decoded = unquote(html_unescape(decoded))
@@ -1278,6 +1301,8 @@ def _decoded_public_blocker_text(value: str) -> str:
 
 
 def _decoded_cli_error_text_issue(value: str) -> bool:
+    if type(value) is not str:
+        return True
     decoded = _decoded_public_blocker_text(value)
     if any(ord(character) < 0x20 or ord(character) == 0x7F for character in decoded):
         return True
@@ -1289,7 +1314,10 @@ def _decoded_cli_error_text_issue(value: str) -> bool:
 def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
     if isinstance(exc, (OSError, SystemExit)):
         return fallback
-    text = str(exc)
+    try:
+        text = str(exc)
+    except Exception:
+        return fallback
     if not text:
         return fallback
     if not text.isascii():

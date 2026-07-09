@@ -75,6 +75,7 @@ FASTPQ_BALANCED_LDE_ROOT = 0x6026_3388_DBBF_9B2A
 FASTPQ_BALANCED_OMEGA_COSET = 0x6AF3_25E8_25AD_5C18
 BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 BASE58_INDEX = {symbol: index for index, symbol in enumerate(BASE58_ALPHABET)}
+RUNTIME_BYTECODE_FILE_PATH_TYPE = type(Path())
 
 TRON_SOURCE_TRUST_ANCHOR_ID = (
     "sccp:tron:source-trust-anchor:mainnet-witness-schedule:v1"
@@ -138,6 +139,9 @@ TRON_DPOS_SOURCE_GATE_TRANSCRIPT_PREFIXES = (
 
 
 def _strip_0x(value: str) -> str:
+    # Source-inventory marker: TRON source strip-0x helper uses exact strings.
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError("0x text must be an exact string")
     return value[2:] if value.lower().startswith("0x") else value
 
 
@@ -240,11 +244,16 @@ def parse_runtime_bytecode_hex(value: str, *, label: str) -> bytes:
 
 
 def _reject_runtime_bytecode_file_symlink_path(path: Path) -> None:
+    # Source-inventory marker: runtime bytecode file helpers use native paths.
+    if type(path) is not RUNTIME_BYTECODE_FILE_PATH_TYPE:
+        raise argparse.ArgumentTypeError("runtime bytecode file cannot be read")
     if first_symlinked_existing_path_component(path) is not None:
         raise argparse.ArgumentTypeError("runtime bytecode file must not be a symlink")
 
 
 def _read_runtime_bytecode_file_text(path: Path, *, label: str) -> str:
+    if type(path) is not RUNTIME_BYTECODE_FILE_PATH_TYPE:
+        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None
     try:
         _reject_runtime_bytecode_file_symlink_path(path)
     except (OSError, argparse.ArgumentTypeError):
@@ -3080,6 +3089,9 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 
 def _decoded_public_blocker_text(value: str) -> str:
+    # Source-inventory marker: lane public blocker decode helpers use exact strings.
+    if type(value) is not str:
+        return ""
     decoded = value
     for _decode_pass in range(max(1, len(value))):
         next_decoded = unquote(html_unescape(decoded))
@@ -3090,6 +3102,8 @@ def _decoded_public_blocker_text(value: str) -> str:
 
 
 def _decoded_cli_error_text_issue(value: str) -> bool:
+    if type(value) is not str:
+        return True
     decoded = _decoded_public_blocker_text(value)
     if any(ord(character) < 0x20 or ord(character) == 0x7F for character in decoded):
         return True
@@ -3101,7 +3115,10 @@ def _decoded_cli_error_text_issue(value: str) -> bool:
 def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
     if isinstance(exc, (OSError, SystemExit)):
         return fallback
-    text = str(exc)
+    try:
+        text = str(exc)
+    except Exception:
+        return fallback
     if not text:
         return fallback
     if not text.isascii():

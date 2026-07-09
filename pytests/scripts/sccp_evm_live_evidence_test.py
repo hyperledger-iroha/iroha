@@ -1212,6 +1212,35 @@ def test_evm_json_rpc_rejects_duplicate_json_keys():
         raise AssertionError("duplicate-key EVM JSON-RPC response was accepted")
 
 
+def test_evm_json_object_rejects_key_subclasses_without_hooks():
+    module = load_live_module()
+
+    class HostileJsonKey(str):
+        def __new__(cls):
+            return str.__new__(cls, "secret-token-result")
+
+        def __hash__(self):
+            raise AssertionError("secret-token EVM JSON key was hashed")
+
+        def __eq__(self, _other):
+            raise AssertionError("secret-token EVM JSON key was compared")
+
+        def __str__(self):
+            raise AssertionError("secret-token EVM JSON key was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token EVM JSON key was repr'd")
+
+    try:
+        module._json_object_without_duplicate_keys([(HostileJsonKey(), "0x1")])
+    except ValueError as exc:
+        message = str(exc)
+        assert message == "JSON-RPC returned duplicate JSON keys"
+        assert "secret-token" not in message
+    else:
+        raise AssertionError("hostile EVM JSON key subclass was accepted")
+
+
 def test_evm_json_rpc_url_rejects_hidden_request_state():
     module = load_live_module()
 
@@ -1244,6 +1273,22 @@ def test_evm_json_rpc_url_rejects_hidden_request_state():
         def __repr__(self):
             raise AssertionError("secret-token EVM RPC URL label was repr'd")
 
+    class HostileEvmRpcHost(str):
+        def __new__(cls):
+            return str.__new__(cls, "localhost")
+
+        def __str__(self):
+            raise AssertionError("secret-token EVM RPC host was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token EVM RPC host was repr'd")
+
+        def strip(self, *_args):
+            raise AssertionError("secret-token EVM RPC host was stripped")
+
+        def lower(self):
+            raise AssertionError("secret-token EVM RPC host was lowered")
+
     assert module._normalize_evm_rpc_url("https://ethereum.example") == (
         "https://ethereum.example"
     )
@@ -1253,6 +1298,9 @@ def test_evm_json_rpc_url_rejects_hidden_request_state():
     assert module._normalize_evm_rpc_url("http://127.0.0.1:8545") == (
         "http://127.0.0.1:8545"
     )
+    hostile_host = HostileEvmRpcHost()
+    assert module._evm_rpc_host_is_loopback(hostile_host) is False
+    assert module._evm_rpc_host_is_non_public_dns(hostile_host) is True
 
     def forbidden_opener(_request, timeout):
         raise AssertionError("malformed EVM RPC URL reached the opener")
@@ -1391,6 +1439,37 @@ def test_evm_json_rpc_rejects_envelope_drift():
             assert expected_message in str(exc)
         else:
             raise AssertionError(failure)
+
+    original_json_loads = module.json.loads
+
+    def hostile_json_loads(*args, **kwargs):
+        decoded = original_json_loads(*args, **kwargs)
+        if type(decoded) is dict and decoded.get("jsonrpc") == "2.0":
+            decoded["jsonrpc"] = HostileEvmLiveString("2.0")
+        return decoded
+
+    def opener(_request, timeout):
+        del timeout
+        return FakeResponse({"jsonrpc": "2.0", "id": 1, "result": "0x38"})
+
+    module.json.loads = hostile_json_loads
+    try:
+        try:
+            module._json_rpc(
+                "https://bsc.example",
+                "eth_chainId",
+                [],
+                opener=opener,
+                timeout=3.0,
+            )
+        except RuntimeError as exc:
+            rendered = str(exc)
+            assert "protocol version" in rendered
+            assert "secret-token" not in rendered
+        else:
+            raise AssertionError("hostile JSON-RPC protocol version was accepted")
+    finally:
+        module.json.loads = original_json_loads
 
 
 def test_live_evm_evidence_collects_destination_and_offline_toml():
@@ -2178,6 +2257,83 @@ def test_live_evm_route_canary_rejects_unverified_transaction_metadata():
         raise AssertionError("forged EVM route canary evidence hash was accepted")
 
 
+def test_live_evm_route_canary_receipt_status_uses_exact_strings(monkeypatch):
+    module = load_live_module()
+
+    class HostileReceiptStatus(str):
+        def __new__(cls):
+            return str.__new__(cls, "0x1")
+
+        def __str__(self):
+            raise AssertionError("secret-token EVM live receipt status stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token EVM live receipt status repr'd")
+
+        def __eq__(self, _other):
+            raise AssertionError("secret-token EVM live receipt status compared")
+
+        def __ne__(self, _other):
+            raise AssertionError("secret-token EVM live receipt status compared")
+
+    fake = fake_opener_for(module)
+    route_allowlist_hash = bytes.fromhex(EVM_LIVE_ROUTE_ALLOWLIST_HASH_VECTOR)
+    route_canary_hash = route_canary_hash_for(module, fake, route_allowlist_hash)
+    original_json_rpc = module._json_rpc
+
+    def hostile_receipt_json_rpc(rpc_url, method, params, *, opener, timeout):
+        if method == "eth_getTransactionReceipt":
+            assert params == ["0x" + fake.route_canary_transaction_hash.hex()]
+            return {
+                "transactionHash": "0x" + fake.route_canary_transaction_hash.hex(),
+                "status": HostileReceiptStatus(),
+                "blockHash": "0x" + fake.route_canary_receipt_block_hash.hex(),
+                "blockNumber": hex(fake.route_canary_receipt_block_number),
+                "logs": [],
+            }
+        return original_json_rpc(
+            rpc_url,
+            method,
+            params,
+            opener=opener,
+            timeout=timeout,
+        )
+
+    with monkeypatch.context() as patch:
+        patch.setattr(module, "_json_rpc", hostile_receipt_json_rpc)
+        try:
+            module.collect_live_evidence(
+                SimpleNamespace(
+                    rpc_url="https://ethereum.example",
+                    domain=module.evidence.SCCP_DOMAIN_ETH,
+                    bridge_address=fake.bridge,
+                    expected_network_id=fake.network_id,
+                    expected_bridge_code_hash=fake.bridge_code_hash,
+                    expected_destination_binding_hash=fake.destination_binding,
+                    route_allowlist_hash=route_allowlist_hash,
+                    route_canary_evidence_hash=route_canary_hash,
+                    route_canary_transaction_hash=fake.route_canary_transaction_hash,
+                    route_canary_log_index=fake.route_canary_log_index,
+                    source_verifier_material_hash=bytes.fromhex(
+                        EVM_SOURCE_VERIFIER_MATERIAL_HASH
+                    ),
+                    source_adapter_engine_deployment_hash=bytes.fromhex(
+                        EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
+                    ),
+                    block_tag="finalized",
+                    timeout=1.0,
+                ),
+                opener=fake.opener,
+            )
+        except RuntimeError as exc:
+            rendered = str(exc)
+            assert rendered == "route-canary transaction receipt status must be 0x1"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("EVM live accepted hostile route-canary receipt status")
+
+
 def test_live_evm_collect_rejects_non_string_route_canary_transaction_summary_without_stringifying(
     monkeypatch,
 ):
@@ -2669,6 +2825,82 @@ def test_live_evm_route_canary_transaction_verification_requires_exact_keys():
             raise AssertionError(
                 f"EVM full TOML accepted route-canary transaction key alias {section}.{field}"
             )
+
+
+def test_live_evm_route_canary_transaction_verification_requires_exact_strings():
+    module = load_live_module()
+    summary = full_evm_live_summary(module)
+
+    cases = (
+        ("route_canary", "evidence_source"),
+        ("route_canary", "evidence_hash"),
+        ("route_canary_transaction", "route_canary_evidence_hash"),
+    )
+
+    for section, field in cases:
+        forged = copy.deepcopy(summary)
+        forged[section][field] = HostileEvmLiveString(forged[section][field])
+
+        assert module._route_canary_transaction_verified(forged) is False
+        try:
+            module.render_offline_toml(forged)
+        except ValueError as exc:
+            rendered = str(exc)
+            if section == "route_canary" and field == "evidence_hash":
+                assert rendered == "route canary evidence hash must be an exact hex string"
+            else:
+                assert rendered == "TOML output requires --route-canary-transaction-hash"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(
+                "EVM full TOML accepted route-canary transaction "
+                f"string subclass {section}.{field}"
+            )
+
+
+def test_live_evm_destination_chain_and_full_toml_block_tag_use_exact_strings():
+    module = load_live_module()
+    summary = full_evm_live_summary(module)
+
+    class HostileCopiedString(str):
+        def __new__(cls, value):
+            return str.__new__(cls, value)
+
+        def __str__(self):
+            raise AssertionError("secret-token EVM live copied string stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token EVM live copied string repr'd")
+
+        def __eq__(self, _other):
+            raise AssertionError("secret-token EVM live copied string compared")
+
+        def __ne__(self, _other):
+            raise AssertionError("secret-token EVM live copied string compared")
+
+        def strip(self, *_args, **_kwargs):
+            raise AssertionError("secret-token EVM live copied string stripped")
+
+    forged = copy.deepcopy(summary)
+    forged["destination_bridge"]["chain"] = HostileCopiedString("eth")
+    try:
+        module.render_offline_toml(forged)
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "destination chain metadata must match domain"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("EVM full TOML accepted hostile copied destination chain")
+
+    forged = copy.deepcopy(summary)
+    forged["block_tag"] = HostileCopiedString("finalized")
+    prerequisites = module._full_toml_prerequisites(forged)
+    assert "--block-tag finalized" in prerequisites
+    assert module._route_canary_transaction_verified(forged) is True
 
 
 def test_live_evm_rejects_non_string_copied_destination_comment_metadata_without_stringifying():
@@ -3190,6 +3422,16 @@ def test_evm_live_exact_string_parsers_reject_string_subclasses_without_hooks():
     hostile_quantity = HostileEvmLiveString("0xa")
 
     cases = (
+        (
+            lambda: module._strip_0x(hostile_hex),
+            module.argparse.ArgumentTypeError,
+            "0x text must be an exact string",
+        ),
+        (
+            lambda: module._selector(hostile_hex),
+            TypeError,
+            "EVM function selector signature must be an exact string",
+        ),
         (
             lambda: module._summary_hex_bytes(
                 {"component": hostile_hex},

@@ -67,6 +67,7 @@ BSC_NETWORK_PROFILES = {
         "route_allowlist_id": "sccp:bsc:route-allowlist:bsc-testnet:v1",
     },
 }
+RUNTIME_BYTECODE_FILE_PATH_TYPE = type(Path())
 
 DOMAIN_PROFILES = {
     SCCP_DOMAIN_ETH: {
@@ -152,11 +153,16 @@ def parse_runtime_bytecode_hex(value: str, *, label: str) -> bytes:
 
 
 def _reject_runtime_bytecode_file_symlink_path(path: Path) -> None:
+    # Source-inventory marker: runtime bytecode file helpers use native paths.
+    if type(path) is not RUNTIME_BYTECODE_FILE_PATH_TYPE:
+        raise argparse.ArgumentTypeError("runtime bytecode file cannot be read")
     if first_symlinked_existing_path_component(path) is not None:
         raise argparse.ArgumentTypeError("runtime bytecode file must not be a symlink")
 
 
 def _read_runtime_bytecode_file_text(path: Path, *, label: str) -> str:
+    if type(path) is not RUNTIME_BYTECODE_FILE_PATH_TYPE:
+        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None
     try:
         _reject_runtime_bytecode_file_symlink_path(path)
     except (OSError, argparse.ArgumentTypeError):
@@ -259,6 +265,9 @@ def _require_domain_network_id(
 def parse_u32_decimal(value: str, *, label: str) -> int:
     """Parse a canonical non-negative decimal u32."""
 
+    # Source-inventory marker: EVM destination decimal parsers use exact strings.
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be a canonical u32 decimal")
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must be a canonical u32 decimal")
     if not value or not value.isascii() or not value.isdecimal():
@@ -274,6 +283,8 @@ def parse_u32_decimal(value: str, *, label: str) -> int:
 def parse_u64_decimal(value: str, *, label: str) -> int:
     """Parse a canonical non-negative decimal u64."""
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be a canonical u64 decimal")
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must be a canonical u64 decimal")
     if not value or not value.isascii() or not value.isdecimal():
@@ -289,6 +300,9 @@ def parse_u64_decimal(value: str, *, label: str) -> int:
 def parse_bool_literal(value: str, *, label: str) -> bool:
     """Parse an exact true/false literal."""
 
+    # Source-inventory marker: EVM destination boolean parser uses exact strings.
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be true or false")
     if value == "true":
         return True
     if value == "false":
@@ -2282,6 +2296,9 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 
 def _decoded_public_blocker_text(value: str) -> str:
+    # Source-inventory marker: lane public blocker decode helpers use exact strings.
+    if type(value) is not str:
+        return ""
     decoded = value
     for _decode_pass in range(max(1, len(value))):
         next_decoded = unquote(html_unescape(decoded))
@@ -2292,6 +2309,8 @@ def _decoded_public_blocker_text(value: str) -> str:
 
 
 def _decoded_cli_error_text_issue(value: str) -> bool:
+    if type(value) is not str:
+        return True
     decoded = _decoded_public_blocker_text(value)
     if any(ord(character) < 0x20 or ord(character) == 0x7F for character in decoded):
         return True
@@ -2303,7 +2322,10 @@ def _decoded_cli_error_text_issue(value: str) -> bool:
 def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
     if isinstance(exc, (OSError, SystemExit)):
         return fallback
-    text = str(exc)
+    try:
+        text = str(exc)
+    except Exception:
+        return fallback
     if not text:
         return fallback
     if not text.isascii():

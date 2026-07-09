@@ -30,6 +30,7 @@ import sccp_ton_destination_evidence as evidence  # noqa: E402
 Urlopen = Callable[..., Any]
 TON_ACCOUNT_STATES_MAX_RESPONSE_BYTES = 1024 * 1024
 TON_ACCOUNT_STATES_MAX_ERROR_BYTES = 4096
+RUNTIME_TEXT_FILE_PATH_TYPE = type(Path())
 PUBLIC_SUMMARY_FIELDS = (
     "source_domain",
     "domain",
@@ -185,6 +186,9 @@ def _account_states_url(api_url: str) -> str:
 
 
 def _api_host_is_loopback(host: str) -> bool:
+    # Source-inventory marker: runtime URL host classifiers use exact strings.
+    if type(host) is not str:
+        return False
     normalized = host.strip("[]").lower()
     try:
         return ipaddress.ip_address(normalized).is_loopback
@@ -193,6 +197,8 @@ def _api_host_is_loopback(host: str) -> bool:
 
 
 def _api_host_is_non_public_dns(host: str) -> bool:
+    if type(host) is not str:
+        return True
     normalized = host.strip("[]").lower()
     try:
         ipaddress.ip_address(normalized)
@@ -218,11 +224,16 @@ def _api_host_is_non_public_dns(host: str) -> bool:
 
 
 def _reject_runtime_file_symlink_path(path: Path) -> None:
+    # Source-inventory marker: live runtime text file helpers use native paths.
+    if type(path) is not RUNTIME_TEXT_FILE_PATH_TYPE:
+        raise ValueError("runtime file cannot be read")
     if first_symlinked_existing_path_component(path) is not None:
         raise ValueError("runtime file must not be a symlink")
 
 
 def _read_runtime_text_file(path: Path, *, error_message: str) -> str:
+    if type(path) is not RUNTIME_TEXT_FILE_PATH_TYPE:
+        raise ValueError(error_message) from None
     try:
         _reject_runtime_file_symlink_path(path)
     except (OSError, ValueError):
@@ -278,6 +289,9 @@ def _api_key_token(value: Any, *, label: str) -> str:
 def _json_object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     decoded: dict[str, Any] = {}
     for key, value in pairs:
+        # Source-inventory marker: live JSON duplicate-key helpers use exact strings.
+        if type(key) is not str:
+            raise ValueError("TON accountStates returned duplicate JSON keys")
         if key in decoded:
             raise ValueError("TON accountStates returned duplicate JSON keys")
         decoded[key] = value
@@ -486,7 +500,13 @@ def _validate_live_evidence(
         raise ValueError("TON live account address metadata is invalid") from None
     if account_address != verifier:
         raise ValueError("TON live account address must match verifier contract")
-    if live.get("account_status") != "active":
+    account_status = _exact_live_string(
+        live,
+        "account_status",
+        label="account_status",
+    )
+    # Source-inventory marker: TON live copied account status uses exact strings.
+    if account_status != "active":
         raise ValueError("TON live account status metadata must be active")
     if live.get("code_boc_present") is not True:
         raise ValueError("TON live code BoC presence metadata must be true")
@@ -1019,6 +1039,9 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 
 def _decoded_public_blocker_text(value: str) -> str:
+    # Source-inventory marker: lane public blocker decode helpers use exact strings.
+    if type(value) is not str:
+        return ""
     decoded = value
     for _decode_pass in range(max(1, len(value))):
         next_decoded = unquote(html_unescape(decoded))
@@ -1029,6 +1052,8 @@ def _decoded_public_blocker_text(value: str) -> str:
 
 
 def _decoded_cli_error_text_issue(value: str) -> bool:
+    if type(value) is not str:
+        return True
     decoded = _decoded_public_blocker_text(value)
     if any(ord(character) < 0x20 or ord(character) == 0x7F for character in decoded):
         return True
@@ -1040,7 +1065,10 @@ def _decoded_cli_error_text_issue(value: str) -> bool:
 def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
     if isinstance(exc, (OSError, SystemExit)):
         return fallback
-    text = str(exc)
+    try:
+        text = str(exc)
+    except Exception:
+        return fallback
     if not text:
         return fallback
     if not text.isascii():

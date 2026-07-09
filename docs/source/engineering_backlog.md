@@ -79,6 +79,28 @@ SCCP source-inventory Markdown exact-key hardening was completed on 2026-07-09.
 SCCP strict release-checklist Markdown exact-key hardening was completed on
 2026-07-09.
 SCCP user-prover Markdown exact-key hardening was completed on 2026-07-09.
+SCCP lane-readiness Markdown exact-key hardening was completed on 2026-07-09.
+SCCP native-prover Markdown invariant exact-key hardening was completed on
+2026-07-09.
+SCCP native-prover Markdown row exact-key hardening was completed on 2026-07-09.
+SCCP input-artifact Markdown exact-key hardening was completed on 2026-07-09.
+SCCP corridor Markdown exact-root-key hardening was completed on 2026-07-09.
+SCCP expected submission-surface exact phase-key hardening was completed on
+2026-07-09.
+SCCP corridor Markdown invariant exact-key hardening was completed on
+2026-07-09.
+SCCP native-prover Markdown invariant status exact-string hardening was
+completed on 2026-07-09.
+SCCP corridor phase-status exact-string hardening was completed on 2026-07-09.
+SCCP readiness public corridor phase-status exact-string hardening was completed
+on 2026-07-09.
+SCCP optional fixed-hex empty sentinel exact-string hardening was completed on
+2026-07-09.
+SCCP readiness native EVM redaction status exact-string hardening was completed
+on 2026-07-09.
+SCCP TRON live transaction parser exact-string hardening was completed on
+2026-07-09.
+SCCP live/evidence exact-literal sweep was completed on 2026-07-09.
 
 ## Multilane localnet default-soak refresh
 
@@ -209,8 +231,10 @@ readiness decisions through equality hooks.
 Source-material evidence CLIs now also reject hostile string subclasses at the
 exact parser boundary for ETH/BSC source-bridge and Solana/TON source-state
 hex, decimal, and runtime-bytecode inputs before copied operator text can reach
-string hooks; the source-material role-validation inventory pins those
-adversarial parser guards.
+string hooks. ETH/BSC source bridge block-tag selection now follows the same
+exact-string boundary before copied tag values can reach truthiness, membership,
+or finality comparisons; the source-material role-validation inventory pins
+those adversarial parser guards.
 All-lanes copied operator evidence now also rejects hostile string subclasses at
 the fallback/minimal TOML boundary before `.strip()`, `.splitlines()`, JSON
 metadata parsing, or comment parsing can invoke copied text hooks; the
@@ -710,10 +734,13 @@ ids, source bridge addresses, runtime hashes/bytecode, deployment transaction
 hashes, receipt status, receipt block numbers, and finality pins from exact
 copied-summary parsers before rendering, so copied metadata cannot hide behind
 prerequisite blockers or comment-time `str(...)` coercion. EVM source-live
-deployment receipt finality checks now also require exact copied block-number
-and block-hash metadata before comparing against the finalized execution head,
-so hostile integer or string coercion hooks cannot run during finality
-revalidation.
+direct summary validation and TOML prerequisite checks now also require exact
+copied `chain`, `block_tag`, and `deployment_receipt_status` strings before
+source-lane matching or deployment-receipt prerequisite comparisons can run. EVM
+source-live deployment receipt finality checks now also require exact copied
+block-number and block-hash metadata before comparing against the finalized
+execution head, so hostile integer or string coercion hooks cannot run during
+finality revalidation.
 EVM receipt-proof direct collector inputs now validate transaction hashes,
 source bridge addresses, receipt-only mode, and explicit expected chain ids
 before RPC, so malformed namespace values cannot trigger provider calls or be
@@ -721,6 +748,9 @@ stringified into receipt proof evidence.
 Solana live RPC commitment values now also require exact `finalized` or
 `confirmed` text before collection or imported summary validation, so hostile
 scalar equality/hash hooks cannot affect live snapshot admission.
+Solana live copied Program/ProgramData owner metadata and the raw live TOML
+`rpc_commitment` gate now also require exact strings before ownership or
+finalized-commitment comparisons can run.
 Solana live expected pins now also normalize destination-binding hashes,
 verifier-code hashes, and ProgramData addresses before summary comparison, so
 hostile scalar equality hooks cannot mark live evidence ready or leak into drift
@@ -898,8 +928,31 @@ secret-bearing string hooks before evidence collection is rejected. The Python
 EVM destination-live CLI parser helpers now mirror that boundary for
 bridge/component hashes, bridge addresses, expected chain IDs, and block tags,
 rejecting hostile non-string values before any string-like hook can run. The
+EVM live route-canary receipt validator now also requires copied receipt
+`status` metadata to be an exact string before comparing against `0x1`, with a
+hostile decoded-receipt regression pinned in the EVM live production inventory.
+The EVM live route-canary transaction verifier now also gates copied
+`evidence_source`, route-canary evidence hash, and transaction evidence hash
+strings before equality checks can mark the transaction verified for full-TOML
+readiness.
+The TRON live route-canary transaction verifier now mirrors that boundary for
+copied source/hash, receipt, topic, route, selector/signature, transcript, and
+owner/signature address strings before full-TOML readiness can open.
+EVM live destination validation now also requires copied `chain` metadata to be
+an exact string before lane-profile comparison, and Ethereum full-TOML
+prerequisites reparse copied `block_tag` metadata before finalized-readiness
+checks can pass.
+TRON live route-canary verification now also gates copied proof byte length,
+proof version, proof source domain, public-input target domain, and signature
+count as exact integers before full-TOML readiness can open.
+TRON live source-event trigger-request and transaction verification now likewise
+require exact copied endpoint/function/parameter, transaction/event/source-proof
+strings, call value, and log index before replay arguments can be emitted.
 Python Solana live CLI parser helpers now apply the same exact-string boundary
 to verifier program ids, ProgramData slot pins, and bytes32 evidence hashes.
+Solana live summary readiness now derives `rpc_commitment_finalized` from the
+validated exact commitment value instead of comparing copied live metadata
+again.
 Solana live generated offline arguments now revalidate copied summary
 destination-binding, route-allowlist, and route-canary evidence hashes through
 exact string/hex helpers before argument emission, with hostile copied-summary
@@ -907,7 +960,8 @@ regressions pinned in the release inventory.
 TON live generated offline arguments now mirror that boundary for copied
 destination-binding, route-allowlist, and route-canary evidence hashes, and
 also reparse emitted live account hashes and logical time before argument
-emission.
+emission. TON live summary validation now also reads copied `account_status`
+through the exact live-string helper before active-account comparison.
 Solana and TON live destination argument builders now also reparse their
 validated-live metadata with exact string, hash, and decimal helpers, so direct
 builder calls cannot stringify hostile slot, account-state, or code-hash
@@ -987,6 +1041,9 @@ Solana source-state direct hash helpers now require exact integer
 source/target domains before computing source-adapter verifier, source-material,
 deployment, or full-light-client gate hashes, so boolean aliases cannot bypass
 the CLI validation path when those helpers are imported directly.
+Solana source-state network selectors now also require exact lowercase
+documented aliases before CLI parsing or direct profile helper calls can select a
+mainnet-beta or testnet source-material profile.
 Copied all-lanes public summary validation now also separates malformed lane
 domains from exact production domains before running lane-family checks, so
 `domain: true` cannot alias ETH domain `1`, satisfy required-domain inventory,

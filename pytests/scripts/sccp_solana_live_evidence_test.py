@@ -413,6 +413,22 @@ def test_solana_json_rpc_url_rejects_hidden_request_state():
         def __repr__(self):
             raise AssertionError("secret-token Solana RPC URL label was repr'd")
 
+    class HostileSolanaRpcHost(str):
+        def __new__(cls):
+            return str.__new__(cls, "localhost")
+
+        def __str__(self):
+            raise AssertionError("secret-token Solana RPC host was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token Solana RPC host was repr'd")
+
+        def strip(self, *_args):
+            raise AssertionError("secret-token Solana RPC host was stripped")
+
+        def lower(self):
+            raise AssertionError("secret-token Solana RPC host was lowered")
+
     assert module._normalize_solana_rpc_url("https://solana.example.invalid") == (
         "https://solana.example.invalid"
     )
@@ -422,6 +438,9 @@ def test_solana_json_rpc_url_rejects_hidden_request_state():
     assert module._normalize_solana_rpc_url("http://127.0.0.1:8899") == (
         "http://127.0.0.1:8899"
     )
+    hostile_host = HostileSolanaRpcHost()
+    assert module._rpc_host_is_loopback(hostile_host) is False
+    assert module._rpc_host_is_non_public_dns(hostile_host) is True
 
     def forbidden_opener(_request, timeout):
         raise AssertionError("malformed Solana RPC URL reached the opener")
@@ -560,6 +579,39 @@ def test_solana_json_rpc_rejects_envelope_drift():
             assert expected_message in str(exc)
         else:
             raise AssertionError(failure)
+
+    original_json_loads = module.json.loads
+
+    def hostile_json_loads(*args, **kwargs):
+        decoded = original_json_loads(*args, **kwargs)
+        if type(decoded) is dict and decoded.get("jsonrpc") == "2.0":
+            decoded["jsonrpc"] = HostileSolanaLiveString("2.0")
+        return decoded
+
+    def opener(_request, timeout):
+        assert timeout == 3.0
+        return FakeResponse(
+            {"jsonrpc": "2.0", "id": 1, "result": {"context": {"slot": 1}}}
+        )
+
+    module.json.loads = hostile_json_loads
+    try:
+        try:
+            module._json_rpc(
+                "https://solana.example.invalid",
+                "getAccountInfo",
+                [],
+                opener=opener,
+                timeout=3.0,
+            )
+        except RuntimeError as exc:
+            rendered = str(exc)
+            assert "protocol version" in rendered
+            assert "secret-token" not in rendered
+        else:
+            raise AssertionError("hostile Solana JSON-RPC protocol version was accepted")
+    finally:
+        module.json.loads = original_json_loads
 
 
 def test_solana_live_cli_redacts_top_level_exception_details(monkeypatch, capsys):
@@ -1263,6 +1315,59 @@ def test_live_solana_evidence_rejects_hostile_imported_commitment_without_hooks(
         assert exc.__cause__ is None
     else:
         raise AssertionError("hostile imported Solana commitment was accepted")
+
+
+def test_live_solana_owner_and_toml_commitment_checks_use_exact_strings():
+    module = load_live_module()
+    program_id = module._encode_solana_base58(bytes.fromhex("33" * 32))
+    programdata_address = module._encode_solana_base58(bytes.fromhex("11" * 32))
+    program_bytes = b"\x7fELFsol"
+    code_hash = module.evidence.solana_verifier_program_code_hash(program_bytes)
+    args = _live_args(module, code_hash=code_hash, programdata_address=programdata_address)
+
+    for field, expected_error in (
+        (
+            "program_owner",
+            "Solana verifier program owner must be the BPF upgradeable loader",
+        ),
+        (
+            "programdata_owner",
+            "Solana ProgramData owner must be the BPF upgradeable loader",
+        ),
+    ):
+        live = _live_record(
+            module,
+            program_id=program_id,
+            programdata_address=programdata_address,
+            program_bytes=program_bytes,
+        )
+        live[field] = HostileSolanaLiveString(module.UPGRADEABLE_LOADER_ID)
+        try:
+            module._summary(args, live)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == expected_error
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError(f"Solana live accepted hostile {field} metadata")
+
+    live = _live_record(
+        module,
+        program_id=program_id,
+        programdata_address=programdata_address,
+        program_bytes=program_bytes,
+    )
+    live["rpc_commitment"] = HostileSolanaLiveString("finalized")
+    try:
+        module.render_toml(args, live)
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "--toml requires finalized Solana JSON-RPC commitment"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+    else:
+        raise AssertionError("Solana live TOML accepted hostile commitment metadata")
 
 
 def test_live_solana_summary_rejects_hostile_expected_pins_without_hooks():
