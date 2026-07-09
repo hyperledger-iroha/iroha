@@ -8687,6 +8687,16 @@ fn decode_kagemusha_recursive_lineage_open_envelopes(
             field: "lineage_witness.pallas_open_envelopes_archive",
         });
     }
+    let declared_count = kagemusha_pallas_open_envelope_archive_declared_count(
+        pallas_open_envelopes_archive,
+        "lineage_witness.pallas_open_envelopes_archive",
+    )?;
+    if declared_count != expected_hops {
+        return Err(KagemushaFoldError::HopCountMismatch {
+            expected: expected_hops,
+            actual: u32::try_from(declared_count).unwrap_or(u32::MAX),
+        });
+    }
     let envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
         norito::decode_from_bytes(pallas_open_envelopes_archive).map_err(|_| {
             KagemushaFoldError::InvalidRecursiveSpendProof {
@@ -8707,6 +8717,130 @@ fn decode_kagemusha_recursive_lineage_open_envelopes(
         )?;
     }
     Ok(envelopes)
+}
+
+fn kagemusha_pallas_open_envelope_archive_declared_count(
+    archive: &[u8],
+    field: &'static str,
+) -> Result<usize, KagemushaFoldError> {
+    type PallasOpenEnvelopeArchive = Vec<iroha_zkp_halo2::OpenVerifyEnvelope>;
+
+    let read_count = |payload: &[u8]| {
+        norito::core::read_seq_len_slice(payload)
+            .map(|(count, _)| count)
+            .map_err(|_| KagemushaFoldError::InvalidRecursiveSpendProof { field })
+    };
+
+    match kagemusha_pallas_open_envelope_archive_uncompressed_payload::<PallasOpenEnvelopeArchive>(
+        archive, field,
+    )? {
+        Some(payload) => read_count(payload),
+        None => {
+            let archived = norito::from_compressed_bytes::<PallasOpenEnvelopeArchive>(archive)
+                .map_err(|_| KagemushaFoldError::InvalidRecursiveSpendProof { field })?;
+            read_count(archived.bytes())
+        }
+    }
+}
+
+fn kagemusha_pallas_open_envelope_archive_uncompressed_payload<'a, T>(
+    archive: &'a [u8],
+    field: &'static str,
+) -> Result<Option<&'a [u8]>, KagemushaFoldError>
+where
+    for<'de> T: norito::NoritoDeserialize<'de>,
+{
+    const MAJOR_OFFSET: usize = 4;
+    const MINOR_OFFSET: usize = 5;
+    const SCHEMA_OFFSET: usize = 6;
+    const SCHEMA_LEN: usize = 16;
+    const COMPRESSION_OFFSET: usize = SCHEMA_OFFSET + SCHEMA_LEN;
+    const LENGTH_OFFSET: usize = COMPRESSION_OFFSET + 1;
+    const CHECKSUM_OFFSET: usize = LENGTH_OFFSET + 8;
+    const FLAGS_OFFSET: usize = CHECKSUM_OFFSET + 8;
+
+    let invalid = || KagemushaFoldError::InvalidRecursiveSpendProof { field };
+
+    if archive.len() < norito::core::Header::SIZE {
+        return Err(invalid());
+    }
+    if archive[..norito::core::MAGIC.len()] != norito::core::MAGIC[..] {
+        return Err(invalid());
+    }
+    if archive[MAJOR_OFFSET] != norito::core::VERSION_MAJOR
+        || archive[MINOR_OFFSET] != norito::core::VERSION_MINOR
+    {
+        return Err(invalid());
+    }
+    let schema = archive
+        .get(SCHEMA_OFFSET..COMPRESSION_OFFSET)
+        .ok_or_else(|| invalid())?;
+    let expected_schema = <T as norito::NoritoDeserialize<'static>>::schema_hash();
+    if schema != expected_schema.as_slice() {
+        return Err(invalid());
+    }
+    let compression = archive[COMPRESSION_OFFSET];
+    if compression == norito::Compression::Zstd as u8 {
+        return Ok(None);
+    }
+    if compression != norito::Compression::None as u8 {
+        return Err(invalid());
+    }
+
+    let mut length_bytes = [0_u8; 8];
+    length_bytes.copy_from_slice(
+        archive
+            .get(LENGTH_OFFSET..CHECKSUM_OFFSET)
+            .ok_or_else(|| invalid())?,
+    );
+    let payload_len_u64 = u64::from_le_bytes(length_bytes);
+    if payload_len_u64 > norito::core::max_archive_len() {
+        return Err(invalid());
+    }
+    let payload_len = usize::try_from(payload_len_u64).map_err(|_| invalid())?;
+
+    let mut checksum_bytes = [0_u8; 8];
+    checksum_bytes.copy_from_slice(
+        archive
+            .get(CHECKSUM_OFFSET..FLAGS_OFFSET)
+            .ok_or_else(|| invalid())?,
+    );
+    let checksum = u64::from_le_bytes(checksum_bytes);
+
+    let flags = *archive.get(FLAGS_OFFSET).ok_or_else(|| invalid())?;
+    norito::core::validate_header_flags(flags).map_err(|_| invalid())?;
+
+    let padding = {
+        let align = std::mem::align_of::<norito::Archived<T>>();
+        if align <= 1 {
+            0
+        } else {
+            let remainder = norito::core::Header::SIZE % align;
+            if remainder == 0 { 0 } else { align - remainder }
+        }
+    };
+    let payload_offset = norito::core::Header::SIZE
+        .checked_add(padding)
+        .ok_or_else(|| invalid())?;
+    let payload_end = payload_offset
+        .checked_add(payload_len)
+        .ok_or_else(|| invalid())?;
+    if archive.len() != payload_end {
+        return Err(invalid());
+    }
+    if archive[norito::core::Header::SIZE..payload_offset]
+        .iter()
+        .any(|byte| *byte != 0)
+    {
+        return Err(invalid());
+    }
+    let payload = archive
+        .get(payload_offset..payload_end)
+        .ok_or_else(|| invalid())?;
+    if norito::hardware_crc64(payload) != checksum {
+        return Err(invalid());
+    }
+    Ok(Some(payload))
 }
 
 fn validate_kagemusha_recursive_pallas_open_envelope_shape(
@@ -8974,6 +9108,15 @@ fn validate_kagemusha_recursive_previous_proof_open_envelopes_archive(
     if previous_recursive_proof_open_envelopes_archive.len()
         > KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES
     {
+        return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+            field: "previous_recursive_proof_open_envelopes_archive",
+        });
+    }
+    let declared_count = kagemusha_pallas_open_envelope_archive_declared_count(
+        previous_recursive_proof_open_envelopes_archive,
+        "previous_recursive_proof_open_envelopes_archive",
+    )?;
+    if declared_count != KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1 {
         return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
             field: "previous_recursive_proof_open_envelopes_archive",
         });
@@ -11427,6 +11570,33 @@ mod offline_note_tests {
     fn kagemusha_recursive_spend_pallas_open_envelope_archive(label: u8) -> Vec<u8> {
         let envelope = kagemusha_recursive_spend_pallas_open_envelope(label);
         to_bytes(&vec![envelope]).expect("encode Pallas envelope archive")
+    }
+
+    fn kagemusha_pallas_open_envelope_archive_with_declared_count(count: usize) -> Vec<u8> {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(
+            &u64::try_from(count)
+                .expect("test envelope count fits u64")
+                .to_le_bytes(),
+        );
+        norito::core::frame_bare_with_header_flags::<Vec<iroha_zkp_halo2::OpenVerifyEnvelope>>(
+            &payload,
+            norito::default_encode_flags(),
+        )
+        .expect("frame count-only Pallas envelope archive")
+    }
+
+    #[test]
+    fn kagemusha_lineage_open_envelope_archive_rejects_declared_count_before_decode() {
+        let archive = kagemusha_pallas_open_envelope_archive_with_declared_count(3);
+
+        assert!(matches!(
+            decode_kagemusha_recursive_lineage_open_envelopes(&archive, 2),
+            Err(KagemushaFoldError::HopCountMismatch {
+                expected: 2,
+                actual: 3,
+            })
+        ));
     }
 
     fn attach_recursive_spend_open_verify_envelope(

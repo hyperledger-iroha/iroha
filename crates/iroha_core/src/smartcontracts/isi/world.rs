@@ -8955,6 +8955,21 @@ pub mod isi {
                 &route_allowlist,
             )?;
         }
+        let taira_tron_xor_diagnostic_local_admission = {
+            #[cfg(feature = "sccp-test-fixtures")]
+            {
+                source_domain == iroha_sccp::SCCP_DOMAIN_TRON
+                    && configured_source_material.is_none()
+                    && configured_source_deployment.is_none()
+                    && state_transaction.chain_id.as_str()
+                        == iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1
+                    && iroha_sccp::verify_sccp_taira_tron_xor_diagnostic_transparent_proof(artifact)
+            }
+            #[cfg(not(feature = "sccp-test-fixtures"))]
+            {
+                false
+            }
+        };
         let artifact_structure_is_valid = if let (Some(material), Some(deployment)) = (
             configured_source_material.as_ref(),
             configured_source_deployment.as_ref(),
@@ -8969,8 +8984,9 @@ pub mod isi {
                 deployment,
             )
         } else {
-            iroha_sccp::verify_nexus_sccp_message_transparent_proof_structure(artifact)
-                && iroha_sccp::verify_message_bundle_structure(&artifact.bundle)
+            (iroha_sccp::verify_nexus_sccp_message_transparent_proof_structure(artifact)
+                && iroha_sccp::verify_message_bundle_structure(&artifact.bundle))
+                || taira_tron_xor_diagnostic_local_admission
         };
         if !artifact_structure_is_valid {
             return Err(invalid_bridge_proof(
@@ -8986,6 +9002,9 @@ pub mod isi {
                 })?;
             validate_sccp_finality_against_state(&finality, state_transaction)
         } else {
+            if taira_tron_xor_diagnostic_local_admission {
+                return Ok(());
+            }
             if let (Some(material), Some(deployment)) = (
                 configured_source_material.as_ref(),
                 configured_source_deployment.as_ref(),

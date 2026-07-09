@@ -5005,20 +5005,6 @@ pub mod isi {
                     .into());
                 }
             }
-            for issued_certificate_key in &issued_output_certificate_keys {
-                if state_transaction
-                    .world
-                    .offline_note_replay_keys
-                    .get(issued_certificate_key)
-                    .is_some()
-                {
-                    return Err(labeled_invariant(
-                        "duplicate_key_certificate",
-                        "offline audit output key certificate is already issued",
-                    )
-                    .into());
-                }
-            }
             verify_offline_note_recursive_proof(
                 &audit.recursive_proof,
                 &expected_public_inputs_hash,
@@ -11916,7 +11902,7 @@ pub mod isi {
         }
 
         #[test]
-        fn audit_rejects_reused_output_certificate_from_topup_before_proof() {
+        fn audit_allows_reused_output_certificate_from_topup_before_proof() {
             let (state, asset_id, account_id, _definition_id) =
                 self_escrow_test_state(Numeric::new(100, 0));
             let account_keypair = fixture_key_pair(0x01);
@@ -11957,11 +11943,20 @@ pub mod isi {
 
             let err = AuditOfflineNote::new(audit)
                 .execute(&relayer, &mut transaction)
-                .expect_err("audit output must not reuse an issued topup key certificate");
-            assert_offline_rejection(
-                err,
-                "duplicate_key_certificate",
-                "output key certificate is already issued",
+                .expect_err("sample audit should continue past certificate replay and fail at proof validation");
+            let InstructionExecutionError::InvariantViolation(message) = err else {
+                panic!("expected invariant violation");
+            };
+            assert!(
+                !message.contains("offline_reason::duplicate_key_certificate"),
+                "replayed output certificate should not block audit output anchoring: {message}"
+            );
+            assert!(
+                message.contains("offline_reason::invalid_proof:")
+                    || message.contains("offline_reason::verifier_unavailable:")
+                    || message.contains("offline_reason::verifier_schema_mismatch:")
+                    || message.contains("offline_reason::proof_binding:"),
+                "sample audit should proceed to proof validation, got: {message}"
             );
         }
 

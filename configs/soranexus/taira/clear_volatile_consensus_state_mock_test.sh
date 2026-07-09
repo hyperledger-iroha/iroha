@@ -81,6 +81,7 @@ run_apply_quarantines_only_volatile_state_case() {
     --runtime-bin "${root}/bin/irohad" \
     --start \
     --torii-ports "" \
+    --p2p-ports "" \
     --log-level warn \
     >"$output" 2>&1
 
@@ -120,6 +121,55 @@ run_sha_mismatch_fails_before_mutation_case() {
   test -f "${dist}/storage/peer0/queue_plan_journal"
   test -d "${dist}/storage/peer0/rbc_sessions"
   test -f "${dist}/peer0.log"
+}
+
+run_apply_refuses_unwritable_storage_before_mutation_case() {
+  local root dist output
+  root="$(make_case_root)"
+  cleanup_paths+=("$root")
+  dist="${root}/dist"
+  output="${root}/unwritable-storage.log"
+  chmod u-w "${dist}/storage/peer1/durable_state"
+
+  if "${root}/clear_volatile_consensus_state.sh" \
+    --dist "$dist" \
+    --apply \
+    --runtime-bin "${root}/bin/irohad" \
+    >"$output" 2>&1; then
+    echo "unwritable storage case unexpectedly succeeded" >&2
+    sed -n '1,120p' "$output" >&2 || true
+    return 1
+  fi
+
+  grep -q 'DIST/storage contains' "$output"
+  grep -q 'not owned.*or not user-writable' "$output"
+  test -f "${dist}/storage/peer0/queue_plan_journal"
+  test -d "${dist}/storage/peer0/rbc_sessions"
+  test -f "${dist}/peer0.log"
+  chmod u+w "${dist}/storage/peer1/durable_state"
+}
+
+run_repair_storage_ownership_restores_user_write_case() {
+  local root dist output
+  root="$(make_case_root)"
+  cleanup_paths+=("$root")
+  dist="${root}/dist"
+  output="${root}/repair-storage.log"
+  chmod u-w "${dist}/storage/peer1/durable_state"
+
+  "${root}/clear_volatile_consensus_state.sh" \
+    --dist "$dist" \
+    --apply \
+    --repair-storage-ownership \
+    --runtime-bin "${root}/bin/irohad" \
+    --torii-ports "" \
+    >"$output" 2>&1
+
+  grep -q 'repairing storage ownership' "$output"
+  grep -q 'volatile consensus quarantine completed.' "$output"
+  test -w "${dist}/storage/peer1/durable_state"
+  test ! -e "${dist}/storage/peer0/queue_plan_journal"
+  test ! -d "${dist}/storage/peer0/rbc_sessions"
 }
 
 run_invalid_torii_ports_fail_before_mutation_case() {
@@ -380,6 +430,8 @@ SH
 run_dry_run_preserves_state_case
 run_apply_quarantines_only_volatile_state_case
 run_sha_mismatch_fails_before_mutation_case
+run_apply_refuses_unwritable_storage_before_mutation_case
+run_repair_storage_ownership_restores_user_write_case
 run_invalid_torii_ports_fail_before_mutation_case "29080,/tmp/29081" "--torii-ports must be a comma-separated list of numeric ports"
 run_invalid_torii_ports_fail_before_mutation_case "29080," "--torii-ports contains an empty port entry"
 run_invalid_torii_ports_fail_before_mutation_case "65536" "--torii-ports contains out-of-range port 65536"

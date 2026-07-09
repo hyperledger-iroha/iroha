@@ -6527,6 +6527,46 @@ impl Actor {
         }
     }
 
+    fn round_liveness_isolation_allows_precommit_vote(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        validation_status: ValidationStatus,
+        parent_hash: Option<HashOf<BlockHeader>>,
+    ) -> bool {
+        if validation_status != ValidationStatus::Valid {
+            return false;
+        }
+        let committed_height = self.committed_height_snapshot();
+        if height != committed_height.saturating_add(1) {
+            return false;
+        }
+        if !pending_extends_tip(
+            height,
+            parent_hash,
+            self.state.committed_height(),
+            self.state.latest_block_hash_fast(),
+        ) {
+            return false;
+        }
+        let exact_authoritative_owner = self
+            .authoritative_slot_owner_hash(height, view)
+            .is_some_and(|owner| owner == block_hash);
+        let cached_proposal_matches_pending = self
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(height, view)
+            .is_some_and(|proposal| {
+                self.pending
+                    .pending_blocks
+                    .get(&block_hash)
+                    .is_some_and(|pending| pending.payload_hash == proposal.payload_hash)
+            });
+        exact_authoritative_owner || cached_proposal_matches_pending
+    }
+
     #[allow(clippy::too_many_lines)]
     #[allow(clippy::too_many_arguments)]
     pub(super) fn emit_precommit_vote(
@@ -6543,7 +6583,15 @@ impl Actor {
         if self.is_observer() {
             return false;
         }
-        if self.round_liveness_isolated() {
+        if self.round_liveness_isolated()
+            && !self.round_liveness_isolation_allows_precommit_vote(
+                block_hash,
+                height,
+                view,
+                validation_status,
+                parent_hash,
+            )
+        {
             debug!(
                 height,
                 view,
@@ -6551,6 +6599,13 @@ impl Actor {
                 "skipping precommit vote while round liveness catch-up isolation is active"
             );
             return false;
+        } else if self.round_liveness_isolated() {
+            debug!(
+                height,
+                view,
+                block = ?block_hash,
+                "allowing precommit vote during round liveness catch-up isolation for authoritative tip-extending block"
+            );
         }
         self.process_committed_blocks_before_consensus("emit_precommit_vote");
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
