@@ -260,6 +260,8 @@ pub(super) struct LaneBlockDescriptor {
     pub(super) lane_id: LaneId,
     /// Dataspace bound to the lane-local block.
     pub(super) dataspace_id: DataSpaceId,
+    /// Global proposal height that planned this lane-local block.
+    pub(super) proposal_height: u64,
     /// Latest committed lane-local height used as this block's predecessor tip.
     pub(super) previous_lane_block_height: u64,
     /// Descriptor hash of the predecessor tip, when the predecessor is known.
@@ -958,6 +960,69 @@ pub(super) fn defer_accepted_proposal_actions(
     }
 }
 
+/// Convert accepted batch actions for blocked lanes into deferrals while
+/// preserving resource counters for candidates that remain accepted.
+///
+/// Existing deferrals retain their original reason. Accepted work routed to a
+/// blocked lane is treated as a lane-consensus deferral before lane payload
+/// ownerships are planned, which prevents proposal assembly from extending a
+/// lane whose previous certified block has not been applied yet.
+#[must_use]
+pub(super) fn defer_accepted_proposal_actions_for_lanes(
+    schedule: &ProposalBatchSchedule,
+    routing_decisions: &[RoutingDecision],
+    candidates: &[ProposalAdmissionCandidate],
+    blocked_lanes: &BTreeSet<LaneId>,
+    reason: ProposalDeferralReason,
+) -> ProposalBatchSchedule {
+    if blocked_lanes.is_empty() {
+        return schedule.clone();
+    }
+
+    let mut deferred = ProposalBatchSchedule {
+        actions: Vec::with_capacity(schedule.actions.len()),
+        ivm_transactions_deferred: schedule.ivm_transactions_deferred,
+        ..ProposalBatchSchedule::default()
+    };
+    let account_gas = schedule.gas_used_delta > 0;
+    for action in &schedule.actions {
+        match *action {
+            ProposalBatchAction::Accept {
+                index,
+                exceeds_gas_limit,
+            } => {
+                let routing = routing_decisions
+                    .get(index)
+                    .expect("schedule action index must reference a routing decision");
+                if blocked_lanes.contains(&routing.lane_id) {
+                    deferred
+                        .actions
+                        .push(ProposalBatchAction::Defer { index, reason });
+                    continue;
+                }
+
+                let candidate = candidates
+                    .get(index)
+                    .expect("schedule action index must reference an admission candidate");
+                deferred.actions.push(ProposalBatchAction::Accept {
+                    index,
+                    exceeds_gas_limit,
+                });
+                if account_gas {
+                    deferred.gas_used_delta =
+                        deferred.gas_used_delta.saturating_add(candidate.gas_cost);
+                }
+                if candidate.is_ivm_heavy {
+                    deferred.ivm_transactions_included_delta =
+                        deferred.ivm_transactions_included_delta.saturating_add(1);
+                }
+            }
+            action @ ProposalBatchAction::Defer { .. } => deferred.actions.push(action),
+        }
+    }
+    deferred
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct LaneAcceptedWork {
     dataspace_id: DataSpaceId,
@@ -1089,11 +1154,10 @@ where
 
 /// Reduce known lane-local tips while honoring lane reset watermarks.
 ///
-/// Accepted lanes without a known tip receive the compatibility latest height
-/// supplied by the caller. The current global proposal path uses
-/// `global_height - 1` for that value so missing lane-local relay history keeps
-/// the existing global-height anchor, while lanes with relay history can
-/// advance independently.
+/// Accepted lanes without a known tip start from lane-local height zero. Missing
+/// lane-local relay history must not inherit global-height compatibility
+/// coordinates, because standalone lane-block execution requires contiguous
+/// predecessor application receipts.
 /// A reset watermark is treated as the latest height of the previous lane
 /// incarnation. Planning floors known tips at that watermark and uses the
 /// watermark as the missing-tip baseline for reset lanes, so recreated lanes
@@ -1102,7 +1166,7 @@ where
 pub(super) fn plan_latest_lane_block_tips_with_reset_heights(
     domains: &[LaneConsensusDomain],
     known_tips: &[LaneBlockTip],
-    compatibility_latest_lane_block_height: u64,
+    _compatibility_latest_lane_block_height: u64,
     reset_heights: &BTreeMap<LaneId, u64>,
 ) -> Result<Vec<LaneBlockTip>, LaneBlockTipPlanError> {
     let mut domains_by_lane = BTreeMap::new();
@@ -1179,10 +1243,7 @@ pub(super) fn plan_latest_lane_block_tips_with_reset_heights(
     Ok(domains_by_lane
         .into_iter()
         .map(|(lane_id, domain)| {
-            let baseline = reset_heights
-                .get(&lane_id)
-                .copied()
-                .unwrap_or(compatibility_latest_lane_block_height);
+            let baseline = reset_heights.get(&lane_id).copied().unwrap_or(0);
             latest_by_lane
                 .get(&lane_id)
                 .copied()
@@ -1580,6 +1641,7 @@ pub(super) fn plan_lane_payload(
     candidate_hashes: &[Hash],
     compatibility_latest_lane_block_height: u64,
     reset_heights: &BTreeMap<LaneId, u64>,
+    proposal_height: u64,
     lane_block_view: u64,
 ) -> Result<LanePayloadPlan, LanePayloadPlanError> {
     let lane_tips = plan_latest_lane_block_tips_with_reset_heights(
@@ -1602,6 +1664,7 @@ pub(super) fn plan_lane_payload(
         &subjects,
         &ownerships,
         candidate_hashes,
+        proposal_height,
     )?;
     let lane_block_proposals = entries
         .iter()
@@ -1654,6 +1717,7 @@ fn build_lane_payload_plan_entries(
     subjects: &[LaneBlockSubject],
     ownerships: &[LanePayloadOwnership],
     candidate_hashes: &[Hash],
+    proposal_height: u64,
 ) -> Result<Vec<LanePayloadPlanEntry>, LanePayloadPlanError> {
     let tips_by_lane = lane_tips
         .iter()
@@ -1742,6 +1806,7 @@ fn build_lane_payload_plan_entries(
         let mut block_descriptor = LaneBlockDescriptor {
             lane_id: domain.lane_id,
             dataspace_id: domain.dataspace_id,
+            proposal_height,
             previous_lane_block_height: tip.latest_lane_block_height,
             previous_lane_block_descriptor_hash: tip.latest_lane_block_descriptor_hash,
             lane_block_height: slot.lane_block_height,
@@ -1817,6 +1882,7 @@ fn build_lane_block_proposal(
     let mut artifact = LaneBlockProposalV1 {
         descriptor: artifact_descriptor,
         proposal_hash: Hash::prehashed([0_u8; Hash::LENGTH]),
+        payload_block_hint: None,
     };
     let proposal_hash = artifact.computed_proposal_hash();
     artifact.proposal_hash = proposal_hash;
@@ -1840,6 +1906,7 @@ fn lane_block_descriptor_artifact(descriptor: &LaneBlockDescriptor) -> LaneBlock
     LaneBlockDescriptorV1 {
         lane_id: descriptor.lane_id,
         dataspace_id: descriptor.dataspace_id,
+        proposal_height: descriptor.proposal_height,
         previous_lane_block_height: descriptor.previous_lane_block_height,
         previous_lane_block_descriptor_hash: descriptor.previous_lane_block_descriptor_hash,
         lane_block_height: descriptor.lane_block_height,
@@ -2499,6 +2566,7 @@ mod tests {
             &[tx_hash(0xC7)],
             3,
             &BTreeMap::new(),
+            4,
             2,
         )
         .expect("lane payload plan");
@@ -2990,6 +3058,65 @@ mod tests {
     }
 
     #[test]
+    fn defer_accepted_proposal_actions_for_lanes_recomputes_remaining_resource_deltas() {
+        let routing = routing_for_lanes(&[1, 2, 3]);
+        let candidates = vec![
+            proposal_candidate(3, true),
+            proposal_candidate(5, false),
+            proposal_candidate(7, true),
+        ];
+        let schedule = ProposalBatchSchedule {
+            actions: vec![
+                ProposalBatchAction::Accept {
+                    index: 0,
+                    exceeds_gas_limit: false,
+                },
+                ProposalBatchAction::Accept {
+                    index: 1,
+                    exceeds_gas_limit: false,
+                },
+                ProposalBatchAction::Defer {
+                    index: 2,
+                    reason: ProposalDeferralReason::GasLimit,
+                },
+            ],
+            gas_used_delta: 8,
+            ivm_transactions_included_delta: 1,
+            ivm_transactions_deferred: 0,
+        };
+        let blocked_lanes = BTreeSet::from([LaneId::new(1)]);
+
+        let deferred = defer_accepted_proposal_actions_for_lanes(
+            &schedule,
+            &routing,
+            &candidates,
+            &blocked_lanes,
+            ProposalDeferralReason::LaneConsensus,
+        );
+
+        assert_eq!(
+            deferred.actions,
+            vec![
+                ProposalBatchAction::Defer {
+                    index: 0,
+                    reason: ProposalDeferralReason::LaneConsensus,
+                },
+                ProposalBatchAction::Accept {
+                    index: 1,
+                    exceeds_gas_limit: false,
+                },
+                ProposalBatchAction::Defer {
+                    index: 2,
+                    reason: ProposalDeferralReason::GasLimit,
+                },
+            ]
+        );
+        assert_eq!(deferred.gas_used_delta, 5);
+        assert_eq!(deferred.ivm_transactions_included_delta, 0);
+        assert_eq!(deferred.ivm_transactions_deferred, 0);
+    }
+
+    #[test]
     fn schedule_proposal_batch_rejects_mismatched_candidates_and_routes() {
         let routing = routing_for_lanes(&[1, 2]);
         let candidates = vec![proposal_candidate(1, false)];
@@ -3394,6 +3521,7 @@ mod tests {
         .expect("lane consensus domains");
         let known_tips = vec![lane_tip(2, 22, 0), lane_tip_with_descriptor(1, 11, 7, 0x71)];
         let candidate_hashes = vec![tx_hash(0xA0), tx_hash(0xA1), tx_hash(0xA2)];
+        let proposal_height = 10;
 
         let plan = plan_lane_payload(
             &domains,
@@ -3401,6 +3529,7 @@ mod tests {
             &candidate_hashes,
             99,
             &BTreeMap::new(),
+            proposal_height,
             5,
         )
         .expect("lane plan");
@@ -3524,6 +3653,7 @@ mod tests {
         let first_descriptor = &plan.entries[0].block_descriptor;
         assert_eq!(first_descriptor.lane_id, LaneId::new(1));
         assert_eq!(first_descriptor.dataspace_id, DataSpaceId::new(11));
+        assert_eq!(first_descriptor.proposal_height, proposal_height);
         assert_eq!(first_descriptor.previous_lane_block_height, 7);
         assert_eq!(
             first_descriptor.previous_lane_block_descriptor_hash,
@@ -3629,7 +3759,7 @@ mod tests {
         for entry in &plan.entries {
             let ownership = &entry.ownership;
             let wire_ownership = SumeragiLanePayloadOwnership {
-                proposal_height: 10,
+                proposal_height,
                 proposal_view: entry.slot.lane_block_view,
                 lane_id: ownership.lane_id,
                 dataspace_id: ownership.dataspace_id,
@@ -3700,6 +3830,7 @@ mod tests {
             &candidate_hashes,
             99,
             &BTreeMap::new(),
+            100,
             2,
         )
         .expect("lane plan with first committee");
@@ -3709,6 +3840,7 @@ mod tests {
             &candidate_hashes,
             99,
             &BTreeMap::new(),
+            100,
             2,
         )
         .expect("lane plan with second committee");
@@ -3760,6 +3892,7 @@ mod tests {
             &candidate_hashes,
             99,
             &BTreeMap::new(),
+            100,
             2,
         )
         .expect("lane plan with first predecessor descriptor");
@@ -3769,6 +3902,7 @@ mod tests {
             &candidate_hashes,
             99,
             &BTreeMap::new(),
+            100,
             2,
         )
         .expect("lane plan with second predecessor descriptor");
@@ -3813,7 +3947,7 @@ mod tests {
         )
         .expect("lane consensus domain");
         let candidate_hashes = vec![tx_hash(0xB0)];
-        let plan = plan_lane_payload(&domains, &[], &candidate_hashes, 4, &BTreeMap::new(), 2)
+        let plan = plan_lane_payload(&domains, &[], &candidate_hashes, 4, &BTreeMap::new(), 5, 2)
             .expect("lane plan");
         let mut tampered_ownerships = plan.ownerships.clone();
         tampered_ownerships[0].accepted_candidate_indices.push(99);
@@ -3825,6 +3959,7 @@ mod tests {
             &plan.subjects,
             &tampered_ownerships,
             &candidate_hashes,
+            plan.entries[0].block_descriptor.proposal_height,
         )
         .expect_err("entry builder must reject mismatched ownership descriptors");
 
@@ -3848,7 +3983,7 @@ mod tests {
         )
         .expect("lane consensus domain");
         let candidate_hashes = vec![tx_hash(0xB1)];
-        let plan = plan_lane_payload(&domains, &[], &candidate_hashes, 4, &BTreeMap::new(), 2)
+        let plan = plan_lane_payload(&domains, &[], &candidate_hashes, 4, &BTreeMap::new(), 5, 2)
             .expect("lane plan");
         let mut descriptor = plan.entries[0].block_descriptor.clone();
         descriptor.subject_hash = Hash::prehashed([0xE1; Hash::LENGTH]);
@@ -4113,7 +4248,7 @@ mod tests {
         )
         .expect("lane consensus domain");
 
-        let err = plan_lane_payload(&domains, &[], &[tx_hash(0xC0)], 4, &BTreeMap::new(), 2)
+        let err = plan_lane_payload(&domains, &[], &[tx_hash(0xC0)], 4, &BTreeMap::new(), 5, 2)
             .expect_err("accepted candidate without transaction hash must fail closed");
 
         assert_eq!(
@@ -4144,6 +4279,7 @@ mod tests {
             &[tx_hash(0xD0)],
             3,
             &BTreeMap::new(),
+            4,
             0,
         )
         .expect_err("foreign-dataspace tip must fail closed");
@@ -4192,10 +4328,10 @@ mod tests {
             tips,
             vec![
                 lane_tip_with_descriptor(1, 11, 8, 0x81),
-                lane_tip(2, 22, 41),
+                lane_tip(2, 22, 0),
                 lane_tip(3, 33, 0),
             ],
-            "tip reducer should keep the latest active-lane tip, ignore idle-lane tips, and fill compatibility tips"
+            "tip reducer should keep the latest active-lane tip, ignore idle-lane tips, and start never-seen lanes at zero"
         );
     }
 
@@ -4315,8 +4451,8 @@ mod tests {
 
         assert_eq!(
             tips,
-            vec![lane_tip(1, 11, 9), lane_tip(2, 22, 41)],
-            "missing tips for reset lanes resume from the reset watermark, while non-reset lanes keep the compatibility baseline"
+            vec![lane_tip(1, 11, 9), lane_tip(2, 22, 0)],
+            "missing tips for reset lanes resume from the reset watermark, while never-seen non-reset lanes start at zero"
         );
     }
 

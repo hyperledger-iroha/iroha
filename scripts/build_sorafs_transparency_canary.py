@@ -21,6 +21,7 @@ from check_sorafs_transparency_rollout_evidence import (  # noqa: E402
     CYCLE_BOUND_KINDS,
     CYCLE_DETAIL_PROBE_LABEL_ERROR,
     CYCLE_DETAIL_PROBE_LABEL_PATTERN,
+    DEFAULT_MAX_EVIDENCE_AGE_SECS,
     DEFAULT_REQUIRED_SOURCE_KINDS,
     FORBIDDEN_INVENTORY_LABEL_MARKERS,
     KIND_BY_NAME,
@@ -30,6 +31,7 @@ from check_sorafs_transparency_rollout_evidence import (  # noqa: E402
     REQUIRED_PUBLICATION_CYCLE_DETAIL_PROBES,
     REQUIRED_PUBLICATION_ROUTES,
     SOURCE_BOUND_KINDS,
+    ValidationOptions,
     validate_evidence_payload,
 )
 from sorafs_checker_preflight import (  # noqa: E402
@@ -414,7 +416,13 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
 def validate_generated_payload(payload: dict[str, Any], args: argparse.Namespace) -> list[str]:
     """Validate the generated canary through the transparency gate contract."""
 
-    kind, errors = validate_evidence_payload(payload)
+    kind, errors = validate_evidence_payload(
+        payload,
+        ValidationOptions(
+            now_unix=args.now_unix,
+            max_evidence_age_secs=DEFAULT_MAX_EVIDENCE_AGE_SECS,
+        ),
+    )
     if kind != args.kind:
         errors.append(f"generated canary must validate as {args.kind}")
     return errors
@@ -478,6 +486,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--deployment-id", required=True)
     parser.add_argument("--environment", required=True)
     parser.add_argument("--generated-at-unix", type=positive_int_arg, required=True)
+    parser.add_argument("--now-unix", type=positive_int_arg, required=True)
     parser.add_argument("--source-batch-digest-hex")
     parser.add_argument("--cycle-digest-hex")
     parser.add_argument("--source-kind", action="append", default=[])

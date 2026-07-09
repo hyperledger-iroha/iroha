@@ -12117,6 +12117,7 @@ pub mod tests {
         let mut descriptor = LaneBlockDescriptorV1 {
             lane_id,
             dataspace_id,
+            proposal_height: 1,
             previous_lane_block_height: 0,
             previous_lane_block_descriptor_hash: None,
             lane_block_height: 1,
@@ -12159,6 +12160,7 @@ pub mod tests {
         let mut proposal = LaneBlockProposalV1 {
             descriptor,
             proposal_hash: Hash::new(b"lane execution proposal placeholder"),
+            payload_block_hint: None,
         };
         proposal.proposal_hash = proposal.computed_proposal_hash();
         crate::kura::LaneBlockExecutionInputArtifact::new(crate::kura::RecoveredLaneBlockPayload {

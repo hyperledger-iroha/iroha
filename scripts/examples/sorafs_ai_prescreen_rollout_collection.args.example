@@ -11,6 +11,12 @@ iroha
 --iroha-arg=/runtime/client.toml
 --out-dir
 dist/sorafs-ai-prescreen-rollout-evidence
+--summary-out
+dist/sorafs-ai-prescreen-rollout-evidence/rollout-summary.json
+--now-unix
+1800400000
+--max-evidence-age-secs
+604800
 --manifest
 /runtime/moderation/repro-manifest.json
 --manifest-format

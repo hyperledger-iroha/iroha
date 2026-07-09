@@ -416,6 +416,23 @@ def test_runner_preflight_sanitizes_malformed_non_path_targets(
     assert errors == ["--summary-out `<non-path>` must be a path"]
 
 
+def test_runner_preflight_requires_reviewed_now_unix(tmp_path: Path) -> None:
+    verifier = tmp_path / "verifier.py"
+    verifier.write_text("", encoding="utf-8")
+
+    errors = validate_runner_preflight(
+        argparse.Namespace(
+            verifier=verifier,
+            out_dir=tmp_path / "evidence",
+            summary_out=None,
+            now_unix=None,
+        ),
+        summary_filename="rollout-summary.json",
+    )
+
+    assert "--now-unix is required" in errors
+
+
 def test_plan_rendered_path_safety_rejects_unsafe_components() -> None:
     assert plan_rendered_path_is_safe(Path("artifacts/sorafs/digest-summary.json"))
     assert plan_rendered_path_is_safe(Path("artifacts/sorafs/gateway_load_digest.json"))

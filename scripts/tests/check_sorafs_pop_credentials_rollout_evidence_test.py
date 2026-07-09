@@ -1974,7 +1974,19 @@ def test_explicit_unknown_schema_fails(tmp_path: Path, capsys) -> None:
         {"schema": "sorafs.pop.unknown.v1", "status": "passed"},
     )
 
-    assert MODULE.main(["--evidence", str(path), "--require-kind", "issuer_bundle"]) == 1
+    assert (
+        MODULE.main(
+            [
+                "--evidence",
+                str(path),
+                "--require-kind",
+                "issuer_bundle",
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
 
     assert "not a recognized SoraFS PoP rollout artifact" in capsys.readouterr().err
 
@@ -1991,6 +2003,8 @@ def test_unknown_directory_artifact_is_ignored_for_subset_gate(tmp_path: Path, c
             str(evidence_dir),
             "--require-kind",
             "issuer_bundle",
+            "--now-unix",
+            str(NOW),
         ]
     )
 
@@ -2017,6 +2031,8 @@ def test_invalid_optional_artifact_blocks_subset_gate(tmp_path: Path, capsys) ->
                 str(evidence_dir),
                 "--require-kind",
                 "issuer_bundle",
+                "--now-unix",
+                str(NOW),
             ]
         )
         == 1
@@ -2026,6 +2042,18 @@ def test_invalid_optional_artifact_blocks_subset_gate(tmp_path: Path, capsys) ->
 
 
 def test_unknown_required_kind_fails_before_validation(capsys) -> None:
-    assert MODULE.main(["--evidence", "missing.json", "--require-kind", "unknown"]) == 2
+    assert (
+        MODULE.main(
+            [
+                "--evidence",
+                "missing.json",
+                "--require-kind",
+                "unknown",
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 2
+    )
 
     assert "unknown required evidence kind" in capsys.readouterr().err

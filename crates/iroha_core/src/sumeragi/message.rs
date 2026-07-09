@@ -1118,6 +1118,7 @@ mod tests {
         let mut descriptor = consensus::LaneBlockDescriptorV1 {
             lane_id: LaneId::new(u32::from(seed % 11) + 1),
             dataspace_id: DataSpaceId::new(u64::from(seed % 13) + 1),
+            proposal_height: u64::from(seed).saturating_add(1),
             previous_lane_block_height: 0,
             previous_lane_block_descriptor_hash: None,
             lane_block_height: u64::from(seed).saturating_add(1),
@@ -1141,6 +1142,7 @@ mod tests {
         let mut proposal = consensus::LaneBlockProposalV1 {
             descriptor,
             proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+            payload_block_hint: None,
         };
         proposal.proposal_hash = proposal.computed_proposal_hash();
 

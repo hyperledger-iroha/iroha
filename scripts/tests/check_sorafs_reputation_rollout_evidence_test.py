@@ -310,6 +310,7 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
         assert row["artifact_count"] == len(row["artifacts"])
         for artifact in row["artifacts"]:
             assert artifact["schema"] == expected_schema
+            assert artifact["status"] == "passed"
             assert not artifact["path"].startswith("/")
             assert "\\" not in artifact["path"]
             assert "." not in artifact["path"].split("/")
@@ -317,6 +318,9 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
             assert artifact["fingerprint"]["deployment_id"] == DEPLOYMENT_ID
             assert artifact["fingerprint"]["environment"] == ENVIRONMENT
             assert artifact["fingerprint"]["deployment_context_reviewed"] is True
+    assert all(
+        artifact["status"] == "passed" for artifact in payload["recognized_artifacts"]
+    )
     assert payload["provider_ids"] == ["provider-a"]
     assert payload["metrics"] == sorted(MODULE.REQUIRED_METRICS)
     assert payload["metric_count_values"] == [len(MODULE.REQUIRED_METRICS)]
@@ -386,6 +390,13 @@ def test_all_snapshot_bound_artifacts_reject_publish_latest_mismatch(
         ]
         assert required["valid"] is False
         assert artifact["valid"] is False
+        assert artifact["status"] == "failed"
+        recognized_artifact = next(
+            artifact
+            for artifact in result["recognized_artifacts"]
+            if artifact["kind"] == kind_name
+        )
+        assert recognized_artifact["status"] == "failed"
         assert (
             f"{kind_name}.merkle_root_hex does not match previous value"
             in artifact["errors"]

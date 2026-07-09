@@ -24,9 +24,9 @@ use iroha_data_model::{
     block::{BlockHeader, consensus::NexusFeeScheduleInputs},
     executor::{self as data_model_executor, ExecutorDataModel},
     isi::{
-        CustomInstruction, InstructionBox, InstructionBox as DMInstructionBox, RemoveKeyValueBox,
-        SetKeyValueBox, TransferBox, error::InstructionExecutionError, mint_burn::MintBox,
-        register::RegisterBox,
+        CustomInstruction, GrantBox, InstructionBox, InstructionBox as DMInstructionBox,
+        RemoveKeyValueBox, SetKeyValueBox, TransferBox, error::InstructionExecutionError,
+        mint_burn::MintBox, register::RegisterBox,
     },
     metadata::Metadata,
     name::Name,
@@ -38,7 +38,7 @@ use iroha_data_model::{
     },
     parameter::{CustomParameter, CustomParameterId},
     permission::Permission,
-    prelude::{Account, Burn, Domain, DomainId, Register, Transfer, Trigger},
+    prelude::{Account, Burn, Domain, DomainId, Grant, Register, Transfer, Trigger},
     query::{AnyQueryBox, QueryRequest},
     role::{Role, RoleId},
     smart_contract::payloads::{ExecutorContext, Validate as ValidatePayload},
@@ -1416,6 +1416,13 @@ impl ContractRuntimeExecutionContext {
             contract_alias.name_segment() == "benefit"
                 && contract_alias.dataspace_segment() == "benefit"
         }) && matches!(self.entrypoint.as_str(), "spend_to_merchant" | "spend_many")
+    }
+
+    fn allows_bisp_spend_permission_grant_bypass(&self) -> bool {
+        self.contract_alias.as_ref().is_some_and(|contract_alias| {
+            contract_alias.name_segment() == "bisp_bisp"
+                && contract_alias.dataspace_segment() == "sbp"
+        }) && self.entrypoint == "grant_beneficiary_spend_permission"
     }
 }
 
@@ -4011,6 +4018,9 @@ impl Executor {
         let result = if should_bypass_contract_runtime_asset_transfer_check(
             contract_runtime_context,
             &instruction,
+        ) || should_bypass_contract_runtime_bisp_spend_permission_grant_check(
+            contract_runtime_context,
+            &instruction,
         ) {
             Self::execute_instruction_directly(state_transaction, authority, instruction, profile)
         } else {
@@ -4053,6 +4063,9 @@ impl Executor {
         let instr_id = instruction.id();
 
         let result = if should_bypass_contract_runtime_asset_transfer_check(
+            contract_runtime_context,
+            instruction,
+        ) || should_bypass_contract_runtime_bisp_spend_permission_grant_check(
             contract_runtime_context,
             instruction,
         ) {
@@ -5608,6 +5621,31 @@ fn extract_transfer_asset(
     .flatten()
 }
 
+fn extract_grant_account_permission(
+    instruction: &InstructionBox,
+) -> Option<Grant<Permission, Account>> {
+    let instr_any = instruction.as_any();
+    if let Some(grant) = instr_any.downcast_ref::<Grant<Permission, Account>>() {
+        return Some(grant.clone());
+    }
+    if let Some(grant_box) = instr_any.downcast_ref::<GrantBox>() {
+        return match grant_box {
+            GrantBox::Permission(grant) => Some(grant.clone()),
+            _ => None,
+        };
+    }
+    if !instruction_has_concrete_type::<Grant<Permission, Account>>(instruction) {
+        return None;
+    }
+    let bytes = instruction.dyn_encode();
+    std::panic::catch_unwind(|| {
+        let mut slice = &bytes[..];
+        Grant::<Permission, Account>::decode(&mut slice).ok()
+    })
+    .ok()
+    .flatten()
+}
+
 fn extract_transfer_domain(
     instruction: &InstructionBox,
 ) -> Option<Transfer<Account, DomainId, Account>> {
@@ -5879,6 +5917,16 @@ fn should_bypass_contract_runtime_asset_transfer_check(
     contract_runtime_context
         .is_some_and(ContractRuntimeExecutionContext::allows_benefit_runtime_asset_transfer_bypass)
         && extract_transfer_asset(instruction).is_some()
+}
+
+fn should_bypass_contract_runtime_bisp_spend_permission_grant_check(
+    contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
+    instruction: &InstructionBox,
+) -> bool {
+    contract_runtime_context
+        .is_some_and(ContractRuntimeExecutionContext::allows_bisp_spend_permission_grant_bypass)
+        && extract_grant_account_permission(instruction)
+            .is_some_and(|grant| grant.object().name() == "BispSpend")
 }
 
 fn can_transfer_asset(
@@ -7788,6 +7836,100 @@ mod tests {
                 "non-spend contract runtime context must not bypass asset transfer checks, got: {other:?}"
             ),
         }
+    }
+
+    #[test]
+    fn contract_runtime_context_allows_bisp_spend_permission_grant_only_for_bisp_grant_entrypoint()
+    {
+        let alice_id = ALICE_ID.clone();
+        let beneficiary = checked_account_id();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let domain = Domain::new(domain_id).build(&alice_id);
+        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
+        let beneficiary_account = Account::new(beneficiary.clone()).build(&beneficiary);
+        let world = World::with([domain], [alice_account, beneficiary_account], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new(world, kura, query_handle);
+        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        state
+            .block(genesis_header)
+            .commit()
+            .expect("commit bootstrap block");
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+
+        let executor = super::Executor::Initial;
+        let instruction = InstructionBox::from(Grant::account_permission(
+            Permission::new("BispSpend".to_owned(), Json::new(())),
+            beneficiary.clone(),
+        ));
+        let contract_address = ContractAddress::derive(
+            iroha_config::parameters::defaults::common::chain_discriminant(),
+            &alice_id,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("bisp contract address");
+        let context = ContractRuntimeExecutionContext {
+            contract_subject: contract_address.subject_id(),
+            contract_address,
+            contract_alias: Some("bisp_bisp::sbp".parse().expect("bisp alias")),
+            entrypoint: "grant_beneficiary_spend_permission".to_owned(),
+        };
+        assert!(
+            should_bypass_contract_runtime_bisp_spend_permission_grant_check(
+                Some(&context),
+                &instruction
+            ),
+            "BISP grant runtime context should match the narrow BispSpend grant bypass"
+        );
+
+        let mut stx = block.transaction();
+        stx.tx_call_hash = Some(Hash::prehashed([0xE7; Hash::LENGTH]));
+        executor
+            .execute_instruction_with_contract_runtime_context(
+                &mut stx,
+                &alice_id,
+                instruction,
+                Some(&context),
+            )
+            .expect("BISP grant runtime context should allow custom BispSpend grant");
+        assert!(
+            authority_has_named_permission(&stx.world, &beneficiary, "BispSpend")
+                .expect("permission lookup should succeed"),
+            "beneficiary should receive BispSpend"
+        );
+    }
+
+    #[test]
+    fn contract_runtime_context_does_not_bypass_other_custom_permission_grants() {
+        let alice_id = ALICE_ID.clone();
+        let beneficiary = checked_account_id();
+        let instruction = InstructionBox::from(Grant::account_permission(
+            Permission::new("OtherSpend".to_owned(), Json::new(())),
+            beneficiary,
+        ));
+        let contract_address = ContractAddress::derive(
+            iroha_config::parameters::defaults::common::chain_discriminant(),
+            &alice_id,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("bisp contract address");
+        let context = ContractRuntimeExecutionContext {
+            contract_subject: contract_address.subject_id(),
+            contract_address,
+            contract_alias: Some("bisp_bisp::sbp".parse().expect("bisp alias")),
+            entrypoint: "grant_beneficiary_spend_permission".to_owned(),
+        };
+        assert!(
+            !should_bypass_contract_runtime_bisp_spend_permission_grant_check(
+                Some(&context),
+                &instruction
+            ),
+            "BISP grant runtime context must not bypass other custom permission grants"
+        );
     }
 
     #[test]

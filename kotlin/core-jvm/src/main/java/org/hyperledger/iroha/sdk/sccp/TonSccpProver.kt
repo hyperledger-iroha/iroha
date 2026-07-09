@@ -2128,6 +2128,7 @@ object SccpTon {
         require(input.publicInputs.targetDomain == DOMAIN_TON) {
             "publicInputs.targetDomain must be TON"
         }
+        val publicInputsBytes = canonicalPublicInputsBytes(input.publicInputs)
         val bundleBytes = requireNativeRecursivePayloadBytes(input.bundleBytes, "bundleBytes")
         val sourceProofBytes = requireOptionalSourceProofBytes(input.sourceProofBytes, "sourceProofBytes")
         requireSccpProofRequestBundleMatchesPublicInputs(
@@ -2135,7 +2136,6 @@ object SccpTon {
             bundleBytes = bundleBytes,
             sourceProofBytes = sourceProofBytes,
         )
-        val publicInputsBytes = canonicalPublicInputsBytes(input.publicInputs)
         val proofContext = normalizeProofContext(input.statementHash, input.destinationBindingHash)
         val sourceStateVerifierId = normalizeNonEmpty(input.sourceStateVerifierId, "sourceStateVerifierId")
         require(sourceStateVerifierId == MAINNET_SHARD_STATE_VERIFIER_ID_V1) {
@@ -4921,6 +4921,7 @@ object SccpTon {
     }
 
     private fun writeU64Le(out: ByteArrayOutputStream, value: BigInteger) {
+        require(value >= BigInteger.ZERO && value <= MAX_U64) { "u64 value must fit u64" }
         var working = value
         for (i in 0 until 8) {
             out.write(working.and(BigInteger.valueOf(0xffL)).toInt())
@@ -4954,6 +4955,7 @@ object SccpTon {
     }
 
     private fun writeU64Be(out: ByteArrayOutputStream, value: BigInteger) {
+        require(value >= BigInteger.ZERO && value <= MAX_U64) { "u64 value must fit u64" }
         val bytes = ByteArray(8)
         var working = value
         for (index in 7 downTo 0) {

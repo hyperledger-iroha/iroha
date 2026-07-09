@@ -13,6 +13,8 @@
 --observability-evidence /var/tmp/sorafs/potr-rollout/observability.json
 --governance-approval-evidence /var/tmp/sorafs/potr-rollout/governance-approval.json
 --summary-out /var/tmp/sorafs/potr-rollout/rollout-summary.json
+--require-kind multi_provider_probe,receipt_validation,proof_stream,reputation_integration,observability,governance_approval
+--now-unix 1800400000
 --max-evidence-age-secs 604800
 --max-route-latency-ms 1500
 --max-hot-latency-ms 90000

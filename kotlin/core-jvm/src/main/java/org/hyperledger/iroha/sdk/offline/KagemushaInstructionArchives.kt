@@ -145,6 +145,62 @@ object KagemushaInstructionArchives {
     }
 
     @JvmStatic
+    @JvmOverloads
+    fun topUpTransactionPayloadFromInitRequest(
+        initRequestArchive: ByteArray,
+        chainId: String,
+        authority: String,
+        creationTimeMs: Long,
+        timeToLiveMs: Long? = null,
+        nonce: Int? = null,
+        metadata: Map<String, *> = emptyMap<String, Any>(),
+    ): TransactionPayload {
+        val exactChainId = requireNonBlankUnpadded(chainId, "chainId")
+        val exactAuthority = requireNonBlankUnpadded(authority, "authority")
+        val topUpRequestArchive =
+            KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendTopUpRequestFromInitRequest(
+                accountId = exactAuthority,
+                initRequestArchive = initRequestArchive,
+            )
+        return topUpTransactionPayloadFromRequest(
+            topUpRequestArchive = topUpRequestArchive,
+            chainId = exactChainId,
+            authority = exactAuthority,
+            creationTimeMs = creationTimeMs,
+            timeToLiveMs = timeToLiveMs,
+            nonce = nonce,
+            metadata = metadata,
+        )
+    }
+
+    @JvmStatic
+    @JvmOverloads
+    fun topUpTransactionPayloadFromInitRequest(
+        assetId: String,
+        amount: String,
+        initRequestArchive: ByteArray,
+        chainId: String,
+        authority: String,
+        creationTimeMs: Long,
+        timeToLiveMs: Long? = null,
+        nonce: Int? = null,
+        metadata: Map<String, *> = emptyMap<String, Any>(),
+    ): TransactionPayload =
+        topUpTransactionPayloadFromRequest(
+            topUpRequestArchive = KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendTopUpRequest(
+                assetId = assetId,
+                amount = amount,
+                initRequestArchive = initRequestArchive,
+            ),
+            chainId = chainId,
+            authority = authority,
+            creationTimeMs = creationTimeMs,
+            timeToLiveMs = timeToLiveMs,
+            nonce = nonce,
+            metadata = metadata,
+        )
+
+    @JvmStatic
     fun recursiveRedeemTransactionPayloadFromRequest(
         redeemRequestArchive: ByteArray,
         chainId: String,

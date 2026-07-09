@@ -66,8 +66,16 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
     malformed but base64-valid configured CRL/OCSP DER and over-limit
     revocation-material lists at configuration load; embedded catalog,
     offline-preflight, and runtime override CRL/OCSP material lists share the
-    same `8`-entry cap; current public-key and X.509 trust-anchor pin fields
-    cannot overlap with their legacy alias fields
+    same `8`-entry cap; stale XMLDSig trust-pin alias fields are malformed, and
+    current public-key, X.509 trust-anchor, and revoked-certificate pin roles
+    cannot overlap; operator canary, trust-bundle, operator-evidence, and final
+    readiness `provider`/`environment` context labels must be canonical
+    lowercase IDs with hyphen separators; executed canaries reject placeholder
+    context IDs before child execution, and trust-bundle plus production
+    evidence/readiness replay rejects exact placeholder context IDs such as
+    `example`, `sample`, `template`, `ci`, and `test` as well as
+    hyphen-tokenized placeholder aliases such as `example-bank`,
+    `sample-preprod`, and `test-preprod`
 - Made Torii inbound validation profile-aware for existing `pacs.008` and
   `pacs.009` endpoints:
   - profile selected by `X-Iroha-Iso-Profile`, then `?profile=...`, then config
@@ -836,6 +844,8 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   notation, or IPv6 transition addresses embedding non-global IPv4 addresses,
   accepts checked-in `operator-canary.bank` template endpoints only for
   `--plan-only` validation and rejects them before non-plan child execution,
+  allows placeholder provider/environment context labels only for
+  `--plan-only` validation and rejects them before non-plan child execution,
   rejects non-plan canary config, rail input/message/receipt-dir, notary
   export/receipt-dir, and explicit verifier receipt paths under checked-in
   `fixtures/iso20022/` artifacts before child execution,
@@ -1049,7 +1059,13 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   SHA-256 values that already identify checked-in schemas or fixture XML, and
   final readiness replays those overlaps as dedicated blockers so accepted
   schema or fixture material cannot be relabelled as blocked-source gap
-  evidence. Final readiness also rejects compact summaries whose manifest
+  evidence. Direct XSD summaries now carry `ok: true` only when the verifier used
+  all strict schema-backed, fixture-backed, profile-backed, and XML schema
+  validation checks against a non-repository manifest with no reviewed or
+  pending gaps; checked-in fixture manifests and local reviewed-gap runs record
+  `ok: false`. Final readiness recomputes that verdict and emits
+  `xsd.summary_not_ok` or `xsd.summary_ok_drift` blockers before accepting an
+  XSD summary. Final readiness also rejects compact summaries whose manifest
   digest reuses schema, fixture, blocked-source, profile-catalog source, or
   profile-catalog JSON digests, whose fixture digest reuses a checked-in schema
   digest, whose fixtures repeat a message definition id or claim a
@@ -1113,7 +1129,8 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   real 2xx HTTP response with positive bounded bytes, `looks_like_xsd=true`,
   and the expected schema-root `target_namespace`, rejecting redirect-class or
   wrong-target XSD-looking rows as forged reachability evidence, rejecting
-  producer-omitted unsafe `content_type` or `target_namespace` metadata, and
+  producer-omitted unsafe `content_type` or `target_namespace` metadata,
+  recomputing summary `ok` before accepting claimed success, and
   requires matching probe
   coverage when reviewed
   pending-XSD gaps are allowed.
@@ -1812,7 +1829,21 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   Inst, and securities CSD profile families. They use
   `operator-canary.bank` template endpoints for plan-only validation; non-plan
   canary execution and archived production evidence both reject that template
-  suffix before it can be treated as live evidence.
+  suffix before it can be treated as live evidence. Plan-only canary summaries
+  record `ok: false`, so redacted planning output cannot be mistaken for an
+  executed provider canary by consumers that check only the summary verdict.
+  Executed direct canary summaries also report `ok: true` only when the run was
+  produced with `--require-explicit-policy`, the planned policy records and
+  executed results are the exact ordered rail/notary/verify records, no stage
+  skipped or producer dry-run was used, local diagnostic allowances such as
+  insecure HTTP, default profiles, or failed receipts were absent, and verifier
+  source-file checks stayed enabled.
+  Compact canary summaries inside aggregate evidence also carry a production
+  `ok` verdict that is true only for executed, explicit-policy, non-dry-run
+  canaries with all production stages and a production-complete receipt summary;
+  final readiness recomputes that compact verdict and emits
+  `evidence.canary_summary_not_ok` or `evidence.canary_summary_ok_drift` for
+  diagnostic or relabelled canary evidence.
 - Added `scripts/iso_trust_bundle_verify.py`, an offline XMLDSig/XAdES trust
   bundle preflight for operator rail PKI material. It caps bundle JSON at
   64 MiB and repeatable bundle input path lists at 64 entries before parsing,
@@ -1914,7 +1945,7 @@ before replacing template endpoints, token-file paths, inboxes, and
 
 ```json
 {
-  "provider": "example-bank",
+  "provider": "banka-paynet",
   "environment": "preprod",
   "rail": {
     "inbox_dir": "inbox",
@@ -1984,7 +2015,10 @@ unused local-audit override flags: `--allow-record-only` must correspond to a
 non-production `embedded_signature_policy`, `--allow-insecure-source-url` must
 correspond to an `http://` or local/private source URL, and `--allow-synthetic-der` must
 correspond to DER material that fails the expected certificate/CRL/OCSP shape
-check. The private synthetic-DER usage marker is not emitted in summaries.
+check. Trust summaries now record `ok: true` only when profile JSON was emitted,
+the summary is emittable, and no local trust diagnostic override was used;
+summary-only or synthetic-template validation records `ok: false`. The private
+synthetic-DER usage marker is not emitted in summaries.
 Profile emission also refuses
   `--allow-record-only`, `--allow-insecure-source-url`, placeholder
   authority/version strings including separator- or compatibility-obfuscated `dummy`, `fake`,
@@ -2030,7 +2064,7 @@ python3 scripts/iso_operator_evidence_verify.py \
   --trust-summary run/iso/swift-cbpr-plus-trust-summary.json \
   --receipt-dir run/iso/rail-receipts \
   --receipt-dir run/iso/notary-receipts \
-  --provider example-bank \
+  --provider banka-paynet \
   --environment preprod \
   --max-canary-age-days 1 \
   --max-trust-age-days 7 \
@@ -2136,7 +2170,13 @@ arguments must be redacted whether represented as
   flags, including
   `--allow-missing-record-sources`, `--allow-canary-stage-receipts-only`, and
   `--allow-profile-json-not-emitted`, are for local test audits only and should not
-  be present in production evidence archives. The live rail and notary adapters
+  be present in production evidence archives. Evidence summaries emitted with
+  any non-production `allow_*` policy record `ok: false`, even when the local
+  audit input is otherwise well formed; final readiness recomputes that
+  top-level verdict from the archived evidence policy, emits
+  `evidence.summary_ok_drift` for forged policy/verdict combinations, and
+  preserves diagnostic policy flags as `"unsupported"` in normalized release
+  output. The live rail and notary adapters
   reject unused local `--allow-insecure-http` and `--allow-default-profile`
   flags before dry-run summaries or network delivery,
   and the notary adapter rejects unused `--allow-missing-record-sources` unless
@@ -2232,7 +2272,7 @@ python3 scripts/iso_production_readiness.py \
   --xsd-summary run/iso/xsd-fixture-summary.json \
   --evidence-summary run/iso/local-provider-evidence.summary.json \
   --pending-xsd-probe-summary run/iso/pending-xsd-probe.summary.json \
-  --provider example-bank \
+  --provider banka-paynet \
   --environment preprod \
   --max-xsd-age-days 30 \
   --max-evidence-age-days 7 \
@@ -2255,7 +2295,15 @@ pending official ISO download sources, the rollup also requires
 `--pending-xsd-probe-summary` evidence covering those message definitions.
 Missing, stale, digest-mismatched, metadata-mismatched, or unreachable probe
 evidence remains a blocker and still does not satisfy strict schema-backed
-production closure.
+production closure. Any local final-readiness override remains a production
+blocker in the aggregate verdict, so `ok: true` is reserved for evidence that
+passes without `--allow-reviewed-xsd-gaps` or
+`--allow-canary-stage-receipts-only`.
+Input XSD summaries must also carry a production-complete `ok` verdict matching
+the replayed strict flags, schema/profile counts, repository-manifest status,
+and reviewed/pending gap lists; forged `ok` values are reported as
+`xsd.summary_ok_drift`, and valid diagnostic XSD summaries remain blocked as
+`xsd.summary_not_ok`.
 The rollup also rechecks the digest-bound provider/environment and freshness
 policy recorded by the evidence gate, rejects archive freshness budgets that
 are weaker than the final release budgets, requires and revalidates each compact
@@ -2459,6 +2507,13 @@ that point to `.json` files plus canonical nonzero lowercase `summary_sha256`
 pointers;
 nested canary, trust, archive-receipt, and
 trust-profile material must not be replayed across distinct evidence summaries.
+Canary-stage and direct-archive receipt-verifier summaries must also retain
+their aggregate `ok` verdict. That verdict is true only when both production
+receipt kinds are present, every receipt entry succeeded, source files were
+required, and no local receipt override (`allow_failed`,
+`allow_insecure_http`, or `allow_default_profile`) was used; evidence and final
+readiness replay recompute the verdict and reject diagnostic or forged
+summaries with receipt-summary-not-ok or receipt-summary-ok-drift blockers.
 Compact canary entries also retain the validated
 runbook `config_path`, which must remain control-free, trim-free, leading-dash-free, traversal-free, and point
 to a `.json` file. Compact provider/environment, stage, receipt-kind,
@@ -2499,17 +2554,19 @@ URLs and DNS hosts instead of relying on downstream URL consumers.
 local diagnostic audits of the current checked-in fixture corpus; production
 release evidence should omit them and must make the strict XSD, profile-catalog,
 and receipt-archive checks pass. The final readiness gate rejects those local
-overrides when they are unused, so `--allow-reviewed-xsd-gaps` must correspond
-to at least one reviewed missing-schema, schema-only, blocked-source, or
-pending-source XSD gap warning, not just a repository fixture manifest or an
-unreviewed advertised profile-version gap. It only downgrades profile-version
-gaps when the exact message definition also has reviewed missing-schema,
-schema-only, blocked-source, or pending-source evidence; repository fixture
-manifest blockers are never
-downgraded out of the blocker set. `--allow-canary-stage-receipts-only` must
-correspond to
-an evidence summary with
-canary-stage-only receipt policy and missing direct receipt archive verification.
+overrides when they are unused and also records a stable
+`readiness.policy.*` blocker when they are used, so diagnostic rollups keep
+`ok: false` even when all underlying evidence is well formed. The
+`--allow-reviewed-xsd-gaps` override must correspond to at least one reviewed
+missing-schema, schema-only, blocked-source, or pending-source XSD gap warning,
+not just a repository fixture manifest or an unreviewed advertised
+profile-version gap. It only downgrades profile-version gaps when the exact
+message definition also has reviewed missing-schema, schema-only,
+blocked-source, or pending-source evidence; repository fixture manifest blockers
+are never downgraded out of the blocker set.
+`--allow-canary-stage-receipts-only` must correspond to an evidence summary
+with canary-stage-only receipt policy and missing direct receipt archive
+verification.
 
 ## Gap Register
 

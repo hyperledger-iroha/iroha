@@ -1286,17 +1286,24 @@ pub struct LaneRelayStore {
 }
 
 impl LaneRelayStore {
+    fn same_relay_identity(left: &LaneRelayEnvelope, right: &LaneRelayEnvelope) -> bool {
+        left.settlement_hash == right.settlement_hash
+            && left.block_header.hash() == right.block_header.hash()
+            && left.da_commitment_hash == right.da_commitment_hash
+            && left.lane_block_descriptor_hash == right.lane_block_descriptor_hash
+            && left.rbc_bytes_total == right.rbc_bytes_total
+            && left.manifest_root == right.manifest_root
+    }
+
     fn conflicting_existing(&self, envelope: &LaneRelayEnvelope) -> Option<LaneRelayError> {
         let lane = envelope.lane_id;
         let height = envelope.block_height;
         let key = (lane, envelope.dataspace_id, height);
         self.entries.get(&key).and_then(|existing| {
-            if existing.settlement_hash != envelope.settlement_hash
-                || existing.block_header.hash() != envelope.block_header.hash()
-            {
-                Some(LaneRelayError::ConflictingRelay { lane, height })
-            } else {
+            if Self::same_relay_identity(existing, envelope) {
                 None
+            } else {
+                Some(LaneRelayError::ConflictingRelay { lane, height })
             }
         })
     }
@@ -1315,9 +1322,7 @@ impl LaneRelayStore {
         let key = (lane, envelope.dataspace_id, height);
 
         if let Some(existing) = self.entries.get(&key) {
-            if existing.settlement_hash != envelope.settlement_hash
-                || existing.block_header.hash() != envelope.block_header.hash()
-            {
+            if !Self::same_relay_identity(existing, &envelope) {
                 return Err(LaneRelayError::ConflictingRelay { lane, height });
             }
 
@@ -24954,10 +24959,18 @@ impl State {
 
     /// Resolve the authoritative validator peer ids for a lane from manifests or staking state.
     pub fn authoritative_lane_peer_ids(&self, lane_id: LaneId) -> Vec<PeerId> {
+        self.authoritative_lane_peer_ids_at_height(lane_id, self.lane_authority_height())
+    }
+
+    /// Resolve the authoritative validator peer ids for a lane at an explicit block height.
+    pub fn authoritative_lane_peer_ids_at_height(
+        &self,
+        lane_id: LaneId,
+        block_height: u64,
+    ) -> Vec<PeerId> {
         let manifest_registry = self.lane_manifests.read().clone();
         let nexus = self.nexus_snapshot();
         let validator_mode = nexus.staking.validator_mode(lane_id, &nexus.lane_catalog);
-        let block_height = self.lane_authority_height();
         let commit_topology = self.commit_topology_snapshot();
         Self::authoritative_lane_peer_ids_from_sources(
             &self.world.view(),
@@ -26007,12 +26020,13 @@ impl State {
         self.lane_relays.read().snapshot()
     }
 
-    /// Snapshot latest committed lane-local artifacts for active catalog lanes.
+    /// Snapshot latest applied lane-local artifacts for active catalog lanes.
     ///
     /// Each tuple is `(lane_id, dataspace_id, latest_lane_block_height, descriptor_hash)`.
     /// Artifacts whose persisted dataspace no longer matches the active lane
-    /// catalog, or whose lane-local height is not above the lane reset
-    /// watermark, are skipped so proposal planning cannot cross lane incarnations.
+    /// catalog, whose lane-local height is not above the lane reset watermark,
+    /// or whose application receipt is still missing are skipped so proposal
+    /// planning cannot extend an uncertified lane-local predecessor.
     #[must_use]
     pub(crate) fn lane_block_artifact_tips_snapshot_cached(
         &self,
@@ -26039,6 +26053,9 @@ impl State {
                 ) {
                     return None;
                 }
+                if !self.lane_block_artifact_has_matching_application_receipt(&artifact) {
+                    return None;
+                }
                 Some((
                     lane.id,
                     lane.dataspace_id,
@@ -26047,6 +26064,48 @@ impl State {
                 ))
             })
             .collect()
+    }
+
+    /// Snapshot active catalog lanes with globally anchored lane-local payload
+    /// artifacts that do not yet have matching application receipts.
+    ///
+    /// Each entry maps `(lane_id, dataspace_id)` to the latest known
+    /// lane-local artifact height above that lane's reset watermark. Proposal
+    /// planning treats these lanes as blocked so it cannot extend a raw
+    /// ownership artifact before that artifact is certified and applied.
+    #[must_use]
+    pub(crate) fn unapplied_lane_block_artifact_heights_snapshot_cached(
+        &self,
+    ) -> BTreeMap<(LaneId, DataSpaceId), u64> {
+        let nexus = self.nexus_snapshot();
+        if !nexus.enabled {
+            return BTreeMap::new();
+        }
+        let reset_heights = self.da_shard_cursors.read().reset_heights().clone();
+        let mut heights = BTreeMap::new();
+
+        for lane in nexus.lane_catalog.lanes() {
+            let Some(artifact) = self
+                .kura
+                .latest_lane_block_artifact_for_dataspace(lane.id, lane.dataspace_id)
+            else {
+                continue;
+            };
+            let lane_block_height = artifact.ownership.lane_block_height;
+            if !Self::lane_block_height_visible_after_reset(
+                &reset_heights,
+                lane.id,
+                lane_block_height,
+            ) {
+                continue;
+            }
+            if self.lane_block_artifact_has_matching_application_receipt(&artifact) {
+                continue;
+            }
+            heights.insert((lane.id, lane.dataspace_id), lane_block_height);
+        }
+
+        heights
     }
 
     /// Snapshot latest certified standalone lane-local blocks for active catalog lanes.
@@ -26145,6 +26204,70 @@ impl State {
             )
         });
         sessions
+    }
+
+    fn lane_block_artifact_has_matching_application_receipt(
+        &self,
+        artifact: &crate::kura::LaneBlockArtifact,
+    ) -> bool {
+        let ownership = &artifact.ownership;
+        let Some(receipt) = self
+            .kura
+            .read_lane_block_application_receipt(ownership.lane_id, ownership.lane_block_height)
+        else {
+            return false;
+        };
+        let descriptor = &receipt.proposal.descriptor;
+        descriptor.lane_id == ownership.lane_id
+            && descriptor.dataspace_id == ownership.dataspace_id
+            && descriptor.lane_block_height == ownership.lane_block_height
+            && Some(descriptor.descriptor_hash) == ownership.lane_block_descriptor_hash
+    }
+
+    /// Snapshot active catalog lanes with certified lane-local blocks that do
+    /// not yet have durable application receipts.
+    ///
+    /// Each entry maps `(lane_id, dataspace_id)` to the first unapplied
+    /// lane-local height above that lane's reset watermark. Proposal planning
+    /// uses this readiness view to avoid extending a lane before its previous
+    /// certified block is visible in local state.
+    #[must_use]
+    pub(crate) fn unapplied_certified_lane_block_heights_snapshot_cached(
+        &self,
+    ) -> BTreeMap<(LaneId, DataSpaceId), u64> {
+        let nexus = self.nexus_snapshot();
+        if !nexus.enabled {
+            return BTreeMap::new();
+        }
+        let reset_heights = self.da_shard_cursors.read().reset_heights().clone();
+        let mut heights = BTreeMap::new();
+
+        for lane in nexus.lane_catalog.lanes() {
+            let Some(lane_block_height) = self
+                .kura
+                .certified_lane_block_artifacts_for_dataspace(lane.id, lane.dataspace_id)
+                .into_iter()
+                .find_map(|artifact| {
+                    let lane_block_height = artifact.proposal.descriptor.lane_block_height;
+                    if !Self::lane_block_height_visible_after_reset(
+                        &reset_heights,
+                        lane.id,
+                        lane_block_height,
+                    ) {
+                        return None;
+                    }
+                    (!self
+                        .kura
+                        .lane_block_application_receipt_available(&artifact.proposal))
+                    .then_some(lane_block_height)
+                })
+            else {
+                continue;
+            };
+            heights.insert((lane.id, lane.dataspace_id), lane_block_height);
+        }
+
+        heights
     }
 
     fn unmerged_merge_admissible_relay_progress(
@@ -48740,6 +48863,7 @@ mod tests {
         let mut descriptor = LaneBlockDescriptorV1 {
             lane_id,
             dataspace_id,
+            proposal_height: lane_block_height,
             previous_lane_block_height: lane_block_height.saturating_sub(1),
             previous_lane_block_descriptor_hash: lane_block_height
                 .checked_sub(1)
@@ -48806,6 +48930,7 @@ mod tests {
         let mut proposal = LaneBlockProposalV1 {
             descriptor,
             proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+            payload_block_hint: None,
         };
         proposal.proposal_hash = proposal.computed_proposal_hash();
 
@@ -49615,6 +49740,84 @@ mod tests {
         }
     }
 
+    struct AutoscaleScaleInCommitRevalidationStage<'state> {
+        state_block: StateBlock<'state>,
+        retired_lane_id: LaneId,
+        retired_blocks_dir: PathBuf,
+        retired_snapshot_dir: PathBuf,
+    }
+
+    fn stage_autoscale_scale_in_for_commit_revalidation<'state>(
+        state: &'state State,
+        kura: &Arc<Kura>,
+        store_root: &Path,
+        cold_root: &Path,
+    ) -> AutoscaleScaleInCommitRevalidationStage<'state> {
+        let retired_lane_id = LaneId::new(1);
+        state
+            .apply_lane_lifecycle_with_options(
+                &iroha_data_model::nexus::LaneLifecyclePlan {
+                    additions: vec![autoscale_elastic_lane_config(
+                        retired_lane_id,
+                        DataSpaceId::UNIVERSAL,
+                        1,
+                    )],
+                    retire: Vec::new(),
+                },
+                false,
+                true,
+            )
+            .expect("seed managed elastic lane before scale-in revalidation test");
+        let source_config = state.nexus_snapshot().lane_config;
+        let source_entry = source_config
+            .entry(retired_lane_id)
+            .expect("managed lane entry exists before scale-in");
+        let retired_blocks_dir = source_entry.blocks_dir(store_root);
+        let retired_snapshot_dir = cold_root.join("lanes").join(&source_entry.kura_segment);
+        assert!(
+            retired_blocks_dir.exists(),
+            "managed lane Kura segment should exist before scale-in"
+        );
+        assert!(
+            retired_snapshot_dir.exists(),
+            "managed lane tiered snapshot should exist before scale-in"
+        );
+
+        let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
+        let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
+        kura.store_block(Arc::new(first))
+            .expect("store previous autoscale block");
+        store_block_for_state_commit(kura, &second);
+        seed_predecessor_height_for_state_commit(state, &second);
+
+        let mut state_block = state.block(second.header());
+        insert_empty_transaction_block_for_state_commit(&mut state_block, &second);
+        let committed_second = ValidBlock::new_unverified_for_tests(second)
+            .commit_unchecked()
+            .unpack(|_| {});
+        let _events = state_block.apply_without_execution(&committed_second, Vec::new());
+        assert!(
+            state_block.pending_autoscale_lifecycle.is_some(),
+            "scale-in transition should be staged before commit revalidation"
+        );
+        assert!(
+            state_block
+                .nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .all(|lane| lane.id != retired_lane_id),
+            "scale-in retirement should be visible only in the block-local Nexus snapshot"
+        );
+
+        AutoscaleScaleInCommitRevalidationStage {
+            state_block,
+            retired_lane_id,
+            retired_blocks_dir,
+            retired_snapshot_dir,
+        }
+    }
+
     #[test]
     fn autoscale_commit_rejects_tampered_pending_transition_metadata_before_storage_publish() {
         #[derive(Clone, Copy)]
@@ -49828,6 +50031,215 @@ mod tests {
             assert!(
                 !elastic_snapshot_dir.exists(),
                 "tampered pending catalog update must reject before creating tiered storage"
+            );
+        }
+    }
+
+    #[test]
+    fn autoscale_commit_scale_in_rejects_tampered_pending_transition_metadata_before_storage_publish()
+     {
+        #[derive(Clone, Copy)]
+        enum PendingTamper {
+            TransitionHeight,
+            TransitionLane,
+            TransitionCapacity,
+        }
+
+        for tamper in [
+            PendingTamper::TransitionHeight,
+            PendingTamper::TransitionLane,
+            PendingTamper::TransitionCapacity,
+        ] {
+            let temp_dir = tempfile::tempdir().expect("temp dir");
+            let store_root = temp_dir.path().join("kura");
+            let cold_root = temp_dir.path().join("cold");
+            let initial_config = RuntimeLaneConfig::default();
+            let kura = strict_kura_for_testing(store_root.clone(), &initial_config);
+            let query_handle = LiveQueryStore::start_test();
+            let mut state =
+                State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+            state
+                .set_nexus(autoscale_transition_test_nexus(
+                    vec![LaneConfig::default()],
+                    1,
+                    2,
+                    200,
+                ))
+                .expect("apply autoscale scale-in tampered pending test nexus config");
+            *state.tiered_backend.lock() =
+                TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
+
+            let AutoscaleScaleInCommitRevalidationStage {
+                mut state_block,
+                retired_lane_id,
+                retired_blocks_dir,
+                retired_snapshot_dir,
+            } = stage_autoscale_scale_in_for_commit_revalidation(
+                &state,
+                &kura,
+                &store_root,
+                &cold_root,
+            );
+            let pending = state_block
+                .pending_autoscale_lifecycle
+                .as_mut()
+                .expect("scale-in transition should be staged before tampering");
+            match tamper {
+                PendingTamper::TransitionHeight => {
+                    pending.transition_height = pending.transition_height.saturating_sub(1);
+                }
+                PendingTamper::TransitionLane => {
+                    pending.transition = PendingAutoscaleTransition::ScaleIn {
+                        lane: LaneId::new(2),
+                        active_lanes: 2,
+                        autoscale_capacity_lanes: 2,
+                        in_latency_ratio_permille: 0,
+                        in_utilization_p95_permille: 0,
+                    };
+                }
+                PendingTamper::TransitionCapacity => {
+                    pending.transition = PendingAutoscaleTransition::ScaleIn {
+                        lane: retired_lane_id,
+                        active_lanes: 1,
+                        autoscale_capacity_lanes: 2,
+                        in_latency_ratio_permille: 0,
+                        in_utilization_p95_permille: 0,
+                    };
+                }
+            }
+
+            let err = state_block
+                .commit()
+                .expect_err("tampered pending autoscale scale-in transition must abort commit");
+            assert!(matches!(
+                err,
+                TransactionsBlockError::AutoscaleLaneLifecycle
+            ));
+
+            let nexus = state.nexus_snapshot();
+            assert_eq!(
+                nexus
+                    .lane_catalog
+                    .lanes()
+                    .iter()
+                    .map(|lane| lane.id)
+                    .collect::<Vec<_>>(),
+                vec![LaneId::SINGLE, retired_lane_id],
+                "tampered pending scale-in transition must not publish the staged retirement"
+            );
+            assert_eq!(nexus.autoscale.last_transition_height, 0);
+            assert_eq!(state.transactions.view().latest_height_for_tests(), 1);
+            assert!(
+                retired_blocks_dir.exists(),
+                "tampered pending scale-in transition must reject before retiring Kura storage"
+            );
+            assert!(
+                retired_snapshot_dir.exists(),
+                "tampered pending scale-in transition must reject before retiring tiered storage"
+            );
+        }
+    }
+
+    #[test]
+    fn autoscale_commit_scale_in_rejects_tampered_pending_catalog_update_before_storage_publish() {
+        #[derive(Clone, Copy)]
+        enum PendingCatalogTamper {
+            SurvivorLaneMutation,
+            RetiredLanePreserved,
+            DerivedLaneConfig,
+        }
+
+        for tamper in [
+            PendingCatalogTamper::SurvivorLaneMutation,
+            PendingCatalogTamper::RetiredLanePreserved,
+            PendingCatalogTamper::DerivedLaneConfig,
+        ] {
+            let temp_dir = tempfile::tempdir().expect("temp dir");
+            let store_root = temp_dir.path().join("kura");
+            let cold_root = temp_dir.path().join("cold");
+            let initial_config = RuntimeLaneConfig::default();
+            let kura = strict_kura_for_testing(store_root.clone(), &initial_config);
+            let query_handle = LiveQueryStore::start_test();
+            let mut state =
+                State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+            state
+                .set_nexus(autoscale_transition_test_nexus(
+                    vec![LaneConfig::default()],
+                    1,
+                    2,
+                    200,
+                ))
+                .expect("apply autoscale scale-in tampered catalog test nexus config");
+            *state.tiered_backend.lock() =
+                TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
+
+            let AutoscaleScaleInCommitRevalidationStage {
+                mut state_block,
+                retired_lane_id,
+                retired_blocks_dir,
+                retired_snapshot_dir,
+            } = stage_autoscale_scale_in_for_commit_revalidation(
+                &state,
+                &kura,
+                &store_root,
+                &cold_root,
+            );
+            let pending = state_block
+                .pending_autoscale_lifecycle
+                .as_mut()
+                .expect("scale-in transition should be staged before catalog tampering");
+            match tamper {
+                PendingCatalogTamper::SurvivorLaneMutation => {
+                    let mut lanes = pending.catalog_update.updated_catalog.lanes().to_vec();
+                    let default_lane = lanes
+                        .iter_mut()
+                        .find(|lane| lane.id == LaneId::SINGLE)
+                        .expect("default lane in staged scale-in catalog");
+                    default_lane.alias = "tampered-default-lane-after-scale-in".to_owned();
+                    pending.catalog_update.updated_catalog = LaneCatalog::new(
+                        pending.catalog_update.updated_catalog.lane_count(),
+                        lanes,
+                    )
+                    .expect("tampered scale-in updated catalog");
+                }
+                PendingCatalogTamper::RetiredLanePreserved => {
+                    pending.catalog_update.updated_catalog =
+                        pending.catalog_update.previous_catalog.clone();
+                }
+                PendingCatalogTamper::DerivedLaneConfig => {
+                    pending.catalog_update.updated_lane_config =
+                        pending.catalog_update.previous_lane_config.clone();
+                }
+            }
+
+            let err = state_block
+                .commit()
+                .expect_err("tampered pending autoscale scale-in catalog update must abort commit");
+            assert!(matches!(
+                err,
+                TransactionsBlockError::AutoscaleLaneLifecycle
+            ));
+
+            let nexus = state.nexus_snapshot();
+            assert_eq!(
+                nexus
+                    .lane_catalog
+                    .lanes()
+                    .iter()
+                    .map(|lane| lane.id)
+                    .collect::<Vec<_>>(),
+                vec![LaneId::SINGLE, retired_lane_id],
+                "tampered pending scale-in catalog update must not publish the staged retirement"
+            );
+            assert_eq!(nexus.autoscale.last_transition_height, 0);
+            assert_eq!(state.transactions.view().latest_height_for_tests(), 1);
+            assert!(
+                retired_blocks_dir.exists(),
+                "tampered pending scale-in catalog update must reject before retiring Kura storage"
+            );
+            assert!(
+                retired_snapshot_dir.exists(),
+                "tampered pending scale-in catalog update must reject before retiring tiered storage"
             );
         }
     }
@@ -66815,6 +67227,14 @@ mod tests {
             "test setup should expose the old certified sidecar before lane reset"
         );
         assert_eq!(
+            state
+                .unapplied_certified_lane_block_heights_snapshot_cached()
+                .get(&(recreated_lane_id, DataSpaceId::UNIVERSAL))
+                .copied(),
+            Some(old_block_height),
+            "test setup should expose the old certified sidecar in proposal readiness snapshots before lane reset"
+        );
+        assert_eq!(
             state.certified_lane_block_sessions_snapshot_cached().len(),
             1,
             "test setup should expose the old certified session before lane reset"
@@ -66871,6 +67291,12 @@ mod tests {
             state.unapplied_certified_lane_block_height(recreated_lane_id, DataSpaceId::UNIVERSAL),
             None,
             "old-incarnation certified sidecar must not block fresh-lane scale-in checks"
+        );
+        assert!(
+            state
+                .unapplied_certified_lane_block_heights_snapshot_cached()
+                .is_empty(),
+            "old-incarnation certified sidecar must not block proposal readiness after reset"
         );
         assert!(
             state
@@ -66947,6 +67373,14 @@ mod tests {
                 .unapplied_certified_lane_block_height(recreated_lane_id, DataSpaceId::UNIVERSAL),
             Some(fresh_height),
             "fresh post-reset certified sidecar should still block unsafe scale-in"
+        );
+        assert_eq!(
+            restarted
+                .unapplied_certified_lane_block_heights_snapshot_cached()
+                .get(&(recreated_lane_id, DataSpaceId::UNIVERSAL))
+                .copied(),
+            Some(fresh_height),
+            "fresh post-reset certified sidecar should block proposal readiness until applied"
         );
     }
 
@@ -70267,6 +70701,98 @@ mod tests {
             store.get(LaneId::new(0), DataSpaceId::UNIVERSAL, 1),
             Some(&verified_h1)
         );
+    }
+
+    #[test]
+    fn lane_relay_store_rejects_identity_drift_during_pending_upgrade() {
+        let (_, validator_keypair) = bls_account_in("validators");
+        let signers = [&validator_keypair];
+        let signers_bitmap = vec![0b0000_0001];
+        let descriptor_a = Hash::new(b"lane-relay-store-descriptor-a");
+        let descriptor_b = Hash::new(b"lane-relay-store-descriptor-b");
+        let mut pending =
+            sample_lane_relay_envelope(1, LaneId::new(0), &signers, signers_bitmap.clone())
+                .with_lane_block_descriptor_hash(Some(descriptor_a));
+        pending.fastpq_proof = None;
+        let verified_drift =
+            sample_lane_relay_envelope(1, LaneId::new(0), &signers, signers_bitmap)
+                .with_lane_block_descriptor_hash(Some(descriptor_b));
+        let mut store = LaneRelayStore::default();
+
+        assert_eq!(
+            store.insert(pending.clone()).expect("pending relay stored"),
+            LaneRelayInsert::Inserted
+        );
+        let err = store
+            .insert(verified_drift)
+            .expect_err("descriptor drift must not upgrade a pending relay");
+        assert!(matches!(
+            err,
+            LaneRelayError::ConflictingRelay { lane, height }
+                if lane == LaneId::new(0) && height == 1
+        ));
+        assert_eq!(
+            store.get(LaneId::new(0), DataSpaceId::UNIVERSAL, 1),
+            Some(&pending),
+            "conflicting verified drift must not overwrite the pending relay"
+        );
+    }
+
+    #[test]
+    fn record_lane_relay_rejects_identity_drift_during_pending_upgrade() {
+        let _status_guard = crate::sumeragi::status::lane_relay_test_guard();
+        crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+        state.nexus.write().enabled = true;
+        let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
+        seed_consensus_keys_with_pops(&state, &validator_keypairs);
+        install_lane_manifest_registry(
+            &state,
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
+        );
+        configure_commit_topology_preserving_world_peers(&state, 1);
+
+        let descriptor_a = Hash::new(b"record-lane-relay-descriptor-a");
+        let descriptor_b = Hash::new(b"record-lane-relay-descriptor-b");
+        let mut pending =
+            sample_lane_relay_envelope_for_state(&state, 2, LaneId::new(0), &validator_keypairs)
+                .with_lane_block_descriptor_hash(Some(descriptor_a));
+        pending.fastpq_proof = None;
+        let verified_drift =
+            sample_lane_relay_envelope_for_state(&state, 2, LaneId::new(0), &validator_keypairs)
+                .with_lane_block_descriptor_hash(Some(descriptor_b));
+
+        assert_eq!(
+            state
+                .record_lane_relay(&pending)
+                .expect("pending relay stored"),
+            LaneRelayInsert::Inserted
+        );
+        let err = state
+            .record_lane_relay(&verified_drift)
+            .expect_err("descriptor drift must not verify over a pending relay");
+        assert!(matches!(
+            err,
+            LaneRelayError::ConflictingRelay { lane, height }
+                if lane == LaneId::new(0) && height == 2
+        ));
+        assert_eq!(
+            state.lane_relay_snapshot(),
+            vec![pending.clone()],
+            "conflicting verified drift must not overwrite state relay cache"
+        );
+        assert_eq!(
+            crate::sumeragi::status::lane_relay_envelopes_snapshot(),
+            vec![pending],
+            "conflicting verified drift must not overwrite relay status cache"
+        );
+        crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
     }
 
     #[test]

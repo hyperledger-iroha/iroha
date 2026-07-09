@@ -258,7 +258,7 @@ pub struct PayloadResponse {
 ///
 /// These parameters are encoded with Norito (binary) in a fixed order to
 /// guarantee determinism across peers and platforms.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 pub struct ConsensusGenesisParams {
     /// Maximal amount of time a leader waits before proposing (ms).
     pub block_time_ms: u64,
@@ -902,30 +902,22 @@ pub struct SumeragiLanePayloadOwnership {
     /// Stable digest of the lane-local block subject.
     pub subject_hash: Hash,
     /// Domain-separated QC mode tag used to derive the lane-local subject.
-    #[norito(default)]
     pub qc_mode_tag: String,
     /// Fetched-batch candidate indices owned by this lane payload.
     pub accepted_candidate_indices: Vec<u64>,
     /// Accepted transaction hashes owned by this lane payload.
-    #[norito(default)]
     pub accepted_transaction_hashes: Vec<Hash>,
     /// Lane-local predecessor height bound by the descriptor.
-    #[norito(default)]
     pub previous_lane_block_height: u64,
     /// Descriptor hash of the lane-local predecessor, when the predecessor is known.
-    #[norito(default)]
     pub previous_lane_block_descriptor_hash: Option<Hash>,
     /// Stable descriptor hash binding standalone lane block replay context.
-    #[norito(default)]
     pub lane_block_descriptor_hash: Option<Hash>,
     /// Canonical validator set bound by the descriptor.
-    #[norito(default)]
     pub lane_block_descriptor_validator_set: Vec<PeerId>,
     /// Validator count bound by the descriptor quorum context.
-    #[norito(default)]
     pub lane_block_descriptor_validator_count: u32,
     /// Minimum quorum bound by the descriptor quorum context.
-    #[norito(default)]
     pub lane_block_descriptor_min_quorum: u32,
     /// Stable digest naming lane-local payload ownership.
     pub payload_ownership_hash: Hash,
@@ -937,6 +929,7 @@ pub struct SumeragiLanePayloadOwnership {
 struct LaneBlockProposalPreimage {
     purpose: String,
     version: u8,
+    proposal_height: u64,
     descriptor_hash: Hash,
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
@@ -966,6 +959,8 @@ pub struct LaneBlockDescriptorV1 {
     pub lane_id: LaneId,
     /// Dataspace bound to the lane-local block.
     pub dataspace_id: DataSpaceId,
+    /// Global proposal height that planned this lane-local block.
+    pub proposal_height: u64,
     /// Latest committed lane-local height used as this block's predecessor tip.
     pub previous_lane_block_height: u64,
     /// Descriptor hash of the predecessor tip, when the predecessor is known.
@@ -1012,6 +1007,7 @@ impl LaneBlockDescriptorV1 {
                 version: 1,
                 lane_id: self.lane_id,
                 dataspace_id: self.dataspace_id,
+                proposal_height: self.proposal_height,
                 previous_lane_block_height: self.previous_lane_block_height,
                 previous_lane_block_descriptor_hash: self.previous_lane_block_descriptor_hash,
                 lane_block_height: self.lane_block_height,
@@ -1039,6 +1035,26 @@ impl LaneBlockDescriptorV1 {
     }
 }
 
+/// Advisory pointer to the canonical global block that carried a lane payload.
+///
+/// This is deliberately not part of [`LaneBlockProposalV1::computed_proposal_hash`].
+/// Peers use it only as a recovery hint for fetching a certified block body;
+/// the fetched block still has to validate against its commit certificate and
+/// the lane descriptor before any payload is replayed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct LaneBlockProposalPayloadHintV1 {
+    /// Global proposal height that anchored the lane payload ownership.
+    pub proposal_height: u64,
+    /// Global proposal view that anchored the lane payload ownership.
+    pub proposal_view: u64,
+    /// Hash of the global block body that carried the lane payload ownership.
+    pub proposal_block_hash: HashOf<BlockHeader>,
+}
+
 /// Canonical standalone lane-local block proposal artifact.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1050,6 +1066,10 @@ pub struct LaneBlockProposalV1 {
     pub descriptor: LaneBlockDescriptorV1,
     /// Stable proposal digest binding descriptor, work, committee, and quorum.
     pub proposal_hash: Hash,
+    /// Optional recovery hint for fetching the global block body with the payload.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub payload_block_hint: Option<LaneBlockProposalPayloadHintV1>,
 }
 
 impl LaneBlockProposalV1 {
@@ -1061,6 +1081,7 @@ impl LaneBlockProposalV1 {
             norito::to_bytes(&LaneBlockProposalPreimage {
                 purpose: "nexus:lane-block-proposal:v1".to_string(),
                 version: 1,
+                proposal_height: descriptor.proposal_height,
                 descriptor_hash: descriptor.descriptor_hash,
                 lane_id: descriptor.lane_id,
                 dataspace_id: descriptor.dataspace_id,
@@ -1082,6 +1103,19 @@ impl LaneBlockProposalV1 {
         )
     }
 
+    /// Return `true` when two proposals identify the same certified lane block.
+    #[must_use]
+    pub fn same_consensus_identity(&self, other: &Self) -> bool {
+        self.descriptor == other.descriptor && self.proposal_hash == other.proposal_hash
+    }
+
+    /// Attach a payload recovery hint without changing the proposal identity.
+    #[must_use]
+    pub fn with_payload_block_hint(mut self, hint: LaneBlockProposalPayloadHintV1) -> Self {
+        self.payload_block_hint = Some(hint);
+        self
+    }
+
     /// Build a canonical lane-block vote body for this proposal and phase.
     #[must_use]
     pub fn vote_body(&self, phase: CertPhase) -> LaneBlockVoteBodyV1 {
@@ -1090,6 +1124,7 @@ impl LaneBlockProposalV1 {
             phase,
             lane_id: descriptor.lane_id,
             dataspace_id: descriptor.dataspace_id,
+            proposal_height: descriptor.proposal_height,
             lane_block_height: descriptor.lane_block_height,
             lane_block_view: descriptor.lane_block_view,
             proposal_hash: self.proposal_hash,
@@ -1121,6 +1156,8 @@ pub struct LaneBlockVoteBodyV1 {
     pub lane_id: LaneId,
     /// Dataspace bound to the lane-local block.
     pub dataspace_id: DataSpaceId,
+    /// Global proposal height that planned this lane-local block.
+    pub proposal_height: u64,
     /// Lane-local block height being certified.
     pub lane_block_height: u64,
     /// Lane-local view being certified.
@@ -1227,6 +1264,7 @@ struct LaneBlockDescriptorPreimage {
     version: u8,
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
+    proposal_height: u64,
     previous_lane_block_height: u64,
     previous_lane_block_descriptor_hash: Option<Hash>,
     lane_block_height: u64,
@@ -1460,6 +1498,7 @@ impl SumeragiLanePayloadOwnership {
                 version: 1,
                 lane_id: self.lane_id,
                 dataspace_id: self.dataspace_id,
+                proposal_height: self.proposal_height,
                 previous_lane_block_height: self.previous_lane_block_height,
                 previous_lane_block_descriptor_hash: self.previous_lane_block_descriptor_hash,
                 lane_block_height: self.lane_block_height,
@@ -1847,7 +1886,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for LaneSwapMetadata {
 }
 
 /// Runtime-upgrade governance hook snapshot.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -3038,6 +3077,59 @@ pub struct SumeragiV1StatusWire {
     pub rbc_status: String,
 }
 
+/// Cached standalone lane-block consensus session status.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SumeragiLaneBlockSessionStatus {
+    /// Lane whose lane-local block is being certified.
+    #[norito(default)]
+    pub lane_id: LaneId,
+    /// Dataspace bound to the lane-local block.
+    #[norito(default)]
+    pub dataspace_id: DataSpaceId,
+    /// Lane-local block height.
+    #[norito(default)]
+    pub lane_block_height: u64,
+    /// Lane-local block view.
+    #[norito(default)]
+    pub lane_block_view: u64,
+    /// Proposal hash identifying the cached session.
+    pub proposal_hash: Hash,
+    /// Whether the proposal artifact is cached locally.
+    #[norito(default)]
+    pub has_proposal: bool,
+    /// Number of cached prepare votes.
+    #[norito(default)]
+    pub prepare_vote_count: u32,
+    /// Number of cached commit votes.
+    #[norito(default)]
+    pub commit_vote_count: u32,
+    /// Whether a prepare QC is cached.
+    #[norito(default)]
+    pub has_prepare_qc: bool,
+    /// Whether a commit QC is cached.
+    #[norito(default)]
+    pub has_commit_qc: bool,
+    /// Whether this peer has a pending local commit-vote opportunity.
+    #[norito(default)]
+    pub pending_commit_vote_request: bool,
+    /// Whether this session is ready to drain as a committed lane block.
+    #[norito(default)]
+    pub pending_committed_session_drain: bool,
+    /// Whether this session already drained to the committed-lane queue.
+    #[norito(default)]
+    pub committed_session_drained: bool,
+    /// Validator count advertised by the session body.
+    #[norito(default)]
+    pub validator_count: u32,
+    /// Minimum quorum advertised by the session body.
+    #[norito(default)]
+    pub min_quorum: u32,
+}
+
 /// Proposal-gate inputs from the most recent pacemaker evaluation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -3427,6 +3519,9 @@ pub struct SumeragiStatusWire {
     /// Certified standalone lane-local block summaries.
     #[norito(default)]
     pub committed_lane_blocks: Vec<SumeragiCommittedLaneBlock>,
+    /// Cached standalone lane-local block consensus sessions.
+    #[norito(default)]
+    pub lane_block_sessions: Vec<SumeragiLaneBlockSessionStatus>,
     /// Count of lanes that still require a governance manifest.
     #[norito(default)]
     pub lane_governance_sealed_total: u32,
@@ -4243,6 +4338,7 @@ mod tests {
             phase,
             lane_id: LaneId::new(7),
             dataspace_id: DataSpaceId::new(11),
+            proposal_height: 12,
             lane_block_height: 13,
             lane_block_view: 2,
             proposal_hash: Hash::prehashed([0x21; Hash::LENGTH]),
@@ -4268,6 +4364,7 @@ mod tests {
         let mut descriptor = LaneBlockDescriptorV1 {
             lane_id: LaneId::new(7),
             dataspace_id: DataSpaceId::new(11),
+            proposal_height: 12,
             previous_lane_block_height: 12,
             previous_lane_block_descriptor_hash: Some(Hash::prehashed([0x20; Hash::LENGTH])),
             lane_block_height: 13,
@@ -4292,6 +4389,7 @@ mod tests {
         let mut proposal = LaneBlockProposalV1 {
             descriptor,
             proposal_hash: Hash::prehashed([0x00; Hash::LENGTH]),
+            payload_block_hint: None,
         };
         proposal.proposal_hash = proposal.computed_proposal_hash();
         proposal
@@ -4340,6 +4438,11 @@ mod tests {
         let mut dataspace_drift = body.clone();
         dataspace_drift.dataspace_id = DataSpaceId::new(12);
         cases.push(("dataspace id", dataspace_drift));
+
+        let mut proposal_height_drift = body.clone();
+        proposal_height_drift.proposal_height =
+            proposal_height_drift.proposal_height.saturating_add(1);
+        cases.push(("proposal height", proposal_height_drift));
 
         let mut height_drift = body.clone();
         height_drift.lane_block_height = height_drift.lane_block_height.saturating_add(1);
@@ -4450,6 +4553,11 @@ mod tests {
         dataspace_drift.dataspace_id = DataSpaceId::new(12);
         cases.push(("dataspace id", dataspace_drift));
 
+        let mut proposal_height_drift = descriptor.clone();
+        proposal_height_drift.proposal_height =
+            proposal_height_drift.proposal_height.saturating_add(1);
+        cases.push(("proposal height", proposal_height_drift));
+
         let mut previous_height_drift = descriptor.clone();
         previous_height_drift.previous_lane_block_height = previous_height_drift
             .previous_lane_block_height
@@ -4545,6 +4653,14 @@ mod tests {
         dataspace_drift.descriptor.dataspace_id = DataSpaceId::new(12);
         refresh_lane_block_descriptor_hash(&mut dataspace_drift);
         cases.push(("dataspace id", dataspace_drift));
+
+        let mut proposal_height_drift = proposal.clone();
+        proposal_height_drift.descriptor.proposal_height = proposal_height_drift
+            .descriptor
+            .proposal_height
+            .saturating_add(1);
+        refresh_lane_block_descriptor_hash(&mut proposal_height_drift);
+        cases.push(("proposal height", proposal_height_drift));
 
         let mut previous_height_drift = proposal.clone();
         previous_height_drift.descriptor.previous_lane_block_height = previous_height_drift
@@ -4663,6 +4779,7 @@ mod tests {
         let body = decoded.vote_body(CertPhase::Prepare);
         assert_eq!(body.proposal_hash, decoded.proposal_hash);
         assert_eq!(body.descriptor_hash, decoded.descriptor.descriptor_hash);
+        assert_eq!(body.proposal_height, decoded.descriptor.proposal_height);
         assert_eq!(
             body.validator_set_hash,
             decoded.descriptor.computed_validator_set_hash()
@@ -5174,6 +5291,63 @@ mod tests {
         assert_eq!(
             ownership.validate_replay_material(),
             Err(SumeragiLanePayloadOwnershipReplayError::SubjectHashMismatch)
+        );
+    }
+
+    #[test]
+    fn lane_payload_ownership_replay_material_rejects_proposal_height_drift() {
+        let mut ownership = sample_lane_payload_ownership_with_replay_material();
+        ownership.proposal_height = ownership.proposal_height.saturating_add(1);
+
+        assert_eq!(
+            ownership.validate_replay_material(),
+            Err(SumeragiLanePayloadOwnershipReplayError::DescriptorHashMismatch)
+        );
+    }
+
+    #[test]
+    fn lane_payload_ownership_replay_material_rejects_defaulted_candidate_hashes() {
+        let mut ownership = sample_lane_payload_ownership_with_replay_material();
+        ownership.accepted_transaction_hashes.clear();
+
+        assert_eq!(
+            ownership.validate_replay_material(),
+            Err(SumeragiLanePayloadOwnershipReplayError::CandidateHashCountMismatch)
+        );
+    }
+
+    #[test]
+    fn lane_payload_ownership_replay_material_rejects_defaulted_predecessor_height() {
+        let mut ownership = sample_lane_payload_ownership_with_replay_material();
+        ownership.previous_lane_block_height = 0;
+
+        assert_eq!(
+            ownership.validate_replay_material(),
+            Err(SumeragiLanePayloadOwnershipReplayError::PreviousLaneBlockHeightMismatch)
+        );
+    }
+
+    #[test]
+    fn lane_payload_ownership_replay_material_rejects_missing_descriptor_hash() {
+        let mut ownership = sample_lane_payload_ownership_with_replay_material();
+        ownership.lane_block_descriptor_hash = None;
+
+        assert_eq!(
+            ownership.validate_replay_material(),
+            Err(SumeragiLanePayloadOwnershipReplayError::MissingDescriptorHash)
+        );
+    }
+
+    #[test]
+    fn lane_payload_ownership_replay_material_rejects_empty_validator_set() {
+        let mut ownership = sample_lane_payload_ownership_with_replay_material();
+        ownership.lane_block_descriptor_validator_set.clear();
+        ownership.lane_block_descriptor_validator_count = 0;
+        ownership.lane_block_descriptor_min_quorum = 0;
+
+        assert_eq!(
+            ownership.validate_replay_material(),
+            Err(SumeragiLanePayloadOwnershipReplayError::EmptyValidatorSet)
         );
     }
 

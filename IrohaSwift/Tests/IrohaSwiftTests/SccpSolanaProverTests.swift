@@ -605,6 +605,33 @@ final class SccpSolanaProverTests: XCTestCase {
             try bscCommitSealHash(seal),
             "0x14659b4643d3a7961f7f86f46319992444617392c8e84967a3bb2a5ad7bc72fb"
         )
+        XCTAssertThrowsError(try canonicalBscValidatorSetPayloadBytes(
+            validatorAddresses: [
+                String(repeating: "11", count: 20),
+                String(repeating: "11", count: 20)
+            ],
+            validatorPowers: [1, 2]
+        )) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidValidatorSet("validatorAddresses[1]"))
+        }
+        XCTAssertThrowsError(try canonicalBscValidatorSetPayloadBytes(
+            validatorAddresses: [String(repeating: "11", count: 20)],
+            validatorPowers: [0]
+        )) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidValidatorSet("validatorPowers[0]"))
+        }
+        XCTAssertThrowsError(try canonicalBscCommitSealBytes(BscCommitSealProof(
+            totalPower: UInt64.max,
+            signedPower: 3,
+            commitMessageHash: commitMessageHash,
+            validatorPublicKeys: validatorPublicKeys,
+            validatorPowers: [UInt64.max, 1, 1, 1],
+            signersBitmap: Self.hexData("0x07"),
+            signatures: signatures,
+            validatorSetHash: nil
+        ))) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidValidatorSet("totalPower"))
+        }
         for rejectedRecoveryId in [UInt8(0), 1, 29, 30] {
             var rejectedSignature = signatures[0]
             rejectedSignature[rejectedSignature.index(rejectedSignature.startIndex, offsetBy: 64)] = rejectedRecoveryId

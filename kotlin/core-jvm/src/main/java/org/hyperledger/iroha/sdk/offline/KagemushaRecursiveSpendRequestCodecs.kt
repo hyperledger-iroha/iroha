@@ -200,6 +200,44 @@ class InitSpendRequest @JvmOverloads constructor(
     val lineageProvingKeyArchive: ByteArray? get() = lineageProvingKeyArchiveBytes?.copyOf()
 }
 
+/** Typed top-up-only encoder input for `KagemushaRecursiveSpendInitRequestV1`. */
+private class TopUpInitSpendRequest(
+    recordBundle: ByteArray,
+    pallasOpenEnvelopes: ByteArray,
+    val currentNote: SpendableNoteDescriptor,
+    val blockHeight: Long?,
+) {
+    private val recordBundleArchive = recordBundle.copyOf()
+    private val pallasOpenEnvelopesArchive = pallasOpenEnvelopes.copyOf()
+
+    init {
+        requireNonNegativeHeight(blockHeight)
+        val recordBundlePayload = KagemushaRecursiveSpendRequestCodecs.compactPayloadForRequest(
+            recordBundleArchive,
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE,
+            "recordBundle",
+        )
+        val recordBundleHopCount = readVerifiedFoldRecordBundleHopCount(
+            recordBundlePayload,
+            NoritoHeader.COMPACT_LEN,
+            "recordBundle",
+        )
+        require(recordBundleHopCount == 1) {
+            "top-up init request must contain exactly one checked hop"
+        }
+        requirePallasOpenEnvelopesArchive(
+            pallasOpenEnvelopesArchive,
+            expectedEnvelopeCount = recordBundleHopCount,
+            field = "pallasOpenEnvelopes",
+            maxBytes = KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES,
+        )
+    }
+
+    val recordBundle: ByteArray get() = recordBundleArchive.copyOf()
+
+    val pallasOpenEnvelopes: ByteArray get() = pallasOpenEnvelopesArchive.copyOf()
+}
+
 /** Typed request for `KagemushaRecursiveSpendTopUpRequestV1`. */
 class TopUpSpendRequest(
     assetId: String,
@@ -635,8 +673,10 @@ object KagemushaRecursiveSpendRequestCodecs {
         NoritoCodec.encode(request, SCHEMA_INIT_REQUEST, InitRequestAdapter, REQUEST_FLAGS)
 
     @JvmStatic
-    fun encodeTopUpRequest(request: TopUpSpendRequest): ByteArray =
-        NoritoCodec.encode(request, SCHEMA_TOP_UP_REQUEST, TopUpRequestAdapter, REQUEST_FLAGS)
+    fun encodeTopUpRequest(request: TopUpSpendRequest): ByteArray {
+        validateTopUpRequestPublicBinding(request)
+        return NoritoCodec.encode(request, SCHEMA_TOP_UP_REQUEST, TopUpRequestAdapter, REQUEST_FLAGS)
+    }
 
     @JvmStatic
     fun encodeAppendRequest(request: AppendSpendRequest): ByteArray =
@@ -781,9 +821,54 @@ object KagemushaRecursiveSpendRequestCodecs {
         amount: String,
         initRequestArchive: ByteArray,
         dataspaceId: Long? = null,
-    ): ByteArray = encodeTopUpRequest(
-        TopUpSpendRequest(accountId, assetDefinitionId, amount, initRequestArchive, dataspaceId),
+    ): ByteArray = buildRecursiveSpendTopUpRequest(
+        assetId = canonicalAssetId(accountId, assetDefinitionId, dataspaceId),
+        amount = amount,
+        initRequestArchive = initRequestArchive,
     )
+
+    @JvmStatic
+    @JvmOverloads
+    fun buildRecursiveSpendTopUpInitRequest(
+        recordBundle: ByteArray?,
+        pallasOpenEnvelopes: ByteArray?,
+        spendableNote: SpendableNoteDescriptor?,
+        blockHeight: Long? = null,
+    ): ByteArray {
+        require(recordBundle != null) { "recordBundle is required" }
+        require(pallasOpenEnvelopes != null) { "pallasOpenEnvelopes is required" }
+        require(spendableNote != null) { "spendableNote is required" }
+        return NoritoCodec.encode(
+            TopUpInitSpendRequest(
+                recordBundle = recordBundle,
+                pallasOpenEnvelopes = pallasOpenEnvelopes,
+                currentNote = spendableNote,
+                blockHeight = blockHeight,
+            ),
+            SCHEMA_INIT_REQUEST,
+            TopUpInitRequestAdapter,
+            REQUEST_FLAGS,
+        )
+    }
+
+    @JvmStatic
+    @JvmOverloads
+    fun buildRecursiveSpendTopUpRequestFromInitRequest(
+        accountId: String,
+        initRequestArchive: ByteArray,
+        dataspaceId: Long? = null,
+    ): ByteArray {
+        val summary = readTopUpInitRequestSummary(initRequestArchive)
+        return encodeTopUpRequest(
+            TopUpSpendRequest(
+                accountId = accountId,
+                assetDefinitionId = summary.assetDefinitionId,
+                amount = summary.amount,
+                initRequestArchive = initRequestArchive,
+                dataspaceId = dataspaceId,
+            ),
+        )
+    }
 
     @JvmStatic
     @JvmOverloads
@@ -1297,6 +1382,69 @@ object KagemushaRecursiveSpendRequestCodecs {
         return requireAppendLineageKeyArtifacts(lineageKeyArtifacts)
     }
 
+    private fun readTopUpInitRequestSummary(initRequestArchive: ByteArray): TopUpInitRequestSummary {
+        val payload = compactPayloadForRequest(initRequestArchive, SCHEMA_INIT_REQUEST, "initRequestArchive")
+        val decoder = NoritoDecoder(payload, REQUEST_FLAGS)
+        val recordBundlePayload = readField(decoder) { it.readRemainingBytes() }
+        val pallasOpenEnvelopes = readField(decoder) { readBytesVec(it) }
+        val currentNote = readField(decoder) { readSpendableNote(it, "initRequestArchive.current_note") }
+        val lineageVerifierKey =
+            readField(decoder) { readOptionRawPayload(it, "initRequestArchive.lineage_verifier_key") }
+        val lineageProvingKeyArchive =
+            readField(decoder) { readOptionRawPayload(it, "initRequestArchive.lineage_proving_key_archive") }
+        readField(decoder) { readOptionU64Value(it) }
+        require(decoder.remaining() == 0) { "Trailing bytes after initRequestArchive" }
+        require(lineageVerifierKey == null) {
+            "top-up init request lineageVerifierKey must be absent"
+        }
+        require(lineageProvingKeyArchive == null) {
+            "top-up init request lineageProvingKeyArchive must be absent"
+        }
+        val recordBundle = readTopUpInitRecordBundleSummary(recordBundlePayload)
+        require(recordBundle.hopCount == 1) {
+            "top-up init request must contain exactly one checked hop"
+        }
+        requirePallasOpenEnvelopesArchive(
+            pallasOpenEnvelopes,
+            expectedEnvelopeCount = recordBundle.hopCount,
+            field = "initRequestArchive.pallas_open_envelopes",
+            maxBytes = KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES,
+        )
+        return TopUpInitRequestSummary(
+            assetDefinitionId = recordBundle.assetDefinitionId,
+            amount = currentNote.amount,
+        )
+    }
+
+    private fun readTopUpInitRecordBundleSummary(recordBundlePayload: ByteArray): TopUpInitRecordBundleSummary {
+        val decoder = NoritoDecoder(recordBundlePayload, REQUEST_FLAGS)
+        val bundlePayload = readField(decoder) { it.readRemainingBytes() }
+        readField(decoder) { it.readRemainingBytes() } // verifier records
+        require(decoder.remaining() == 0) { "Trailing bytes after initRequestArchive.record_bundle" }
+
+        val bundle = NoritoDecoder(bundlePayload, REQUEST_FLAGS)
+        readField(bundle) { readChainId(it) }
+        val assetDefinitionId = readField(bundle) {
+            readAssetDefinitionId(it, "initRequestArchive.record_bundle.asset")
+        }
+        val hopCount = readField(bundle) {
+            readVerifiedFoldStepCount(it, "initRequestArchive.record_bundle.steps")
+        }
+        require(bundle.remaining() == 0) { "Trailing bytes after initRequestArchive.record_bundle.bundle" }
+        return TopUpInitRecordBundleSummary(assetDefinitionId = assetDefinitionId, hopCount = hopCount)
+    }
+
+    private fun validateTopUpRequestPublicBinding(request: TopUpSpendRequest) {
+        val summary = readTopUpInitRequestSummary(request.initRequestArchive)
+        val parsedAsset = parseAssetId(request.assetId, "assetId")
+        require(parsedAsset.assetDefinitionId == summary.assetDefinitionId) {
+            "top-up request asset definition must match the nested init request"
+        }
+        require(request.amount == summary.amount) {
+            "top-up request amount must match the nested current note"
+        }
+    }
+
     private fun previousProofOpenEnvelopesOrGenerated(
         previousBundle: ByteArray,
         outputCircuitId: String?,
@@ -1323,24 +1471,62 @@ object KagemushaRecursiveSpendRequestCodecs {
 
     private object InitRequestAdapter : TypeAdapter<InitSpendRequest> {
         override fun encode(encoder: NoritoEncoder, value: InitSpendRequest) {
-            writeRawField(
-                encoder,
-                compactPayloadForRequest(value.recordBundle, SCHEMA_RECORD_BUNDLE, "recordBundle"),
+            writeInitRequestFields(
+                encoder = encoder,
+                recordBundle = value.recordBundle,
+                pallasOpenEnvelopes = value.pallasOpenEnvelopes,
+                currentNote = value.currentNote,
+                lineageVerifierKey = value.lineageVerifierKey,
+                lineageProvingKeyArchive = value.lineageProvingKeyArchive,
+                blockHeight = value.blockHeight,
             )
-            writeField(encoder) { writeBytesVec(it, value.pallasOpenEnvelopes) }
-            writeField(encoder) { writeSpendableNote(it, value.currentNote) }
-            writeField(encoder) {
-                writeOptionRaw(it, value.lineageVerifierKey?.let(::verifyingKeyBoxPayload))
-            }
-            writeField(encoder) {
-                writeOptionBytesVec(it, value.lineageProvingKeyArchive)
-            }
-            writeField(encoder) { writeOptionU64(it, value.blockHeight) }
         }
 
         override fun decode(decoder: NoritoDecoder): InitSpendRequest {
             throw UnsupportedOperationException("recursive spend requests are encode-only")
         }
+    }
+
+    private object TopUpInitRequestAdapter : TypeAdapter<TopUpInitSpendRequest> {
+        override fun encode(encoder: NoritoEncoder, value: TopUpInitSpendRequest) {
+            writeInitRequestFields(
+                encoder = encoder,
+                recordBundle = value.recordBundle,
+                pallasOpenEnvelopes = value.pallasOpenEnvelopes,
+                currentNote = value.currentNote,
+                lineageVerifierKey = null,
+                lineageProvingKeyArchive = null,
+                blockHeight = value.blockHeight,
+            )
+        }
+
+        override fun decode(decoder: NoritoDecoder): TopUpInitSpendRequest {
+            throw UnsupportedOperationException("recursive spend top-up init requests are encode-only")
+        }
+    }
+
+    private fun writeInitRequestFields(
+        encoder: NoritoEncoder,
+        recordBundle: ByteArray,
+        pallasOpenEnvelopes: ByteArray,
+        currentNote: SpendableNoteDescriptor,
+        lineageVerifierKey: ByteArray?,
+        lineageProvingKeyArchive: ByteArray?,
+        blockHeight: Long?,
+    ) {
+        writeRawField(
+            encoder,
+            compactPayloadForRequest(recordBundle, SCHEMA_RECORD_BUNDLE, "recordBundle"),
+        )
+        writeField(encoder) { writeBytesVec(it, pallasOpenEnvelopes) }
+        writeField(encoder) { writeSpendableNote(it, currentNote) }
+        writeField(encoder) {
+            writeOptionRaw(it, lineageVerifierKey?.let(::verifyingKeyBoxPayload))
+        }
+        writeField(encoder) {
+            writeOptionBytesVec(it, lineageProvingKeyArchive)
+        }
+        writeField(encoder) { writeOptionU64(it, blockHeight) }
     }
 
     private object TopUpRequestAdapter : TypeAdapter<TopUpSpendRequest> {
@@ -1950,6 +2136,16 @@ private data class PreparedVerifiedFoldHop(
     val publicInputs: TransferPublicInputs,
     val envelope: OpenVerifyEnvelopeValue,
     val verifierRecord: VerifierRecordValue,
+)
+
+private data class TopUpInitRequestSummary(
+    val assetDefinitionId: String,
+    val amount: String,
+)
+
+private data class TopUpInitRecordBundleSummary(
+    val assetDefinitionId: String,
+    val hopCount: Int,
 )
 
 private fun verifyingKeyBoxPayload(bytes: ByteArray): ByteArray =

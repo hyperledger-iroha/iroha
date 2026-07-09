@@ -777,6 +777,9 @@ def validate_runner_preflight(
     if errors:
         return errors
 
+    if hasattr(args, "now_unix") and getattr(args, "now_unix") is None:
+        errors.append("--now-unix is required")
+
     if not isinstance(verifier, Path):
         errors.append(
             f"--verifier `{path_diagnostic_label(verifier)}` "

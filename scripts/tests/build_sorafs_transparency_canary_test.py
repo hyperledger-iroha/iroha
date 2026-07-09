@@ -31,6 +31,7 @@ CHECKER_SPEC.loader.exec_module(CHECKER)
 
 
 GENERATED_AT = 1_800_000_120
+NOW_UNIX = GENERATED_AT
 SOURCE_BATCH_DIGEST = "a" * 64
 CYCLE_DIGEST = "b" * 64
 
@@ -51,6 +52,8 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
         "production",
         "--generated-at-unix",
         str(GENERATED_AT),
+        "--now-unix",
+        str(NOW_UNIX),
     ]
     if kind in MODULE.SOURCE_BATCH_DIGEST_KINDS:
         args.extend(["--source-batch-digest-hex", SOURCE_BATCH_DIGEST])
@@ -71,6 +74,13 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
         for route in MODULE.REQUIRED_EXPLORER_ROUTES:
             args.extend(["--explorer-route", route])
     return args
+
+
+def checker_options() -> object:
+    return CHECKER.ValidationOptions(
+        now_unix=NOW_UNIX,
+        max_evidence_age_secs=CHECKER.DEFAULT_MAX_EVIDENCE_AGE_SECS,
+    )
 
 
 def assert_rejected_without_artifact(
@@ -134,7 +144,7 @@ def test_generated_canaries_pass_full_transparency_gate(tmp_path: Path) -> None:
         evidence_paths.append(canary_path(tmp_path, kind))
     summary = tmp_path / "summary.json"
 
-    command = []
+    command = ["--now-unix", str(NOW_UNIX)]
     for path in evidence_paths:
         command.extend(["--evidence", str(path)])
     command.extend(["--summary-out", str(summary)])

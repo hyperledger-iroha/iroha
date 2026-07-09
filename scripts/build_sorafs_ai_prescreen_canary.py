@@ -23,6 +23,7 @@ from check_sorafs_ai_prescreen_rollout_evidence import (  # noqa: E402
     ALLOWED_PRESCREEN_VERDICTS,
     COMMITTEE_RESULT_LABEL_ERROR,
     COMMITTEE_RESULT_LABEL_PATTERN,
+    DEFAULT_MAX_EVIDENCE_AGE_SECS,
     FORBIDDEN_INVENTORY_LABEL_MARKERS,
     FORBIDDEN_SUBJECT_REFERENCE_MARKERS,
     FORBIDDEN_WORKFLOW_ID_MARKERS,
@@ -40,6 +41,7 @@ from check_sorafs_ai_prescreen_rollout_evidence import (  # noqa: E402
     REQUIRED_TRANSPARENCY_SOURCE_KINDS,
     SUBJECT_REFERENCE_ERROR,
     SUBJECT_REFERENCE_PATTERN,
+    ValidationOptions,
     WORKFLOW_ID_ERROR,
     WORKFLOW_ID_PATTERN,
     expected_operator_route_url,
@@ -1009,7 +1011,13 @@ def validate_generated_payload(
 ) -> list[str]:
     """Validate the generated canary through the AI pre-screen gate contract."""
 
-    kind, errors = validate_evidence_payload(payload)
+    kind, errors = validate_evidence_payload(
+        payload,
+        ValidationOptions(
+            now_unix=args.now_unix,
+            max_evidence_age_secs=DEFAULT_MAX_EVIDENCE_AGE_SECS,
+        ),
+    )
     if kind != args.kind:
         errors.append(f"generated canary must validate as {args.kind}")
     return errors
@@ -1073,6 +1081,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--deployment-id", required=True)
     parser.add_argument("--environment", required=True)
     parser.add_argument("--generated-at-unix", type=positive_int_arg, required=True)
+    parser.add_argument("--now-unix", type=positive_int_arg, required=True)
     parser.add_argument("--body-digest-hex", required=True)
     parser.add_argument("--manifest-id-hex")
     parser.add_argument("--runner-hash-hex")

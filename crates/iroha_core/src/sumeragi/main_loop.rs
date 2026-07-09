@@ -82,6 +82,51 @@ fn try_sign_consensus_preimage(
     Signature::try_new(private_key, preimage).map(|signature| signature.payload().to_vec())
 }
 
+fn queued_empty_frontier_can_make_progress(
+    height: u64,
+    committed_height: u64,
+    active_queue_len: usize,
+    pending_blocks_for_height: usize,
+    slot_has_round_liveness: bool,
+) -> bool {
+    height == committed_height.saturating_add(1)
+        && active_queue_len > 0
+        && pending_blocks_for_height == 0
+        && !slot_has_round_liveness
+}
+
+#[cfg(test)]
+mod queued_empty_frontier_can_make_progress_tests {
+    use super::queued_empty_frontier_can_make_progress;
+
+    #[test]
+    fn allows_queued_empty_frontier_without_round_liveness() {
+        assert!(queued_empty_frontier_can_make_progress(2, 1, 1, 0, false));
+    }
+
+    #[test]
+    fn rejects_non_frontier_or_inactive_work() {
+        for (height, committed_height, queue_len, pending_blocks, has_liveness) in [
+            (1, 1, 1, 0, false),
+            (3, 1, 1, 0, false),
+            (2, 1, 0, 0, false),
+            (2, 1, 1, 1, false),
+            (2, 1, 1, 0, true),
+        ] {
+            assert!(
+                !queued_empty_frontier_can_make_progress(
+                    height,
+                    committed_height,
+                    queue_len,
+                    pending_blocks,
+                    has_liveness
+                ),
+                "height={height} committed_height={committed_height} queue_len={queue_len} pending_blocks={pending_blocks} has_liveness={has_liveness}"
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod checked_consensus_signing_tests {
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
@@ -13654,9 +13699,32 @@ impl CommittedLaneBlockQueue {
         before.saturating_sub(self.pending.len())
     }
 
+    fn unapplied_lane_ids_for_admissible_lanes(
+        &self,
+        kura: &crate::kura::Kura,
+        admissible_lane: impl Fn(LaneId, DataSpaceId, u64, u64) -> bool,
+    ) -> BTreeSet<LaneId> {
+        self.pending
+            .iter()
+            .filter_map(|session| {
+                if kura.lane_block_application_receipt_available(&session.proposal) {
+                    return None;
+                }
+                let descriptor = &session.proposal.descriptor;
+                admissible_lane(
+                    descriptor.lane_id,
+                    descriptor.dataspace_id,
+                    descriptor.lane_block_height,
+                    descriptor.proposal_height,
+                )
+                .then_some(descriptor.lane_id)
+            })
+            .collect()
+    }
+
     fn retain_sessions_for_admissible_lanes(
         &mut self,
-        admissible_lane: impl Fn(LaneId, DataSpaceId, u64) -> bool,
+        admissible_lane: impl Fn(LaneId, DataSpaceId, u64, u64) -> bool,
     ) -> usize {
         let before = self.pending.len();
         self.pending.retain(|session| {
@@ -13665,6 +13733,7 @@ impl CommittedLaneBlockQueue {
                 descriptor.lane_id,
                 descriptor.dataspace_id,
                 descriptor.lane_block_height,
+                descriptor.proposal_height,
             )
         });
         before.saturating_sub(self.pending.len())
@@ -13693,10 +13762,6 @@ impl CommittedLaneBlockQueue {
             .iter()
             .map(|session| {
                 let execution_status = if kura
-                    .lane_block_application_receipt_conflicts_with_preflight(&session.proposal)
-                {
-                    super::status::CommittedLaneBlockExecutionStatus::ApplicationReceiptConflictsWithPreflight
-                } else if kura
                     .lane_block_application_receipt_available(&session.proposal)
                 {
                     let descriptor = &session.proposal.descriptor;
@@ -13714,6 +13779,10 @@ impl CommittedLaneBlockQueue {
                             super::status::CommittedLaneBlockExecutionStatus::StateAppliedByCanonicalBlock
                         }
                     }
+                } else if kura
+                    .lane_block_application_receipt_conflicts_with_preflight(&session.proposal)
+                {
+                    super::status::CommittedLaneBlockExecutionStatus::ApplicationReceiptConflictsWithPreflight
                 } else if !kura
                     .lane_block_predecessor_application_receipt_available(&session.proposal)
                 {
@@ -13850,6 +13919,28 @@ impl CommittedLaneBlockQueue {
             recovered = recovered.saturating_add(1);
         }
         recovered
+    }
+
+    fn payload_hint_repair_candidates(
+        &self,
+        kura: &crate::kura::Kura,
+    ) -> Vec<crate::sumeragi::consensus::LaneBlockProposalV1> {
+        self.pending
+            .iter()
+            .filter_map(|session| {
+                let proposal = &session.proposal;
+                proposal.payload_block_hint.as_ref()?;
+                if kura.lane_block_application_receipt_available(proposal)
+                    || kura.lane_block_execution_input_available(proposal)
+                    || kura
+                        .lane_block_payload_availability(proposal)
+                        .is_available()
+                {
+                    return None;
+                }
+                Some(proposal.clone())
+            })
+            .collect()
     }
 
     fn preflight_recovered_execution_inputs_into_kura(&self, state: &crate::state::State) -> usize {
@@ -14350,16 +14441,6 @@ impl CommittedLaneBlockQueue {
             if !kura.lane_block_predecessor_application_receipt_available(&session.proposal) {
                 continue;
             }
-            if kura.lane_block_application_receipt_conflicts_with_preflight(&session.proposal) {
-                warn!(
-                    lane_id = ?session.proposal.descriptor.lane_id,
-                    dataspace_id = ?session.proposal.descriptor.dataspace_id,
-                    lane_block_height = session.proposal.descriptor.lane_block_height,
-                    lane_block_view = session.proposal.descriptor.lane_block_view,
-                    "skipping lane-block application receipt because it conflicts with direct-execution preflight"
-                );
-                continue;
-            }
             match kura.persist_lane_block_application_receipt_if_ready(&session.proposal) {
                 Ok(true) => recorded = recorded.saturating_add(1),
                 Ok(false) => continue,
@@ -14433,7 +14514,11 @@ fn committed_lane_block_statuses_match_session(
         && left.dataspace_id == right.dataspace_id
         && left.lane_block_height == right.lane_block_height
         && left.lane_block_view == right.lane_block_view
+        && left.descriptor_hash == right.descriptor_hash
         && left.proposal_hash == right.proposal_hash
+        && left.proposal == right.proposal
+        && left.prepare_qc == right.prepare_qc
+        && left.commit_qc == right.commit_qc
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22167,6 +22252,12 @@ impl Actor {
         let recovered_lane_block_execution_inputs = subsystems
             .committed_lane_blocks
             .recover_available_payloads_into_kura(state.kura());
+        let recorded_lane_block_application_receipts_before_preflight = subsystems
+            .committed_lane_blocks
+            .record_available_payload_application_receipts_into_kura(state.kura());
+        let pruned_canonical_receipted_committed_lane_blocks = subsystems
+            .committed_lane_blocks
+            .prune_application_receipted_sessions(state.kura());
         let preflighted_lane_block_execution_inputs = subsystems
             .committed_lane_blocks
             .preflight_recovered_execution_inputs_into_kura(&state);
@@ -22197,10 +22288,12 @@ impl Actor {
             );
         let recorded_lane_block_application_receipts = subsystems
             .committed_lane_blocks
-            .record_available_payload_application_receipts_into_kura(state.kura());
+            .record_available_payload_application_receipts_into_kura(state.kura())
+            .saturating_add(recorded_lane_block_application_receipts_before_preflight);
         let pruned_applied_committed_lane_blocks = subsystems
             .committed_lane_blocks
-            .prune_application_receipted_sessions(state.kura());
+            .prune_application_receipted_sessions(state.kura())
+            .saturating_add(pruned_canonical_receipted_committed_lane_blocks);
         let committed_lane_block_status = subsystems
             .committed_lane_blocks
             .status_snapshot_for_state(&state);
@@ -23878,6 +23971,10 @@ impl Actor {
             // commit height advances mid-tick.
             progress |= self.tick_mode_management();
         }
+        let lane_block_vote_progress = {
+            let _view_ctx = StateViewContextGuard::new("sumeragi.tick.lane_block_votes");
+            self.broadcast_ready_local_lane_block_votes()
+        };
         let committed_lane_block_progress = {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.committed_lane_blocks");
             self.queue_committed_lane_block_sessions()
@@ -24000,6 +24097,7 @@ impl Actor {
             || adaptive_progress
             || refresh_progress
             || committed_progress
+            || lane_block_vote_progress
             || committed_lane_block_progress
             || deferred_qc_progress
             || deferred_missing_payload_progress
@@ -24732,21 +24830,36 @@ impl Actor {
 
     fn maybe_cache_rehydrated_kura_body(&self, block: &SignedBlock) {
         let block_hash = block.hash();
-        if !matches!(
+        if matches!(
             self.kura.block_body_status_by_hash(block_hash),
             Some(
                 crate::kura::BlockBodyStatus::RemoteOnly { .. }
                     | crate::kura::BlockBodyStatus::Missing
             )
-        ) {
-            return;
-        }
-        if let Err(err) = self.kura.cache_block_body(block) {
+        ) && let Err(err) = self.kura.cache_block_body(block)
+        {
             warn!(
                 ?err,
                 height = block.header().height().get(),
                 block = %block_hash,
                 "failed to cache rehydrated Kura block body"
+            );
+        }
+
+        let height = block.header().height().get();
+        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let has_lane_payload_ownerships = block
+            .execution_context()
+            .is_some_and(|bundle| !bundle.lane_payload_ownerships.is_empty());
+        if height <= committed_height
+            && has_lane_payload_ownerships
+            && let Err(err) = self.kura.store_block(Arc::new(block.clone()))
+        {
+            warn!(
+                ?err,
+                height,
+                block = %block_hash,
+                "failed to refresh Kura lane payload sidecars from certified block body"
             );
         }
     }
@@ -25120,7 +25233,9 @@ impl Actor {
             BlockMessage::RbcDeliver(deliver) => self.handle_rbc_deliver(deliver),
             BlockMessage::FetchPendingBlock(request) => self.handle_fetch_pending_block(request),
             BlockMessage::Proposal(proposal) => self.handle_proposal(proposal),
-            BlockMessage::LaneBlockProposal(proposal) => self.handle_lane_block_proposal(proposal),
+            BlockMessage::LaneBlockProposal(proposal) => {
+                self.handle_incoming_lane_block_proposal(proposal)
+            }
             BlockMessage::LaneBlockVote(vote) => self.handle_lane_block_vote(vote, sender.as_ref()),
             BlockMessage::LaneBlockQc(qc) => self.handle_lane_block_qc(qc),
         };
@@ -27500,6 +27615,8 @@ impl Actor {
                 BlockMessage::Proposal(_)
                     | BlockMessage::ProposalHint(_)
                     | BlockMessage::LaneBlockProposal(_)
+                    | BlockMessage::LaneBlockQc(_)
+                    | BlockMessage::LaneBlockVote(_)
                     | BlockMessage::BlockCreated(_)
                     | BlockMessage::BlockBodyResponse(_)
                     | BlockMessage::RbcInit(_)
@@ -38931,11 +39048,13 @@ impl Actor {
             .max(Duration::from_millis(1));
         let committed_height = self.committed_height_snapshot();
         let current_view = self.phase_tracker.current_view(height).unwrap_or(0);
-        let local_leader_can_make_frontier_progress = height == committed_height.saturating_add(1)
-            && self.queue.active_len() > 0
-            && self.pending_block_count_for_height(height) == 0
-            && !self.slot_has_round_liveness(height, current_view)
-            && self.local_is_round_leader(height, current_view);
+        let queued_empty_frontier_can_make_progress = queued_empty_frontier_can_make_progress(
+            height,
+            committed_height,
+            self.queue.active_len(),
+            self.pending_block_count_for_height(height),
+            self.slot_has_round_liveness(height, current_view),
+        );
         if !self.missing_qc_height_has_unresolved_dependency_at_height(height) {
             let _ = self.clear_non_actionable_missing_dependencies_for_height(
                 height,
@@ -38945,13 +39064,14 @@ impl Actor {
             self.clear_missing_block_recovery_for_height(height, now);
             return false;
         }
-        if local_leader_can_make_frontier_progress {
+        if queued_empty_frontier_can_make_progress {
             self.clear_missing_block_recovery_for_height_preserving_frontier_state(height, now);
             debug!(
                 height,
                 view = current_view,
                 queue_len = self.queue.active_len(),
-                "allowing local leader proposal despite same-height missing dependency"
+                local_leader = self.local_is_round_leader(height, current_view),
+                "allowing queued empty-frontier proposal path despite same-height missing dependency"
             );
             return false;
         }

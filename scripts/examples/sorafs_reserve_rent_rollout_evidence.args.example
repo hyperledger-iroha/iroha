@@ -5,6 +5,10 @@
 artifacts/sorafs/reserve-rent/staged
 --summary-out
 artifacts/sorafs/reserve-rent/staged/rollout-summary.json
+--require-kind
+policy_config,quote_matrix,ledger_digest,lifecycle_service,signed_routes,reserve_movement,credit_line,appeal_policy,metrics_alerts,provider_bake,governance_approval
+--now-unix
+1800400000
 --max-ledger-age-secs
 604800
 --max-lifecycle-lag-secs

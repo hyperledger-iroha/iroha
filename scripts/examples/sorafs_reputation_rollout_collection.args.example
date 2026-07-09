@@ -30,6 +30,12 @@ provider-a=/runtime/sorafs/reputation/provider-a-proof.to
 artifacts/sorafs/reputation/staged
 --summary-out
 artifacts/sorafs/reputation/staged/rollout-summary.json
+--now-unix
+1800400000
+--max-snapshot-age-secs
+691200
+--max-ingest-lag-secs
+900
 --watch-since
 0
 --watch-limit

@@ -368,7 +368,7 @@ def validation_options(args: argparse.Namespace) -> ValidationOptions:
     """Return checker options used to prevalidate generated release evidence."""
 
     return ValidationOptions(
-        now_unix=args.now_unix or args.generated_at_unix,
+        now_unix=args.now_unix,
         max_evidence_age_secs=DEFAULT_MAX_EVIDENCE_AGE_SECS,
         min_release_targets=DEFAULT_MIN_RELEASE_TARGETS,
         min_downstream_packages=DEFAULT_MIN_DOWNSTREAM_PACKAGES,
@@ -446,7 +446,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--deployment-id", required=True)
     parser.add_argument("--environment", required=True)
     parser.add_argument("--generated-at-unix", type=positive_int_arg, required=True)
-    parser.add_argument("--now-unix", type=positive_int_arg)
+    parser.add_argument("--now-unix", type=positive_int_arg, required=True)
     parser.add_argument("--release-manifest-digest-hex")
     parser.add_argument("--manifest-digest-hex")
     parser.add_argument("--archive-index-digest-hex")

@@ -3980,8 +3980,32 @@ def verify_manifest(
     compact_schema_only = [
         schema for schema in compact_schemas if schema["path"] not in backed_schema_paths
     ]
+    schema_validated_fixture_count = sum(
+        1 for fixture in fixtures if fixture["schema_validated"]
+    )
+    ok = (
+        not _path_is_repository_iso_fixture(str(path))
+        and args.require_schema_backed_fixtures
+        and args.require_fixture_for_schema
+        and args.require_profile_schema_backed_versions
+        and args.validate_xml_schema
+        and len(schemas) > 0
+        and len(fixtures) > 0
+        and len(missing_schema_fixtures) == 0
+        and len(compact_schema_only) == 0
+        and len(blocked_schema_sources) == 0
+        and len(pending_schema_sources) == 0
+        and profile_catalog is not None
+        and profile_catalog["checked_versions"] > 0
+        and profile_catalog["schema_backed_versions"]
+        == profile_catalog["checked_versions"]
+        and len(missing_profile_schema_versions) == 0
+        and len(unreviewed_profile_schema_message_ids) == 0
+        and schema_validated_fixture_count == len(fixtures)
+    )
     summary: dict[str, Any] = {
         "version": SUMMARY_VERSION,
+        "ok": ok,
         "verified_at": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat(),
         "manifest": str(path),
         "manifest_sha256": sha256_hex(manifest_bytes),
@@ -3990,9 +4014,7 @@ def verify_manifest(
         "blocked_schema_source_count": len(blocked_schema_sources),
         "pending_schema_source_count": len(pending_schema_sources),
         "schema_backed_fixtures": len(fixtures) - len(missing_schema_fixtures),
-        "schema_validated_fixtures": sum(
-            1 for fixture in fixtures if fixture["schema_validated"]
-        ),
+        "schema_validated_fixtures": schema_validated_fixture_count,
         "profile_checked_versions": (
             profile_catalog["checked_versions"] if profile_catalog else 0
         ),

@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import re
 import sys
-import time
 from collections import Counter
 from dataclasses import dataclass
 from html import unescape
@@ -4011,7 +4010,9 @@ def validate_summary_artifact(
     require_optional_artifact_label(artifact, "schema", path, errors)
     require_optional_artifact_label(artifact, "status", path, errors)
     status = canonical_string(artifact.get("status"))
-    if status is not None and status not in SUCCESS_ARTIFACT_STATUSES:
+    if status is None:
+        errors.append(f"{path}.status must be canonical")
+    elif status not in SUCCESS_ARTIFACT_STATUSES:
         errors.append(f"{path}.status must be a successful status")
     if artifact.get("valid") is not True:
         errors.append(f"{path}.valid must be true")
@@ -5252,8 +5253,8 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--now-unix",
         type=positive_int_arg,
-        default=int(time.time()),
-        help="Validator clock used for artifact age checks. Defaults to current Unix time.",
+        required=True,
+        help="Required reviewed validator clock used for artifact age checks.",
     )
     parser.add_argument(
         "--max-summary-artifact-age-secs",

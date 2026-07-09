@@ -5935,7 +5935,7 @@ function decodedPublicBlockerText(value) {
 function publicProductionBlockerSensitiveProblem(entries, label) {
   for (const [index, entry] of entries.entries()) {
     if (PUBLIC_BLOCKER_SENSITIVE_PATTERN.test(
-      decodedPublicBlockerText(String(entry)),
+      normalizedDecodedPublicBlockerText(entry),
     )) {
       return `${label}[${index}] contains sensitive name`;
     }
@@ -5943,8 +5943,15 @@ function publicProductionBlockerSensitiveProblem(entries, label) {
   return null;
 }
 
+function normalizedDecodedPublicBlockerText(value) {
+  return decodedPublicBlockerText(String(value))
+    .split(" ")
+    .filter((part) => part.length > 0)
+    .join(" ");
+}
+
 function canonicalPublicBlockerKey(value) {
-  return decodedPublicBlockerText(String(value)).toLowerCase();
+  return normalizedDecodedPublicBlockerText(value).toLowerCase();
 }
 
 function publicProductionBlockerDuplicateProblem(entries, label) {
@@ -10386,9 +10393,12 @@ export async function signBscGroth16AttestationRole(options = {}) {
   const explicitOutPath = optionalPath(options, "out");
   if (explicitOutPath) {
     assertDistinctResolvedPaths(explicitOutPath, "--out", requestOption, "--request");
-    if (resolve(explicitOutPath) === resolve(String(privateKeyOption))) {
-      throw new Error("attestation signing output must not overwrite the private key file.");
-    }
+    assertDistinctResolvedPaths(
+      explicitOutPath,
+      "--out",
+      privateKeyOption,
+      "--private-key-pem",
+    );
   }
   const requestPath = await assertReadableRegularFile(
     requestOption,
@@ -10464,9 +10474,7 @@ export async function signBscGroth16AttestationRole(options = {}) {
     explicitOutPath ??
     join(dirname(requestPath), `${profile.key}-bsc-groth16-${roleKey}-attestation.json`);
   assertDistinctResolvedPaths(outPath, "--out", requestPath, "--request");
-  if (resolve(outPath) === privateKeyPath) {
-    throw new Error("attestation signing output must not overwrite the private key file.");
-  }
+  assertDistinctResolvedPaths(outPath, "--out", privateKeyPath, "--private-key-pem");
   await writePublicJson(outPath, record);
   return {
     ok: true,

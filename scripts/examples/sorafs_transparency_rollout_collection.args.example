@@ -23,6 +23,10 @@ staging
 artifacts/sorafs/transparency/staged
 --summary-out
 artifacts/sorafs/transparency/staged/rollout-summary.json
+--now-unix
+1800400000
+--max-evidence-age-secs
+604800
 --limit
 50
 --timeout-secs

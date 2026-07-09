@@ -285,6 +285,53 @@ def test_unreviewed_environment_fails_before_write(
     )
 
 
+def test_now_unix_is_required_for_freshness_validation(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = complete_args(tmp_path)
+    now_index = args.index("--now-unix")
+    del args[now_index : now_index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--now-unix" in captured.err
+    assert "required" in captured.err
+    assert not canary_path(tmp_path).exists()
+
+
+def test_future_generated_at_unix_fails_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = complete_args(tmp_path)
+    args[args.index("--generated-at-unix") + 1] = str(GENERATED_AT + 1)
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "generated_at_unix must not be in the future" in captured.err
+    assert str(GENERATED_AT + 1) not in captured.err
+    assert not canary_path(tmp_path).exists()
+
+
+def test_stale_generated_at_unix_fails_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = complete_args(tmp_path)
+    stale_generated_at = GENERATED_AT - CHECKER.DEFAULT_MAX_CANARY_AGE_SECS - 1
+    args[args.index("--generated-at-unix") + 1] = str(stale_generated_at)
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "generated_at_unix is older than 86400 seconds" in captured.err
+    assert str(stale_generated_at) not in captured.err
+    assert not canary_path(tmp_path).exists()
+
+
 def test_generated_canary_passes_existing_evidence_viewer_gate(tmp_path: Path) -> None:
     assert MODULE.main(complete_args(tmp_path)) == 0
     write_json(tmp_path / "appeal-intake.json", appeal_intake())

@@ -4073,6 +4073,86 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
     tx_queue.insert("capacity".into(), Value::from(wire.tx_queue_capacity));
     tx_queue.insert("saturated".into(), Value::from(wire.tx_queue_saturated));
 
+    let mut proposal_gate = Map::new();
+    proposal_gate.insert("height".into(), Value::from(wire.proposal_gate.height));
+    proposal_gate.insert("view".into(), Value::from(wire.proposal_gate.view));
+    proposal_gate.insert(
+        "queue_len".into(),
+        Value::from(wire.proposal_gate.queue_len),
+    );
+    proposal_gate.insert(
+        "pending_blocks_total".into(),
+        Value::from(wire.proposal_gate.pending_blocks_total),
+    );
+    proposal_gate.insert(
+        "pending_blocks_blocking".into(),
+        Value::from(wire.proposal_gate.pending_blocks_blocking),
+    );
+    proposal_gate.insert(
+        "active_pending_for_tip".into(),
+        Value::from(wire.proposal_gate.active_pending_for_tip),
+    );
+    proposal_gate.insert(
+        "queue_saturated".into(),
+        Value::from(wire.proposal_gate.queue_saturated),
+    );
+    proposal_gate.insert(
+        "active_pending".into(),
+        Value::from(wire.proposal_gate.active_pending),
+    );
+    proposal_gate.insert(
+        "rbc_backlog".into(),
+        Value::from(wire.proposal_gate.rbc_backlog),
+    );
+    proposal_gate.insert(
+        "relay_backpressure".into(),
+        Value::from(wire.proposal_gate.relay_backpressure),
+    );
+    proposal_gate.insert(
+        "consensus_queue_backpressure".into(),
+        Value::from(wire.proposal_gate.consensus_queue_backpressure),
+    );
+    proposal_gate.insert(
+        "should_defer".into(),
+        Value::from(wire.proposal_gate.should_defer),
+    );
+    proposal_gate.insert(
+        "only_pacing_backpressure".into(),
+        Value::from(wire.proposal_gate.only_pacing_backpressure),
+    );
+    proposal_gate.insert(
+        "commit_inflight_active".into(),
+        Value::from(wire.proposal_gate.commit_inflight_active),
+    );
+    proposal_gate.insert(
+        "cached_proposal_present".into(),
+        Value::from(wire.proposal_gate.cached_proposal_present),
+    );
+    proposal_gate.insert(
+        "cached_proposal_hint_present".into(),
+        Value::from(wire.proposal_gate.cached_proposal_hint_present),
+    );
+    proposal_gate.insert(
+        "round_liveness_present".into(),
+        Value::from(wire.proposal_gate.round_liveness_present),
+    );
+    proposal_gate.insert(
+        "frontier_owner_present".into(),
+        Value::from(wire.proposal_gate.frontier_owner_present),
+    );
+    proposal_gate.insert(
+        "missing_qc_liveness_active".into(),
+        Value::from(wire.proposal_gate.missing_qc_liveness_active),
+    );
+    proposal_gate.insert(
+        "last_pacemaker_attempt_age_ms".into(),
+        Value::from(wire.proposal_gate.last_pacemaker_attempt_age_ms),
+    );
+    proposal_gate.insert(
+        "last_successful_proposal_age_ms".into(),
+        Value::from(wire.proposal_gate.last_successful_proposal_age_ms),
+    );
+
     let queue_depths_value = |depths: &SumeragiWorkerQueueDepths| {
         let mut map = Map::new();
         map.insert("vote_rx".into(), Value::from(depths.vote_rx));
@@ -4562,6 +4642,13 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
             Value::Object(map)
         })
         .collect();
+    let lane_block_sessions: Vec<Value> = wire
+        .lane_block_sessions
+        .iter()
+        .map(|entry| {
+            norito::json::to_value(entry).expect("serialize lane-block session status to JSON")
+        })
+        .collect();
     let lane_governance: Vec<Value> = wire
         .lane_governance
         .iter()
@@ -4688,6 +4775,7 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
     root.insert("highest_qc".into(), Value::Object(highest));
     root.insert("locked_qc".into(), Value::Object(locked));
     root.insert("tx_queue".into(), Value::Object(tx_queue));
+    root.insert("proposal_gate".into(), Value::Object(proposal_gate));
     root.insert("worker_loop".into(), Value::Object(worker_loop));
     root.insert("commit_inflight".into(), Value::Object(commit_inflight));
     root.insert(
@@ -4859,6 +4947,10 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
     root.insert(
         "committed_lane_blocks".into(),
         Value::Array(committed_lane_blocks),
+    );
+    root.insert(
+        "lane_block_sessions".into(),
+        Value::Array(lane_block_sessions),
     );
     root.insert(
         "lane_governance_sealed_total".into(),
@@ -19642,7 +19734,29 @@ mod tests {
                 drop_unsolicited_share_blocks_total: 4,
             },
             pacemaker_backpressure_deferrals_total: 6,
-            proposal_gate: SumeragiProposalGateStatus::default(),
+            proposal_gate: SumeragiProposalGateStatus {
+                height: 13,
+                view: 21,
+                queue_len: 5,
+                pending_blocks_total: 2,
+                pending_blocks_blocking: 1,
+                active_pending_for_tip: 0,
+                queue_saturated: false,
+                active_pending: false,
+                rbc_backlog: true,
+                relay_backpressure: false,
+                consensus_queue_backpressure: true,
+                should_defer: true,
+                only_pacing_backpressure: false,
+                commit_inflight_active: false,
+                cached_proposal_present: false,
+                cached_proposal_hint_present: true,
+                round_liveness_present: false,
+                frontier_owner_present: true,
+                missing_qc_liveness_active: true,
+                last_pacemaker_attempt_age_ms: 123,
+                last_successful_proposal_age_ms: 456,
+            },
             commit_pipeline_tick_total: 0,
             da_reschedule_total: 0,
             missing_block_fetch: SumeragiMissingBlockFetchStatus {
@@ -19748,6 +19862,7 @@ mod tests {
             lane_relay_envelopes: vec![relay_envelope.clone()],
             lane_payload_ownerships: Vec::new(),
             committed_lane_blocks: Vec::new(),
+            lane_block_sessions: Vec::new(),
             lane_governance_sealed_total: 0,
             lane_governance_sealed_aliases: Vec::new(),
             lane_governance: vec![iroha_data_model::block::consensus::SumeragiLaneGovernance {
@@ -23324,6 +23439,7 @@ mod tests {
             lane_relay_envelopes: vec![relay],
             lane_payload_ownerships: Vec::new(),
             committed_lane_blocks: Vec::new(),
+            lane_block_sessions: Vec::new(),
             lane_governance_sealed_total: 0,
             lane_governance_sealed_aliases: Vec::new(),
             lane_governance: vec![iroha_data_model::block::consensus::SumeragiLaneGovernance {
@@ -23686,7 +23802,29 @@ mod tests {
                 ..Default::default()
             },
             pacemaker_backpressure_deferrals_total: 6,
-            proposal_gate: SumeragiProposalGateStatus::default(),
+            proposal_gate: SumeragiProposalGateStatus {
+                height: 13,
+                view: 21,
+                queue_len: 5,
+                pending_blocks_total: 2,
+                pending_blocks_blocking: 1,
+                active_pending_for_tip: 0,
+                queue_saturated: false,
+                active_pending: false,
+                rbc_backlog: true,
+                relay_backpressure: false,
+                consensus_queue_backpressure: true,
+                should_defer: true,
+                only_pacing_backpressure: false,
+                commit_inflight_active: false,
+                cached_proposal_present: false,
+                cached_proposal_hint_present: true,
+                round_liveness_present: false,
+                frontier_owner_present: true,
+                missing_qc_liveness_active: true,
+                last_pacemaker_attempt_age_ms: 123,
+                last_successful_proposal_age_ms: 456,
+            },
             commit_pipeline_tick_total: 0,
             da_reschedule_total: 0,
             missing_block_fetch: SumeragiMissingBlockFetchStatus {
@@ -23792,6 +23930,7 @@ mod tests {
             lane_relay_envelopes: vec![relay_envelope.clone()],
             lane_payload_ownerships: vec![lane_payload_ownership.clone()],
             committed_lane_blocks: Vec::new(),
+            lane_block_sessions: Vec::new(),
             lane_governance_sealed_total: 0,
             lane_governance_sealed_aliases: Vec::new(),
             lane_governance: vec![iroha_data_model::block::consensus::SumeragiLaneGovernance {
@@ -23903,6 +24042,47 @@ mod tests {
             view_change_causes.get("last_cause").and_then(Value::as_str),
             Some("missing_qc")
         );
+        let proposal_gate = root
+            .get("proposal_gate")
+            .and_then(Value::as_object)
+            .expect("proposal_gate object");
+        for (key, expected) in [
+            ("height", 13),
+            ("view", 21),
+            ("queue_len", 5),
+            ("pending_blocks_total", 2),
+            ("pending_blocks_blocking", 1),
+            ("active_pending_for_tip", 0),
+            ("last_pacemaker_attempt_age_ms", 123),
+            ("last_successful_proposal_age_ms", 456),
+        ] {
+            assert_eq!(
+                proposal_gate.get(key).and_then(Value::as_u64),
+                Some(expected),
+                "proposal_gate.{key} mismatch"
+            );
+        }
+        for (key, expected) in [
+            ("queue_saturated", false),
+            ("active_pending", false),
+            ("rbc_backlog", true),
+            ("relay_backpressure", false),
+            ("consensus_queue_backpressure", true),
+            ("should_defer", true),
+            ("only_pacing_backpressure", false),
+            ("commit_inflight_active", false),
+            ("cached_proposal_present", false),
+            ("cached_proposal_hint_present", true),
+            ("round_liveness_present", false),
+            ("frontier_owner_present", true),
+            ("missing_qc_liveness_active", true),
+        ] {
+            assert_eq!(
+                proposal_gate.get(key).and_then(Value::as_bool),
+                Some(expected),
+                "proposal_gate.{key} mismatch"
+            );
+        }
         let da_gate = root
             .get("da_gate")
             .and_then(Value::as_object)

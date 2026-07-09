@@ -825,6 +825,28 @@ public final class SourceSccpProofsTests {
         .equals("0x14659b4643d3a7961f7f86f46319992444617392c8e84967a3bb2a5ad7bc72fb")
         : "BSC commit seal hash must match Rust";
 
+    final String u64OverflowDecimal = "18446744073709551616";
+    expectThrowsMessage(
+        () ->
+            SourceSccpProofs.canonicalBscValidatorSetPayloadBytes(
+                Collections.singletonList(repeat("11", 20)),
+                Collections.singletonList(u64OverflowDecimal)),
+        "validatorPowers[0] must fit u64");
+    expectThrowsMessage(
+        () ->
+            SourceSccpProofs.canonicalBscCommitSealBytes(
+                new SourceSccpProofs.BscCommitSealProof(
+                    1,
+                    u64OverflowDecimal,
+                    "3",
+                    commitMessageHash,
+                    validatorPublicKeys,
+                    Arrays.asList("1", "1", "1", "1"),
+                    hexBytes("07"),
+                    signatures,
+                    validatorSetHash)),
+        "totalPower must fit u64");
+
     for (final int recoveryId : new int[] {0, 1, 29, 30}) {
       final byte[] rejectedSignature = Arrays.copyOf(signatures.get(0), signatures.get(0).length);
       rejectedSignature[64] = (byte) recoveryId;

@@ -2840,6 +2840,7 @@ mod network_relay_tests {
         let mut descriptor = LaneBlockDescriptorV1 {
             lane_id: LaneId::SINGLE,
             dataspace_id: DataSpaceId::UNIVERSAL,
+            proposal_height: 5,
             previous_lane_block_height: 4,
             previous_lane_block_descriptor_hash: Some(Hash::prehashed([0x50; 32])),
             lane_block_height: 5,
@@ -2861,6 +2862,7 @@ mod network_relay_tests {
         let mut proposal = LaneBlockProposalV1 {
             descriptor,
             proposal_hash: Hash::prehashed([0x56; 32]),
+            payload_block_hint: None,
         };
         proposal.proposal_hash = proposal.computed_proposal_hash();
         proposal

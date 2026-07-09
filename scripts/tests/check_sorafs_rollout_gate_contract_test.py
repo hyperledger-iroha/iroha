@@ -1337,6 +1337,64 @@ def response_args_module():
     return load_script_module(RESPONSE_ARGS_HELPER, "sorafs_response_args_contract")
 
 
+def write_argfile_without_option(source: Path, destination: Path, option: str) -> None:
+    """Write a copy of a newline argfile with one option/value pair removed."""
+
+    lines = source.read_text(encoding="utf-8").splitlines()
+    output: list[str] = []
+    removed = False
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if line == option:
+            removed = True
+            index += 2
+            continue
+        if line.startswith(f"{option} ") or line.startswith(f"{option}="):
+            removed = True
+            index += 1
+            continue
+        output.append(line)
+        index += 1
+
+    assert removed, f"{source.name} did not contain {option}"
+    destination.write_text("\n".join(output) + "\n", encoding="utf-8")
+
+
+def write_argfile_replacing_option_value(
+    source: Path, destination: Path, option: str, value: str
+) -> None:
+    """Write a copy of a newline argfile with one option value replaced."""
+
+    lines = source.read_text(encoding="utf-8").splitlines()
+    output: list[str] = []
+    replaced = False
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if line == option:
+            replaced = True
+            output.append(line)
+            output.append(value)
+            index += 2
+            continue
+        if line.startswith(f"{option} "):
+            replaced = True
+            output.append(f"{option} {value}")
+            index += 1
+            continue
+        if line.startswith(f"{option}="):
+            replaced = True
+            output.append(f"{option}={value}")
+            index += 1
+            continue
+        output.append(line)
+        index += 1
+
+    assert replaced, f"{source.name} did not contain {option}"
+    destination.write_text("\n".join(output) + "\n", encoding="utf-8")
+
+
 def checker_names() -> list[str]:
     return [path.name for path in CHECKERS]
 
@@ -3014,6 +3072,77 @@ def test_canary_argfile_examples_reject_noncanonical_non_timestamp_integer_optio
     assert failures == {}
 
 
+def test_canary_argfile_examples_require_now_unix_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    failures: dict[str, list[str]] = {}
+    covered: list[str] = []
+    examples = sorted(EXAMPLES_DIR.glob("sorafs_*canary.args.example"))
+
+    assert examples
+
+    for example in examples:
+        builder_path = canary_example_builder_path(example)
+        if '"--now-unix"' not in read(builder_path):
+            continue
+        covered.append(example.name)
+        argfile = tmp_path / f"{example.stem}.without-now.args"
+        write_argfile_without_option(example, argfile, "--now-unix")
+        module = load_script_module(
+            builder_path,
+            f"{builder_path.stem}_{example.stem}_missing_now_unix_contract",
+        )
+        output = tmp_path / example.stem / "missing-now" / "canary.json"
+        args = [
+            f"@{argfile}",
+            "--out",
+            str(output),
+        ]
+
+        exit_code = module.main(args)
+        captured = capsys.readouterr()
+
+        file_errors: list[str] = []
+        if exit_code != 2:
+            file_errors.append(f"exit code was {exit_code}")
+        if "--now-unix" not in captured.err or "required" not in captured.err:
+            file_errors.append(f"stderr was {captured.err!r}")
+        if output.exists():
+            file_errors.append(f"wrote {output}")
+        if file_errors:
+            failures[example.name] = file_errors
+
+    assert covered
+    assert failures == {}
+
+
+def test_canary_builders_require_explicit_now_unix_for_freshness() -> None:
+    failures: dict[str, list[str]] = {}
+    covered: list[str] = []
+
+    for path in sorted(SCRIPTS_DIR.glob("build_sorafs_*_canary.py")):
+        source = read(path)
+        if '"--now-unix"' not in source:
+            continue
+        covered.append(path.name)
+        file_errors: list[str] = []
+        if (
+            'parser.add_argument("--now-unix", type=positive_int_arg, required=True)'
+            not in source
+        ):
+            file_errors.append("parser")
+        if "args.now_unix or args.generated_at_unix" in source:
+            file_errors.append("fallback")
+        if "now_unix=args.now_unix" not in source:
+            file_errors.append("validation")
+        if file_errors:
+            failures[path.name] = file_errors
+
+    assert covered
+    assert failures == {}
+
+
 def test_canary_builder_tests_keep_standardized_closed_set_matrix() -> None:
     missing = [
         path.name
@@ -3979,6 +4108,7 @@ def generic_object_array_checkers() -> set[str]:
 
 def positive_int_arg_checkers() -> set[str]:
     return {
+        "check_sorafs_ai_prescreen_rollout_evidence.py",
         "check_sorafs_appeal_finance_rollout_evidence.py",
         "check_sorafs_gateway_compliance_rollout_evidence.py",
         "check_sorafs_gateway_load_rollout_evidence.py",
@@ -3994,12 +4124,14 @@ def positive_int_arg_checkers() -> set[str]:
         "check_sorafs_repair_rollout_evidence.py",
         "check_sorafs_reputation_rollout_evidence.py",
         "check_sorafs_reserve_rent_rollout_evidence.py",
+        "check_sorafs_transparency_rollout_evidence.py",
         "check_sorafs_production_readiness.py",
     }
 
 
 def non_negative_int_arg_checkers() -> set[str]:
     return {
+        "check_sorafs_ai_prescreen_rollout_evidence.py",
         "check_sorafs_appeal_finance_rollout_evidence.py",
         "check_sorafs_gateway_compliance_rollout_evidence.py",
         "check_sorafs_gateway_load_rollout_evidence.py",
@@ -4014,6 +4146,7 @@ def non_negative_int_arg_checkers() -> set[str]:
         "check_sorafs_reference_sdk_release_evidence.py",
         "check_sorafs_repair_rollout_evidence.py",
         "check_sorafs_reserve_rent_rollout_evidence.py",
+        "check_sorafs_transparency_rollout_evidence.py",
         "check_sorafs_production_readiness.py",
     }
 
@@ -4024,6 +4157,7 @@ def positive_int_arg_runners() -> set[str]:
 
 def non_negative_int_arg_runners() -> set[str]:
     return {
+        "run_sorafs_ai_prescreen_rollout_evidence.py",
         "run_sorafs_appeal_finance_rollout_evidence.py",
         "run_sorafs_gateway_compliance_rollout_evidence.py",
         "run_sorafs_gateway_load_rollout_evidence.py",
@@ -4039,6 +4173,7 @@ def non_negative_int_arg_runners() -> set[str]:
         "run_sorafs_repair_rollout_evidence.py",
         "run_sorafs_reputation_rollout_evidence.py",
         "run_sorafs_reserve_rent_rollout_evidence.py",
+        "run_sorafs_transparency_rollout_evidence.py",
         "run_sorafs_production_readiness.py",
     }
 
@@ -4176,6 +4311,36 @@ def command_option_values(command: object, option: str) -> list[str]:
             values.append(command[index].split("=", 1)[1])
         index += 1
     return values
+
+
+def argfile_option_values(path: Path, option: str) -> list[str]:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    values: list[str] = []
+    prefix = f"{option}="
+    spaced_prefix = f"{option} "
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if line == option:
+            assert index + 1 < len(lines), f"{path.name} has dangling {option}"
+            values.append(lines[index + 1])
+            index += 2
+            continue
+        if line.startswith(prefix):
+            values.append(line.split("=", 1)[1])
+        elif line.startswith(spaced_prefix):
+            values.append(line.split(maxsplit=1)[1])
+        index += 1
+    return values
+
+
+def comma_split_argfile_values(values: list[str]) -> list[str]:
+    return [
+        item.strip()
+        for value in values
+        for item in value.split(",")
+        if item.strip()
+    ]
 
 
 def command_output_values(command: object) -> list[str]:
@@ -4637,6 +4802,285 @@ def test_rollout_checker_examples_document_runtime_only_evidence() -> None:
     assert missing == {}
 
 
+def test_rollout_checker_examples_pin_freshness_controls() -> None:
+    failures: dict[str, list[str]] = {}
+    freshness_options = (
+        "--now-unix",
+        "--max-evidence-age-secs",
+        "--max-snapshot-age-secs",
+        "--max-ingest-lag-secs",
+        "--max-summary-artifact-age-secs",
+        "--max-canary-age-secs",
+        "--max-dashboard-age-secs",
+        "--max-cycle-age-secs",
+        "--max-root-age-secs",
+        "--max-revocation-age-secs",
+        "--max-ledger-age-secs",
+        "--max-bake-age-secs",
+        "--max-head-age-secs",
+    )
+    examples = [(path, checker_example(path)) for path in CHECKERS]
+    examples.append(
+        (
+            PRODUCTION_READINESS_CHECKER,
+            EXAMPLES_DIR / "sorafs_production_readiness.args.example",
+        )
+    )
+
+    for path, example in examples:
+        source = read(path)
+        parser_source = (
+            function_source(path, "build_parser")
+            if "def build_parser" in source
+            else function_source(path, "parse_args")
+        )
+        example_source = read(example)
+        missing = [
+            option
+            for option in freshness_options
+            if f'"{option}"' in parser_source and option not in example_source
+        ]
+        if missing:
+            failures[path.name] = missing
+
+    assert failures == {}
+
+
+def test_rollout_checker_examples_pin_summary_outputs_inside_evidence_dir() -> None:
+    failures: dict[str, list[str]] = {}
+
+    for path in CHECKERS:
+        example = checker_example(path)
+        evidence_dirs = argfile_option_values(example, "--evidence-dir")
+        summary_outputs = argfile_option_values(example, "--summary-out")
+        file_errors: list[str] = []
+
+        if len(evidence_dirs) != 1:
+            file_errors.append(f"--evidence-dir:{evidence_dirs!r}")
+        if len(summary_outputs) != 1:
+            file_errors.append(f"--summary-out:{summary_outputs!r}")
+        if len(evidence_dirs) == 1 and len(summary_outputs) == 1:
+            evidence_dir = Path(evidence_dirs[0]).resolve()
+            summary_out = Path(summary_outputs[0]).resolve()
+            try:
+                summary_out.relative_to(evidence_dir)
+            except ValueError:
+                file_errors.append("--summary-out outside --evidence-dir")
+            else:
+                if summary_out == evidence_dir:
+                    file_errors.append("--summary-out equals --evidence-dir")
+
+        runner_path = SCRIPTS_DIR / path.name.replace("check_", "run_", 1)
+        if runner_path in COLLECTION_RUNNERS:
+            collection_example = runner_collection_example(runner_path)
+            collection_out_dirs = argfile_option_values(collection_example, "--out-dir")
+            collection_summary_outputs = argfile_option_values(
+                collection_example, "--summary-out"
+            )
+            if (
+                len(evidence_dirs) == 1
+                and len(summary_outputs) == 1
+                and collection_out_dirs == evidence_dirs
+                and collection_summary_outputs
+                and collection_summary_outputs != summary_outputs
+            ):
+                file_errors.append(
+                    "--summary-out differs from matching collection argfile"
+                )
+
+        if file_errors:
+            failures[path.name] = file_errors
+
+    assert failures == {}
+
+
+def test_rollout_checker_examples_pin_required_kind_scope() -> None:
+    failures: dict[str, list[str]] = {}
+
+    for path in CHECKERS:
+        example = checker_example(path)
+        module = load_script_module(
+            path,
+            f"sorafs_checker_required_kind_scope_contract_{path.stem}",
+        )
+        expected = list(getattr(module, "DEFAULT_REQUIRED_KINDS", ()))
+        actual = comma_split_argfile_values(argfile_option_values(example, "--require-kind"))
+        file_errors: list[str] = []
+        if not actual:
+            file_errors.append("missing --require-kind")
+        if actual != expected:
+            file_errors.append(f"--require-kind:{actual!r} expected:{expected!r}")
+        if len(set(actual)) != len(actual):
+            file_errors.append("--require-kind contains duplicates")
+        if file_errors:
+            failures[path.name] = file_errors
+
+    assert failures == {}
+
+
+def test_rollout_checkers_require_reviewed_now_unix() -> None:
+    failures: dict[str, list[str]] = {}
+
+    for path in [*CHECKERS, PRODUCTION_READINESS_CHECKER]:
+        source = read(path)
+        file_errors: list[str] = []
+        if "int(time.time())" in source:
+            file_errors.append("falls back to verifier wall clock")
+        marker = '"--now-unix"'
+        marker_index = source.find(marker)
+        if marker_index == -1:
+            file_errors.append("missing --now-unix parser option")
+        else:
+            block_start = source.rfind("parser.add_argument", 0, marker_index)
+            block_end = source.find("    parser.add_argument", marker_index + 1)
+            if block_start == -1:
+                file_errors.append("could not locate --now-unix parser block")
+            else:
+                if block_end == -1:
+                    block_end = source.find("    return parser", marker_index)
+                block = source[block_start:block_end]
+                if "required=True" not in block:
+                    file_errors.append("--now-unix parser option is not required")
+        if "import time" in source:
+            file_errors.append("imports time for checker freshness")
+        if file_errors:
+            failures[path.name] = file_errors
+
+    assert failures == {}
+
+
+def test_rollout_checker_examples_require_now_unix_before_loading(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    failures: dict[str, list[str]] = {}
+    examples = [(path, checker_example(path)) for path in CHECKERS]
+    examples.append(
+        (
+            PRODUCTION_READINESS_CHECKER,
+            EXAMPLES_DIR / "sorafs_production_readiness.args.example",
+        )
+    )
+
+    for path, example in examples:
+        module = load_script_module(
+            path,
+            f"sorafs_checker_missing_now_unix_contract_{path.stem}",
+        )
+        argfile = tmp_path / f"{example.stem}.missing-now.args"
+        write_argfile_without_option(example, argfile, "--now-unix")
+        file_errors: list[str] = []
+        try:
+            exit_code = module.main([f"@{argfile}"])
+        except Exception as error:
+            captured = capsys.readouterr()
+            file_errors.append(f"raised {type(error).__name__}: {error}")
+        else:
+            captured = capsys.readouterr()
+            if exit_code != 2:
+                file_errors.append(f"exit code was {exit_code}")
+            if captured.out:
+                file_errors.append(f"unexpected stdout: {captured.out!r}")
+            if "--now-unix" not in captured.err or "required" not in captured.err:
+                file_errors.append(
+                    f"stderr did not report required --now-unix: {captured.err!r}"
+                )
+            if "input evidence file" in captured.err or "must exist and be" in captured.err:
+                file_errors.append(
+                    f"stderr reached evidence loading before argument rejection: {captured.err!r}"
+                )
+            if ROLLOUT_ARGFILE_SECRET_RE.search(captured.err):
+                file_errors.append(
+                    f"stderr contained a secret-looking token: {captured.err!r}"
+                )
+            leaked_diagnostics = [
+                token
+                for token in (
+                    "Traceback",
+                    "FileNotFoundError",
+                    "PermissionError",
+                    "RuntimeError",
+                    "SystemExit",
+                    "ValueError",
+                )
+                if token in captured.err
+            ]
+            if leaked_diagnostics:
+                file_errors.append(
+                    f"stderr leaked raw diagnostic classes: {leaked_diagnostics!r}"
+                )
+        if file_errors:
+            failures[path.name] = file_errors
+
+    assert failures == {}
+
+
+def test_rollout_checker_examples_reject_invalid_now_unix_before_loading(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    failures: dict[str, list[str]] = {}
+    examples = [(path, checker_example(path)) for path in CHECKERS]
+    examples.append(
+        (
+            PRODUCTION_READINESS_CHECKER,
+            EXAMPLES_DIR / "sorafs_production_readiness.args.example",
+        )
+    )
+
+    for path, example in examples:
+        module = load_script_module(
+            path,
+            f"sorafs_checker_invalid_now_unix_contract_{path.stem}",
+        )
+        argfile = tmp_path / f"{example.stem}.invalid-now.args"
+        write_argfile_replacing_option_value(example, argfile, "--now-unix", "0")
+        file_errors: list[str] = []
+        try:
+            exit_code = module.main([f"@{argfile}"])
+        except Exception as error:
+            captured = capsys.readouterr()
+            file_errors.append(f"raised {type(error).__name__}: {error}")
+        else:
+            captured = capsys.readouterr()
+            if exit_code != 2:
+                file_errors.append(f"exit code was {exit_code}")
+            if captured.out:
+                file_errors.append(f"unexpected stdout: {captured.out!r}")
+            if "--now-unix" not in captured.err or "must be positive" not in captured.err:
+                file_errors.append(
+                    f"stderr did not report invalid --now-unix: {captured.err!r}"
+                )
+            if "input evidence file" in captured.err or "must exist and be" in captured.err:
+                file_errors.append(
+                    f"stderr reached evidence loading before argument rejection: {captured.err!r}"
+                )
+            if ROLLOUT_ARGFILE_SECRET_RE.search(captured.err):
+                file_errors.append(
+                    f"stderr contained a secret-looking token: {captured.err!r}"
+                )
+            leaked_diagnostics = [
+                token
+                for token in (
+                    "Traceback",
+                    "FileNotFoundError",
+                    "PermissionError",
+                    "RuntimeError",
+                    "SystemExit",
+                    "ValueError",
+                )
+                if token in captured.err
+            ]
+            if leaked_diagnostics:
+                file_errors.append(
+                    f"stderr leaked raw diagnostic classes: {leaked_diagnostics!r}"
+                )
+        if file_errors:
+            failures[path.name] = file_errors
+
+    assert failures == {}
+
+
 def test_rollout_checker_examples_fail_closed_without_runtime_evidence(capsys) -> None:
     failures: dict[str, list[str]] = {}
     examples = [(path, checker_example(path)) for path in CHECKERS]
@@ -4899,6 +5343,194 @@ def test_rollout_runner_examples_parse_with_runner_parsers() -> None:
             failures[path.name] = detail[-1] if detail else f"SystemExit({error.code})"
         except Exception as error:
             failures[path.name] = f"{type(error).__name__}: {error}"
+
+    assert failures == {}
+
+
+def test_rollout_runner_collection_examples_pin_summary_outputs() -> None:
+    failures: dict[str, str] = {}
+
+    for path in COLLECTION_RUNNERS:
+        parse_source = function_source(path, "parse_args")
+        if '"--summary-out"' not in parse_source:
+            continue
+        example = runner_collection_example(path)
+        module = load_script_module(
+            path,
+            f"sorafs_runner_summary_out_contract_{path.stem}",
+        )
+        stderr = StringIO()
+        try:
+            with redirect_stderr(stderr):
+                args = module.parse_args([f"@{example}", "--dry-run"])
+        except SystemExit as error:
+            detail = stderr.getvalue().strip().splitlines()
+            failures[path.name] = detail[-1] if detail else f"SystemExit({error.code})"
+            continue
+        except Exception as error:
+            failures[path.name] = f"{type(error).__name__}: {error}"
+            continue
+        if getattr(args, "summary_out", None) is None:
+            failures[path.name] = f"{example.name} leaves --summary-out implicit"
+            continue
+        out_dir = Path(args.out_dir).resolve()
+        summary_out = Path(args.summary_out).resolve()
+        try:
+            summary_out.relative_to(out_dir)
+        except ValueError:
+            failures[path.name] = (
+                f"{example.name} writes --summary-out outside --out-dir"
+            )
+        else:
+            if summary_out == out_dir:
+                failures[path.name] = f"{example.name} uses --out-dir as --summary-out"
+
+    assert failures == {}
+
+
+def test_rollout_runner_collection_examples_pin_required_kind_scope() -> None:
+    failures: dict[str, list[str]] = {}
+
+    for path in COLLECTION_RUNNERS:
+        if path == PRODUCTION_READINESS_RUNNER:
+            continue
+        parse_source = function_source(path, "parse_args")
+        if '"--require-kind"' not in parse_source:
+            continue
+        example = runner_collection_example(path)
+        module = load_script_module(
+            path,
+            f"sorafs_runner_required_kind_scope_contract_{path.stem}",
+        )
+        expected = list(getattr(module, "DEFAULT_REQUIRED_KINDS", ()))
+        actual = comma_split_argfile_values(argfile_option_values(example, "--require-kind"))
+        file_errors: list[str] = []
+        if not actual:
+            file_errors.append("missing --require-kind")
+        if actual != expected:
+            file_errors.append(f"--require-kind:{actual!r} expected:{expected!r}")
+        if len(set(actual)) != len(actual):
+            file_errors.append("--require-kind contains duplicates")
+        if file_errors:
+            failures[path.name] = file_errors
+
+    assert failures == {}
+
+
+def test_production_readiness_examples_pin_required_gate_scope() -> None:
+    module = load_script_module(
+        PRODUCTION_READINESS_CHECKER,
+        "sorafs_production_readiness_required_gate_scope_contract",
+    )
+    expected = list(module.DEFAULT_REQUIRED_GATES)
+    failures: dict[str, list[str]] = {}
+
+    for example in (
+        EXAMPLES_DIR / "sorafs_production_readiness.args.example",
+        EXAMPLES_DIR / "sorafs_production_readiness_collection.args.example",
+    ):
+        actual = comma_split_argfile_values(argfile_option_values(example, "--require-gate"))
+        file_errors: list[str] = []
+        if not actual:
+            file_errors.append("missing --require-gate")
+        if actual != expected:
+            file_errors.append(f"--require-gate:{actual!r} expected:{expected!r}")
+        if len(set(actual)) != len(actual):
+            file_errors.append("--require-gate contains duplicates")
+        if file_errors:
+            failures[example.name] = file_errors
+
+    assert failures == {}
+
+
+def test_rollout_runner_examples_pin_freshness_controls() -> None:
+    failures: dict[str, list[str]] = {}
+    freshness_options = (
+        "--now-unix",
+        "--max-evidence-age-secs",
+        "--max-snapshot-age-secs",
+        "--max-ingest-lag-secs",
+        "--max-summary-artifact-age-secs",
+        "--max-canary-age-secs",
+        "--max-dashboard-age-secs",
+        "--max-cycle-age-secs",
+        "--max-root-age-secs",
+        "--max-revocation-age-secs",
+        "--max-ledger-age-secs",
+        "--max-bake-age-secs",
+        "--max-head-age-secs",
+    )
+
+    for path in COLLECTION_RUNNERS:
+        parse_source = function_source(path, "parse_args")
+        example = runner_collection_example(path)
+        example_source = read(example)
+        missing: list[str] = []
+        for option in freshness_options:
+            if f'"{option}"' in parse_source and option not in example_source:
+                missing.append(option)
+        if missing:
+            failures[path.name] = missing
+
+    assert failures == {}
+
+
+def test_rollout_runner_examples_reject_invalid_now_unix_before_plan(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    failures: dict[str, list[str]] = {}
+
+    for path in COLLECTION_RUNNERS:
+        example = runner_collection_example(path)
+        module = load_script_module(
+            path,
+            f"sorafs_runner_invalid_now_unix_contract_{path.stem}",
+        )
+        argfile = tmp_path / f"{example.stem}.invalid-now.args"
+        write_argfile_replacing_option_value(example, argfile, "--now-unix", "0")
+        file_errors: list[str] = []
+        try:
+            exit_code = module.main([f"@{argfile}", "--dry-run"])
+        except Exception as error:
+            captured = capsys.readouterr()
+            file_errors.append(f"raised {type(error).__name__}: {error}")
+        else:
+            captured = capsys.readouterr()
+            if exit_code != 2:
+                file_errors.append(f"exit code was {exit_code}")
+            if captured.out:
+                file_errors.append(f"unexpected stdout: {captured.out!r}")
+            if "--now-unix" not in captured.err or "must be positive" not in captured.err:
+                file_errors.append(
+                    f"stderr did not report invalid --now-unix: {captured.err!r}"
+                )
+            if "input evidence file" in captured.err or "must exist and be" in captured.err:
+                file_errors.append(
+                    f"stderr reached evidence loading before argument rejection: {captured.err!r}"
+                )
+            if ROLLOUT_ARGFILE_SECRET_RE.search(captured.err):
+                file_errors.append(
+                    f"stderr contained a secret-looking token: {captured.err!r}"
+                )
+            leaked_diagnostics = [
+                token
+                for token in (
+                    "Traceback",
+                    "FileNotFoundError",
+                    "PermissionError",
+                    "RuntimeError",
+                    "SystemExit",
+                    "ValueError",
+                )
+                if token in captured.err
+            ]
+            if leaked_diagnostics:
+                file_errors.append(
+                    f"stderr leaked raw diagnostic classes: {leaked_diagnostics!r}"
+                )
+        if file_errors:
+            failures[path.name] = file_errors
 
     assert failures == {}
 
@@ -7429,6 +8061,9 @@ def test_android_codegen_sorafs_fixture_replay_uses_no_follow_io() -> None:
     assert "def require_storage_class" in replay
     assert "value not in STORAGE_CLASSES" in replay
     assert "def require_metadata_int" in replay
+    assert "def iso_utc_from_unix_timestamp(value: int) -> str" in replay
+    assert "datetime.datetime.utcnow()" not in replay
+    assert 'timestamp = iso_utc_from_unix_timestamp(fixture_meta["now_unix_secs"])' in replay
     assert "isinstance(value, bool)" in replay
     assert "fixture_name = require_fixture_name(" in replay
     assert "profile_handle = require_profile_handle(" in replay
@@ -7496,6 +8131,7 @@ def test_android_codegen_sorafs_fixture_replay_uses_no_follow_io() -> None:
         "test_require_subprocess_metadata_fields_reject_unsafe_values_without_leaking"
         in replay_test
     )
+    assert "test_build_fixture_example_uses_reviewed_metadata_timestamp" in replay_test
     assert (
         "test_main_rejects_absolute_payload_metadata_path_before_subprocess_without_leaking"
         in replay_test
@@ -8120,6 +8756,7 @@ def test_rollout_runners_preflight_verifier_and_output_targets() -> None:
 
     helper = read(SCRIPTS_DIR / "sorafs_runner_preflight.py")
     helper_test = read(RUNNER_PREFLIGHT_TEST)
+    runner_sources = "\n".join(read(path) for path in COLLECTION_RUNNERS)
     assert "diagnostic_text_is_canonical" in helper
     assert "def _require_error_list" in helper
     assert "def _require_label" in helper
@@ -8131,6 +8768,10 @@ def test_rollout_runners_preflight_verifier_and_output_targets() -> None:
     assert "runner error message must be a non-empty canonical string" in helper
     assert "if not diagnostic_text_is_canonical(error):" in helper
     assert "if not diagnostic_text_is_canonical(label):" in helper
+    assert "--now-unix is required" in helper
+    assert "test_runner_preflight_requires_reviewed_now_unix" in helper_test
+    stale_help = "Defaults to verifier " + "wall clock"
+    assert stale_help not in runner_sources
     assert "paths must be a sequence" in helper
     assert "identity map must be a dictionary" in helper
     assert "identity map entries must be path identities and " in helper
@@ -15541,7 +16182,10 @@ def test_ai_prescreen_canary_builder_is_checked_in() -> None:
     roadmap = read(REPO_ROOT / "roadmap.md")
 
     assert "Build payload-free SoraFS AI pre-screening rollout canary artifacts." in builder
-    assert "validate_evidence_payload(payload)" in builder
+    assert "validate_evidence_payload(" in builder
+    assert "ValidationOptions(" in builder
+    assert "now_unix=args.now_unix" in builder
+    assert 'parser.add_argument("--now-unix", type=positive_int_arg, required=True)' in builder
     assert "REQUIRED_OPERATOR_ROUTES" in builder
     assert "REQUIRED_TRANSPARENCY_SOURCE_KINDS" in builder
     assert "REQUIRED_GOVERNANCE_PRODUCERS" in builder
@@ -21771,6 +22415,8 @@ def test_evidence_viewer_canary_builder_keeps_checker_required_counts() -> None:
     assert "FORBIDDEN_INVENTORY_LABEL_MARKERS" in builder
     assert "require_rollout_deployment_id" in builder
     assert "require_rollout_environment" in builder
+    assert 'parser.add_argument("--now-unix", type=positive_int_arg, required=True)' in builder
+    assert "now_unix=args.now_unix" in builder
     assert "test_unknown_and_duplicate_role_coverage_fails_before_write" in builder_test
     assert "test_unknown_security_control_fails_before_write" in builder_test
     assert "test_duplicate_export_target_fails_before_write" in builder_test
@@ -21778,6 +22424,9 @@ def test_evidence_viewer_canary_builder_keeps_checker_required_counts() -> None:
     assert "test_viewer_session_placeholder_marker_fails_before_write" in builder_test
     assert "test_digest_must_be_exact_lowercase_hex_before_write" in builder_test
     assert "test_long_lived_url_ttl_fails_before_write" in builder_test
+    assert "test_now_unix_is_required_for_freshness_validation" in builder_test
+    assert "test_future_generated_at_unix_fails_before_write" in builder_test
+    assert "test_stale_generated_at_unix_fails_before_write" in builder_test
     assert "test_unreviewed_deployment_id_fails_before_write" in builder_test
     assert "test_unreviewed_environment_fails_before_write" in builder_test
     assert 'payload["audit_log_tamper_rejected"] is True' in builder_test
@@ -23645,7 +24294,10 @@ def test_transparency_canary_builder_is_checked_in() -> None:
     )
 
     assert "Build payload-free SoraFS transparency rollout canary artifacts." in builder
-    assert "validate_evidence_payload(payload)" in builder
+    assert "validate_evidence_payload(" in builder
+    assert "ValidationOptions(" in builder
+    assert "now_unix=args.now_unix" in builder
+    assert 'parser.add_argument("--now-unix", type=positive_int_arg, required=True)' in builder
     assert "DEFAULT_REQUIRED_SOURCE_KINDS" in builder
     assert "REQUIRED_PUBLICATION_ROUTES" in builder
     assert "REQUIRED_PUBLICATION_CYCLE_DETAIL_PROBES" in builder
@@ -24942,6 +25594,10 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert "test_required_and_recognized_artifact_digests_fail_closed_from_config" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
+    assert (
+        "test_required_and_recognized_artifact_digest_shapes_fail_closed_from_config"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
+    )
     assert "test_required_and_recognized_artifact_status_must_be_successful" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
@@ -24951,6 +25607,10 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     )
     assert (
         "test_required_and_recognized_artifact_valid_markers_fail_closed_from_config"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
+    )
+    assert (
+        "test_required_and_recognized_artifact_valid_marker_shapes_fail_closed_from_config"
         in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
     )
     assert "PAYLOAD_FREE_SUMMARY_METADATA_FIELDS" in checker
@@ -25502,6 +26162,10 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
     assert (
+        "test_required_and_recognized_artifact_path_shapes_fail_closed_from_config"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
+    )
+    assert (
         "test_required_and_recognized_artifact_path_variants_fail_closed_from_config"
         in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
     )
@@ -25526,8 +26190,17 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
     assert 'require_optional_artifact_label(artifact, "status", path, errors)' in checker
+    assert ".status must be canonical" in checker
     assert (
         "test_required_and_recognized_artifact_optional_labels_fail_closed_from_config"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
+    )
+    assert (
+        "test_required_and_recognized_artifact_schema_shapes_fail_closed_from_config"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
+    )
+    assert (
+        "test_required_and_recognized_artifact_status_shapes_fail_closed_from_config"
         in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
     )
     assert "PAYLOAD_FREE_ARTIFACT_FIELDS" in checker
@@ -25622,6 +26295,10 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     )
     assert (
         "test_required_and_recognized_malformed_error_lists_fail_closed_from_config"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
+    )
+    assert (
+        "test_required_and_recognized_error_list_shapes_fail_closed_from_config"
         in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
     )
     assert (

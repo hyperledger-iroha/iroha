@@ -439,6 +439,43 @@ def test_require_subprocess_metadata_fields_reject_unsafe_values_without_leaking
             raise AssertionError("unsafe subprocess metadata field was accepted")
 
 
+def test_build_fixture_example_uses_reviewed_metadata_timestamp() -> None:
+    fixture_meta = {
+        "fixture": "multi_peer_parity_v1",
+        "plan_file": "plan.json",
+        "providers_file": "providers.json",
+        "telemetry_file": "telemetry.json",
+        "now_unix_secs": 1_725_000_000,
+    }
+    chunker_fixture = {"chunk_digest_sha3_256": "a" * 64}
+    manifest_report = {
+        "chunking": {
+            "profile_id": "sf1",
+            "namespace": "sorafs",
+            "name": "sf1",
+            "semver": "1.0.0",
+            "handle": "sorafs.sf1@1.0.0",
+            "profile_aliases": ["sorafs.sf1"],
+            "multihash_code": 0x16,
+        },
+        "manifest": {
+            "digest_hex": "b" * 64,
+            "pin_policy": {"min_replicas": 4},
+        },
+        "chunk_digests": [{"digest_blake3": "c" * 64}],
+    }
+
+    example = MODULE.build_fixture_example(
+        fixture_meta,
+        chunker_fixture,
+        manifest_report,
+        MODULE.REPO_ROOT / "target-codex" / "android_codegen" / "report.json",
+    )
+
+    assert example["generated_at"] == "2024-08-30T06:40:00Z"
+    assert example["instruction"]["submitted_epoch"] == fixture_meta["now_unix_secs"]
+
+
 def test_main_rejects_absolute_payload_metadata_path_before_subprocess_without_leaking(
     tmp_path: Path,
     monkeypatch,

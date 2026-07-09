@@ -99,6 +99,8 @@ missing browser/streaming viewer service.
 - `scripts/build_sorafs_evidence_viewer_canary.py` builds the payload-free
   `evidence_viewer` canary from reviewed deployment facts, rejects unreviewed
   `--deployment-id` and `--environment` values before checker prevalidation,
+  requires explicit `--now-unix` freshness context so future or stale
+  `--generated-at-unix` values fail before writing,
   requires every positive control claim explicitly, forces raw
   evidence/session-token/signed URL/watermark-secret/body flags to `false`,
   requires reviewed `moderation-viewer-session-*` `--viewer-session` labels

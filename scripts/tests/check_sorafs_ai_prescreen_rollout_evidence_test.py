@@ -29,6 +29,7 @@ SUBJECT_REFERENCE = "cid:bafyprodmoderation20260701"
 DEPLOYMENT_ID = "ai-prescreen-staging-a"
 ENVIRONMENT = "staging"
 GENERATED_AT = 1_800_000_200
+NOW_UNIX = GENERATED_AT
 
 
 def write_json(path: Path, payload: dict) -> Path:
@@ -42,6 +43,13 @@ def with_context(payload: dict) -> dict:
     payload["environment"] = ENVIRONMENT
     payload["deployment_context_reviewed"] = True
     return payload
+
+
+def validation_options() -> object:
+    return MODULE.ValidationOptions(
+        now_unix=NOW_UNIX,
+        max_evidence_age_secs=MODULE.DEFAULT_MAX_EVIDENCE_AGE_SECS,
+    )
 
 
 def runner(*, status: str = "verified", subject: str = SUBJECT_REFERENCE) -> dict:
@@ -412,7 +420,7 @@ POLICY_BOUND_FIXTURES = (
 
 
 def run_gate(root: Path, *extra: str) -> int:
-    return MODULE.main(["--evidence-dir", str(root), *extra])
+    return MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(root), *extra])
 
 
 def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
@@ -425,7 +433,10 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert payload["schema"] == "sorafs.moderation.ai_prescreen.rollout_evidence_gate.v1"
     assert payload["status"] == "ready"
     assert payload["required"]["operator_workflow"]["valid"] is True
-    assert payload["thresholds"] == {"max_evidence_bytes": MODULE.MAX_EVIDENCE_BYTES}
+    assert payload["thresholds"] == {
+        "max_evidence_bytes": MODULE.MAX_EVIDENCE_BYTES,
+        "max_evidence_age_secs": MODULE.DEFAULT_MAX_EVIDENCE_AGE_SECS,
+    }
     assert payload["recognized_artifact_count"] == 8
     assert payload["valid_runner_bindings"] == [
         {
@@ -441,6 +452,34 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert payload["required"]["runner"]["artifacts"][0]["fingerprint"][
         "deployment_id"
     ] == DEPLOYMENT_ID
+
+
+def test_generated_at_unix_rejects_future_and_stale_artifacts(tmp_path: Path) -> None:
+    cases = (
+        (
+            "future",
+            NOW_UNIX + 1,
+            "generated_at_unix must not be in the future",
+        ),
+        (
+            "stale",
+            NOW_UNIX - MODULE.DEFAULT_MAX_EVIDENCE_AGE_SECS - 1,
+            f"generated_at_unix is older than {MODULE.DEFAULT_MAX_EVIDENCE_AGE_SECS} seconds",
+        ),
+    )
+
+    for label, generated_at, expected_error in cases:
+        root = tmp_path / label
+        root.mkdir()
+        payload = runner()
+        payload["generated_at_unix"] = generated_at
+        write_json(root / "runner.json", payload)
+        summary = root / "summary.json"
+
+        assert run_gate(root, "--require-kind", "runner", "--summary-out", str(summary)) == 1
+
+        report = json.loads(summary.read_text(encoding="utf-8"))
+        assert expected_error in json.dumps(report)
 
 
 def test_bound_fixture_tables_cover_checker_bound_kind_sets() -> None:
@@ -1236,18 +1275,18 @@ def test_runner_and_committee_accept_only_shipped_verdicts() -> None:
         for verdict in allowed:
             payload = build_payload()
             payload["verdict"] = verdict
-            kind, errors = MODULE.validate_evidence_payload(payload)
+            kind, errors = MODULE.validate_evidence_payload(payload, validation_options())
             assert kind in {"runner", "committee"}
             assert errors == []
 
         payload = build_payload()
         payload["verdict"] = "allow"
-        _kind, errors = MODULE.validate_evidence_payload(payload)
+        _kind, errors = MODULE.validate_evidence_payload(payload, validation_options())
         assert expected_error in errors
 
         payload = build_payload()
         payload["verdict"] = " Quarantine "
-        _kind, errors = MODULE.validate_evidence_payload(payload)
+        _kind, errors = MODULE.validate_evidence_payload(payload, validation_options())
         assert "validation value must be a non-empty canonical string" in errors
 
 
@@ -2555,7 +2594,7 @@ def test_explicit_unknown_schema_fails(tmp_path: Path) -> None:
         {"schema": "sorafs.moderation.unexpected.v1", "status": "passed"},
     )
 
-    assert MODULE.main(["--evidence", str(path)]) == 1
+    assert MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence", str(path)]) == 1
 
 
 def test_unknown_schema_in_directory_is_ignored_for_subset_gate(tmp_path: Path) -> None:
@@ -2583,7 +2622,7 @@ def test_response_file_arguments_are_supported(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    assert MODULE.main([f"@{args_file}"]) == 0
+    assert MODULE.main(["--now-unix", str(NOW_UNIX), f"@{args_file}"]) == 0
 
 
 def test_invalid_optional_recognized_artifact_fails_subset_gate(tmp_path: Path) -> None:

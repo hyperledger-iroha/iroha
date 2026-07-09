@@ -60138,6 +60138,14 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             .map(committed_lane_block_json)
             .collect(),
     );
+    let lane_block_sessions = Value::Array(
+        snap.lane_block_sessions
+            .iter()
+            .map(|entry| {
+                json::to_value(entry).expect("serialize lane-block session status for status")
+            })
+            .collect(),
+    );
     let dataspace_commitments = Value::Array(
         snap.dataspace_commitments
             .iter()
@@ -60746,6 +60754,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("lane_relay_envelopes", lane_relay_envelopes),
         json_entry("lane_payload_ownerships", lane_payload_ownerships),
         json_entry("committed_lane_blocks", committed_lane_blocks),
+        json_entry("lane_block_sessions", lane_block_sessions),
         json_entry("dataspace_commitments", dataspace_commitments),
         json_entry("lane_governance", lane_governance),
         json_entry(
@@ -60984,6 +60993,7 @@ mod status_tests {
         let mut descriptor = LaneBlockDescriptorV1 {
             lane_id: LaneId::new(7),
             dataspace_id: DataSpaceId::new(11),
+            proposal_height: 13,
             previous_lane_block_height: 12,
             previous_lane_block_descriptor_hash: Some(Hash::prehashed([0x61; Hash::LENGTH])),
             lane_block_height: 13,
@@ -61005,6 +61015,7 @@ mod status_tests {
         let mut proposal = LaneBlockProposalV1 {
             descriptor,
             proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+            payload_block_hint: None,
         };
         proposal.proposal_hash = proposal.computed_proposal_hash();
         let prepare_qc = LaneBlockQcV1 {
@@ -63919,6 +63930,7 @@ pub async fn handle_v1_sumeragi_status(
                 .iter()
                 .map(committed_lane_block_wire)
                 .collect(),
+            lane_block_sessions: snap.lane_block_sessions.clone(),
             lane_governance_sealed_total: snap.lane_governance_sealed_total,
             lane_governance_sealed_aliases: snap.lane_governance_sealed_aliases.clone(),
             lane_governance: snap

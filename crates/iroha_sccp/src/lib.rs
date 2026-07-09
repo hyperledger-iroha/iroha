@@ -8558,11 +8558,11 @@ fn sccp_manifest_matches_domain_production_backend(manifest: &SccpProofManifestV
 }
 
 fn sccp_allow_unready_transparent_proof_bypass_enabled(allow_unready: bool) -> bool {
-    allow_unready && cfg!(test)
+    allow_unready && cfg!(any(test, feature = "test-fixtures"))
 }
 
 fn sccp_allow_unready_source_proof_bypass_enabled(allow_unready: bool) -> bool {
-    allow_unready && cfg!(test)
+    allow_unready && cfg!(any(test, feature = "test-fixtures"))
 }
 
 fn sccp_manifest_allows_transparent_proofs_internal(

@@ -72,11 +72,14 @@ from sorafs_required_kinds import (  # noqa: E402
 from sorafs_response_args import (  # noqa: E402
     EvidenceArgumentParser,
     expand_response_args,
+    non_negative_int_arg,
+    positive_int_arg,
 )
 
 
 SUMMARY_SCHEMA = "sorafs.transparency.rollout_evidence_gate.v1"
 MAX_EVIDENCE_BYTES = 2 * 1024 * 1024
+DEFAULT_MAX_EVIDENCE_AGE_SECS = 7 * 24 * 60 * 60
 HEX64_LEN = 64
 CYCLE_DETAIL_PROBE_LABEL_PATTERN = re.compile(
     r"^transparency-cycle-detail-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
@@ -111,6 +114,14 @@ class EvidenceKind:
     name: str
     schema: str
     required_false_flags: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ValidationOptions:
+    """Reviewer-controlled freshness options for transparency evidence."""
+
+    now_unix: int
+    max_evidence_age_secs: int
 
 
 EVIDENCE_KINDS: tuple[EvidenceKind, ...] = (
@@ -710,7 +721,10 @@ def validate_kind_specific(kind: EvidenceKind, payload: dict[str, Any], errors: 
         validate_routes(payload, errors)
 
 
-def validate_evidence_payload(payload: dict[str, Any]) -> tuple[str | None, list[str]]:
+def validate_evidence_payload(
+    payload: dict[str, Any],
+    options: ValidationOptions,
+) -> tuple[str | None, list[str]]:
     kind_name, errors = validate_standard_evidence_payload(
         payload,
         SCHEMA_TO_KIND,
@@ -721,7 +735,13 @@ def validate_evidence_payload(payload: dict[str, Any]) -> tuple[str | None, list
         require_reviewed_deployment_context=True,
     )
     if kind_name is not None:
-        require_positive_int(payload, "generated_at_unix", errors)
+        require_recent_timestamp(
+            payload,
+            "generated_at_unix",
+            errors,
+            now_unix=options.now_unix,
+            max_age_secs=options.max_evidence_age_secs,
+        )
     return kind_name, errors
 
 
@@ -758,6 +778,7 @@ def build_summary(
     evidence_files: list[Path],
     required_kinds: tuple[str, ...],
     summary_out: Path | None,
+    options: ValidationOptions,
 ) -> tuple[dict[str, Any], list[str]]:
     errors: list[str] = []
     artifacts_by_kind = init_evidence_artifact_buckets(DEFAULT_REQUIRED_KINDS)
@@ -782,7 +803,7 @@ def build_summary(
         if loaded is None:
             continue
         payload, digest = loaded
-        kind_name, validation_errors = validate_evidence_payload(payload)
+        kind_name, validation_errors = validate_evidence_payload(payload, options)
         if kind_name is None:
             record_explicit_evidence_validation_errors(
                 path, explicit, validation_errors, errors
@@ -886,6 +907,7 @@ def build_summary(
         "required_kinds": required_evidence_kind_names(required_kinds),
         "thresholds": {
             "max_evidence_bytes": MAX_EVIDENCE_BYTES,
+            "max_evidence_age_secs": options.max_evidence_age_secs,
         },
         "evidence_file_count": count_evidence_files(files),
         "recognized_artifact_count": count_evidence_artifacts(artifacts_by_kind),
@@ -936,6 +958,17 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="Optional summary JSON output path.",
     )
+    parser.add_argument(
+        "--now-unix",
+        type=positive_int_arg,
+        required=True,
+        help="Required reviewed validator clock used for age checks.",
+    )
+    parser.add_argument(
+        "--max-evidence-age-secs",
+        type=non_negative_int_arg,
+        default=DEFAULT_MAX_EVIDENCE_AGE_SECS,
+    )
     try:
         expanded = expand_response_args(sys.argv[1:] if argv is None else argv, parser)
     except ValueError as error:
@@ -956,13 +989,21 @@ def main(argv: list[str] | None = None) -> int:
         emit_checker_exception(error)
         return 2
 
+    options = ValidationOptions(
+        now_unix=args.now_unix,
+        max_evidence_age_secs=args.max_evidence_age_secs,
+    )
     preflight_errors = validate_checker_preflight(args)
     if preflight_errors:
         emit_checker_error_lines(preflight_errors)
         return 2
 
     summary, errors = build_summary(
-        args.evidence_dir, args.evidence, required_kinds, args.summary_out
+        args.evidence_dir,
+        args.evidence,
+        required_kinds,
+        args.summary_out,
+        options,
     )
     rendered_summary, summary_errors = render_and_write_checker_summary(
         args.summary_out, summary

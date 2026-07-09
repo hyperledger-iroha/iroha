@@ -1,6 +1,6 @@
 # Engineering Backlog (Detailed Open Work)
 
-Last updated: 2026-07-07
+Last updated: 2026-07-08
 
 The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
 history lives in [`../../status.md`](../../status.md). This file should only
@@ -15,6 +15,25 @@ and sample fixtures now use the normalized config fields, and the targeted
 torii route-manifest tests pass. The single-deploy contract-manifest
 integration test now also reads the nested receipt field and passes with the
 current Torii response shape.
+
+## Multilane localnet default-soak refresh
+
+The cross-dataspace route-probe corridor now has fresh evidence for ownership,
+committed-lane QC, and applied certified-row gates. The successful-swap balance
+gate now queries lane client sets, and committed transaction history now
+requires matching lane-quorum outcomes before it is treated as authoritative.
+Proposal planning now defers lanes with unapplied artifacts/certified blocks,
+Kura can rebuild missing lane-block artifact sidecars from local canonical block
+bodies, and lane-payload ownership status preserves unrelated lanes by
+lane/dataspace upsert. The remaining open work is the DvP lane-block
+application liveness gap: under the 12-peer localnet, route probes can still
+stall before committed/applied lane-block convergence, with one DS lane split
+between executable-payload wait and canonical application while the other DS
+lane has no committed lane-block row. The default 10-iteration soak must be
+refreshed only after that Kura/history vs WSV application boundary is closed;
+the last default run before the quorum-history hardening exited `ok` with only
+3/10 soak iterations passing, so it remains a stress signal rather than release
+evidence.
 
 ## SCCP launch-scope note
 
@@ -108,6 +127,33 @@ serialization stays fixture-only. Source-proof envelopes now also reject
 outer hash-role aliasing between message ids, payload hashes,
 source-event digests, commitment roots, finality block/header hashes, and
 receipt/message roots before material or OpenVerify checks run, and checked
+BSC JavaScript source-proof construction now canonicalizes validator private-key
+aliases, rejects duplicate derived validator addresses, and bounds individual
+plus aggregate validator powers to `u64` before Parlia validator-set or
+commit-seal transcripts are built, so duplicated local signing inputs or
+overflowing powers cannot stand in for a distinct BSC validator quorum. The
+exported JavaScript BSC validator-set payload and commit-seal canonicalizers now
+apply the same `u64` power bounds before deriving verifier-side hashes. Shared
+JavaScript SCCP `u8`, `u16`, `u32`, signed `i32`, and `u64` writers plus
+transparent public-input domain/finality-height normalization now reject
+oversized values before ABI, SSZ, TON, or little-endian transcript bytes can
+silently wrap through `DataView`. Python transcript writers now use the same
+pre-encoding bounds, and Kotlin/JVM plus Java Android SCCP helpers bound `u64`
+ABI, SSZ, TON, Solana, and source-proof transcript fields before byte emission.
+Swift's BSC helper surface now also rejects duplicate validator addresses, zero
+powers, and aggregate `UInt64` commit-seal overflow before Parlia quorum
+transcript bytes are emitted. The .NET SDK now exposes the BSC validator-set
+canonical payload/hash helpers and commit-seal canonicalization/hash helpers,
+rejecting malformed validator-set payloads, non-canonical secp256k1 keys or
+signatures, signer/quorum drift, bitmap padding, and validator-set hash
+mismatches before deriving verifier-side hashes. BSC validator-set payload and
+commit-seal overflow or signer/quorum regressions are pinned across Python,
+Swift, mobile, and C# helper tests, while the release inventory now guards the
+Python/Swift/Kotlin/Java/C# marker set. The focused C# BSC mainnet SCCP test
+filters now pass with a temporary .NET SDK installed outside the repository.
+The focused Kotlin/JVM and Java Android SCCP helper tests now also pass with a
+temporary JDK 21 installed outside the repository, closing the local SDK
+validation gap for this slice. Checked
 source-proof envelope serialization now requires that same base wrapper shape
 before canonical bytes or hashes are emitted. TON live-account destination
 rollout readiness and route-canary evidence now also reject replay between the
@@ -1436,6 +1482,10 @@ verifier rejects public Markdown if the marker is removed.
 	The top-level Blocking Items Markdown list now shares those canonical bullet
 	and hidden-spacing duplicate rules, so copied public blocker lists cannot
 	preserve a blocker marker while adding visually aliased duplicate bullets.
+	Table-cell blocker lists now also match the exact rendered cell text, so
+	release-checklist, native-prover, source-inventory, user-prover, and
+	lane-readiness cells cannot add hidden NBSP/zero-width duplicate blocker
+	aliases while preserving each blocker substring elsewhere in the section.
 	Generated Required Release Evidence now also compares source-inventory marker
 	counts and rendered labels against the generated source-inventory gate set, so
 	new release gates cannot be added without public Markdown invariant coverage.
@@ -1536,6 +1586,9 @@ Those shared public blocker-list validators now also number distinct duplicate
 decoded blocker groups, so raw-plus-encoded duplicate pairs cannot collapse into
 one generic duplicate-string diagnostic while the copied operator blocker text
 stays out of public output.
+Those duplicate keys now also collapse decoded ASCII-space runs before
+comparison, so raw or percent-encoded repeated-space aliases cannot split one
+copied blocker into distinct public blocker keys.
 Strict active-launch blocker collection now also numbers repeated redacted
 malformed, control-character, Markdown-unsafe, non-ASCII, and sensitive
 top-level evidence or active-lane blocker diagnostics while preserving
@@ -1572,10 +1625,10 @@ and strict verifier now pin that decoded key normalization through explicit
 `casefold()` helper regressions, so public blocker routing cannot silently fall
 back to ASCII-only lowercasing.
 Lane-local SCCP source, destination, receipt-proof, and live-evidence helper
-CLIs now also use decoded `casefold()` normalization before sensitive-marker
-redaction, with their helper bodies pinned by the release public scalar-text
-source inventory so direct operator diagnostics cannot silently regress to
-ASCII-only lowercasing.
+CLIs now also use decoded, ASCII-space-normalized `casefold()` normalization
+before sensitive-marker redaction, with their helper bodies pinned by the
+release public scalar-text source inventory so direct operator diagnostics
+cannot silently regress to raw repeated-space aliases or ASCII-only lowercasing.
 Active-launch blocker collection now scopes copied domain-prefixed blockers
 with the same decoded public key, so encoded or case-varied non-active domain
 blockers cannot be reclassified as active launch blockers while active-domain
@@ -2064,31 +2117,40 @@ SCCP raw all-lanes route-canary validation now rejects built-in source-material
 template hashes replayed as EVM/BSC, TON, or TRON transcript fields directly,
 with source-template and route-canary inventory pins for the exact regressions.
 BSC/TRON route-config production blocker lists now also compare
-HTML-entity-decoded and bounded URL-percent-decoded lowercase blocker text for
-duplicates, so encoded copies cannot repeat operator blockers in route-config
-or live-evidence diagnostics. The same decoded blocker text is used for
-sensitive-name matching, including whitespace-separated secret labels such as
-`api token` and `private key`, so encoded copies fail closed before diagnostics
-can echo operator blocker text. These blocker lists must also remain printable
+HTML-entity-decoded, bounded URL-percent-decoded, and ASCII-space-collapsed
+lowercase blocker text for duplicates, so encoded or repeated-space copies
+cannot repeat operator blockers in route-config or live-evidence diagnostics.
+The same decoded ASCII-space-collapsed blocker text is used for sensitive-name
+matching, including repeated-space secret labels such as `api  key` and
+`private  key`, so encoded copies fail closed before diagnostics can echo
+operator blocker text. These blocker lists must also remain printable
 ASCII and control-character-free after bounded decoding too, including encoded
 newline, tab, DEL, and RTL/non-ASCII text, before route-config diagnostics or
 generated TOML can preserve them.
+Generated Required Release Evidence now names that decoded
+ASCII-space-collapsed sensitive-name and duplicate-key blocker gate for the BSC
+and TRON route-config source inventories.
 Release public blocker decoding now runs to a deterministic
 input-length-bounded fixed point across the bundle builder, strict verifier,
 readiness renderer, all-lanes summary, and lane evidence scripts; five-layer
 percent-encoded Markdown markers and deeply nested HTML-entity sensitive names
 must still collapse to fixed public blocker diagnostics before copied operator
 text is rendered.
-BSC Groth16 material `productionBlockers` now apply the same decoded duplicate
-key rule for direct proof-self-test manifests and copied proof-self-test
-reports, so encoded copies cannot repeat operator blockers before preflight or
-proof-self-test diagnostics are rendered. Direct proof-self-test manifest
-blockers must also be non-empty canonical printable ASCII strings without
-control characters after bounded decoding, so encoded newline/tab/DEL or
-RTL/non-ASCII text fails before preflight diagnostics can quote any blocker
-text. Generated SnarkJS self-check blockers are canonicalized to single-line
-printable public text before manifest writing, while copied blocker arrays keep
-the stricter fail-closed decoded boundary.
+BSC Groth16 material `productionBlockers` now apply the same decoded
+ASCII-space-collapsed duplicate key rule for direct proof-self-test manifests
+and copied proof-self-test reports, so encoded or repeated-space copies cannot
+repeat operator blockers before preflight or proof-self-test diagnostics are
+rendered. Sensitive-name checks use that collapsed decoded text too, so
+repeated-space secret/private-key labels fail closed with fixed diagnostics.
+Direct proof-self-test manifest blockers must also be non-empty canonical
+printable ASCII strings without control characters after bounded decoding, so
+encoded newline/tab/DEL or RTL/non-ASCII text fails before preflight diagnostics
+can quote any blocker text. Generated SnarkJS self-check blockers are
+canonicalized to single-line printable public text before manifest writing,
+while copied blocker arrays keep the stricter fail-closed decoded boundary.
+Generated Required Release Evidence now names that same decoded
+ASCII-space-collapsed sensitive-name and duplicate-key blocker gate for the BSC
+Groth16 material evidence guard inventory.
 BSC Groth16 attestation request role blockers now share that canonical
 public-safe boundary in both `attestation-status` and signing/finalization
 validation, so malformed newline, tab, DEL, non-ASCII, duplicate, whitespace,
@@ -2227,6 +2289,15 @@ successful proofs: `ok=true`, a 2xx integer HTTP status, and a canonical
 nonzero response digest. Any failed, mismatched, incomplete, or malformed
 triplet is normalized to `"unsupported"` in public readiness output after the
 existing blocker is emitted.
+Receipt-verifier summaries also carry an aggregate `ok` verdict, which is true
+only when both production receipt kinds are present, every receipt entry
+succeeds, source files were required, and no local receipt override
+(`allow_failed`, `allow_insecure_http`, or `allow_default_profile`) was used.
+Evidence and readiness replay recompute that verdict and report
+`evidence.receipt_summary_not_ok`, `evidence.receipt_summary_ok_drift`,
+`evidence.archive_receipt_summary_not_ok`, or
+`evidence.archive_receipt_summary_ok_drift` for diagnostic or forged receipt
+summaries.
 Final readiness also accepts digest-bound pending-XSD probe summaries and
 requires them when reviewed pending-source gaps are allowed, rechecking official
 ISO URL metadata, freshness, counts, bounded sample digest shape,
@@ -2512,7 +2583,17 @@ timestamp, and HTTP URL helpers. Receipt-verifier raw CLI, receipt path, and
 HTTP URL helpers plus canary raw CLI, URL, output/runbook path, runbook string,
 and numeric preflight helpers now use the same policy too. Trust-bundle raw
 CLI, output path, and source-age integer preflight helpers also reject Unicode
-format controls at the raw guard layer.
+format controls at the raw guard layer. ISO operator canary, trust-bundle,
+operator-evidence, and final production-readiness replay now also require
+`provider` and `environment` context labels to be canonical lowercase IDs with
+hyphen separators, rejecting uppercase, slash-bearing, and
+leading/trailing-hyphen labels before they can label archived production
+evidence. Executed canaries, operator-evidence archival, and final readiness
+replay also reject exact placeholder/non-production context IDs such as
+`example`, `sample`, `template`, `ci`, and `test`, plus hyphen-tokenized
+placeholder aliases such as `example-bank`, `sample-preprod`, and
+`test-preprod`, including digest-correct forged canary, evidence-policy, and
+compact trust-profile summaries.
 ISO URL port parser failures now report only label-level invalid-port
 diagnostics instead of including parser exception text that may contain the raw
 operator-provided port string.
@@ -2573,7 +2654,12 @@ blocked-source, or pending-source gap warnings, never repository fixture
 manifest blockers or a truly unreviewed profile-catalog-only schema gap;
 advertised profile-version gaps remain blockers unless the exact message
 definition also has reviewed missing-schema, schema-only, blocked-source, or
-pending-source evidence. Cross-summary XSD material replay checks also include
+pending-source evidence. XSD preflight summaries now carry `ok: true` only when
+all strict schema-backed, fixture-backed, profile-backed, and XML schema
+validation checks pass against non-repository material with no reviewed or
+pending gaps; repository fixture manifests and diagnostic reviewed-gap summaries
+record `ok: false`, and final readiness recomputes the verdict before accepting
+the summary. Cross-summary XSD material replay checks also include
 pending-source message IDs, official catalogue/source references, and bounded
 direct download URLs, so one operator package cannot satisfy another by
 replaying the same pending-source record. Pending-source
@@ -2765,7 +2851,11 @@ to compact canary provider/environment fields, evidence policy context, trust
 profile IDs/rails/environments, trust embedded-signature policies,
 profile-override policies, trust source authority/version strings, and archived
 trust DER labels before release summaries can preserve those values. Archived
-trust embedded-signature policies and source authority/version provenance also
+provider/environment and trust-profile environment checks now reject both exact
+placeholder IDs and hyphen-tokenized placeholder aliases such as `example-bank`,
+`sample-preprod`, and `test-preprod` without echoing the submitted value.
+Archived trust embedded-signature policies and source authority/version
+provenance also
 reject non-ASCII confusable spellings before readiness blockers or evidence
 summaries can preserve forged policy or provenance values.
 Direct trust-bundle material and archived evidence replay also require DER labels
@@ -6566,16 +6656,53 @@ redistributable schemas, and official trust/revocation bundles.
   minimum peer counts, required scale-in cycle counts, required scale-in quorum
   minima, and optional scale-in cycle counts so rollout summaries expose the
   quorum evidence instead of only aggregate miss counters. The remaining
-  breadth is the multi-peer corridor; the 2026-07-06 four-peer strict autoscale
-  expand/contract localnet blocker is closed after lane payload ownership
-  replay was routed through canonical data-model entrypoint-hash helpers. The
-  strict run now observes load application, deterministic scale-out quorum,
-  strict lane status quorum, and scale-in across all four peers in cycle 1.
+  breadth is the multi-peer corridor; the 2026-07-07 four-peer strict autoscale
+  expand/contract localnet blocker is closed after the strict expansion probe was
+  hardened to require fresh deterministic scale-out transition evidence and
+  expanded-lane status evidence in the same readiness gate. Once transition
+  quorum is observed, strict probes stop adding top-up load while waiting for
+  status propagation. The strict run now observes load application,
+  deterministic scale-out/status quorum, and scale-in quorum in cycle 1, and the
+  public-profile strict transition run passes the same combined evidence gate.
+  The repeated two-cycle autoscale localnet also passes under the
+  stop-top-up-after-transition-quorum policy.
+  Scale-in commit-revalidation coverage now also mirrors the scale-out
+  adversarial boundary: tampered pending transition metadata, survivor catalog
+  rows, preserved retired-lane catalogs, and derived lane configs all abort
+  before retired-lane Kura/tiered storage or committed catalog publication.
+  The 12-peer cross-dataspace localnet route-probe corridor now also requires
+  observable replayable lane-payload ownership for DS1 and DS2 with exact
+  dataspace IDs, the expected four-validator lane committee, and the
+  deterministic three-vote quorum. The route-probe parser now requires those
+  ownership rows to pass the canonical replay-material hash validator, treats
+  same-slot ownership identity drift or malformed latest ownership rows as
+  non-progress, and keeps same-height cross-peer observations from combining
+  into quorum progress unless their descriptor, subject, payload-ownership, and
+  RBC-instance identities match. Conflicting top committed-lane or ownership
+  identities that independently satisfy quorum at the same lane height/view now
+  fail closed instead of being selected by iterator order. A second DS1 route
+  probe proves one active lane can advance beyond another in lane-local block
+  height without waiting for the idle configured lane, while helper coverage
+  rejects wrong-dataspace, empty-work, under-quorum, single-peer-ahead,
+  malformed-latest, forged-replay-hash, and conflicting-identity ownership
+  evidence.
   Committed standalone lane-block summaries are also exported through the
-  canonical Norito status payload, and the localnet corridor parser treats them
-  as expansion/progress evidence only after both prepare and commit QC signer
-  counts satisfy the lane quorum and their execution status is not a rejected
-  direct preflight. Kura now centralizes the direct-applier readiness predicate:
+  canonical Norito status payload, and the localnet corridor parser requires
+  each active lane to publish committed rows whose embedded prepare and commit
+  QC signer counts satisfy the exact lane quorum. The parser now also retains
+  committed-lane descriptor/proposal hashes, subject hash, payload-ownership
+  hash, RBC-instance hash, and QC-mode tag and treats same-height rows with
+  identity drift or malformed latest QC metadata as non-progress, so
+  conflicting certified payload identities cannot fake scale-out progress,
+  combine into cross-peer route progress, or prove safe scale-in contraction.
+  Runtime committed-lane status merging now also requires
+  descriptor hash plus proposal, prepare-QC, and commit-QC equality before
+  replacing an existing row, so malformed in-memory descriptor or QC drift
+  remains visible as suspicious evidence instead of overwriting the original
+  certified status. That separates independent lane-height planning evidence from
+  standalone lane-block QC evidence instead of treating operator status-row
+  fanout as the safety proof. Kura now
+  centralizes the direct-applier readiness predicate:
   a recovered input is exposed only after predecessor application is receipted
   without a preflight conflict, the current local state tip has a clean matching
   preflight, no receipt or preflight conflict exists, and the lane block has not
@@ -6603,10 +6730,13 @@ redistributable schemas, and official trust/revocation bundles.
   active-route and reset-watermark predicate before mutating prune runs, so
   stale queued old-incarnation sessions cannot become fresh proposal
   predecessors. Committed block-artifact tip snapshots read from Kura and cached
-  relay envelopes also honor lane reset watermarks, so historical lane payload
-  artifacts or old-incarnation relays at or below the reset height do not export
-  stale predecessor descriptor hashes or global-height compatibility coordinates
-  into fresh proposal planning. Lane-block ingress and local broadcast preflight
+  relay envelopes also honor lane reset watermarks, and relay envelopes must be
+  merge-admissible with a standalone lane-block descriptor hash before they can
+  seed proposal predecessor tips. Historical lane payload artifacts,
+  old-incarnation relays at or below the reset height, or descriptorless
+  verified relays therefore do not export stale predecessor descriptor hashes or
+  global-height compatibility coordinates into fresh proposal planning.
+  Lane-block ingress and local broadcast preflight
   perform the same Nexus-active route and reset-watermark checks before
   proposal/vote/QC caching or transport, so stale route or old-incarnation
   messages cannot seal or rebroadcast QCs, emit local commit votes, or enqueue
@@ -6657,6 +6787,11 @@ redistributable schemas, and official trust/revocation bundles.
   scheduler vote plans, so spoofed or quorum-downgraded active-route prepare
   plans cannot create a local BLS prepare signature, orphan lane session,
   invalid-vote drop, or background broadcast.
+  Committed lane-block queue hydration now revalidates certified sessions
+  before bounded restart admission, rejecting invalid proposals, missing
+  aggregate QC signatures, wrong prepare/commit phase slots, and proposal/QC
+  committee drift before malformed durable sidecars can publish status, recover
+  payloads, or consume capacity needed by a later valid certified session.
   Certified lane-block sidecar snapshots also honor lane reset watermarks:
   stale same-lane sidecars at or below the reset height no longer seed
   proposal tips, restart execution queues, or autoscale unapplied-progress
@@ -6701,10 +6836,36 @@ redistributable schemas, and official trust/revocation bundles.
   counts, or impossible validator-set sizes cannot fake expansion/direct
   execution, and malformed latest default-dataspace rows remain non-idle for
   scale-in instead of being treated as absence.
-  Lane-relay summaries now also preserve dataspace ids and only count
-  default-dataspace relay rows as autoscale expansion or lingering elastic-lane
-  evidence, so wrong-dataspace relay rows cannot fake default-route progress or
-  block destruction.
+  Lane-relay summaries now also preserve dataspace ids, standalone descriptor
+  presence, and merge-admissibility state. Autoscale expansion only counts
+  default-dataspace relay rows that are both descriptor-backed and
+  merge-admissible, while descriptorless or non-merge relay rows for the
+  retiring elastic lane still count as lingering state and block scale-in.
+  Wrong-dataspace relay rows cannot fake default-route progress or block
+  destruction.
+  Exact duplicate same-height default-dataspace relay rows are idempotent, while
+  descriptor-hash drift or merge-admissibility drift in the latest relay row set
+  is ambiguous, cannot prove expansion, and remains non-idle for scale-in.
+  The runtime lane-relay status cache now keys entries by immutable relay
+  identity, including header hash, descriptor hash, DA hash, settlement hash,
+  RBC byte count, and manifest root, so descriptor drift remains visible while
+  merge-admissible rows can still upgrade matching pending rows and cannot be
+  downgraded by later non-merge rows. The state-side `LaneRelayStore` now uses
+  the same immutable identity boundary before pending rows can be upgraded with
+  QC/FastPQ material, so descriptor drift cannot overwrite pending relay
+  evidence under the guise of a verified upgrade. `State::record_lane_relay` has
+  matching regression coverage to keep rejected drift from replacing the state
+  relay cache or Sumeragi status cache.
+  Sumeragi lane-payload ownership status now validates canonical replay material
+  before exposing rows or applying the status cap, so malformed subject,
+  payload-ownership, RBC-instance, or descriptor hashes cannot leak as ownership
+  evidence or evict valid recent rows.
+  Committed-lane status now validates each row against its embedded proposal,
+  prepare QC, and commit QC before exposing or capping it, reusing the
+  lane-consensus committed-session validator so summary drift, malformed
+  proposal hashes, QC phase drift, committee drift, missing aggregate
+  signatures, and under-quorum signer bitmaps cannot leak as certified
+  lane-block evidence.
   Commit-quorum discovery in the localnet corridor now also fails closed after
   timeout when peer status reports split-brain or out-of-range explicit quorum
   values, explicit quorum values that do not match reported validator-set length
@@ -6748,9 +6909,9 @@ redistributable schemas, and official trust/revocation bundles.
   active lane with the in-memory pending queue, so restarted peers keep
   publishing applied committed-lane evidence for both canonical block receipts
   and direct execution receipts even when already receipted sessions are
-  skipped by execution hydration. The broader multi-peer
-  independent-lane corridor remains the
-  remaining breadth.
+  skipped by execution hydration. The broader multi-peer independent-lane
+  corridor is now narrowed to full rollout evidence beyond the observable
+  ownership-planning and embedded committed-QC gates.
   Kura now has a direct-execution lane application receipt format for clean
   direct preflight evidence tied to a committed state hash, so direct
   lane-state application can persist durable evidence without reusing the
@@ -7084,8 +7245,8 @@ redistributable schemas, and official trust/revocation bundles.
   explicitly revoked.
 - Completed 2026-06-02: tightened ISO XMLDSig X.509 production admission so
   Torii config and shared profile JSON SHA-256 trust/revocation pins must
-  already be canonical lowercase hex, `x509_trust_anchor_sha256_pins` and
-  legacy certificate pins require a linked issuer certificate beyond the leaf,
+  already be canonical lowercase hex, and `x509_trust_anchor_sha256_pins`
+  require a linked issuer certificate beyond the leaf,
   and CRL/OCSP freshness plus delegated OCSP responder certificate validity are
   evaluated at verified XAdES `SigningTime` or BAH `CreDt` rather than local
   wall clock.
@@ -7145,9 +7306,9 @@ redistributable schemas, and official trust/revocation bundles.
   certificate-policy OID lists plus CRL/OCSP DER base64 material now reject
   padded or duplicate entries instead of silently trimming or de-duplicating, so
   padded trust/revocation profile config fails before runtime admission.
-  Current public-key and X.509 trust-anchor pin fields now also fail closed when
-  they overlap with their legacy alias fields in embedded or runtime profile
-  configuration.
+  Stale XMLDSig trust-pin alias fields now fail as malformed input, and the
+  current public-key, X.509 trust-anchor, and revoked-certificate pin roles must
+  not overlap in embedded or runtime profile configuration.
   Final production-readiness XSD replay now also recomputes
   profile-version `schema_backed` flags from the schema-backed XML fixture
   message-definition IDs in the same digest-bound summary, so forged archived
@@ -7777,8 +7938,21 @@ redistributable schemas, and official trust/revocation bundles.
 	  exclusive same-directory owner-private temporary files with
 	  bounded digest-derived names that are descriptor-rechecked, fsynced, and
 	  atomically replaced where available.
-  `--plan-only` validates runbooks and prints redacted child commands without
-  contacting Torii or notary endpoints.
+  `--plan-only` validates runbooks, prints redacted child commands without
+  contacting Torii or notary endpoints, and emits `ok=false` so planned output
+  cannot be confused with an executed canary. Executed direct summaries now
+  emit `ok=true` only when `--require-explicit-policy` was used, planned policy
+  records and executed results are the exact ordered rail/notary/verify
+  records, no stage skipped or producer dry-run was used, local diagnostic
+  allowances such as insecure HTTP, default profiles, or failed receipts were
+  absent, and verifier source-file checks stayed enabled. Aggregate evidence
+  summaries now preserve a compact canary `ok` verdict that is true only for
+  executed, explicit-policy, non-dry-run canaries with all production stages and
+  a production-complete receipt summary; final readiness recomputes that verdict
+  and reports
+  `evidence.canary_summary_not_ok` or
+  `evidence.canary_summary_ok_drift` for diagnostic or relabelled canary
+  evidence.
 - Completed 2026-06-04: added checked-in ISO operator canary runbook templates
   under `fixtures/iso20022/operator_canary/` for Swift CBPR+, Fedwire Funds,
   SEPA SCT Inst, and securities CSD profile families. The script tests validate
@@ -7834,6 +8008,9 @@ redistributable schemas, and official trust/revocation bundles.
 		  `--allow-synthetic-der` flags unless a verified bundle actually carries
 		  matching non-production policy, insecure source URL, or synthetic DER
 		  evidence; private synthetic-DER usage is stripped before summary emission.
+		  Trust summaries now record `ok=true` only when profile JSON was emitted,
+		  `profile_json_emittable` remains true, and no local trust diagnostic
+		  override was used.
 	- Completed 2026-06-04: added checked-in trust-bundle templates under
 	  `fixtures/iso20022/trust_bundles/` for Swift CBPR+, Fedwire Funds, SEPA SCT
   Inst, and securities CSD profile families. The templates use synthetic DER
@@ -7872,6 +8049,12 @@ redistributable schemas, and official trust/revocation bundles.
 					  non-production signature policy or `http://` or local/private
 					  source provenance per trust summary, so one diagnostic trust
 					  summary cannot mask hidden diagnostic material in another,
+					  emits `ok=false` on evidence summaries whenever any local
+					  non-production `allow_*` policy flag is in force, with
+					  final readiness recomputing the top-level evidence verdict,
+					  preserving diagnostic policy flags as `"unsupported"`, and
+					  reporting `evidence.summary_ok_drift` when a digest-correct
+					  summary relabels local policy as production-ready,
 					  rejects unused dry-run,
 					  failed-receipt, insecure-HTTP, and receipt-source-missing diagnostic overrides unless an
 					  archived canary command actually targets HTTP or local/private
@@ -8227,7 +8410,12 @@ redistributable schemas, and official trust/revocation bundles.
   evidence, and
   `--allow-canary-stage-receipts-only` requires an
   evidence summary with canary-stage-only receipt policy and missing direct
-  receipt archive verification. Compact trust summaries that explicitly record
+  receipt archive verification. Both overrides still emit stable
+  `readiness.policy.*` blockers, so local diagnostic rollups cannot return
+  `ok: true` as production-ready release evidence. XSD summaries also expose
+  `ok=false` for repository fixture or reviewed-gap diagnostic material, with
+  final readiness emitting `xsd.summary_not_ok` or `xsd.summary_ok_drift` when
+  replayed fields disagree with that verdict. Compact trust summaries that explicitly record
   `allow_insecure_source_url=true` can replay `http://` or local/private
   trust-source URLs as diagnostic evidence and still produce readiness blockers
   instead of aborting as malformed.

@@ -698,7 +698,7 @@ def validation_options(args: argparse.Namespace) -> ValidationOptions:
     """Return checker options used to prevalidate the generated canary."""
 
     return ValidationOptions(
-        now_unix=args.now_unix or args.generated_at_unix,
+        now_unix=args.now_unix,
         max_feed_lag_secs=DEFAULT_MAX_FEED_LAG_SECS,
         max_cycle_age_secs=DEFAULT_MAX_CYCLE_AGE_SECS,
         max_divergence_bps=DEFAULT_MAX_DIVERGENCE_BPS,
@@ -776,7 +776,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--deployment-id", required=True)
     parser.add_argument("--environment", required=True)
     parser.add_argument("--generated-at-unix", type=positive_int_arg, required=True)
-    parser.add_argument("--now-unix", type=positive_int_arg)
+    parser.add_argument("--now-unix", type=positive_int_arg, required=True)
     parser.add_argument("--verified-claim", action="append", default=[])
     parser.add_argument("--feed-count", type=positive_int_arg)
     parser.add_argument("--feed", action="append", default=[])

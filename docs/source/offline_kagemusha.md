@@ -28,10 +28,21 @@ The SDK top-up producer now accepts a
 `TopUpKagemushaRecursive` instruction archive. The nested init request carries
 the checked hop proof, verifier records, current-note binding, and Pallas
 opening metadata needed to validate the top-up before instruction
-serialization. Submission uses the existing signed transaction pipeline or the
+serialization. Kotlin/JVM and Java Android clients can build that nested
+lineage-free top-up init archive with `buildRecursiveSpendTopUpInitRequest`,
+then derive the canonical top-up request or transaction payload from it.
+Those SDK wrappers reject lineage-bearing init archives, asset-definition
+mismatches, amount mismatches, non-one-hop init archives, and malformed Pallas
+opening archives before native top-up dispatch.
+Submission uses the existing signed transaction pipeline or the
 Torii `/v1/offline/v2/kagemusha/topup` route, whose signed JSON body carries the
-client-produced archive in `topup_request_norito_base64`. The retired
-`/v1/offline/v2/notes/issue` route fails closed.
+client-produced archive in `topup_request_norito_base64`. Kotlin/JVM and Java
+Android expose this route as `KagemushaTopUpClient.submitKagemushaTopUp`,
+implemented by `ToriiOfflineNoteIssuerClient`; the body is signed with
+canonical body auth, includes the account/device/asset binding fields, and
+does not carry `amount`, `init_request_norito_base64`, or
+`topup_init_request_norito_base64`. The retired `/v1/offline/v2/notes/issue`
+route fails closed.
 
 `KagemushaTransfer` is the chain-side shielded offline-offline instruction. It
 reuses the existing ZK asset accumulator in WSV instead of introducing a second
@@ -290,6 +301,26 @@ command, so old `.vk`/`.pk`-only invocations and one-sided package-output
 invocations fail before expensive key generation starts.
 Generating these artifacts is intentionally expensive; do it during release
 preparation, not on payment devices or inside request handling.
+Before invoking Halo2 verifier/proving key generation, lineage artifact
+builders first run a deterministic pre-configuration estimate from the
+fixed-window verifier layout, then print any configured verifier-slice shape
+that is still within budget. The default guard rejects shapes whose estimated
+footprint exceeds the workstation-sized budget before the expensive Halo2
+constraint system is built. Set
+`IROHA_KAGEMUSHA_LINEAGE_KEYGEN_MAX_ESTIMATED_GIB=0` only on a dedicated
+high-memory release artifact builder after reviewing the printed shape. If the
+guard trips, the current verifier-slice layout still needs a row-oriented
+keygen redesign before release artifact generation can be treated as
+workstation-safe.
+The row-oriented rewrite is being staged from the scalar layer upward: the
+native Pasta/Fp fixed-window decomposition now has a reusable row-based circuit
+primitive that removes per-window advice columns while preserving canonical
+scalar-bit links, and the shared-table fixed-window selector now has a
+row-based primitive that links tree nodes with fixed row rotations instead of
+allocating one point column set per tree node. The lineage artifact command
+remains guarded until the fixed-window point table, complete-add/MSM, and IPA
+verifier-slice configs migrate to the same row-oriented model and the row
+selector is wired into those production compositions.
 The production readiness rollup requires
 `artifacts/kagemusha/lineage-proof-evidence.json`,
 `artifacts/kagemusha/recursive-compact-key-evidence.json`, and
@@ -2568,7 +2599,14 @@ Bridge ABI 6 introduced, and ABI 6-or-later bridges expose, the production recur
 `connect_norito_kagemusha_recursive_spend_topup` the chain-facing top-up
 producer: it lowers a validated `KagemushaRecursiveSpendTopUpRequestV1`
 archive into the `TopUpKagemushaRecursive` instruction archive. Raw init
-request archives are not accepted as top-up inputs. All ten
+request archives are not accepted as top-up inputs. Kotlin/JVM and Java Android
+SDKs expose `buildRecursiveSpendTopUpInitRequest` only to encode the nested
+one-hop, lineage-free `KagemushaRecursiveSpendInitRequestV1` archive needed by
+the top-up request. Callers must still wrap that archive with
+`buildRecursiveSpendTopUpRequestFromInitRequest` or
+`topUpTransactionPayloadFromInitRequest`, which derive the asset definition and
+current note amount from the init archive and use the transaction authority as
+the charged asset account for direct payer top-up submission. All ten
 entry points accept and return raw Norito archives so SDKs do not implement recursive proof internals,
 accumulator derivation, or witness merging. The data model round-trips the raw
 archive contracts for `init`, `append`, transition-profile preflight,
@@ -3635,7 +3673,10 @@ scalar bits above the configured window width are constrained to zero. A
 non-native Vesta fixed-window point selector now proves that a selected private
 point-or-identity comes from a private `2^WINDOW_BITS` table under those
 canonical window bits. The selector uses a quadratic binary selection network
-rather than a high-degree product selector. A companion table-derivation gadget
+rather than a high-degree product selector. The shared-table selector also has
+a row-oriented form that stores table leaves and selection-tree nodes in one
+reusable point column set, with fixed row rotations linking every internal node
+to its two source rows. A companion table-derivation gadget
 now proves the private table is exactly `[0, B, 2B, ...]` for a public base
 point by linking entry zero to identity, entry one to the public base, and later
 entries to a complete-add chain. A fixed-window native-scalar multiplication

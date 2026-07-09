@@ -38,6 +38,7 @@ POLICY_DIGEST = "b" * 64
 MANIFEST_ID = "c" * 32
 QUARANTINE_ID = "d" * 32
 GENERATED_AT = 1_800_400_000
+NOW_UNIX = GENERATED_AT
 SUBJECT_REFERENCE = "cid:bafyprodmoderation20260701"
 
 
@@ -57,6 +58,8 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
         "production",
         "--generated-at-unix",
         str(GENERATED_AT),
+        "--now-unix",
+        str(NOW_UNIX),
         "--body-digest-hex",
         DIGEST,
     ]
@@ -138,6 +141,13 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
     return args
 
 
+def checker_options() -> object:
+    return CHECKER.ValidationOptions(
+        now_unix=NOW_UNIX,
+        max_evidence_age_secs=CHECKER.DEFAULT_MAX_EVIDENCE_AGE_SECS,
+    )
+
+
 def assert_rejected_without_artifact(
     args: list[str],
     *,
@@ -178,7 +188,7 @@ def test_builds_payload_free_notification_transport_canary(tmp_path: Path) -> No
     ]
     assert payload["payload_bytes_included"] is False
     assert payload["private_payloads_included"] is False
-    kind, errors = CHECKER.validate_evidence_payload(payload)
+    kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
     assert kind == "notification_transport"
     assert errors == []
 
@@ -249,7 +259,7 @@ def test_generated_canaries_pass_full_ai_prescreen_gate(tmp_path: Path) -> None:
         evidence_paths.append(canary_path(tmp_path, kind))
     summary = tmp_path / "summary.json"
 
-    command = []
+    command = ["--now-unix", str(NOW_UNIX)]
     for path in evidence_paths:
         command.extend(["--evidence", str(path)])
     command.extend(["--summary-out", str(summary)])
@@ -710,7 +720,7 @@ def test_governance_dag_canary_records_edge_inventory(tmp_path: Path) -> None:
     ]
     assert payload["edge_count"] == len(MODULE.REQUIRED_GOVERNANCE_PRODUCERS)
     assert payload["edges"] == expected_edges
-    kind, errors = CHECKER.validate_evidence_payload(payload)
+    kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
     assert kind == "governance_dag"
     assert errors == []
 
@@ -953,7 +963,7 @@ def test_verdict_input_accepts_shipped_block_value(tmp_path: Path) -> None:
 
     payload = json.loads(canary_path(tmp_path, "committee").read_text("utf-8"))
     assert payload["verdict"] == "block"
-    kind, errors = CHECKER.validate_evidence_payload(payload)
+    kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
     assert kind == "committee"
     assert errors == []
 

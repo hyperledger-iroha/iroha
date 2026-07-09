@@ -1708,6 +1708,80 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs["encoding"], "utf-8")
         self.assertEqual(run.call_args.kwargs["errors"], "replace")
 
+    def test_staged_resource_guard_detects_orphaned_compact_keygen_child(
+        self,
+    ) -> None:
+        resource_guard = compact_key_staged_runner.resource_guard
+        completed = resource_guard.subprocess.CompletedProcess(
+            ["ps"],
+            0,
+            stdout=(
+                " 77928 1 77928 11080 /work/dist/current/release/iroha app zk "
+                "kagemusha recursive-compact-key-artifacts --vk-out "
+                "artifacts/kagemusha/recursive-compact-len4.vk --pk-out "
+                "artifacts/kagemusha/recursive-compact-len4.pk\n"
+            ),
+        )
+
+        with mock.patch.object(
+            resource_guard.subprocess,
+            "run",
+            return_value=completed,
+        ):
+            jobs = resource_guard.find_running_heavy_jobs()
+
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].pid, 77928)
+        self.assertEqual(jobs[0].parent_pid, 1)
+        self.assertEqual(jobs[0].process_group_id, 77928)
+        self.assertEqual(jobs[0].rss_bytes, 11080 * 1024)
+
+    def test_staged_finalizer_heavy_job_diagnostics_redact_commands_and_paths(
+        self,
+    ) -> None:
+        resource_guard = compact_key_staged_runner.resource_guard
+        jobs = [
+            resource_guard.RunningHeavyJob(
+                pid=77928,
+                parent_pid=1,
+                process_group_id=77928,
+                rss_bytes=11_687_936_000,
+            ),
+            resource_guard.RunningHeavyJob(
+                pid=88002,
+                parent_pid=77928,
+                process_group_id=77928,
+                rss_bytes=4096,
+            ),
+        ]
+
+        for finalizer in (compact_key_finalizer, lineage_finalizer):
+            with self.subTest(finalizer=finalizer.__name__):
+                with mock.patch.object(
+                    finalizer.resource_guard,
+                    "find_running_heavy_jobs",
+                    return_value=jobs,
+                ):
+                    diagnostics = finalizer.running_heavy_job_diagnostics()
+
+                self.assertEqual(len(diagnostics), 2)
+                rendered = diagnostics[0]
+                self.assertIn("pid=77928", rendered)
+                self.assertIn("ppid=1", rendered)
+                self.assertIn("pgid=77928", rendered)
+                self.assertIn("rss_bytes=11687936000", rendered)
+                self.assertIn("pid=88002", diagnostics[1])
+                self.assertIn("ppid=77928", diagnostics[1])
+                self.assertIn("rss_bytes=4096", diagnostics[1])
+                self.assertNotIn("iroha app zk", rendered)
+                self.assertNotIn("--pk-out", rendered)
+                self.assertNotIn("/repo", rendered)
+                self.assertNotIn("artifacts/kagemusha", rendered)
+                self.assertNotIn("iroha app zk", diagnostics[1])
+                self.assertNotIn("--pk-out", diagnostics[1])
+                self.assertNotIn("/repo", diagnostics[1])
+                self.assertNotIn("artifacts/kagemusha", diagnostics[1])
+
     def test_staged_resource_guard_ignores_marker_text_in_unrelated_commands(
         self,
     ) -> None:
@@ -30658,7 +30732,23 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             artifact_dir = root / "published"
 
             stderr = io.StringIO()
-            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+            with (
+                redirect_stdout(io.StringIO()),
+                redirect_stderr(stderr),
+                mock.patch.object(
+                    compact_key_finalizer,
+                    "running_heavy_job_diagnostics",
+                    return_value=[
+                        (
+                            "running Kagemusha heavy job remains active while "
+                            "staged runner temporary outputs exist; wait for it "
+                            "to exit and rerun through the staged runner before "
+                            "finalization (pid=88001, ppid=1, "
+                            "pgid=88001, rss_bytes=123456)"
+                        )
+                    ],
+                ),
+            ):
                 status = compact_key_finalizer.main(
                     compact_key_finalizer_args(
                         staged_artifact_dir=staged_artifact_dir,
@@ -30674,6 +30764,15 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             "temporary outputs; staged run is incomplete",
             rendered,
         )
+        self.assertIn(
+            "running Kagemusha heavy job remains active while staged runner "
+            "temporary outputs exist",
+            rendered,
+        )
+        self.assertIn("pid=88001", rendered)
+        self.assertIn("ppid=1", rendered)
+        self.assertIn("pgid=88001", rendered)
+        self.assertIn("rss_bytes=123456", rendered)
         self.assertNotIn("staged keygen exit marker is missing", rendered)
         self.assertFalse((artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME).exists())
 
@@ -34738,7 +34837,23 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             artifact_dir = root / "published"
 
             stderr = io.StringIO()
-            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+            with (
+                redirect_stdout(io.StringIO()),
+                redirect_stderr(stderr),
+                mock.patch.object(
+                    lineage_finalizer,
+                    "running_heavy_job_diagnostics",
+                    return_value=[
+                        (
+                            "running Kagemusha heavy job remains active while "
+                            "staged runner temporary outputs exist; wait for it "
+                            "to exit and rerun through the staged runner before "
+                            "finalization (pid=88002, ppid=1, "
+                            "pgid=88002, rss_bytes=654321)"
+                        )
+                    ],
+                ),
+            ):
                 status = lineage_finalizer.main(
                     lineage_finalizer_args(
                         staged_artifact_dir=staged_artifact_dir,
@@ -34754,6 +34869,15 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             "outputs; staged run is incomplete",
             rendered,
         )
+        self.assertIn(
+            "running Kagemusha heavy job remains active while staged runner "
+            "temporary outputs exist",
+            rendered,
+        )
+        self.assertIn("pid=88002", rendered)
+        self.assertIn("ppid=1", rendered)
+        self.assertIn("pgid=88002", rendered)
+        self.assertIn("rss_bytes=654321", rendered)
         self.assertNotIn("staged lineage proof exit marker is missing", rendered)
         self.assertFalse(
             (artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME).exists()

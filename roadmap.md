@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-07-07
+Last updated: 2026-07-09
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -67,6 +67,64 @@ requirement with `--adoption-override-id <incident-or-approval-id>`. Wrapper
 tests, xtask parser tests, direct-mode/orchestrator rollout docs, and the
 rollout static contract pin those guards.
 
+SoraFS SFM-4b3 evidence-viewer canary generation now requires an explicit
+`--now-unix` review timestamp and validates the generated artifact against that
+clock before writing JSON. Future or stale `--generated-at-unix` values can no
+longer self-validate by omitting `--now-unix`; the builder tests and rollout
+static contract pin missing, future, and stale timestamp rejection before
+payload-free canary artifacts are written.
+
+All checked-in SoraFS canary builders now follow the same first-release clock
+rule: `--now-unix` is required, generated payloads are validated against that
+explicit review clock, and checked-in argfile examples fail before writing if
+the review timestamp is missing or malformed. The rollout contract rejects any
+builder that falls back to `generated_at_unix` as its own validation clock.
+The SFM-4a AI pre-screen and SFM-4c transparency rollout checkers now enforce
+the same stale/future generated-artifact freshness gate directly, so hand-built
+or externally supplied evidence cannot bypass builder prevalidation.
+Their collection runners expose and forward explicit `--now-unix` and
+`--max-evidence-age-secs` verifier controls, so dry-run plans and live
+collection runs use the same reviewed freshness window.
+Checked-in SoraFS collection argfile examples that expose verifier freshness
+controls now pin those reviewed clocks too, and the rollout contract rejects
+runner examples that omit parser-exposed freshness controls.
+The same reviewed collection examples now also pin parser-exposed
+`--summary-out` paths, and the rollout contract requires each collection
+runner exposing the option to parse a concrete summary artifact path from its
+argfile.
+The SFM-3 reputation collection runner now also exposes and forwards the
+checker freshness clock plus snapshot-age and ingest-lag ceilings, so live
+collection cannot silently depend on verifier defaults for those rollout
+thresholds.
+Direct SoraFS rollout/release checker argfile examples now pin their
+parser-exposed freshness clocks and age windows too, and the rollout contract
+rejects checker examples that omit those reviewed controls.
+Direct checker argfiles also keep `--summary-out` paths inside their reviewed
+`--evidence-dir`, and when the direct checker reads the same directory written
+by its collection runner, both examples must name the same summary artifact.
+Direct checker argfiles now also pin their complete `--require-kind` scope
+instead of relying on verifier defaults, and the rollout contract compares that
+scope against each verifier's current `DEFAULT_REQUIRED_KINDS`.
+Collection runner argfiles that expose `--require-kind` now pin those scopes as
+well, and aggregate production-readiness argfiles pin `--require-gate`; the
+rollout contract keeps both checked-in scopes synchronized with current
+gate/kind inventories.
+Shared SoraFS runner preflight now also requires a reviewed `--now-unix` before
+plan rendering for runners exposing `now_unix`, so collection execution cannot
+silently fall back to verifier wall-clock defaults.
+The same contract mutates checked-in checker and collection argfile examples
+with invalid `--now-unix` values and requires parser-time failure before
+evidence loading or dry-run plan rendering.
+Direct SoraFS rollout/release checkers now require reviewed `--now-unix` at
+their own CLI boundary as well, with no verifier wall-clock fallback; the
+rollout contract rejects reintroduced `time.time()` fallback paths and removes
+`--now-unix` from every checked-in direct checker argfile to verify parser-time
+failure before evidence loading.
+The Android SoraFS codegen replay fixture now derives its `generated_at`
+metadata from the reviewed fixture `now_unix_secs` instead of process wall
+clock time, so replayed tracked SDK fixture examples are deterministic across
+operator hosts.
+
 SoraFS aggregate production-readiness metadata checks now keep their
 adversarial anchor matrices tied to the configured owner-kind maps. Every
 configured `valid_*` hex-list or tuple-binding metadata field must appear in
@@ -100,6 +158,8 @@ deployment-context production checks derive from every configured required
 artifact kind, required-row and artifact schema binding checks derive from
 every configured required artifact kind, required and recognized artifact
 digest-shape checks derive from every configured required artifact kind,
+malformed artifact digest-shape checks derive from every configured required
+artifact kind,
 required-kind and required-row inventory checks derive from every configured
 gate,
 recognized-artifact inventory shape and count checks derive from every
@@ -135,6 +195,10 @@ artifact deployment-context reviewed-marker shape checks derive from every
 configured required artifact kind,
 artifact optional label canonicality checks derive from every configured
 required artifact kind,
+artifact schema-shape checks derive from every configured required artifact
+kind,
+artifact status-shape checks derive from every configured required artifact
+kind,
 recognized-artifact per-kind count-binding checks derive from every
 configured required artifact kind,
 recognized-artifact canonical identity-drift checks derive from every
@@ -154,9 +218,12 @@ required-row and artifact error-list checks derive from every configured
 required artifact kind,
 malformed required-row and artifact error-list shape checks derive from every
 configured required artifact kind,
+missing and object-shaped error-list checks derive from every configured
+required artifact kind,
 required and recognized artifact field-closure checks derive from every
 configured required artifact kind,
 path-portability checks derive from every configured required artifact kind,
+artifact path-shape checks derive from every configured required artifact kind,
 path-portability variant checks derive from every configured required artifact
 kind,
 URI-scheme and current-segment path checks derive from every configured
@@ -169,7 +236,8 @@ recognized-artifact metadata binding checks derive from every configured
 required artifact kind,
 status rejection checks derive from every configured required artifact kind,
 required and recognized artifact valid-marker checks derive from every
-configured required artifact kind, object-list schema validation and
+configured required artifact kind, malformed artifact valid-marker shape checks
+derive from every configured required artifact kind, object-list schema validation and
 duplicate-entry checks derive from every configured object-list schema, and
 string-list, string-array list,
 positive-integer list, and scalar hex checks derive from their configured
@@ -309,10 +377,12 @@ filters in-memory committed-queue lane tips through the same active-route and
 reset-watermark predicate before mutating prune runs, so stale queued
 old-incarnation sessions cannot become fresh proposal predecessors. Committed
 block-artifact tip snapshots read from Kura and cached relay envelopes also
-honor lane reset watermarks, so historical lane payload artifacts or
-old-incarnation relays at or below the reset height do not export stale
-predecessor descriptor hashes or global-height compatibility coordinates into
-fresh proposal planning. Lane-block
+honor lane reset watermarks, and relay envelopes must be merge-admissible with
+a standalone lane-block descriptor hash before they can seed proposal
+predecessor tips. Historical lane payload artifacts, old-incarnation relays at
+or below the reset height, or descriptorless verified relays therefore do not
+export stale predecessor descriptor hashes or global-height compatibility
+coordinates into fresh proposal planning. Lane-block
 ingress and local broadcast preflight now perform the same Nexus-active route
 and reset-watermark checks before proposal/vote/QC caching or transport, so
 stale route or old-incarnation messages cannot seal or rebroadcast QCs, emit
@@ -364,6 +434,11 @@ Local prepare-vote production now applies the same pre-sign checks to scheduler
 vote plans, so spoofed or quorum-downgraded active-route prepare plans cannot
 create a local BLS prepare signature, orphan lane session, invalid-vote drop, or
 background broadcast.
+Committed lane-block queue hydration now revalidates certified sessions before
+bounded restart admission, rejecting invalid proposals, missing aggregate QC
+signatures, wrong prepare/commit phase slots, and proposal/QC committee drift
+before malformed durable sidecars can publish status, recover payloads, or
+consume capacity needed by a later valid certified session.
 Certified lane-block sidecar snapshots now honor lane reset watermarks too:
 stale same-lane sidecars at or below the reset height no longer seed proposal
 tips, restart execution queues, or autoscale unapplied-progress checks, while
@@ -398,10 +473,34 @@ matching lines. Exact duplicate
 same-height transition rows are idempotent and conflicting same-height rows are
 dropped as ambiguous; ambiguous heights remain visible and block fresh
 scale-out/scale-in delta quorum from either the baseline or current snapshot.
-Lane-relay summaries now also preserve dataspace ids and only count
-default-dataspace relay rows for autoscale expansion or lingering elastic-lane
-state, so wrong-dataspace relay rows cannot fake default-route progress or block
-destruction.
+Lane-relay summaries now also preserve dataspace ids, standalone descriptor
+presence, and merge-admissibility state. Autoscale expansion only counts
+default-dataspace relay rows that are both descriptor-backed and
+merge-admissible, while descriptorless or non-merge relay rows for the retiring
+elastic lane still count as lingering state and block scale-in. Wrong-dataspace
+relay rows cannot fake default-route progress or block destruction.
+Exact duplicate same-height default-dataspace relay rows are idempotent, while
+descriptor-hash drift or merge-admissibility drift in the latest relay row set
+is ambiguous, cannot prove expansion, and remains non-idle for scale-in.
+The runtime lane-relay status cache now keys entries by immutable relay
+identity, including header hash, descriptor hash, DA hash, settlement hash, RBC
+byte count, and manifest root, so descriptor drift remains visible while
+merge-admissible rows can still upgrade matching pending rows and cannot be
+downgraded by later non-merge rows. The state-side `LaneRelayStore` now uses
+the same immutable identity boundary before pending rows can be upgraded with
+QC/FastPQ material, so descriptor drift cannot overwrite pending relay evidence
+under the guise of a verified upgrade. `State::record_lane_relay` has matching
+regression coverage to keep rejected drift from replacing the state relay cache
+or Sumeragi status cache.
+Sumeragi lane-payload ownership status now validates canonical replay material
+before exposing rows or applying the status cap, so malformed subject,
+payload-ownership, RBC-instance, or descriptor hashes cannot leak as ownership
+evidence or evict valid recent rows.
+Committed-lane status now validates each row against its embedded proposal,
+prepare QC, and commit QC before exposing or capping it, reusing the
+lane-consensus committed-session validator so summary drift, malformed proposal
+hashes, QC phase drift, committee drift, missing aggregate signatures, and
+under-quorum signer bitmaps cannot leak as certified lane-block evidence.
 Default-dataspace committed-lane rows now also have to carry canonical quorum
 metadata before they can prove rollout progress: `min_quorum` must match the
 deterministic quorum for `validator_count`, the advertised validator set must
@@ -454,10 +553,35 @@ Kagemusha online-to-offline top-up now has a first-class
 `KagemushaRecursiveSpendTopUpRequestV1` producer path, a chain-side
 `TopUpKagemushaRecursive` instruction, and Torii
 `/v1/offline/v2/kagemusha/topup` submission that accepts only client-produced
-top-up request archives. Raw init-request top-up helpers and compatibility
-aliases are retired for the first release. Remaining launch work should focus
-on end-to-end operator/mobile rollout validation rather than reviving the
-retired Offline V2 `/notes/issue` construction path.
+top-up request archives. SDKs now expose a mobile-facing top-up init encoder
+that emits the nested one-hop, lineage-free init request and a wrapper helper
+that derives the canonical top-up request from it; Kotlin/JVM and Java Android
+also expose `KagemushaTopUpClient.submitKagemushaTopUp` for the signed Torii
+submission route. Raw init-request submission helpers and compatibility aliases
+remain retired for the first release.
+Remaining launch work should focus on end-to-end operator/mobile rollout
+validation rather than reviving the retired Offline V2 `/notes/issue`
+construction path.
+
+Kagemusha Reserved-lineage key artifact generation remains the active launch
+blocker for offline transfer verification. The `lineage-key-artifacts` command
+now fails before Halo2 verifier-slice configuration when deterministic
+fixed-window layout estimates exceed the memory guard, instead of silently
+entering unbounded configure/keygen on laptops. The next implementation step is
+a full row-oriented verifier-slice layout, followed by signed release artifact
+generation for the init and append profiles. The first reusable row primitive
+for scalar fixed-window decomposition is in place, and a row-oriented
+shared-table selector primitive now proves fixed-window table selection without
+per-tree-node advice columns. Remaining work is to migrate the fixed-window
+point table, complete-add/MSM, and IPA verifier composition configs onto the
+same row-oriented model, wire the row selector into those production
+compositions, and then remove the artifact-generation guard as a hard stop.
+
+Public NPoS XOR handling is pinned to canonical asset-definition bindings:
+`xor#universal` is only an alias selector, Taira binds it to
+`6TEAJqbb8oEPmLncoNiMRbLEK6tw`, and Nexus deployable genesis generation must
+receive an operator-supplied canonical Base58 XOR id through
+`--xor-asset-definition-id`.
 
 Crypto production-readiness hardening closed the remaining BFV wrapper-order
 follow-up on 2026-07-05. The exact and bounded artifact-aware wrappers now
@@ -865,8 +989,9 @@ browser-prover `bound_route_hash` must match `destination_binding_hash`.
 Duplicate, unknown, padded, and bare Solana route-manifest CLI options are also
 rejected before route-manifest or proposal work without echoing unknown option
 names. Solana route-manifest and proposal output paths cannot alias input
-artifacts, proposal modes are restricted to exact `Plain`/`Zk`, proposal
-preflight failures occur before manifest reads or network fetches, unexpected
+artifacts, including through symlink-parent directories, proposal modes are
+restricted to exact `Plain`/`Zk`, proposal preflight failures occur before
+manifest reads or network fetches, unexpected
 commands and positional values are redacted, deploy/evidence option preflights
 fail before spawning Solana CLI, deploy confirmation uses only canonical
 `--confirm-network taira_sol_xor:solana-testnet`, and the retired
@@ -876,7 +1001,8 @@ proposal/doctor Torii URLs must be public-DNS HTTPS or loopback HTTP without
 credentials, params, query strings, or fragments. The helper's default Solana
 RPC and TAIRA Torii URLs are fixed public constants rather than
 environment-derived aliases. JSON outputs are written through temporary-file
-rename so output symlinks are replaced rather than followed. The release
+rename so output symlinks are replaced rather than followed and hostile
+temporary-path symlinks are retried without receiving artifacts. The release
 bundle/readiness inventories require the Solana route-manifest CLI negative
 tests in the contract-smoke evidence phase.
 
@@ -1011,6 +1137,33 @@ columns, and FastPQ public I/O hash. That placeholder opening is now explicitly
 `cfg(test)`-only; production builds must use the normal FastPQ verification
 path, and BSC material-only source material still cannot satisfy production
 source-proof or local-admission gates without governed deployment evidence.
+The JavaScript BSC source-chain proof builder now canonicalizes validator
+private-key aliases before internal construction, rejects duplicate derived
+validator addresses, and bounds individual plus aggregate validator powers to
+`u64` before Parlia validator-set or commit-seal transcripts are built. The
+exported JavaScript BSC validator-set payload and commit-seal canonicalizers
+apply the same `u64` power bounds before deriving verifier-side hashes. Shared
+JavaScript SCCP `u8`, `u16`, `u32`, signed `i32`, and `u64` writers plus
+transparent public-input domain/finality-height normalization now reject
+oversized values before ABI, SSZ, TON, or little-endian transcript bytes can
+silently wrap through `DataView`.
+Python transcript writers now apply the same pre-encoding unsigned/signed bounds
+for source-proof canonical bytes, and Kotlin/JVM plus Java Android SCCP helpers
+bound `u64` ABI, SSZ, TON, Solana, and source-proof transcript fields before
+byte emission. Swift's BSC helper surface is now pinned to reject duplicate
+validator addresses, zero powers, and aggregate `UInt64` commit-seal overflow
+before Parlia quorum transcript bytes are emitted. The .NET SDK now also exposes
+the BSC validator-set canonical payload/hash helpers and commit-seal
+canonicalization/hash helpers, rejecting malformed validator-set payloads,
+non-canonical secp256k1 keys or signatures, signer/quorum drift, bitmap
+padding, and validator-set hash mismatches before deriving verifier-side hashes.
+BSC validator-set payload and commit-seal overflow or signer/quorum regressions
+are pinned in Python, Swift, mobile, and C# helper tests, with release
+inventories guarding the Python/Swift/Kotlin/Java/C# marker set. The C# BSC
+mainnet SCCP test filters now pass with a temporary .NET SDK installed outside
+the repository. The focused Kotlin/JVM and Java Android SCCP helper tests now
+also pass with a temporary JDK 21 installed outside the repository, closing the
+local SDK validation gap for this slice.
 
 TON source-adapter readiness now stays aligned with the governed
 full-light-client audit policy: readiness-positive test fixtures use the
@@ -12279,6 +12432,10 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   bullet and hidden-spacing duplicate rules, so copied public blocker lists
   cannot preserve a blocker marker while adding visually aliased duplicate
   bullets.
+  Table-cell blocker lists must also match the exact rendered cell text, so
+  release-checklist, native-prover, source-inventory, user-prover, and
+  lane-readiness cells cannot add hidden NBSP/zero-width duplicate blocker
+  aliases while preserving each blocker substring elsewhere in the section.
   Strict readiness Markdown and release-notes heading parsing must also reject
   noncanonical top-level title/status blocks, non-exact public section-heading
   spelling, unexpected public section headings, Setext headings, repeated
@@ -12358,17 +12515,22 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
 	  paths that resolve to deployment evidence, TAIRA burn-record contract
 	  material, verifier/prover material, live evidence, offline full-TOML
 	  evidence, or browser-prover manifests before parsing inputs or writing the
-	  manifest. BSC/TRON deploy commands must reject deployment evidence/plan
-	  `--out` paths that resolve to verifier material or deployer secrets before
-	  parsing operator inputs, loading signers, or reaching networks. TRON
-	  `sign-transaction` and `broadcast` must also reject `--out` paths that
-	  resolve to source transaction artifacts or deployer secrets before signing,
-	  broadcasting, or writing output, and the release/readiness inventory must
-	  pin those guards beside the offline regressions. BSC native-prover bundle
+	  manifest, and the BSC route-manifest sparse inventory now pins the
+	  symlink-parent alias regression directly. BSC/TRON deploy commands must
+	  reject deployment evidence/plan
+	  `--out` paths that resolve to verifier material or deployer secrets,
+	  including through symlink-parent aliases, before parsing operator inputs,
+	  loading signers, or reaching networks. TRON `sign-transaction` and
+	  `broadcast` must also reject `--out` paths that resolve to source
+	  transaction artifacts or deployer secrets, including through symlink-parent
+	  aliases, before signing, broadcasting, or writing output, and the
+	  release/readiness inventory must pin those guards beside the offline
+	  regressions. BSC native-prover bundle
 	  generation must also reject bundle `--out` paths that resolve to governed
 	  proof, proving-key, verifier-key, Groth16 material, self-test, parity, or
-	  SDK implementation artifacts, or file-backed audit evidence before writing
-	  the bundle. The shared BSC/TRON route-output guards and TON
+	  SDK implementation artifacts, or file-backed audit evidence, including
+	  through symlink-parent aliases, before writing the bundle. The shared
+	  BSC/TRON route-output guards and TON
 	  route-manifest guards now also compare existing real filesystem targets
 	  and symlinked parent directories, so symlink-parent output aliases cannot
 	  overwrite governed manifests, route configs, deployer secrets, deployment
@@ -12382,33 +12544,41 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
 	  symlinks cannot receive artifacts. BSC Groth16 `generate` must reject
 	  generated circuit/setup, verifier-key, manifest, copied transcript, and
 	  local Powers-of-Tau output paths that resolve to operator-provided source
-	  inputs or to each other
+	  inputs or to each other, including through symlink-parent aliases,
 	  before creating the output directory, copying artifacts, running Circom, or
 	  invoking SnarkJS. BSC Groth16 `toolchain-fingerprint` must reject copied
-	  transcript `--out` paths that resolve to the source transcript before
-	  parsing it or hashing local tools. BSC Groth16 `proof-self-test` must
-	  reject report `--out` paths that resolve to the material manifest,
-	  witness WASM, or manifest-bound circuit/proving/verifier artifacts before
-	  parsing sentinel inputs, invoking SnarkJS, or writing reports. BSC Groth16
+	  transcript `--out` paths that resolve to the source transcript, including
+	  through symlink-parent aliases, before parsing it or hashing local tools.
+	  BSC Groth16 `proof-self-test` must reject report `--out` paths that
+	  resolve to the material manifest, witness WASM, or manifest-bound
+	  circuit/proving/verifier artifacts, including through symlink-parent
+	  aliases, before parsing sentinel inputs, invoking SnarkJS, or writing
+	  reports. BSC Groth16
 	  `materialize` must reject copied input artifact target collisions and
-	  copied-input collisions with fixed verifier-key or manifest outputs before
-	  copying artifacts or writing production material. BSC Groth16
+	  copied-input collisions with fixed verifier-key or manifest outputs,
+	  including through symlink-parent aliases, before copying artifacts or
+	  writing production material. BSC Groth16
 	  `transcript-template` and `evidence-template` must reject generated output
-	  path collisions with their own output sets or source artifacts before
-	  replacing any transcript, evidence, report, index, or manifest files. BSC
+	  path collisions with their own output sets or source artifacts, including
+	  through symlink-parent aliases, before replacing any transcript, evidence,
+	  report, index, or manifest files. BSC
 	  Groth16 `attestation-request` must also reject request
 	  `--out` paths that resolve to the material manifest, semantic review
-	  evidence, or circuit-security audit evidence before parsing those
-	  artifacts or writing the unsigned request package, and `handoff-bundle`
+	  evidence, or circuit-security audit evidence, including through
+	  symlink-parent aliases, before parsing those artifacts or writing the
+	  unsigned request package, and `handoff-bundle`
 	  must reject `--out` paths that resolve to the material manifest,
 	  transcript-template package, evidence-template package, or attestation
-	  request package before parsing those artifacts or writing handoff JSON.
+	  request package, including through symlink-parent aliases, before parsing
+	  those artifacts or writing handoff JSON.
 	  BSC Groth16 `sign-attestation` must reject signed-role `--out` paths that
-	  resolve to the unsigned attestation request package or Ed25519 private key
-	  before parsing those inputs or writing the signature artifact.
+	  resolve to the unsigned attestation request package or Ed25519 private key,
+	  including through symlink-parent aliases, before parsing those inputs or
+	  writing the signature artifact.
 	  `finalize-attestations` must reject explicit `--out-dir` paths that
-	  resolve to the unsigned request package or signed role attestation files
-	  before parsing signed inputs or materializing production-ready outputs.
+	  resolve to the unsigned request package or signed role attestation files,
+	  including through symlink-parent aliases, before parsing signed inputs or
+	  materializing production-ready outputs.
 	  BSC/TRON
 	  route-config blocker-list validators must also
 	  keep handoff-placeholder regressions free of open-work markers while still
@@ -13937,12 +14107,14 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   release-checklist, embedded evidence, standalone all-lanes root, lane,
   source-adapter-gate, and release-checklist blocker arrays, and active-launch
 	  route-canary, route-allowlist, destination-rollout, and source-adapter-gate
-	  blocker arrays must keep canonical non-empty strings, duplicate rejection,
-	  ready-surface empty-blocker checks, and invalid-marker rendering for
-	  malformed blocker containers before published bundle readiness can pass.
-	  Duplicate blocker rejection must compare decoded/lowercased public text,
-	  including HTML entity and bounded URL-percent encoded forms, so encoded
-	  copies cannot evade the repeated operator-text guard.
+	  blocker arrays must keep canonical non-empty strings, duplicate and
+	  internal-space-normalized duplicate rejection, ready-surface empty-blocker
+	  checks, and invalid-marker rendering for malformed blocker containers
+	  before published bundle readiness can pass.
+	  Duplicate blocker rejection must compare decoded, lowercased, and
+	  ASCII-space-normalized public text, including HTML entity and bounded
+	  URL-percent encoded forms, so encoded or repeated-space copies cannot
+	  evade the repeated operator-text guard.
 	  SCCP public blocker decoding now runs to a deterministic input-length-bounded
 	  fixed point across the bundle builder, strict verifier, readiness renderer,
 	  all-lanes summary, and lane evidence scripts; five-layer percent-encoded
@@ -14800,9 +14972,10 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
 	  regressions, so future edits cannot silently fall back to ASCII-only
 	  lowercasing.
 	  The source, destination, receipt-proof, and live-evidence helper CLIs now use
-	  the same decoded `casefold()` path before sensitive-marker redaction, and the
-	  release public scalar-text source inventory pins those helper bodies so a
-	  lane-local fallback to ASCII-only lowercasing blocks readiness.
+	  the same decoded, ASCII-space-normalized `casefold()` path before
+	  sensitive-marker redaction, and the release public scalar-text source
+	  inventory pins those helper bodies so a lane-local fallback to raw
+	  repeated-space aliases or ASCII-only lowercasing blocks readiness.
 	  The engineering backlog no longer lists the endpoint-redaction,
 	  all-lanes/readiness public-summary, bounded Markdown row, active checklist,
   native-artifact, manifest, release-notes, phase-transcript, self-verifier,
@@ -15906,35 +16079,36 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   generated material manifests, proof-self-test, preflight report validation,
   attestation handoff/request summaries, and finalization/materialization
   errors: HTML entities and bounded URL-percent encodings are decoded before
-  sensitive-name matching, and encoded secret/private-key blocker text must fail
-  closed with fixed diagnostics. Duplicate blocker rejection must compare the
-	  same decoded/lowercased public text before direct proof-self-test or copied
-	  preflight report diagnostics can echo repeated operator blockers. Direct
-	  proof-self-test manifest blockers must be non-empty canonical printable ASCII
-	  strings without control characters after bounded decoding before preflight
-	  diagnostics can quote any blocker text. Generated SnarkJS self-check blockers
-	  must be canonicalized to single-line printable public text before manifest
-	  writing, while copied blocker arrays keep the stricter fail-closed decoded
-	  boundary. BSC Groth16 attestation request role blockers must enforce the
-	  same printable/no-control/canonical/duplicate boundary in `attestation-status`
-	  and signing/finalization validation before role diagnostics can echo blocker
-		  text; BSC and TRON route-config production blocker lists must enforce the same
-		  printable/no-control boundary after bounded decoding too, so encoded
-		  newline/tab/DEL or non-ASCII/RTL text fails before route-config diagnostics
-		  or generated TOML can preserve post-deploy blocker text. BSC Groth16
-		  material helper operator booleans must also stay exact for remaining
-		  overwrite switches: missing options may take their documented fallback,
-		  but explicitly supplied empty, null, object-wrapper, padded, uppercase,
-		  alias, boolean, or numeric values must fail closed before artifact writes
-		  can proceed. Removed local setup switches must fail before PTAU reads, and
-		  `generate` must require externally supplied Powers of Tau material.
-		  Removed unready-candidate proof-self-test flags must fail before manifest
-		  reads, and proof-self-test reports must require productionReady material.
-		  Template writer regressions must prove pre-existing transcript index,
-		  evidence index, and handoff outputs stay untouched when `overwrite` is
-		  malformed. The Groth16 material
-		  evidence guard inventory must pin those parser and
-		  adversarial-test markers before release evidence can pass.
+  sensitive-name matching, and encoded or repeated-space secret/private-key
+  blocker text must fail closed with fixed diagnostics. Duplicate blocker
+  rejection must compare the same decoded, ASCII-space-collapsed, lowercased
+  public text before direct proof-self-test or copied preflight report
+  diagnostics can echo repeated operator blockers. Direct proof-self-test
+  manifest blockers must be non-empty canonical printable ASCII strings without
+  control characters after bounded decoding before preflight diagnostics can
+  quote any blocker text. Generated SnarkJS self-check blockers must be
+  canonicalized to single-line printable public text before manifest writing,
+  while copied blocker arrays keep the stricter fail-closed decoded boundary.
+  BSC Groth16 attestation request role blockers must enforce the same
+  printable/no-control/canonical/duplicate boundary in `attestation-status` and
+  signing/finalization validation before role diagnostics can echo blocker
+  text; BSC and TRON route-config production blocker lists must enforce the same
+  decoded ASCII-space-collapsed sensitive-name and duplicate-key boundary plus
+  the same printable/no-control boundary after bounded decoding too, so encoded
+  newline/tab/DEL or non-ASCII/RTL text fails before route-config diagnostics or
+  generated TOML can preserve post-deploy blocker text. BSC Groth16 material
+  helper operator booleans must also stay exact for remaining overwrite
+  switches: missing options may take their documented fallback, but explicitly
+  supplied empty, null, object-wrapper, padded, uppercase, alias, boolean, or
+  numeric values must fail closed before artifact writes can proceed. Removed
+  local setup switches must fail before PTAU reads, and `generate` must require
+  externally supplied Powers of Tau material. Removed unready-candidate
+  proof-self-test flags must fail before manifest reads, and proof-self-test
+  reports must require productionReady material. Template writer regressions
+  must prove pre-existing transcript index, evidence index, and handoff outputs
+  stay untouched when `overwrite` is malformed. The Groth16 material evidence
+  guard inventory must pin those parser and adversarial-test markers before
+  release evidence can pass.
   Native EVM release bundles must also keep role-specific artifact byte floors:
   64 KiB for proof/proving material, 128 bytes for verifier/support fixtures,
   and 1024 bytes for SDK implementation artifacts. Public Swift, Kotlin,
@@ -16753,7 +16927,8 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   source binding evidence.
   BSC publish-route-manifest and publish-burn-record-vk commands must reject
   `--out` collisions with their route manifest or VK-template inputs before
-  producing ISI artifacts. BSC route-manifest publication must also preserve
+  producing ISI artifacts, including symlink-parent aliases that resolve back
+  to those reviewed inputs. BSC route-manifest publication must also preserve
   raw Torii pipeline HTTP rejections, including bounded public response
   previews, before any JSON fallback that depends on a local native decoder.
   Release-readiness and strict release-bundle source inventory must pin the
@@ -16849,7 +17024,8 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   malformed route manifests. Route-manifest `--out` paths must also stay
   distinct from all input evidence paths, and
   publish-route-manifest `--out` must stay distinct from the manifest being
-  published, before any reviewed evidence can be replaced.
+  published, including through symlink-parent aliases, before any reviewed
+  evidence can be replaced.
   Release-readiness and strict-bundle source inventories must pin those
   Node-script regressions.
   TRON deployment helper operator booleans must stay exact as well: malformed,
@@ -24707,13 +24883,46 @@ operator-provided rollout bundles.
   default lane, mixed-committee coverage proves that local prepare-vote
   broadcast is limited to lanes whose validator set includes the local peer,
   and negative coverage proves a cross-lane batch with one missing lane
-  authority is deferred atomically with stale ownership status cleared;
-  broader live multi-peer rollout evidence remains outstanding.
-  Committed standalone lane-block
-  summaries now ride the canonical Norito status payload too, and the localnet
-  parser counts them as autoscale expansion/progress evidence only after both
-  prepare and commit QC signer counts satisfy the lane quorum and their
-  execution status is not a rejected direct preflight. The bounded
+  authority is deferred atomically with stale ownership status cleared. Fresh
+  active lanes with no lane-local relay history now start predecessor planning
+  from lane-local height zero instead of inheriting a global compatibility
+  height, while reset watermarks remain the baseline for recreated lanes;
+  broader default-soak live multi-peer rollout evidence remains outstanding.
+  The 12-peer
+  cross-dataspace localnet route-probe corridor now gates DS1 and DS2 planning
+  on observable replayable lane-payload ownership with exact dataspace IDs, the
+  expected four-validator lane committees, and the deterministic three-vote
+  quorum. The route-probe parser now requires those ownership rows to pass the
+  canonical replay-material hash validator, treats same-slot ownership identity
+  drift or malformed latest ownership rows as non-progress, and keeps
+  same-height cross-peer observations from combining into quorum progress
+  unless their descriptor, subject, payload-ownership, and RBC-instance
+  identities match. Conflicting top committed-lane or ownership identities that
+  independently satisfy quorum at the same lane height/view now fail closed
+  instead of being selected by iterator order. An extra DS1 route
+  probe proves one active lane can advance beyond another in lane-local block
+  height without waiting for an idle configured lane. Committed standalone
+  lane-block summaries now ride the canonical Norito status payload too, and
+  the localnet parser requires each active lane to publish committed rows whose
+  embedded prepare and commit QC signer counts satisfy the exact lane quorum.
+  The parser also retains committed-lane
+  descriptor/proposal hashes, subject hash, payload-ownership hash,
+  RBC-instance hash, and QC-mode tag and treats same-height rows with identity
+  drift or malformed latest QC metadata as non-progress, so conflicting
+  certified payload identities cannot fake scale-out progress, combine into
+  cross-peer route progress, or prove safe scale-in contraction.
+  Runtime committed-lane status merging now also requires descriptor hash plus
+  proposal, prepare-QC, and commit-QC equality before replacing an existing
+  row, so malformed in-memory descriptor or QC drift remains visible as
+  suspicious evidence instead of overwriting the original certified status.
+  That separates independent lane-height planning evidence from standalone
+  lane-block QC evidence instead of treating operator status-row fanout as the
+  safety proof. The route-probe corridor now also requires an applied
+  certified committed-lane row with executable payload material for each active
+  dataspace, scans every peer for that self-certified QC evidence, and keeps
+  the stricter latest-row application selector under focused parser coverage
+  while the end-to-end gate accepts the highest applied certified row when
+  later rows are still awaiting predecessor application. The bounded
   committed-session queue now releases capacity only after a durable
   application receipt is validated, and restart hydration skips already
   application-receipted certified sidecars so applied work cannot crowd out
@@ -24768,13 +24977,21 @@ operator-provided rollout bundles.
   Focused non-localnet multilane integration suites for router behavior,
   pipeline setup, Kura storage layout, cross-lane adversarial isolation,
   global commit behavior, and lane-registry wiring have been refreshed after
-  these local hardening passes. Cross-dataspace localnet evidence now also
-  passes genesis pre-execution and the full 12-peer atomic-swap soak/rollback
-  test after updating the fixture to use the canonical `universal` dataspace
-  alias plus manifest-hash-derived private dataspace ids, and after making the
-  heavy localnet test allocate its own stack; the full 12-peer atomic-swap
-  fixture was refreshed on the 2026-07-03 Nexus consensus metadata snapshot
-  with a 10/10 paired-swap soak and rollback verification. The feature-gated
+  these local hardening passes. Cross-dataspace localnet route evidence now
+  passes genesis pre-execution and covers route probes, applied certified
+  evidence, stricter committed-history quorum checks, proposal-readiness
+  deferral for unapplied lane blocks, Kura sidecar recovery from local canonical
+  block bodies, and lane/dataspace-preserving ownership status. The remaining
+  blocker is DvP lane-block application liveness under the 12-peer localnet:
+  route probes can still stall before committed/applied lane-block convergence,
+  with one DS lane split between executable-payload wait and canonical
+  application while the other DS lane has no committed lane-block row. The
+  default 10-iteration paired-swap soak still remains a stress/liveness refresh
+  item; the latest default run before the quorum-history hardening exited `ok`
+  with only 3/10 soak iterations passing.
+  Historical full-soak evidence remains the 2026-07-03 Nexus consensus metadata
+  snapshot with a 10/10 paired-swap soak and rollback verification. The
+  feature-gated
   STARK cross-dataspace localnet fixture now uses the same canonical dataspace
   catalog and has non-ignored `zk-stark` genesis pre-execution coverage, while
   its native STARK/FRI proof runtime tests remain intentionally ignored until
@@ -24798,17 +25015,20 @@ operator-provided rollout bundles.
   contraction profiles across consecutive scale-in passes.
   The autoscale soak harness now also fails closed on stale prior scale-out
   logs and retry cleanup races: strict repeated cycles require fresh
-  post-baseline scale-out quorum, cooldown clearance re-checks contraction
-  before taking the cycle baseline, strict post-storage probes stop adding
-  top-up load, and the reporter rejects successful-cycle summaries with
-  scale-out or scale-in quorum misses. The reporter summary now also publishes
-  quorum-required maxima, successful scale-out minimum peer counts, required
-  scale-in cycle counts, required scale-in quorum minima, and optional scale-in
-  cycle counts for rollout review. A fresh 2026-07-06 strict expand/contract
-  localnet rerun now passes after lane-block message ingress was wired into
-  `irohad` and lane payload ownership replay was routed through canonical
-  entrypoint-hash helpers: the run observes load application, deterministic
-  scale-out/status quorum, and scale-in across all four peers in cycle 1.
+	  post-baseline scale-out quorum, cooldown clearance re-checks contraction
+	  before taking the cycle baseline, strict probes stop adding top-up load once
+	  transition quorum is observed, and the reporter rejects successful-cycle summaries with
+	  scale-out or scale-in quorum misses. The reporter summary now also publishes
+	  quorum-required maxima, successful scale-out minimum peer counts, required
+	  scale-in cycle counts, required scale-in quorum minima, and optional scale-in
+	  cycle counts for rollout review. A fresh 2026-07-07 strict expand/contract
+	  localnet rerun now passes after strict expansion readiness was hardened to
+	  require fresh deterministic scale-out transition evidence and expanded-lane
+	  status evidence in one gate: the canonical strict run observes load
+	  application, deterministic scale-out/status quorum, and scale-in quorum in
+	  cycle 1, and the public-profile strict run passes the same combined evidence
+	  gate. The repeated two-cycle localnet also passes under the stop-top-up-after
+	  transition-quorum policy.
   Hardened localnet soak evidence now includes a clean 300-second run refreshed
   on the 2026-07-03 Nexus consensus
   metadata snapshot with 10 cycles, 0 retries, and 0 failures, plus an earlier
@@ -25110,7 +25330,11 @@ operator-provided rollout bundles.
   previous-catalog lifecycle replay, derived lane config, and scale-out
   creation height are now revalidated again at block commit before autoscale
   storage geometry is published, so tampered staged metadata cannot
-  durable-publish a valid catalog delta. Direct queue admission and restart
+  durable-publish a valid catalog delta. Scale-in commit-revalidation coverage
+  now proves tampered pending transition metadata, survivor catalog rows,
+  preserved retired-lane catalogs, and derived lane configs abort before
+  retired-lane Kura/tiered storage or committed catalog publication, matching
+  the existing scale-out tamper boundary. Direct queue admission and restart
   queue-plan journal replay now also pin forged future-created autoscale route
   plans against the live height-aware route before they can enter the pending
   queue or local routing ledger. State-backed queue route resolution now also
@@ -31652,67 +31876,122 @@ validation path.
   so named fairness aggregates cannot be bypassed by inlining multi-action
   fairness directly into source or top-level specs. Progress specs must resolve Init as a defined
   zero-arity operator, so liveness specs cannot bind the documented initial
-  predicate to a missing or parameterized helper. Progress Init operators must
+  predicate to a missing or parameterized helper. Source and top-level progress specs must reject missing or parameterized Init operators,
+  so source and top-level liveness wrappers cannot bypass the shared
+  initial-state proof boundary. Progress Init operators must
   stay initial-state predicates, so direct specs and projection aliases cannot
   replace the initial-state boundary with next-state actions, fairness clauses,
-  or temporal eventualities, including through onward init aliases. Progress
+  or temporal eventualities, including through onward init aliases. Source and top-level progress Init operators must stay initial-state predicates,
+  so source and top-level liveness wrappers cannot replace the shared
+  initial-state proof boundary with action or temporal formulas. Source and top-level progress Init operators must be inspectable initial-state predicates,
+  so empty or otherwise unparseable `Init` roots cannot satisfy source or
+  top-level progress wrappers. Progress
   Init local aliases must resolve to initial-state predicates, so local helper
   names cannot hide action-only or temporal syntax from the initial-state
-  boundary check. Progress Init local aliases must resolve to defined
+  boundary check. Source and top-level progress Init local aliases must resolve to initial-state predicates,
+  so local helper names cannot hide action or temporal syntax from source or
+  top-level liveness wrappers. Progress Init local aliases must resolve to defined
   zero-arity initial-state predicates, so local helper names cannot point at
-  missing or parameterized initial predicates. Progress Init local aliases
+  missing or parameterized initial predicates. Source and top-level progress Init local aliases must resolve to defined zero-arity initial-state predicates,
+  so source and top-level liveness wrappers cannot point local `Init` aliases
+  at missing or parameterized initial predicates. Progress Init local aliases
   must resolve to inspectable initial-state predicates, so local helper names
-  cannot point at empty or otherwise uninspectable predicate definitions. Progress Init local aliases must inherit recursive resolution for onward local aliases,
+  cannot point at empty or otherwise uninspectable predicate definitions. Source and top-level progress Init local aliases must resolve to inspectable initial-state predicates,
+  so source and top-level liveness wrappers cannot point local `Init` aliases
+  at empty or otherwise uninspectable predicate definitions. Progress Init local aliases must inherit recursive resolution for onward local aliases,
   so local helper names cannot hide a missing, undefined, parameterized, or
-  uninspectable inner initial-state predicate behind another local helper. Progress
-  Init aliases must be acyclic, so recursive local or imported aliases cannot
+  uninspectable inner initial-state predicate behind another local helper. Source and top-level progress Init local aliases must inherit recursive resolution for onward local aliases,
+  so source and top-level liveness wrappers cannot hide bad initial predicates
+  behind local helper-to-helper chains. Progress Init aliases must be acyclic, so recursive local or imported aliases cannot
   satisfy the initial-state predicate boundary without resolving to an
-  inspectable predicate. Progress Init aliases must resolve through named local INSTANCE declarations,
+  inspectable predicate. Source and top-level progress Init aliases must be acyclic,
+  so source and top-level liveness wrappers cannot satisfy the initial-state
+  boundary through recursive local `Init` alias cycles. Progress Init aliases must resolve through named local INSTANCE declarations,
   so imported Init aliases cannot rely on implicit or misspelled module
-  aliases. Progress Init aliases must inherit recursive resolution for onward aliases inside imported Init targets,
+  aliases. Source and top-level progress Init aliases must resolve through named local INSTANCE declarations,
+  so source and top-level liveness wrappers cannot import `Init` through
+  undeclared module aliases. Progress Init aliases must inherit recursive resolution for onward aliases inside imported Init targets,
   so imported Init aliases cannot hide a missing, undefined, parameterized,
-  recursive, or uninspectable inner initial-state predicate. Progress Init aliases must inherit helper target guards inside imported Init targets,
+  recursive, or uninspectable inner initial-state predicate. Source and top-level progress Init aliases must inherit recursive resolution for onward aliases inside imported Init targets,
+  so source and top-level liveness wrappers cannot import `Init` targets that
+  hide bad inner initial predicates behind local helper aliases. Progress Init aliases must inherit helper target guards inside imported Init targets,
   so imported Init aliases cannot hide action-shaped, parameterized, or
-  uninspectable helper operands inside the imported initial-state predicate. Progress Init aliases must inherit helper acyclicity inside imported Init targets,
+  uninspectable helper operands inside the imported initial-state predicate. Source and top-level progress Init aliases must inherit helper target guards inside imported Init targets,
+  so source and top-level liveness wrappers cannot import `Init` predicates
+  that bury action-shaped, parameterized, or uninspectable helper operands. Progress Init aliases must inherit helper acyclicity inside imported Init targets,
   so imported Init aliases cannot hide recursive helper operands inside the
-  imported initial-state predicate. Progress Init aliases must inherit module-alias helper target guards inside imported Init targets,
+  imported initial-state predicate. Source and top-level progress Init aliases must inherit helper acyclicity inside imported Init targets,
+  so source and top-level liveness wrappers cannot import `Init` predicates
+  that satisfy the initial-state boundary through recursive helper operands. Progress Init aliases must inherit module-alias helper target guards inside imported Init targets,
   so imported Init aliases cannot hide missing instance aliases, missing
   modules, undefined operators, action-shaped targets, parameterized targets,
-  or uninspectable targets behind imported helper operands. Progress Init aliases must inherit module-alias helper acyclicity inside imported Init targets,
+  or uninspectable targets behind imported helper operands. Source and top-level progress Init aliases must inherit module-alias helper target guards inside imported Init targets,
+  so source and top-level liveness wrappers cannot import `Init` predicates
+  that bury missing instance aliases, missing modules, action-shaped targets,
+  parameterized targets, or uninspectable targets behind module-alias helper
+  operands. Progress Init aliases must inherit module-alias helper acyclicity inside imported Init targets,
   so imported Init aliases cannot hide recursive module-alias helper operands
-  inside the imported initial-state predicate. Progress Init aliases must inherit recursive module-alias helper resolution inside imported Init targets,
+  inside the imported initial-state predicate. Source and top-level progress Init aliases must inherit module-alias helper acyclicity inside imported Init targets,
+  so source and top-level liveness wrappers cannot import `Init` predicates
+  that satisfy the initial-state boundary through recursive module-alias
+  helper operands. Progress Init aliases must inherit recursive module-alias helper resolution inside imported Init targets,
   so imported Init aliases cannot hide missing, undefined, action-shaped,
   parameterized, recursive, or uninspectable onward aliases behind imported
-  helper operands. Progress Init aliases must inherit nested helper guards behind imported module-alias helpers,
+  helper operands. Source and top-level progress Init aliases must inherit recursive module-alias helper resolution inside imported Init targets,
+  so source and top-level liveness wrappers cannot import `Init` predicates
+  that hide bad onward aliases behind module-alias helper operands. Progress Init aliases must inherit nested helper guards behind imported module-alias helpers,
   so imported Init aliases cannot hide action-shaped, parameterized,
   recursive, or uninspectable local helper operands inside imported helper
+  targets. Source and top-level progress Init aliases must inherit nested helper guards behind imported module-alias helpers,
+  so source and top-level liveness wrappers cannot import `Init` predicates
+  that hide bad local helper operands inside imported module-alias helper
   targets. Progress Init aliases must inherit nested helper alias resolution behind imported module-alias helpers,
   so imported Init aliases cannot hide missing instance aliases, missing
   modules, undefined operators, action-shaped targets, parameterized targets,
   recursive aliases, or uninspectable targets behind local helper aliases
-  inside imported helper targets. Progress Init aliases must inherit nested module-alias helper guards behind imported module-alias helpers,
+  inside imported helper targets. Source and top-level progress Init aliases must inherit nested helper alias resolution behind imported module-alias helpers,
+  so source and top-level liveness wrappers cannot import `Init` predicates
+  that hide bad onward aliases behind local helper aliases inside imported
+  module-alias helper targets. Progress Init aliases must inherit nested module-alias helper guards behind imported module-alias helpers,
   so imported Init aliases cannot hide missing instance aliases, missing
   modules, undefined operators, action-shaped targets, parameterized targets,
   recursive module-alias helper operands, or uninspectable targets inside
-  imported helper targets. Progress Init aliases must inherit nested module-alias helper onward resolution behind imported module-alias helpers,
+  imported helper targets. Source and top-level progress Init aliases must inherit nested module-alias helper guards behind imported module-alias helpers,
+  so source and top-level liveness wrappers cannot import `Init` predicates
+  that hide bad module-alias helper operands inside imported module-alias
+  helper targets. Progress Init aliases must inherit nested module-alias helper onward resolution behind imported module-alias helpers,
   so imported Init aliases cannot hide missing instance aliases, missing
   modules, undefined operators, action-shaped targets, parameterized targets,
   recursive onward aliases, or uninspectable targets behind nested
-  module-alias helper operands. Progress Init aliases must inherit nested module-alias target helper guards behind imported module-alias helpers,
+  module-alias helper operands. Source and top-level progress Init aliases must inherit nested module-alias helper onward resolution behind imported module-alias helpers,
+  so source and top-level liveness wrappers cannot import `Init` predicates
+  that hide bad onward aliases behind nested module-alias helper operands. Progress Init aliases must inherit nested module-alias target helper guards behind imported module-alias helpers,
   so imported Init aliases cannot hide action-shaped, parameterized,
   recursive, or uninspectable local helper operands inside nested module-alias
-  helper targets. Progress Init aliases must inherit nested module-alias target helper alias resolution behind imported module-alias helpers,
+  helper targets. Source and top-level progress Init aliases must inherit nested module-alias target helper guards behind imported module-alias helpers,
+  so source and top-level liveness wrappers cannot import `Init` predicates
+  that hide bad local helper operands inside nested module-alias helper
+  targets. Progress Init aliases must inherit nested module-alias target helper alias resolution behind imported module-alias helpers,
   so imported Init aliases cannot hide missing instance aliases, missing
   modules, undefined operators, action-shaped targets, parameterized targets,
   recursive aliases, or uninspectable targets behind local helper aliases
-  inside nested module-alias helper targets. Progress Init aliases must inherit nested module-alias target helper alias onward resolution behind imported module-alias helpers,
+  inside nested module-alias helper targets. Source and top-level progress Init aliases must inherit nested module-alias target helper alias resolution behind imported module-alias helpers,
+  so source and top-level liveness wrappers cannot import `Init` predicates
+  that hide bad onward aliases behind local helper aliases inside nested
+  module-alias helper targets. Progress Init aliases must inherit nested module-alias target helper alias onward resolution behind imported module-alias helpers,
   so imported Init aliases cannot hide missing instance aliases, missing
   modules, undefined operators, action-shaped targets, parameterized targets,
   recursive onward aliases, or uninspectable targets behind local helper
-  alias targets inside nested module-alias helper targets. Progress Init aliases must inherit nested module-alias target helper alias onward target helper guards behind imported module-alias helpers,
+  alias targets inside nested module-alias helper targets. Source and top-level progress Init aliases must inherit nested module-alias target helper alias onward resolution behind imported module-alias helpers,
+  so source and top-level liveness wrappers cannot import `Init` predicates
+  that hide bad onward aliases behind local helper alias targets inside
+  nested module-alias helper targets. Progress Init aliases must inherit nested module-alias target helper alias onward target helper guards behind imported module-alias helpers,
   so imported Init aliases cannot hide action-shaped, parameterized,
   recursive, or uninspectable local helper operands inside onward alias
-  targets reached from nested module-alias helper targets. Progress Init aliases must inherit nested module-alias target helper alias onward target helper alias resolution behind imported module-alias helpers,
+  targets reached from nested module-alias helper targets. Source and top-level progress Init aliases must inherit nested module-alias target helper alias onward target helper guards behind imported module-alias helpers,
+  so source and top-level liveness wrappers cannot import `Init` predicates
+  that hide bad local helper operands inside onward alias targets reached
+  from nested module-alias helper targets. Progress Init aliases must inherit nested module-alias target helper alias onward target helper alias resolution behind imported module-alias helpers,
   so imported Init aliases cannot hide missing instance aliases, missing
   modules, undefined operators, action-shaped targets, parameterized targets,
   recursive aliases, or uninspectable targets behind local helper aliases
@@ -31725,9 +32004,13 @@ validation path.
   recursive, or uninspectable helper operands after several alternating
   module-alias and local-alias hops. Progress Init aliases must resolve to local modules with defined zero-arity initial-state predicates,
   so imported Init aliases cannot point at missing modules, undefined
-  operators, or parameterized helpers. Progress Init aliases must resolve to
+  operators, or parameterized helpers. Source and top-level progress Init aliases must resolve to local modules with defined zero-arity initial-state predicates,
+  so source and top-level liveness wrappers cannot import missing modules,
+  undefined operators, or parameterized initial predicates as `Init`. Progress Init aliases must resolve to
   inspectable initial-state predicates, so imported Init aliases cannot point
-  at empty or otherwise uninspectable helper predicates. Progress Init helper conjuncts must resolve to initial-state
+  at empty or otherwise uninspectable helper predicates. Source and top-level progress Init aliases must resolve to inspectable initial-state predicates,
+  so source and top-level liveness wrappers cannot import empty or otherwise
+  uninspectable initial-state predicate definitions as `Init`. Progress Init helper conjuncts must resolve to initial-state
   predicates, so composed Init formulas cannot bury action-only or temporal
   syntax in named helper operands. Progress Init helpers must be acyclic, so
   composed Init formulas cannot satisfy the initial-state boundary through

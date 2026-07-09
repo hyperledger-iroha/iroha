@@ -376,6 +376,28 @@ public final class TransactionBuilderTests {
                 null,
                 Map.of()),
         "authority must not contain surrounding whitespace");
+    assertIllegalArgumentMessage(
+        () ->
+            KagemushaInstructionArchives.topUpTransactionPayloadFromInitRequest(
+                new byte[0],
+                " 00000042",
+                authority,
+                1_735_000_000_000L,
+                null,
+                null,
+                Map.of()),
+        "chainId must not contain surrounding whitespace");
+    assertIllegalArgumentMessage(
+        () ->
+            KagemushaInstructionArchives.topUpTransactionPayloadFromInitRequest(
+                new byte[0],
+                "00000042",
+                " " + authority,
+                1_735_000_000_000L,
+                null,
+                null,
+                Map.of()),
+        "authority must not contain surrounding whitespace");
   }
 
   private static void kagemushaInstructionArchivesRejectAdversarialInputs() {

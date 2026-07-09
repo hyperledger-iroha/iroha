@@ -46,6 +46,12 @@ def complete_args(tmp_path: Path) -> list[str]:
         str(write_payload(payload_dir / "consumption.json")),
         "--out-dir",
         str(tmp_path / "evidence"),
+        "--now-unix",
+        "1800400000",
+        "--max-snapshot-age-secs",
+        "691200",
+        "--max-ingest-lag-secs",
+        "900",
         "--watch-limit",
         "7",
         "--watch-max-polls",
@@ -141,6 +147,12 @@ def test_dry_run_prints_complete_reputation_rollout_plan(tmp_path: Path, capsys)
     assert "--provider-id=provider-a" in verify
     verifier = plan["steps"][5]["command"]
     assert "check_sorafs_reputation_rollout_evidence.py" in verifier[1]
+    assert "--now-unix" in verifier
+    assert "1800400000" in verifier
+    assert "--max-snapshot-age-secs" in verifier
+    assert "691200" in verifier
+    assert "--max-ingest-lag-secs" in verifier
+    assert "900" in verifier
     assert "--require-provider" in verifier
     assert "provider-a" in verifier
 
@@ -473,6 +485,26 @@ def test_missing_external_evidence_fails_before_plan(tmp_path: Path, capsys) -> 
     assert "--metrics-evidence" not in captured.err
     assert str(missing) not in captured.err
     assert captured.out == ""
+
+
+def test_invalid_freshness_args_fail_before_plan(tmp_path: Path, capsys) -> None:
+    cases = (
+        ("--now-unix", "0"),
+        ("--max-snapshot-age-secs", "0"),
+        ("--max-ingest-lag-secs", "0"),
+    )
+
+    for option, value in cases:
+        case_dir = tmp_path / option.removeprefix("--").replace("-", "_")
+        case_dir.mkdir()
+        args = complete_args(case_dir)
+        args[args.index(option) + 1] = value
+
+        assert MODULE.main([*args, "--dry-run"]) == 2
+
+        captured = capsys.readouterr()
+        assert "must be positive" in captured.err
+        assert captured.out == ""
 
 
 def test_torii_url_rejects_secret_bearing_url_without_leaking(

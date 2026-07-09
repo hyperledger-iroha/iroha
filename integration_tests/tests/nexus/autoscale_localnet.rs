@@ -19,6 +19,7 @@ use eyre::{Result, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
     client::{Client, TxConfirmationStatus},
+    crypto::Hash,
     data_model::{
         Level,
         block::consensus::{
@@ -1577,6 +1578,8 @@ struct LaneRelaySnapshot {
     lane_id: u32,
     dataspace_id: u64,
     block_height: u64,
+    descriptor_hash: Option<Hash>,
+    merge_admissible: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1585,6 +1588,12 @@ struct CommittedLaneBlockSnapshot {
     dataspace_id: u64,
     lane_block_height: u64,
     lane_block_view: u64,
+    descriptor_hash: Hash,
+    proposal_hash: Hash,
+    subject_hash: Hash,
+    payload_ownership_hash: Hash,
+    rbc_instance_hash: Hash,
+    qc_mode_tag: String,
     execution_status: String,
     executable_payload_available: bool,
     validator_count: u32,
@@ -1905,6 +1914,8 @@ fn status_snapshot(network: &sandbox::SerializedNetwork) -> Result<Vec<PeerStatu
                             lane_id: lane.lane_id.as_u32(),
                             dataspace_id: lane.dataspace_id.as_u64(),
                             block_height: lane.block_height,
+                            descriptor_hash: lane.lane_block_descriptor_hash,
+                            merge_admissible: lane.is_merge_admissible(),
                         })
                         .collect::<Vec<_>>()
                 })
@@ -1920,6 +1931,12 @@ fn status_snapshot(network: &sandbox::SerializedNetwork) -> Result<Vec<PeerStatu
                             dataspace_id: entry.dataspace_id.as_u64(),
                             lane_block_height: entry.lane_block_height,
                             lane_block_view: entry.lane_block_view,
+                            descriptor_hash: entry.descriptor_hash,
+                            proposal_hash: entry.proposal_hash,
+                            subject_hash: entry.subject_hash,
+                            payload_ownership_hash: entry.payload_ownership_hash,
+                            rbc_instance_hash: entry.rbc_instance_hash,
+                            qc_mode_tag: entry.qc_mode_tag.clone(),
                             execution_status: entry.execution_status.clone(),
                             executable_payload_available: entry.executable_payload_available,
                             validator_count: entry.validator_count,
@@ -2226,14 +2243,71 @@ fn peer_lane_commitment_evidence(
     }
 }
 
-fn peer_lane_relay_height(peer: &PeerStatusSnapshot, lane_id: u32) -> Option<u64> {
-    peer.lane_relay
-        .iter()
-        .filter(|relay| {
-            relay.lane_id == lane_id && relay.dataspace_id == DataSpaceId::UNIVERSAL.as_u64()
-        })
-        .map(|relay| relay.block_height)
-        .max()
+fn lane_relay_latest_rows_equivalent(left: &LaneRelaySnapshot, right: &LaneRelaySnapshot) -> bool {
+    left.lane_id == right.lane_id
+        && left.dataspace_id == right.dataspace_id
+        && left.block_height == right.block_height
+        && left.descriptor_hash == right.descriptor_hash
+        && left.merge_admissible == right.merge_admissible
+}
+
+enum LaneRelayEvidence<'a> {
+    Missing,
+    Unambiguous(&'a LaneRelaySnapshot),
+    Ambiguous,
+}
+
+fn latest_lane_relay_evidence(peer: &PeerStatusSnapshot, lane_id: u32) -> LaneRelayEvidence<'_> {
+    let mut latest = None::<&LaneRelaySnapshot>;
+    let mut latest_is_ambiguous = false;
+
+    for relay in peer.lane_relay.iter().filter(|relay| {
+        relay.lane_id == lane_id && relay.dataspace_id == DataSpaceId::UNIVERSAL.as_u64()
+    }) {
+        let Some(current) = latest else {
+            latest = Some(relay);
+            latest_is_ambiguous = false;
+            continue;
+        };
+        match relay.block_height.cmp(&current.block_height) {
+            std::cmp::Ordering::Greater => {
+                latest = Some(relay);
+                latest_is_ambiguous = false;
+            }
+            std::cmp::Ordering::Equal => {
+                if !lane_relay_latest_rows_equivalent(current, relay) {
+                    latest_is_ambiguous = true;
+                }
+            }
+            std::cmp::Ordering::Less => {}
+        }
+    }
+
+    if latest_is_ambiguous {
+        LaneRelayEvidence::Ambiguous
+    } else {
+        match latest {
+            Some(snapshot) => LaneRelayEvidence::Unambiguous(snapshot),
+            None => LaneRelayEvidence::Missing,
+        }
+    }
+}
+
+fn relay_row_counts_as_expansion_progress(relay: &LaneRelaySnapshot) -> bool {
+    relay.dataspace_id == DataSpaceId::UNIVERSAL.as_u64()
+        && relay.merge_admissible
+        && relay.descriptor_hash.is_some()
+}
+
+fn peer_lane_relay_progress_height(peer: &PeerStatusSnapshot, lane_id: u32) -> Option<u64> {
+    match latest_lane_relay_evidence(peer, lane_id) {
+        LaneRelayEvidence::Unambiguous(relay) if relay_row_counts_as_expansion_progress(relay) => {
+            Some(relay.block_height)
+        }
+        LaneRelayEvidence::Missing
+        | LaneRelayEvidence::Unambiguous(_)
+        | LaneRelayEvidence::Ambiguous => None,
+    }
 }
 
 fn committed_lane_block_targets_default_dataspace(block: &CommittedLaneBlockSnapshot) -> bool {
@@ -2286,6 +2360,12 @@ fn committed_lane_block_latest_rows_equivalent(
         && left.dataspace_id == right.dataspace_id
         && left.lane_block_height == right.lane_block_height
         && left.lane_block_view == right.lane_block_view
+        && left.descriptor_hash == right.descriptor_hash
+        && left.proposal_hash == right.proposal_hash
+        && left.subject_hash == right.subject_hash
+        && left.payload_ownership_hash == right.payload_ownership_hash
+        && left.rbc_instance_hash == right.rbc_instance_hash
+        && left.qc_mode_tag == right.qc_mode_tag
         && left.execution_status == right.execution_status
         && left.executable_payload_available == right.executable_payload_available
         && left.validator_count == right.validator_count
@@ -2469,6 +2549,9 @@ fn peer_has_ambiguous_lane_evidence(peer: &PeerStatusSnapshot, lane_id: u32) -> 
         latest_committed_lane_block_evidence(peer, lane_id, committed_lane_block_is_certified),
         CommittedLaneBlockEvidence::Ambiguous
     ) || matches!(
+        latest_lane_relay_evidence(peer, lane_id),
+        LaneRelayEvidence::Ambiguous
+    ) || matches!(
         peer_lane_validator_evidence(peer, lane_id),
         LaneValidatorEvidence::Ambiguous
     )
@@ -2531,8 +2614,8 @@ fn peer_has_lane_progress_transition(
     };
 
     let relay_progressed = match (
-        peer_lane_relay_height(peer, lane_id),
-        peer_lane_relay_height(baseline_peer, lane_id),
+        peer_lane_relay_progress_height(peer, lane_id),
+        peer_lane_relay_progress_height(baseline_peer, lane_id),
     ) {
         (Some(current), Some(baseline)) => current > baseline,
         (Some(current), None) => current > 0,
@@ -2767,7 +2850,10 @@ fn peer_has_contracted_profile(
         }
         LaneCommitmentEvidence::Ambiguous => false,
     };
-    let elastic_lane_relay_idle = peer_lane_relay_height(status, elastic_lane_id).is_none();
+    let elastic_lane_relay_idle = matches!(
+        latest_lane_relay_evidence(status, elastic_lane_id),
+        LaneRelayEvidence::Missing
+    );
     let elastic_committed_lane_blocks_idle = matches!(
         latest_committed_lane_block_evidence(
             status,
@@ -3405,7 +3491,11 @@ fn expansion_probe_top_up_tx_count(
     elapsed: Duration,
     cycle_load_tx_count: usize,
     require_scale_out_transition: bool,
+    scale_out_transition_observed_on_quorum: bool,
 ) -> usize {
+    if require_scale_out_transition && scale_out_transition_observed_on_quorum {
+        return 0;
+    }
     if storage_expanded && elapsed >= EXPANSION_STATUS_SIGNAL_GRACE {
         if require_scale_out_transition {
             return 0;
@@ -3413,6 +3503,21 @@ fn expansion_probe_top_up_tx_count(
         return expansion_post_storage_top_up_tx_count(cycle_load_tx_count);
     }
     expansion_scaled_top_up_tx_count(heartbeat_seq, cycle_load_tx_count)
+}
+
+fn expansion_probe_ready(
+    expansion_observed_on_status: bool,
+    scale_out_transition_observed_on_quorum: bool,
+    require_scale_out_transition: bool,
+    require_expansion_status: bool,
+) -> bool {
+    if require_scale_out_transition && require_expansion_status {
+        scale_out_transition_observed_on_quorum && expansion_observed_on_status
+    } else if require_scale_out_transition {
+        scale_out_transition_observed_on_quorum
+    } else {
+        expansion_observed_on_status || scale_out_transition_observed_on_quorum
+    }
 }
 
 fn wait_for_expanded_lanes_with_heartbeat(
@@ -3426,6 +3531,7 @@ fn wait_for_expanded_lanes_with_heartbeat(
     elastic_lane_id: u32,
     expanded_provisioned_lanes: usize,
     require_scale_out_transition: bool,
+    require_expansion_status: bool,
     quorum_required: usize,
     timeout: Duration,
     context: &str,
@@ -3482,7 +3588,7 @@ fn wait_for_expanded_lanes_with_heartbeat(
                             false
                         }
                     };
-                if scale_out_transition_observed_on_quorum {
+                if scale_out_transition_observed_on_quorum && !require_expansion_status {
                     eprintln!(
                         "[autoscale-localnet] {context}: expansion observed via deterministic autoscale scale-out transitions despite status errors (scale-out transitions {last_scale_out_transition_peers}/{quorum_required})"
                     );
@@ -3529,6 +3635,7 @@ fn wait_for_expanded_lanes_with_heartbeat(
                     elapsed,
                     cycle_load_tx_count,
                     require_scale_out_transition,
+                    scale_out_transition_observed_on_quorum,
                 );
                 if top_up_tx_count > 0 {
                     if let Err(top_up_err) =
@@ -3563,13 +3670,18 @@ fn wait_for_expanded_lanes_with_heartbeat(
                 }
             };
 
-        let expansion_ready = if require_scale_out_transition {
-            scale_out_transition_observed_on_quorum
-        } else {
-            expansion_observed_on_status || scale_out_transition_observed_on_quorum
-        };
+        let expansion_ready = expansion_probe_ready(
+            expansion_observed_on_status,
+            scale_out_transition_observed_on_quorum,
+            require_scale_out_transition,
+            require_expansion_status,
+        );
         if expansion_ready {
-            if expansion_observed_on_status {
+            if require_scale_out_transition && require_expansion_status {
+                eprintln!(
+                    "[autoscale-localnet] {context}: expansion observed via status lane activity/lifecycle transitions and deterministic autoscale scale-out transitions (scale-out transitions {last_scale_out_transition_peers}/{quorum_required})"
+                );
+            } else if expansion_observed_on_status {
                 eprintln!(
                     "[autoscale-localnet] {context}: expansion observed via status lane activity/lifecycle transitions"
                 );
@@ -3633,6 +3745,7 @@ fn wait_for_expanded_lanes_with_heartbeat(
             elapsed,
             cycle_load_tx_count,
             require_scale_out_transition,
+            scale_out_transition_observed_on_quorum,
         );
         if top_up_tx_count > 0 {
             if let Err(err) = submit_load_round_robin(top_up_clients, top_up_tx_count) {
@@ -3645,76 +3758,16 @@ fn wait_for_expanded_lanes_with_heartbeat(
     Err(eyre!(
         "{context}: timed out waiting for expanded lane profile (lane {elastic_lane_id} active via status `capacity>0 || committed>0`, sumeragi lane commitment `tx_count>0 || teu_total>0`, public-lane validator lifecycle activity (`active || pending_activation || jailed || exiting`), baseline transition via lane declaration/progress, or deterministic autoscale scale-out transitions on >= {quorum_required}/{TOTAL_PEERS} peers{}; storage lane count={expanded_provisioned_lanes} accepted only as fallback after grace {:?} + post-storage status window {:?} when elastic lane storage progresses on >= {quorum_required}/{TOTAL_PEERS} peers and scale-out transition quorum is not required); last status snapshot: {last_status_snapshot:?}; last storage snapshot: {last_storage_snapshot:?}; last elastic storage snapshot: {last_elastic_storage_snapshot:?}; last autoscale transition snapshot: {last_transition_snapshot:?}; last scale-out transition peers: {last_scale_out_transition_peers}/{TOTAL_PEERS}; last status error: {last_status_error:?}; last transition error: {last_transition_error:?}; last heartbeat error: {last_heartbeat_error:?}; last top-up error: {last_top_up_error:?}",
         if require_scale_out_transition {
-            "; strict mode requires fresh deterministic scale-out transition quorum after the cycle baseline"
+            if require_expansion_status {
+                "; strict mode requires fresh deterministic scale-out transition quorum after the cycle baseline and expanded-lane status evidence"
+            } else {
+                "; strict mode requires fresh deterministic scale-out transition quorum after the cycle baseline"
+            }
         } else {
             ""
         },
         EXPANSION_STATUS_SIGNAL_GRACE,
         EXPANSION_POST_STORAGE_STATUS_WINDOW,
-    ))
-}
-
-fn wait_for_expanded_lane_status_quorum(
-    network: &sandbox::SerializedNetwork,
-    heartbeat_client: &Client,
-    top_up_clients: &[Client],
-    cycle_load_tx_count: usize,
-    baseline_status_snapshot: &[PeerStatusSnapshot],
-    elastic_lane_id: u32,
-    quorum_required: usize,
-    timeout: Duration,
-    context: &str,
-    heartbeat_prefix: &str,
-    heartbeat_interval: Duration,
-) -> Result<()> {
-    let started = Instant::now();
-    let mut heartbeat_seq = 0_u64;
-    let mut last_status_snapshot = Vec::new();
-    let mut last_status_error = None::<String>;
-    let mut last_heartbeat_error = None::<String>;
-    let mut last_top_up_error = None::<String>;
-    let mut last_status_signal_peers = 0_usize;
-
-    while started.elapsed() <= timeout {
-        match status_snapshot(network) {
-            Ok(snapshot) => {
-                last_status_signal_peers = peers_with_expanded_lane_signal(
-                    &snapshot,
-                    Some(baseline_status_snapshot),
-                    elastic_lane_id,
-                );
-                if last_status_signal_peers >= quorum_required {
-                    eprintln!(
-                        "[autoscale-localnet] {context}: strict expansion status quorum observed for lane {elastic_lane_id} ({last_status_signal_peers}/{quorum_required})"
-                    );
-                    return Ok(());
-                }
-                last_status_snapshot = snapshot;
-            }
-            Err(err) => {
-                last_status_error = Some(err.to_string());
-            }
-        }
-
-        if let Err(err) = heartbeat_client.submit(Log::new(
-            Level::INFO,
-            format!("{heartbeat_prefix}-{heartbeat_seq}"),
-        )) {
-            last_heartbeat_error = Some(err.to_string());
-        }
-        heartbeat_seq = heartbeat_seq.saturating_add(1);
-
-        let top_up_tx_count = expansion_scaled_top_up_tx_count(heartbeat_seq, cycle_load_tx_count);
-        if top_up_tx_count > 0 {
-            if let Err(err) = submit_load_round_robin(top_up_clients, top_up_tx_count) {
-                last_top_up_error = Some(err.to_string());
-            }
-        }
-        thread::sleep(heartbeat_interval);
-    }
-
-    Err(eyre!(
-        "{context}: timed out waiting for expanded lane {elastic_lane_id} status quorum (status signal {last_status_signal_peers}/{quorum_required}); last status snapshot: {last_status_snapshot:?}; last status error: {last_status_error:?}; last heartbeat error: {last_heartbeat_error:?}; last top-up error: {last_top_up_error:?}"
     ))
 }
 
@@ -4062,30 +4115,13 @@ fn run_expand_contract_cycle(
         elastic_lane_id,
         expanded_provisioned_lanes,
         require_scale_out_transition,
+        require_expansion_status_before_contraction,
         quorum_required,
         scale_out_timeout,
         &expansion_context,
         &expansion_prefix,
         EXPANSION_PROBE_INTERVAL,
     )?;
-    if require_expansion_status_before_contraction {
-        let strict_expansion_context =
-            format!("autoscale strict expansion status cycle {cycle_index}");
-        let strict_expansion_prefix = format!("autoscale-strict-expand-status-cycle-{cycle_index}");
-        wait_for_expanded_lane_status_quorum(
-            network,
-            &expansion_probe_client,
-            submitters,
-            load_tx_count,
-            &pre_cycle_status,
-            elastic_lane_id,
-            quorum_required,
-            STRICT_SCALE_OUT_WAIT_TIMEOUT,
-            &strict_expansion_context,
-            &strict_expansion_prefix,
-            EXPANSION_PROBE_INTERVAL,
-        )?;
-    }
     let expansion_time_s = expansion_started.elapsed().as_secs_f64();
     eprintln!(
         "[autoscale-localnet][cycle {cycle_index}] expansion wait: {:.3}s",
@@ -4818,6 +4854,7 @@ mod tests {
     use eyre::Result;
     use iroha::{
         client::TxConfirmationStatus,
+        crypto::Hash,
         data_model::{
             block::consensus::{
                 COMMITTED_LANE_STATUS_APPLICATION_RECEIPT_CONFLICTS_WITH_PREFLIGHT,
@@ -4850,12 +4887,12 @@ mod tests {
         expansion_observed_on_quorum_or_scale_out_transition_for_lane,
         expansion_observed_on_quorum_peers, expansion_observed_on_quorum_peers_for_lane,
         expansion_observed_on_storage, expansion_observed_on_storage_for_count,
-        expansion_observed_on_storage_for_lane_count, expansion_probe_top_up_tx_count,
-        expansion_scaled_top_up_tx_count, expansion_top_up_tx_count,
-        is_autoscale_elastic_storage_segment, parse_autoscale_transition_stats,
-        parse_autoscale_transition_stats_for_lane, peer_committed_lane_block_snapshot,
-        peer_direct_applied_committed_lane_block_snapshot, peer_lane_commitment_snapshot,
-        peer_lane_status, peer_lane_validator_snapshot,
+        expansion_observed_on_storage_for_lane_count, expansion_probe_ready,
+        expansion_probe_top_up_tx_count, expansion_scaled_top_up_tx_count,
+        expansion_top_up_tx_count, is_autoscale_elastic_storage_segment,
+        parse_autoscale_transition_stats, parse_autoscale_transition_stats_for_lane,
+        peer_committed_lane_block_snapshot, peer_direct_applied_committed_lane_block_snapshot,
+        peer_lane_commitment_snapshot, peer_lane_status, peer_lane_validator_snapshot,
         peers_with_direct_applied_committed_lane_block_for_lane,
         peers_with_elastic_storage_progress, peers_with_expanded_lane_signal,
         peers_with_scale_in_transition, peers_with_scale_out_transition,
@@ -4888,6 +4925,38 @@ mod tests {
             blocks_non_empty: 10,
             ..PeerStatusSnapshot::default()
         }
+    }
+
+    fn relay_snapshot(
+        lane_id: u32,
+        dataspace_id: u64,
+        block_height: u64,
+        descriptor_hash: Option<Hash>,
+        merge_admissible: bool,
+    ) -> LaneRelaySnapshot {
+        LaneRelaySnapshot {
+            lane_id,
+            dataspace_id,
+            block_height,
+            descriptor_hash,
+            merge_admissible,
+        }
+    }
+
+    fn descriptor_backed_relay_snapshot(
+        lane_id: u32,
+        dataspace_id: u64,
+        block_height: u64,
+    ) -> LaneRelaySnapshot {
+        relay_snapshot(
+            lane_id,
+            dataspace_id,
+            block_height,
+            Some(Hash::new(format!(
+                "autoscale-localnet-relay-descriptor:{lane_id}:{dataspace_id}:{block_height}"
+            ))),
+            true,
+        )
     }
 
     fn status_with_commit_quorum(
@@ -5128,6 +5197,16 @@ mod tests {
             dataspace_id: 0,
             lane_block_height: height,
             lane_block_view: 0,
+            descriptor_hash: Hash::new(format!("autoscale-localnet-descriptor:{lane_id}:{height}")),
+            proposal_hash: Hash::new(format!("autoscale-localnet-proposal:{lane_id}:{height}")),
+            subject_hash: Hash::new(format!("autoscale-localnet-subject:{lane_id}:{height}")),
+            payload_ownership_hash: Hash::new(format!(
+                "autoscale-localnet-payload-ownership:{lane_id}:{height}",
+            )),
+            rbc_instance_hash: Hash::new(format!(
+                "autoscale-localnet-rbc-instance:{lane_id}:{height}",
+            )),
+            qc_mode_tag: format!("autoscale-localnet-qc-mode:{lane_id}:{height}"),
             execution_status: COMMITTED_LANE_STATUS_PAYLOAD_RECOVERED_AWAITING_STATE_APPLICATION
                 .to_owned(),
             executable_payload_available: true,
@@ -5321,6 +5400,89 @@ mod tests {
             !expansion_observed_on_quorum_peers_for_lane(&conflicting_snapshot, None, 1, 3),
             "conflicting latest committed lane-block rows must not fake autoscale expansion"
         );
+
+        let mut descriptor_hash_b = certified_a.clone();
+        descriptor_hash_b.descriptor_hash =
+            Hash::new(b"autoscale-localnet-conflicting-descriptor-hash");
+        let descriptor_hash_conflicting_peer = PeerStatusSnapshot {
+            committed_lane_blocks: vec![certified_a.clone(), descriptor_hash_b],
+            ..PeerStatusSnapshot::default()
+        };
+        assert!(
+            peer_committed_lane_block_snapshot(&descriptor_hash_conflicting_peer, 1).is_none(),
+            "same-height committed lane-block rows with descriptor-hash drift must fail closed"
+        );
+        let descriptor_hash_conflicting_snapshot = vec![
+            descriptor_hash_conflicting_peer.clone(),
+            descriptor_hash_conflicting_peer.clone(),
+            descriptor_hash_conflicting_peer,
+            PeerStatusSnapshot::default(),
+        ];
+        assert!(
+            !expansion_observed_on_quorum_peers_for_lane(
+                &descriptor_hash_conflicting_snapshot,
+                None,
+                1,
+                3,
+            ),
+            "descriptor-hash drift must not fake autoscale expansion"
+        );
+
+        let mut proposal_hash_b = certified_a.clone();
+        proposal_hash_b.proposal_hash = Hash::new(b"autoscale-localnet-conflicting-proposal-hash");
+        let proposal_hash_conflicting_peer = PeerStatusSnapshot {
+            committed_lane_blocks: vec![certified_a.clone(), proposal_hash_b],
+            ..PeerStatusSnapshot::default()
+        };
+        assert!(
+            peer_committed_lane_block_snapshot(&proposal_hash_conflicting_peer, 1).is_none(),
+            "same-height committed lane-block rows with proposal-hash drift must fail closed"
+        );
+
+        let identity_drift_cases = [
+            ("subject-hash", {
+                let mut drifted = certified_a.clone();
+                drifted.subject_hash = Hash::new(b"autoscale-localnet-conflicting-subject-hash");
+                drifted
+            }),
+            ("payload-ownership-hash", {
+                let mut drifted = certified_a.clone();
+                drifted.payload_ownership_hash =
+                    Hash::new(b"autoscale-localnet-conflicting-payload-ownership-hash");
+                drifted
+            }),
+            ("rbc-instance-hash", {
+                let mut drifted = certified_a.clone();
+                drifted.rbc_instance_hash =
+                    Hash::new(b"autoscale-localnet-conflicting-rbc-instance-hash");
+                drifted
+            }),
+            ("qc-mode", {
+                let mut drifted = certified_a.clone();
+                drifted.qc_mode_tag.push_str(":drift");
+                drifted
+            }),
+        ];
+        for (field, drifted) in identity_drift_cases {
+            let conflicting_peer = PeerStatusSnapshot {
+                committed_lane_blocks: vec![certified_a.clone(), drifted],
+                ..PeerStatusSnapshot::default()
+            };
+            assert!(
+                peer_committed_lane_block_snapshot(&conflicting_peer, 1).is_none(),
+                "same-height committed lane-block rows with {field} drift must fail closed",
+            );
+            let conflicting_snapshot = vec![
+                conflicting_peer.clone(),
+                conflicting_peer.clone(),
+                conflicting_peer,
+                PeerStatusSnapshot::default(),
+            ];
+            assert!(
+                !expansion_observed_on_quorum_peers_for_lane(&conflicting_snapshot, None, 1, 3),
+                "{field} drift must not fake autoscale expansion",
+            );
+        }
 
         let exact_duplicate_peer = PeerStatusSnapshot {
             committed_lane_blocks: vec![certified_a.clone(), certified_a],
@@ -5582,19 +5744,19 @@ mod tests {
     #[test]
     fn expansion_probe_top_up_intensifies_after_storage_grace() {
         assert_eq!(
-            expansion_probe_top_up_tx_count(4, false, Duration::from_secs(8), 96, false),
+            expansion_probe_top_up_tx_count(4, false, Duration::from_secs(8), 96, false, false),
             24
         );
         assert_eq!(
-            expansion_probe_top_up_tx_count(4, true, Duration::from_secs(7), 96, false),
+            expansion_probe_top_up_tx_count(4, true, Duration::from_secs(7), 96, false, false),
             24
         );
         assert_eq!(
-            expansion_probe_top_up_tx_count(1, true, Duration::from_secs(8), 96, false),
+            expansion_probe_top_up_tx_count(1, true, Duration::from_secs(8), 96, false, false),
             96
         );
         assert_eq!(
-            expansion_probe_top_up_tx_count(7, true, Duration::from_secs(15), 384, false),
+            expansion_probe_top_up_tx_count(7, true, Duration::from_secs(15), 384, false, false),
             384
         );
     }
@@ -5602,12 +5764,48 @@ mod tests {
     #[test]
     fn strict_expansion_probe_stops_top_up_after_storage_expands() {
         assert_eq!(
-            expansion_probe_top_up_tx_count(7, true, Duration::from_secs(15), 384, true),
+            expansion_probe_top_up_tx_count(7, true, Duration::from_secs(15), 384, true, false),
             0
         );
         assert_eq!(
-            expansion_probe_top_up_tx_count(4, true, Duration::from_secs(7), 96, true),
+            expansion_probe_top_up_tx_count(4, true, Duration::from_secs(7), 96, true, false),
             24
+        );
+    }
+
+    #[test]
+    fn strict_expansion_probe_stops_top_up_after_scale_out_quorum() {
+        assert_eq!(
+            expansion_probe_top_up_tx_count(4, false, Duration::from_secs(1), 384, true, true),
+            0
+        );
+        assert_eq!(
+            expansion_probe_top_up_tx_count(12, true, Duration::from_secs(7), 384, true, true),
+            0
+        );
+    }
+
+    #[test]
+    fn expansion_probe_ready_requires_status_when_strict_status_requested() {
+        assert!(
+            expansion_probe_ready(false, true, true, false),
+            "strict transition mode may accept transition evidence when status is not explicitly required"
+        );
+        assert!(
+            !expansion_probe_ready(false, true, true, true),
+            "strict status mode must not accept transition evidence without expanded-lane status"
+        );
+        assert!(
+            !expansion_probe_ready(true, false, true, true),
+            "strict status mode must still require fresh scale-out transition evidence"
+        );
+        assert!(
+            expansion_probe_ready(true, true, true, true),
+            "strict status mode is ready only when both evidence streams agree"
+        );
+        assert!(
+            expansion_probe_ready(true, false, false, false),
+            "non-strict expansion can use status evidence alone"
         );
     }
 
@@ -6404,8 +6602,16 @@ mod tests {
             },
         ];
 
-        assert_eq!(peers_with_scale_out_transition(&current, &baseline), 1);
-        assert_eq!(peers_with_scale_in_transition(&current, &baseline), 1);
+        assert_eq!(
+            peers_with_scale_out_transition(&current, &baseline),
+            0,
+            "scale-out transition deltas must fail closed when current peer rows are missing"
+        );
+        assert_eq!(
+            peers_with_scale_in_transition(&current, &baseline),
+            0,
+            "scale-in transition deltas must fail closed when current peer rows are missing"
+        );
     }
 
     #[test]
@@ -6447,12 +6653,12 @@ mod tests {
 
         assert_eq!(
             peers_with_scale_out_transition(&current, &baseline),
-            2,
+            0,
             "peers without a matching baseline entry must not manufacture fresh scale-out quorum"
         );
         assert_eq!(
             peers_with_scale_in_transition(&current, &baseline),
-            2,
+            0,
             "peers without a matching baseline entry must not manufacture fresh scale-in quorum"
         );
         assert!(!scale_out_transition_observed_on_quorum_peers(
@@ -7489,11 +7695,11 @@ mod tests {
         let pre_cycle_snapshot = vec![status_with_declared_lanes(&[0, 1, 2]); 4];
         let mut wrong_lane_relay = pre_cycle_snapshot.clone();
         for peer in wrong_lane_relay.iter_mut().take(3) {
-            peer.lane_relay.push(LaneRelaySnapshot {
-                lane_id: 1,
-                dataspace_id: DataSpaceId::UNIVERSAL.as_u64(),
-                block_height: 42,
-            });
+            peer.lane_relay.push(descriptor_backed_relay_snapshot(
+                1,
+                DataSpaceId::UNIVERSAL.as_u64(),
+                42,
+            ));
         }
 
         assert!(expansion_observed_on_quorum_peers_for_lane(
@@ -7511,11 +7717,11 @@ mod tests {
 
         let mut wrong_dataspace_relay = pre_cycle_snapshot.clone();
         for peer in wrong_dataspace_relay.iter_mut().take(3) {
-            peer.lane_relay.push(LaneRelaySnapshot {
-                lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
-                dataspace_id: DataSpaceId::new(42).as_u64(),
-                block_height: 42,
-            });
+            peer.lane_relay.push(descriptor_backed_relay_snapshot(
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                DataSpaceId::new(42).as_u64(),
+                42,
+            ));
         }
         assert_eq!(
             peers_with_expanded_lane_signal(
@@ -7533,13 +7739,157 @@ mod tests {
             3
         ));
 
+        let mut descriptorless_relay = pre_cycle_snapshot.clone();
+        for peer in descriptorless_relay.iter_mut().take(3) {
+            peer.lane_relay.push(relay_snapshot(
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                DataSpaceId::UNIVERSAL.as_u64(),
+                42,
+                None,
+                true,
+            ));
+        }
+        assert_eq!(
+            peers_with_expanded_lane_signal(
+                &descriptorless_relay,
+                Some(&pre_cycle_snapshot),
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            ),
+            0,
+            "descriptorless default-dataspace relay rows must not fake expansion"
+        );
+        assert!(!expansion_observed_on_quorum_peers_for_lane(
+            &descriptorless_relay,
+            Some(&pre_cycle_snapshot),
+            PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            3
+        ));
+
+        let mut non_merge_relay = pre_cycle_snapshot.clone();
+        for peer in non_merge_relay.iter_mut().take(3) {
+            peer.lane_relay.push(relay_snapshot(
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                DataSpaceId::UNIVERSAL.as_u64(),
+                42,
+                Some(Hash::new(b"autoscale-localnet-non-merge-relay")),
+                false,
+            ));
+        }
+        assert_eq!(
+            peers_with_expanded_lane_signal(
+                &non_merge_relay,
+                Some(&pre_cycle_snapshot),
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            ),
+            0,
+            "non-merge-admissible default-dataspace relay rows must not fake expansion"
+        );
+        assert!(!expansion_observed_on_quorum_peers_for_lane(
+            &non_merge_relay,
+            Some(&pre_cycle_snapshot),
+            PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            3
+        ));
+
+        let mut duplicate_relay = pre_cycle_snapshot.clone();
+        for peer in duplicate_relay.iter_mut().take(3) {
+            let relay = descriptor_backed_relay_snapshot(
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                DataSpaceId::UNIVERSAL.as_u64(),
+                42,
+            );
+            peer.lane_relay.push(relay.clone());
+            peer.lane_relay.push(relay);
+        }
+        assert!(expansion_observed_on_quorum_peers_for_lane(
+            &duplicate_relay,
+            Some(&pre_cycle_snapshot),
+            PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            3
+        ));
+
+        let mut ambiguous_descriptor_relay = pre_cycle_snapshot.clone();
+        for peer in ambiguous_descriptor_relay.iter_mut().take(3) {
+            let relay = descriptor_backed_relay_snapshot(
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                DataSpaceId::UNIVERSAL.as_u64(),
+                42,
+            );
+            let mut drifted_relay = relay.clone();
+            drifted_relay.descriptor_hash =
+                Some(Hash::new(b"autoscale-localnet-relay-descriptor-drift"));
+            peer.lane_relay.push(relay);
+            peer.lane_relay.push(drifted_relay);
+        }
+        assert_eq!(
+            peers_with_expanded_lane_signal(
+                &ambiguous_descriptor_relay,
+                Some(&pre_cycle_snapshot),
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            ),
+            0,
+            "same-height descriptor drift must not fake relay progress"
+        );
+        assert!(!expansion_observed_on_quorum_peers_for_lane(
+            &ambiguous_descriptor_relay,
+            Some(&pre_cycle_snapshot),
+            PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            3
+        ));
+
+        let mut ambiguous_merge_relay = pre_cycle_snapshot.clone();
+        for peer in ambiguous_merge_relay.iter_mut().take(3) {
+            let relay = descriptor_backed_relay_snapshot(
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                DataSpaceId::UNIVERSAL.as_u64(),
+                42,
+            );
+            let mut drifted_relay = relay.clone();
+            drifted_relay.merge_admissible = false;
+            peer.lane_relay.push(relay);
+            peer.lane_relay.push(drifted_relay);
+        }
+        assert_eq!(
+            peers_with_expanded_lane_signal(
+                &ambiguous_merge_relay,
+                Some(&pre_cycle_snapshot),
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            ),
+            0,
+            "same-height merge-admissibility drift must not fake relay progress"
+        );
+        assert!(!expansion_observed_on_quorum_peers_for_lane(
+            &ambiguous_merge_relay,
+            Some(&pre_cycle_snapshot),
+            PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            3
+        ));
+
+        let mut progressed_from_ambiguous_baseline = pre_cycle_snapshot.clone();
+        for peer in progressed_from_ambiguous_baseline.iter_mut().take(3) {
+            peer.lane_relay.push(descriptor_backed_relay_snapshot(
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                DataSpaceId::UNIVERSAL.as_u64(),
+                43,
+            ));
+        }
+        assert_eq!(
+            peers_with_expanded_lane_signal(
+                &progressed_from_ambiguous_baseline,
+                Some(&ambiguous_descriptor_relay),
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            ),
+            0,
+            "ambiguous baseline relay evidence must not be repairable into fresh expansion"
+        );
+
         let mut stale_relay = pre_cycle_snapshot.clone();
         for peer in stale_relay.iter_mut().take(3) {
-            peer.lane_relay.push(LaneRelaySnapshot {
-                lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
-                dataspace_id: DataSpaceId::UNIVERSAL.as_u64(),
-                block_height: 42,
-            });
+            peer.lane_relay.push(descriptor_backed_relay_snapshot(
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                DataSpaceId::UNIVERSAL.as_u64(),
+                42,
+            ));
         }
         assert!(!expansion_observed_on_quorum_peers_for_lane(
             &stale_relay,
@@ -7612,11 +7962,13 @@ mod tests {
 
         let mut elastic_relay = contracted_public_profile.clone();
         for peer in elastic_relay.iter_mut().take(3) {
-            peer.lane_relay.push(LaneRelaySnapshot {
-                lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
-                dataspace_id: DataSpaceId::UNIVERSAL.as_u64(),
-                block_height: 42,
-            });
+            peer.lane_relay.push(relay_snapshot(
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                DataSpaceId::UNIVERSAL.as_u64(),
+                42,
+                None,
+                false,
+            ));
         }
         assert!(!contraction_observed_on_quorum_peers_for_profile(
             &elastic_relay,
@@ -7627,11 +7979,11 @@ mod tests {
 
         let mut wrong_dataspace_relay = contracted_public_profile.clone();
         for peer in wrong_dataspace_relay.iter_mut().take(3) {
-            peer.lane_relay.push(LaneRelaySnapshot {
-                lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
-                dataspace_id: DataSpaceId::new(42).as_u64(),
-                block_height: 42,
-            });
+            peer.lane_relay.push(descriptor_backed_relay_snapshot(
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                DataSpaceId::new(42).as_u64(),
+                42,
+            ));
         }
         assert!(
             contraction_observed_on_quorum_peers_for_profile(
@@ -7641,6 +7993,49 @@ mod tests {
                 3
             ),
             "wrong-dataspace relay rows must not block default-dataspace contraction"
+        );
+
+        let mut ambiguous_relay = contracted_public_profile.clone();
+        for peer in ambiguous_relay.iter_mut().take(3) {
+            let relay = descriptor_backed_relay_snapshot(
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                DataSpaceId::UNIVERSAL.as_u64(),
+                42,
+            );
+            let mut drifted_relay = relay.clone();
+            drifted_relay.descriptor_hash =
+                Some(Hash::new(b"autoscale-localnet-contraction-relay-drift"));
+            peer.lane_relay.push(relay);
+            peer.lane_relay.push(drifted_relay);
+        }
+        assert!(!contraction_observed_on_quorum_peers_for_profile(
+            &ambiguous_relay,
+            PUBLIC_PROFILE_INITIAL_PROVISIONED_LANES,
+            PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            3
+        ));
+
+        let mut ambiguous_wrong_dataspace_relay = contracted_public_profile.clone();
+        for peer in ambiguous_wrong_dataspace_relay.iter_mut().take(3) {
+            let relay = descriptor_backed_relay_snapshot(
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                DataSpaceId::new(42).as_u64(),
+                42,
+            );
+            let mut drifted_relay = relay.clone();
+            drifted_relay.descriptor_hash =
+                Some(Hash::new(b"autoscale-localnet-wrong-dataspace-relay-drift"));
+            peer.lane_relay.push(relay);
+            peer.lane_relay.push(drifted_relay);
+        }
+        assert!(
+            contraction_observed_on_quorum_peers_for_profile(
+                &ambiguous_wrong_dataspace_relay,
+                PUBLIC_PROFILE_INITIAL_PROVISIONED_LANES,
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                3
+            ),
+            "wrong-dataspace ambiguous relay rows must not block default-dataspace contraction"
         );
 
         let mut elastic_validator = contracted_public_profile.clone();
@@ -7702,6 +8097,131 @@ mod tests {
             0,
             "ambiguous committed lane-block rows must not fake expansion either"
         );
+
+        let mut descriptor_hash_drift = contracted_public_profile.clone();
+        for peer in descriptor_hash_drift.iter_mut().take(3) {
+            let certified = certified_lane_block_status(PUBLIC_PROFILE_ELASTIC_LANE_ID, 42, 3, 3);
+            let mut drifted = certified.clone();
+            drifted.descriptor_hash =
+                Hash::new(b"autoscale-localnet-public-profile-conflicting-descriptor-hash");
+            peer.committed_lane_blocks.push(certified);
+            peer.committed_lane_blocks.push(drifted);
+        }
+        assert!(
+            peer_committed_lane_block_snapshot(
+                &descriptor_hash_drift[0],
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            )
+            .is_none(),
+            "same-height committed lane-block rows with descriptor-hash drift must be ambiguous"
+        );
+        assert!(
+            !contraction_observed_on_quorum_peers_for_profile(
+                &descriptor_hash_drift,
+                PUBLIC_PROFILE_INITIAL_PROVISIONED_LANES,
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                3,
+            ),
+            "descriptor-hash drift must not prove safe lane destruction"
+        );
+        assert_eq!(
+            peers_with_expanded_lane_signal(
+                &descriptor_hash_drift,
+                Some(&contracted_public_profile),
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            ),
+            0,
+            "descriptor-hash drift must not fake public-profile expansion"
+        );
+
+        let mut proposal_hash_drift = contracted_public_profile.clone();
+        for peer in proposal_hash_drift.iter_mut().take(3) {
+            let certified = certified_lane_block_status(PUBLIC_PROFILE_ELASTIC_LANE_ID, 42, 3, 3);
+            let mut drifted = certified.clone();
+            drifted.proposal_hash =
+                Hash::new(b"autoscale-localnet-public-profile-conflicting-proposal-hash");
+            peer.committed_lane_blocks.push(certified);
+            peer.committed_lane_blocks.push(drifted);
+        }
+        assert!(
+            peer_committed_lane_block_snapshot(
+                &proposal_hash_drift[0],
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            )
+            .is_none(),
+            "same-height committed lane-block rows with proposal-hash drift must be ambiguous"
+        );
+        assert!(
+            !contraction_observed_on_quorum_peers_for_profile(
+                &proposal_hash_drift,
+                PUBLIC_PROFILE_INITIAL_PROVISIONED_LANES,
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                3,
+            ),
+            "proposal-hash drift must not prove safe lane destruction"
+        );
+
+        let certified_template =
+            certified_lane_block_status(PUBLIC_PROFILE_ELASTIC_LANE_ID, 42, 3, 3);
+        let identity_drift_cases = [
+            ("subject-hash", {
+                let mut drifted = certified_template.clone();
+                drifted.subject_hash =
+                    Hash::new(b"autoscale-localnet-public-profile-conflicting-subject-hash");
+                drifted
+            }),
+            ("payload-ownership-hash", {
+                let mut drifted = certified_template.clone();
+                drifted.payload_ownership_hash = Hash::new(
+                    b"autoscale-localnet-public-profile-conflicting-payload-ownership-hash",
+                );
+                drifted
+            }),
+            ("rbc-instance-hash", {
+                let mut drifted = certified_template.clone();
+                drifted.rbc_instance_hash =
+                    Hash::new(b"autoscale-localnet-public-profile-conflicting-rbc-instance-hash");
+                drifted
+            }),
+            ("qc-mode", {
+                let mut drifted = certified_template.clone();
+                drifted.qc_mode_tag.push_str(":drift");
+                drifted
+            }),
+        ];
+        for (field, drifted) in identity_drift_cases {
+            let mut identity_drift = contracted_public_profile.clone();
+            for peer in identity_drift.iter_mut().take(3) {
+                peer.committed_lane_blocks.push(certified_template.clone());
+                peer.committed_lane_blocks.push(drifted.clone());
+            }
+            assert!(
+                peer_committed_lane_block_snapshot(
+                    &identity_drift[0],
+                    PUBLIC_PROFILE_ELASTIC_LANE_ID
+                )
+                .is_none(),
+                "same-height committed lane-block rows with {field} drift must be ambiguous",
+            );
+            assert!(
+                !contraction_observed_on_quorum_peers_for_profile(
+                    &identity_drift,
+                    PUBLIC_PROFILE_INITIAL_PROVISIONED_LANES,
+                    PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                    3,
+                ),
+                "{field} drift must not prove safe lane destruction",
+            );
+            assert_eq!(
+                peers_with_expanded_lane_signal(
+                    &identity_drift,
+                    Some(&contracted_public_profile),
+                    PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                ),
+                0,
+                "{field} drift must not fake public-profile expansion",
+            );
+        }
 
         let mut exact_committed_lane_block_duplicates = contracted_public_profile.clone();
         for peer in exact_committed_lane_block_duplicates.iter_mut().take(3) {

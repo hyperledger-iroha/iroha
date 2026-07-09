@@ -53,6 +53,35 @@ MAX_JSON_NESTING_DEPTH = 128
 MAX_HTTP_URL_CHARS = 2048
 MAX_LOCAL_PATH_CHARS = 4096
 MAX_CLEAN_STRING_CHARS = 4096
+CONTEXT_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
+PLACEHOLDER_CONTEXT_IDS = {
+    "ci",
+    "dev",
+    "development",
+    "dummy",
+    "example",
+    "fake",
+    "local",
+    "not-production",
+    "not-production-ready",
+    "placeholder",
+    "sample",
+    "template",
+    "test",
+}
+PLACEHOLDER_CONTEXT_TOKENS = {
+    "dummy",
+    "example",
+    "fake",
+    "placeholder",
+    "sample",
+    "template",
+    "test",
+}
+PLACEHOLDER_CONTEXT_PHRASES = (
+    "not-production",
+    "not-production-ready",
+)
 LOCAL_REBINDING_HOST_SUFFIXES = {"localtest.me", "lvh.me", "nip.io", "sslip.io", "vcap.me"}
 RESERVED_PLACEHOLDER_HOST_SUFFIXES = {
     "example",
@@ -154,6 +183,17 @@ VERIFY_KEYS = {
     "allow_default_profile",
     "require_source_files",
     "skip_on_stage_failure",
+}
+PRODUCTION_CANARY_STAGE_ORDER = ("rail", "notary", "verify")
+PRODUCTION_CANARY_STAGE_NAMES = set(PRODUCTION_CANARY_STAGE_ORDER)
+LOCAL_DIAGNOSTIC_STAGE_FLAGS = {
+    "rail": {"--allow-default-profile", "--allow-insecure-http", "--dry-run"},
+    "notary": {"--allow-insecure-http", "--dry-run"},
+    "verify": {
+        "--allow-failed",
+        "--allow-default-profile",
+        "--allow-insecure-http",
+    },
 }
 
 
@@ -970,10 +1010,25 @@ def _reject_non_ascii_context(value: str, label: str) -> None:
         raise CanaryError(f"{label} must use printable ASCII")
 
 
+def _reject_noncanonical_context_id(value: str, label: str) -> None:
+    if CONTEXT_ID_RE.fullmatch(value) is None:
+        raise CanaryError(f"{label} must be a canonical lowercase context id")
+
+
+def _reject_placeholder_context_id(value: str, label: str) -> None:
+    if (
+        value in PLACEHOLDER_CONTEXT_IDS
+        or any(token in PLACEHOLDER_CONTEXT_TOKENS for token in value.split("-"))
+        or any(phrase in value for phrase in PLACEHOLDER_CONTEXT_PHRASES)
+    ):
+        raise CanaryError(f"{label} must not use placeholder context id")
+
+
 def _required_context_string(value: dict[str, Any], key: str, label: str) -> str:
     raw = _required_string(value, key, label)
     _reject_non_ascii_context(raw, f"{label}.{key}")
     _reject_secret_looking_identifier(raw, f"{label}.{key}")
+    _reject_noncanonical_context_id(raw, f"{label}.{key}")
     return raw
 
 
@@ -2408,6 +2463,33 @@ def _stage_failed(result: StageResult) -> bool:
     )
 
 
+def _stage_uses_local_diagnostic_policy(stage: StagePlan) -> bool:
+    if stage.dry_run:
+        return True
+    flags = set(stage.argv)
+    if flags.intersection(LOCAL_DIAGNOSTIC_STAGE_FLAGS.get(stage.name, set())):
+        return True
+    return stage.name == "verify" and "--require-source-files" not in flags
+
+
+def _canary_production_ok(
+    *,
+    prior_failure: bool,
+    require_explicit_policy: bool,
+    stage_plans: list[StagePlan],
+    results: list[StageResult],
+) -> bool:
+    if prior_failure or not require_explicit_policy:
+        return False
+    if any(result.skipped for result in results):
+        return False
+    if tuple(stage.name for stage in stage_plans) != PRODUCTION_CANARY_STAGE_ORDER:
+        return False
+    if tuple(result.name for result in results) != PRODUCTION_CANARY_STAGE_ORDER:
+        return False
+    return not any(_stage_uses_local_diagnostic_policy(stage) for stage in stage_plans)
+
+
 def _skipped_verify_result(reason: str) -> StageResult:
     timestamp = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat()
     return StageResult(
@@ -2496,12 +2578,16 @@ def build_stage_plans(
     require_explicit_policy: bool,
     allow_template_canary_endpoints: bool,
     allow_repository_fixture_paths: bool,
+    allow_placeholder_contexts: bool,
 ) -> tuple[str, str, list[StagePlan], Any]:
     """Validate a runbook and return provider metadata plus non-verify stages."""
 
     _reject_unknown_keys(config, TOP_LEVEL_KEYS, "config")
     provider = _required_context_string(config, "provider", "config")
     environment = _required_context_string(config, "environment", "config")
+    if not allow_placeholder_contexts:
+        _reject_placeholder_context_id(provider, "config.provider")
+        _reject_placeholder_context_id(environment, "config.environment")
     config_dir = _path_resolve(config_path, "config path").parent
     if not allow_repository_fixture_paths:
         _reject_repository_iso_fixture_path(config_path, "config path")
@@ -2571,6 +2657,7 @@ def run(args: argparse.Namespace) -> int:
         require_explicit_policy=args.require_explicit_policy,
         allow_template_canary_endpoints=args.plan_only,
         allow_repository_fixture_paths=args.plan_only,
+        allow_placeholder_contexts=args.plan_only,
     )
     artifact_paths = tuple(
         artifact
@@ -2618,7 +2705,7 @@ def run(args: argparse.Namespace) -> int:
             "config_path": str(resolved_config_path),
             "started_at": started_at,
             "finished_at": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat(),
-            "ok": True,
+            "ok": False,
             "plan_only": True,
             "policy": {
                 "require_explicit_policy": args.require_explicit_policy,
@@ -2651,7 +2738,9 @@ def run(args: argparse.Namespace) -> int:
         require_explicit_policy=args.require_explicit_policy,
         allow_repository_fixture_paths=False,
     )
+    stage_plans_for_verdict = list(stages)
     if verify_stage is not None:
+        stage_plans_for_verdict.append(verify_stage)
         if not verify_stage.argv:
             results.append(_skipped_verify_result("skipped because an earlier stage failed"))
         else:
@@ -2669,6 +2758,12 @@ def run(args: argparse.Namespace) -> int:
         prior_failure = True
 
     _reject_unsafe_stage_output(results)
+    ok = _canary_production_ok(
+        prior_failure=prior_failure,
+        require_explicit_policy=args.require_explicit_policy,
+        stage_plans=stage_plans_for_verdict,
+        results=results,
+    )
 
     summary: dict[str, Any] = {
         "version": CANARY_SUMMARY_VERSION,
@@ -2677,7 +2772,7 @@ def run(args: argparse.Namespace) -> int:
         "config_path": str(resolved_config_path),
         "started_at": started_at,
         "finished_at": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat(),
-        "ok": not prior_failure,
+        "ok": ok,
         "plan_only": False,
         "policy": {
             "require_explicit_policy": args.require_explicit_policy,

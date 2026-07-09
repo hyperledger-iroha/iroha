@@ -82,6 +82,14 @@ PROFILE_HANDLE_RE = re.compile(
 STORAGE_CLASSES = frozenset({"hot", "warm", "cold"})
 
 
+def iso_utc_from_unix_timestamp(value: int) -> str:
+    """Render a reviewed Unix timestamp as canonical UTC fixture metadata."""
+
+    return datetime.datetime.fromtimestamp(value, datetime.timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+
+
 def read_open_flags() -> int:
     """Return descriptor flags for fail-closed JSON fixture reads."""
 
@@ -310,7 +318,7 @@ def build_fixture_example(
 ) -> dict:
     chunking = manifest_report["chunking"]
     manifest = manifest_report["manifest"]
-    timestamp = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    timestamp = iso_utc_from_unix_timestamp(fixture_meta["now_unix_secs"])
     instruction = {
         "digest_hex": manifest["digest_hex"],
         "chunker": {

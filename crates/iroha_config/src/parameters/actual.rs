@@ -8377,6 +8377,7 @@ pub struct SccpRouteManifest {
     /// Stable asset key within the route.
     pub asset_key: String,
     /// Route network key, for example `mainnet`, `testnet`, or `bsc-testnet`.
+    #[norito(default)]
     pub network: String,
     /// Canonical counterparty chain key.
     pub chain: String,
@@ -8405,8 +8406,10 @@ pub struct SccpRouteManifest {
     /// Counterparty TairaXOR bridge contract address.
     pub taira_xor_bridge_address: String,
     /// SCCP source bridge contract address.
+    #[norito(default)]
     pub source_bridge_address: String,
     /// Destination verifier contract address.
+    #[norito(default)]
     pub destination_verifier_address: String,
     /// TON verifier internal message value in nanoTON.
     pub ton_finalize_message_value_nano: Option<String>,

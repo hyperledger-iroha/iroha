@@ -379,7 +379,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--now-unix",
         type=positive_int_arg,
-        help="Validator clock used for age checks. Defaults to verifier wall clock.",
+        help="Required reviewed validator clock used for age checks.",
     )
     parser.add_argument(
         "--max-evidence-age-secs",

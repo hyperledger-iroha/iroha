@@ -17,6 +17,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from check_sorafs_transparency_rollout_evidence import (  # noqa: E402
+    DEFAULT_MAX_EVIDENCE_AGE_SECS,
     DEFAULT_REQUIRED_KINDS,
     DEFAULT_REQUIRED_SOURCE_KINDS,
     EVIDENCE_REQUIRED_FIELDS,
@@ -29,6 +30,7 @@ from sorafs_checker_preflight import fsync_checker_output_parent  # noqa: E402
 from sorafs_response_args import (  # noqa: E402
     EvidenceArgumentParser,
     expand_response_args,
+    non_negative_int_arg,
     positive_int_arg,
     require_equals_form_option_values,
 )
@@ -46,6 +48,7 @@ from sorafs_runner_preflight import (  # noqa: E402
     inspect_runner_path_is_symlink,
     run_command_plan,
     require_existing_files,
+    require_runner_non_negative_int,
     require_runner_passthrough_args,
     require_runner_positive_int,
     require_runner_url_args,
@@ -173,6 +176,8 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
         errors.append("--cycle-id must be a 16-byte lowercase hex string")
     require_runner_positive_int(args, "limit", errors)
     require_runner_positive_int(args, "timeout_secs", errors)
+    require_runner_positive_int(args, "now_unix", errors, allow_none=True)
+    require_runner_non_negative_int(args, "max_evidence_age_secs", errors)
     return errors
 
 
@@ -264,7 +269,11 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
         str(out_dir),
         "--summary-out",
         str(summary_out),
+        "--max-evidence-age-secs",
+        str(args.max_evidence_age_secs),
     ]
+    if args.now_unix is not None:
+        verifier_command.extend(["--now-unix", str(args.now_unix)])
 
     return [
         CommandPlan("source_entry_canary", source_entry_out, source_entry_command),
@@ -527,6 +536,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--summary-out",
         type=Path,
         help="Optional verifier summary path. Defaults under --out-dir.",
+    )
+    parser.add_argument(
+        "--now-unix",
+        type=positive_int_arg,
+        help="Validator clock used for verifier freshness checks.",
+    )
+    parser.add_argument(
+        "--max-evidence-age-secs",
+        type=non_negative_int_arg,
+        default=DEFAULT_MAX_EVIDENCE_AGE_SECS,
+        help="Maximum accepted age for generated evidence timestamps.",
     )
     parser.add_argument(
         "--source-entry",

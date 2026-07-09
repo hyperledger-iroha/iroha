@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import re
 import sys
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -557,7 +556,16 @@ def finalize_reputation_required_rows(required: dict[str, dict[str, Any]]) -> No
         if kind is not None and isinstance(artifacts, list):
             for artifact in artifacts:
                 if isinstance(artifact, dict):
-                    artifact.update({"schema": kind.schema})
+                    artifact.update(
+                        {
+                            "schema": kind.schema,
+                            "status": (
+                                "passed"
+                                if artifact.get("valid") is True
+                                else "failed"
+                            ),
+                        }
+                    )
 
 
 def validate_publish_or_latest(
@@ -1179,8 +1187,8 @@ def build_parser() -> EvidenceArgumentParser:
     parser.add_argument(
         "--now-unix",
         type=positive_int_arg,
-        default=None,
-        help="Override current Unix time for deterministic freshness checks.",
+        required=True,
+        help="Required reviewed validator clock used for deterministic freshness checks.",
     )
     parser.add_argument(
         "--max-snapshot-age-secs",
@@ -1231,13 +1239,12 @@ def main(argv: list[str] | None = None) -> int:
     if any("conflicts with reserved output" in error for error in load_errors):
         emit_checker_error_lines(load_errors)
         return 2
-    now_unix = args.now_unix if args.now_unix is not None else int(time.time())
     summary = validate_evidence_set(
         loaded,
         evidence_dirs=args.evidence_dir,
         required_kinds=required_kinds,
         required_providers=tuple(args.require_provider),
-        now_unix=now_unix,
+        now_unix=args.now_unix,
         max_snapshot_age_secs=args.max_snapshot_age_secs,
         max_ingest_lag_secs=args.max_ingest_lag_secs,
     )

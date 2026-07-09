@@ -205,6 +205,32 @@ class KagemushaInstructionArchivesTest {
             "authority must not contain surrounding whitespace",
             paddedTopUpAuthority.message,
         )
+
+        val paddedTopUpInitChainId = assertFailsWith<IllegalArgumentException> {
+            KagemushaInstructionArchives.topUpTransactionPayloadFromInitRequest(
+                initRequestArchive = byteArrayOf(),
+                chainId = " 00000042",
+                authority = authority,
+                creationTimeMs = 1_735_000_000_000L,
+            )
+        }
+        assertEquals(
+            "chainId must not contain surrounding whitespace",
+            paddedTopUpInitChainId.message,
+        )
+
+        val paddedTopUpInitAuthority = assertFailsWith<IllegalArgumentException> {
+            KagemushaInstructionArchives.topUpTransactionPayloadFromInitRequest(
+                initRequestArchive = byteArrayOf(),
+                chainId = "00000042",
+                authority = " $authority",
+                creationTimeMs = 1_735_000_000_000L,
+            )
+        }
+        assertEquals(
+            "authority must not contain surrounding whitespace",
+            paddedTopUpInitAuthority.message,
+        )
     }
 
     @Test

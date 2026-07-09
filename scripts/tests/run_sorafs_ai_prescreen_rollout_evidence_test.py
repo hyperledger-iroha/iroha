@@ -38,6 +38,10 @@ def complete_args(tmp_path: Path) -> list[str]:
         "--iroha-arg=/runtime/client.toml",
         "--out-dir",
         str(tmp_path / "evidence"),
+        "--now-unix",
+        "1800400000",
+        "--max-evidence-age-secs",
+        "604800",
         "--manifest",
         str(write_payload(payload_dir / "manifest.json")),
         "--manifest-format",
@@ -141,6 +145,10 @@ def test_dry_run_prints_complete_collection_plan(tmp_path: Path, capsys) -> None
     assert "operator-canary" in operator
     verifier = plan["steps"][6]["command"]
     assert "check_sorafs_ai_prescreen_rollout_evidence.py" in verifier[1]
+    assert "--now-unix" in verifier
+    assert "1800400000" in verifier
+    assert "--max-evidence-age-secs" in verifier
+    assert "604800" in verifier
     assert str(plan["external_evidence"]["governance_dag"]).endswith("governance-dag.json")
     assert plan["evidence_contract"]["runner"]["schema"] == (
         "sorafs.moderation.runner.rollout_evidence.v1"
@@ -430,6 +438,26 @@ def test_malformed_source_entry_sanitizes_exception_text(
 
     assert "<non-canonical-error>" in errors
     assert bad_message not in "\n".join(errors)
+
+
+def test_invalid_freshness_args_fail_before_plan(tmp_path: Path, capsys) -> None:
+    cases = (
+        ("--now-unix", "0", "must be positive"),
+        ("--max-evidence-age-secs", "-1", "must be non-negative"),
+    )
+
+    for option, value, diagnostic in cases:
+        case_dir = tmp_path / option.removeprefix("--").replace("-", "_")
+        case_dir.mkdir()
+        args = complete_args(case_dir)
+        value_index = args.index(option) + 1
+        args[value_index] = value
+
+        assert MODULE.main([*args, "--dry-run"]) == 2
+
+        captured = capsys.readouterr()
+        assert diagnostic in captured.err
+        assert captured.out == ""
 
 
 def test_malformed_source_entry_does_not_echo_spec(tmp_path: Path) -> None:

@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import re
 import sys
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -1879,8 +1878,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--now-unix",
         type=positive_int_arg,
-        default=int(time.time()),
-        help="Validator clock used for age checks. Defaults to current Unix time.",
+        required=True,
+        help="Required reviewed validator clock used for age checks.",
     )
     parser.add_argument(
         "--max-ledger-age-secs",

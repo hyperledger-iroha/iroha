@@ -4,7 +4,9 @@
 # signing keys, raw proof material, and operator secrets in runtime-only
 # locations.
 --evidence-dir /var/tmp/sorafs/por-rollout
---summary-out /var/tmp/sorafs/por-rollout-summary.json
+--summary-out /var/tmp/sorafs/por-rollout/rollout-summary.json
+--require-kind randomness,scheduler_runtime,validator_replay,reporting_archive,observability,governance_approval
+--now-unix 1800400000
 --max-evidence-age-secs 604800
 --max-route-latency-ms 1500
 --max-scheduler-lag-secs 900

@@ -64,7 +64,7 @@ public enum KagemushaRecursiveSpendProver {
     public static let recursivePreviousProofOpenEnvelopesRequiredCountV1 = 1
     public static let recursivePreviousProofOpenEnvelopesMaxBytes = 8 * 1024 * 1024
     public static let recursivePallasOpenEnvelopeMaxTranscriptLabelBytes = 128
-    public static let nativeArchiveMaxBytes = 64 * 1024 * 1024
+    public static let nativeArchiveMaxBytes = 256 * 1024 * 1024
     public static let recursiveSpendAccumulatorDomain =
         "iroha:kagemusha:v1:recursive-spend-accumulator"
     public static let recursiveSpendTransitionProfileDomain =

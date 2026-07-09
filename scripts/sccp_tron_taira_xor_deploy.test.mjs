@@ -788,6 +788,43 @@ test("TRON transaction commands reject output path collisions before writing art
     assert.equal(await readFile(secretPath, "utf8"), secretText);
     assert.equal(await readFile(unsignedPath, "utf8"), unsignedText);
 
+    const linkedInputDir = join(dir, "linked-tron-transaction-inputs");
+    await symlink(dir, linkedInputDir);
+
+    await assert.rejects(
+      () =>
+        execFileAsync(
+          process.execPath,
+          signOutputCollisionArgs(join(linkedInputDir, "unsigned-transaction.json")),
+        ),
+      (error) => {
+        assert.match(
+          `${error.message}\n${error.stderr ?? ""}`,
+          /--out must not be the same path as --transaction/u,
+        );
+        return true;
+      },
+    );
+    assert.equal(await readFile(secretPath, "utf8"), secretText);
+    assert.equal(await readFile(unsignedPath, "utf8"), unsignedText);
+
+    await assert.rejects(
+      () =>
+        execFileAsync(
+          process.execPath,
+          signOutputCollisionArgs(join(linkedInputDir, "deployer.secret.json")),
+        ),
+      (error) => {
+        assert.match(
+          `${error.message}\n${error.stderr ?? ""}`,
+          /--out must not be the same path as --secret/u,
+        );
+        return true;
+      },
+    );
+    assert.equal(await readFile(secretPath, "utf8"), secretText);
+    assert.equal(await readFile(unsignedPath, "utf8"), unsignedText);
+
     const signed = signTransactionPayload(transaction, { privateKey, address: deployerAddress });
     const signedArtifact = buildSignedTransactionArtifact(
       signed,
@@ -804,6 +841,26 @@ test("TRON transaction commands reject output path collisions before writing art
           signedPath,
           "--out",
           signedPath,
+        ]),
+      (error) => {
+        assert.match(
+          `${error.message}\n${error.stderr ?? ""}`,
+          /--out must not be the same path as --transaction/u,
+        );
+        return true;
+      },
+    );
+    assert.equal(await readFile(signedPath, "utf8"), signedText);
+
+    await assert.rejects(
+      () =>
+        execFileAsync(process.execPath, [
+          TRON_SCRIPT_PATH,
+          "broadcast",
+          "--transaction",
+          signedPath,
+          "--out",
+          join(linkedInputDir, "signed-transaction.json"),
         ]),
       (error) => {
         assert.match(
@@ -1107,6 +1164,33 @@ test("TRON deploy command rejects output path collisions before reading operator
           verifier: verifierPath,
           secret: secretPath,
           out: secretPath,
+        }),
+      /--out must not be the same path as --secret/u,
+    );
+    assert.equal(await readFile(verifierPath, "utf8"), verifierText);
+    assert.equal(await readFile(secretPath, "utf8"), secretText);
+
+    const linkedInputDir = join(dir, "linked-tron-deploy-inputs");
+    await symlink(dir, linkedInputDir);
+
+    await assert.rejects(
+      () =>
+        deployCommand({
+          verifier: verifierPath,
+          secret: secretPath,
+          out: join(linkedInputDir, "verifier.json"),
+        }),
+      /--out must not be the same path as --verifier/u,
+    );
+    assert.equal(await readFile(verifierPath, "utf8"), verifierText);
+    assert.equal(await readFile(secretPath, "utf8"), secretText);
+
+    await assert.rejects(
+      () =>
+        deployCommand({
+          verifier: verifierPath,
+          secret: secretPath,
+          out: join(linkedInputDir, "deployer.secret.json"),
         }),
       /--out must not be the same path as --secret/u,
     );
@@ -3570,6 +3654,11 @@ test("TRON route-config rejects malformed or foreign route manifests", async () 
         "TRON route-config percent-encoded whitespace sensitive blocker",
       ],
       [
+        "source_event_transaction_production_blockers",
+        "private%20%20key-source-event-blocker",
+        "TRON route-config percent-encoded repeated-space sensitive blocker",
+      ],
+      [
         "route_canary_production_blockers",
         "private&#95;key-route-canary-blocker",
         "TRON route-config HTML-entity sensitive blocker",
@@ -3578,6 +3667,11 @@ test("TRON route-config rejects malformed or foreign route manifests", async () 
         "route_canary_production_blockers",
         "private&#32;key-route-canary-blocker",
         "TRON route-config HTML-entity whitespace sensitive blocker",
+      ],
+      [
+        "route_canary_production_blockers",
+        "seed&#32;&#32;phrase-route-canary-blocker",
+        "TRON route-config HTML-entity repeated-space sensitive blocker",
       ],
     ]) {
       const patchedManifest = {
@@ -3601,14 +3695,14 @@ test("TRON route-config rejects malformed or foreign route manifests", async () 
       [
         "source_event_transaction_production_blockers",
         "safe duplicated source event blocker",
-        "safe%20duplicated%20source%20event%20blocker",
-        "TRON route-config decoded duplicate source event blocker",
+        "safe%20%20duplicated%20source%20%20event%20blocker",
+        "TRON route-config decoded repeated-space duplicate source event blocker",
       ],
       [
         "route_canary_production_blockers",
         "safe duplicated route canary blocker",
-        "safe duplicated route&#32;canary blocker",
-        "TRON route-config decoded duplicate route canary blocker",
+        "safe duplicated%20%20route&#32;&#32;canary blocker",
+        "TRON route-config decoded repeated-space duplicate route canary blocker",
       ],
     ]) {
       const patchedManifest = {
@@ -4025,7 +4119,7 @@ test("route manifest draft rejects forged or incomplete live evidence", async ()
     const { evidencePath, contractPath, verifierPath } = await writeRouteManifestInputs(dir);
     const liveEvidencePath = join(dir, "live-evidence.json");
     const blocker = "safe duplicated live source blocker";
-    const encodedBlocker = "safe%20duplicated%20live%20source%20blocker";
+    const encodedBlocker = "safe%20%20duplicated%20live%20%20source%20blocker";
     const live = JSON.parse(JSON.stringify(routeLiveEvidence()));
     live.source_event_transaction.source_event_transaction_production_ready = false;
     live.source_event_transaction.source_event_transaction_production_blockers = [

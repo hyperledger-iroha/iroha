@@ -558,7 +558,7 @@ async fn sumeragi_status_endpoint_json_and_norito_payloads_match_semantics() {
         json_committed_lane_blocks.len(),
         norito_wire.committed_lane_blocks.len()
     );
-    iroha_core::sumeragi::status::set_lane_payload_ownerships(Vec::new());
+    iroha_core::sumeragi::status::clear_lane_payload_ownerships();
     iroha_core::sumeragi::status::set_committed_lane_blocks(Vec::new());
 }
 

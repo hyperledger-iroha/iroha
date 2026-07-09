@@ -409,18 +409,22 @@ public enum KagemushaRecursiveRedeemRequestArchive {
     public static let typeName = "KagemushaRecursiveSpendRedeemRequestV1"
     public static let schemaName = KagemushaWireNames.recursiveRedeemRequest
 
+    public static func validateEnvelope(_ archive: Data) throws {
+        _ = try validatedKagemushaRecursiveRequestArchiveFrame(
+            archive,
+            emptyError: KagemushaRecursiveRedeemRequestArchiveError.emptyRequestArchive,
+            oversizedError: KagemushaRecursiveRedeemRequestArchiveError.oversizedRequestArchive,
+            invalidError: KagemushaRecursiveRedeemRequestArchiveError.invalidRequestArchive
+        )
+    }
+
     public static func validate(_ archive: Data) throws {
-        guard !archive.isEmpty else {
-            throw KagemushaRecursiveRedeemRequestArchiveError.emptyRequestArchive
-        }
-        guard archive.count <= KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes else {
-            throw KagemushaRecursiveRedeemRequestArchiveError.oversizedRequestArchive
-        }
-        guard let frame = noritoDecodeFrame(archive),
-              frame.header.compression == .none,
-              frame.paddingLength <= KagemushaInstructionTransactionEncoder.maxNoritoHeaderPaddingBytes else {
-            throw KagemushaRecursiveRedeemRequestArchiveError.invalidRequestArchive
-        }
+        let frame = try validatedKagemushaRecursiveRequestArchiveFrame(
+            archive,
+            emptyError: KagemushaRecursiveRedeemRequestArchiveError.emptyRequestArchive,
+            oversizedError: KagemushaRecursiveRedeemRequestArchiveError.oversizedRequestArchive,
+            invalidError: KagemushaRecursiveRedeemRequestArchiveError.invalidRequestArchive
+        )
         guard noritoSchemaHash(forTypeName: schemaName) == frame.header.schema else {
             throw KagemushaRecursiveRedeemRequestArchiveError.unsupportedRequestArchiveType
         }
@@ -434,18 +438,22 @@ public enum KagemushaRecursiveTopUpRequestArchive {
     public static let typeName = "KagemushaRecursiveSpendTopUpRequestV1"
     public static let schemaName = KagemushaWireNames.recursiveTopUpRequest
 
+    public static func validateEnvelope(_ archive: Data) throws {
+        _ = try validatedKagemushaRecursiveRequestArchiveFrame(
+            archive,
+            emptyError: KagemushaRecursiveTopUpRequestArchiveError.emptyRequestArchive,
+            oversizedError: KagemushaRecursiveTopUpRequestArchiveError.oversizedRequestArchive,
+            invalidError: KagemushaRecursiveTopUpRequestArchiveError.invalidRequestArchive
+        )
+    }
+
     public static func validate(_ archive: Data) throws {
-        guard !archive.isEmpty else {
-            throw KagemushaRecursiveTopUpRequestArchiveError.emptyRequestArchive
-        }
-        guard archive.count <= KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes else {
-            throw KagemushaRecursiveTopUpRequestArchiveError.oversizedRequestArchive
-        }
-        guard let frame = noritoDecodeFrame(archive),
-              frame.header.compression == .none,
-              frame.paddingLength <= KagemushaInstructionTransactionEncoder.maxNoritoHeaderPaddingBytes else {
-            throw KagemushaRecursiveTopUpRequestArchiveError.invalidRequestArchive
-        }
+        let frame = try validatedKagemushaRecursiveRequestArchiveFrame(
+            archive,
+            emptyError: KagemushaRecursiveTopUpRequestArchiveError.emptyRequestArchive,
+            oversizedError: KagemushaRecursiveTopUpRequestArchiveError.oversizedRequestArchive,
+            invalidError: KagemushaRecursiveTopUpRequestArchiveError.invalidRequestArchive
+        )
         guard noritoSchemaHash(forTypeName: schemaName) == frame.header.schema else {
             throw KagemushaRecursiveTopUpRequestArchiveError.unsupportedRequestArchiveType
         }
@@ -453,6 +461,26 @@ public enum KagemushaRecursiveTopUpRequestArchive {
             throw KagemushaRecursiveTopUpRequestArchiveError.invalidRequestArchive
         }
     }
+}
+
+private func validatedKagemushaRecursiveRequestArchiveFrame(
+    _ archive: Data,
+    emptyError: Error,
+    oversizedError: Error,
+    invalidError: Error
+) throws -> NoritoFrame {
+    guard !archive.isEmpty else {
+        throw emptyError
+    }
+    guard archive.count <= KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes else {
+        throw oversizedError
+    }
+    guard let frame = noritoDecodeFrame(archive),
+          frame.header.compression == .none,
+          frame.paddingLength <= KagemushaInstructionTransactionEncoder.maxNoritoHeaderPaddingBytes else {
+        throw invalidError
+    }
+    return frame
 }
 
 extension SwiftTransactionEncoder {

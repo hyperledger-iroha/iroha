@@ -522,7 +522,7 @@ def validation_options(args: argparse.Namespace) -> ValidationOptions:
     """Return checker options used to prevalidate the generated canary."""
 
     return ValidationOptions(
-        now_unix=args.now_unix or args.generated_at_unix,
+        now_unix=args.now_unix,
         max_evidence_age_secs=DEFAULT_MAX_EVIDENCE_AGE_SECS,
         max_route_latency_ms=DEFAULT_MAX_ROUTE_LATENCY_MS,
         max_hot_latency_ms=DEFAULT_MAX_HOT_LATENCY_MS,
@@ -602,7 +602,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--deployment-id", required=True)
     parser.add_argument("--environment", required=True)
     parser.add_argument("--generated-at-unix", type=positive_int_arg, required=True)
-    parser.add_argument("--now-unix", type=positive_int_arg)
+    parser.add_argument("--now-unix", type=positive_int_arg, required=True)
     parser.add_argument("--receipt-summary-digest-hex")
     parser.add_argument("--validation-bundle-digest-hex")
     parser.add_argument("--stats-digest-hex")

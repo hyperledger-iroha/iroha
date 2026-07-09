@@ -842,6 +842,7 @@ mod tests {
         let mut descriptor = LaneBlockDescriptorV1 {
             lane_id: LaneId::SINGLE,
             dataspace_id: DataSpaceId::UNIVERSAL,
+            proposal_height: 12,
             previous_lane_block_height: 11,
             previous_lane_block_descriptor_hash: Some(Hash::prehashed([0xA1; Hash::LENGTH])),
             lane_block_height: 12,
@@ -863,6 +864,7 @@ mod tests {
         let mut proposal = LaneBlockProposalV1 {
             descriptor,
             proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+            payload_block_hint: None,
         };
         proposal.proposal_hash = proposal.computed_proposal_hash();
         (proposal, keypair)
@@ -5228,9 +5230,16 @@ mod tests {
                     | (Self::Qc, BlockMessage::LaneBlockQc(_))
             )
         }
+
+        fn queue_kind(self) -> status::WorkerQueueKind {
+            match self {
+                Self::Vote => status::WorkerQueueKind::Votes,
+                Self::Proposal | Self::Qc => status::WorkerQueueKind::Blocks,
+            }
+        }
     }
 
-    fn assert_try_incoming_lane_block_message_waits_when_block_queue_full(
+    fn assert_try_incoming_lane_block_message_waits_when_target_queue_full(
         fixture: LaneBlockQueueFixture,
         with_sender: bool,
     ) {
@@ -5238,7 +5247,7 @@ mod tests {
         let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(CAP);
         let (block_tx, block_rx) = mpsc::sync_channel(CAP);
         let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(CAP);
-        let (vote_tx, _vote_rx) = mpsc::sync_channel(CAP);
+        let (vote_tx, vote_rx) = mpsc::sync_channel(CAP);
         let (consensus_tx, _consensus_rx) = mpsc::sync_channel(CAP);
         let (background_tx, _background_rx) = mpsc::sync_channel(CAP);
         let (lane_tx, _lane_rx) = mpsc::sync_channel(CAP);
@@ -5254,7 +5263,7 @@ mod tests {
             block_payload_tx,
             block_tx.clone(),
             rbc_chunk_tx,
-            vote_tx,
+            vote_tx.clone(),
             consensus_tx,
             background_tx,
             lane_tx,
@@ -5267,9 +5276,19 @@ mod tests {
             redundant_send_r: 1,
             membership: None,
         });
-        block_tx
+        let target_tx = match fixture.queue_kind() {
+            status::WorkerQueueKind::Votes => &vote_tx,
+            status::WorkerQueueKind::Blocks => &block_tx,
+            other => panic!("unexpected lane-block queue kind: {other:?}"),
+        };
+        let target_rx = match fixture.queue_kind() {
+            status::WorkerQueueKind::Votes => &vote_rx,
+            status::WorkerQueueKind::Blocks => &block_rx,
+            other => panic!("unexpected lane-block queue kind: {other:?}"),
+        };
+        target_tx
             .send(inbound(filler))
-            .expect("fill block ingress channel");
+            .expect("fill target ingress channel");
 
         let sender = checked_peer();
         let expected_sender = with_sender.then_some(sender.clone());
@@ -5288,23 +5307,23 @@ mod tests {
 
         done_rx
             .recv_timeout(Duration::from_millis(200))
-            .expect_err("lane-block message should block when block ingress queue is full");
-        let _ = block_rx
+            .expect_err("lane-block message should block when target ingress queue is full");
+        let _ = target_rx
             .recv()
-            .expect("drain block ingress queue to unblock sender");
+            .expect("drain target ingress queue to unblock sender");
         let accepted = done_rx
             .recv_timeout(Duration::from_secs(1))
             .expect("lane-block message should enqueue after capacity frees");
         assert!(accepted, "lane-block message enqueue should succeed");
         join.join().expect("join lane-block sender");
 
-        let received = block_rx
+        let received = target_rx
             .try_recv()
             .expect("lane-block message should be enqueued after capacity frees");
         let (queue_kind, _latency_ms) = received
             .queue_latency_ms()
             .expect("lane-block message should record enqueue metadata");
-        assert_eq!(queue_kind, status::WorkerQueueKind::Blocks);
+        assert_eq!(queue_kind, fixture.queue_kind());
         assert_eq!(received.sender, expected_sender);
         assert!(
             fixture.matches(&received.message),
@@ -5314,7 +5333,7 @@ mod tests {
 
     #[test]
     fn try_incoming_block_message_waits_when_block_queue_full_for_lane_block_proposal() {
-        assert_try_incoming_lane_block_message_waits_when_block_queue_full(
+        assert_try_incoming_lane_block_message_waits_when_target_queue_full(
             LaneBlockQueueFixture::Proposal,
             false,
         );
@@ -5322,23 +5341,23 @@ mod tests {
 
     #[test]
     fn try_incoming_block_message_from_waits_when_block_queue_full_for_lane_block_proposal() {
-        assert_try_incoming_lane_block_message_waits_when_block_queue_full(
+        assert_try_incoming_lane_block_message_waits_when_target_queue_full(
             LaneBlockQueueFixture::Proposal,
             true,
         );
     }
 
     #[test]
-    fn try_incoming_block_message_waits_when_block_queue_full_for_lane_block_vote() {
-        assert_try_incoming_lane_block_message_waits_when_block_queue_full(
+    fn try_incoming_block_message_waits_when_vote_queue_full_for_lane_block_vote() {
+        assert_try_incoming_lane_block_message_waits_when_target_queue_full(
             LaneBlockQueueFixture::Vote,
             false,
         );
     }
 
     #[test]
-    fn try_incoming_block_message_from_waits_when_block_queue_full_for_lane_block_vote() {
-        assert_try_incoming_lane_block_message_waits_when_block_queue_full(
+    fn try_incoming_block_message_from_waits_when_vote_queue_full_for_lane_block_vote() {
+        assert_try_incoming_lane_block_message_waits_when_target_queue_full(
             LaneBlockQueueFixture::Vote,
             true,
         );
@@ -5346,7 +5365,7 @@ mod tests {
 
     #[test]
     fn try_incoming_block_message_waits_when_block_queue_full_for_lane_block_qc() {
-        assert_try_incoming_lane_block_message_waits_when_block_queue_full(
+        assert_try_incoming_lane_block_message_waits_when_target_queue_full(
             LaneBlockQueueFixture::Qc,
             false,
         );
@@ -5354,7 +5373,7 @@ mod tests {
 
     #[test]
     fn try_incoming_block_message_from_waits_when_block_queue_full_for_lane_block_qc() {
-        assert_try_incoming_lane_block_message_waits_when_block_queue_full(
+        assert_try_incoming_lane_block_message_waits_when_target_queue_full(
             LaneBlockQueueFixture::Qc,
             true,
         );
@@ -13969,6 +13988,13 @@ impl SumeragiHandle {
                     mode,
                 )
             }
+            BlockMessage::LaneBlockVote(vote) => enqueue_with_mode(
+                &self.votes,
+                InboundBlockMessage::new(BlockMessage::LaneBlockVote(vote), sender),
+                "LaneBlockVote",
+                status::WorkerQueueKind::Votes,
+                mode,
+            ),
             BlockMessage::Qc(cert) => {
                 iroha_logger::debug!(
                     phase = ?cert.phase,

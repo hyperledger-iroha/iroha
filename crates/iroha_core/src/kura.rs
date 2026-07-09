@@ -4276,7 +4276,10 @@ impl Kura {
         }
 
         self.check_storage_budget(block, merge_entry)?;
-        self.persist_lane_payload_ownership_artifacts_for_block(block)?;
+        let mut lane_artifacts = self.stage_lane_payload_ownership_artifacts_for_block(
+            block,
+            LaneBlockArtifactConflictPolicy::PreserveCanonical,
+        )?;
 
         let mut block_data = self.block_data.lock();
         Self::validate_next_or_existing_block(
@@ -4289,7 +4292,9 @@ impl Kura {
             let chain_len = block_data.len();
             drop(block_data);
             self.ensure_durable_block_at_height(actual_height, block_hash)?;
-            self.persist_lane_payload_ownership_artifacts_for_block(block)?;
+            if let Some(batch) = lane_artifacts.take() {
+                batch.commit();
+            }
             self.set_block_height_index_entry(actual_height_usize, block_hash);
             self.set_transaction_entrypoint_index_entry(actual_height_usize, block, chain_len);
             if let Some(entry) = merge_entry {
@@ -4313,6 +4318,15 @@ impl Kura {
                 entry_epoch = entry.epoch_id,
                 "Failed to append merge-ledger entry while storing block"
             );
+            if let Some(mut batch) = lane_artifacts.take()
+                && let Err(rollback_err) = batch.rollback()
+            {
+                error!(
+                    ?rollback_err,
+                    ?block_hash,
+                    "Failed to rollback lane artifacts after merge-ledger append failure"
+                );
+            }
             return Err(err);
         }
 
@@ -4326,9 +4340,21 @@ impl Kura {
                     "Failed to rollback merge-ledger entry after block write failure"
                 );
             }
+            if let Some(mut batch) = lane_artifacts.take()
+                && let Err(rollback_err) = batch.rollback()
+            {
+                error!(
+                    ?rollback_err,
+                    ?block_hash,
+                    "Failed to rollback lane artifacts after block write failure"
+                );
+            }
             return Err(err);
         }
 
+        if let Some(batch) = lane_artifacts.take() {
+            batch.commit();
+        }
         block_data.push((block_hash, Some(Arc::clone(block))));
         Self::drop_persisted_blocks(
             &mut block_data,
@@ -5122,7 +5148,10 @@ impl Kura {
         }
 
         self.check_replace_storage_budget(block.as_ref())?;
-        self.persist_lane_payload_ownership_artifacts_for_block(&block)?;
+        self.validate_lane_payload_ownership_artifacts_for_block(
+            &block,
+            LaneBlockArtifactConflictPolicy::AllowCanonicalReplacementAtProposalHeight(height),
+        )?;
 
         let mut data = self.block_data.lock();
         if Self::validate_top_replacement(data.as_slice(), height, height_usize, block_hash)? {
@@ -5145,6 +5174,7 @@ impl Kura {
         self.set_block_height_index_entry(height_usize, block_hash);
         self.set_transaction_entrypoint_index_entry(height_usize, &block, chain_len);
         drop(data);
+        self.persist_lane_payload_ownership_artifacts_for_block(&block)?;
         self.prune_wsv_checkpoints_above(height.saturating_sub(1))?;
         self.prune_commit_manifests_above(height.saturating_sub(1))?;
         self.append_debug_block_dump(&block);
@@ -6392,6 +6422,32 @@ struct SidecarIndexEntry {
     len: u64,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum LaneBlockArtifactConflictPolicy {
+    PreserveCanonical,
+    AllowCanonicalReplacementAtProposalHeight(u64),
+}
+
+#[derive(Debug)]
+struct LaneBlockArtifactWriteCheckpoint {
+    data_path: PathBuf,
+    index_path: PathBuf,
+    data_existed: bool,
+    index_existed: bool,
+    data_len: u64,
+    index_len: u64,
+    index_entry_pos: Option<u64>,
+    index_entry_bytes: Option<[u8; PIPELINE_INDEX_ENTRY_SIZE]>,
+    tracked_bytes_before: Option<u64>,
+}
+
+struct LaneBlockArtifactWriteBatch<'a> {
+    kura: &'a Kura,
+    _guard: parking_lot::MutexGuard<'a, ()>,
+    checkpoints: Vec<LaneBlockArtifactWriteCheckpoint>,
+    finished: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FastpqProofWriteResult {
     Written,
@@ -6715,6 +6771,78 @@ impl LaneBlockApplicationReceiptArtifact {
     }
 }
 
+impl LaneBlockArtifactConflictPolicy {
+    fn allows_canonical_replacement(
+        self,
+        existing: &LaneBlockArtifact,
+        replacement: &LaneBlockArtifact,
+    ) -> bool {
+        match self {
+            Self::PreserveCanonical => false,
+            Self::AllowCanonicalReplacementAtProposalHeight(height) => {
+                existing.ownership.proposal_height == height
+                    && replacement.ownership.proposal_height == height
+                    && existing.proposal_block_hash != replacement.proposal_block_hash
+            }
+        }
+    }
+}
+
+impl<'a> LaneBlockArtifactWriteBatch<'a> {
+    fn new(kura: &'a Kura) -> Self {
+        Self {
+            kura,
+            _guard: kura.sidecar_lock.lock(),
+            checkpoints: Vec::new(),
+            finished: false,
+        }
+    }
+
+    fn push(&mut self, checkpoint: LaneBlockArtifactWriteCheckpoint) {
+        self.checkpoints.push(checkpoint);
+    }
+
+    fn commit(mut self) {
+        self.finished = true;
+    }
+
+    fn rollback(&mut self) -> Result<()> {
+        if self.finished {
+            return Ok(());
+        }
+
+        let mut first_error = None;
+        while let Some(checkpoint) = self.checkpoints.pop() {
+            if let Err(err) = self
+                .kura
+                .restore_lane_block_artifact_checkpoint_locked(&checkpoint)
+            {
+                error!(?err, "failed to roll back lane block artifact write");
+                if first_error.is_none() {
+                    first_error = Some(err);
+                }
+            }
+        }
+        self.finished = true;
+
+        if let Some(err) = first_error {
+            Err(err)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl Drop for LaneBlockArtifactWriteBatch<'_> {
+    fn drop(&mut self) {
+        if !self.finished
+            && let Err(err) = self.rollback()
+        {
+            error!(?err, "failed to roll back uncommitted lane block artifacts");
+        }
+    }
+}
+
 impl Kura {
     fn now_unix_secs() -> u64 {
         SystemTime::now()
@@ -7012,6 +7140,20 @@ impl Kura {
         &self,
         block: &SignedBlock,
     ) -> Result<()> {
+        if let Some(batch) = self.stage_lane_payload_ownership_artifacts_for_block(
+            block,
+            LaneBlockArtifactConflictPolicy::PreserveCanonical,
+        )? {
+            batch.commit();
+        }
+        Ok(())
+    }
+
+    fn validate_lane_payload_ownership_artifacts_for_block(
+        &self,
+        block: &SignedBlock,
+        conflict_policy: LaneBlockArtifactConflictPolicy,
+    ) -> Result<()> {
         let Some(bundle) = block.execution_context() else {
             return Ok(());
         };
@@ -7023,12 +7165,102 @@ impl Kura {
         let block_hash = block.hash();
         for ownership in &bundle.lane_payload_ownerships {
             let artifact = LaneBlockArtifact::new(block_hash, ownership.clone());
-            self.write_lane_block_artifact_locked(&artifact)?;
+            artifact.encode_framed()?;
+            self.validate_lane_block_artifact_write_locked(&artifact, conflict_policy)?;
         }
         Ok(())
     }
 
-    fn write_lane_block_artifact_locked(&self, artifact: &LaneBlockArtifact) -> Result<()> {
+    fn stage_lane_payload_ownership_artifacts_for_block(
+        &self,
+        block: &SignedBlock,
+        conflict_policy: LaneBlockArtifactConflictPolicy,
+    ) -> Result<Option<LaneBlockArtifactWriteBatch<'_>>> {
+        let Some(bundle) = block.execution_context() else {
+            return Ok(None);
+        };
+        if bundle.lane_payload_ownerships.is_empty() {
+            return Ok(None);
+        }
+
+        let mut batch = LaneBlockArtifactWriteBatch::new(self);
+        let block_hash = block.hash();
+        for ownership in &bundle.lane_payload_ownerships {
+            let artifact = LaneBlockArtifact::new(block_hash, ownership.clone());
+            match self.write_lane_block_artifact_locked(&artifact, conflict_policy) {
+                Ok(Some(checkpoint)) => batch.push(checkpoint),
+                Ok(None) => {}
+                Err(err) => {
+                    if let Err(rollback_err) = batch.rollback() {
+                        error!(
+                            ?rollback_err,
+                            ?block_hash,
+                            "failed to roll back lane artifacts after write error"
+                        );
+                    }
+                    return Err(err);
+                }
+            }
+        }
+        Ok(Some(batch))
+    }
+
+    fn validate_lane_block_artifact_write_locked(
+        &self,
+        artifact: &LaneBlockArtifact,
+        conflict_policy: LaneBlockArtifactConflictPolicy,
+    ) -> Result<()> {
+        let lane_id = artifact.ownership.lane_id;
+        let lane_block_height = artifact.ownership.lane_block_height;
+        let entry = self.lane_storage_entry(lane_id)?;
+        let (data_path, index_path) = Self::lane_artifact_paths_for_entry(&entry, &self.store_root);
+        if data_path.parent().is_none() {
+            return Err(Self::invalid_lane_artifact_error(
+                data_path,
+                "lane artifact path has no parent directory",
+            ));
+        }
+        if lane_block_height == 0 {
+            return Err(Self::invalid_lane_artifact_error(
+                data_path,
+                "lane artifact block height must be non-zero",
+            ));
+        }
+        Self::recover_indexed_sidecar_artifacts(&data_path, &index_path, "lane block artifact");
+
+        if let Some(existing) = Self::read_indexed_sidecar_from_paths_with_recovery(
+            lane_block_height,
+            &data_path,
+            &index_path,
+            norito::decode_from_bytes::<LaneBlockArtifact>,
+            "lane block artifact",
+            false,
+        ) {
+            if existing == *artifact {
+                return Ok(());
+            }
+            if self.lane_block_artifact_is_canonical_locked(&existing)
+                && !conflict_policy.allows_canonical_replacement(&existing, artifact)
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    data_path,
+                    format!(
+                        "lane artifact already exists for lane {} height {} with a different payload",
+                        lane_id.as_u32(),
+                        lane_block_height
+                    ),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn write_lane_block_artifact_locked(
+        &self,
+        artifact: &LaneBlockArtifact,
+        conflict_policy: LaneBlockArtifactConflictPolicy,
+    ) -> Result<Option<LaneBlockArtifactWriteCheckpoint>> {
         let lane_id = artifact.ownership.lane_id;
         let lane_block_height = artifact.ownership.lane_block_height;
         let entry = self.lane_storage_entry(lane_id)?;
@@ -7046,39 +7278,38 @@ impl Kura {
             ));
         }
         std::fs::create_dir_all(&dir).map_err(|err| Error::MkDir(err, dir.clone()))?;
+        Self::recover_indexed_sidecar_artifacts(&data_path, &index_path, "lane block artifact");
 
-        if let Some(existing) = Self::read_indexed_sidecar_from_paths(
+        if let Some(existing) = Self::read_indexed_sidecar_from_paths_with_recovery(
             lane_block_height,
             &data_path,
             &index_path,
             norito::decode_from_bytes::<LaneBlockArtifact>,
             "lane block artifact",
+            false,
         ) {
             if existing == *artifact {
-                return Ok(());
+                return Ok(None);
             }
-            return Err(Self::invalid_lane_artifact_error(
-                data_path,
-                format!(
-                    "lane artifact already exists for lane {} height {} with a different payload",
-                    lane_id.as_u32(),
-                    lane_block_height
-                ),
-            ));
+            if self.lane_block_artifact_is_canonical_locked(&existing)
+                && !conflict_policy.allows_canonical_replacement(&existing, artifact)
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    data_path,
+                    format!(
+                        "lane artifact already exists for lane {} height {} with a different payload",
+                        lane_id.as_u32(),
+                        lane_block_height
+                    ),
+                ));
+            }
         }
 
-        let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
-            Ok(bytes) => Some(bytes),
-            Err(err) => {
-                iroha_logger::warn!(
-                    ?err,
-                    lane = %lane_id.as_u32(),
-                    lane_block_height,
-                    "failed to measure lane artifact bytes before write"
-                );
-                None
-            }
-        };
+        let checkpoint = self.capture_lane_block_artifact_checkpoint_locked(
+            &data_path,
+            &index_path,
+            lane_block_height,
+        );
         let payload = artifact.encode_framed()?;
         let wrote = Self::append_indexed_sidecar(
             &data_path,
@@ -7090,12 +7321,23 @@ impl Kura {
             None,
         );
         if !wrote {
+            if let Err(rollback_err) =
+                self.restore_lane_block_artifact_checkpoint_locked(&checkpoint)
+            {
+                error!(
+                    ?rollback_err,
+                    lane = %lane_id.as_u32(),
+                    lane_block_height,
+                    "failed to roll back lane block artifact after write failure"
+                );
+                return Err(rollback_err);
+            }
             return Err(Error::IO(
                 std::io::Error::other("failed to persist lane block artifact"),
                 data_path,
             ));
         }
-        if let Some(before_bytes) = before_bytes {
+        if let Some(before_bytes) = checkpoint.tracked_bytes_before {
             match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
                 Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
                 Err(err) => iroha_logger::warn!(
@@ -7106,6 +7348,146 @@ impl Kura {
                 ),
             }
         }
+        Ok(Some(checkpoint))
+    }
+
+    fn lane_block_artifact_is_canonical_locked(&self, artifact: &LaneBlockArtifact) -> bool {
+        let Some(proposal_height) = usize::try_from(artifact.ownership.proposal_height)
+            .ok()
+            .and_then(NonZeroUsize::new)
+        else {
+            return false;
+        };
+        self.get_block_hash(proposal_height)
+            .or_else(|| self.get_durable_block_hash(proposal_height))
+            == Some(artifact.proposal_block_hash)
+    }
+
+    fn capture_lane_block_artifact_checkpoint_locked(
+        &self,
+        data_path: &Path,
+        index_path: &Path,
+        lane_block_height: u64,
+    ) -> LaneBlockArtifactWriteCheckpoint {
+        let data_meta = std::fs::metadata(data_path).ok();
+        let index_meta = std::fs::metadata(index_path).ok();
+        let data_existed = data_meta.is_some();
+        let index_existed = index_meta.is_some();
+        let data_len = data_meta.as_ref().map(std::fs::Metadata::len).unwrap_or(0);
+        let index_len = index_meta.as_ref().map(std::fs::Metadata::len).unwrap_or(0);
+        let index_entry_pos = lane_block_height
+            .checked_sub(1)
+            .map(|height| height.saturating_mul(PIPELINE_INDEX_ENTRY_SIZE_U64))
+            .filter(|pos| pos.saturating_add(PIPELINE_INDEX_ENTRY_SIZE_U64) <= index_len);
+        let index_entry_bytes = index_entry_pos.and_then(|pos| {
+            let mut file = std::fs::File::open(index_path).ok()?;
+            let mut buf = [0u8; PIPELINE_INDEX_ENTRY_SIZE];
+            file.seek(SeekFrom::Start(pos))
+                .and_then(|_| file.read_exact(&mut buf))
+                .ok()?;
+            Some(buf)
+        });
+        let tracked_bytes_before = match Self::sidecar_tracked_bytes(data_path, index_path, None) {
+            Ok(bytes) => Some(bytes),
+            Err(err) => {
+                iroha_logger::warn!(
+                    ?err,
+                    lane_block_height,
+                    "failed to measure lane artifact bytes before write"
+                );
+                None
+            }
+        };
+
+        LaneBlockArtifactWriteCheckpoint {
+            data_path: data_path.to_path_buf(),
+            index_path: index_path.to_path_buf(),
+            data_existed,
+            index_existed,
+            data_len,
+            index_len,
+            index_entry_pos,
+            index_entry_bytes,
+            tracked_bytes_before,
+        }
+    }
+
+    fn restore_lane_block_artifact_checkpoint_locked(
+        &self,
+        checkpoint: &LaneBlockArtifactWriteCheckpoint,
+    ) -> Result<()> {
+        let tracked_bytes_after_write =
+            Self::sidecar_tracked_bytes(&checkpoint.data_path, &checkpoint.index_path, None).ok();
+
+        if checkpoint.data_existed {
+            let data = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .open(&checkpoint.data_path)
+                .map_err(|err| Error::IO(err, checkpoint.data_path.clone()))?;
+            data.set_len(checkpoint.data_len)
+                .map_err(|err| Error::IO(err, checkpoint.data_path.clone()))?;
+            if matches!(self.sidecar_fsync_mode(), FsyncMode::On) {
+                data.sync_data()
+                    .map_err(|err| Error::IO(err, checkpoint.data_path.clone()))?;
+            }
+        } else if let Err(err) = std::fs::remove_file(&checkpoint.data_path)
+            && err.kind() != ErrorKind::NotFound
+        {
+            return Err(Error::IO(err, checkpoint.data_path.clone()));
+        }
+
+        if checkpoint.index_existed {
+            let mut index = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(&checkpoint.index_path)
+                .map_err(|err| Error::IO(err, checkpoint.index_path.clone()))?;
+            index
+                .set_len(checkpoint.index_len)
+                .map_err(|err| Error::IO(err, checkpoint.index_path.clone()))?;
+            if let (Some(pos), Some(bytes)) =
+                (checkpoint.index_entry_pos, checkpoint.index_entry_bytes)
+            {
+                index
+                    .seek(SeekFrom::Start(pos))
+                    .and_then(|_| index.write_all(&bytes))
+                    .map_err(|err| Error::IO(err, checkpoint.index_path.clone()))?;
+            }
+            if matches!(self.sidecar_fsync_mode(), FsyncMode::On) {
+                index
+                    .sync_data()
+                    .map_err(|err| Error::IO(err, checkpoint.index_path.clone()))?;
+            }
+        } else if let Err(err) = std::fs::remove_file(&checkpoint.index_path)
+            && err.kind() != ErrorKind::NotFound
+        {
+            return Err(Error::IO(err, checkpoint.index_path.clone()));
+        }
+
+        if matches!(self.sidecar_fsync_mode(), FsyncMode::On)
+            && let Some(parent) = checkpoint.data_path.parent()
+        {
+            sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+        }
+
+        if let (Some(after_write), Some(before_write)) =
+            (tracked_bytes_after_write, checkpoint.tracked_bytes_before)
+            && let Ok(after_rollback) =
+                Self::sidecar_tracked_bytes(&checkpoint.data_path, &checkpoint.index_path, None)
+        {
+            self.update_disk_usage_delta(after_write, after_rollback);
+            if after_rollback != before_write {
+                warn!(
+                    before_write,
+                    after_rollback, "lane artifact rollback restored different tracked byte count"
+                );
+            }
+        }
+
         Ok(())
     }
 
@@ -7835,7 +8217,7 @@ impl Kura {
             return true;
         }
         let Some(previous_descriptor_hash) = descriptor.previous_lane_block_descriptor_hash else {
-            return false;
+            return true;
         };
         let Some(receipt) =
             self.read_lane_block_application_receipt(descriptor.lane_id, previous_height)
@@ -8283,14 +8665,17 @@ impl Kura {
         &self,
         proposal: &LaneBlockProposalV1,
     ) -> bool {
-        let available = self
-            .read_lane_block_application_receipt(
-                proposal.descriptor.lane_id,
-                proposal.descriptor.lane_block_height,
-            )
-            .is_some_and(|artifact| artifact.proposal == *proposal);
-        if !available {
+        let Some(artifact) = self.read_lane_block_application_receipt(
+            proposal.descriptor.lane_id,
+            proposal.descriptor.lane_block_height,
+        ) else {
             return false;
+        };
+        if artifact.proposal != *proposal {
+            return false;
+        }
+        if artifact.format == LaneBlockApplicationReceiptArtifactFormat::Current {
+            return true;
         }
         if self.lane_block_application_receipt_conflicts_with_preflight(proposal) {
             iroha_logger::warn!(
@@ -8526,7 +8911,9 @@ impl Kura {
         let Some(artifact) =
             self.read_lane_block_artifact(descriptor.lane_id, descriptor.lane_block_height)
         else {
-            return Err(LaneBlockPayloadAvailability::MissingLaneArtifact);
+            return self
+                .recover_lane_block_artifact_from_canonical_blocks(proposal)
+                .ok_or(LaneBlockPayloadAvailability::MissingLaneArtifact);
         };
         if !Self::lane_block_artifact_matches_descriptor(&artifact.ownership, descriptor) {
             return Err(LaneBlockPayloadAvailability::DescriptorMismatch);
@@ -8550,6 +8937,67 @@ impl Kura {
         }
 
         Ok((artifact, block))
+    }
+
+    fn recover_lane_block_artifact_from_canonical_blocks(
+        &self,
+        proposal: &LaneBlockProposalV1,
+    ) -> Option<(LaneBlockArtifact, Arc<SignedBlock>)> {
+        let descriptor = &proposal.descriptor;
+        for height in (1..=self.blocks_count()).rev() {
+            let Some(height) = NonZeroUsize::new(height) else {
+                continue;
+            };
+            let Some(block) = self.get_block(height) else {
+                continue;
+            };
+            let Some(bundle) = block.execution_context() else {
+                continue;
+            };
+            let Some(ownership) = bundle
+                .lane_payload_ownerships
+                .iter()
+                .find(|ownership| {
+                    Self::lane_block_artifact_matches_descriptor(ownership, descriptor)
+                })
+                .cloned()
+            else {
+                continue;
+            };
+            let artifact = LaneBlockArtifact::new(block.hash(), ownership);
+            if !self.persist_recovered_lane_block_artifact(&artifact) {
+                return None;
+            }
+            debug!(
+                lane_id = ?descriptor.lane_id,
+                dataspace_id = ?descriptor.dataspace_id,
+                lane_block_height = descriptor.lane_block_height,
+                "recovered missing lane-block artifact sidecar from canonical block body"
+            );
+            return Some((artifact, block));
+        }
+
+        None
+    }
+
+    fn persist_recovered_lane_block_artifact(&self, artifact: &LaneBlockArtifact) -> bool {
+        let _guard = self.sidecar_lock.lock();
+        match self.write_lane_block_artifact_locked(
+            artifact,
+            LaneBlockArtifactConflictPolicy::PreserveCanonical,
+        ) {
+            Ok(_) => true,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    lane_id = ?artifact.ownership.lane_id,
+                    dataspace_id = ?artifact.ownership.dataspace_id,
+                    lane_block_height = artifact.ownership.lane_block_height,
+                    "failed to persist recovered lane-block artifact sidecar"
+                );
+                false
+            }
+        }
     }
 
     fn lane_block_artifact_matches_descriptor(
@@ -8617,6 +9065,78 @@ impl Kura {
         self.latest_lane_block_artifact_matching(lane_id, |artifact| {
             artifact.ownership.dataspace_id == dataspace_id
         })
+    }
+
+    /// Return all valid lane-local block artifacts for every configured lane storage entry.
+    ///
+    /// Artifacts are sorted by lane-local height first so recovery can rebuild
+    /// predecessor-gated lane sessions before later blocks that depend on them.
+    #[must_use]
+    pub(crate) fn lane_block_artifacts_snapshot(&self) -> Vec<LaneBlockArtifact> {
+        let lane_ids = self
+            .lane_storage_entries
+            .lock()
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        let mut artifacts = lane_ids
+            .into_iter()
+            .flat_map(|lane_id| self.lane_block_artifacts_for_lane(lane_id))
+            .collect::<Vec<_>>();
+        artifacts.sort_by_key(|artifact| {
+            let ownership = &artifact.ownership;
+            (
+                ownership.lane_block_height,
+                ownership.lane_id.as_u32(),
+                ownership.dataspace_id.as_u64(),
+                ownership.lane_block_view,
+            )
+        });
+        artifacts
+    }
+
+    fn lane_block_artifacts_for_lane(&self, lane_id: LaneId) -> Vec<LaneBlockArtifact> {
+        let Some(entry) = self.lane_storage_entry(lane_id).ok() else {
+            return Vec::new();
+        };
+        let (data_path, index_path) = Self::lane_artifact_paths_for_entry(&entry, &self.store_root);
+        let _guard = self.sidecar_lock.lock();
+        Self::recover_indexed_sidecar_artifacts(&data_path, &index_path, "lane block artifact");
+
+        let index_len = match std::fs::metadata(&index_path) {
+            Ok(meta) => meta.len(),
+            Err(err) => {
+                iroha_logger::debug!(
+                    ?err,
+                    lane = %lane_id.as_u32(),
+                    ?index_path,
+                    "lane block artifact index is unavailable"
+                );
+                return Vec::new();
+            }
+        };
+        let remainder = index_len % PIPELINE_INDEX_ENTRY_SIZE_U64;
+        if remainder != 0 {
+            iroha_logger::warn!(
+                len = index_len,
+                aligned_len = index_len - remainder,
+                lane = %lane_id.as_u32(),
+                ?index_path,
+                "lane block artifact index length misaligned; ignoring trailing bytes"
+            );
+        }
+        let total_entries = index_len / PIPELINE_INDEX_ENTRY_SIZE_U64;
+        (1..=total_entries)
+            .filter_map(|lane_block_height| {
+                self.read_lane_block_artifact_from_paths_locked(
+                    lane_id,
+                    lane_block_height,
+                    &data_path,
+                    &index_path,
+                    false,
+                )
+            })
+            .collect()
     }
 
     fn latest_lane_block_artifact_matching<F>(
@@ -16687,6 +17207,7 @@ mod tests {
         let descriptor = LaneBlockDescriptorV1 {
             lane_id: ownership.lane_id,
             dataspace_id: ownership.dataspace_id,
+            proposal_height: ownership.proposal_height,
             previous_lane_block_height: ownership.previous_lane_block_height,
             previous_lane_block_descriptor_hash: ownership.previous_lane_block_descriptor_hash,
             lane_block_height: ownership.lane_block_height,
@@ -16714,6 +17235,7 @@ mod tests {
         let mut proposal = LaneBlockProposalV1 {
             descriptor,
             proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+            payload_block_hint: None,
         };
         proposal.proposal_hash = proposal.computed_proposal_hash();
         proposal
@@ -16737,6 +17259,7 @@ mod tests {
         let mut descriptor = LaneBlockDescriptorV1 {
             lane_id,
             dataspace_id,
+            proposal_height: lane_block_height,
             previous_lane_block_height: lane_block_height.saturating_sub(1),
             previous_lane_block_descriptor_hash: lane_block_height
                 .checked_sub(1)
@@ -16803,6 +17326,7 @@ mod tests {
         let mut proposal = LaneBlockProposalV1 {
             descriptor,
             proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+            payload_block_hint: None,
         };
         proposal.proposal_hash = proposal.computed_proposal_hash();
 
@@ -16851,7 +17375,20 @@ mod tests {
         dataspace_id: DataSpaceId,
         lane_block_height: u64,
     ) -> Arc<SignedBlock> {
-        let mut block = generator.next().as_ref().clone();
+        block_with_lane_payload_ownership_for_kura(
+            generator.next().as_ref().clone(),
+            lane_id,
+            dataspace_id,
+            lane_block_height,
+        )
+    }
+
+    fn block_with_lane_payload_ownership_for_kura(
+        mut block: SignedBlock,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_block_height: u64,
+    ) -> Arc<SignedBlock> {
         let entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
             b"kura-lane-artifact-entrypoint",
         ));
@@ -16928,6 +17465,22 @@ mod tests {
         };
         let catalog = LaneCatalog::new(nonzero!(2_u32), vec![lane0, lane1]).expect("catalog");
         RuntimeLaneConfig::from_catalog(&catalog)
+    }
+
+    fn assert_lane_artifact_files_absent_or_empty(
+        lane_entry: &LaneConfigEntry,
+        store_root: &std::path::Path,
+    ) {
+        let (data_path, index_path) = Kura::lane_artifact_paths_for_entry(lane_entry, store_root);
+        for path in [data_path, index_path] {
+            if let Ok(metadata) = fs::metadata(&path) {
+                assert_eq!(
+                    metadata.len(),
+                    0,
+                    "lane artifact file was not rolled back: {path:?}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -17016,6 +17569,73 @@ mod tests {
         assert_eq!(recovered.proposal, proposal);
         assert_eq!(recovered.artifact.ownership, ownership);
         assert_eq!(recovered.entrypoints, vec![expected_entrypoint]);
+    }
+
+    #[test]
+    fn lane_block_payload_availability_rebuilds_missing_artifact_sidecar_from_canonical_block() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let lane_block_height = 1;
+        let block = dummy_block_with_lane_payload_ownership(
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        );
+        let ownership = block
+            .execution_context()
+            .expect("execution context")
+            .lane_payload_ownerships
+            .first()
+            .expect("lane ownership")
+            .clone();
+        let expected_entrypoint = block
+            .external_entrypoints_cloned()
+            .next()
+            .expect("dummy block entrypoint");
+        let proposal = lane_block_proposal_from_ownership(&ownership);
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.store_block(block)
+            .expect("store block with lane artifact");
+        let (data_path, index_path) =
+            Kura::lane_artifact_paths_for_entry(lane_entry, temp_dir.path());
+        std::fs::remove_file(&data_path).expect("remove lane artifact data sidecar");
+        std::fs::remove_file(&index_path).expect("remove lane artifact index sidecar");
+        assert!(
+            kura.read_lane_block_artifact(lane_id, lane_block_height)
+                .is_none(),
+            "test setup should remove the lane artifact sidecar"
+        );
+        {
+            let mut block_data = kura.block_data.lock();
+            for (_, block) in block_data.iter_mut() {
+                *block = None;
+            }
+            assert!(
+                block_data.iter().all(|(_, block)| block.is_none()),
+                "test setup should force recovery through durable block rehydration"
+            );
+        }
+
+        assert_eq!(
+            kura.lane_block_payload_availability(&proposal),
+            LaneBlockPayloadAvailability::Available
+        );
+        let recovered = kura
+            .recover_lane_block_payload(&proposal)
+            .expect("recover executable lane payload after sidecar rebuild");
+        assert_eq!(recovered.proposal, proposal);
+        assert_eq!(recovered.artifact.ownership, ownership);
+        assert_eq!(recovered.entrypoints, vec![expected_entrypoint]);
+        assert_eq!(
+            kura.read_lane_block_artifact(lane_id, lane_block_height)
+                .expect("rebuilt lane artifact sidecar")
+                .ownership,
+            ownership
+        );
     }
 
     #[test]
@@ -17785,6 +18405,46 @@ mod tests {
     }
 
     #[test]
+    fn lane_block_predecessor_receipt_allows_compatibility_anchor_without_descriptor() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let lane_block_height = 12;
+        let block = dummy_block_with_lane_payload_ownership(
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        );
+        let mut ownership = block
+            .execution_context()
+            .expect("execution context")
+            .lane_payload_ownerships
+            .first()
+            .expect("lane ownership")
+            .clone();
+        ownership.previous_lane_block_descriptor_hash = None;
+        let replay_hashes = ownership
+            .compute_replay_hashes()
+            .expect("compatibility anchor replay hashes compute");
+        ownership.subject_hash = replay_hashes.subject_hash;
+        ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
+        ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
+        ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
+        ownership
+            .validate_replay_material()
+            .expect("compatibility anchor ownership remains replayable");
+        let proposal = lane_block_proposal_from_ownership(&ownership);
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        assert!(
+            kura.lane_block_predecessor_application_receipt_available(&proposal),
+            "a missing predecessor descriptor marks the first executable segment for a lane incarnation"
+        );
+    }
+
+    #[test]
     fn lane_block_direct_application_input_rejects_conflicting_predecessor_receipt() {
         let temp_dir = TempDir::new().expect("create temp dir");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
@@ -17957,7 +18617,7 @@ mod tests {
     }
 
     #[test]
-    fn lane_block_application_receipt_conflicting_with_preflight_is_not_available() {
+    fn canonical_lane_block_application_receipt_overrides_conflicting_preflight() {
         let temp_dir = TempDir::new().expect("create temp dir");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
         let lane_config = two_lane_runtime_config();
@@ -18019,13 +18679,13 @@ mod tests {
             "direct-execution preflight mismatch must be detected"
         );
         assert!(
-            !kura.lane_block_application_receipt_available(&proposal),
-            "conflicting preflight evidence must keep the lane block from being treated as applied"
+            kura.lane_block_application_receipt_available(&proposal),
+            "canonical block results must keep the lane block applied despite stale preflight evidence"
         );
 
         let (reloaded, _) = Kura::new(&config, &lane_config).expect("reload kura");
         assert!(reloaded.lane_block_application_receipt_conflicts_with_preflight(&proposal));
-        assert!(!reloaded.lane_block_application_receipt_available(&proposal));
+        assert!(reloaded.lane_block_application_receipt_available(&proposal));
     }
 
     #[test]
@@ -18370,6 +19030,57 @@ mod tests {
     }
 
     #[test]
+    fn lane_block_artifacts_snapshot_returns_all_valid_artifacts_in_replay_order() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane0 = LaneId::from(0);
+        let lane1 = LaneId::from(1);
+        let lane0_entry = lane_config.entry(lane0).expect("lane 0 entry");
+        let lane1_entry = lane_config.entry(lane1).expect("lane 1 entry");
+        let mut generator = DummyBlocks::new();
+        let lane1_later = dummy_block_with_lane_payload_ownership_from_generator(
+            &mut generator,
+            lane1,
+            lane1_entry.dataspace_id,
+            3,
+        );
+        let lane0_first = dummy_block_with_lane_payload_ownership_from_generator(
+            &mut generator,
+            lane0,
+            lane0_entry.dataspace_id,
+            1,
+        );
+        let lane1_first = dummy_block_with_lane_payload_ownership_from_generator(
+            &mut generator,
+            lane1,
+            lane1_entry.dataspace_id,
+            1,
+        );
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.store_block(lane1_later)
+            .expect("store sparse later lane artifact first");
+        kura.store_block(lane0_first)
+            .expect("store first lane 0 artifact");
+        kura.store_block(lane1_first)
+            .expect("store first lane 1 artifact after sparse write");
+
+        let replay_keys = kura
+            .lane_block_artifacts_snapshot()
+            .into_iter()
+            .map(|artifact| {
+                (
+                    artifact.ownership.lane_block_height,
+                    artifact.ownership.lane_id.as_u32(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(replay_keys, vec![(1, 0), (1, 1), (3, 1)]);
+    }
+
+    #[test]
     fn latest_lane_block_artifact_for_dataspace_skips_newer_foreign_dataspace() {
         let temp_dir = TempDir::new().expect("create temp dir");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
@@ -18624,6 +19335,188 @@ mod tests {
             kura.blocks_count(),
             1,
             "conflicting lane artifact must abort before the second global block is stored"
+        );
+    }
+
+    #[test]
+    fn lane_block_artifact_rolls_back_when_block_write_fails() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let lane_block_height = 1;
+        let mut generator = DummyBlocks::new();
+        let aborted = dummy_block_with_lane_payload_ownership_from_generator(
+            &mut generator,
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        );
+        let replacement: SignedBlock =
+            ValidBlock::new_dummy_and_modify_header(checked_keypair().private_key(), |header| {
+                header.set_height(nonzero!(1_u64));
+                header.set_prev_block_hash(None);
+                header.set_view_change_index(header.view_change_index().saturating_add(1));
+            })
+            .into();
+        let replacement = block_with_lane_payload_ownership_for_kura(
+            replacement,
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        );
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.fail_next_block_write_for_tests();
+        let err = kura
+            .store_block(aborted)
+            .expect_err("injected block write failure");
+        assert!(matches!(err, Error::IO(_, _)));
+        assert_eq!(kura.blocks_count(), 0);
+        assert!(
+            kura.read_lane_block_artifact(lane_id, lane_block_height)
+                .is_none(),
+            "aborted block must not leave a readable lane artifact"
+        );
+        assert_lane_artifact_files_absent_or_empty(lane_entry, temp_dir.path());
+
+        kura.store_block(replacement)
+            .expect("later valid block at same lane height must not be poisoned");
+        assert!(
+            kura.read_lane_block_artifact(lane_id, lane_block_height)
+                .is_some(),
+            "replacement block should persist its lane artifact"
+        );
+    }
+
+    #[test]
+    fn lane_block_artifact_rolls_back_when_merge_append_fails() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let lane_block_height = 1;
+        let mut generator = DummyBlocks::new();
+        let aborted = dummy_block_with_lane_payload_ownership_from_generator(
+            &mut generator,
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        );
+        let replacement: SignedBlock =
+            ValidBlock::new_dummy_and_modify_header(checked_keypair().private_key(), |header| {
+                header.set_height(nonzero!(1_u64));
+                header.set_prev_block_hash(None);
+                header.set_view_change_index(header.view_change_index().saturating_add(1));
+            })
+            .into();
+        let replacement = block_with_lane_payload_ownership_for_kura(
+            replacement,
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        );
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        let failing_dir = tempfile::tempdir().expect("tempdir");
+        let log_path = failing_dir.path().join("merge.log");
+        fs::write(&log_path, []).expect("seed merge log file");
+        let failing_log = MergeLedgerLog {
+            file: Some(
+                FileWrap::open_with(log_path, |opts| {
+                    opts.read(true);
+                })
+                .expect("open read-only merge log"),
+            ),
+            entries: Vec::new(),
+            cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
+            total_entries: 0,
+            fail_next_append: false,
+        };
+        *kura.merge_log.lock() = failing_log;
+        let entry = sample_merge_entry(11);
+
+        let err = kura
+            .store_block_with_merge_entry(aborted, &entry)
+            .expect_err("merge log append should fail");
+        assert!(matches!(err, Error::IO(_, _)));
+        assert_eq!(kura.blocks_count(), 0);
+        assert!(
+            kura.read_lane_block_artifact(lane_id, lane_block_height)
+                .is_none(),
+            "aborted merge must not leave a readable lane artifact"
+        );
+        assert_lane_artifact_files_absent_or_empty(lane_entry, temp_dir.path());
+
+        *kura.merge_log.lock() = MergeLedgerLog::in_memory(MERGE_LEDGER_CACHE_CAPACITY);
+        kura.store_block(replacement)
+            .expect("later valid block at same lane height must not be poisoned");
+        assert!(
+            kura.read_lane_block_artifact(lane_id, lane_block_height)
+                .is_some(),
+            "replacement block should persist its lane artifact"
+        );
+    }
+
+    #[test]
+    fn replace_top_block_overwrites_replaced_lane_artifact() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let lane_block_height = 1;
+        let original = dummy_block_with_lane_payload_ownership(
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        );
+        let mut replacement: SignedBlock =
+            ValidBlock::new_dummy_and_modify_header(checked_keypair().private_key(), |header| {
+                header.set_height(nonzero!(1_u64));
+                header.set_prev_block_hash(None);
+                header.set_view_change_index(header.view_change_index().saturating_add(1));
+            })
+            .into();
+        let entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
+            b"kura-lane-artifact-replacement-entrypoint",
+        ));
+        let replacement_ownership = sample_lane_payload_ownership_for_kura(
+            &replacement,
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        );
+        replacement.set_execution_context(Some(
+            BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+                entrypoint_hash,
+                lane_id,
+                lane_entry.dataspace_id,
+            )])
+            .with_lane_payload_ownerships(vec![replacement_ownership.clone()]),
+        ));
+        let replacement = Arc::new(replacement);
+        assert_ne!(
+            original.hash(),
+            replacement.hash(),
+            "replacement must change the top block hash"
+        );
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.store_block(original)
+            .expect("store original lane artifact");
+        kura.replace_top_block(Arc::clone(&replacement))
+            .expect("replace top block with lane artifact");
+
+        let artifact = kura
+            .read_lane_block_artifact(lane_id, lane_block_height)
+            .expect("replacement lane artifact");
+        assert_eq!(artifact.proposal_block_hash, replacement.hash());
+        assert_eq!(artifact.ownership, replacement_ownership);
+        assert_eq!(
+            kura.block_hash_at_height(nonzero!(1_usize)),
+            Some(replacement.hash())
         );
     }
 

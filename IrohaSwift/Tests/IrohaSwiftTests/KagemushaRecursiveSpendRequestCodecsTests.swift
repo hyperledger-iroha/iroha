@@ -1838,6 +1838,24 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                 currentNote: Self.sampleNote(seed: 0x41),
                 outputProofCircuitId: KagemushaRecursiveSpendProver.recursiveSpendLineageAppendProofCircuitIdV1,
                 previousLineageVerifierRecord: Self.sampleVerifierRecord(),
+                previousProofOpenEnvelopes: Self.syntheticPallasOpenEnvelopesArchive(),
+                lineageVerifierKey: nil,
+                lineageProvingKeyArchive: nil
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidField("lineageVerifierKey")
+            )
+        }
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendAppendRequest(
+                previousBundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
+                recordBundle: recordBundle,
+                pallasOpenEnvelopes: pallasOpenEnvelopes,
+                currentNote: Self.sampleNote(seed: 0x41),
+                outputProofCircuitId: KagemushaRecursiveSpendProver.recursiveSpendLineageAppendProofCircuitIdV1,
+                previousLineageVerifierRecord: Self.sampleVerifierRecord(),
                 previousProofOpenEnvelopes: nil,
                 lineageVerifierKey: Data(repeating: 0x6b, count: 64),
                 lineageProvingKeyArchive: Self.syntheticArchive(schema: "test.LineageProvingKeyArchive")

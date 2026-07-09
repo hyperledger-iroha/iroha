@@ -654,6 +654,8 @@ def test_duplicate_required_gate_fails_before_validation(capsys) -> None:
                 "gateway_load",
                 "--require-gate",
                 "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
             ]
         )
         == 2
@@ -667,7 +669,10 @@ def test_duplicate_required_gate_fails_before_validation(capsys) -> None:
 def test_unknown_required_gate_fails_before_validation(capsys) -> None:
     unknown_gate = "private-key-placeholder"
 
-    assert MODULE.main(["--require-gate", unknown_gate]) == 2
+    assert (
+        MODULE.main(["--require-gate", unknown_gate, "--now-unix", str(NOW_UNIX)])
+        == 2
+    )
 
     captured = capsys.readouterr()
     assert "unknown required evidence kind" in captured.err
@@ -677,7 +682,10 @@ def test_unknown_required_gate_fails_before_validation(capsys) -> None:
 def test_malformed_required_gate_fails_before_validation(capsys) -> None:
     malformed_gate = "gateway_load,"
 
-    assert MODULE.main(["--require-gate", malformed_gate]) == 2
+    assert (
+        MODULE.main(["--require-gate", malformed_gate, "--now-unix", str(NOW_UNIX)])
+        == 2
+    )
 
     captured = capsys.readouterr()
     assert (
@@ -751,6 +759,8 @@ def write_complete_lane_fixture_summary(
                 str(evidence_root),
                 "--summary-out",
                 str(summary),
+                "--now-unix",
+                str(fixture_module.NOW_UNIX),
             ]
         )
     elif gate_name == "reputation":
@@ -2896,6 +2906,79 @@ def test_required_and_recognized_artifact_digests_fail_closed_from_config(
             assert forged_digest not in result_text
 
 
+def test_required_and_recognized_artifact_digest_shapes_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        malformed_values = (
+            ("missing", None, ()),
+            ("boolean", True, ()),
+            (
+                "object",
+                {"private_key": f"runtime-only-digest-{index:03d}"},
+                ("private_key", f"runtime-only-digest-{index:03d}"),
+            ),
+        )
+        for suffix, malformed_digest, forbidden_values in malformed_values:
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{suffix}_digest"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            required_artifact = payload["required"][kind_name]["artifacts"][0]
+            if suffix == "missing":
+                required_artifact.pop("sha256")
+            else:
+                required_artifact["sha256"] = malformed_digest
+            payload["recognized_artifacts"] = recognized_artifacts_from_required(
+                payload
+            )
+            recognized_index = next(
+                artifact_index
+                for artifact_index, artifact in enumerate(
+                    payload["recognized_artifacts"]
+                )
+                if artifact["kind"] == kind_name
+                and artifact["path"] == required_artifact["path"]
+            )
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            result = json.loads(result_text)
+            errors = "\n".join(result["errors"])
+            assert f"{gate_name} production readiness summary is invalid" in errors
+            assert (
+                f"{gate_name}.required.{kind_name}.artifacts[0].sha256 "
+                "must be canonical lowercase SHA-256"
+                in errors
+            )
+            assert (
+                f"recognized_artifacts[{recognized_index}].sha256 "
+                "must be canonical lowercase SHA-256"
+                in errors
+            )
+            assert result["required"][gate_name]["valid"] is False
+            for forbidden_value in forbidden_values:
+                assert forbidden_value not in result_text
+
+
 def test_malformed_required_artifact_metadata_label_fails(tmp_path: Path) -> None:
     payload = gate_summary("gateway_load")
     first_required = MODULE.GATE_BY_NAME["gateway_load"].required_kinds[0]
@@ -2968,6 +3051,116 @@ def test_required_and_recognized_artifact_optional_labels_fail_closed_from_confi
                 in errors
             )
             assert forged_label not in result_text
+
+
+def test_required_and_recognized_artifact_schema_shapes_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        object_schema = {"private_key": f"runtime-only-schema-{index:03d}"}
+        for surface, shape, mutate, expected_error, forbidden_values in (
+            (
+                "required",
+                "missing",
+                lambda payload: payload["required"][kind_name]["artifacts"][
+                    0
+                ].pop("schema"),
+                f"{gate_name}.required.{kind_name}.artifacts[0].schema "
+                "must be canonical",
+                (),
+            ),
+            (
+                "required",
+                "object",
+                lambda payload: payload["required"][kind_name]["artifacts"][
+                    0
+                ].__setitem__(
+                    "schema",
+                    object_schema,
+                ),
+                f"{gate_name}.required.{kind_name}.artifacts[0].schema "
+                "must be canonical",
+                ("private_key", object_schema["private_key"]),
+            ),
+            (
+                "recognized",
+                "missing",
+                lambda payload: payload["recognized_artifacts"][
+                    next(
+                        artifact_index
+                        for artifact_index, artifact in enumerate(
+                            payload["recognized_artifacts"]
+                        )
+                        if artifact["kind"] == kind_name
+                    )
+                ].pop("schema"),
+                "recognized_artifacts[{index}].schema must match the required "
+                "artifact metadata",
+                (),
+            ),
+            (
+                "recognized",
+                "object",
+                lambda payload: payload["recognized_artifacts"][
+                    next(
+                        artifact_index
+                        for artifact_index, artifact in enumerate(
+                            payload["recognized_artifacts"]
+                        )
+                        if artifact["kind"] == kind_name
+                    )
+                ].__setitem__(
+                    "schema",
+                    object_schema,
+                ),
+                "recognized_artifacts[{index}].schema must be canonical when present",
+                ("private_key", object_schema["private_key"]),
+            ),
+        ):
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{surface}_{shape}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            mutate(payload)
+            recognized_index = next(
+                artifact_index
+                for artifact_index, artifact in enumerate(
+                    payload["recognized_artifacts"]
+                )
+                if artifact["kind"] == kind_name
+            )
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            result = json.loads(result_text)
+            errors = "\n".join(result["errors"])
+            assert f"{gate_name} production readiness summary is invalid" in errors
+            if surface == "recognized":
+                expected = expected_error.format(index=recognized_index)
+            else:
+                expected = expected_error
+            assert expected in errors
+            assert result["required"][gate_name]["valid"] is False
+            for forbidden_value in forbidden_values:
+                assert forbidden_value not in result_text
 
 
 def test_non_object_artifact_fingerprint_reports_single_sanitized_error(
@@ -3558,6 +3751,77 @@ def test_required_and_recognized_artifact_paths_fail_closed_from_config(
             )
             assert forged_path not in result_text
             assert "private_key" not in result_text
+
+
+def test_required_and_recognized_artifact_path_shapes_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        malformed_values = (
+            ("missing", None, ()),
+            ("boolean", False, ()),
+            (
+                "object",
+                {"private_key": f"runtime-only-path-{index:03d}"},
+                ("private_key", f"runtime-only-path-{index:03d}"),
+            ),
+        )
+        for suffix, malformed_path, forbidden_values in malformed_values:
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{suffix}_path"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            required_artifact = payload["required"][kind_name]["artifacts"][0]
+            if suffix == "missing":
+                required_artifact.pop("path")
+            else:
+                required_artifact["path"] = malformed_path
+            payload["recognized_artifacts"] = recognized_artifacts_from_required(
+                payload
+            )
+            recognized_index = next(
+                artifact_index
+                for artifact_index, artifact in enumerate(
+                    payload["recognized_artifacts"]
+                )
+                if artifact["kind"] == kind_name
+            )
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            result = json.loads(result_text)
+            errors = "\n".join(result["errors"])
+            assert f"{gate_name} production readiness summary is invalid" in errors
+            assert (
+                f"{gate_name}.required.{kind_name}.artifacts[0].path "
+                "must be canonical"
+                in errors
+            )
+            assert (
+                f"recognized_artifacts[{recognized_index}].path must be canonical"
+                in errors
+            )
+            assert result["required"][gate_name]["valid"] is False
+            for forbidden_value in forbidden_values:
+                assert forbidden_value not in result_text
 
 
 def test_required_and_recognized_artifact_path_variants_fail_closed_from_config(
@@ -12580,6 +12844,169 @@ def test_required_and_recognized_malformed_error_lists_fail_closed_from_config(
                     assert malformed_value not in result_text
 
 
+def test_required_and_recognized_error_list_shapes_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    def remove_required_row_errors(payload: dict, kind_name: str) -> int | None:
+        payload["required"][kind_name].pop("errors")
+        return None
+
+    def set_required_row_errors_object(
+        payload: dict,
+        kind_name: str,
+        value: object,
+    ) -> int | None:
+        payload["required"][kind_name]["errors"] = value
+        return None
+
+    def remove_required_artifact_errors(
+        payload: dict,
+        kind_name: str,
+    ) -> int | None:
+        payload["required"][kind_name]["artifacts"][0].pop("errors")
+        return None
+
+    def set_required_artifact_errors_object(
+        payload: dict,
+        kind_name: str,
+        value: object,
+    ) -> int | None:
+        payload["required"][kind_name]["artifacts"][0]["errors"] = value
+        return None
+
+    def remove_recognized_artifact_errors(payload: dict, kind_name: str) -> int:
+        recognized_index = next(
+            artifact_index
+            for artifact_index, artifact in enumerate(payload["recognized_artifacts"])
+            if artifact["kind"] == kind_name
+        )
+        payload["recognized_artifacts"][recognized_index].pop("errors")
+        return recognized_index
+
+    def set_recognized_artifact_errors_object(
+        payload: dict,
+        kind_name: str,
+        value: object,
+    ) -> int:
+        recognized_index = next(
+            artifact_index
+            for artifact_index, artifact in enumerate(payload["recognized_artifacts"])
+            if artifact["kind"] == kind_name
+        )
+        payload["recognized_artifacts"][recognized_index]["errors"] = value
+        return recognized_index
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        malformed_object = {
+            "private_key": f"runtime-only-error-list-{index:03d}",
+        }
+        for surface, shape, mutate, expected_path, forbidden_values in (
+            (
+                "row",
+                "missing",
+                lambda payload, _value: remove_required_row_errors(
+                    payload,
+                    kind_name,
+                ),
+                f"{gate_name}.required.{kind_name}.errors",
+                (),
+            ),
+            (
+                "row",
+                "object",
+                lambda payload, value: set_required_row_errors_object(
+                    payload,
+                    kind_name,
+                    value,
+                ),
+                f"{gate_name}.required.{kind_name}.errors",
+                ("private_key", malformed_object["private_key"]),
+            ),
+            (
+                "required_artifact",
+                "missing",
+                lambda payload, _value: remove_required_artifact_errors(
+                    payload,
+                    kind_name,
+                ),
+                f"{gate_name}.required.{kind_name}.artifacts[0].errors",
+                (),
+            ),
+            (
+                "required_artifact",
+                "object",
+                lambda payload, value: set_required_artifact_errors_object(
+                    payload,
+                    kind_name,
+                    value,
+                ),
+                f"{gate_name}.required.{kind_name}.artifacts[0].errors",
+                ("private_key", malformed_object["private_key"]),
+            ),
+            (
+                "recognized_artifact",
+                "missing",
+                lambda payload, _value: remove_recognized_artifact_errors(
+                    payload,
+                    kind_name,
+                ),
+                "recognized_artifacts[{index}].errors",
+                (),
+            ),
+            (
+                "recognized_artifact",
+                "object",
+                lambda payload, value: set_recognized_artifact_errors_object(
+                    payload,
+                    kind_name,
+                    value,
+                ),
+                "recognized_artifacts[{index}].errors",
+                ("private_key", malformed_object["private_key"]),
+            ),
+        ):
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{surface}_{shape}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            recognized_index = mutate(
+                payload,
+                malformed_object if shape == "object" else None,
+            )
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            result = json.loads(result_text)
+            errors = "\n".join(result["errors"])
+            if surface == "recognized_artifact":
+                assert recognized_index is not None
+                path = expected_path.format(index=recognized_index)
+            else:
+                path = expected_path
+            assert f"{path} must be an empty error list" in errors
+            assert result["required"][gate_name]["valid"] is False
+            for forbidden_value in forbidden_values:
+                assert forbidden_value not in result_text
+
+
 def test_recognized_artifact_count_mismatch_fails(tmp_path: Path) -> None:
     payload = gate_summary("gateway_load")
     payload["recognized_artifact_count"] += 1
@@ -13433,6 +13860,76 @@ def test_required_and_recognized_artifact_statuses_fail_closed_from_config(
         assert forged_status not in result_text
 
 
+def test_required_and_recognized_artifact_status_shapes_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        for surface, shape in (
+            ("required", "missing"),
+            ("required", "object"),
+            ("recognized", "missing"),
+            ("recognized", "object"),
+        ):
+            hostile_status = {"private_key": f"runtime-only-status-{index:03d}"}
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{surface}_{shape}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            target_artifact = payload["required"][kind_name]["artifacts"][0]
+            recognized_index = next(
+                artifact_index
+                for artifact_index, artifact in enumerate(
+                    payload["recognized_artifacts"]
+                )
+                if artifact["kind"] == kind_name
+                and artifact["path"] == target_artifact["path"]
+            )
+            if surface == "required":
+                artifact = target_artifact
+                expected_error = (
+                    f"{gate_name}.required.{kind_name}.artifacts[0].status "
+                    "must be canonical"
+                )
+            else:
+                artifact = payload["recognized_artifacts"][recognized_index]
+                expected_error = (
+                    f"recognized_artifacts[{recognized_index}].status "
+                    "must be canonical"
+                )
+            if shape == "missing":
+                artifact.pop("status")
+            else:
+                artifact["status"] = hostile_status
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            result = json.loads(result_text)
+            errors = "\n".join(result["errors"])
+            assert f"{gate_name} production readiness summary is invalid" in errors
+            assert expected_error in errors
+            assert result["required"][gate_name]["valid"] is False
+            assert "private_key" not in result_text
+            assert hostile_status["private_key"] not in result_text
+
+
 def test_required_and_recognized_artifact_valid_markers_fail_closed_from_config(
     tmp_path: Path,
 ) -> None:
@@ -13479,6 +13976,78 @@ def test_required_and_recognized_artifact_valid_markers_fail_closed_from_config(
         )
         assert f"recognized_artifacts[{recognized_index}].valid must be true" in errors
         assert forged_valid not in result_text
+
+
+def test_required_and_recognized_artifact_valid_marker_shapes_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        malformed_values = (
+            ("missing", None, ()),
+            ("false", False, ()),
+            (
+                "object",
+                {"private_key": f"runtime-only-valid-{index:03d}"},
+                ("private_key", f"runtime-only-valid-{index:03d}"),
+            ),
+        )
+        for suffix, malformed_valid, forbidden_values in malformed_values:
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{suffix}_valid"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            required_artifact = payload["required"][kind_name]["artifacts"][0]
+            if suffix == "missing":
+                required_artifact.pop("valid")
+            else:
+                required_artifact["valid"] = malformed_valid
+            payload["recognized_artifacts"] = recognized_artifacts_from_required(
+                payload
+            )
+            recognized_index = next(
+                artifact_index
+                for artifact_index, artifact in enumerate(
+                    payload["recognized_artifacts"]
+                )
+                if artifact["kind"] == kind_name
+                and artifact["path"] == required_artifact["path"]
+            )
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            result = json.loads(result_text)
+            errors = "\n".join(result["errors"])
+            assert f"{gate_name} production readiness summary is invalid" in errors
+            assert (
+                f"{gate_name}.required.{kind_name}.artifacts[0].valid "
+                "must be true"
+                in errors
+            )
+            assert (
+                f"recognized_artifacts[{recognized_index}].valid must be true"
+                in errors
+            )
+            assert result["required"][gate_name]["valid"] is False
+            for forbidden_value in forbidden_values:
+                assert forbidden_value not in result_text
 
 
 def test_required_artifact_extra_fields_fail(tmp_path: Path) -> None:
