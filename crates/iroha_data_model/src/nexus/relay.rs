@@ -729,7 +729,7 @@ impl LaneRelayEnvelope {
         for receipt in &settlement.native_amx_receipts {
             if receipt.lane_id != settlement.lane_id
                 || receipt.dataspace_id != settlement.dataspace_id
-                || receipt.block_height != settlement.block_height
+                || receipt.authority_context_height != settlement.block_height
             {
                 return Err(LaneRelayError::SettlementReceiptCoordinateMismatch);
             }
@@ -1167,7 +1167,9 @@ mod tests {
         AccountId, PeerId,
         block::{
             BlockHeader,
-            consensus::{LaneBlockCommitment, NexusFeeReceipt, NexusFeeScheduleInputs},
+            consensus::{
+                LaneBlockCommitment, NativeAmxReceipt, NexusFeeReceipt, NexusFeeScheduleInputs,
+            },
         },
         consensus::{CertPhase, QcAggregate},
     };
@@ -1284,6 +1286,34 @@ mod tests {
             .verify()
             .expect_err("mismatched receipt totals must fail verification");
         assert_eq!(err, LaneRelayError::SettlementTotalsMismatch);
+    }
+
+    #[test]
+    fn verify_accepts_native_amx_receipt_with_lane_local_height() {
+        let mut envelope = build_envelope(6, None);
+        envelope
+            .settlement_commitment
+            .native_amx_receipts
+            .push(NativeAmxReceipt {
+                version: 1,
+                source_id: [0x5A; 32],
+                chain_id_hash: Hash::new(b"native-amx-relay-test-chain"),
+                plan_digest: Hash::new(b"native-amx-relay-test-plan"),
+                lane_id: envelope.lane_id,
+                dataspace_id: envelope.dataspace_id,
+                lane_incarnation: Hash::new(b"native-amx-relay-test-incarnation"),
+                authority_context_height: envelope.block_height,
+                lane_block_height: 7,
+                lane_block_view: 2,
+                coordinator_proposal_hash: Hash::new(b"native-amx-relay-test-proposal"),
+                legs: Vec::new(),
+            });
+        envelope.settlement_hash =
+            compute_settlement_hash(&envelope.settlement_commitment).expect("settlement hash");
+
+        envelope
+            .verify()
+            .expect("lane-local height must not be compared with global block height");
     }
 
     #[test]
