@@ -4908,6 +4908,90 @@ fn zk_ace_verifying_key_registration_payload_v1_py(py: Python<'_>) -> PyResult<P
     Ok(payload.into_any().unbind())
 }
 
+fn confidential_vk_registration_payload_py(
+    py: Python<'_>,
+    record: iroha_data_model::proof::VerifyingKeyRecord,
+    backend: &str,
+    name: &str,
+    label: &str,
+) -> PyResult<Py<PyAny>> {
+    let key_bytes = record
+        .key
+        .as_ref()
+        .ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "{label} verifying-key record is missing inline key bytes"
+            ))
+        })?
+        .bytes
+        .clone();
+    let payload = PyDict::new(py);
+    payload.set_item("backend", backend)?;
+    payload.set_item("name", name)?;
+    payload.set_item("version", record.version)?;
+    payload.set_item("circuit_id", record.circuit_id)?;
+    payload.set_item(
+        "public_inputs_schema_hash_hex",
+        hex_encode(record.public_inputs_schema_hash),
+    )?;
+    payload.set_item("curve", record.curve)?;
+    payload.set_item("vk_len", record.vk_len)?;
+    payload.set_item("max_proof_bytes", record.max_proof_bytes)?;
+    payload.set_item("commitment_hex", hex_encode(record.commitment))?;
+    if let Some(gas_schedule_id) = record.gas_schedule_id {
+        payload.set_item("gas_schedule_id", gas_schedule_id)?;
+    }
+    payload.set_item("vk_bytes", BASE64.encode(&key_bytes))?;
+    payload.set_item("status", "Active")?;
+    Ok(payload.into_any().unbind())
+}
+
+#[pyfunction]
+#[pyo3(name = "confidential_transfer_v2_verifying_key_registration_payload_v1")]
+fn confidential_transfer_v2_verifying_key_registration_payload_v1_py(
+    py: Python<'_>,
+) -> PyResult<Py<PyAny>> {
+    let record = iroha_core::zk::confidential_v2::confidential_transfer_v2_vk_record(
+        "confidential_transfer_v2",
+        1,
+    )
+    .map_err(|err| {
+        PyValueError::new_err(format!(
+            "failed to build confidential transfer v2 verifying-key registration payload: {err}"
+        ))
+    })?;
+    confidential_vk_registration_payload_py(
+        py,
+        record,
+        iroha_core::zk::ZK_BACKEND_HALO2_IPA,
+        "confidential_transfer_v2",
+        "confidential transfer v2",
+    )
+}
+
+#[pyfunction]
+#[pyo3(name = "confidential_unshield_v3_verifying_key_registration_payload_v1")]
+fn confidential_unshield_v3_verifying_key_registration_payload_v1_py(
+    py: Python<'_>,
+) -> PyResult<Py<PyAny>> {
+    let record = iroha_core::zk::confidential_v2::confidential_unshield_v3_vk_record(
+        "confidential_unshield_v3",
+        1,
+    )
+    .map_err(|err| {
+        PyValueError::new_err(format!(
+            "failed to build confidential unshield v3 verifying-key registration payload: {err}"
+        ))
+    })?;
+    confidential_vk_registration_payload_py(
+        py,
+        record,
+        iroha_core::zk::ZK_BACKEND_HALO2_IPA,
+        "confidential_unshield_v3",
+        "confidential unshield v3",
+    )
+}
+
 #[pyfunction]
 #[pyo3(name = "zk_ace_build_transfer_authorization_v1", signature = (
     from_account_id,
@@ -24066,6 +24150,14 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     module.add_function(wrap_pyfunction!(
         zk_ace_verifying_key_registration_payload_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        confidential_transfer_v2_verifying_key_registration_payload_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        confidential_unshield_v3_verifying_key_registration_payload_v1_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(

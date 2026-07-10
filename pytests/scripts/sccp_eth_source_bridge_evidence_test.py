@@ -124,6 +124,41 @@ class HostileDeploymentBlockNumber:
         raise AssertionError("secret-token ETH deployment block number was compared")
 
 
+class HostileEthSourceString(str):
+    def __new__(cls, value):
+        return str.__new__(cls, value)
+
+    def strip(self, *args, **kwargs):
+        raise AssertionError("secret-token ETH source string was stripped")
+
+    def startswith(self, *args, **kwargs):
+        raise AssertionError("secret-token ETH source string prefix was checked")
+
+    def isascii(self):
+        raise AssertionError("secret-token ETH source string ascii was checked")
+
+    def isdecimal(self):
+        raise AssertionError("secret-token ETH source string decimal was checked")
+
+    def __len__(self):
+        raise AssertionError("secret-token ETH source string length was read")
+
+    def __iter__(self):
+        raise AssertionError("secret-token ETH source string was iterated")
+
+    def __str__(self):
+        raise AssertionError("secret-token ETH source string was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token ETH source string was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token ETH source string was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token ETH source string was compared")
+
+
 class HostileTomlString(str):
     def __new__(cls):
         return str.__new__(cls, "blocked")
@@ -413,6 +448,36 @@ def test_eth_runtime_bytecode_file_rejects_unreadable_file_shapes(tmp_path):
         def __fspath__(self):
             raise AssertionError("secret-token ETH runtime path-like was coerced")
 
+    # Source-inventory marker: runtime bytecode file native path helpers reject path-like inputs.
+    for path in (
+        str(outside),
+        HostileRuntimeBytecodePath(),
+        HostileRuntimeBytecodePathLike(),
+    ):
+        try:
+            module._read_runtime_bytecode_file_text(
+                path,
+                label="source bridge runtime bytecode",
+            )
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            assert rendered == "source bridge runtime bytecode file cannot be read"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError("ETH runtime bytecode helper accepted hostile path")
+
+        try:
+            module._reject_runtime_bytecode_file_symlink_path(path)
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            assert rendered == "runtime bytecode file cannot be read"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("ETH runtime bytecode symlink helper accepted hostile path")
+
     for path in (
         str(symlink_input),
         str(directory_input),
@@ -679,6 +744,89 @@ def test_eth_source_numeric_parsers_require_canonical_ascii_decimal():
             assert "must be a positive u64" in str(exc)
         else:
             raise AssertionError(f"noncanonical ETH block number {value!r} was accepted")
+
+
+def test_eth_source_exact_string_parsers_reject_subclasses_without_hooks():
+    module = load_evidence_module()
+    hostile_hex = HostileEthSourceString("0x" + "11" * 32)
+    hostile_address = HostileEthSourceString("0x" + "22" * 20)
+    hostile_runtime = HostileEthSourceString("0x6080604052")
+    hostile_decimal = HostileEthSourceString("4660")
+
+    cases = (
+        (
+            lambda: module._strip_lower_0x_hex(
+                hostile_hex,
+                label="source trust anchor hash",
+            ),
+            "source trust anchor hash must be canonical lowercase 0x hex",
+        ),
+        (
+            lambda: module.parse_hex_bytes(
+                hostile_hex,
+                label="source trust anchor hash",
+                byte_length=32,
+            ),
+            "source trust anchor hash must be canonical lowercase 0x hex",
+        ),
+        (
+            lambda: module.parse_evm_address(
+                hostile_address,
+                label="source bridge address",
+            ),
+            "source bridge address must be canonical lowercase 0x hex",
+        ),
+        (
+            lambda: module.parse_runtime_bytecode_hex(
+                hostile_runtime,
+                label="source bridge runtime bytecode",
+            ),
+            "source bridge runtime bytecode must be canonical lowercase 0x hex",
+        ),
+        (
+            lambda: module.parse_runtime_bytecode_file(
+                hostile_runtime,
+                label="source bridge runtime bytecode",
+            ),
+            "source bridge runtime bytecode file cannot be read",
+        ),
+        (
+            lambda: module.parse_u32(hostile_decimal, label="source domain"),
+            "source domain must be a u32",
+        ),
+        (
+            lambda: module.parse_positive_u64(
+                hostile_decimal,
+                label="deployment block number",
+            ),
+            "deployment block number must be a positive u64",
+        ),
+    )
+    for parse, expected_message in cases:
+        try:
+            parse()
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("ETH source parser accepted a string subclass")
+
+
+def test_eth_source_block_tag_rejects_string_subclasses_without_hooks():
+    module = load_evidence_module()
+    args = SimpleNamespace(block_tag=HostileEthSourceString("finalized"))
+
+    try:
+        module._block_tag_from_args(args)
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "block_tag must be finalized, safe, or latest"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+    else:
+        raise AssertionError("ETH source block tag accepted a string subclass")
 
 
 def test_eth_runtime_bytecode_derives_source_bridge_code_hash():

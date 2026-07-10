@@ -949,6 +949,33 @@ def test_ton_code_boc_file_rejects_unreadable_file_shapes(tmp_path):
         def __fspath__(self):
             raise AssertionError("secret-token TON code path-like was coerced")
 
+    # Source-inventory marker: code BoC file native path helpers reject path-like inputs.
+    for path in (
+        str(outside),
+        HostileCodeBocPath(),
+        HostileCodeBocPathLike(),
+    ):
+        try:
+            module._read_code_boc_file(path, label="code BoC")
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            assert rendered == "code BoC file cannot be read"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError("TON code BoC helper accepted hostile path")
+
+        try:
+            module._reject_code_boc_file_symlink_path(path)
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            assert rendered == "code BoC file cannot be read"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("TON code BoC symlink helper accepted hostile path")
+
     for path in (
         str(symlink_input),
         str(directory_input),
@@ -1052,6 +1079,45 @@ def test_ton_raw_address_parser_rejects_zero_malformed_and_noncanonical():
         assert "account must be 32 bytes" in str(exc)
     else:
         raise AssertionError("short TON account hex was accepted")
+
+
+def test_ton_destination_scalar_helpers_reject_string_subclasses_without_hooks():
+    module = load_evidence_module()
+
+    cases = (
+        (
+            lambda: module._strip_lower_0x_hex(
+                HostileTonDestinationString("0x" + "11" * 32),
+                label="verifier code hash",
+            ),
+            "verifier code hash must be canonical lowercase 0x hex",
+        ),
+        (
+            lambda: module._parse_canonical_i32_decimal(
+                HostileTonDestinationString("0"),
+                label="verifier contract address",
+            ),
+            "verifier contract address workchain must be canonical i32",
+        ),
+        (
+            lambda: module._parse_canonical_i32_decimal(
+                HostileTonDestinationString("-1"),
+                label="verifier contract address",
+            ),
+            "verifier contract address workchain must be canonical i32",
+        ),
+    )
+
+    for parser, expected_message in cases:
+        try:
+            parser()
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("TON destination scalar helper accepted hostile text")
 
 
 def test_ton_last_transaction_lt_requires_canonical_ascii_decimal():

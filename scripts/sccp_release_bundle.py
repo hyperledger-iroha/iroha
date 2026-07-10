@@ -53,7 +53,24 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return payload
 
 
+NATIVE_PATH_TYPE = type(Path())
+
+
+def _require_native_path(
+    path: object,
+    *,
+    json_read_error: str | None = None,
+    value_error: str = "release artifact path must be a regular file",
+) -> Path:
+    if type(path) is not NATIVE_PATH_TYPE:
+        if json_read_error is not None:
+            raise OSError(json_read_error)
+        raise ValueError(value_error)
+    return path
+
+
 def _load_json_without_duplicate_keys(path: Path) -> Any:
+    path = _require_native_path(path, json_read_error="JSON path cannot be read")
     try:
         _reject_release_artifact_symlink_path(path)
     except (OSError, ValueError):
@@ -89,6 +106,9 @@ def _verify_module() -> Any:
 
 
 def _path_control_character(path: str) -> str | None:
+    # Source-inventory marker: release path text helpers use exact strings.
+    if type(path) is not str:
+        return "non-string path"
     for character in path:
         if ord(character) < 0x20 or ord(character) == 0x7F:
             return repr(character)
@@ -195,6 +215,8 @@ PUBLIC_SENSITIVE_MARKER_CONFUSABLES = str.maketrans(
 
 
 def _path_markdown_unsafe_character(path: str) -> str | None:
+    if type(path) is not str:
+        return "non-string path"
     for character in path:
         if character in MARKDOWN_UNSAFE_PATH_CHARACTERS:
             return repr(character)
@@ -225,6 +247,8 @@ def _native_evm_prover_duplicate_json_key_error(key: Any) -> str:
 
 
 def _path_percent_encoded_traversal(path: str) -> str | None:
+    if type(path) is not str:
+        return "non-string path"
     decoded = path
     seen = {decoded}
     for _ in range(32):
@@ -263,6 +287,8 @@ def _reject_release_artifact_symlink_path(path: Path) -> None:
 
 
 def _artifact(path: Path, root: Path) -> dict[str, Any]:
+    path = _require_native_path(path)
+    root = _require_native_path(root)
     _reject_release_artifact_symlink_path(path)
     if not path.is_file():
         raise ValueError("release artifact path must be a regular file")
@@ -303,6 +329,14 @@ def _artifact(path: Path, root: Path) -> dict[str, Any]:
 
 
 def _copy_file(source: Path, destination: Path) -> Path:
+    source = _require_native_path(
+        source,
+        value_error="release bundle source path must be a native path",
+    )
+    destination = _require_native_path(
+        destination,
+        value_error="release bundle destination path must be a native path",
+    )
     _reject_symlink_sources([source])
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source, destination)
@@ -310,6 +344,10 @@ def _copy_file(source: Path, destination: Path) -> Path:
 
 
 def _safe_name(path: Path, index: int) -> str:
+    path = _require_native_path(
+        path,
+        value_error="release bundle source path must be a native path",
+    )
     name = path.name.replace("/", "_").replace("\\", "_")
     if name.strip() != name:
         raise ValueError(
@@ -335,6 +373,10 @@ def _safe_name(path: Path, index: int) -> str:
 
 
 def _copy_evidence_inputs(paths: list[Path], output_dir: Path) -> list[Path]:
+    output_dir = _require_native_path(
+        output_dir,
+        value_error="release bundle output directory must be a native path",
+    )
     evidence_dir = output_dir / "evidence"
     return [
         _copy_file(path, evidence_dir / _safe_name(path, index))
@@ -342,8 +384,8 @@ def _copy_evidence_inputs(paths: list[Path], output_dir: Path) -> list[Path]:
     ]
 
 
-def _parse_phase_evidence_arg(raw: str) -> tuple[str, Path]:
-    if "=" not in raw:
+def _parse_phase_evidence_arg(raw: object) -> tuple[str, Path]:
+    if type(raw) is not str or "=" not in raw:
         raise argparse.ArgumentTypeError(
             "phase evidence must use NAME=PATH syntax"
         )
@@ -364,7 +406,7 @@ def _parse_phase_evidence_arg(raw: str) -> tuple[str, Path]:
     return name, Path(path_text)
 
 
-def _phase_evidence_path_error(path_text: str) -> str | None:
+def _phase_evidence_path_error(path_text: object) -> str | None:
     # Source-inventory markers:
     # - phase evidence path must not contain surrounding whitespace
     # - phase evidence path contains control character
@@ -372,6 +414,8 @@ def _phase_evidence_path_error(path_text: str) -> str | None:
     # - phase evidence path contains Markdown-unsafe character
     # - phase evidence path contains sensitive name
     # - phase evidence path contains percent-encoded traversal segment
+    if type(path_text) is not str:
+        return "phase evidence path must be an exact string"
     if path_text.strip() != path_text:
         return "phase evidence path must not contain surrounding whitespace"
     if _path_control_character(path_text) is not None:
@@ -387,7 +431,7 @@ def _phase_evidence_path_error(path_text: str) -> str | None:
     return None
 
 
-def _phase_evidence_directory_path_error(path_text: str) -> str | None:
+def _phase_evidence_directory_path_error(path_text: object) -> str | None:
     # Source-inventory markers:
     # - phase evidence directory path must not contain surrounding whitespace
     # - phase evidence directory path contains control character
@@ -395,6 +439,8 @@ def _phase_evidence_directory_path_error(path_text: str) -> str | None:
     # - phase evidence directory path contains Markdown-unsafe character
     # - phase evidence directory path contains sensitive name
     # - phase evidence directory path contains percent-encoded traversal segment
+    if type(path_text) is not str:
+        return "phase evidence directory path must be an exact string"
     if path_text.strip() != path_text:
         return "phase evidence directory path must not contain surrounding whitespace"
     if _path_control_character(path_text) is not None:
@@ -410,7 +456,7 @@ def _phase_evidence_directory_path_error(path_text: str) -> str | None:
     return None
 
 
-def _output_directory_path_error(path_text: str) -> str | None:
+def _output_directory_path_error(path_text: object) -> str | None:
     # Source-inventory markers:
     # - release bundle output directory path must not contain surrounding whitespace
     # - release bundle output directory path contains control character
@@ -418,6 +464,8 @@ def _output_directory_path_error(path_text: str) -> str | None:
     # - release bundle output directory path contains Markdown-unsafe character
     # - release bundle output directory path contains sensitive name
     # - release bundle output directory path contains percent-encoded traversal segment
+    if type(path_text) is not str:
+        return "release bundle output directory path must be an exact string"
     if path_text.strip() != path_text:
         return "release bundle output directory path must not contain surrounding whitespace"
     if _path_control_character(path_text) is not None:
@@ -438,6 +486,10 @@ def _phase_evidence_source_label(name: str) -> str:
 
 
 def _phase_log_from_dir(directory: Path, phase: str) -> Path:
+    directory = _require_native_path(
+        directory,
+        value_error="release bundle phase evidence directory must be a native path",
+    )
     candidates = (
         directory / f"{phase}.log",
         directory / "dist" / "sccp-production-corridor" / f"{phase}.log",
@@ -619,21 +671,30 @@ def _native_evm_prover_payload_sources(
         paths.append((relative_path, artifact_path))
 
     for field in ("proof_artifact", "proving_key", "verifier_key"):
-        if field in payload:
-            add_path(payload[field], field)
-    if "cross_sdk_fixture_parity_artifact" in payload:
+        if _public_mapping_has_string_key(payload, field):
+            add_path(_public_mapping_get_string_key(payload, field), field)
+    if _public_mapping_has_string_key(payload, "cross_sdk_fixture_parity_artifact"):
         add_path(
-            payload["cross_sdk_fixture_parity_artifact"],
+            _public_mapping_get_string_key(
+                payload,
+                "cross_sdk_fixture_parity_artifact",
+            ),
             "cross_sdk_fixture_parity_artifact",
         )
-    if "native_prover_self_test_artifact" in payload:
+    if _public_mapping_has_string_key(payload, "native_prover_self_test_artifact"):
         add_path(
-            payload["native_prover_self_test_artifact"],
+            _public_mapping_get_string_key(
+                payload,
+                "native_prover_self_test_artifact",
+            ),
             "native_prover_self_test_artifact",
         )
 
-    native_sdk_artifacts = payload.get("native_sdk_artifacts")
-    if "native_sdk_artifacts" in payload:
+    native_sdk_artifacts = _public_mapping_get_string_key(
+        payload,
+        "native_sdk_artifacts",
+    )
+    if _public_mapping_has_string_key(payload, "native_sdk_artifacts"):
         if type(native_sdk_artifacts) is not list:
             raise ValueError(
                 "native EVM Groth16 prover bundle native_sdk_artifacts must be a list"
@@ -645,15 +706,18 @@ def _native_evm_prover_payload_sources(
                     f"native_sdk_artifacts[{index}] must be an object"
                 )
             artifact = _public_mapping_string_view(artifact)
-            if "implementation_artifact" not in artifact:
+            if not _public_mapping_has_string_key(artifact, "implementation_artifact"):
                 continue
-            sdk = artifact.get("sdk")
+            sdk = _public_mapping_get_string_key(artifact, "sdk")
             label = (
                 f"{sdk} implementation_artifact"
                 if type(sdk) is str and sdk
                 else f"native_sdk_artifacts[{index}].implementation_artifact"
             )
-            add_path(artifact["implementation_artifact"], label)
+            add_path(
+                _public_mapping_get_string_key(artifact, "implementation_artifact"),
+                label,
+            )
     return paths
 
 
@@ -691,6 +755,10 @@ def _all_lanes_summary(paths: list[Path]) -> dict[str, Any]:
 
 
 def _write_json(path: Path, payload: Any) -> None:
+    path = _require_native_path(
+        path,
+        value_error="release bundle JSON output path must be a native path",
+    )
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
@@ -1302,7 +1370,7 @@ def _source_adapter_gate_template_audit_errors(
         return template_errors
     errors: list[str] = []
     for audit_field in audit_fields:
-        audit_hash = audit_hashes.get(audit_field)
+        audit_hash = _public_mapping_get_string_key(audit_hashes, audit_field)
         if not _is_canonical_bytes32_hex_text(audit_hash):
             continue
         if bytes.fromhex(audit_hash[2:]) in template_hashes:
@@ -1334,7 +1402,7 @@ def _source_record_template_hash_errors(
         "source_verifier_material_hash",
         "source_adapter_engine_deployment_hash",
     ):
-        source_hash = source_hashes.get(field)
+        source_hash = _public_mapping_get_string_key(source_hashes, field)
         if not _is_canonical_bytes32_hex_text(source_hash):
             continue
         if bytes.fromhex(source_hash[2:]) in template_hashes:
@@ -1360,11 +1428,17 @@ def _source_record_hash_role_errors(
         (
             (
                 "source_verifier_material_hash",
-                source_hashes.get("source_verifier_material_hash"),
+                _public_mapping_get_string_key(
+                    source_hashes,
+                    "source_verifier_material_hash",
+                ),
             ),
             (
                 "source_adapter_engine_deployment_hash",
-                source_hashes.get("source_adapter_engine_deployment_hash"),
+                _public_mapping_get_string_key(
+                    source_hashes,
+                    "source_adapter_engine_deployment_hash",
+                ),
             ),
         ),
     )
@@ -1388,7 +1462,7 @@ def _route_canary_template_hash_errors(
         return template_errors
     errors: list[str] = []
     for field in CRYPTOGRAPHIC_ROUTE_CANARY_TEMPLATE_HASH_FIELDS:
-        route_canary_hash = row.get(field)
+        route_canary_hash = _public_mapping_get_string_key(row, field)
         if not _is_canonical_bytes32_hex_text(route_canary_hash):
             continue
         assert type(route_canary_hash) is str
@@ -1418,7 +1492,7 @@ def _all_lanes_route_canary_template_hash_errors(
         return template_errors
     errors: list[str] = []
     for field in ALL_LANES_ROUTE_CANARY_TEMPLATE_HASH_FIELDS:
-        evidence_hash = route_canary.get(field)
+        evidence_hash = _public_mapping_get_string_key(route_canary, field)
         if not _is_canonical_bytes32_hex_text(evidence_hash):
             continue
         assert type(evidence_hash) is str
@@ -1451,7 +1525,7 @@ def _all_lanes_template_hash_errors(
         return template_errors
     errors: list[str] = []
     for field in fields:
-        value = row.get(field)
+        value = _public_mapping_get_string_key(row, field)
         if not _is_canonical_bytes32_hex_text(value):
             continue
         assert type(value) is str
@@ -1470,7 +1544,7 @@ def _source_adapter_gate_hash_role_fields(
     if type(lane) is not dict:
         return ()
     lane = _public_mapping_string_view(lane)
-    source_gate = lane.get("source_adapter_gate")
+    source_gate = _public_mapping_get_string_key(lane, "source_adapter_gate")
     if type(source_gate) is not dict:
         return ()
     source_gate = _public_mapping_string_view(source_gate)
@@ -1478,13 +1552,13 @@ def _source_adapter_gate_hash_role_fields(
     fields: list[tuple[str, Any]] = []
     seen_hashes: set[str] = set()
 
-    gate_hash = source_gate.get("gate_hash")
+    gate_hash = _public_mapping_get_string_key(source_gate, "gate_hash")
     if _is_nonzero_bytes32_hex_text(gate_hash):
         assert type(gate_hash) is str
         fields.append(("source_adapter_gate_hash", gate_hash))
         seen_hashes.add(gate_hash)
 
-    audit_hashes = source_gate.get("audit_hashes")
+    audit_hashes = _public_mapping_get_string_key(source_gate, "audit_hashes")
     if type(audit_hashes) is not dict:
         return tuple(fields)
 
@@ -1574,13 +1648,13 @@ def _source_adapter_gate_semantic_errors(
 
     lane = _public_mapping_string_view(lane)
     source_gate = _public_mapping_string_view(source_gate)
-    raw_domain = lane.get("domain")
+    raw_domain = _public_mapping_get_string_key(lane, "domain")
     domain = raw_domain if type(raw_domain) is int else None
-    required = source_gate.get("required")
-    ready = source_gate.get("ready")
-    gate_hash = source_gate.get("gate_hash")
-    audit_hashes = source_gate.get("audit_hashes")
-    blockers = source_gate.get("blockers")
+    required = _public_mapping_get_string_key(source_gate, "required")
+    ready = _public_mapping_get_string_key(source_gate, "ready")
+    gate_hash = _public_mapping_get_string_key(source_gate, "gate_hash")
+    audit_hashes = _public_mapping_get_string_key(source_gate, "audit_hashes")
+    blockers = _public_mapping_get_string_key(source_gate, "blockers")
 
     errors: list[str] = []
     audit_label = f"{label}.source_adapter_gate audit_hashes"
@@ -1590,7 +1664,7 @@ def _source_adapter_gate_semantic_errors(
     ) = _source_adapter_gate_audit_keys_for_domain_chain_or_errors(
         f"{label}.source_adapter_gate",
         domain,
-        lane.get("chain"),
+        _public_mapping_get_string_key(lane, "chain"),
     )
     if audit_key_errors:
         return audit_key_errors
@@ -1727,7 +1801,7 @@ def _source_adapter_gate_semantic_errors(
         ) = _source_adapter_gate_hash_key_for_domain_chain_or_errors(
             f"{label}.source_adapter_gate",
             domain,
-            lane.get("chain"),
+            _public_mapping_get_string_key(lane, "chain"),
         )
         if hash_key_errors:
             errors.extend(hash_key_errors)
@@ -1751,40 +1825,55 @@ def _source_adapter_gate_semantic_errors(
             )
         )
         role_fields: list[tuple[str, Any]] = []
-        source_hashes = lane.get("source_record_hashes")
+        source_hashes = _public_mapping_get_string_key(lane, "source_record_hashes")
         if type(source_hashes) is dict:
             source_hashes = _public_mapping_string_view(source_hashes)
             role_fields.extend(
                 (
-                    (field, source_hashes.get(field))
+                    (field, _public_mapping_get_string_key(source_hashes, field))
                     for field in (
                         "source_verifier_material_hash",
                         "source_adapter_engine_deployment_hash",
                     )
                 )
             )
-        destination_binding = lane.get("destination_binding")
+        destination_binding = _public_mapping_get_string_key(
+            lane,
+            "destination_binding",
+        )
         if type(destination_binding) is dict:
             destination_binding = _public_mapping_string_view(destination_binding)
             role_fields.append(
                 (
                     "destination_binding_hash",
-                    destination_binding.get("destination_binding_hash"),
+                    _public_mapping_get_string_key(
+                        destination_binding,
+                        "destination_binding_hash",
+                    ),
                 )
             )
-        route_allowlist = lane.get("route_allowlist")
+        route_allowlist = _public_mapping_get_string_key(lane, "route_allowlist")
         if type(route_allowlist) is dict:
             route_allowlist = _public_mapping_string_view(route_allowlist)
             role_fields.append(
-                ("route_allowlist_hash", route_allowlist.get("route_allowlist_hash"))
+                (
+                    "route_allowlist_hash",
+                    _public_mapping_get_string_key(
+                        route_allowlist,
+                        "route_allowlist_hash",
+                    ),
+                )
             )
-            route_canary = route_allowlist.get("route_canary")
+            route_canary = _public_mapping_get_string_key(
+                route_allowlist,
+                "route_canary",
+            )
             if type(route_canary) is dict:
                 route_canary = _public_mapping_string_view(route_canary)
                 role_fields.append(
                     (
                         "route_canary_evidence_hash",
-                        route_canary.get("evidence_hash"),
+                        _public_mapping_get_string_key(route_canary, "evidence_hash"),
                     )
                 )
                 # Source-inventory marker: source_adapter_gate hash role audit_hashes.evm_source_gate_hash must not reuse route_canary.message_id
@@ -1793,7 +1882,10 @@ def _source_adapter_gate_semantic_errors(
                     domain
                 ):
                     role_fields.append(
-                        (f"route_canary.{field}", route_canary.get(field))
+                        (
+                            f"route_canary.{field}",
+                            _public_mapping_get_string_key(route_canary, field),
+                        )
                     )
         role_fields.extend(
             (f"audit_hashes.{field}", value)
@@ -1835,10 +1927,13 @@ def _cryptographic_evidence_source_adapter_gate_bundle_errors(
         )
 
     payload = _public_mapping_string_view(payload)
-    raw_domain = payload.get("domain")
+    raw_domain = _public_mapping_get_string_key(payload, "domain")
     domain = raw_domain if type(raw_domain) is int else None
-    required = payload.get("source_adapter_gate_required")
-    gate_hash = payload.get("source_adapter_gate_hash")
+    required = _public_mapping_get_string_key(
+        payload,
+        "source_adapter_gate_required",
+    )
+    gate_hash = _public_mapping_get_string_key(payload, "source_adapter_gate_hash")
     errors: list[str] = []
     (
         expected_audit_keys,
@@ -1846,7 +1941,7 @@ def _cryptographic_evidence_source_adapter_gate_bundle_errors(
     ) = _source_adapter_gate_audit_keys_for_domain_chain_or_errors(
         f"{label} source_adapter_gate",
         domain,
-        payload.get("chain"),
+        _public_mapping_get_string_key(payload, "chain"),
     )
     if audit_key_errors:
         return audit_key_errors
@@ -1949,7 +2044,7 @@ def _cryptographic_evidence_source_adapter_gate_bundle_errors(
         ) = _source_adapter_gate_hash_key_for_domain_chain_or_errors(
             f"{label} source_adapter_gate",
             domain,
-            payload.get("chain"),
+            _public_mapping_get_string_key(payload, "chain"),
         )
         if hash_key_errors:
             errors.extend(hash_key_errors)
@@ -2010,21 +2105,33 @@ def _cryptographic_evidence_source_adapter_gate_hash_role_errors(
 ) -> list[str]:
     payload = _public_mapping_string_view(payload)
     fields: list[tuple[str, Any]] = [
-        ("source_verifier_material_hash", payload.get("source_verifier_material_hash")),
+        (
+            "source_verifier_material_hash",
+            _public_mapping_get_string_key(payload, "source_verifier_material_hash"),
+        ),
         (
             "source_adapter_engine_deployment_hash",
-            payload.get("source_adapter_engine_deployment_hash"),
+            _public_mapping_get_string_key(
+                payload,
+                "source_adapter_engine_deployment_hash",
+            ),
         ),
-        ("destination_binding_hash", payload.get("destination_binding_hash")),
-        ("route_allowlist_hash", payload.get("route_allowlist_hash")),
+        (
+            "destination_binding_hash",
+            _public_mapping_get_string_key(payload, "destination_binding_hash"),
+        ),
+        (
+            "route_allowlist_hash",
+            _public_mapping_get_string_key(payload, "route_allowlist_hash"),
+        ),
         # Source-inventory marker: public source_adapter_gate audit hashes must not reuse route_canary_message_id
     ]
     fields.extend(
-        (field, payload.get(field))
+        (field, _public_mapping_get_string_key(payload, field))
         for field in CRYPTOGRAPHIC_ROUTE_CANARY_TEMPLATE_HASH_FIELDS
     )
     # Source-inventory marker: public source_adapter_gate top-level hash roles must be checked even when audit hashes are malformed
-    gate_hash = payload.get("source_adapter_gate_hash")
+    gate_hash = _public_mapping_get_string_key(payload, "source_adapter_gate_hash")
     semantic_audit_hash_values: set[Any] = set()
     if type(audit_hashes) is dict:
         audit_label = f"{label} source_adapter_gate_audit_hashes"
@@ -2059,7 +2166,7 @@ def _cryptographic_evidence_route_canary_hash_role_errors(
     return _distinct_nonzero_bytes32_field_errors(
         f"{label} route_canary hash role",
         tuple(
-            (field, payload.get(field))
+            (field, _public_mapping_get_string_key(payload, field))
             for field in CRYPTOGRAPHIC_ROUTE_CANARY_TEMPLATE_HASH_FIELDS
         ),
     )
@@ -2083,24 +2190,26 @@ def _route_canary_common_semantic_errors(
         "route_allowlist_hash",
         "destination_binding_hash",
     ):
-        if not _is_nonzero_bytes32_hex_text(route_canary.get(field)):
+        if not _is_nonzero_bytes32_hex_text(
+            _public_mapping_get_string_key(route_canary, field)
+        ):
             errors.append(
                 f"{canary_label} {field} must be a non-zero canonical "
                 "bytes32 hex string"
             )
 
-    status = route_canary.get("status")
+    status = _public_mapping_get_string_key(route_canary, "status")
     if type(status) is str and status != "passed":
         errors.append(f"{canary_label} status must be passed")
 
-    raw_domain = lane.get("domain")
+    raw_domain = _public_mapping_get_string_key(lane, "domain")
     domain = raw_domain if type(raw_domain) is int else None
     expected_source = (
         _route_canary_source_by_domain().get(domain)
         if type(domain) is int
         else None
     )
-    evidence_source = route_canary.get("evidence_source")
+    evidence_source = _public_mapping_get_string_key(route_canary, "evidence_source")
     if (
         expected_source is not None
         and type(evidence_source) is str
@@ -2108,11 +2217,17 @@ def _route_canary_common_semantic_errors(
     ):
         errors.append(f"{canary_label} evidence_source must be {expected_source}")
 
-    if route_canary.get("evidence_bound") is not True:
+    if _public_mapping_get_string_key(route_canary, "evidence_bound") is not True:
         errors.append(f"{canary_label} evidence_bound must be true")
 
-    expected_route_hash = route_allowlist.get("route_allowlist_hash")
-    route_canary_route_hash = route_canary.get("route_allowlist_hash")
+    expected_route_hash = _public_mapping_get_string_key(
+        route_allowlist,
+        "route_allowlist_hash",
+    )
+    route_canary_route_hash = _public_mapping_get_string_key(
+        route_canary,
+        "route_allowlist_hash",
+    )
     if (
         type(expected_route_hash) is str
         and type(route_canary_route_hash) is str
@@ -2123,8 +2238,14 @@ def _route_canary_common_semantic_errors(
             "route_allowlist_hash"
         )
 
-    expected_destination_hash = destination_binding.get("destination_binding_hash")
-    route_canary_destination_hash = route_canary.get("destination_binding_hash")
+    expected_destination_hash = _public_mapping_get_string_key(
+        destination_binding,
+        "destination_binding_hash",
+    )
+    route_canary_destination_hash = _public_mapping_get_string_key(
+        route_canary,
+        "destination_binding_hash",
+    )
     if (
         type(expected_destination_hash) is str
         and type(route_canary_destination_hash) is str
@@ -2134,7 +2255,7 @@ def _route_canary_common_semantic_errors(
             f"{canary_label} destination_binding_hash must match lane "
             "destination_binding_hash"
         )
-    source_hashes = lane.get("source_record_hashes")
+    source_hashes = _public_mapping_get_string_key(lane, "source_record_hashes")
     source_hashes = (
         _public_mapping_string_view(source_hashes)
         if type(source_hashes) is dict
@@ -2146,19 +2267,37 @@ def _route_canary_common_semantic_errors(
             (
                 (
                     "source_verifier_material_hash",
-                    source_hashes.get("source_verifier_material_hash"),
+                    _public_mapping_get_string_key(
+                        source_hashes,
+                        "source_verifier_material_hash",
+                    ),
                 ),
                 (
                     "source_adapter_engine_deployment_hash",
-                    source_hashes.get("source_adapter_engine_deployment_hash"),
+                    _public_mapping_get_string_key(
+                        source_hashes,
+                        "source_adapter_engine_deployment_hash",
+                    ),
                 ),
                 *_source_adapter_gate_hash_role_fields(label, lane),
-                ("route_allowlist_hash", route_allowlist.get("route_allowlist_hash")),
+                (
+                    "route_allowlist_hash",
+                    _public_mapping_get_string_key(
+                        route_allowlist,
+                        "route_allowlist_hash",
+                    ),
+                ),
                 (
                     "destination_binding_hash",
-                    destination_binding.get("destination_binding_hash"),
+                    _public_mapping_get_string_key(
+                        destination_binding,
+                        "destination_binding_hash",
+                    ),
                 ),
-                ("evidence_hash", route_canary.get("evidence_hash")),
+                (
+                    "evidence_hash",
+                    _public_mapping_get_string_key(route_canary, "evidence_hash"),
+                ),
             ),
         )
     )
@@ -2176,18 +2315,23 @@ def _route_canary_common_present_semantic_errors(
     route_canary = _public_mapping_string_view(route_canary)
     errors: list[str] = []
     canary_label = f"{label}.route_allowlist.route_canary"
-    status = route_canary.get("status")
+
+    def route_canary_get(field: str, default: Any = None) -> Any:
+        return _public_mapping_get_string_key(route_canary, field, default)
+
+    # Source-inventory marker: route canary semantic checks use exact copied canary keys.
+    status = route_canary_get("status")
     if type(status) is str and status != "passed":
         errors.append(f"{canary_label} status must be passed")
 
-    raw_domain = lane.get("domain")
+    raw_domain = _public_mapping_get_string_key(lane, "domain")
     domain = raw_domain if type(raw_domain) is int else None
     expected_source = (
         _route_canary_source_by_domain().get(domain)
         if type(domain) is int
         else None
     )
-    evidence_source = route_canary.get("evidence_source")
+    evidence_source = route_canary_get("evidence_source")
     if (
         expected_source is not None
         and type(evidence_source) is str
@@ -2195,8 +2339,11 @@ def _route_canary_common_present_semantic_errors(
     ):
         errors.append(f"{canary_label} evidence_source must be {expected_source}")
 
-    evidence_bound = route_canary.get("evidence_bound")
-    if "evidence_bound" in route_canary and type(evidence_bound) is bool:
+    evidence_bound = route_canary_get("evidence_bound")
+    if (
+        _public_mapping_has_string_key(route_canary, "evidence_bound")
+        and type(evidence_bound) is bool
+    ):
         if evidence_bound is not True:
             errors.append(f"{canary_label} evidence_bound must be true")
     return errors
@@ -2211,7 +2358,7 @@ def _route_canary_required_truth_present_semantic_errors(
 
     lane = _public_mapping_string_view(lane)
     route_canary = _public_mapping_string_view(route_canary)
-    raw_domain = lane.get("domain")
+    raw_domain = _public_mapping_get_string_key(lane, "domain")
     domain = raw_domain if type(raw_domain) is int else None
     if domain in (_sccp_domain_eth(), _sccp_domain_bsc()):
         fields = ("message_proof_used", "receipt_block_finalized")
@@ -2227,8 +2374,12 @@ def _route_canary_required_truth_present_semantic_errors(
     errors: list[str] = []
     canary_label = f"{label}.route_allowlist.route_canary"
     for field in fields:
-        value = route_canary.get(field)
-        if field in route_canary and type(value) is bool and value is not True:
+        value = _public_mapping_get_string_key(route_canary, field)
+        if (
+            _public_mapping_has_string_key(route_canary, field)
+            and type(value) is bool
+            and value is not True
+        ):
             errors.append(f"{canary_label} {field} must be true")
     return errors
 
@@ -2242,35 +2393,50 @@ def _route_canary_not_ready_proof_context_semantic_errors(
 
     lane = _public_mapping_string_view(lane)
     route_canary = _public_mapping_string_view(route_canary)
-    raw_domain = lane.get("domain")
+    raw_domain = _public_mapping_get_string_key(lane, "domain")
     domain = raw_domain if type(raw_domain) is int else None
     canary_label = f"{label}.route_allowlist.route_canary"
     errors: list[str] = []
 
+    def route_canary_get(field: str, default: Any = None) -> Any:
+        return _public_mapping_get_string_key(route_canary, field, default)
+
     def require_u32(field: str) -> None:
-        value = route_canary.get(field)
-        if field in route_canary and type(value) is int:
+        value = route_canary_get(field)
+        if _public_mapping_has_string_key(route_canary, field) and type(value) is int:
             if value < 0 or value > 0xFFFF_FFFF:
                 errors.append(f"{canary_label} {field} must be a u32 integer")
 
     def require_positive_int(field: str) -> None:
-        value = route_canary.get(field)
-        if field in route_canary and type(value) is int and value <= 0:
+        value = route_canary_get(field)
+        if (
+            _public_mapping_has_string_key(route_canary, field)
+            and type(value) is int
+            and value <= 0
+        ):
             errors.append(f"{canary_label} {field} must be a positive integer")
 
     def require_nonnegative_int(field: str) -> None:
-        value = route_canary.get(field)
-        if field in route_canary and type(value) is int and value < 0:
+        value = route_canary_get(field)
+        if (
+            _public_mapping_has_string_key(route_canary, field)
+            and type(value) is int
+            and value < 0
+        ):
             errors.append(f"{canary_label} {field} must be a non-negative integer")
 
     def require_int_constant(field: str, expected: int, expected_label: str) -> None:
-        value = route_canary.get(field)
-        if field in route_canary and type(value) is int and value != expected:
+        value = route_canary_get(field)
+        if (
+            _public_mapping_has_string_key(route_canary, field)
+            and type(value) is int
+            and value != expected
+        ):
             errors.append(f"{canary_label} {field} must be {expected_label}")
 
     def require_positive_decimal_string(field: str) -> None:
-        value = route_canary.get(field)
-        if field in route_canary and type(value) is str:
+        value = route_canary_get(field)
+        if _public_mapping_has_string_key(route_canary, field) and type(value) is str:
             if not _is_canonical_decimal_text(value, positive=True):
                 errors.append(
                     f"{canary_label} {field} must be a canonical positive "
@@ -2290,16 +2456,22 @@ def _route_canary_not_ready_proof_context_semantic_errors(
         require_int_constant("target_domain", _sccp_domain_tron(), "TRON")
         require_int_constant("proof_version", 1, "1")
         require_int_constant("proof_source_domain", _sccp_domain_sora(), "SORA")
-        owner = route_canary.get("transaction_owner_address")
-        recovered = route_canary.get("signature_recovered_address")
+        owner = route_canary_get("transaction_owner_address")
+        recovered = route_canary_get("signature_recovered_address")
         owner_canonical = _is_canonical_tron_address_text(owner)
         recovered_canonical = _is_canonical_tron_address_text(recovered)
-        if "transaction_owner_address" in route_canary and not owner_canonical:
+        if (
+            _public_mapping_has_string_key(route_canary, "transaction_owner_address")
+            and not owner_canonical
+        ):
             errors.append(
                 f"{canary_label} transaction_owner_address must be a non-zero "
                 "canonical 0x41-prefixed 21-byte hex string"
             )
-        if "signature_recovered_address" in route_canary and not recovered_canonical:
+        if (
+            _public_mapping_has_string_key(route_canary, "signature_recovered_address")
+            and not recovered_canonical
+        ):
             errors.append(
                 f"{canary_label} signature_recovered_address must be a non-zero "
                 "canonical 0x41-prefixed 21-byte hex string"
@@ -2310,9 +2482,10 @@ def _route_canary_not_ready_proof_context_semantic_errors(
                 "transaction_owner_address"
             )
     elif domain == _sccp_domain_sol():
-        value = route_canary.get("solana_programdata_address")
-        if "solana_programdata_address" in route_canary and not (
-            _is_canonical_solana_pubkey_text(value)
+        value = route_canary_get("solana_programdata_address")
+        if (
+            _public_mapping_has_string_key(route_canary, "solana_programdata_address")
+            and not _is_canonical_solana_pubkey_text(value)
         ):
             errors.append(
                 f"{canary_label} solana_programdata_address must be a non-zero "
@@ -2338,17 +2511,17 @@ def _route_canary_not_ready_hash_role_errors(
     route_allowlist = _public_mapping_string_view(route_allowlist)
     destination_binding = _public_mapping_string_view(destination_binding)
     route_canary = _public_mapping_string_view(route_canary)
-    raw_domain = lane.get("domain")
+    raw_domain = _public_mapping_get_string_key(lane, "domain")
     domain = raw_domain if type(raw_domain) is int else None
     canary_label = f"{label}.route_allowlist.route_canary"
     role_fields: list[tuple[str, Any]] = []
 
-    source_hashes = lane.get("source_record_hashes")
+    source_hashes = _public_mapping_get_string_key(lane, "source_record_hashes")
     if type(source_hashes) is dict:
         source_hashes = _public_mapping_string_view(source_hashes)
         role_fields.extend(
             (
-                (field, source_hashes.get(field))
+                (field, _public_mapping_get_string_key(source_hashes, field))
                 for field in (
                     "source_verifier_material_hash",
                     "source_adapter_engine_deployment_hash",
@@ -2357,19 +2530,26 @@ def _route_canary_not_ready_hash_role_errors(
         )
     role_fields.extend(_source_adapter_gate_hash_role_fields(label, lane))
     role_fields.append(
-        ("route_allowlist_hash", route_allowlist.get("route_allowlist_hash"))
+        (
+            "route_allowlist_hash",
+            _public_mapping_get_string_key(route_allowlist, "route_allowlist_hash"),
+        )
     )
     role_fields.append(
         (
             "destination_binding_hash",
-            destination_binding.get("destination_binding_hash"),
+            _public_mapping_get_string_key(
+                destination_binding,
+                "destination_binding_hash",
+            ),
         )
     )
     canary_hash_fields = _all_lanes_route_canary_fields(domain).intersection(
         ALL_LANES_ROUTE_CANARY_TEMPLATE_HASH_FIELDS
     )
     role_fields.extend(
-        (field, route_canary.get(field)) for field in sorted(canary_hash_fields)
+        (field, _public_mapping_get_string_key(route_canary, field))
+        for field in sorted(canary_hash_fields)
     )
     return _distinct_nonzero_bytes32_field_errors(
         f"{canary_label} hash role",
@@ -2386,7 +2566,7 @@ def _destination_binding_not_ready_domain_semantic_errors(
 
     lane = _public_mapping_string_view(lane)
     destination_binding = _public_mapping_string_view(destination_binding)
-    raw_domain = lane.get("domain")
+    raw_domain = _public_mapping_get_string_key(lane, "domain")
     domain = raw_domain if type(raw_domain) is int else None
     binding_label = f"{label}.destination_binding"
     errors: list[str] = []
@@ -2464,7 +2644,7 @@ def _route_canary_u32_errors(
     field: str,
 ) -> list[str]:
     route_canary = _public_mapping_string_view(route_canary)
-    value = route_canary.get(field)
+    value = _public_mapping_get_string_key(route_canary, field)
     if type(value) is not int or value < 0 or value > 0xFFFF_FFFF:
         return [f"{label} {field} must be a u32 integer"]
     return []
@@ -2481,7 +2661,7 @@ def _route_canary_expected_u32_errors(
     errors = _route_canary_u32_errors(label, route_canary, field)
     if errors:
         return errors
-    if route_canary.get(field) != expected:
+    if _public_mapping_get_string_key(route_canary, field) != expected:
         return [f"{label} {field} must be {expected_label}"]
     return []
 
@@ -2497,19 +2677,23 @@ def _route_canary_evm_semantic_errors(
     route_allowlist = _public_mapping_string_view(route_allowlist)
     destination_binding = _public_mapping_string_view(destination_binding)
     route_canary = _public_mapping_string_view(route_canary)
-    raw_domain = lane.get("domain")
+    raw_domain = _public_mapping_get_string_key(lane, "domain")
     domain = raw_domain if type(raw_domain) is int else None
     if domain not in _all_lanes_evm_destination_domains():
         return []
 
     canary_label = f"{label}.route_allowlist.route_canary"
     errors: list[str] = []
+
+    def route_canary_get(field: str, default: Any = None) -> Any:
+        return _public_mapping_get_string_key(route_canary, field, default)
+
     transcript_roles = _all_lanes_route_canary_transcript_hash_fields(domain)
     transcript_hash_fields = tuple(
         field for field in transcript_roles if field != "evidence_hash"
     )
     for field in transcript_hash_fields:
-        if not _is_nonzero_bytes32_hex_text(route_canary.get(field)):
+        if not _is_nonzero_bytes32_hex_text(route_canary_get(field)):
             errors.append(
                 f"{canary_label} {field} must be a non-zero canonical "
                 "bytes32 hex string"
@@ -2518,17 +2702,17 @@ def _route_canary_evm_semantic_errors(
     errors.extend(
         _distinct_nonzero_bytes32_field_errors(
             f"{canary_label} transcript hash",
-            tuple((field, route_canary.get(field)) for field in transcript_roles),
+            tuple((field, route_canary_get(field)) for field in transcript_roles),
         )
     )
 
     governed_hash_fields: list[tuple[str, Any]] = []
-    source_hashes = lane.get("source_record_hashes")
+    source_hashes = _public_mapping_get_string_key(lane, "source_record_hashes")
     if type(source_hashes) is dict:
         source_hashes = _public_mapping_string_view(source_hashes)
         governed_hash_fields.extend(
             (
-                (field, source_hashes.get(field))
+                (field, _public_mapping_get_string_key(source_hashes, field))
                 for field in (
                     "source_verifier_material_hash",
                     "source_adapter_engine_deployment_hash",
@@ -2537,16 +2721,22 @@ def _route_canary_evm_semantic_errors(
         )
     governed_hash_fields.extend(_source_adapter_gate_hash_role_fields(label, lane))
     governed_hash_fields.append(
-        ("route_allowlist_hash", route_allowlist.get("route_allowlist_hash"))
+        (
+            "route_allowlist_hash",
+            _public_mapping_get_string_key(route_allowlist, "route_allowlist_hash"),
+        )
     )
     governed_hash_fields.append(
         (
             "destination_binding_hash",
-            destination_binding.get("destination_binding_hash"),
+            _public_mapping_get_string_key(
+                destination_binding,
+                "destination_binding_hash",
+            ),
         )
     )
     governed_hash_fields.extend(
-        (field, route_canary.get(field)) for field in transcript_roles
+        (field, route_canary_get(field)) for field in transcript_roles
     )
     errors.extend(
         _distinct_nonzero_bytes32_field_errors(
@@ -2556,7 +2746,7 @@ def _route_canary_evm_semantic_errors(
     )
 
     errors.extend(_route_canary_u32_errors(canary_label, route_canary, "log_index"))
-    receipt_block_number = route_canary.get("receipt_block_number")
+    receipt_block_number = route_canary_get("receipt_block_number")
     if type(receipt_block_number) is not int or receipt_block_number <= 0:
         errors.append(f"{canary_label} receipt_block_number must be a positive integer")
     if type(domain) is int:
@@ -2588,7 +2778,7 @@ def _route_canary_evm_semantic_errors(
         )
     )
     for field in ("message_proof_used", "receipt_block_finalized"):
-        if route_canary.get(field) is not True:
+        if route_canary_get(field) is not True:
             errors.append(f"{canary_label} {field} must be true")
     return errors
 
@@ -2604,7 +2794,7 @@ def _route_canary_integer_errors(
         raise ValueError("route canary integer positive must be a boolean")
 
     route_canary = _public_mapping_string_view(route_canary)
-    value = route_canary.get(field)
+    value = _public_mapping_get_string_key(route_canary, field)
     if type(value) is not int or value < 0 or (positive and value == 0):
         qualifier = "positive " if positive else "non-negative "
         return [f"{label} {field} must be a {qualifier}integer"]
@@ -2622,32 +2812,36 @@ def _route_canary_tron_semantic_errors(
     route_allowlist = _public_mapping_string_view(route_allowlist)
     destination_binding = _public_mapping_string_view(destination_binding)
     route_canary = _public_mapping_string_view(route_canary)
-    raw_domain = lane.get("domain")
+    raw_domain = _public_mapping_get_string_key(lane, "domain")
     domain = raw_domain if type(raw_domain) is int else None
     if domain != _sccp_domain_tron():
         return []
 
     canary_label = f"{label}.route_allowlist.route_canary"
     errors: list[str] = []
+
+    def route_canary_get(field: str, default: Any = None) -> Any:
+        return _public_mapping_get_string_key(route_canary, field, default)
+
     transcript_roles = _all_lanes_route_canary_transcript_hash_fields(domain)
     transcript_hash_fields = tuple(
         field for field in transcript_roles if field != "evidence_hash"
     )
     for field in transcript_hash_fields:
-        if not _is_nonzero_bytes32_hex_text(route_canary.get(field)):
+        if not _is_nonzero_bytes32_hex_text(route_canary_get(field)):
             errors.append(
                 f"{canary_label} {field} must be a non-zero canonical "
                 "bytes32 hex string"
             )
 
     for field in ("transaction_owner_address", "signature_recovered_address"):
-        if not _is_canonical_tron_address_text(route_canary.get(field)):
+        if not _is_canonical_tron_address_text(route_canary_get(field)):
             errors.append(
                 f"{canary_label} {field} must be a non-zero canonical "
                 "0x41-prefixed 21-byte hex string"
             )
-    transaction_owner_address = route_canary.get("transaction_owner_address")
-    signature_recovered_address = route_canary.get("signature_recovered_address")
+    transaction_owner_address = route_canary_get("transaction_owner_address")
+    signature_recovered_address = route_canary_get("signature_recovered_address")
     if (
         _is_canonical_tron_address_text(transaction_owner_address)
         and _is_canonical_tron_address_text(signature_recovered_address)
@@ -2661,17 +2855,17 @@ def _route_canary_tron_semantic_errors(
     errors.extend(
         _distinct_nonzero_bytes32_field_errors(
             f"{canary_label} transcript hash",
-            tuple((field, route_canary.get(field)) for field in transcript_roles),
+            tuple((field, route_canary_get(field)) for field in transcript_roles),
         )
     )
 
     governed_hash_fields: list[tuple[str, Any]] = []
-    source_hashes = lane.get("source_record_hashes")
+    source_hashes = _public_mapping_get_string_key(lane, "source_record_hashes")
     if type(source_hashes) is dict:
         source_hashes = _public_mapping_string_view(source_hashes)
         governed_hash_fields.extend(
             (
-                (field, source_hashes.get(field))
+                (field, _public_mapping_get_string_key(source_hashes, field))
                 for field in (
                     "source_verifier_material_hash",
                     "source_adapter_engine_deployment_hash",
@@ -2680,16 +2874,22 @@ def _route_canary_tron_semantic_errors(
         )
     governed_hash_fields.extend(_source_adapter_gate_hash_role_fields(label, lane))
     governed_hash_fields.append(
-        ("route_allowlist_hash", route_allowlist.get("route_allowlist_hash"))
+        (
+            "route_allowlist_hash",
+            _public_mapping_get_string_key(route_allowlist, "route_allowlist_hash"),
+        )
     )
     governed_hash_fields.append(
         (
             "destination_binding_hash",
-            destination_binding.get("destination_binding_hash"),
+            _public_mapping_get_string_key(
+                destination_binding,
+                "destination_binding_hash",
+            ),
         )
     )
     governed_hash_fields.extend(
-        (field, route_canary.get(field)) for field in transcript_roles
+        (field, route_canary_get(field)) for field in transcript_roles
     )
     errors.extend(
         _distinct_nonzero_bytes32_field_errors(
@@ -2747,7 +2947,7 @@ def _route_canary_tron_semantic_errors(
         "raw_data_owner_matches_transaction",
         "signature_recovers_to_owner",
     ):
-        if route_canary.get(field) is not True:
+        if route_canary_get(field) is not True:
             errors.append(f"{canary_label} {field} must be true")
     return errors
 
@@ -2759,22 +2959,26 @@ def _route_canary_solana_semantic_errors(
 ) -> list[str]:
     lane = _public_mapping_string_view(lane)
     route_canary = _public_mapping_string_view(route_canary)
-    raw_domain = lane.get("domain")
+    raw_domain = _public_mapping_get_string_key(lane, "domain")
     domain = raw_domain if type(raw_domain) is int else None
     if domain != _sccp_domain_sol():
         return []
 
     canary_label = f"{label}.route_allowlist.route_canary"
     errors: list[str] = []
+
+    def route_canary_get(field: str, default: Any = None) -> Any:
+        return _public_mapping_get_string_key(route_canary, field, default)
+
     if not _is_canonical_solana_pubkey_text(
-        route_canary.get("solana_programdata_address")
+        route_canary_get("solana_programdata_address")
     ):
         errors.append(
             f"{canary_label} solana_programdata_address must be a non-zero "
             "canonical base58 Solana address"
         )
     if not _is_canonical_decimal_text(
-        route_canary.get("solana_programdata_slot"),
+        route_canary_get("solana_programdata_slot"),
         positive=True,
     ):
         errors.append(
@@ -2795,21 +2999,25 @@ def _route_canary_ton_semantic_errors(
     route_allowlist = _public_mapping_string_view(route_allowlist)
     destination_binding = _public_mapping_string_view(destination_binding)
     route_canary = _public_mapping_string_view(route_canary)
-    raw_domain = lane.get("domain")
+    raw_domain = _public_mapping_get_string_key(lane, "domain")
     domain = raw_domain if type(raw_domain) is int else None
     if domain != _sccp_domain_ton():
         return []
 
     canary_label = f"{label}.route_allowlist.route_canary"
     errors: list[str] = []
+
+    def route_canary_get(field: str, default: Any = None) -> Any:
+        return _public_mapping_get_string_key(route_canary, field, default)
+
     for field in ("ton_account_state_hash", "ton_last_transaction_hash"):
-        if not _is_nonzero_bytes32_hex_text(route_canary.get(field)):
+        if not _is_nonzero_bytes32_hex_text(route_canary_get(field)):
             errors.append(
                 f"{canary_label} {field} must be a non-zero canonical "
                 "bytes32 hex string"
             )
     if not _is_canonical_decimal_text(
-        route_canary.get("ton_last_transaction_lt"),
+        route_canary_get("ton_last_transaction_lt"),
         positive=True,
     ):
         errors.append(
@@ -2818,12 +3026,12 @@ def _route_canary_ton_semantic_errors(
         )
 
     governed_hash_fields: list[tuple[str, Any]] = []
-    source_hashes = lane.get("source_record_hashes")
+    source_hashes = _public_mapping_get_string_key(lane, "source_record_hashes")
     if type(source_hashes) is dict:
         source_hashes = _public_mapping_string_view(source_hashes)
         governed_hash_fields.extend(
             (
-                (field, source_hashes.get(field))
+                (field, _public_mapping_get_string_key(source_hashes, field))
                 for field in (
                     "source_verifier_material_hash",
                     "source_adapter_engine_deployment_hash",
@@ -2832,16 +3040,22 @@ def _route_canary_ton_semantic_errors(
         )
     governed_hash_fields.extend(_source_adapter_gate_hash_role_fields(label, lane))
     governed_hash_fields.append(
-        ("route_allowlist_hash", route_allowlist.get("route_allowlist_hash"))
+        (
+            "route_allowlist_hash",
+            _public_mapping_get_string_key(route_allowlist, "route_allowlist_hash"),
+        )
     )
     governed_hash_fields.append(
         (
             "destination_binding_hash",
-            destination_binding.get("destination_binding_hash"),
+            _public_mapping_get_string_key(
+                destination_binding,
+                "destination_binding_hash",
+            ),
         )
     )
     governed_hash_fields.extend(
-        (field, route_canary.get(field))
+        (field, route_canary_get(field))
         for field in (
             "ton_account_state_hash",
             "ton_last_transaction_hash",
@@ -2867,44 +3081,61 @@ def _all_lanes_route_canary_cross_lane_bundle_errors(
             continue
         lane = _public_mapping_string_view(lane)
         lane_label = f"{label}.lanes[{index}]"
-        source_hashes = lane.get("source_record_hashes")
+        source_hashes = _public_mapping_get_string_key(lane, "source_record_hashes")
         if type(source_hashes) is dict:
             source_hashes = _public_mapping_string_view(source_hashes)
             for field in (
                 "source_verifier_material_hash",
                 "source_adapter_engine_deployment_hash",
             ):
-                value = source_hashes.get(field)
+                value = _public_mapping_get_string_key(source_hashes, field)
                 if _is_nonzero_bytes32_hex_text(value):
                     assert type(value) is str
                     governed_hashes.setdefault(value, (lane_label, field))
-        destination_binding = lane.get("destination_binding")
+        destination_binding = _public_mapping_get_string_key(
+            lane,
+            "destination_binding",
+        )
         if type(destination_binding) is dict:
             destination_binding = _public_mapping_string_view(destination_binding)
-            value = destination_binding.get("destination_binding_hash")
+            value = _public_mapping_get_string_key(
+                destination_binding,
+                "destination_binding_hash",
+            )
             if _is_nonzero_bytes32_hex_text(value):
                 assert type(value) is str
                 governed_hashes.setdefault(
                     value,
                     (lane_label, "destination_binding_hash"),
                 )
-        route_allowlist = lane.get("route_allowlist")
+        route_allowlist = _public_mapping_get_string_key(lane, "route_allowlist")
         if type(route_allowlist) is dict:
             route_allowlist = _public_mapping_string_view(route_allowlist)
-            value = route_allowlist.get("route_allowlist_hash")
+            value = _public_mapping_get_string_key(
+                route_allowlist,
+                "route_allowlist_hash",
+            )
             if _is_nonzero_bytes32_hex_text(value):
                 assert type(value) is str
                 governed_hashes.setdefault(value, (lane_label, "route_allowlist_hash"))
-            route_canary = route_allowlist.get("route_canary")
+            route_canary = _public_mapping_get_string_key(
+                route_allowlist,
+                "route_canary",
+            )
             if type(route_canary) is dict:
                 route_canary = _public_mapping_string_view(route_canary)
-                canary_hash_fields = _all_lanes_route_canary_fields(
-                    lane.get("domain")
-                ).intersection(ALL_LANES_ROUTE_CANARY_TEMPLATE_HASH_FIELDS)
+                raw_domain = _public_mapping_get_string_key(lane, "domain")
+                domain = raw_domain if type(raw_domain) is int else None
+                canary_hash_fields = _all_lanes_route_canary_fields(domain).intersection(
+                    ALL_LANES_ROUTE_CANARY_TEMPLATE_HASH_FIELDS
+                )
                 for field in sorted(canary_hash_fields):
                     if field == "evidence_hash":
                         continue
-                    canary_value = route_canary.get(field)
+                    canary_value = _public_mapping_get_string_key(
+                        route_canary,
+                        field,
+                    )
                     if _is_nonzero_bytes32_hex_text(canary_value):
                         assert type(canary_value) is str
                         governed_hashes.setdefault(
@@ -2923,20 +3154,25 @@ def _all_lanes_route_canary_cross_lane_bundle_errors(
             continue
         lane = _public_mapping_string_view(lane)
         lane_label = f"{label}.lanes[{index}]"
-        route_allowlist = lane.get("route_allowlist")
+        route_allowlist = _public_mapping_get_string_key(lane, "route_allowlist")
         if type(route_allowlist) is not dict:
             continue
         route_allowlist = _public_mapping_string_view(route_allowlist)
-        route_canary = route_allowlist.get("route_canary")
+        route_canary = _public_mapping_get_string_key(
+            route_allowlist,
+            "route_canary",
+        )
         if type(route_canary) is not dict:
             continue
         route_canary = _public_mapping_string_view(route_canary)
         canary_label = f"{lane_label}.route_allowlist.route_canary"
-        canary_hash_fields = _all_lanes_route_canary_fields(
-            lane.get("domain")
-        ).intersection(ALL_LANES_ROUTE_CANARY_TEMPLATE_HASH_FIELDS)
+        raw_domain = _public_mapping_get_string_key(lane, "domain")
+        domain = raw_domain if type(raw_domain) is int else None
+        canary_hash_fields = _all_lanes_route_canary_fields(domain).intersection(
+            ALL_LANES_ROUTE_CANARY_TEMPLATE_HASH_FIELDS
+        )
         for field in sorted(canary_hash_fields):
-            canary_hash = route_canary.get(field)
+            canary_hash = _public_mapping_get_string_key(route_canary, field)
             if not _is_nonzero_bytes32_hex_text(canary_hash):
                 continue
             assert type(canary_hash) is str
@@ -3376,6 +3612,9 @@ def _submission_surface_sdk_helpers_text_error(value: Any, label: str) -> str | 
 
 
 def _decoded_public_blocker_text(value: str) -> str:
+    # Source-inventory marker: release bundle public blocker decode helpers use exact strings.
+    if type(value) is not str:
+        return ""
     decoded = value
     for _decode_pass in range(max(1, len(value))):
         next_decoded = unquote(html_unescape(decoded))
@@ -3386,12 +3625,16 @@ def _decoded_public_blocker_text(value: str) -> str:
 
 
 def _decoded_sensitive_public_marker_text(value: str) -> str:
+    if type(value) is not str:
+        return ""
     return _decoded_public_blocker_text(value).translate(
         PUBLIC_SENSITIVE_MARKER_CONFUSABLES
     ).casefold()
 
 
 def _decoded_public_blocker_text_issue(value: str) -> str | None:
+    if type(value) is not str:
+        return "non-string value"
     decoded = _decoded_public_blocker_text(value)
     if _path_control_character(decoded) is not None:
         return "control character"
@@ -3403,6 +3646,8 @@ def _decoded_public_blocker_text_issue(value: str) -> str | None:
 
 
 def _canonical_public_blocker_key(value: str) -> str:
+    if type(value) is not str:
+        return ""
     return _decoded_public_blocker_text(value).casefold()
 
 
@@ -3582,6 +3827,15 @@ def _public_mapping_string_view(payload: dict[Any, Any]) -> dict[str, Any]:
     """Return exact string-keyed public fields without comparing hostile aliases."""
 
     return {key: value for key, value in payload.items() if type(key) is str}
+
+
+def _corridor_phase_status_is_exact_passed(status: Any) -> bool:
+    # Source-inventory marker: bundled corridor phase status comparisons use exact copied strings.
+    return type(status) is str and status == "passed"
+
+
+def _corridor_phase_status_is_valid(status: Any) -> bool:
+    return type(status) is str and status in {"passed", "blocked"}
 
 
 def _require_report_list(value: Any, label: str, errors: list[str]) -> list[Any]:
@@ -4514,7 +4768,8 @@ def _release_report_preflight_errors(report: Any, *, label: str) -> list[str]:
         return errors
     _require_report_fields(payload, label, ("production_ready", "blockers"), errors)
     payload = _public_mapping_string_view(payload)
-    if type(payload.get("production_ready")) is not bool:
+    production_ready = _public_mapping_get_string_key(payload, "production_ready")
+    if type(production_ready) is not bool:
         errors.append(f"{label} production_ready must be true or false")
     errors.extend(
         _public_blocker_list_field_errors(
@@ -4524,9 +4779,13 @@ def _release_report_preflight_errors(report: Any, *, label: str) -> list[str]:
             allow_empty=True,
         )
     )
-    blockers = payload.get("blockers")
-    if payload.get("production_ready") is True and type(blockers) is list and blockers:
+    blockers = _public_mapping_get_string_key(payload, "blockers")
+    if production_ready is True and type(blockers) is list and blockers:
         errors.append(f"{label} blockers must be empty when production_ready is true")
+    if production_ready is False and type(blockers) is list and not blockers:
+        errors.append(
+            f"{label} blockers must be non-empty when production_ready is false"
+        )
     return errors
 
 
@@ -4539,7 +4798,8 @@ def _artifact_row_errors(row: Any, label: str) -> list[str]:
     errors.extend(_unknown_public_field_errors(artifact, label, ARTIFACT_FIELDS))
     _require_report_fields(artifact, label, ARTIFACT_FIELDS, errors)
     artifact = _public_mapping_string_view(artifact)
-    artifact_path = artifact.get("path")
+    # Source-inventory marker: bundle artifact row schema uses exact public artifact keys.
+    artifact_path = _public_mapping_get_string_key(artifact, "path")
     if type(artifact_path) is not str or not artifact_path:
         errors.append(f"{label} path must be a non-empty string")
     else:
@@ -4577,10 +4837,12 @@ def _artifact_row_errors(row: Any, label: str) -> list[str]:
                 or artifact_path != path.as_posix()
             ):
                 errors.append(f"{label} path is not canonical")
-    bytes_value = artifact.get("bytes")
+    bytes_value = _public_mapping_get_string_key(artifact, "bytes")
     if type(bytes_value) is not int or bytes_value <= 0:
         errors.append(f"{label} bytes must be a positive integer")
-    errors.extend(_sha256_text_errors(label, artifact.get("sha256")))
+    errors.extend(
+        _sha256_text_errors(label, _public_mapping_get_string_key(artifact, "sha256"))
+    )
     return errors
 
 
@@ -4593,7 +4855,8 @@ def _native_evm_artifact_summary_errors(row: Any, label: str) -> list[str]:
     errors.extend(_native_evm_unknown_field_errors(artifact, label, ARTIFACT_FIELDS))
     _require_report_fields(artifact, label, ARTIFACT_FIELDS, errors)
     artifact = _public_mapping_string_view(artifact)
-    artifact_path = artifact.get("path")
+    # Source-inventory marker: bundle native artifact summary uses exact public artifact keys.
+    artifact_path = _public_mapping_get_string_key(artifact, "path")
     if type(artifact_path) is not str or not artifact_path:
         errors.append(f"{label} path must be a non-empty string")
     else:
@@ -4631,10 +4894,12 @@ def _native_evm_artifact_summary_errors(row: Any, label: str) -> list[str]:
                 or artifact_path != path.as_posix()
             ):
                 errors.append(f"{label} path is not canonical")
-    bytes_value = artifact.get("bytes")
+    bytes_value = _public_mapping_get_string_key(artifact, "bytes")
     if type(bytes_value) is not int or bytes_value <= 0:
         errors.append(f"{label} bytes must be a positive integer")
-    errors.extend(_sha256_text_errors(label, artifact.get("sha256")))
+    errors.extend(
+        _sha256_text_errors(label, _public_mapping_get_string_key(artifact, "sha256"))
+    )
     return errors
 
 
@@ -4664,20 +4929,29 @@ def _native_evm_summary_path_role_errors(
 ) -> list[str]:
     payload = _public_mapping_string_view(payload)
     roles: list[tuple[str, Any]] = [
-        ("artifact", payload.get("artifact")),
-        ("proof_artifact", payload.get("proof_artifact")),
-        ("proving_key", payload.get("proving_key")),
-        ("verifier_key", payload.get("verifier_key")),
+        ("artifact", _public_mapping_get_string_key(payload, "artifact")),
+        (
+            "proof_artifact",
+            _public_mapping_get_string_key(payload, "proof_artifact"),
+        ),
+        ("proving_key", _public_mapping_get_string_key(payload, "proving_key")),
+        ("verifier_key", _public_mapping_get_string_key(payload, "verifier_key")),
         (
             "cross_sdk_fixture_parity_artifact",
-            payload.get("cross_sdk_fixture_parity_artifact"),
+            _public_mapping_get_string_key(
+                payload,
+                "cross_sdk_fixture_parity_artifact",
+            ),
         ),
         (
             "native_prover_self_test_artifact",
-            payload.get("native_prover_self_test_artifact"),
+            _public_mapping_get_string_key(
+                payload,
+                "native_prover_self_test_artifact",
+            ),
         ),
     ]
-    sdk_artifacts = payload.get("sdk_artifacts")
+    sdk_artifacts = _public_mapping_get_string_key(payload, "sdk_artifacts")
     if type(sdk_artifacts) is list:
         for index, row in enumerate(sdk_artifacts):
             if type(row) is dict:
@@ -4685,7 +4959,10 @@ def _native_evm_summary_path_role_errors(
                 roles.append(
                     (
                         f"sdk_artifacts[{index}].implementation_artifact",
-                        row.get("implementation_artifact"),
+                        _public_mapping_get_string_key(
+                            row,
+                            "implementation_artifact",
+                        ),
                     )
                 )
 
@@ -4782,9 +5059,13 @@ def _copied_input_provenance_bundle_errors(
         return []
 
     payload = _public_mapping_string_view(payload)
+    # Source-inventory marker: release input provenance uses exact copied root keys.
+    def report_get(field: str, default: Any = None) -> Any:
+        return _public_mapping_get_string_key(payload, field, default)
+
     errors: list[str] = []
     input_paths: list[str] = []
-    inputs = payload.get("inputs")
+    inputs = report_get("inputs")
     inputs_label = f"{label}.inputs"
     if type(inputs) is not list or not inputs:
         errors.append(f"{inputs_label} must be a non-empty list of canonical paths")
@@ -4806,7 +5087,7 @@ def _copied_input_provenance_bundle_errors(
                     input_paths.append(item)
 
     artifact_paths: list[str] = []
-    input_artifacts = payload.get("input_artifacts")
+    input_artifacts = report_get("input_artifacts")
     artifacts_label = f"{label}.input_artifacts"
     if type(input_artifacts) is not list or not input_artifacts:
         errors.append(f"{artifacts_label} must be a non-empty list")
@@ -4856,14 +5137,20 @@ def _release_checklist_bundle_errors(
     )
     _require_report_fields(payload, label, RELEASE_CHECKLIST_FIELDS, errors)
     payload = _public_mapping_string_view(payload)
+    ready = _public_mapping_get_string_key(payload, "ready")
     if require_ready:
-        if payload.get("ready") is not True:
+        if ready is not True:
             errors.append(f"{label} ready must be true")
-    elif type(payload.get("ready")) is not bool:
+    elif type(ready) is not bool:
         errors.append(f"{label} ready must be true or false")
 
-    items = _require_report_list(payload.get("items"), f"{label}.items", errors)
+    items = _require_report_list(
+        _public_mapping_get_string_key(payload, "items"),
+        f"{label}.items",
+        errors,
+    )
     seen_item_ids: set[str] = set()
+    semantic_item_ready_values: list[bool] = []
     for index, item in enumerate(items):
         item_base_label = f"{label}.items[{index}]"
         item_payload = _require_report_mapping(item, item_base_label, errors)
@@ -4894,17 +5181,20 @@ def _release_checklist_bundle_errors(
             errors,
         )
         item_payload = _public_mapping_string_view(item_payload)
-        title = item_payload.get("title")
+        title = _public_mapping_get_string_key(item_payload, "title")
         if type(title) is not str or not title or title.strip() != title:
             errors.append(
                 f"{item_label} title must be a non-empty string "
                 "with no surrounding whitespace"
             )
+        item_ready = _public_mapping_get_string_key(item_payload, "ready")
         if require_ready:
-            if item_payload.get("ready") is not True:
+            if item_ready is not True:
                 errors.append(f"{item_label} ready must be true")
-        elif type(item_payload.get("ready")) is not bool:
+        elif type(item_ready) is not bool:
             errors.append(f"{item_label} ready must be true or false")
+        if type(item_ready) is bool:
+            semantic_item_ready_values.append(item_ready)
         errors.extend(
             _public_blocker_list_field_errors(
                 item_label,
@@ -4913,9 +5203,23 @@ def _release_checklist_bundle_errors(
                 allow_empty=True,
             )
         )
-        blockers = item_payload.get("blockers")
+        blockers = _public_mapping_get_string_key(item_payload, "blockers")
         if require_ready and type(blockers) is list and blockers:
             errors.append(f"{item_label} blockers must be empty")
+        if (
+            not require_ready
+            and item_ready is False
+            and type(blockers) is list
+            and not blockers
+        ):
+            errors.append(f"{item_label} blockers must be non-empty when ready is false")
+    if (
+        not require_ready
+        and ready is False
+        and len(semantic_item_ready_values) == len(items)
+        and all(semantic_item_ready_values)
+    ):
+        errors.append(f"{label} ready must match item readiness")
     return errors
 
 
@@ -4959,15 +5263,27 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
         )
     )
     payload = _public_mapping_string_view(payload)
+    # Source-inventory marker: bundle native EVM prover summary uses exact copied payload keys.
 
-    if "required" in payload and payload.get("required") is not True:
+    if _public_mapping_has_string_key(
+        payload,
+        "required",
+    ) and _public_mapping_get_string_key(payload, "required") is not True:
         errors.append(f"{label} required must be true")
-    validation_status = payload.get("validation_status")
-    if "validation_status" in payload and validation_status not in {"passed", "blocked"}:
+    validation_status = _public_mapping_get_string_key(payload, "validation_status")
+    validation_status_passed = (
+        type(validation_status) is str and validation_status == "passed"
+    )
+    validation_status_blocked = (
+        type(validation_status) is str and validation_status == "blocked"
+    )
+    if _public_mapping_has_string_key(payload, "validation_status") and not (
+        validation_status_passed or validation_status_blocked
+    ):
         errors.append(f"{label} validation_status must be passed or blocked")
-    elif validation_status != "passed":
+    elif not validation_status_passed:
         errors.append(f"{label} validation_status must be passed")
-    if validation_status == "passed":
+    if validation_status_passed:
         _require_report_fields(
             payload,
             label,
@@ -4980,8 +5296,8 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
         "lanes",
         "proof_backend",
     ):
-        value = payload.get(field)
-        if validation_status == "passed" or not _public_scalar_absent(value):
+        value = _public_mapping_get_string_key(payload, field)
+        if validation_status_passed or not _public_scalar_absent(value):
             errors.extend(_non_empty_string_field_errors(label, payload, field))
     exact_string_fields = (
         ("schema", _native_evm_prover_bundle_schema()),
@@ -4990,8 +5306,10 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
         ("proof_backend", "evm-groth16-bn254-v1"),
     )
     for field, expected in exact_string_fields:
-        value = payload.get(field)
-        if field in payload and (type(value) is not str or value != expected):
+        value = _public_mapping_get_string_key(payload, field)
+        if _public_mapping_has_string_key(payload, field) and (
+            type(value) is not str or value != expected
+        ):
             errors.append(f"{label} {field} must be {expected}")
     for field in (
         "proof_artifact_hash",
@@ -4999,10 +5317,10 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
         "verifier_key_hash",
         "destination_binding_hash",
     ):
-        value = payload.get(field)
+        value = _public_mapping_get_string_key(payload, field)
         if (
-            field in payload
-            and (validation_status == "passed" or not _public_scalar_absent(value))
+            _public_mapping_has_string_key(payload, field)
+            and (validation_status_passed or not _public_scalar_absent(value))
             and not _is_nonzero_bytes32_hex_text(value)
         ):
             errors.append(
@@ -5017,10 +5335,10 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
         ("cross_sdk_fixture_parity_artifact", ""),
         ("native_prover_self_test_artifact", ""),
     ):
-        if artifact_field not in payload:
+        if not _public_mapping_has_string_key(payload, artifact_field):
             continue
-        artifact = payload.get(artifact_field)
-        if validation_status != "passed" and artifact is None:
+        artifact = _public_mapping_get_string_key(payload, artifact_field)
+        if not validation_status_passed and artifact is None:
             continue
         artifact_label = f"{label}.{artifact_field}"
         if type(artifact) is not dict:
@@ -5037,13 +5355,13 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
                 )
             )
 
-    audit_hashes = payload.get("audit_hashes")
+    audit_hashes = _public_mapping_get_string_key(payload, "audit_hashes")
     required_audit_hashes = _native_evm_required_audit_hashes()
     semantic_audit_hashes: dict[str, Any] = {}
-    if "audit_hashes" in payload:
+    if _public_mapping_has_string_key(payload, "audit_hashes"):
         if type(audit_hashes) is not dict:
             errors.append(f"{label}.audit_hashes must be a non-empty object")
-        elif validation_status == "passed" and not audit_hashes:
+        elif validation_status_passed and not audit_hashes:
             errors.append(f"{label}.audit_hashes must be a non-empty object")
         else:
             audit_key_errors: list[str] = []
@@ -5061,7 +5379,10 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
                         )
                     )
                     continue
-                semantic_audit_hashes[key] = audit_hashes[key]
+                semantic_audit_hashes[key] = _public_mapping_get_string_key(
+                    audit_hashes,
+                    key,
+                )
             errors.extend(
                 _number_repeated_source_adapter_gate_audit_diagnostics(
                     audit_key_errors,
@@ -5077,21 +5398,37 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
                         f"{label}.audit_hashes.{key} must be a canonical "
                         "non-zero 32-byte hex value"
                     )
-    if validation_status == "passed" and type(audit_hashes) is dict:
+    if validation_status_passed and type(audit_hashes) is dict:
         for key in sorted(required_audit_hashes - semantic_audit_hashes.keys()):
             errors.append(f"{label}.audit_hashes missing field: {key}")
 
     reserved_audit_hash_roles: dict[str, Any] = {
-        "proof_artifact_hash": payload.get("proof_artifact_hash"),
-        "proving_key_hash": payload.get("proving_key_hash"),
-        "verifier_key_hash": payload.get("verifier_key_hash"),
-        "destination_binding_hash": payload.get("destination_binding_hash"),
+        "proof_artifact_hash": _public_mapping_get_string_key(
+            payload,
+            "proof_artifact_hash",
+        ),
+        "proving_key_hash": _public_mapping_get_string_key(
+            payload,
+            "proving_key_hash",
+        ),
+        "verifier_key_hash": _public_mapping_get_string_key(
+            payload,
+            "verifier_key_hash",
+        ),
+        "destination_binding_hash": _public_mapping_get_string_key(
+            payload,
+            "destination_binding_hash",
+        ),
     }
 
     parity_hash = semantic_audit_hashes.get("cross_sdk_fixture_parity")
-    if type(payload.get("cross_sdk_fixture_parity_artifact")) is dict:
+    parity_artifact = _public_mapping_get_string_key(
+        payload,
+        "cross_sdk_fixture_parity_artifact",
+    )
+    if type(parity_artifact) is dict:
         artifact_hash = _public_mapping_get_string_key(
-            payload["cross_sdk_fixture_parity_artifact"],
+            parity_artifact,
             "sha256",
         )
         if (
@@ -5104,9 +5441,13 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
                 "audit_hashes.cross_sdk_fixture_parity"
             )
     self_test_hash = semantic_audit_hashes.get("native_prover_self_test")
-    if type(payload.get("native_prover_self_test_artifact")) is dict:
+    self_test_artifact = _public_mapping_get_string_key(
+        payload,
+        "native_prover_self_test_artifact",
+    )
+    if type(self_test_artifact) is dict:
         artifact_hash = _public_mapping_get_string_key(
-            payload["native_prover_self_test_artifact"],
+            self_test_artifact,
             "sha256",
         )
         if (
@@ -5119,7 +5460,7 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
                 "audit_hashes.native_prover_self_test"
             )
 
-    if "validation_blockers" in payload:
+    if _public_mapping_has_string_key(payload, "validation_blockers"):
         errors.extend(
             _string_list_field_errors(
                 label,
@@ -5130,33 +5471,44 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
         )
         errors.extend(
             _submission_surface_validation_blocker_list_errors(
-                payload.get("validation_blockers"),
+                _public_mapping_get_string_key(payload, "validation_blockers"),
                 label,
             )
         )
-        validation_blockers = payload.get("validation_blockers")
+        validation_blockers = _public_mapping_get_string_key(
+            payload,
+            "validation_blockers",
+        )
         if (
-            validation_status == "passed"
+            validation_status_passed
             and type(validation_blockers) is list
             and validation_blockers
         ):
             errors.append(
                 f"{label} validation_blockers must be empty when validation_status is passed"
             )
+        if (
+            validation_status_blocked
+            and type(validation_blockers) is list
+            and not validation_blockers
+        ):
+            errors.append(
+                f"{label} validation_blockers must be non-empty when validation_status is blocked"
+            )
         if type(validation_blockers) is list and validation_blockers:
             errors.append(f"{label} validation_blockers must be empty")
 
     seen_sdks: set[str] = set()
     semantic_sdk_order: list[str] = []
-    if "sdk_artifacts" in payload:
+    if _public_mapping_has_string_key(payload, "sdk_artifacts"):
         sdk_name_errors: list[str] = []
         sdk_artifacts_label = f"{label}.sdk_artifacts"
         sdk_rows = _require_report_list(
-            payload.get("sdk_artifacts"),
+            _public_mapping_get_string_key(payload, "sdk_artifacts"),
             sdk_artifacts_label,
             errors,
         )
-        if validation_status == "passed" and not sdk_rows:
+        if validation_status_passed and not sdk_rows:
             errors.append(f"{sdk_artifacts_label} must be a non-empty list")
         for index, row in enumerate(sdk_rows):
             row_label = f"{sdk_artifacts_label}[{index}]"
@@ -5177,8 +5529,11 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
                 errors,
             )
             row_payload = _public_mapping_string_view(row_payload)
-            sdk = row_payload.get("sdk")
-            implementation = row_payload.get("implementation")
+            sdk = _public_mapping_get_string_key(row_payload, "sdk")
+            implementation = _public_mapping_get_string_key(
+                row_payload,
+                "implementation",
+            )
             sdk_error = _native_evm_sdk_key_error(sdk, row_label)
             if sdk_error is not None:
                 errors.append(sdk_error)
@@ -5210,7 +5565,7 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
                     errors.append(
                         f"{row_label} implementation must be {expected_implementation}"
                     )
-            if "implementation" in row_payload and (
+            if _public_mapping_has_string_key(row_payload, "implementation") and (
                 type(implementation) is not str
                 or not implementation
                 or implementation.strip() != implementation
@@ -5219,15 +5574,25 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
                     f"{row_label} implementation must be a non-empty string "
                     "with no surrounding whitespace"
                 )
-            if "implementation_hash" in row_payload and not _is_nonzero_bytes32_hex_text(
-                row_payload.get("implementation_hash")
+            implementation_hash = _public_mapping_get_string_key(
+                row_payload,
+                "implementation_hash",
+            )
+            if _public_mapping_has_string_key(
+                row_payload,
+                "implementation_hash",
+            ) and not _is_nonzero_bytes32_hex_text(
+                implementation_hash
             ):
                 errors.append(
                     f"{row_label} implementation_hash must be a canonical "
                     "non-zero 32-byte hex value"
                 )
-            implementation_artifact = row_payload.get("implementation_artifact")
-            if "implementation_artifact" in row_payload:
+            implementation_artifact = _public_mapping_get_string_key(
+                row_payload,
+                "implementation_artifact",
+            )
+            if _public_mapping_has_string_key(row_payload, "implementation_artifact"):
                 artifact_label = f"{row_label}.implementation_artifact"
                 if type(implementation_artifact) is not dict:
                     errors.append(f"{artifact_label} must be an object")
@@ -5242,7 +5607,6 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
                         implementation_artifact,
                         "sha256",
                     )
-                    implementation_hash = row_payload.get("implementation_hash")
                     if (
                         _is_nonzero_canonical_sha256_text(artifact_hash)
                         and type(implementation_hash) is str
@@ -5254,8 +5618,8 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
             if type(sdk) is str:
                 reserved_audit_hash_roles[
                     f"sdk_artifacts[{index}].implementation_hash"
-                ] = row_payload.get("implementation_hash")
-        if validation_status == "passed":
+                ] = implementation_hash
+        if validation_status_passed:
             for sdk in sorted(
                 set(_native_evm_required_implementations()) - seen_sdks
             ):
@@ -5306,7 +5670,14 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
     )
     _require_report_fields(payload, label, CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS, errors)
     payload = _public_mapping_string_view(payload)
-    if "domain" in payload and type(payload.get("domain")) is not int:
+    # Source-inventory marker: bundle cryptographic evidence row scalars use exact copied keys.
+    def row_get(field: str, default: Any = None) -> Any:
+        return _public_mapping_get_string_key(payload, field, default)
+
+    def row_has(field: str) -> bool:
+        return _public_mapping_has_string_key(payload, field)
+
+    if row_has("domain") and type(row_get("domain")) is not int:
         errors.append(f"{label} domain must be an integer")
     errors.extend(_non_empty_string_field_errors(label, payload, "chain"))
     for field in (
@@ -5323,9 +5694,9 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
                 allow_empty=True,
             )
         )
-    route_canary_source = payload.get("route_canary_evidence_source")
+    route_canary_source = row_get("route_canary_evidence_source")
     if (
-        "route_canary_evidence_source" in payload
+        row_has("route_canary_evidence_source")
         and not _public_scalar_absent(route_canary_source)
     ):
         route_canary_source_error = _public_scalar_string_error(
@@ -5340,12 +5711,12 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
             else:
                 errors.append(route_canary_source_error)
     for field in ("route_canary_evidence_bound", "source_adapter_gate_required"):
-        if field in payload and type(payload.get(field)) is not bool:
+        if row_has(field) and type(row_get(field)) is not bool:
             errors.append(f"{label} {field} must be true or false")
     if (
-        "route_canary_message_proof_used" in payload
-        and payload.get("route_canary_message_proof_used") is not None
-        and type(payload.get("route_canary_message_proof_used")) is not bool
+        row_has("route_canary_message_proof_used")
+        and row_get("route_canary_message_proof_used") is not None
+        and type(row_get("route_canary_message_proof_used")) is not bool
     ):
         errors.append(
             f"{label} route_canary_message_proof_used must be true, false, or null"
@@ -5357,30 +5728,31 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
         # Source-inventory marker: route_canary_raw_data_owner_matches_transaction must be true, false, or null
         # Source-inventory marker: route_canary_signature_recovers_to_owner must be true, false, or null
         if (
-            field in payload
-            and payload.get(field) is not None
-            and type(payload.get(field)) is not bool
+            row_has(field)
+            and row_get(field) is not None
+            and type(row_get(field)) is not bool
         ):
             errors.append(f"{label} {field} must be true, false, or null")
     for field in (
         "route_canary_transaction_owner_address",
         "route_canary_signature_recovered_address",
     ):
-        if field in payload and not _public_scalar_absent(payload.get(field)):
-            if not _is_canonical_tron_address_text(payload.get(field)):
+        value = row_get(field)
+        if row_has(field) and not _public_scalar_absent(value):
+            if not _is_canonical_tron_address_text(value):
                 errors.append(
                     f"{label} {field} must be a non-zero canonical "
                     "0x41-prefixed 21-byte hex string"
                 )
     if (
-        "route_canary_receipt_block_finalized" in payload
-        and payload.get("route_canary_receipt_block_finalized") is not None
-        and type(payload.get("route_canary_receipt_block_finalized")) is not bool
+        row_has("route_canary_receipt_block_finalized")
+        and row_get("route_canary_receipt_block_finalized") is not None
+        and type(row_get("route_canary_receipt_block_finalized")) is not bool
     ):
         errors.append(
             f"{label} route_canary_receipt_block_finalized must be true, false, or null"
         )
-    raw_domain = payload.get("domain")
+    raw_domain = row_get("domain")
     domain = raw_domain if type(raw_domain) is int else None
     evm_route_canary_domains = {_sccp_domain_eth(), _sccp_domain_bsc()}
     snapshot_route_canary_domains = {
@@ -5399,7 +5771,7 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
     )
     if domain == _sccp_domain_eth():
         for field in ("evm_source_rpc_chain_id", "evm_destination_rpc_chain_id"):
-            value_for_field = payload.get(field)
+            value_for_field = row_get(field)
             if (
                 type(value_for_field) is str
                 and (
@@ -5407,18 +5779,18 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
                     or int(value_for_field, 10)
                     != _expected_evm_rpc_chain_id(
                         _sccp_domain_eth(),
-                        payload.get("chain"),
+                        row_get("chain"),
                     )
                 )
             ):
                 errors.append(f"{label} {field} must be Ethereum mainnet chain id 1")
         for field in ("evm_source_block_tag", "evm_destination_block_tag"):
-            value_for_field = payload.get(field)
+            value_for_field = row_get(field)
             if type(value_for_field) is str and value_for_field != "finalized":
                 errors.append(f"{label} {field} must be finalized for Ethereum mainnet")
     elif domain == _sccp_domain_bsc():
         bsc_has_evm_evidence = any(
-            type(payload.get(field)) is str and bool(payload.get(field))
+            type(row_get(field)) is str and bool(row_get(field))
             for field in (
                 "source_verifier_material_hash",
                 "source_adapter_engine_deployment_hash",
@@ -5429,13 +5801,18 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
         )
         expected_chain_id = _expected_evm_rpc_chain_id(
             _sccp_domain_bsc(),
-            payload.get("chain"),
+            row_get("chain"),
         )
+        chain = row_get("chain")
+        # Source-inventory marker: bundle BSC testnet profile labels require exact
+        # public chain strings before equality checks.
         expected_chain = (
-            "bsc-testnet" if payload.get("chain") == "bsc-testnet" else "bsc"
+            "bsc-testnet"
+            if type(chain) is str and chain == "bsc-testnet"
+            else "bsc"
         )
         for field in ("evm_source_rpc_chain_id", "evm_destination_rpc_chain_id"):
-            value_for_field = payload.get(field)
+            value_for_field = row_get(field)
             if (
                 bsc_has_evm_evidence
                 and type(value_for_field) is str
@@ -5449,7 +5826,7 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
                     f"{expected_chain_id} for {expected_chain}"
                 )
         for field in ("evm_source_block_tag", "evm_destination_block_tag"):
-            value_for_field = payload.get(field)
+            value_for_field = row_get(field)
             if (
                 bsc_has_evm_evidence
                 and type(value_for_field) is str
@@ -5465,11 +5842,11 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
             "evm_destination_rpc_chain_id",
             "evm_destination_block_tag",
         ):
-            value_for_field = payload.get(field)
+            value_for_field = row_get(field)
             if type(value_for_field) is str and value_for_field:
                 errors.append(f"{label} {field} must be empty for non-EVM lanes")
     has_route_canary_evidence = _is_nonzero_bytes32_hex_text(
-        payload.get("route_canary_evidence_hash")
+        row_get("route_canary_evidence_hash")
     )
     has_evm_route_canary_evidence = (
         domain in evm_route_canary_domains and has_route_canary_evidence
@@ -5481,19 +5858,19 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
         domain in message_proof_route_canary_domains and has_route_canary_evidence
     )
     if not has_route_canary_evidence:
-        if not _public_scalar_absent(payload.get("route_canary_evidence_source")):
+        if not _public_scalar_absent(row_get("route_canary_evidence_source")):
             # Source-inventory marker: route-canary public metadata must be empty when route canary evidence is absent
             errors.append(
                 f"{label} route_canary_evidence_source must be empty when "
                 "route canary evidence is absent"
             )
-        if payload.get("route_canary_evidence_bound") is not False:
+        if row_get("route_canary_evidence_bound") is not False:
             # Source-inventory marker: route-canary public metadata must be unbound when route canary evidence is absent
             errors.append(
                 f"{label} route_canary_evidence_bound must be false when "
                 "route canary evidence is absent"
             )
-        if payload.get("route_canary_message_proof_used") is not None:
+        if row_get("route_canary_message_proof_used") is not None:
             # Source-inventory marker: route_canary_message_proof_used must be null when route canary evidence is absent
             errors.append(
                 f"{label} route_canary_message_proof_used must be null when "
@@ -5503,7 +5880,7 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
             "route_canary_raw_data_owner_matches_transaction",
             "route_canary_signature_recovers_to_owner",
         ):
-            if payload.get(field) is not None:
+            if row_get(field) is not None:
                 # Source-inventory marker: TRON route-canary public owner/signature flags must be null when route canary evidence is absent
                 errors.append(
                     f"{label} {field} must be null when route canary evidence "
@@ -5515,7 +5892,7 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
             "route_canary_signature_sha256",
             "route_canary_signature_recovered_address",
         ):
-            if not _public_scalar_absent(payload.get(field)):
+            if not _public_scalar_absent(row_get(field)):
                 # Source-inventory marker: TRON route-canary public transcript fields must be empty when route canary evidence is absent
                 errors.append(
                     f"{label} {field} must be empty when route canary evidence "
@@ -5527,7 +5904,7 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
             "route_canary_proof_version",
             "route_canary_proof_source_domain",
         ):
-            if payload.get(field) is not None:
+            if row_get(field) is not None:
                 # Source-inventory marker: route-canary public scalar proof context must be null when route canary evidence is absent
                 errors.append(
                     f"{label} {field} must be null when route canary evidence "
@@ -5541,14 +5918,14 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
             "route_canary_finality_height",
             "route_canary_finality_block_hash",
         ):
-            if payload.get(field) is not None:
+            if row_get(field) is not None:
                 # Source-inventory marker: route-canary public transcript proof context must be null when route canary evidence is absent
                 errors.append(
                     f"{label} {field} must be null when route canary evidence "
                     "is absent"
                 )
         for field in ("route_canary_block_number", "route_canary_block_timestamp"):
-            if payload.get(field) is not None:
+            if row_get(field) is not None:
                 # Source-inventory marker: TRON route-canary public block metadata must be null when route canary evidence is absent
                 errors.append(
                     f"{label} {field} must be null when route canary evidence "
@@ -5560,7 +5937,7 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
             "route_canary_block_receipts_root",
             "route_canary_message_id",
         ):
-            if not _public_scalar_absent(payload.get(field)):
+            if not _public_scalar_absent(row_get(field)):
                 # Source-inventory marker: route-canary public EVM receipt metadata must be empty when route canary evidence is absent
                 errors.append(
                     f"{label} {field} must be empty when route canary evidence "
@@ -5570,7 +5947,7 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
             "route_canary_receipt_block_number",
             "route_canary_receipt_block_finalized",
         ):
-            if payload.get(field) is not None:
+            if row_get(field) is not None:
                 # Source-inventory marker: route-canary public EVM receipt metadata must be null when route canary evidence is absent
                 errors.append(
                     f"{label} {field} must be null when route canary evidence "
@@ -5578,7 +5955,7 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
                 )
     if (
         has_message_proof_route_canary_evidence
-        and payload.get("route_canary_message_proof_used") is not True
+        and row_get("route_canary_message_proof_used") is not True
     ):
         # Source-inventory marker: route_canary_message_proof_used must be true for message-proof route canary evidence
         errors.append(
@@ -5587,7 +5964,7 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
         )
     if has_message_proof_route_canary_evidence:
         expected_source = _route_canary_source_by_domain().get(domain)
-        route_canary_source = payload.get("route_canary_evidence_source")
+        route_canary_source = row_get("route_canary_evidence_source")
         if (
             type(route_canary_source) is not str
             or route_canary_source != expected_source
@@ -5597,7 +5974,7 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
                 f"{label} route_canary_evidence_source must be {expected_source} "
                 "for message-proof route canary evidence"
             )
-        if payload.get("route_canary_evidence_bound") is not True:
+        if row_get("route_canary_evidence_bound") is not True:
             # Source-inventory marker: route-canary public metadata must be bound for message-proof route canary evidence
             errors.append(
                 f"{label} route_canary_evidence_bound must be true for "
@@ -5611,7 +5988,7 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
             "route_canary_finality_height",
             "route_canary_finality_block_hash",
         ):
-            if not _is_nonzero_bytes32_hex_text(payload.get(field)):
+            if not _is_nonzero_bytes32_hex_text(row_get(field)):
                 # Source-inventory marker: route-canary public transcript hashes must be non-zero bytes32 for message-proof route canary evidence
                 errors.append(
                     f"{label} {field} must be a non-zero canonical bytes32 hex "
@@ -5624,7 +6001,7 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
             ("route_canary_proof_source_domain", _sccp_domain_sora(), "SORA"),
         )
         for field, expected, expected_label in scalar_expectations:
-            value_for_field = payload.get(field)
+            value_for_field = row_get(field)
             if expected is None:
                 if (
                     type(value_for_field) is not int
@@ -5650,7 +6027,7 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
     if (
         domain in known_route_canary_domains
         and domain not in message_proof_route_canary_domains
-        and payload.get("route_canary_message_proof_used") is not None
+        and row_get("route_canary_message_proof_used") is not None
     ):
         # Source-inventory marker: route_canary_message_proof_used must be null for lanes without message-proof route canary evidence
         errors.append(
@@ -5673,7 +6050,7 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
             "route_canary_finality_height",
             "route_canary_finality_block_hash",
         ):
-            if payload.get(field) is not None:
+            if row_get(field) is not None:
                 # Source-inventory marker: route-canary public transcript proof context must be null for lanes without message-proof route canary evidence
                 # Source-inventory marker: route-canary public scalar proof context must be null for lanes without message-proof route canary evidence
                 errors.append(
@@ -5682,7 +6059,7 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
                 )
     if has_snapshot_route_canary_evidence:
         expected_source = _route_canary_source_by_domain().get(domain)
-        route_canary_source = payload.get("route_canary_evidence_source")
+        route_canary_source = row_get("route_canary_evidence_source")
         if (
             type(route_canary_source) is not str
             or route_canary_source != expected_source
@@ -5692,7 +6069,7 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
                 f"{label} route_canary_evidence_source must be {expected_source} "
                 "for snapshot route canary evidence"
             )
-        if payload.get("route_canary_evidence_bound") is not True:
+        if row_get("route_canary_evidence_bound") is not True:
             # Source-inventory marker: route-canary public metadata must be bound for snapshot route canary evidence
             errors.append(
                 f"{label} route_canary_evidence_bound must be true for "
@@ -5703,7 +6080,7 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
             "route_canary_raw_data_owner_matches_transaction",
             "route_canary_signature_recovers_to_owner",
         ):
-            if payload.get(field) is not True:
+            if row_get(field) is not True:
                 # Source-inventory marker: TRON route-canary public owner/signature flags must be true for TRON route canary evidence
                 errors.append(
                     f"{label} {field} must be true for TRON route canary evidence"
@@ -5712,7 +6089,7 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
             "route_canary_transaction_id",
             "route_canary_signature_sha256",
         ):
-            if not _is_nonzero_bytes32_hex_text(payload.get(field)):
+            if not _is_nonzero_bytes32_hex_text(row_get(field)):
                 # Source-inventory marker: TRON route-canary public transcript fields must be exact for TRON route canary evidence
                 errors.append(
                     f"{label} {field} must be a non-zero canonical bytes32 hex "
@@ -5722,15 +6099,15 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
             "route_canary_transaction_owner_address",
             "route_canary_signature_recovered_address",
         ):
-            if not _is_canonical_tron_address_text(payload.get(field)):
+            if not _is_canonical_tron_address_text(row_get(field)):
                 # Source-inventory marker: TRON route-canary public transcript fields must be exact for TRON route canary evidence
                 errors.append(
                     f"{label} {field} must be a non-zero canonical "
                     "0x41-prefixed 21-byte hex string for TRON route canary "
                     "evidence"
                 )
-        transaction_owner = payload.get("route_canary_transaction_owner_address")
-        signature_recovered = payload.get("route_canary_signature_recovered_address")
+        transaction_owner = row_get("route_canary_transaction_owner_address")
+        signature_recovered = row_get("route_canary_signature_recovered_address")
         if (
             _is_canonical_tron_address_text(transaction_owner)
             and _is_canonical_tron_address_text(signature_recovered)
@@ -5748,26 +6125,26 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
             "route_canary_signature_sha256",
             "route_canary_signature_recovered_address",
         ):
-            if not _public_scalar_absent(payload.get(field)):
+            if not _public_scalar_absent(row_get(field)):
                 # Source-inventory marker: TRON route-canary public transcript fields must be empty for non-TRON lanes
                 errors.append(f"{label} {field} must be empty for non-TRON lanes")
         for field in (
             "route_canary_raw_data_owner_matches_transaction",
             "route_canary_signature_recovers_to_owner",
         ):
-            if payload.get(field) is not None:
+            if row_get(field) is not None:
                 # Source-inventory marker: TRON route-canary public owner/signature flags must be null for non-TRON lanes
                 errors.append(
                     f"{label} {field} must be null for non-TRON route "
                     "canary evidence"
                 )
         for field in ("route_canary_block_number", "route_canary_block_timestamp"):
-            if payload.get(field) is not None:
+            if row_get(field) is not None:
                 # Source-inventory marker: TRON route-canary public block metadata must be null for non-TRON lanes
                 errors.append(f"{label} {field} must be null for non-TRON lanes")
     if has_evm_route_canary_evidence:
         expected_source = _route_canary_source_by_domain().get(domain)
-        route_canary_source = payload.get("route_canary_evidence_source")
+        route_canary_source = row_get("route_canary_evidence_source")
         if (
             type(route_canary_source) is not str
             or route_canary_source != expected_source
@@ -5782,13 +6159,13 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
             "route_canary_block_receipts_root",
             "route_canary_message_id",
         ):
-            if not _is_nonzero_bytes32_hex_text(payload.get(field)):
+            if not _is_nonzero_bytes32_hex_text(row_get(field)):
                 # Source-inventory marker: route-canary public EVM receipt metadata must be exact for message-proof route canary evidence
                 errors.append(
                     f"{label} {field} must be a non-zero canonical bytes32 "
                     "hex string for finalized EVM route canary evidence"
                 )
-        receipt_block_number = payload.get("route_canary_receipt_block_number")
+        receipt_block_number = row_get("route_canary_receipt_block_number")
         if (
             type(receipt_block_number) is not int
             or receipt_block_number <= 0
@@ -5799,12 +6176,12 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
                 f"{label} route_canary_receipt_block_number must be a positive "
                 "u32 integer for finalized EVM route canary evidence"
             )
-        if payload.get("route_canary_evidence_bound") is not True:
+        if row_get("route_canary_evidence_bound") is not True:
             errors.append(
                 f"{label} route_canary_evidence_bound must be true for finalized "
                 "EVM route canary evidence"
             )
-        if payload.get("route_canary_receipt_block_finalized") is not True:
+        if row_get("route_canary_receipt_block_finalized") is not True:
             errors.append(
                 f"{label} route_canary_receipt_block_finalized must be true for "
                 "finalized EVM route canary evidence"
@@ -5820,7 +6197,7 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
             "route_canary_block_receipts_root",
             "route_canary_message_id",
         ):
-            if not _public_scalar_absent(payload.get(field)):
+            if not _public_scalar_absent(row_get(field)):
                 # Source-inventory marker: route-canary public EVM receipt metadata must be empty for lanes without EVM route canary evidence
                 errors.append(
                     f"{label} {field} must be empty for lanes without EVM "
@@ -5830,7 +6207,7 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
             "route_canary_receipt_block_number",
             "route_canary_receipt_block_finalized",
         ):
-            if payload.get(field) is not None:
+            if row_get(field) is not None:
                 # Source-inventory marker: route-canary public EVM receipt metadata must be null for lanes without EVM route canary evidence
                 errors.append(
                     f"{label} {field} must be null for lanes without EVM "
@@ -5950,8 +6327,8 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
             positive=False,
         )
     )
-    audit_hashes = payload.get("source_adapter_gate_audit_hashes")
-    if "source_adapter_gate_audit_hashes" in payload:
+    audit_hashes = row_get("source_adapter_gate_audit_hashes")
+    if row_has("source_adapter_gate_audit_hashes"):
         if type(audit_hashes) is not dict:
             errors.append(f"{label} source_adapter_gate_audit_hashes must be an object")
         else:
@@ -6023,6 +6400,30 @@ def _public_copied_value_matches(actual: Any, expected: Any) -> bool:
             for actual_item, expected_item in zip(actual, expected)
         )
     return False
+
+
+def _public_copied_value_claims_binding(value: Any) -> bool:
+    """Return whether a copied public value makes a non-empty binding claim."""
+
+    if value is None:
+        return False
+    if type(value) is str:
+        return value != ""
+    if type(value) in (dict, list):
+        return bool(value)
+    if type(value) is bool:
+        return value is True
+    if type(value) is int:
+        return True
+    return True
+
+
+def _public_copied_field_claims_binding(field: str, value: Any) -> bool:
+    """Return whether a copied public field claims embedded lane binding."""
+
+    if type(value) is bool:
+        return value is True or field == "source_adapter_gate_required"
+    return _public_copied_value_claims_binding(value)
 
 
 def _cryptographic_evidence_lane_binding_bundle_errors(
@@ -6213,7 +6614,11 @@ def _cryptographic_evidence_lane_binding_bundle_errors(
                     expected = missing
                     break
                 expected = _public_mapping_get_string_key(expected, segment)
-            if expected is missing or _public_copied_value_matches(row.get(field), expected):
+            actual = row.get(field)
+            if expected is missing:
+                if not _public_copied_field_claims_binding(field, actual):
+                    continue
+            elif _public_copied_value_matches(actual, expected):
                 continue
             lane_field = ".".join(lane_path)
             errors.append(f"{row_label} {field} must match {lane_label}.{lane_field}")
@@ -6235,26 +6640,55 @@ def _submission_surface_row_bundle_errors(surface: Any, label: str) -> list[str]
     )
     _require_report_fields(payload, label, USER_PROVER_SUBMISSION_SURFACE_FIELDS, errors)
     payload = _public_mapping_string_view(payload)
-    lanes_error = _submission_surface_lanes_key_error(payload.get("lanes"), label)
-    if "lanes" in payload and lanes_error is not None:
+    # Source-inventory marker: bundle submission surface rows use exact copied keys.
+    lanes = _public_mapping_get_string_key(payload, "lanes")
+    proof_backend = _public_mapping_get_string_key(payload, "proof_backend")
+    on_chain_submission = _public_mapping_get_string_key(
+        payload,
+        "on_chain_submission",
+    )
+    sdk_helpers = _public_mapping_get_string_key(payload, "sdk_helpers")
+    helper_symbols = _public_mapping_get_string_key(payload, "sdk_helper_symbols")
+    helper_sets = _public_mapping_get_string_key(
+        payload,
+        "sdk_helper_symbols_by_sdk",
+    )
+    required_phases = _public_mapping_get_string_key(payload, "required_phases")
+    validation_status = _public_mapping_get_string_key(payload, "validation_status")
+    validation_blockers = _public_mapping_get_string_key(
+        payload,
+        "validation_blockers",
+    )
+
+    lanes_error = _submission_surface_lanes_key_error(lanes, label)
+    if _public_mapping_has_string_key(payload, "lanes") and lanes_error is not None:
         errors.append(lanes_error)
     proof_backend_error = _submission_surface_proof_backend_key_error(
-        payload.get("proof_backend"),
+        proof_backend,
         label,
     )
-    if "proof_backend" in payload and proof_backend_error is not None:
+    if (
+        _public_mapping_has_string_key(payload, "proof_backend")
+        and proof_backend_error is not None
+    ):
         errors.append(proof_backend_error)
     submission_error = _submission_surface_submission_text_error(
-        payload.get("on_chain_submission"),
+        on_chain_submission,
         label,
     )
-    if "on_chain_submission" in payload and submission_error is not None:
+    if (
+        _public_mapping_has_string_key(payload, "on_chain_submission")
+        and submission_error is not None
+    ):
         errors.append(submission_error)
     sdk_helpers_error = _submission_surface_sdk_helpers_text_error(
-        payload.get("sdk_helpers"),
+        sdk_helpers,
         label,
     )
-    if "sdk_helpers" in payload and sdk_helpers_error is not None:
+    if (
+        _public_mapping_has_string_key(payload, "sdk_helpers")
+        and sdk_helpers_error is not None
+    ):
         errors.append(sdk_helpers_error)
 
     errors.extend(
@@ -6267,11 +6701,10 @@ def _submission_surface_row_bundle_errors(surface: Any, label: str) -> list[str]
     )
     errors.extend(
         _submission_surface_helper_symbol_list_errors(
-            payload.get("sdk_helper_symbols"),
+            helper_symbols,
             f"{label} sdk_helper_symbols",
         )
     )
-    helper_symbols = payload.get("sdk_helper_symbols")
     if type(helper_symbols) is list and all(
         _submission_surface_helper_symbol_error(
             item,
@@ -6281,11 +6714,9 @@ def _submission_surface_row_bundle_errors(surface: Any, label: str) -> list[str]
         for item in helper_symbols
     ):
         expected_helpers = ", ".join(helper_symbols)
-        sdk_helpers = payload.get("sdk_helpers")
         if type(sdk_helpers) is not str or sdk_helpers != expected_helpers:
             errors.append(f"{label} sdk_helpers must match sdk_helper_symbols")
 
-    helper_sets = payload.get("sdk_helper_symbols_by_sdk")
     if type(helper_sets) is not dict:
         errors.append(f"{label} sdk_helper_symbols_by_sdk must be an object")
     else:
@@ -6352,7 +6783,6 @@ def _submission_surface_row_bundle_errors(surface: Any, label: str) -> list[str]
             allow_empty=False,
         )
     )
-    required_phases = payload.get("required_phases")
     if type(required_phases) is list and all(
         type(item) is str and item for item in required_phases
     ):
@@ -6377,18 +6807,21 @@ def _submission_surface_row_bundle_errors(surface: Any, label: str) -> list[str]
         for phase in sorted(set(semantic_phases) - known_phases):
             errors.append(f"{phase_label} contains unknown phase: {phase}")
 
-    validation_status = payload.get("validation_status")
     validation_status_passed = (
         type(validation_status) is str and validation_status == "passed"
     )
-    if "validation_status" in payload and (
-        type(validation_status) is not str
-        or validation_status not in {"passed", "blocked"}
+    validation_status_valid = (
+        type(validation_status) is str
+        and validation_status in {"passed", "blocked"}
+    )
+    if (
+        _public_mapping_has_string_key(payload, "validation_status")
+        and not validation_status_valid
     ):
         errors.append(f"{label} validation_status must be passed or blocked")
     elif not validation_status_passed:
         errors.append(f"{label} validation_status must be passed")
-    if "validation_blockers" in payload:
+    if _public_mapping_has_string_key(payload, "validation_blockers"):
         errors.extend(
             _string_list_field_errors(
                 label,
@@ -6399,11 +6832,10 @@ def _submission_surface_row_bundle_errors(surface: Any, label: str) -> list[str]
         )
         errors.extend(
             _submission_surface_validation_blocker_list_errors(
-                payload.get("validation_blockers"),
+                validation_blockers,
                 label,
             )
         )
-        validation_blockers = payload.get("validation_blockers")
         if (
             validation_status_passed
             and type(validation_blockers) is list
@@ -6411,6 +6843,15 @@ def _submission_surface_row_bundle_errors(surface: Any, label: str) -> list[str]
         ):
             errors.append(
                 f"{label} validation_blockers must be empty when validation_status is passed"
+            )
+        if (
+            type(validation_status) is str
+            and validation_status == "blocked"
+            and type(validation_blockers) is list
+            and not validation_blockers
+        ):
+            errors.append(
+                f"{label} validation_blockers must be non-empty when validation_status is blocked"
             )
         if type(validation_blockers) is list and validation_blockers:
             errors.append(f"{label} validation_blockers must be empty")
@@ -6593,7 +7034,7 @@ def _native_evm_prover_binding_bundle_errors(
         return [
             f"{label}.native_evm_prover_bundle cannot be recomputed without bundle directory"
         ]
-    evidence = report.get("evidence")
+    evidence = _public_mapping_get_string_key(report, "evidence")
     if type(evidence) is not dict:
         evidence = {}
     try:
@@ -6675,8 +7116,13 @@ def _corridor_phase_transcript_bundle_errors(
         return [
             f"{label}.corridor phase evidence cannot be checked: missing bundle directory"
         ]
-    phases = corridor.get("phases")
-    evidence_artifacts = corridor.get("evidence_artifacts")
+    corridor = _public_mapping_string_view(corridor) if type(corridor) is dict else {}
+    # Source-inventory marker: corridor phase transcripts use exact copied corridor keys.
+    phases = _public_mapping_get_string_key(corridor, "phases")
+    evidence_artifacts = _public_mapping_get_string_key(
+        corridor,
+        "evidence_artifacts",
+    )
     if type(phases) is not dict or type(evidence_artifacts) is not dict:
         return []
     phases = _public_mapping_string_view(phases)
@@ -6684,7 +7130,7 @@ def _corridor_phase_transcript_bundle_errors(
     errors: list[str] = []
     verifier = _verify_module()
     for phase, status in phases.items():
-        if status != "passed":
+        if not _corridor_phase_status_is_exact_passed(status):
             continue
         phase_error = _corridor_phase_key_error(
             phase,
@@ -6716,7 +7162,8 @@ def _bundled_artifact_integrity_errors(
     if type(artifact) is not dict:
         return []
     artifact = _public_mapping_string_view(artifact)
-    artifact_path = artifact.get("path")
+    # Source-inventory marker: bundle artifact schema and integrity use exact public artifact keys.
+    artifact_path = _public_mapping_get_string_key(artifact, "path")
     if type(artifact_path) is not str or not artifact_path:
         return []
     if (
@@ -6748,7 +7195,7 @@ def _bundled_artifact_integrity_errors(
         return [f"{label} artifact file is missing"]
 
     errors: list[str] = []
-    expected_bytes = artifact.get("bytes")
+    expected_bytes = _public_mapping_get_string_key(artifact, "bytes")
     if type(expected_bytes) is int and expected_bytes >= 0:
         actual_bytes = path.stat().st_size
         if expected_bytes != actual_bytes:
@@ -6756,7 +7203,7 @@ def _bundled_artifact_integrity_errors(
                 f"{label} artifact byte length mismatch: "
                 f"expected {expected_bytes}, got {actual_bytes}"
             )
-    expected_hash = artifact.get("sha256")
+    expected_hash = _public_mapping_get_string_key(artifact, "sha256")
     if _is_nonzero_canonical_sha256_text(expected_hash):
         actual_hash = hashlib.sha256(path.read_bytes()).hexdigest()
         if expected_hash != actual_hash:
@@ -6778,9 +7225,13 @@ def _release_report_artifact_integrity_bundle_errors(
     if type(payload) is not dict:
         return []
     payload = _public_mapping_string_view(payload)
+    # Source-inventory marker: release report artifact integrity uses exact copied report keys.
+    def report_get(field: str, default: Any = None) -> Any:
+        return _public_mapping_get_string_key(payload, field, default)
+
     errors: list[str] = []
 
-    input_artifacts = payload.get("input_artifacts")
+    input_artifacts = report_get("input_artifacts")
     if type(input_artifacts) is list:
         for index, artifact in enumerate(input_artifacts):
             errors.extend(
@@ -6791,10 +7242,13 @@ def _release_report_artifact_integrity_bundle_errors(
                 )
             )
 
-    corridor = payload.get("corridor")
+    corridor = report_get("corridor")
     if type(corridor) is dict:
         corridor = _public_mapping_string_view(corridor)
-        phase_artifacts = corridor.get("evidence_artifacts")
+        phase_artifacts = _public_mapping_get_string_key(
+            corridor,
+            "evidence_artifacts",
+        )
         if type(phase_artifacts) is dict:
             for phase, artifact in phase_artifacts.items():
                 phase_error = _corridor_phase_key_error(
@@ -6814,7 +7268,7 @@ def _release_report_artifact_integrity_bundle_errors(
                     )
                 )
 
-    native_summary = payload.get("native_evm_prover_bundle")
+    native_summary = _public_mapping_get_string_key(payload, "native_evm_prover_bundle")
     if type(native_summary) is dict:
         native_summary = _public_mapping_string_view(native_summary)
         for field in (
@@ -6827,12 +7281,12 @@ def _release_report_artifact_integrity_bundle_errors(
         ):
             errors.extend(
                 _bundled_artifact_integrity_errors(
-                    native_summary.get(field),
+                    _public_mapping_get_string_key(native_summary, field),
                     bundle_dir,
                     f"{label}.native_evm_prover_bundle.{field}",
                 )
             )
-        sdk_artifacts = native_summary.get("sdk_artifacts")
+        sdk_artifacts = _public_mapping_get_string_key(native_summary, "sdk_artifacts")
         if type(sdk_artifacts) is list:
             for index, row in enumerate(sdk_artifacts):
                 if type(row) is not dict:
@@ -6840,7 +7294,10 @@ def _release_report_artifact_integrity_bundle_errors(
                 row = _public_mapping_string_view(row)
                 errors.extend(
                     _bundled_artifact_integrity_errors(
-                        row.get("implementation_artifact"),
+                        _public_mapping_get_string_key(
+                            row,
+                            "implementation_artifact",
+                        ),
                         bundle_dir,
                         (
                             f"{label}.native_evm_prover_bundle."
@@ -6975,23 +7432,27 @@ def _all_lanes_nested_bundle_errors(
     label: str,
 ) -> list[str]:
     errors: list[str] = []
+    lane = _public_mapping_string_view(lane)
     field_sets = _all_lanes_nested_field_sets()
-    raw_domain = lane.get("domain")
+    raw_domain = _public_mapping_get_string_key(lane, "domain")
     domain = raw_domain if type(raw_domain) is int else None
     enforce_governed_hash_semantics = (
         domain == _active_launch_domain()
-        or lane.get("production_ready") is True
+        or _public_mapping_get_string_key(lane, "production_ready") is True
     )
-    records = lane.get("records")
-    record_flags = records if type(records) is dict else {}
+    records = _public_mapping_get_string_key(lane, "records")
+    record_flags = _public_mapping_string_view(records) if type(records) is dict else {}
     copied_source_records_present = (
-        record_flags.get("source_verifier_material") is True
-        and record_flags.get("source_adapter_deployment") is True
+        _public_mapping_get_string_key(record_flags, "source_verifier_material") is True
+        and _public_mapping_get_string_key(record_flags, "source_adapter_deployment")
+        is True
     )
     copied_destination_record_present = (
-        record_flags.get("destination_rollout") is True
+        _public_mapping_get_string_key(record_flags, "destination_rollout") is True
     )
-    copied_route_record_present = record_flags.get("route_allowlist") is True
+    copied_route_record_present = (
+        _public_mapping_get_string_key(record_flags, "route_allowlist") is True
+    )
 
     def required_fields_for_copied_nested(
         field: str,
@@ -6999,7 +7460,7 @@ def _all_lanes_nested_bundle_errors(
         *,
         record_present: bool = False,
     ) -> frozenset[str]:
-        value = lane.get(field)
+        value = _public_mapping_get_string_key(lane, field)
         if enforce_governed_hash_semantics:
             return required_fields
         if record_present:
@@ -7009,7 +7470,7 @@ def _all_lanes_nested_bundle_errors(
         return frozenset()
 
     source_hashes = _all_lanes_object(
-        lane.get("source_record_hashes"),
+        _public_mapping_get_string_key(lane, "source_record_hashes"),
         f"{label}.source_record_hashes",
         field_sets["source_record_hashes"],
         required_fields_for_copied_nested(
@@ -7040,7 +7501,7 @@ def _all_lanes_nested_bundle_errors(
     )
 
     source_gate = _all_lanes_object(
-        lane.get("source_adapter_gate"),
+        _public_mapping_get_string_key(lane, "source_adapter_gate"),
         f"{label}.source_adapter_gate",
         field_sets["source_adapter_gate"],
         required_fields_for_copied_nested(
@@ -7050,7 +7511,9 @@ def _all_lanes_nested_bundle_errors(
         errors,
     )
     for field in ("required", "ready"):
-        if field in source_gate and type(source_gate.get(field)) is not bool:
+        if _public_mapping_has_string_key(source_gate, field) and type(
+            _public_mapping_get_string_key(source_gate, field)
+        ) is not bool:
             errors.append(f"{label}.source_adapter_gate {field} must be true or false")
     errors.extend(
         _optional_nonzero_bytes32_field_errors(
@@ -7067,8 +7530,9 @@ def _all_lanes_nested_bundle_errors(
             allow_empty=True,
         )
     )
-    audit_hashes = source_gate.get("audit_hashes")
-    if "audit_hashes" in source_gate:
+    # Source-inventory marker: bundle source adapter gate metadata uses exact copied gate keys.
+    audit_hashes = _public_mapping_get_string_key(source_gate, "audit_hashes")
+    if _public_mapping_has_string_key(source_gate, "audit_hashes"):
         audit_label = f"{label}.source_adapter_gate audit_hashes"
         if type(audit_hashes) is not dict:
             errors.append(f"{audit_label} must be an object")
@@ -7104,7 +7568,7 @@ def _all_lanes_nested_bundle_errors(
             ) = _source_adapter_gate_audit_keys_for_domain_chain_or_errors(
                 f"{label}.source_adapter_gate",
                 domain,
-                lane.get("chain"),
+                _public_mapping_get_string_key(lane, "chain"),
             )
             errors.extend(audit_requirement_errors)
             if expected_audit_keys is not None:
@@ -7118,7 +7582,7 @@ def _all_lanes_nested_bundle_errors(
             _source_adapter_gate_template_hash_errors(
                 f"{label}.source_adapter_gate gate_hash",
                 domain,
-                source_gate.get("gate_hash"),
+                _public_mapping_get_string_key(source_gate, "gate_hash"),
             )
         )
         if type(audit_hashes) is dict:
@@ -7131,11 +7595,19 @@ def _all_lanes_nested_bundle_errors(
             )
     if (
         enforce_governed_hash_semantics
-        and source_gate.get("ready") is True
-        and type(source_gate.get("blockers")) is list
-        and source_gate.get("blockers")
+        and _public_mapping_get_string_key(source_gate, "ready") is True
+        and type(_public_mapping_get_string_key(source_gate, "blockers")) is list
+        and _public_mapping_get_string_key(source_gate, "blockers")
     ):
         errors.append(f"{label}.source_adapter_gate blockers must be empty when ready")
+    if (
+        _public_mapping_get_string_key(source_gate, "ready") is False
+        and type(_public_mapping_get_string_key(source_gate, "blockers")) is list
+        and not _public_mapping_get_string_key(source_gate, "blockers")
+    ):
+        errors.append(
+            f"{label}.source_adapter_gate blockers must be non-empty when ready is false"
+        )
     if enforce_governed_hash_semantics:
         errors.extend(
             _source_adapter_gate_semantic_errors(
@@ -7147,7 +7619,7 @@ def _all_lanes_nested_bundle_errors(
         )
 
     evm_live = _all_lanes_object(
-        lane.get("evm_live_metadata"),
+        _public_mapping_get_string_key(lane, "evm_live_metadata"),
         f"{label}.evm_live_metadata",
         field_sets["evm_live_metadata"],
         required_fields_for_copied_nested(
@@ -7157,7 +7629,9 @@ def _all_lanes_nested_bundle_errors(
         errors,
     )
     for field in ("required", "ready"):
-        if field in evm_live and type(evm_live.get(field)) is not bool:
+        if _public_mapping_has_string_key(evm_live, field) and type(
+            _public_mapping_get_string_key(evm_live, field)
+        ) is not bool:
             errors.append(f"{label}.evm_live_metadata {field} must be true or false")
     for field in (
         "source_rpc_chain_id",
@@ -7173,23 +7647,29 @@ def _all_lanes_nested_bundle_errors(
                 allow_empty=True,
             )
         )
+    # Source-inventory marker: bundle EVM live metadata uses exact copied keys.
+    evm_live_required = _public_mapping_get_string_key(evm_live, "required")
+    evm_live_ready = _public_mapping_get_string_key(evm_live, "ready")
     if domain in _all_lanes_evm_destination_domains():
         if (
             enforce_governed_hash_semantics
-            and "required" in evm_live
-            and evm_live.get("required") is not True
+            and _public_mapping_has_string_key(evm_live, "required")
+            and evm_live_required is not True
         ):
             errors.append(f"{label}.evm_live_metadata required must be true")
         if (
             enforce_governed_hash_semantics
             and domain == _active_launch_domain()
-            and "ready" in evm_live
-            and evm_live.get("ready") is not True
+            and _public_mapping_has_string_key(evm_live, "ready")
+            and evm_live_ready is not True
         ):
             errors.append(f"{label}.evm_live_metadata ready must be true")
-        expected_chain_id = _expected_evm_rpc_chain_id(domain, lane.get("chain"))
+        expected_chain_id = _expected_evm_rpc_chain_id(
+            domain,
+            _public_mapping_get_string_key(lane, "chain"),
+        )
         for field in ("source_rpc_chain_id", "destination_rpc_chain_id"):
-            value = evm_live.get(field)
+            value = _public_mapping_get_string_key(evm_live, field)
             if enforce_governed_hash_semantics and not value:
                 errors.append(f"{label}.evm_live_metadata {field} must be present")
             elif not _public_scalar_absent(value) and type(value) is str and (
@@ -7201,24 +7681,32 @@ def _all_lanes_nested_bundle_errors(
                     f"must be canonical chain id {expected_chain_id}"
                 )
         for field in ("source_block_tag", "destination_block_tag"):
-            if enforce_governed_hash_semantics and not evm_live.get(field):
+            value = _public_mapping_get_string_key(evm_live, field)
+            if enforce_governed_hash_semantics and not value:
                 errors.append(f"{label}.evm_live_metadata {field} must be present")
         if domain == _sccp_domain_eth():
             for field in ("source_block_tag", "destination_block_tag"):
+                value = _public_mapping_get_string_key(evm_live, field)
                 if (
                     enforce_governed_hash_semantics
-                    and evm_live.get(field) != "finalized"
+                    and value != "finalized"
                 ):
                     errors.append(
                         f"{label}.evm_live_metadata {field} "
                         "must be finalized for Ethereum mainnet"
                     )
     else:
-        if "required" in evm_live and evm_live.get("required") is not False:
+        if (
+            _public_mapping_has_string_key(evm_live, "required")
+            and evm_live_required is not False
+        ):
             errors.append(
                 f"{label}.evm_live_metadata required must be false for non-EVM lanes"
             )
-        if "ready" in evm_live and evm_live.get("ready") is not True:
+        if (
+            _public_mapping_has_string_key(evm_live, "ready")
+            and evm_live_ready is not True
+        ):
             errors.append(
                 f"{label}.evm_live_metadata ready must be true for non-EVM lanes"
             )
@@ -7228,7 +7716,9 @@ def _all_lanes_nested_bundle_errors(
             "destination_rpc_chain_id",
             "destination_block_tag",
         ):
-            if not _public_scalar_absent(evm_live.get(field)):
+            if not _public_scalar_absent(
+                _public_mapping_get_string_key(evm_live, field)
+            ):
                 errors.append(
                     f"{label}.evm_live_metadata {field} must be empty "
                     "for non-EVM lanes"
@@ -7242,7 +7732,7 @@ def _all_lanes_nested_bundle_errors(
     elif domain == _sccp_domain_tron():
         destination_required_fields.add("destination_network_id")
     destination_binding = _all_lanes_object(
-        lane.get("destination_binding"),
+        _public_mapping_get_string_key(lane, "destination_binding"),
         f"{label}.destination_binding",
         field_sets["destination_binding"],
         required_fields_for_copied_nested(
@@ -7279,8 +7769,9 @@ def _all_lanes_nested_bundle_errors(
             )
         )
     if (
-        "destination_network_id" in destination_binding
-        and destination_binding.get("destination_network_id") is not None
+        _public_mapping_has_string_key(destination_binding, "destination_network_id")
+        and _public_mapping_get_string_key(destination_binding, "destination_network_id")
+        is not None
     ):
         errors.extend(
             _string_field_errors(
@@ -7293,11 +7784,17 @@ def _all_lanes_nested_bundle_errors(
     if enforce_governed_hash_semantics:
         binding_label = f"{label}.destination_binding"
         if domain in _all_lanes_evm_destination_domains():
-            if "destination_network_id" not in destination_binding:
+            if not _public_mapping_has_string_key(
+                destination_binding,
+                "destination_network_id",
+            ):
                 errors.append(
                     f"{binding_label} destination_network_id is required for EVM-family lanes"
                 )
-            if "destination_bridge_address" not in destination_binding:
+            if not _public_mapping_has_string_key(
+                destination_binding,
+                "destination_bridge_address",
+            ):
                 errors.append(
                     f"{binding_label} destination_bridge_address is required for EVM-family lanes"
                 )
@@ -7320,7 +7817,10 @@ def _all_lanes_nested_bundle_errors(
                 )
             )
         elif domain == _sccp_domain_tron():
-            if "destination_network_id" not in destination_binding:
+            if not _public_mapping_has_string_key(
+                destination_binding,
+                "destination_network_id",
+            ):
                 errors.append(
                     f"{binding_label} destination_network_id is required for TRON lanes"
                 )
@@ -7333,16 +7833,25 @@ def _all_lanes_nested_bundle_errors(
                     type_label="bytes32",
                 )
             )
-            if "destination_bridge_address" in destination_binding:
+            if _public_mapping_has_string_key(
+                destination_binding,
+                "destination_bridge_address",
+            ):
                 errors.append(
                     f"{binding_label} destination_bridge_address is only valid for EVM-family lanes"
                 )
         elif domain in (_sccp_domain_sol(), _sccp_domain_ton()):
-            if "destination_network_id" in destination_binding:
+            if _public_mapping_has_string_key(
+                destination_binding,
+                "destination_network_id",
+            ):
                 errors.append(
                     f"{binding_label} destination_network_id is only valid for EVM-family or TRON lanes"
                 )
-            if "destination_bridge_address" in destination_binding:
+            if _public_mapping_has_string_key(
+                destination_binding,
+                "destination_bridge_address",
+            ):
                 errors.append(
                     f"{binding_label} destination_bridge_address is only valid for EVM-family lanes"
                 )
@@ -7356,20 +7865,26 @@ def _all_lanes_nested_bundle_errors(
         )
     for field in ("expected_destination_binding_hash_matches", "recomputed"):
         if (
-            field in destination_binding
-            and type(destination_binding.get(field)) is not bool
+            _public_mapping_has_string_key(destination_binding, field)
+            and type(_public_mapping_get_string_key(destination_binding, field))
+            is not bool
         ):
             errors.append(
                 f"{label}.destination_binding {field} must be true or false"
             )
         elif (
             enforce_governed_hash_semantics
-            and field in destination_binding
-            and destination_binding.get(field) is not True
+            and _public_mapping_has_string_key(destination_binding, field)
+            and _public_mapping_get_string_key(destination_binding, field) is not True
         ):
             errors.append(f"{label}.destination_binding {field} must be true")
-    destination_hash = destination_binding.get("destination_binding_hash")
-    expected_destination_hash = destination_binding.get(
+    # Source-inventory marker: bundle destination binding metadata uses exact copied destination keys.
+    destination_hash = _public_mapping_get_string_key(
+        destination_binding,
+        "destination_binding_hash",
+    )
+    expected_destination_hash = _public_mapping_get_string_key(
+        destination_binding,
         "expected_destination_binding_hash"
     )
     # Source-inventory marker: expected_destination_binding_hash must match destination_binding_hash
@@ -7422,7 +7937,7 @@ def _all_lanes_nested_bundle_errors(
     )
 
     route_allowlist = _all_lanes_object(
-        lane.get("route_allowlist"),
+        _public_mapping_get_string_key(lane, "route_allowlist"),
         f"{label}.route_allowlist",
         field_sets["route_allowlist"],
         required_fields_for_copied_nested(
@@ -7445,8 +7960,16 @@ def _all_lanes_nested_bundle_errors(
                 )
             )
     if (
-        "expected_route_allowlist_hash_matches" in route_allowlist
-        and type(route_allowlist.get("expected_route_allowlist_hash_matches"))
+        _public_mapping_has_string_key(
+            route_allowlist,
+            "expected_route_allowlist_hash_matches",
+        )
+        and type(
+            _public_mapping_get_string_key(
+                route_allowlist,
+                "expected_route_allowlist_hash_matches",
+            )
+        )
         is not bool
     ):
         errors.append(
@@ -7455,15 +7978,28 @@ def _all_lanes_nested_bundle_errors(
         )
     elif (
         enforce_governed_hash_semantics
-        and "expected_route_allowlist_hash_matches" in route_allowlist
-        and route_allowlist.get("expected_route_allowlist_hash_matches") is not True
+        and _public_mapping_has_string_key(
+            route_allowlist,
+            "expected_route_allowlist_hash_matches",
+        )
+        and _public_mapping_get_string_key(
+            route_allowlist,
+            "expected_route_allowlist_hash_matches",
+        )
+        is not True
     ):
         errors.append(
             f"{label}.route_allowlist expected_route_allowlist_hash_matches "
             "must be true"
     )
-    route_hash = route_allowlist.get("route_allowlist_hash")
-    expected_route_hash = route_allowlist.get("expected_route_allowlist_hash")
+    route_hash = _public_mapping_get_string_key(
+        route_allowlist,
+        "route_allowlist_hash",
+    )
+    expected_route_hash = _public_mapping_get_string_key(
+        route_allowlist,
+        "expected_route_allowlist_hash",
+    )
     # Source-inventory marker: expected_route_allowlist_hash must match route_allowlist_hash
     errors.extend(
         _matching_nonzero_bytes32_field_errors(
@@ -7503,7 +8039,10 @@ def _all_lanes_nested_bundle_errors(
             evidence_label="route binding evidence",
         )
     )
-    route_canary_value = route_allowlist.get("route_canary")
+    route_canary_value = _public_mapping_get_string_key(
+        route_allowlist,
+        "route_canary",
+    )
     if enforce_governed_hash_semantics or route_canary_value is not None:
         route_canary = _all_lanes_object(
             route_canary_value,
@@ -7568,7 +8107,9 @@ def _all_lanes_nested_bundle_errors(
         "raw_data_owner_matches_transaction",
         "signature_recovers_to_owner",
     ):
-        if field in route_canary and type(route_canary.get(field)) is not bool:
+        if _public_mapping_has_string_key(route_canary, field) and type(
+            _public_mapping_get_string_key(route_canary, field)
+        ) is not bool:
             errors.append(
                 f"{label}.route_allowlist.route_canary {field} must be true or false"
             )
@@ -7702,7 +8243,8 @@ def _all_lanes_summary_bundle_errors(summary: Any, label: str) -> list[str]:
     )
     _require_report_fields(payload, label, ALL_LANES_SUMMARY_FIELDS, errors)
     payload = _public_mapping_string_view(payload)
-    if type(payload.get("production_ready")) is not bool:
+    production_ready = _public_mapping_get_string_key(payload, "production_ready")
+    if type(production_ready) is not bool:
         errors.append(f"{label} production_ready must be true or false")
     errors.extend(_launch_domain_list_bundle_errors(label, payload))
     errors.extend(
@@ -7713,20 +8255,19 @@ def _all_lanes_summary_bundle_errors(summary: Any, label: str) -> list[str]:
             allow_empty=True,
         )
     )
-    blockers = payload.get("blockers")
-    if (
-        payload.get("production_ready") is True
-        and type(blockers) is list
-        and blockers
-    ):
+    blockers = _public_mapping_get_string_key(payload, "blockers")
+    if production_ready is True and type(blockers) is list and blockers:
         errors.append(f"{label} blockers must be empty when production_ready is true")
+    if production_ready is False and type(blockers) is list and not blockers:
+        errors.append(f"{label} blockers must be non-empty when production_ready is false")
 
+    release_checklist = _public_mapping_get_string_key(payload, "release_checklist")
     checklist = _require_report_mapping(
-        payload.get("release_checklist"),
+        release_checklist,
         f"{label}.release_checklist",
         errors,
     )
-    if type(payload.get("release_checklist")) is dict:
+    if type(release_checklist) is dict:
         errors.extend(
             _release_checklist_bundle_errors(
                 checklist,
@@ -7735,7 +8276,11 @@ def _all_lanes_summary_bundle_errors(summary: Any, label: str) -> list[str]:
             )
         )
 
-    lanes = _require_report_list(payload.get("lanes"), f"{label}.lanes", errors)
+    lanes = _require_report_list(
+        _public_mapping_get_string_key(payload, "lanes"),
+        f"{label}.lanes",
+        errors,
+    )
     for index, lane in enumerate(lanes):
         lane_label = f"{label}.lanes[{index}]"
         lane_payload = _require_report_mapping(lane, lane_label, errors)
@@ -7750,9 +8295,12 @@ def _all_lanes_summary_bundle_errors(summary: Any, label: str) -> list[str]:
         )
         _require_report_fields(lane_payload, lane_label, ALL_LANES_LANE_FIELDS, errors)
         lane_payload = _public_mapping_string_view(lane_payload)
-        if "domain" in lane_payload and type(lane_payload.get("domain")) is not int:
+        lane_domain = _public_mapping_get_string_key(lane_payload, "domain")
+        if _public_mapping_has_string_key(lane_payload, "domain") and type(
+            lane_domain
+        ) is not int:
             errors.append(f"{lane_label} domain must be an integer")
-        if "chain" in lane_payload:
+        if _public_mapping_has_string_key(lane_payload, "chain"):
             errors.extend(
                 _non_empty_string_field_errors(
                     lane_label,
@@ -7760,8 +8308,12 @@ def _all_lanes_summary_bundle_errors(summary: Any, label: str) -> list[str]:
                     "chain",
                 )
             )
-        if "production_ready" in lane_payload and type(
-            lane_payload.get("production_ready")
+        lane_production_ready = _public_mapping_get_string_key(
+            lane_payload,
+            "production_ready",
+        )
+        if _public_mapping_has_string_key(lane_payload, "production_ready") and type(
+            lane_production_ready
         ) is not bool:
             errors.append(f"{lane_label} production_ready must be true or false")
         errors.extend(
@@ -7772,22 +8324,31 @@ def _all_lanes_summary_bundle_errors(summary: Any, label: str) -> list[str]:
                 allow_empty=True,
             )
         )
-        lane_blockers = lane_payload.get("blockers")
+        lane_blockers = _public_mapping_get_string_key(lane_payload, "blockers")
         if (
-            lane_payload.get("production_ready") is True
+            lane_production_ready is True
             and type(lane_blockers) is list
             and lane_blockers
         ):
             errors.append(
                 f"{lane_label} blockers must be empty when production_ready is true"
             )
+        if (
+            lane_production_ready is False
+            and type(lane_blockers) is list
+            and not lane_blockers
+        ):
+            errors.append(
+                f"{lane_label} blockers must be non-empty when production_ready is false"
+            )
 
+        lane_records = _public_mapping_get_string_key(lane_payload, "records")
         records = _require_report_mapping(
-            lane_payload.get("records"),
+            lane_records,
             f"{lane_label}.records",
             errors,
         )
-        if type(lane_payload.get("records")) is dict:
+        if type(lane_records) is dict:
             errors.extend(
                 _unknown_public_field_errors(
                     records,
@@ -7803,14 +8364,17 @@ def _all_lanes_summary_bundle_errors(summary: Any, label: str) -> list[str]:
             )
             records = _public_mapping_string_view(records)
             for field in ALL_LANES_RECORD_FIELDS:
-                if field in records and type(records.get(field)) is not bool:
+                record_value = _public_mapping_get_string_key(records, field)
+                if _public_mapping_has_string_key(records, field) and type(
+                    record_value
+                ) is not bool:
                     errors.append(
                         f"{lane_label}.records {field} must be true or false"
                     )
                 elif (
-                    lane_payload.get("production_ready") is True
-                    and field in records
-                    and records.get(field) is not True
+                    lane_production_ready is True
+                    and _public_mapping_has_string_key(records, field)
+                    and record_value is not True
                 ):
                     errors.append(f"{lane_label}.records {field} must be true")
 
@@ -7830,7 +8394,7 @@ def _all_lanes_summary_output_bundle_errors(
     if type(summary) is not dict:
         return errors
     report = _public_mapping_string_view(report)
-    report_evidence = report.get("evidence")
+    report_evidence = _public_mapping_get_string_key(report, "evidence")
     if type(report_evidence) is not dict:
         errors.append(
             f"{label} cannot be compared: bundled report evidence is not an object"
@@ -7857,19 +8421,45 @@ def _release_report_bundle_errors(
     _require_report_fields(payload, label, READINESS_REPORT_BUNDLE_FIELDS, errors)
     payload = _public_mapping_string_view(payload)
 
-    _require_report_list(payload.get("inputs"), f"{label}.inputs", errors)
+    inputs = _public_mapping_get_string_key(payload, "inputs")
+    input_artifacts = _public_mapping_get_string_key(payload, "input_artifacts")
+    release_checklist = _public_mapping_get_string_key(payload, "release_checklist")
+    corridor_value = _public_mapping_get_string_key(payload, "corridor")
+    cryptographic_evidence = _public_mapping_get_string_key(
+        payload,
+        "cryptographic_evidence",
+    )
+    user_prover_submission_surfaces = _public_mapping_get_string_key(
+        payload,
+        "user_prover_submission_surfaces",
+    )
+    native_summary = _public_mapping_get_string_key(
+        payload,
+        "native_evm_prover_bundle",
+    )
+    source_inventory_value = _public_mapping_get_string_key(
+        payload,
+        "source_inventory",
+    )
+    evidence_summary = _public_mapping_get_string_key(payload, "evidence")
+
+    _require_report_list(inputs, f"{label}.inputs", errors)
     for index, artifact in enumerate(
-        _require_report_list(payload.get("input_artifacts"), f"{label}.input_artifacts", errors)
+        _require_report_list(
+            input_artifacts,
+            f"{label}.input_artifacts",
+            errors,
+        )
     ):
         errors.extend(_artifact_row_errors(artifact, f"{label}.input_artifacts[{index}]"))
     errors.extend(_copied_input_provenance_bundle_errors(payload, label))
 
     checklist = _require_report_mapping(
-        payload.get("release_checklist"),
+        release_checklist,
         f"{label}.release_checklist",
         errors,
     )
-    if type(payload.get("release_checklist")) is dict:
+    if type(release_checklist) is dict:
         checklist_errors = _release_checklist_bundle_errors(
             checklist,
             f"{label}.release_checklist",
@@ -7879,8 +8469,8 @@ def _release_report_bundle_errors(
     else:
         checklist_errors = []
 
-    corridor = _require_report_mapping(payload.get("corridor"), f"{label}.corridor", errors)
-    if type(payload.get("corridor")) is dict:
+    corridor = _require_report_mapping(corridor_value, f"{label}.corridor", errors)
+    if type(corridor_value) is dict:
         errors.extend(
             _unknown_public_field_errors(
                 corridor,
@@ -7895,15 +8485,24 @@ def _release_report_bundle_errors(
             errors,
         )
         corridor = _public_mapping_string_view(corridor)
-        if type(corridor.get("production_ready")) is not bool:
+        corridor_production_ready = _public_mapping_get_string_key(
+            corridor,
+            "production_ready",
+        )
+        corridor_require_phase_evidence = _public_mapping_get_string_key(
+            corridor,
+            "require_phase_evidence",
+        )
+        corridor_blockers = _public_mapping_get_string_key(corridor, "blockers")
+        if type(corridor_production_ready) is not bool:
             errors.append(f"{label}.corridor production_ready must be true or false")
-        elif corridor.get("production_ready") is not True:
+        elif corridor_production_ready is not True:
             errors.append(f"{label} production corridor is not ready")
-        if type(corridor.get("require_phase_evidence")) is not bool:
+        if type(corridor_require_phase_evidence) is not bool:
             errors.append(
                 f"{label}.corridor require_phase_evidence must be true or false"
             )
-        elif corridor.get("require_phase_evidence") is not True:
+        elif corridor_require_phase_evidence is not True:
             errors.append(f"{label} does not require hashed phase evidence")
         errors.extend(
             _public_blocker_list_field_errors(
@@ -7913,9 +8512,8 @@ def _release_report_bundle_errors(
                 allow_empty=True,
             )
         )
-        corridor_blockers = corridor.get("blockers")
         if (
-            corridor.get("production_ready") is True
+            corridor_production_ready is True
             and type(corridor_blockers) is list
             and corridor_blockers
         ):
@@ -7923,12 +8521,17 @@ def _release_report_bundle_errors(
                 f"{label}.corridor blockers must be empty when production_ready is true"
             )
         phases = _require_report_mapping(
-            corridor.get("phases"), f"{label}.corridor.phases", errors
+            _public_mapping_get_string_key(corridor, "phases"),
+            f"{label}.corridor.phases",
+            errors,
         )
         known_corridor_phases = _corridor_phase_names()
         phase_key_errors: list[str] = []
         phases_label = f"{label}.corridor.phases"
-        for phase in sorted(phases, key=_safe_public_key_sort_key):
+        for phase, status in sorted(
+            phases.items(),
+            key=lambda item: _safe_public_key_sort_key(item[0]),
+        ):
             phase_error = _corridor_phase_key_error(
                 phase,
                 phases_label,
@@ -7937,8 +8540,8 @@ def _release_report_bundle_errors(
                 phase_key_errors.append(phase_error)
             elif phase not in known_corridor_phases:
                 errors.append(f"{label}.corridor has unknown phase status: {phase}")
-            status = phases.get(phase)
-            if status not in {"passed", "blocked"}:
+            status_is_passed = _corridor_phase_status_is_exact_passed(status)
+            if not _corridor_phase_status_is_valid(status):
                 if phase_error is None:
                     errors.append(
                         f"{label}.corridor phase {phase} status must be passed or blocked"
@@ -7947,7 +8550,7 @@ def _release_report_bundle_errors(
                     errors.append(
                         f"{label}.corridor phase status must be passed or blocked"
                     )
-            elif corridor.get("production_ready") is True and status != "passed":
+            elif corridor_production_ready is True and not status_is_passed:
                 if phase_error is None:
                     errors.append(
                         f"{label}.corridor phase {phase} is not passed: {status!r}"
@@ -7963,7 +8566,7 @@ def _release_report_bundle_errors(
             )
         )
         evidence_artifacts = _require_report_mapping(
-            corridor.get("evidence_artifacts"),
+            _public_mapping_get_string_key(corridor, "evidence_artifacts"),
             f"{label}.corridor.evidence_artifacts",
             errors,
         )
@@ -8002,9 +8605,9 @@ def _release_report_bundle_errors(
                 evidence_phases_label,
             )
         )
-        if corridor.get("require_phase_evidence") is True:
+        if corridor_require_phase_evidence is True:
             for phase, status in phases.items():
-                if status != "passed":
+                if not _corridor_phase_status_is_exact_passed(status):
                     continue
                 phase_error = _corridor_phase_key_error(
                     phase,
@@ -8012,7 +8615,8 @@ def _release_report_bundle_errors(
                 )
                 if phase_error is not None:
                     continue
-                artifact = evidence_artifacts.get(phase)
+                # Source-inventory marker: bundled corridor phase evidence artifact lookup uses exact public phase keys.
+                artifact = _public_mapping_get_string_key(evidence_artifacts, phase)
                 if type(artifact) is not dict:
                     errors.append(
                         f"{label}.corridor phase {phase} has no hashed evidence artifact"
@@ -8026,7 +8630,7 @@ def _release_report_bundle_errors(
         )
 
     crypto_rows = _require_report_list(
-        payload.get("cryptographic_evidence"),
+        cryptographic_evidence,
         f"{label}.cryptographic_evidence",
         errors,
     )
@@ -8039,7 +8643,7 @@ def _release_report_bundle_errors(
         )
 
     submission_surfaces = _require_report_list(
-        payload.get("user_prover_submission_surfaces"),
+        user_prover_submission_surfaces,
         f"{label}.user_prover_submission_surfaces",
         errors,
     )
@@ -8058,7 +8662,6 @@ def _release_report_bundle_errors(
         )
     )
 
-    native_summary = payload.get("native_evm_prover_bundle")
     native_summary_errors = _native_evm_prover_summary_errors(
         native_summary,
         f"{label}.native_evm_prover_bundle",
@@ -8074,12 +8677,12 @@ def _release_report_bundle_errors(
             )
         )
     source_inventory = _require_report_mapping(
-        payload.get("source_inventory"),
+        source_inventory_value,
         f"{label}.source_inventory",
         errors,
     )
     source_inventory_label = f"{label}.source_inventory"
-    if type(payload.get("source_inventory")) is dict:
+    if type(source_inventory_value) is dict:
         known_source_inventory_gates = _source_inventory_known_gates()
         present_source_inventory_gates = {
             gate
@@ -8118,11 +8721,17 @@ def _release_report_bundle_errors(
                 inventory_payload,
                 "validation_status",
             )
-            if validation_status not in {"passed", "blocked"}:
+            validation_status_passed = (
+                type(validation_status) is str and validation_status == "passed"
+            )
+            validation_status_blocked = (
+                type(validation_status) is str and validation_status == "blocked"
+            )
+            if not (validation_status_passed or validation_status_blocked):
                 errors.append(
                     f"{inventory_label} validation_status must be passed or blocked"
                 )
-            elif validation_status != "passed":
+            elif not validation_status_passed:
                 errors.append(f"{inventory_label} validation_status must be passed")
             errors.extend(
                 _public_blocker_list_field_errors(
@@ -8136,6 +8745,14 @@ def _release_report_bundle_errors(
                 inventory_payload,
                 "validation_blockers",
             )
+            if (
+                validation_status_blocked
+                and type(validation_blockers) is list
+                and not validation_blockers
+            ):
+                errors.append(
+                    f"{inventory_label} validation_blockers must be non-empty when validation_status is blocked"
+                )
             if type(validation_blockers) is list and validation_blockers:
                 errors.append(f"{inventory_label} validation_blockers must be empty")
         errors.extend(
@@ -8145,7 +8762,6 @@ def _release_report_bundle_errors(
             )
         )
 
-    evidence_summary = payload.get("evidence")
     evidence_summary_errors = _all_lanes_summary_bundle_errors(
         evidence_summary,
         f"{label}.evidence",
@@ -8164,7 +8780,7 @@ def _release_report_bundle_errors(
         errors.extend(
             _cryptographic_evidence_lane_binding_bundle_errors(
                 crypto_rows,
-                evidence_summary.get("lanes"),
+                _public_mapping_get_string_key(evidence_summary, "lanes"),
                 crypto_label=f"{label}.cryptographic_evidence",
                 lanes_label=f"{label}.evidence.lanes",
             )
@@ -8255,19 +8871,19 @@ def _release_notes_artifact_row_cells(artifact: Any) -> list[str]:
             "`<invalid bytes>`",
             "`<invalid artifact.sha256>`",
         ]
-    artifact_path = artifact.get("path")
+    artifact_path = _public_mapping_get_string_key(artifact, "path")
     path_cell = (
         f"`{artifact_path}`"
         if _release_notes_artifact_path_is_safe(artifact_path)
         else "`<invalid artifact>`"
     )
-    artifact_bytes = artifact.get("bytes")
+    artifact_bytes = _public_mapping_get_string_key(artifact, "bytes")
     bytes_cell = (
         str(artifact_bytes)
         if type(artifact_bytes) is int and artifact_bytes > 0
         else "`<invalid bytes>`"
     )
-    artifact_hash = artifact.get("sha256")
+    artifact_hash = _public_mapping_get_string_key(artifact, "sha256")
     hash_cell = (
         f"`{artifact_hash}`"
         if _is_nonzero_canonical_sha256_text(artifact_hash)
@@ -8285,10 +8901,14 @@ def _release_notes_artifact_rows(artifacts: Any) -> list[list[str]]:
                 "`<invalid bytes>`",
                 "`<invalid artifact.sha256>`",
             ]
-        ]
+    ]
     rows: list[list[str]] = []
     for artifact in artifacts:
-        artifact_path = artifact.get("path") if type(artifact) is dict else None
+        artifact_path = (
+            _public_mapping_get_string_key(artifact, "path")
+            if type(artifact) is dict
+            else None
+        )
         if (
             type(artifact) is dict
             and type(artifact_path) is str
@@ -8305,7 +8925,12 @@ def _release_notes_attachment(
 ) -> str:
     # Source-inventory marker: release-notes attachment report roots must reject subclasses.
     report = report if type(report) is dict else {}
-    status = "READY" if report.get("production_ready") is True else "NOT READY"
+    # Source-inventory marker: release-notes attachment status uses exact public readiness key.
+    status = (
+        "READY"
+        if _public_mapping_get_string_key(report, "production_ready") is True
+        else "NOT READY"
+    )
     lines = [
         "# SCCP Public Release Notes Attachment",
         "",
@@ -8330,7 +8955,7 @@ def _release_notes_attachment(
     for row in _release_notes_artifact_rows(artifacts):
         lines.append("| " + " | ".join(row) + " |")
     blocker_lines = _markdown_string_list_items(
-        report.get("blockers"),
+        _public_mapping_get_string_key(report, "blockers"),
         field_label="blockers",
     )
     if blocker_lines:
@@ -8340,6 +8965,10 @@ def _release_notes_attachment(
 
 
 def _bundle_artifacts(output_dir: Path, paths: list[Path]) -> list[dict[str, Any]]:
+    output_dir = _require_native_path(
+        output_dir,
+        value_error="release bundle output directory must be a native path",
+    )
     return [_artifact(path, output_dir) for path in paths]
 
 
@@ -8374,10 +9003,15 @@ def _release_bundle_manifest_errors(
         errors.append(f"manifest missing top-level field: {key}")
     manifest = _public_mapping_string_view(manifest)
     # Source-inventory marker: release manifest validation readiness roots must reject subclasses.
+    # Source-inventory marker: release manifest validation uses exact public manifest keys.
     report = _public_mapping_string_view(report) if type(report) is dict else {}
     summary = _public_mapping_string_view(summary) if type(summary) is dict else {}
-    if manifest.get("schema") != verifier.SCHEMA:
-        errors.append(f"unexpected manifest schema: {manifest.get('schema')}")
+
+    def manifest_get(field: str) -> Any:
+        return _public_mapping_get_string_key(manifest, field)
+
+    if manifest_get("schema") != verifier.SCHEMA:
+        errors.append(f"unexpected manifest schema: {manifest_get('schema')}")
     errors.extend(verifier._boolean_field_errors("manifest", manifest, "production_ready"))
     errors.extend(
         verifier._boolean_field_errors("manifest", manifest, "release_checklist_ready")
@@ -8392,7 +9026,7 @@ def _release_bundle_manifest_errors(
         )
     )
 
-    artifacts = manifest.get("artifacts")
+    artifacts = manifest_get("artifacts")
     if type(artifacts) is not list or not artifacts:
         errors.append("manifest artifacts must be a non-empty list")
         artifacts = []
@@ -8433,36 +9067,54 @@ def _release_bundle_manifest_errors(
                 "manifest artifact order does not match canonical release bundle order"
             )
 
-    if manifest.get("production_ready") is not True:
+    if manifest_get("production_ready") is not True:
         errors.append("manifest production_ready is not true")
-    if manifest.get("release_checklist_ready") is not True:
+    if manifest_get("release_checklist_ready") is not True:
         errors.append("manifest release_checklist_ready is not true")
-    if manifest.get("corridor_ready") is not True:
+    if manifest_get("corridor_ready") is not True:
         errors.append("manifest corridor_ready is not true")
-    if manifest.get("blockers"):
+    if manifest_get("blockers"):
         errors.append("manifest contains blockers")
-    if manifest.get("production_ready") != report.get("production_ready"):
+    if manifest_get("production_ready") != _public_mapping_get_string_key(
+        report,
+        "production_ready",
+    ):
         errors.append("manifest production_ready does not match readiness report")
-    if manifest.get("blockers") != report.get("blockers"):
+    if manifest_get("blockers") != _public_mapping_get_string_key(report, "blockers"):
         errors.append("manifest blockers do not match readiness report blockers")
-    release_checklist = report.get("release_checklist")
+    release_checklist = _public_mapping_get_string_key(report, "release_checklist")
     if type(release_checklist) is dict:
         release_checklist = _public_mapping_string_view(release_checklist)
-    if type(release_checklist) is dict and manifest.get(
+    release_checklist_ready = (
+        _public_mapping_get_string_key(release_checklist, "ready")
+        if type(release_checklist) is dict
+        else None
+    )
+    # Source-inventory marker: release manifest report readiness comparison uses exact copied report keys.
+    if type(release_checklist) is dict and manifest_get(
         "release_checklist_ready"
-    ) != release_checklist.get("ready"):
+    ) != release_checklist_ready:
         errors.append(
             "manifest release_checklist_ready does not match "
             "readiness report release_checklist"
         )
-    corridor = report.get("corridor")
+    corridor = _public_mapping_get_string_key(report, "corridor")
     if type(corridor) is dict:
         corridor = _public_mapping_string_view(corridor)
-    if type(corridor) is dict and manifest.get("corridor_ready") != corridor.get(
-        "production_ready"
+    corridor_production_ready = (
+        _public_mapping_get_string_key(corridor, "production_ready")
+        if type(corridor) is dict
+        else None
+    )
+    if (
+        type(corridor) is dict
+        and manifest_get("corridor_ready") != corridor_production_ready
     ):
         errors.append("manifest corridor_ready does not match readiness report corridor")
-    summary_native_bundle = report.get("native_evm_prover_bundle")
+    summary_native_bundle = _public_mapping_get_string_key(
+        report,
+        "native_evm_prover_bundle",
+    )
     if type(summary_native_bundle) is not dict:
         summary_native_bundle = verifier._missing_native_evm_prover_bundle_status()
     summary_launch_checklist = verifier._active_launch_release_checklist(
@@ -8470,12 +9122,12 @@ def _release_bundle_manifest_errors(
         summary_native_bundle,
     )
     summary_launch_ready = summary_launch_checklist.get("ready")
-    if manifest.get("production_ready") != summary_launch_ready:
+    if manifest_get("production_ready") != summary_launch_ready:
         errors.append(
             "manifest production_ready does not match all-lanes summary active "
             f"{verifier.ACTIVE_LAUNCH_DISPLAY} launch readiness"
         )
-    if type(summary.get("release_checklist")) is dict and manifest.get(
+    if type(summary.get("release_checklist")) is dict and manifest_get(
         "release_checklist_ready"
     ) != summary_launch_checklist.get("ready"):
         errors.append(
@@ -8591,6 +9243,10 @@ def _strict_verifier_summary_errors(summary: Any) -> list[str]:
 
 
 def _verify_generated_bundle(output_dir: Path) -> dict[str, Any]:
+    output_dir = _require_native_path(
+        output_dir,
+        value_error="generated SCCP release bundle path must be a native path",
+    )
     summary = _verify_module().verify_bundle(output_dir)
     summary_errors = _strict_verifier_summary_errors(summary)
     if summary_errors:
@@ -8608,7 +9264,30 @@ def _verify_generated_bundle(output_dir: Path) -> dict[str, Any]:
 
 
 def _relative_to_bundle(output_dir: Path, path: Path) -> Path:
+    output_dir = _require_native_path(
+        output_dir,
+        value_error="release bundle relative path root must be a native path",
+    )
+    path = _require_native_path(
+        path,
+        value_error="release bundle relative path target must be a native path",
+    )
     return path.relative_to(output_dir)
+
+
+def _relative_phase_evidence_arg(root: Path, raw: object) -> str:
+    if type(raw) is not str:
+        raise ValueError("release bundle phase evidence assignment must be an exact string")
+    if "=" not in raw:
+        raise ValueError(
+            "release bundle phase evidence assignment must use NAME=PATH syntax"
+        )
+    root = _require_native_path(
+        root,
+        value_error="release bundle phase evidence root must be a native path",
+    )
+    phase, path_text = raw.split("=", 1)
+    return f"{phase}={_relative_to_bundle(root, Path(path_text))}"
 
 
 def _build_bundle_report(
@@ -8616,7 +9295,7 @@ def _build_bundle_report(
     output_dir: Path,
     evidence_paths: list[Path],
     phase_results: list[str],
-    phase_evidence_args: list[str],
+    phase_evidence_args: list[object],
     native_evm_prover_bundle: Path | None,
 ) -> dict[str, Any]:
     relative_evidence = [
@@ -8625,10 +9304,7 @@ def _build_bundle_report(
     ]
     relative_phase_evidence: list[str] = []
     for raw in phase_evidence_args:
-        phase, path_text = raw.split("=", 1)
-        relative_phase_evidence.append(
-            f"{phase}={_relative_to_bundle(output_dir, Path(path_text))}"
-        )
+        relative_phase_evidence.append(_relative_phase_evidence_arg(output_dir, raw))
 
     original_cwd = Path.cwd()
     try:
@@ -8650,6 +9326,14 @@ def _build_bundle_report(
 
 
 def _absolute_from_cwd(path: Path, cwd: Path) -> Path:
+    path = _require_native_path(
+        path,
+        value_error="release bundle path must be a native path",
+    )
+    cwd = _require_native_path(
+        cwd,
+        value_error="release bundle cwd must be a native path",
+    )
     return path if path.is_absolute() else cwd / path
 
 
@@ -8679,9 +9363,8 @@ def _build_preflight_report(
         )
         relative_phase_evidence: list[str] = []
         for raw in copied_phase_args:
-            phase, path_text = raw.split("=", 1)
             relative_phase_evidence.append(
-                f"{phase}={_relative_to_bundle(preflight_dir, Path(path_text))}"
+                _relative_phase_evidence_arg(preflight_dir, raw)
             )
         try:
             os.chdir(preflight_dir)
@@ -8765,6 +9448,10 @@ def _prepare_output_dir(path: Path, *, force: bool) -> None:
     if type(force) is not bool:
         raise ValueError("release bundle output force must be a boolean")
 
+    path = _require_native_path(
+        path,
+        value_error="release bundle output directory must be a native path",
+    )
     if path.exists():
         if not force:
             raise FileExistsError("output directory already exists")
@@ -8781,6 +9468,7 @@ def _path_contains(parent: Path, child: Path) -> bool:
 
 
 def _reject_path_control_characters(path: Path, label: str) -> None:
+    path = _require_native_path(path, value_error=f"{label} must be a native path")
     path_text = str(path)
     control_character = _path_control_character(path_text)
     if control_character is not None:
@@ -8803,6 +9491,10 @@ def _reject_sensitive_source_filename(name: str) -> None:
 
 def _reject_symlink_sources(paths: list[Path]) -> None:
     for path in paths:
+        path = _require_native_path(
+            path,
+            value_error="release bundle source path must be a native path",
+        )
         _reject_path_control_characters(path, "release bundle source path")
         if path.name.strip() != path.name:
             raise ValueError(
@@ -8832,6 +9524,10 @@ def _reject_symlink_sources(paths: list[Path]) -> None:
 
 
 def _evidence_input_identity(path: Path) -> tuple[object, ...]:
+    path = _require_native_path(
+        path,
+        value_error="release bundle evidence input path must be a native path",
+    )
     try:
         status = path.stat()
     except FileNotFoundError:
@@ -8842,6 +9538,10 @@ def _evidence_input_identity(path: Path) -> tuple[object, ...]:
 def _reject_duplicate_evidence_inputs(paths: list[Path]) -> None:
     seen: dict[tuple[object, ...], Path] = {}
     for path in paths:
+        path = _require_native_path(
+            path,
+            value_error="release bundle evidence input path must be a native path",
+        )
         identity = _evidence_input_identity(path)
         previous = seen.get(identity)
         if previous is not None:
@@ -8853,6 +9553,10 @@ def _reject_duplicate_evidence_inputs(paths: list[Path]) -> None:
 
 
 def _reject_symlinked_existing_output_path(path: Path) -> None:
+    path = _require_native_path(
+        path,
+        value_error="release bundle output directory must be a native path",
+    )
     symlink_component = first_symlinked_existing_path_component(path)
     if symlink_component is None:
         return
@@ -8864,6 +9568,10 @@ def _reject_symlinked_existing_output_path(path: Path) -> None:
 
 
 def _reject_existing_output_non_directory(path: Path) -> None:
+    path = _require_native_path(
+        path,
+        value_error="release bundle output directory must be a native path",
+    )
     if path.exists() and not path.is_dir():
         raise ValueError("release bundle output directory must be a directory")
 
@@ -9028,7 +9736,10 @@ def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
         or getattr(exc, "filename2", None) is not None
     ):
         return fallback
-    text = str(exc)
+    try:
+        text = str(exc)
+    except Exception:
+        return fallback
     if not text:
         return fallback
     if not text.isascii():
@@ -9081,7 +9792,7 @@ def main(argv: list[str] | None = None) -> int:
         ):
             blockers = "\n".join(
                 _markdown_string_list_items(
-                    preflight_report.get("blockers"),
+                    _public_mapping_get_string_key(preflight_report, "blockers"),
                     field_label="blockers",
                 )
             )

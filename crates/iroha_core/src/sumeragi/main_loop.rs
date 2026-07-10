@@ -20404,11 +20404,7 @@ impl Actor {
         if !explicit_retirement {
             return false;
         }
-        let block_created_payload_owner = reason == "block_created";
-        if block_created_payload_owner && session.delivered {
-            return false;
-        }
-        if !block_created_payload_owner && !session.delivered && !session.is_invalid() {
+        if !session.is_invalid() && (!session.delivered || reason == "block_created") {
             return false;
         }
         debug!(
@@ -22572,24 +22568,59 @@ impl Actor {
             startup_trace_started_at,
         );
         let recovered_lane_reservations = actor.queue.live_lane_reservations();
+        let mut finalized_committed_reservations = 0_usize;
+        for key in &recovered_lane_reservations {
+            if !actor
+                .state
+                .has_committed_transaction(key.signed_transaction_hash)
+            {
+                continue;
+            }
+            if actor
+                .queue
+                .commit_lane_reservation(key)
+                .map_err(|err| {
+                    eyre!(
+                        "failed to finalize committed lane queue reservation during startup: {err}"
+                    )
+                })?
+                == crate::queue::LaneQueueReservationOutcome::Finalized
+            {
+                finalized_committed_reservations =
+                    finalized_committed_reservations.saturating_add(1);
+            }
+        }
+        let remaining_lane_reservations = actor.queue.live_lane_reservations();
+        let startup_nexus = actor.state.nexus_snapshot();
         let released_orphans = actor
             .queue
-            .reconcile_orphaned_lane_reservations(&recovered_lane_reservations, |key| {
-                actor
-                    .state
-                    .kura()
-                    .autonomous_lane_payload_matches_reservation(
-                        key,
-                        actor.chain_hash,
-                        actor.epoch_for_height(key.proposal_height),
-                    )
+            .reconcile_orphaned_lane_reservations(&remaining_lane_reservations, |key| {
+                actor.state.lane_incarnation_at_height(key.lane_id, key.proposal_height)
+                    == Some(key.lane_incarnation)
+                    && crate::state::nexus_active_lane_dataspace_at_height(
+                        key.lane_id,
+                        &startup_nexus,
+                        key.proposal_height,
+                    ) == Some(key.dataspace_id)
+                    && actor
+                        .state
+                        .kura()
+                        .autonomous_lane_payload_matches_reservation(
+                            key,
+                            actor.chain_hash,
+                            actor.epoch_for_height(key.proposal_height),
+                        )
             })
             .map_err(|err| eyre!("failed to reconcile lane queue reservations: {err}"))?;
-        if !recovered_lane_reservations.is_empty() || released_orphans > 0 {
+        if !recovered_lane_reservations.is_empty()
+            || finalized_committed_reservations > 0
+            || released_orphans > 0
+        {
             info!(
                 recovered = recovered_lane_reservations.len(),
+                finalized_committed = finalized_committed_reservations,
                 released_orphans,
-                "reconciled durable lane queue reservations against Kura payload ownership"
+                "reconciled durable lane queue reservations against committed state, active incarnation, and Kura payload ownership"
             );
         }
         actor.seed_phase_ema_metrics();
@@ -25060,7 +25091,8 @@ impl Actor {
                 height,
                 view,
                 Self::block_message_kind(&msg),
-            ) {
+            ) && !self.should_bypass_future_view_window_for_frontier_proposal(&msg, height, view)
+            {
                 match &msg {
                     BlockMessage::BlockCreated(created) => {
                         let header = created.block.header();
@@ -28923,6 +28955,47 @@ impl Actor {
                 );
                 true
             }
+        }
+    }
+
+    fn should_bypass_future_view_window_for_frontier_proposal(
+        &self,
+        msg: &BlockMessage,
+        height: u64,
+        view: u64,
+    ) -> bool {
+        if self.config.gating.future_view_window == 0
+            || height != self.committed_height_snapshot().saturating_add(1)
+            || self
+                .phase_tracker
+                .current_view(height)
+                .is_none_or(|local_view| view <= local_view)
+        {
+            return false;
+        }
+        let Some(highest_qc) = Self::frontier_proposal_highest_qc(msg) else {
+            return false;
+        };
+        self.latest_committed_qc()
+            .is_some_and(|committed| committed == highest_qc)
+    }
+
+    fn frontier_proposal_highest_qc(
+        msg: &BlockMessage,
+    ) -> Option<crate::sumeragi::consensus::QcHeaderRef> {
+        match msg {
+            BlockMessage::BlockCreated(created) => {
+                let frontier = created.frontier.as_ref()?;
+                let header = created.block.header();
+                (header.prev_block_hash() == Some(frontier.highest_qc.subject_block_hash))
+                    .then_some(frontier.highest_qc)
+            }
+            BlockMessage::ProposalHint(hint) => Some(hint.highest_qc),
+            BlockMessage::Proposal(proposal) => {
+                let highest_qc = proposal.header.highest_qc;
+                (proposal.header.parent_hash == highest_qc.subject_block_hash).then_some(highest_qc)
+            }
+            _ => None,
         }
     }
 
@@ -42262,7 +42335,6 @@ impl Actor {
             || height != self.committed_height_snapshot().saturating_add(1)
             || (!missing_qc_liveness_active && !queued_frontier_work_active)
             || self.local_is_round_leader(height, view)
-            || self.slot_has_round_liveness(height, view)
             || (pending_blocks_block_rotation && !vote_locked_recovery_can_rotate)
             || self.subsystems.commit.inflight.is_some()
             || self.frontier_slot_passive_catchup_owns_height(height)
@@ -42298,6 +42370,38 @@ impl Actor {
         if !idle_round_timed_out(true, view_age, timeout) {
             return false;
         }
+        let stale_round_liveness =
+            self.stale_cached_round_liveness_allows_nonleader_rotation(height, view, now, timeout);
+        if self.slot_has_round_liveness(height, view) && stale_round_liveness.is_none() {
+            return false;
+        }
+        if let Some((stale_age, stale_window)) = stale_round_liveness {
+            let dropped_proposal = self
+                .subsystems
+                .propose
+                .proposal_cache
+                .pop_proposal(height, view)
+                .is_some();
+            let dropped_hint = self
+                .subsystems
+                .propose
+                .proposal_cache
+                .pop_hint(height, view)
+                .is_some();
+            let dropped_marker = self.clear_exhausted_frontier_proposal_marker(height, view);
+            warn!(
+                height,
+                view,
+                pending_queue_len,
+                active_queue_len,
+                stale_age_ms = stale_age.as_millis(),
+                stale_window_ms = stale_window.as_millis(),
+                dropped_proposal,
+                dropped_hint,
+                dropped_marker,
+                "stale cached proposal evidence has no live owner; rotating non-leader frontier view"
+            );
+        }
 
         warn!(
             height,
@@ -42311,6 +42415,90 @@ impl Actor {
         );
         self.trigger_view_change_with_cause(height, view, ViewChangeCause::MissingQc);
         true
+    }
+
+    fn stale_cached_round_liveness_allows_nonleader_rotation(
+        &self,
+        height: u64,
+        view: u64,
+        now: Instant,
+        timeout: Duration,
+    ) -> Option<(Duration, Duration)> {
+        if !self.config.resilience.enabled
+            || !self.slot_has_round_liveness(height, view)
+            || (!self.slot_tracker.proposals_seen.contains(&(height, view))
+                && self
+                    .subsystems
+                    .propose
+                    .proposal_cache
+                    .get_proposal(height, view)
+                    .is_none()
+                && self
+                    .subsystems
+                    .propose
+                    .proposal_cache
+                    .get_hint(height, view)
+                    .is_none())
+            || self.slot_has_authoritative_payload(height, view)
+            || self.authoritative_slot_owner_hash(height, view).is_some()
+            || self
+                .frontier_slot_live_local_owner_for_round(height, view)
+                .is_some()
+            || self.pending_live_local_owner_for_round(height, view)
+            || self.same_height_has_recoverable_qc(height)
+            || self.validation_inflight_for_slot(height, view, None)
+            || self
+                .recent_pending_validation_for_slot(height, view, None, now, timeout)
+                .is_some()
+            || self
+                .subsystems
+                .commit
+                .inflight
+                .as_ref()
+                .is_some_and(|inflight| {
+                    !inflight.pending.aborted
+                        && inflight.pending.validation_status != ValidationStatus::Invalid
+                        && inflight.pending.height == height
+                        && inflight.pending.view == view
+                })
+            || self.pending.pending_blocks.values().any(|pending| {
+                !pending.aborted
+                    && !pending.is_retired_same_height()
+                    && pending.validation_status != ValidationStatus::Invalid
+                    && pending.height == height
+                    && pending.view == view
+            })
+        {
+            return None;
+        }
+
+        let epoch = self.epoch_for_height(height);
+        if let Some(existing_vote) = self.local_same_height_vote(height, epoch)
+            && existing_vote.view >= view
+            && self.local_same_height_vote_blocks_fresh_proposal(
+                height,
+                view,
+                &existing_vote,
+                now,
+                true,
+            )
+        {
+            return None;
+        }
+
+        let stale_window = timeout
+            .max(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
+            .max(Duration::from_millis(1));
+        let view_age = self.phase_tracker.view_age(height, now)?;
+        let cache_age = self
+            .subsystems
+            .propose
+            .proposal_cache
+            .observed_at(height, view)
+            .map(|observed_at| now.saturating_duration_since(observed_at));
+        let stale_age = cache_age.unwrap_or(view_age);
+        (view_age >= stale_window && cache_age.is_none_or(|age| age >= stale_window))
+            .then_some((stale_age, stale_window))
     }
 
     fn maybe_defer_missing_qc_rotation(
@@ -45607,6 +45795,7 @@ impl Actor {
             }
         }
         self.clear_rbc_session_roster(&key);
+        self.clear_rbc_payload_bytes_metric_recorded(&key);
         if clear_status_summary {
             self.subsystems.da_rbc.rbc.status_handle.remove(&key);
         }
@@ -45641,6 +45830,9 @@ impl Actor {
         self.subsystems.da_rbc.rbc.outbound_chunks.remove(&key);
         if self.subsystems.da_rbc.rbc.outbound_cursor == Some(key) {
             self.subsystems.da_rbc.rbc.outbound_cursor = None;
+        }
+        if self.subsystems.da_rbc.rbc.rebroadcast_cursor == Some(key) {
+            self.subsystems.da_rbc.rbc.rebroadcast_cursor = None;
         }
         if !preserve_persisted_snapshot {
             self.subsystems.da_rbc.rbc.persisted_sessions.remove(&key);
@@ -46247,9 +46439,55 @@ fn drain_rbc_state_for_block(
                 entry.3 = entry.3.saturating_add(alloc.teu_total);
             }
         }
+        if let Some(recorded) = payload_metric_recorded_sessions.as_mut() {
+            recorded.remove(&key);
+        }
     }
 
     (lane_totals, dataspace_totals)
+}
+
+#[cfg(test)]
+mod rbc_retention_tests {
+    use super::*;
+
+    fn test_block_hash(tag: &[u8]) -> HashOf<BlockHeader> {
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(tag))
+    }
+
+    #[test]
+    fn drain_rbc_state_for_block_clears_payload_metric_marker() {
+        let key = (test_block_hash(b"rbc-retention-block"), 7, 2);
+        let mut sessions = BTreeMap::from([(
+            key,
+            RbcSession::test_new(1, Some(Hash::new(b"payload")), None, 0),
+        )]);
+        let mut pending = BTreeMap::new();
+        let mut rosters = BTreeMap::from([(key, Vec::new())]);
+        let mut roster_sources = BTreeMap::from([(key, RbcRosterSource::Derived)]);
+        let mut recorded = BTreeSet::from([key]);
+        let status_handle = rbc_status::Handle::new();
+
+        let _ = drain_rbc_state_for_block(
+            key.0,
+            &mut sessions,
+            &mut pending,
+            &mut rosters,
+            &mut roster_sources,
+            Some(&mut recorded),
+            &status_handle,
+            None,
+            None,
+            None,
+            false,
+        );
+
+        assert!(sessions.is_empty());
+        assert!(pending.is_empty());
+        assert!(rosters.is_empty());
+        assert!(roster_sources.is_empty());
+        assert!(!recorded.contains(&key));
+    }
 }
 
 /// Derive the commit quorum timeout from the on-chain sumeragi parameters.

@@ -181,7 +181,7 @@ use std::{
     convert::{Infallible, TryInto},
     fmt::Debug,
     fs,
-    net::IpAddr,
+    net::{IpAddr, ToSocketAddrs},
     num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
     str::FromStr,
@@ -353,6 +353,96 @@ use tower_http::{
 use utils::extractors::JsonOrNoritoVersioned;
 
 // Bring connect-info make service into scope for axum 0.8 serve path
+
+const TORII_TCP_LISTEN_BACKLOG: i32 = 1024;
+
+fn bind_reusable_tcp_listener(addr: std::net::SocketAddr) -> std::io::Result<TcpListener> {
+    use socket2::{Domain, Protocol, Socket, Type};
+
+    let domain = if addr.is_ipv4() {
+        Domain::IPV4
+    } else {
+        Domain::IPV6
+    };
+    let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
+    socket.set_reuse_address(true)?;
+    socket.set_nonblocking(true)?;
+    socket.bind(&addr.into())?;
+    socket.listen(TORII_TCP_LISTEN_BACKLOG)?;
+    TcpListener::from_std(socket.into())
+}
+
+fn bind_reusable_tcp_listener_from_addrs<I>(addrs: I) -> std::io::Result<TcpListener>
+where
+    I: IntoIterator<Item = std::net::SocketAddr>,
+{
+    let mut last_error = None;
+    for addr in addrs {
+        match bind_reusable_tcp_listener(addr) {
+            Ok(listener) => return Ok(listener),
+            Err(err) => last_error = Some(err),
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::AddrNotAvailable,
+            "no socket addresses resolved for Torii listener",
+        )
+    }))
+}
+
+async fn bind_torii_tcp_listener(address: SocketAddr) -> std::io::Result<TcpListener> {
+    match address {
+        SocketAddr::Ipv4(v) => bind_reusable_tcp_listener(std::net::SocketAddr::V4(v.into())),
+        SocketAddr::Ipv6(v) => bind_reusable_tcp_listener(std::net::SocketAddr::V6(v.into())),
+        SocketAddr::Host(v) => {
+            bind_reusable_tcp_listener_from_addrs((v.host.as_ref(), v.port).to_socket_addrs()?)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tcp_listener_bind_tests {
+    use std::net::{Ipv4Addr, SocketAddr as StdSocketAddr, SocketAddrV4};
+
+    use iroha_primitives::addr::SocketAddr;
+
+    use super::bind_torii_tcp_listener;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn torii_reusable_tcp_listener_binds_loopback() {
+        let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0);
+        let listener = bind_torii_tcp_listener(SocketAddr::Ipv4(addr.into()))
+            .await
+            .expect("Torii reusable listener should bind");
+
+        assert_ne!(
+            listener
+                .local_addr()
+                .expect("listener has local addr")
+                .port(),
+            0,
+            "OS should assign an ephemeral port"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn torii_reusable_tcp_listener_rejects_active_listener() {
+        let active = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .expect("active listener should bind");
+        let addr = match active.local_addr().expect("active listener has local addr") {
+            StdSocketAddr::V4(addr) => addr,
+            StdSocketAddr::V6(_) => unreachable!("test binds IPv4 loopback"),
+        };
+
+        let err = bind_torii_tcp_listener(SocketAddr::Ipv4(addr.into()))
+            .await
+            .expect_err("active listener must not be shadowed by reusable bind");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::AddrInUse);
+    }
+}
 use crate::iso20022_bridge::{
     Iso20022BridgeRuntime, IsoMessageState, IsoMessageStatus, Pacs002Status,
 };
@@ -34770,6 +34860,12 @@ fn pipeline_status_local_entry(
     }
 
     if let Some(entry) = app.pipeline_status_cache.lookup(hash) {
+        if entry.kind == PipelineStatusKind::Queued
+            && !app.queue.contains_pending_hash(hash.clone(), &app.state)
+        {
+            app.pipeline_status_cache.remove_entry_by_hash(hash);
+            return None;
+        }
         return Some((entry, "cache"));
     }
 
@@ -42393,14 +42489,11 @@ impl Torii {
             }
         }
 
-        let listener = match torii_address.clone() {
-            SocketAddr::Ipv4(v) => TcpListener::bind(std::net::SocketAddr::V4(v.into())).await,
-            SocketAddr::Ipv6(v) => TcpListener::bind(std::net::SocketAddr::V6(v.into())).await,
-            SocketAddr::Host(v) => TcpListener::bind((v.host.as_ref(), v.port)).await,
-        }
-        .change_context(Error::StartServer)
-        .attach("failed to bind to the specified address")
-        .attach_with(|| self.address.clone().into_attachment())?;
+        let listener = bind_torii_tcp_listener(torii_address.clone())
+            .await
+            .change_context(Error::StartServer)
+            .attach("failed to bind to the specified address")
+            .attach_with(|| self.address.clone().into_attachment())?;
 
         let (api_router, app_state) = self.create_api_router_with_state();
         #[cfg(feature = "app_api")]
@@ -52164,13 +52257,67 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[test]
-    fn pipeline_status_local_read_keeps_non_terminal_local_cache() {
+    fn pipeline_status_local_read_evicts_stale_queued_cache() {
         let app = mk_app_state_for_tests();
         let tx_hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(
             [0x75; Hash::LENGTH],
         ));
         app.pipeline_status_cache.record_entry(
             tx_hash,
+            PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None),
+        );
+
+        let err = execute_pipeline_status_local_read(
+            &app,
+            &PipelineStatusQuery {
+                hash: Some(tx_hash.to_string()),
+                scope: Some("local".to_owned()),
+            },
+            ResponseFormat::Json,
+            None,
+        )
+        .expect_err("local reads must not expose stale queued cache entries");
+
+        assert_eq!(err.into_response().status(), StatusCode::NOT_FOUND);
+        assert!(app.pipeline_status_cache.lookup(&tx_hash).is_none());
+    }
+
+    #[tokio::test]
+    async fn pipeline_status_local_read_keeps_live_pending_queued_cache() {
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .high_load_tx_threshold = usize::MAX;
+        let keypair = checked_torii_test_keypair_from_seed_byte(
+            0xd8,
+            Algorithm::Ed25519,
+            "derive live pending pipeline-status fixture key",
+        );
+        let authority = AccountId::new(keypair.public_key().clone());
+        let transaction = TransactionBuilder::new((*app.chain_id).clone(), authority)
+            .with_instructions([Log::new(
+                Level::INFO,
+                "pipeline-status-live-pending".to_string(),
+            )])
+            .sign(keypair.private_key());
+        let tx_hash = transaction.hash();
+
+        let response = super::handler_post_transaction(
+            State(app.clone()),
+            HeaderMap::new(),
+            None,
+            versioned_signed_for_test(&transaction),
+        )
+        .await
+        .expect("accepted")
+        .into_response();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert!(
+            app.queue.contains_pending_hash(tx_hash.clone(), &app.state),
+            "fixture transaction should remain pending in the live queue"
+        );
+        app.pipeline_status_cache.record_entry(
+            tx_hash.clone(),
             PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None),
         );
 
@@ -52183,7 +52330,33 @@ pub(crate) mod tests_runtime_handlers {
             ResponseFormat::Json,
             None,
         )
-        .expect("local reads should still expose local queued cache");
+        .expect("local reads should keep genuinely pending queued cache entries");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(app.pipeline_status_cache.lookup(&tx_hash).is_some());
+    }
+
+    #[test]
+    fn pipeline_status_local_read_keeps_approved_cache() {
+        let app = mk_app_state_for_tests();
+        let tx_hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(
+            [0x75; Hash::LENGTH],
+        ));
+        app.pipeline_status_cache.record_entry(
+            tx_hash,
+            PipelineStatusEntry::fresh(PipelineStatusKind::Approved, None, None),
+        );
+
+        let response = execute_pipeline_status_local_read(
+            &app,
+            &PipelineStatusQuery {
+                hash: Some(tx_hash.to_string()),
+                scope: Some("local".to_owned()),
+            },
+            ResponseFormat::Json,
+            None,
+        )
+        .expect("local reads should keep block-pipeline cache entries");
 
         assert_eq!(response.status(), StatusCode::OK);
     }

@@ -172,6 +172,8 @@ __all__ = [
     "buildConfidentialUnshieldProofV3WithPaths",
     "build_confidential_asset_hidden_transfer_proof_v1",
     "buildConfidentialAssetHiddenTransferProofV1",
+    "confidential_transfer_v2_verifying_key_registration_payload_v1",
+    "confidential_unshield_v3_verifying_key_registration_payload_v1",
     "zk_ace_verifying_key_registration_payload_v1",
     "build_zk_ace_authorization_proof_v1",
     "zk_ace_authorized_transfer_digest_check",
@@ -1403,6 +1405,40 @@ def zk_ace_verifying_key_registration_payload_v1() -> Dict[str, Any]:
     payload = _crypto.zk_ace_verifying_key_registration_payload_v1()
     if not isinstance(payload, Mapping):
         raise RuntimeError("ZK-ACE verifier-key builder returned a non-object payload")
+    return dict(payload)
+
+
+def confidential_transfer_v2_verifying_key_registration_payload_v1() -> Dict[str, Any]:
+    """Build the canonical active confidential transfer v2 verifier-key payload."""
+
+    method = "confidential_transfer_v2_verifying_key_registration_payload_v1"
+    if not hasattr(_crypto, method):
+        raise RuntimeError(
+            "iroha_python._crypto is missing confidential transfer v2 verifier-key support; "
+            "rebuild the extension"
+        )
+    payload = getattr(_crypto, method)()
+    if not isinstance(payload, Mapping):
+        raise RuntimeError(
+            "confidential transfer v2 verifier-key builder returned a non-object payload"
+        )
+    return dict(payload)
+
+
+def confidential_unshield_v3_verifying_key_registration_payload_v1() -> Dict[str, Any]:
+    """Build the canonical active confidential unshield v3 verifier-key payload."""
+
+    method = "confidential_unshield_v3_verifying_key_registration_payload_v1"
+    if not hasattr(_crypto, method):
+        raise RuntimeError(
+            "iroha_python._crypto is missing confidential unshield v3 verifier-key support; "
+            "rebuild the extension"
+        )
+    payload = getattr(_crypto, method)()
+    if not isinstance(payload, Mapping):
+        raise RuntimeError(
+            "confidential unshield v3 verifier-key builder returned a non-object payload"
+        )
     return dict(payload)
 
 

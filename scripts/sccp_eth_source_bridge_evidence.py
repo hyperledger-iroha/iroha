@@ -109,9 +109,12 @@ ETH_TEMPLATE_TRANSCRIPT_PREFIXES = (
 )
 ETH_SOURCE_BRIDGE_CONFIG_PREFIX = b"iroha:sccp:eth-source-bridge-config:v1"
 ETH_SOURCE_BLOCK_TAGS = ("finalized", "safe", "latest")
+RUNTIME_BYTECODE_FILE_PATH_TYPE = type(Path())
 
 
-def _strip_lower_0x_hex(value: str, *, label: str) -> str:
+def _strip_lower_0x_hex(value: object, *, label: str) -> str:
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be canonical lowercase 0x hex")
     if value.startswith("0X"):
         raise argparse.ArgumentTypeError(f"{label} must use lowercase 0x prefix")
     if not value.startswith("0x"):
@@ -123,7 +126,7 @@ def _strip_lower_0x_hex(value: str, *, label: str) -> str:
 
 
 def parse_hex_bytes(
-    value: str,
+    value: object,
     *,
     label: str,
     byte_length: int,
@@ -134,6 +137,8 @@ def parse_hex_bytes(
     if type(nonzero) is not bool:
         raise ValueError("ETH source bridge fixed hex nonzero must be a boolean")
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be canonical lowercase 0x hex")
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
     text = _strip_lower_0x_hex(value, label=label)
@@ -148,15 +153,17 @@ def parse_hex_bytes(
     return raw
 
 
-def parse_evm_address(value: str, *, label: str) -> bytes:
+def parse_evm_address(value: object, *, label: str) -> bytes:
     """Parse a non-zero EVM address."""
 
     return parse_hex_bytes(value, label=label, byte_length=20)
 
 
-def parse_runtime_bytecode_hex(value: str, *, label: str) -> bytes:
+def parse_runtime_bytecode_hex(value: object, *, label: str) -> bytes:
     """Parse non-empty runtime bytecode from hex text."""
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be canonical lowercase 0x hex")
     if value != value.strip() or any(symbol.isspace() for symbol in value):
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
     text = _strip_lower_0x_hex(value, label=label)
@@ -174,11 +181,16 @@ def parse_runtime_bytecode_hex(value: str, *, label: str) -> bytes:
 
 
 def _reject_runtime_bytecode_file_symlink_path(path: Path) -> None:
+    # Source-inventory marker: runtime bytecode file helpers use native paths.
+    if type(path) is not RUNTIME_BYTECODE_FILE_PATH_TYPE:
+        raise argparse.ArgumentTypeError("runtime bytecode file cannot be read")
     if first_symlinked_existing_path_component(path) is not None:
         raise argparse.ArgumentTypeError("runtime bytecode file must not be a symlink")
 
 
 def _read_runtime_bytecode_file_text(path: Path, *, label: str) -> str:
+    if type(path) is not RUNTIME_BYTECODE_FILE_PATH_TYPE:
+        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None
     try:
         _reject_runtime_bytecode_file_symlink_path(path)
     except (OSError, argparse.ArgumentTypeError):
@@ -201,9 +213,11 @@ def parse_runtime_bytecode_file(value: str, *, label: str) -> bytes:
     return parse_runtime_bytecode_hex("".join(text.split()), label=label)
 
 
-def parse_u32(value: str, *, label: str) -> int:
+def parse_u32(value: object, *, label: str) -> int:
     """Parse an unsigned 32-bit integer."""
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be a u32")
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must be a u32")
     text = value
@@ -223,9 +237,11 @@ def _require_exact_u32(value: object, label: str) -> int:
     return value
 
 
-def parse_positive_u64(value: str, *, label: str) -> int:
+def parse_positive_u64(value: object, *, label: str) -> int:
     """Parse a positive unsigned 64-bit integer."""
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be a positive u64")
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must be a positive u64")
     text = value
@@ -309,8 +325,10 @@ def _optional_expected_record_hash(
 
 
 def _block_tag_from_args(args: argparse.Namespace) -> str:
-    block_tag = getattr(args, "block_tag", None) or "finalized"
-    if block_tag not in ETH_SOURCE_BLOCK_TAGS:
+    raw_block_tag = getattr(args, "block_tag", None)
+    block_tag = "finalized" if raw_block_tag is None else raw_block_tag
+    # Source-inventory marker: ETH source bridge block tag selector uses exact strings.
+    if type(block_tag) is not str or block_tag not in ETH_SOURCE_BLOCK_TAGS:
         raise ValueError("block_tag must be finalized, safe, or latest")
     return block_tag
 
@@ -1538,6 +1556,9 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 
 def _decoded_public_blocker_text(value: str) -> str:
+    # Source-inventory marker: lane public blocker decode helpers use exact strings.
+    if type(value) is not str:
+        return ""
     decoded = value
     for _decode_pass in range(max(1, len(value))):
         next_decoded = unquote(html_unescape(decoded))
@@ -1548,6 +1569,8 @@ def _decoded_public_blocker_text(value: str) -> str:
 
 
 def _decoded_cli_error_text_issue(value: str) -> bool:
+    if type(value) is not str:
+        return True
     decoded = _decoded_public_blocker_text(value)
     if any(ord(character) < 0x20 or ord(character) == 0x7F for character in decoded):
         return True
@@ -1559,7 +1582,10 @@ def _decoded_cli_error_text_issue(value: str) -> bool:
 def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
     if isinstance(exc, (OSError, SystemExit)):
         return fallback
-    text = str(exc)
+    try:
+        text = str(exc)
+    except Exception:
+        return fallback
     if not text:
         return fallback
     if not text.isascii():

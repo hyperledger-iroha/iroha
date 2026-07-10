@@ -526,7 +526,7 @@ struct ChallengeState {
 #[derive(Debug)]
 struct PorTrackerState {
     pending: HashMap<[u8; 32], ChallengeState>,
-    finalized: HashSet<[u8; 32]>,
+    finalized: HashMap<[u8; 32], PorChallengeV1>,
     entry_limit: usize,
 }
 
@@ -534,7 +534,7 @@ impl Default for PorTrackerState {
     fn default() -> Self {
         Self {
             pending: HashMap::new(),
-            finalized: HashSet::new(),
+            finalized: HashMap::new(),
             entry_limit: DEFAULT_TRACKER_ENTRY_LIMIT,
         }
     }
@@ -544,7 +544,7 @@ impl Default for PorTrackerState {
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 pub(crate) struct PorTrackerCheckpointV1 {
     pending: Vec<ChallengeState>,
-    finalized: Vec<[u8; 32]>,
+    finalized: Vec<PorChallengeV1>,
 }
 
 /// Tracks the lifecycle of PoR challenges, proofs, and verdicts.
@@ -574,8 +574,12 @@ impl PorTracker {
             .validate()
             .map_err(PorTrackerError::ChallengeInvalid)?;
         let mut state = self.inner.write().expect("por tracker poisoned");
-        if state.finalized.contains(&challenge.challenge_id) {
-            return Err(PorTrackerError::ChallengeReplay);
+        if let Some(finalized) = state.finalized.get(&challenge.challenge_id) {
+            return if finalized == challenge {
+                Ok(())
+            } else {
+                Err(PorTrackerError::ChallengeConflict)
+            };
         }
         if !state.pending.contains_key(&challenge.challenge_id)
             && state.pending.len() >= state.entry_limit
@@ -704,11 +708,13 @@ impl PorTracker {
             });
         }
         let callback_value = before_commit(stats)?;
-        tracker
+        let finalized = tracker
             .pending
             .remove(&verdict.challenge_id)
             .expect("validated PoR challenge must remain while write lock is held");
-        tracker.finalized.insert(verdict.challenge_id);
+        tracker
+            .finalized
+            .insert(verdict.challenge_id, finalized.challenge);
         Ok((stats, callback_value))
     }
 
@@ -717,8 +723,8 @@ impl PorTracker {
         let tracker = self.inner.read().expect("por tracker poisoned");
         let mut pending = tracker.pending.values().cloned().collect::<Vec<_>>();
         pending.sort_by_key(|state| state.challenge.challenge_id);
-        let mut finalized = tracker.finalized.iter().copied().collect::<Vec<_>>();
-        finalized.sort_unstable();
+        let mut finalized = tracker.finalized.values().cloned().collect::<Vec<_>>();
+        finalized.sort_by_key(|challenge| challenge.challenge_id);
         PorTrackerCheckpointV1 { pending, finalized }
     }
 
@@ -739,6 +745,7 @@ impl PorTracker {
             });
         }
         let mut pending = HashMap::with_capacity(checkpoint.pending.len());
+        let mut previous_pending_id = None;
         for state in checkpoint.pending {
             state
                 .challenge
@@ -759,20 +766,38 @@ impl PorTracker {
                 ));
             }
             let challenge_id = state.challenge.challenge_id;
+            if previous_pending_id.is_some_and(|previous| previous >= challenge_id) {
+                return Err(PorTrackerError::InvalidCheckpoint(
+                    "pending challenges must be strictly ordered by challenge id".to_owned(),
+                ));
+            }
+            previous_pending_id = Some(challenge_id);
             if pending.insert(challenge_id, state).is_some() {
                 return Err(PorTrackerError::InvalidCheckpoint(
                     "duplicate pending challenge id".to_owned(),
                 ));
             }
         }
-        let finalized_count = checkpoint.finalized.len();
-        let finalized = checkpoint.finalized.into_iter().collect::<HashSet<_>>();
-        if finalized.len() != finalized_count {
-            return Err(PorTrackerError::InvalidCheckpoint(
-                "duplicate finalized challenge id".to_owned(),
-            ));
+        let mut finalized = HashMap::with_capacity(checkpoint.finalized.len());
+        let mut previous_finalized_id = None;
+        for challenge in checkpoint.finalized {
+            challenge
+                .validate()
+                .map_err(PorTrackerError::ChallengeInvalid)?;
+            let challenge_id = challenge.challenge_id;
+            if previous_finalized_id.is_some_and(|previous| previous >= challenge_id) {
+                return Err(PorTrackerError::InvalidCheckpoint(
+                    "finalized challenges must be strictly ordered by challenge id".to_owned(),
+                ));
+            }
+            previous_finalized_id = Some(challenge_id);
+            if finalized.insert(challenge_id, challenge).is_some() {
+                return Err(PorTrackerError::InvalidCheckpoint(
+                    "duplicate finalized challenge id".to_owned(),
+                ));
+            }
         }
-        if pending.keys().any(|id| finalized.contains(id)) {
+        if pending.keys().any(|id| finalized.contains_key(id)) {
             return Err(PorTrackerError::InvalidCheckpoint(
                 "challenge id appears in both pending and finalized state".to_owned(),
             ));
@@ -940,9 +965,6 @@ pub enum PorTrackerError {
     /// Challenge already recorded with differing payload.
     #[error("challenge with identical id already exists")]
     ChallengeConflict,
-    /// A finalized challenge identifier was submitted again.
-    #[error("challenge id was already finalized and cannot be replayed")]
-    ChallengeReplay,
     /// Pending challenge retention reached its configured hard ceiling.
     #[error("pending PoR challenge retention exhausted (limit {limit})")]
     PendingRetentionExhausted {
@@ -1383,7 +1405,7 @@ mod tests {
     }
 
     #[test]
-    fn tracker_rejects_challenge_replay_after_finalization() {
+    fn tracker_accepts_exact_finalized_replay_and_rejects_conflict() {
         let tracker = PorTracker::default();
         let challenge = sample_challenge();
         let proof = sample_proof(&challenge);
@@ -1396,9 +1418,14 @@ mod tests {
             .record_verdict(&verdict, &sample_auditor_keys(), 1)
             .unwrap();
 
+        tracker
+            .record_challenge(&challenge)
+            .expect("exact finalized replay is idempotent");
+        let mut conflicting = challenge.clone();
+        conflicting.deadline_at = conflicting.deadline_at.saturating_add(1);
         assert!(matches!(
-            tracker.record_challenge(&challenge),
-            Err(PorTrackerError::ChallengeReplay)
+            tracker.record_challenge(&conflicting),
+            Err(PorTrackerError::ChallengeConflict)
         ));
         assert!(tracker.backlog_entries().is_empty());
     }
@@ -1442,7 +1469,7 @@ mod tests {
     }
 
     #[test]
-    fn tracker_checkpoint_preserves_pending_proofs_and_finalized_replay_ids() {
+    fn tracker_checkpoint_preserves_pending_proofs_and_finalized_payloads() {
         let source = PorTracker::with_entry_limit(4);
         let finalized = sample_challenge();
         let finalized_proof = sample_proof(&finalized);
@@ -1469,9 +1496,14 @@ mod tests {
         let checkpoint = norito::decode_from_bytes(&encoded).unwrap();
         let restored = PorTracker::with_entry_limit(4);
         restored.restore_checkpoint(checkpoint).unwrap();
+        restored
+            .record_challenge(&finalized)
+            .expect("restored finalized challenge is exactly idempotent");
+        let mut conflicting = finalized.clone();
+        conflicting.deadline_at = conflicting.deadline_at.saturating_add(1);
         assert!(matches!(
-            restored.record_challenge(&finalized),
-            Err(PorTrackerError::ChallengeReplay)
+            restored.record_challenge(&conflicting),
+            Err(PorTrackerError::ChallengeConflict)
         ));
         restored
             .record_verdict(

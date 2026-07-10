@@ -19209,6 +19209,7 @@ fn sccp_source_context_is_packagable_for_manifest(
         Some(deployment) => {
             deployment.source_domain == source_domain
                 && deployment.target_domain == manifest.local_domain
+                && sccp_source_adapter_engine_deployment_matches_material(material, deployment)
         }
         None => true,
     }
@@ -19257,11 +19258,16 @@ fn sccp_local_admission_is_allowed(
 }
 
 fn sccp_local_admission_source_adapter_hash(
-    _material: &SccpSourceVerifierMaterialV1,
+    material: &SccpSourceVerifierMaterialV1,
     source_deployment: Option<&SccpSourceAdapterEngineDeploymentV1>,
 ) -> Option<H256> {
     if let Some(deployment) = source_deployment {
-        return Some(sccp_source_adapter_engine_deployment_hash(deployment));
+        return sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+            material.source_domain,
+            material,
+            deployment,
+        )
+        .then(|| sccp_source_adapter_engine_deployment_hash(deployment));
     }
     None
 }
@@ -61377,6 +61383,19 @@ pub mod tests {
             sample_transfer_bundle(SCCP_DOMAIN_ETH, SCCP_DOMAIN_TON, 31).finality_proof;
         assert!(
             build_sccp_ton_proof_request(
+                &public_inputs,
+                &bundle_bytes,
+                Some(remote_source_proof_bytes.as_slice()),
+                inner.statement_hash,
+                manifest.destination_binding.binding_hash,
+                source_state_verifier_hash,
+                &deployment_binding,
+            )
+            .is_none(),
+            "SORA-source TON proof requests must reject canonical but extraneous source proof bytes"
+        );
+        assert!(
+            build_sccp_ton_proof_request(
                 &remote_source_public_inputs,
                 &remote_source_bundle_bytes,
                 None,
@@ -61426,6 +61445,22 @@ pub mod tests {
         assert!(
             wrap_sccp_ton_proof_result(&recursive_proof_bytes, &stripped_source_proof).is_none(),
             "wrapped TON proof results must reject self-consistent requests with stripped non-SORA source proof bytes"
+        );
+        let mut swapped_bundle_request = remote_source_request;
+        swapped_bundle_request.bundle_bytes = swapped_bundle_bytes;
+        swapped_bundle_request.request_hash = sccp_ton_proof_request_hash(
+            &swapped_bundle_request.public_inputs_bytes,
+            &swapped_bundle_request.bundle_bytes,
+            &swapped_bundle_request.source_proof_bytes,
+            &swapped_bundle_request.source_state_verifier_id,
+            swapped_bundle_request.source_state_verifier_hash,
+            swapped_bundle_request.statement_hash,
+            swapped_bundle_request.destination_binding_hash,
+            swapped_bundle_request.source_adapter_deployment_binding_hash,
+        );
+        assert!(
+            wrap_sccp_ton_proof_result(&recursive_proof_bytes, &swapped_bundle_request).is_none(),
+            "wrapped TON proof results must reject self-consistent requests with swapped bundle bytes"
         );
         assert!(
             build_sccp_ton_proof_request(
@@ -67522,6 +67557,11 @@ pub mod tests {
             Some(&material),
             Some(&foreign_target_deployment),
         );
+        assert!(
+            sccp_source_verifier_material_from_message_bundle_evidence(&foreign_target_bundle)
+                .is_none(),
+            "source material extractor must reject EVM Groth16 deployment-bound foreign-target source proofs"
+        );
         let foreign_target_proof =
             decode_sccp_source_chain_proof_envelope(&foreign_target_bundle.finality_proof)
                 .expect("decode foreign-target ETH source proof");
@@ -67705,6 +67745,42 @@ pub mod tests {
             ),
             "source-aware EVM Groth16 verification must reject deployment-bound foreign-target source proofs"
         );
+        assert!(
+            !verify_nexus_sccp_message_transparent_proof_structure_allow_unready(
+                &bsc_source_aware_artifact,
+                true,
+            ),
+            "source-aware EVM Groth16 context-free verification must reject deployment-bound foreign-target source proofs"
+        );
+        let bsc_source_aware_artifact_bytes = to_bytes(&bsc_source_aware_artifact)
+            .expect("encode source-aware EVM Groth16 foreign-target artifact");
+        assert!(
+            recover_nexus_sccp_message_transparent_proof_allow_unready(
+                &bsc_source_aware_artifact.message_backend,
+                &bsc_source_aware_artifact_bytes,
+                true,
+            )
+            .is_none(),
+            "source-aware EVM Groth16 context-free recovery must reject deployment-bound foreign-target source proofs"
+        );
+        assert!(
+            recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready_manifest(
+                &bsc_source_aware_artifact.message_backend,
+                &bsc_source_aware_artifact_bytes,
+                &material,
+                &foreign_target_deployment,
+            )
+            .is_none(),
+            "source-aware EVM Groth16 recovery must reject deployment-bound foreign-target source proofs"
+        );
+        assert!(
+            build_sccp_counterparty_proof_job_from_artifact_allow_unready(
+                &bsc_source_aware_artifact,
+                true,
+            )
+            .is_none(),
+            "source-aware EVM Groth16 artifact-to-job conversion must reject deployment-bound foreign-target source proofs"
+        );
         let tron_target_deployment =
             sccp_source_adapter_engine_deployment_from_material_for_target_v1(
                 &material,
@@ -67718,6 +67794,11 @@ pub mod tests {
             8802,
             Some(&material),
             Some(&tron_target_deployment),
+        );
+        assert!(
+            sccp_source_verifier_material_from_message_bundle_evidence(&tron_target_bundle)
+                .is_none(),
+            "source material extractor must reject TRON Groth16 deployment-bound foreign-target source proofs"
         );
         let tron_target_public_inputs =
             sccp_message_transparent_public_inputs_with_source_verifier_material_and_deployment(
@@ -67846,6 +67927,42 @@ pub mod tests {
             ),
             "source-aware TRON Groth16 verification must reject deployment-bound foreign-target source proofs"
         );
+        assert!(
+            !verify_nexus_sccp_message_transparent_proof_structure_allow_unready(
+                &tron_source_aware_artifact,
+                true,
+            ),
+            "source-aware TRON Groth16 context-free verification must reject deployment-bound foreign-target source proofs"
+        );
+        let tron_source_aware_artifact_bytes = to_bytes(&tron_source_aware_artifact)
+            .expect("encode source-aware TRON Groth16 foreign-target artifact");
+        assert!(
+            recover_nexus_sccp_message_transparent_proof_allow_unready(
+                &tron_source_aware_artifact.message_backend,
+                &tron_source_aware_artifact_bytes,
+                true,
+            )
+            .is_none(),
+            "source-aware TRON Groth16 context-free recovery must reject deployment-bound foreign-target source proofs"
+        );
+        assert!(
+            recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready_manifest(
+                &tron_source_aware_artifact.message_backend,
+                &tron_source_aware_artifact_bytes,
+                &material,
+                &tron_target_deployment,
+            )
+            .is_none(),
+            "source-aware TRON Groth16 recovery must reject deployment-bound foreign-target source proofs"
+        );
+        assert!(
+            build_sccp_counterparty_proof_job_from_artifact_allow_unready(
+                &tron_source_aware_artifact,
+                true,
+            )
+            .is_none(),
+            "source-aware TRON Groth16 artifact-to-job conversion must reject deployment-bound foreign-target source proofs"
+        );
         let solana_target_deployment =
             sccp_source_adapter_engine_deployment_from_material_for_target_v1(
                 &material,
@@ -67859,6 +67976,11 @@ pub mod tests {
             8803,
             Some(&material),
             Some(&solana_target_deployment),
+        );
+        assert!(
+            sccp_source_verifier_material_from_message_bundle_evidence(&solana_target_bundle)
+                .is_none(),
+            "source material extractor must reject Solana native deployment-bound foreign-target source proofs"
         );
         let solana_target_public_inputs =
             sccp_message_transparent_public_inputs_with_source_verifier_material_and_deployment(
@@ -67942,6 +68064,84 @@ pub mod tests {
             .is_none(),
             "source-aware Solana native proof jobs must reject deployment-bound foreign-target source proofs"
         );
+        let solana_source_aware_platform_payload = build_sccp_platform_submission_payload(
+            &solana_manifest,
+            &solana_native_proof_bytes,
+            &solana_target_public_inputs,
+            &solana_target_bundle,
+            Some(&solana_manifest.destination_binding),
+            None,
+            Some(&material),
+            Some(&solana_target_deployment),
+        )
+        .expect("hand-crafted source-aware Solana native platform payload");
+        let solana_source_aware_artifact = NexusSccpMessageTransparentProofV1 {
+            version: 1,
+            local_domain: solana_manifest.local_domain,
+            counterparty_domain: solana_manifest.counterparty_domain,
+            security_model: solana_manifest.security_model,
+            anchor_governance: solana_manifest.anchor_governance,
+            destination_binding: solana_manifest.destination_binding.clone(),
+            proof_family: solana_manifest.proof_family.clone(),
+            verifier_backend: solana_manifest.verifier_backend.clone(),
+            message_backend: solana_manifest.message_backend.clone(),
+            registry_backend: solana_manifest.registry_backend.clone(),
+            manifest_seed: solana_manifest.manifest_seed.clone(),
+            finality_model: solana_manifest.finality_model,
+            verifier_target: solana_manifest.verifier_target,
+            public_inputs: solana_target_public_inputs.clone(),
+            proof_bytes: solana_native_proof_bytes.clone(),
+            submission_package: source_aware_package_from_platform_payload(
+                &solana_manifest,
+                solana_source_aware_platform_payload,
+            ),
+            bundle: solana_target_bundle.clone(),
+        };
+        assert!(
+            !verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material_and_deployment_allow_unready(
+                &solana_source_aware_artifact,
+                &material,
+                &solana_target_deployment,
+                true,
+            ),
+            "source-aware Solana native verification must reject deployment-bound foreign-target source proofs"
+        );
+        assert!(
+            !verify_nexus_sccp_message_transparent_proof_structure_allow_unready(
+                &solana_source_aware_artifact,
+                true,
+            ),
+            "source-aware Solana native context-free verification must reject deployment-bound foreign-target source proofs"
+        );
+        let solana_source_aware_artifact_bytes = to_bytes(&solana_source_aware_artifact)
+            .expect("encode source-aware Solana native foreign-target artifact");
+        assert!(
+            recover_nexus_sccp_message_transparent_proof_allow_unready(
+                &solana_source_aware_artifact.message_backend,
+                &solana_source_aware_artifact_bytes,
+                true,
+            )
+            .is_none(),
+            "source-aware Solana native context-free recovery must reject deployment-bound foreign-target source proofs"
+        );
+        assert!(
+            recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready_manifest(
+                &solana_source_aware_artifact.message_backend,
+                &solana_source_aware_artifact_bytes,
+                &material,
+                &solana_target_deployment,
+            )
+            .is_none(),
+            "source-aware Solana native recovery must reject deployment-bound foreign-target source proofs"
+        );
+        assert!(
+            build_sccp_counterparty_proof_job_from_artifact_allow_unready(
+                &solana_source_aware_artifact,
+                true,
+            )
+            .is_none(),
+            "source-aware Solana native artifact-to-job conversion must reject deployment-bound foreign-target source proofs"
+        );
         let ton_target_deployment =
             sccp_source_adapter_engine_deployment_from_material_for_target_v1(
                 &material,
@@ -67955,6 +68155,11 @@ pub mod tests {
             8804,
             Some(&material),
             Some(&ton_target_deployment),
+        );
+        assert!(
+            sccp_source_verifier_material_from_message_bundle_evidence(&ton_target_bundle)
+                .is_none(),
+            "source material extractor must reject TON native deployment-bound foreign-target source proofs"
         );
         let ton_target_public_inputs =
             sccp_message_transparent_public_inputs_with_source_verifier_material_and_deployment(
@@ -68036,6 +68241,110 @@ pub mod tests {
             )
             .is_none(),
             "source-aware TON native proof jobs must reject deployment-bound foreign-target source proofs"
+        );
+        let ton_source_aware_bundle_bytes =
+            canonical_nexus_sccp_message_bundle_bytes_checked_internal(
+                &ton_target_bundle,
+                Some(&material),
+                Some(&ton_target_deployment),
+            )
+            .expect("source-aware TON bundle bytes");
+        let ton_source_aware_inner = build_sccp_message_transparent_inner_proof_internal(
+            &ton_target_bundle,
+            &ton_manifest,
+            Some(&material),
+            Some(&ton_target_deployment),
+        )
+        .expect("source-aware TON inner proof");
+        let ton_source_aware_message_body_boc = build_sccp_ton_message_body_boc(
+            &ton_manifest,
+            &ton_manifest.destination_binding,
+            &ton_target_public_inputs,
+            &ton_native_proof_bytes,
+            &ton_source_aware_bundle_bytes,
+            ton_source_aware_inner.statement_hash,
+        )
+        .expect("source-aware TON message body");
+        let ton_source_aware_platform_payload = SccpPlatformSubmissionPayloadV1::TonInternalMessage(
+            SccpTonInternalMessageSubmissionPayloadV1 {
+                message_body_boc: ton_source_aware_message_body_boc,
+                query_id: sccp_ton_submission_query_id(&ton_target_public_inputs),
+                destination_binding: ton_manifest.destination_binding.clone(),
+                destination_binding_hash: ton_manifest.destination_binding.binding_hash,
+                proof_bytes: ton_native_proof_bytes.clone(),
+                public_inputs_bytes: canonical_sccp_message_transparent_public_inputs_bytes(
+                    &ton_target_public_inputs,
+                ),
+                bundle_bytes: ton_source_aware_bundle_bytes,
+                statement_hash: ton_source_aware_inner.statement_hash,
+            },
+        );
+        let ton_source_aware_artifact = NexusSccpMessageTransparentProofV1 {
+            version: 1,
+            local_domain: ton_manifest.local_domain,
+            counterparty_domain: ton_manifest.counterparty_domain,
+            security_model: ton_manifest.security_model,
+            anchor_governance: ton_manifest.anchor_governance,
+            destination_binding: ton_manifest.destination_binding.clone(),
+            proof_family: ton_manifest.proof_family.clone(),
+            verifier_backend: ton_manifest.verifier_backend.clone(),
+            message_backend: ton_manifest.message_backend.clone(),
+            registry_backend: ton_manifest.registry_backend.clone(),
+            manifest_seed: ton_manifest.manifest_seed.clone(),
+            finality_model: ton_manifest.finality_model,
+            verifier_target: ton_manifest.verifier_target,
+            public_inputs: ton_target_public_inputs.clone(),
+            proof_bytes: ton_native_proof_bytes.clone(),
+            submission_package: source_aware_package_from_platform_payload(
+                &ton_manifest,
+                ton_source_aware_platform_payload,
+            ),
+            bundle: ton_target_bundle.clone(),
+        };
+        assert!(
+            !verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material_and_deployment_allow_unready(
+                &ton_source_aware_artifact,
+                &material,
+                &ton_target_deployment,
+                true,
+            ),
+            "source-aware TON native verification must reject deployment-bound foreign-target source proofs"
+        );
+        assert!(
+            !verify_nexus_sccp_message_transparent_proof_structure_allow_unready(
+                &ton_source_aware_artifact,
+                true,
+            ),
+            "source-aware TON native context-free verification must reject deployment-bound foreign-target source proofs"
+        );
+        let ton_source_aware_artifact_bytes = to_bytes(&ton_source_aware_artifact)
+            .expect("encode source-aware TON native foreign-target artifact");
+        assert!(
+            recover_nexus_sccp_message_transparent_proof_allow_unready(
+                &ton_source_aware_artifact.message_backend,
+                &ton_source_aware_artifact_bytes,
+                true,
+            )
+            .is_none(),
+            "source-aware TON native context-free recovery must reject deployment-bound foreign-target source proofs"
+        );
+        assert!(
+            recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready_manifest(
+                &ton_source_aware_artifact.message_backend,
+                &ton_source_aware_artifact_bytes,
+                &material,
+                &ton_target_deployment,
+            )
+            .is_none(),
+            "source-aware TON native recovery must reject deployment-bound foreign-target source proofs"
+        );
+        assert!(
+            build_sccp_counterparty_proof_job_from_artifact_allow_unready(
+                &ton_source_aware_artifact,
+                true,
+            )
+            .is_none(),
+            "source-aware TON native artifact-to-job conversion must reject deployment-bound foreign-target source proofs"
         );
 
         let material_only_bundle = sample_transfer_bundle_with_source_material(
@@ -71261,6 +71570,12 @@ pub mod tests {
             material.source_bridge_emitter_code_hash,
             sample_evm_source_bridge_code_hash(source_domain)
         );
+        let mut wrong_emitter_address = material.clone();
+        wrong_emitter_address.source_bridge_emitter_address = [0x47; 20].to_vec();
+        assert!(
+            !sccp_source_verifier_material_is_production_ready(&wrong_emitter_address),
+            "EVM-family source material must bind the governed source bridge emitter address"
+        );
         if source_domain == SCCP_DOMAIN_ETH {
             assert!(
                 sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
@@ -71855,6 +72170,10 @@ pub mod tests {
             ),
             "Solana deployment evidence must not open production before the full light-client predicates are deployed"
         );
+        assert!(
+            sccp_local_admission_source_adapter_hash(&material, Some(&deployment)).is_none(),
+            "Solana local-admission packaging must not emit source-adapter hashes before governed full light-client audit evidence is attached"
+        );
 
         assert!(
             build_sccp_solana_mainnet_source_adapter_deployment_with_full_light_client_audit(
@@ -71945,6 +72264,13 @@ pub mod tests {
                 &audited_deployment,
             ),
             "governed Solana full-light-client audit evidence should open the source-adapter gate"
+        );
+        assert_eq!(
+            sccp_local_admission_source_adapter_hash(&material, Some(&audited_deployment)),
+            Some(sccp_source_adapter_engine_deployment_hash(
+                &audited_deployment
+            )),
+            "Solana local-admission source-adapter hash must be derived only from the governed audited deployment"
         );
 
         let mut duplicated_audit_deployment = audited_deployment.clone();
@@ -72259,6 +72585,27 @@ pub mod tests {
             .is_some(),
             "Solana deployment-bound local admission artifact must recover with exact audited deployment material"
         );
+        assert!(
+            recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment(
+                &solana_artifact.message_backend,
+                &solana_artifact_bytes,
+                &material,
+                &audited_deployment,
+            )
+            .is_none(),
+            "Solana normal recovery must keep the disabled destination manifest gate closed"
+        );
+        let solana_backend_drift = format!("{}-drift", solana_artifact.message_backend);
+        assert!(
+            recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready_manifest(
+                &solana_backend_drift,
+                &solana_artifact_bytes,
+                &material,
+                &audited_deployment,
+            )
+            .is_none(),
+            "Solana deployment-bound recovery must reject backend-label drift"
+        );
         let mut wrong_target_audited_deployment = audited_deployment.clone();
         wrong_target_audited_deployment.target_domain = SCCP_DOMAIN_ETH;
         assert!(
@@ -72277,6 +72624,24 @@ pub mod tests {
             )
             .is_none(),
             "Solana source proof byte recovery must reject exact proof bytes paired with a non-SORA deployment target"
+        );
+        assert!(
+            !verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material_and_deployment_allow_unready_manifest(
+                &solana_artifact,
+                &material,
+                &wrong_target_audited_deployment,
+            ),
+            "Solana local admission artifacts must reject exact proof bytes paired with a non-SORA deployment target"
+        );
+        assert!(
+            recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready_manifest(
+                &solana_artifact.message_backend,
+                &solana_artifact_bytes,
+                &material,
+                &wrong_target_audited_deployment,
+            )
+            .is_none(),
+            "Solana local admission recovery must reject exact proof bytes paired with a non-SORA deployment target"
         );
         let material_only_bundle = sample_transfer_bundle_with_source_material_and_deployment(
             SCCP_DOMAIN_SOL,
@@ -72303,6 +72668,15 @@ pub mod tests {
             .is_none(),
             "Solana source proof byte recovery must reject material-only proofs"
         );
+        assert!(
+            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment(
+                &material_only_bundle,
+                &material,
+                &audited_deployment,
+            )
+            .is_none(),
+            "Solana transparent proof builder must reject material-only source proofs without audited deployment evidence"
+        );
         let wrong_target_bundle = sample_transfer_bundle(SCCP_DOMAIN_SOL, SCCP_DOMAIN_ETH, 712);
         assert!(
             verified_sccp_solana_mainnet_source_chain_proof_envelope_for_production(
@@ -72322,6 +72696,15 @@ pub mod tests {
             .is_none(),
             "Solana source proof byte recovery must reject non-SORA targets"
         );
+        assert!(
+            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment(
+                &wrong_target_bundle,
+                &material,
+                &audited_deployment,
+            )
+            .is_none(),
+            "Solana transparent proof builder must reject non-SORA destination source proofs"
+        );
         let wrong_source_bundle = sample_transfer_bundle(SCCP_DOMAIN_TON, SCCP_DOMAIN_SORA, 713);
         assert!(
             verified_sccp_solana_mainnet_source_chain_proof_envelope_for_production(
@@ -72340,6 +72723,15 @@ pub mod tests {
             )
             .is_none(),
             "Solana source proof byte recovery must reject copied non-Solana proof bytes"
+        );
+        assert!(
+            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment(
+                &wrong_source_bundle,
+                &material,
+                &audited_deployment,
+            )
+            .is_none(),
+            "Solana transparent proof builder must reject copied non-Solana source proofs"
         );
         let mut replayed_receipt_deployment = audited_deployment.clone();
         replayed_receipt_deployment.deployment_receipt_hash = [0xAB; 32];
@@ -73301,6 +73693,10 @@ pub mod tests {
             ),
             "TON deployment evidence must not open production without audited full light-client predicates"
         );
+        assert!(
+            sccp_local_admission_source_adapter_hash(&material, Some(&deployment)).is_none(),
+            "TON local-admission packaging must not emit source-adapter hashes before governed full light-client audit evidence is attached"
+        );
 
         assert!(
             build_sccp_ton_mainnet_source_adapter_deployment_with_full_light_client_audit(
@@ -73391,6 +73787,13 @@ pub mod tests {
                 &audited_deployment,
             ),
             "governed TON full-light-client audit evidence should open the source-adapter gate"
+        );
+        assert_eq!(
+            sccp_local_admission_source_adapter_hash(&material, Some(&audited_deployment)),
+            Some(sccp_source_adapter_engine_deployment_hash(
+                &audited_deployment
+            )),
+            "TON local-admission source-adapter hash must be derived only from the governed audited deployment"
         );
 
         let mut duplicated_audit_deployment = audited_deployment.clone();
@@ -73548,6 +73951,27 @@ pub mod tests {
             .is_some(),
             "TON deployment-bound local admission artifact must recover with exact audited deployment material"
         );
+        assert!(
+            recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment(
+                &ton_artifact.message_backend,
+                &ton_artifact_bytes,
+                &material,
+                &audited_deployment,
+            )
+            .is_none(),
+            "TON normal recovery must keep the disabled destination manifest gate closed"
+        );
+        let ton_backend_drift = format!("{}-drift", ton_artifact.message_backend);
+        assert!(
+            recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready_manifest(
+                &ton_backend_drift,
+                &ton_artifact_bytes,
+                &material,
+                &audited_deployment,
+            )
+            .is_none(),
+            "TON deployment-bound recovery must reject backend-label drift"
+        );
         let mut wrong_target_audited_deployment = audited_deployment.clone();
         wrong_target_audited_deployment.target_domain = SCCP_DOMAIN_ETH;
         assert!(
@@ -73566,6 +73990,24 @@ pub mod tests {
             )
             .is_none(),
             "TON source proof byte recovery must reject exact proof bytes paired with a non-SORA deployment target"
+        );
+        assert!(
+            !verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material_and_deployment_allow_unready_manifest(
+                &ton_artifact,
+                &material,
+                &wrong_target_audited_deployment,
+            ),
+            "TON local admission artifacts must reject exact proof bytes paired with a non-SORA deployment target"
+        );
+        assert!(
+            recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready_manifest(
+                &ton_artifact.message_backend,
+                &ton_artifact_bytes,
+                &material,
+                &wrong_target_audited_deployment,
+            )
+            .is_none(),
+            "TON local admission recovery must reject exact proof bytes paired with a non-SORA deployment target"
         );
         let material_only_bundle = sample_transfer_bundle_with_source_material_and_deployment(
             SCCP_DOMAIN_TON,
@@ -73592,6 +74034,15 @@ pub mod tests {
             .is_none(),
             "TON source proof byte recovery must reject material-only proofs"
         );
+        assert!(
+            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment(
+                &material_only_bundle,
+                &material,
+                &audited_deployment,
+            )
+            .is_none(),
+            "TON transparent proof builder must reject material-only source proofs without audited deployment evidence"
+        );
         let wrong_target_bundle = sample_transfer_bundle(SCCP_DOMAIN_TON, SCCP_DOMAIN_ETH, 711);
         assert!(
             verified_sccp_ton_mainnet_source_chain_proof_envelope_for_production(
@@ -73611,6 +74062,15 @@ pub mod tests {
             .is_none(),
             "TON source proof byte recovery must reject non-SORA targets"
         );
+        assert!(
+            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment(
+                &wrong_target_bundle,
+                &material,
+                &audited_deployment,
+            )
+            .is_none(),
+            "TON transparent proof builder must reject non-SORA destination source proofs"
+        );
         let wrong_source_bundle = sample_transfer_bundle(SCCP_DOMAIN_SOL, SCCP_DOMAIN_SORA, 712);
         assert!(
             verified_sccp_ton_mainnet_source_chain_proof_envelope_for_production(
@@ -73629,6 +74089,15 @@ pub mod tests {
             )
             .is_none(),
             "TON source proof byte recovery must reject copied non-TON proof bytes"
+        );
+        assert!(
+            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment(
+                &wrong_source_bundle,
+                &material,
+                &audited_deployment,
+            )
+            .is_none(),
+            "TON transparent proof builder must reject copied non-TON source proofs"
         );
         let mut replayed_receipt_deployment = audited_deployment.clone();
         replayed_receipt_deployment.deployment_receipt_hash = [0xAB; 32];
@@ -74476,6 +74945,15 @@ pub mod tests {
         );
         let deployment = build_sccp_tron_mainnet_source_adapter_deployment(&material, [0x35; 32])
             .expect("TRON source adapter deployment");
+        assert!(
+            sccp_source_adapter_engine_deployment_from_material_for_target_v1(
+                &material,
+                SCCP_DOMAIN_ETH,
+                [0x36; 32],
+            )
+            .is_none(),
+            "TRON source adapter deployment builders must reject non-SORA deployment targets"
+        );
         assert_eq!(
             deployment.source_bridge_config_hash,
             sample_tron_source_bridge_config_hash()
@@ -74761,6 +75239,27 @@ pub mod tests {
             "TRON deployment-bound local admission artifact must recover with exact deployment material"
         );
         assert!(
+            recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment(
+                &tron_artifact.message_backend,
+                &tron_artifact_bytes,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "TRON normal recovery must keep the disabled destination manifest gate closed"
+        );
+        let tron_backend_drift = format!("{}-drift", tron_artifact.message_backend);
+        assert!(
+            recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready_manifest(
+                &tron_backend_drift,
+                &tron_artifact_bytes,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "TRON deployment-bound recovery must reject backend-label drift"
+        );
+        assert!(
             verified_sccp_tron_mainnet_source_chain_proof_envelope_for_production(
                 &deployment_bound_bundle,
                 &material,
@@ -74787,6 +75286,15 @@ pub mod tests {
             .is_none(),
             "TRON source proof byte recovery must reject material-only proofs"
         );
+        assert!(
+            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment(
+                &bundle,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "TRON transparent proof builder must reject material-only source proofs without deployment evidence"
+        );
         let wrong_target_bundle = sample_transfer_bundle(SCCP_DOMAIN_TRON, SCCP_DOMAIN_ETH, 710);
         assert!(
             verified_sccp_tron_mainnet_source_chain_proof_envelope_for_production(
@@ -74806,6 +75314,15 @@ pub mod tests {
             .is_none(),
             "TRON source proof byte recovery must reject non-SORA targets"
         );
+        assert!(
+            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment(
+                &wrong_target_bundle,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "TRON transparent proof builder must reject non-SORA destination source proofs"
+        );
         let wrong_source_bundle = sample_transfer_bundle(SCCP_DOMAIN_ETH, SCCP_DOMAIN_SORA, 711);
         assert!(
             verified_sccp_tron_mainnet_source_chain_proof_envelope_for_production(
@@ -74824,6 +75341,15 @@ pub mod tests {
             )
             .is_none(),
             "TRON source proof byte recovery must reject non-TRON proof bytes"
+        );
+        assert!(
+            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment(
+                &wrong_source_bundle,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "TRON transparent proof builder must reject copied non-TRON source proofs"
         );
         let mut replayed_receipt = deployment.clone();
         replayed_receipt.deployment_receipt_hash = [0xAB; 32];
@@ -75729,6 +76255,41 @@ pub mod tests {
                 true
             )
             .is_none()
+        );
+
+        let artifact = build_nexus_sccp_message_transparent_proof_allow_unready(&bundle, true)
+            .expect("valid SORA-origin artifact must still build without source context");
+        assert!(
+            verify_nexus_sccp_message_transparent_proof_structure_allow_unready(&artifact, true),
+            "valid SORA-origin artifact must still verify without source context"
+        );
+        let artifact_bytes = to_bytes(&artifact).expect("encode SORA-origin artifact");
+        assert!(
+            !verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material_allow_unready(
+                &artifact,
+                &source_material,
+                true,
+            ),
+            "SORA-origin transparent proof verification must reject external source material"
+        );
+        assert!(
+            !verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material_and_deployment_allow_unready(
+                &artifact,
+                &source_material,
+                &source_deployment,
+                true,
+            ),
+            "SORA-origin transparent proof verification must reject deployment-bound external source context"
+        );
+        assert!(
+            recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready_manifest(
+                &artifact.message_backend,
+                &artifact_bytes,
+                &source_material,
+                &source_deployment,
+            )
+            .is_none(),
+            "SORA-origin transparent proof recovery must reject deployment-bound external source context"
         );
     }
 
@@ -79050,6 +79611,15 @@ pub mod tests {
         )
         .expect("deployment-bound local admission payload");
         assert_eq!(local_admission.bundle_bytes, deployment_checked);
+        assert_eq!(
+            sccp_local_admission_source_adapter_hash(&material, Some(&deployment)),
+            Some(sccp_source_adapter_engine_deployment_hash(&deployment)),
+            "local admission must bind the exact governed deployment hash"
+        );
+        assert!(
+            sccp_local_admission_source_adapter_hash(&material, None).is_none(),
+            "local admission must not emit source-adapter hashes without deployment evidence"
+        );
 
         let mut drifted_public_inputs = public_inputs.clone();
         drifted_public_inputs.finality_block_hash[0] ^= 0x01;
@@ -79088,6 +79658,36 @@ pub mod tests {
             )
             .is_none(),
             "local admission payloads must reject all-zero native proof placeholders",
+        );
+        let mut mismatched_deployment = deployment.clone();
+        mismatched_deployment.source_bridge_config_hash[0] ^= 0x01;
+        assert!(
+            !sccp_source_context_is_packagable_for_manifest(
+                &manifest,
+                &bundle,
+                Some(&material),
+                Some(&mismatched_deployment),
+            ),
+            "source-context packaging must reject deployment descriptors that drift from the supplied material"
+        );
+        assert!(
+            sccp_local_admission_source_adapter_hash(&material, Some(&mismatched_deployment))
+                .is_none(),
+            "local admission must not emit a deployment hash for material/deployment mismatches"
+        );
+        assert!(
+            build_sccp_counterparty_submission_package_internal(
+                &bundle,
+                &manifest,
+                &[0xAA],
+                None,
+                None,
+                true,
+                Some(&material),
+                Some(&mismatched_deployment),
+            )
+            .is_none(),
+            "even unready-test packaging must reject mismatched deployment context before payload construction"
         );
         let mut replayed_deployment = deployment.clone();
         replayed_deployment.deployment_receipt_hash = [0xE7; 32];
@@ -79231,6 +79831,22 @@ pub mod tests {
             .is_none(),
             "source proof byte recovery must reject copied BSC proof bytes under an ETH source label"
         );
+        let bsc_foreign_target_deployment =
+            sccp_source_adapter_engine_deployment_from_material_for_target_v1(
+                &material,
+                SCCP_DOMAIN_ETH,
+                [0xE7; 32],
+            )
+            .expect("BSC source adapter deployment for an ETH target");
+        assert!(
+            recover_sccp_bsc_mainnet_source_chain_proof_envelope_for_production(
+                &bundle.finality_proof,
+                &material,
+                &bsc_foreign_target_deployment,
+            )
+            .is_none(),
+            "BSC source proof byte recovery must reject exact proof bytes paired with a non-SORA deployment target"
+        );
         let artifact =
             build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment(
                 &bundle,
@@ -79271,7 +79887,7 @@ pub mod tests {
                 &deployment,
             )
             .is_none(),
-            "normal recovery must keep the disabled destination manifest gate closed"
+            "BSC normal recovery must keep the disabled destination manifest gate closed"
         );
         let recovered = recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready_manifest(
             &artifact.message_backend,
@@ -79289,7 +79905,25 @@ pub mod tests {
                 &deployment,
             )
             .is_none(),
-            "deployment-bound recovery must reject backend-label drift"
+            "BSC deployment-bound recovery must reject backend-label drift"
+        );
+        assert!(
+            !verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material_and_deployment_allow_unready_manifest(
+                &artifact,
+                &material,
+                &bsc_foreign_target_deployment,
+            ),
+            "BSC local admission artifacts must reject exact proof bytes paired with a non-SORA deployment target"
+        );
+        assert!(
+            recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready_manifest(
+                &artifact.message_backend,
+                &artifact_bytes,
+                &material,
+                &bsc_foreign_target_deployment,
+            )
+            .is_none(),
+            "BSC local admission recovery must reject exact proof bytes paired with a non-SORA deployment target"
         );
 
         let material_only_bundle = sample_transfer_bundle_with_source_material_and_deployment(
@@ -79317,6 +79951,15 @@ pub mod tests {
             .is_none(),
             "BSC source proof byte recovery must reject material-only proofs"
         );
+        assert!(
+            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment(
+                &material_only_bundle,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "BSC transparent proof builder must reject material-only source proofs without deployment evidence"
+        );
         let wrong_target_bundle = sample_transfer_bundle(SCCP_DOMAIN_BSC, SCCP_DOMAIN_ETH, 709);
         assert!(
             verified_sccp_bsc_mainnet_source_chain_proof_envelope_for_production(
@@ -79336,6 +79979,15 @@ pub mod tests {
             .is_none(),
             "BSC source proof byte recovery must reject non-SORA targets"
         );
+        assert!(
+            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment(
+                &wrong_target_bundle,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "BSC transparent proof builder must reject non-SORA destination source proofs"
+        );
         let wrong_source_bundle = sample_transfer_bundle(SCCP_DOMAIN_ETH, SCCP_DOMAIN_SORA, 710);
         assert!(
             verified_sccp_bsc_mainnet_source_chain_proof_envelope_for_production(
@@ -79354,6 +80006,15 @@ pub mod tests {
             )
             .is_none(),
             "BSC source proof byte recovery must reject non-BSC proof bytes"
+        );
+        assert!(
+            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment(
+                &wrong_source_bundle,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "BSC transparent proof builder must reject copied non-BSC source proofs"
         );
 
         let mut replayed_receipt = deployment.clone();
@@ -79852,6 +80513,22 @@ pub mod tests {
             .is_none(),
             "source proof byte recovery must reject copied ETH proof bytes under a BSC source label"
         );
+        let eth_foreign_target_deployment =
+            sccp_source_adapter_engine_deployment_from_material_for_target_v1(
+                &material,
+                SCCP_DOMAIN_BSC,
+                [0xE7; 32],
+            )
+            .expect("ETH source adapter deployment for a BSC target");
+        assert!(
+            recover_sccp_eth_mainnet_source_chain_proof_envelope_for_production(
+                &bundle.finality_proof,
+                &material,
+                &eth_foreign_target_deployment,
+            )
+            .is_none(),
+            "ETH source proof byte recovery must reject exact proof bytes paired with a non-SORA deployment target"
+        );
 
         let artifact =
             build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment(
@@ -79893,7 +80570,7 @@ pub mod tests {
                 &deployment,
             )
             .is_none(),
-            "normal recovery must keep the disabled destination manifest gate closed"
+            "ETH normal recovery must keep the disabled destination manifest gate closed"
         );
         let recovered = recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready_manifest(
             &artifact.message_backend,
@@ -79911,7 +80588,25 @@ pub mod tests {
                 &deployment,
             )
             .is_none(),
-            "deployment-bound recovery must reject backend-label drift"
+            "ETH deployment-bound recovery must reject backend-label drift"
+        );
+        assert!(
+            !verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material_and_deployment_allow_unready_manifest(
+                &artifact,
+                &material,
+                &eth_foreign_target_deployment,
+            ),
+            "ETH local admission artifacts must reject exact proof bytes paired with a non-SORA deployment target"
+        );
+        assert!(
+            recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready_manifest(
+                &artifact.message_backend,
+                &artifact_bytes,
+                &material,
+                &eth_foreign_target_deployment,
+            )
+            .is_none(),
+            "ETH local admission recovery must reject exact proof bytes paired with a non-SORA deployment target"
         );
 
         let material_only_bundle = sample_transfer_bundle_with_source_material_and_deployment(
@@ -79939,6 +80634,15 @@ pub mod tests {
             .is_none(),
             "ETH source proof byte recovery must reject material-only proofs"
         );
+        assert!(
+            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment(
+                &material_only_bundle,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "ETH transparent proof builder must reject material-only source proofs without deployment evidence"
+        );
         let wrong_target_bundle = sample_transfer_bundle(SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC, 713);
         assert!(
             verified_sccp_eth_mainnet_source_chain_proof_envelope_for_production(
@@ -79958,6 +80662,15 @@ pub mod tests {
             .is_none(),
             "ETH source proof byte recovery must reject non-SORA targets"
         );
+        assert!(
+            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment(
+                &wrong_target_bundle,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "ETH transparent proof builder must reject non-SORA destination source proofs"
+        );
         let wrong_source_bundle = sample_transfer_bundle(SCCP_DOMAIN_BSC, SCCP_DOMAIN_SORA, 714);
         assert!(
             verified_sccp_eth_mainnet_source_chain_proof_envelope_for_production(
@@ -79976,6 +80689,15 @@ pub mod tests {
             )
             .is_none(),
             "ETH source proof byte recovery must reject non-ETH proof bytes"
+        );
+        assert!(
+            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment(
+                &wrong_source_bundle,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "ETH transparent proof builder must reject copied non-ETH source proofs"
         );
 
         let mut replayed_receipt = deployment.clone();
@@ -81319,7 +82041,7 @@ pub mod tests {
             "remote-source TRON requests must reject opaque source proof bytes"
         );
 
-        let mut stripped_source_proof = request;
+        let mut stripped_source_proof = request.clone();
         stripped_source_proof.source_proof_bytes.clear();
         stripped_source_proof.request_hash = sccp_groth16_bn254_proof_request_hash(
             SCCP_TRON_GROTH16_PROOF_REQUEST_PREFIX_V1,
@@ -81334,6 +82056,21 @@ pub mod tests {
             wrap_sccp_tron_groth16_bn254_proof_result(&proof_bytes, &stripped_source_proof)
                 .is_none(),
             "wrapped TRON proofs must reject self-consistent remote-source requests with stripped source proof bytes"
+        );
+        let mut swapped_bundle = request;
+        swapped_bundle.bundle_bytes = sora_bundle_bytes;
+        swapped_bundle.request_hash = sccp_groth16_bn254_proof_request_hash(
+            SCCP_TRON_GROTH16_PROOF_REQUEST_PREFIX_V1,
+            &swapped_bundle.public_inputs_bytes,
+            &swapped_bundle.bundle_bytes,
+            &swapped_bundle.source_proof_bytes,
+            swapped_bundle.statement_hash,
+            swapped_bundle.destination_binding_hash,
+            &swapped_bundle.public_signal_words,
+        );
+        assert!(
+            wrap_sccp_tron_groth16_bn254_proof_result(&proof_bytes, &swapped_bundle).is_none(),
+            "wrapped TRON proofs must reject self-consistent requests with swapped bundle bytes"
         );
     }
 

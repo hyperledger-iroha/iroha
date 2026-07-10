@@ -8530,6 +8530,22 @@ def test_zk_ace_python_capabilities_require_both_proof_builder_names(
 
 
 def test_zk_ace_python_exports_catalog_named_proof_builder() -> None:
+    assert (
+        "confidential_transfer_v2_verifying_key_registration_payload_v1"
+        in crypto.__all__
+    )
+    assert (
+        "confidential_transfer_v2_verifying_key_registration_payload_v1"
+        in iroha_python.__all__
+    )
+    assert (
+        "confidential_unshield_v3_verifying_key_registration_payload_v1"
+        in crypto.__all__
+    )
+    assert (
+        "confidential_unshield_v3_verifying_key_registration_payload_v1"
+        in iroha_python.__all__
+    )
     assert "zk_ace_verifying_key_registration_payload_v1" in crypto.__all__
     assert "zk_ace_verifying_key_registration_payload_v1" in iroha_python.__all__
     assert "build_zk_ace_authorization_proof_v1" in crypto.__all__
@@ -8550,7 +8566,69 @@ def test_zk_ace_python_exports_catalog_named_proof_builder() -> None:
         iroha_python.zk_ace_verifying_key_registration_payload_v1
         is crypto.zk_ace_verifying_key_registration_payload_v1
     )
+    assert (
+        iroha_python.confidential_transfer_v2_verifying_key_registration_payload_v1
+        is crypto.confidential_transfer_v2_verifying_key_registration_payload_v1
+    )
+    assert (
+        iroha_python.confidential_unshield_v3_verifying_key_registration_payload_v1
+        is crypto.confidential_unshield_v3_verifying_key_registration_payload_v1
+    )
     assert iroha_python.privacy_proof_request_v1 is crypto.privacy_proof_request_v1
+
+
+def test_confidential_verifying_key_registration_payloads_delegate_native(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Native:
+        @staticmethod
+        def confidential_transfer_v2_verifying_key_registration_payload_v1() -> dict[str, object]:
+            return {
+                "backend": "halo2/ipa",
+                "name": "confidential_transfer_v2",
+                "version": 1,
+            }
+
+        @staticmethod
+        def confidential_unshield_v3_verifying_key_registration_payload_v1() -> dict[str, object]:
+            return {
+                "backend": "halo2/ipa",
+                "name": "confidential_unshield_v3",
+                "version": 1,
+            }
+
+    monkeypatch.setattr(crypto, "_crypto", Native())
+
+    assert crypto.confidential_transfer_v2_verifying_key_registration_payload_v1() == {
+        "backend": "halo2/ipa",
+        "name": "confidential_transfer_v2",
+        "version": 1,
+    }
+    assert crypto.confidential_unshield_v3_verifying_key_registration_payload_v1() == {
+        "backend": "halo2/ipa",
+        "name": "confidential_unshield_v3",
+        "version": 1,
+    }
+
+
+def test_confidential_verifying_key_registration_payloads_require_native_support(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Native:
+        pass
+
+    monkeypatch.setattr(crypto, "_crypto", Native())
+
+    with pytest.raises(
+        RuntimeError,
+        match="missing confidential transfer v2 verifier-key support",
+    ):
+        crypto.confidential_transfer_v2_verifying_key_registration_payload_v1()
+    with pytest.raises(
+        RuntimeError,
+        match="missing confidential unshield v3 verifier-key support",
+    ):
+        crypto.confidential_unshield_v3_verifying_key_registration_payload_v1()
 
 
 def test_zk_ace_verifying_key_registration_payload_delegates_native(

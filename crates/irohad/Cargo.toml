@@ -53,6 +53,8 @@ telegram-alerts = ["telemetry", "iroha_telemetry/telegram"]
 schema-endpoint = ["iroha_torii/schema"]
 # Enable profiling endpoint
 profiling-endpoint = ["iroha_torii/profiling"]
+# Enable TAIRA diagnostic SCCP local admission for testnet release smokes.
+sccp-test-fixtures = ["iroha_core/sccp-test-fixtures", "iroha_torii/sccp-test-fixtures"]
 
 [[bin]]
 name = "iroha3d"

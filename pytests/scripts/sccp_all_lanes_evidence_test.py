@@ -124,6 +124,29 @@ class HostileAllLanesMatchingText(str):
         raise AssertionError("secret-token all-lanes matching text was compared")
 
 
+class HostileAllLanesHexText(str):
+    def __new__(cls, value: str):
+        return str.__new__(cls, value)
+
+    def __str__(self):
+        raise AssertionError("secret-token all-lanes hex text was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token all-lanes hex text was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token all-lanes hex text was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token all-lanes hex text was compared")
+
+    def lower(self):
+        raise AssertionError("secret-token all-lanes hex text lower ran")
+
+    def startswith(self, _prefix):
+        raise AssertionError("secret-token all-lanes hex text startswith ran")
+
+
 class HostileAllLanesBlockerText(str):
     def __new__(cls):
         return str.__new__(cls, "safe public blocker")
@@ -136,6 +159,9 @@ class HostileAllLanesBlockerText(str):
 
     def __iter__(self):
         raise AssertionError("secret-token all-lanes blocker was iterated")
+
+    def __len__(self):
+        raise AssertionError("secret-token all-lanes blocker length was read")
 
     def __eq__(self, _other):
         raise AssertionError("secret-token all-lanes blocker was compared")
@@ -154,6 +180,9 @@ class HostileAllLanesBlockerText(str):
 
     def casefold(self):
         raise AssertionError("secret-token all-lanes blocker was casefolded")
+
+    def translate(self, _table):
+        raise AssertionError("secret-token all-lanes blocker was translated")
 
 
 class HostileAllLanesChecklistText(str):
@@ -1954,6 +1983,43 @@ def complete_bundle(module):
     return records
 
 
+def assert_destination_live_exact_key_cases(module, domain, cases):
+    index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(domain)
+    for field, expected_blocker in cases:
+        records = complete_bundle(module)
+        destination = records["sccp_destination_rollouts"][index]
+        destination[HostileAllLanesFieldName(field)] = destination.pop(field)
+
+        summary = module.validate_evidence_bundle(records)
+
+        blockers = "\n".join(summary["blockers"])
+        assert summary["production_ready"] is False, field
+        assert expected_blocker in blockers, field
+        assert "secret-token" not in blockers
+        assert "__str__" not in blockers
+        assert "__eq__" not in blockers
+
+
+def assert_route_canary_exact_key_cases(module, domain, cases):
+    index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(domain)
+    for fields, expected_blocker in cases:
+        records = complete_bundle(module)
+        route = records["sccp_route_allowlists"][index]
+        if type(fields) is str:
+            fields = (fields,)
+        for field in fields:
+            route[HostileAllLanesFieldName(field)] = route.pop(field)
+
+        summary = module.validate_evidence_bundle(records)
+
+        blockers = "\n".join(summary["blockers"])
+        assert summary["production_ready"] is False, fields
+        assert expected_blocker in blockers, fields
+        assert "secret-token" not in blockers
+        assert "__str__" not in blockers
+        assert "__eq__" not in blockers
+
+
 def active_template_hash(module, lane, field):
     helper = module._load_sibling_module("sccp_source_template_hashes.py")
     for template_lane, template_field, template_hash in (
@@ -2585,6 +2651,21 @@ def test_all_lanes_minimal_toml_sensitive_helpers_cover_marker_families():
     ) == "source adapter gate audit hashes contains unexpected field: public_operator_field"
 
 
+def test_all_lanes_minimal_toml_diagnostic_helpers_reject_string_subclasses_without_hooks():
+    module = load_evidence_module()
+    hostile = HostileAllLanesFieldName("secret-token-diagnostic-helper")
+
+    assert module._minimal_toml_duplicate_key_detail(hostile) == (
+        "duplicate key with malformed name"
+    )
+    assert module._toml_unsupported_section_detail(hostile) == (
+        "unsupported zk section with malformed name"
+    )
+    assert module._evidence_unsupported_section_detail(hostile) == (
+        "unsupported evidence section with malformed name"
+    )
+
+
 def test_all_lanes_minimal_toml_parser_redacts_unsupported_section_names():
     module = load_evidence_module()
     original_tomllib = module.tomllib
@@ -2727,6 +2808,92 @@ def test_all_lanes_minimal_toml_rejects_array_subclasses_without_hooks():
     finally:
         module.json.loads = original_json_loads
         module.tomllib = original_tomllib
+
+
+def test_all_lanes_minimal_toml_rejects_string_subclasses_without_hooks():
+    module = load_evidence_module()
+    hostile_text = HostileAllLanesParserText(
+        '[[zk.sccp_route_allowlists]]\nroute_id = "route"\n'
+    )
+    original_tomllib = module.tomllib
+    module.tomllib = None
+    try:
+        cases = (
+            (
+                lambda: module._load_toml(hostile_text, label="operator evidence"),
+                "operator evidence: invalid TOML",
+            ),
+            (
+                lambda: module._load_toml_minimal(
+                    hostile_text,
+                    label="operator evidence",
+                ),
+                "operator evidence: invalid TOML",
+            ),
+            (
+                lambda: module._parse_minimal_toml_value(
+                    hostile_text,
+                    label="operator evidence",
+                    line_number=2,
+                ),
+                "operator evidence:2: unsupported TOML value",
+            ),
+            (
+                lambda: module._comment_toml_value(
+                    hostile_text,
+                    label="operator evidence",
+                    line_number=1,
+                ),
+                "operator evidence:1: invalid metadata comment",
+            ),
+        )
+        for parse, expected_message in cases:
+            try:
+                parse()
+            except ValueError as exc:
+                rendered = str(exc)
+                assert rendered == expected_message
+                assert "secret-token" not in rendered
+                assert exc.__cause__ is None
+            else:
+                raise AssertionError(
+                    "minimal TOML loader accepted hostile string subclass"
+                )
+    finally:
+        module.tomllib = original_tomllib
+
+
+def test_all_lanes_strip_0x_rejects_string_subclasses_without_hooks():
+    module = load_evidence_module()
+
+    try:
+        module._strip_0x(HostileAllLanesHexText("0x" + "11" * 32))
+    except module.argparse.ArgumentTypeError as exc:
+        rendered = str(exc)
+        assert rendered == "0x text must be an exact string"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+    else:
+        raise AssertionError("all-lanes strip-0x helper accepted hostile text")
+
+
+def test_all_lanes_canonical_text_helpers_reject_string_subclasses_without_hooks():
+    module = load_evidence_module()
+
+    assert module._canonical_hex_text(HostileAllLanesHexText("0x" + "11" * 32)) is None
+
+    try:
+        module._decode_canonical_base64(
+            HostileAllLanesHexText("QUJD"),
+            label="source gate audit hash",
+        )
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "source gate audit hash must be base64"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+    else:
+        raise AssertionError("all-lanes base64 helper accepted hostile text")
 
 
 def test_all_lanes_metadata_comment_redacts_json_exception_causes():
@@ -2876,6 +3043,59 @@ def test_all_lanes_load_evidence_rejects_unreadable_file_shapes(tmp_path):
         assert "secret-token" not in message
         assert "IsADirectoryError" not in message
         assert "FileNotFoundError" not in message
+
+
+def test_all_lanes_load_evidence_rejects_pathlike_subclasses_without_hooks(tmp_path):
+    module = load_evidence_module()
+    evidence = tmp_path / "complete.toml"
+    evidence.write_text(
+        "\n".join(
+            [
+                "[[zk.sccp_source_verifier_materials]]",
+                "version = 1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    evidence_text = str(evidence)
+
+    class HostileEvidencePathString(str):
+        def __new__(cls):
+            return str.__new__(cls, evidence_text)
+
+        def __str__(self):
+            raise AssertionError("secret-token all-lanes evidence path was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token all-lanes evidence path was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token all-lanes evidence path was coerced")
+
+    class HostileEvidencePathLike:
+        def __str__(self):
+            raise AssertionError(
+                "secret-token all-lanes evidence path-like was stringified"
+            )
+
+        def __repr__(self):
+            raise AssertionError("secret-token all-lanes evidence path-like was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError(
+                "secret-token all-lanes evidence path-like was coerced"
+            )
+
+    for path in (HostileEvidencePathString(), HostileEvidencePathLike()):
+        for loader in (
+            lambda candidate: module.load_evidence_bundle([candidate]),
+            module._load_evidence_text,
+        ):
+            with pytest.raises(OSError) as exc_info:
+                loader(path)
+            message = str(exc_info.value)
+            assert message == "evidence input cannot be read"
+            assert "secret-token" not in message
 
 
 def test_all_lanes_load_evidence_rejects_container_subclasses_without_leaking(
@@ -3306,6 +3526,77 @@ def test_all_lanes_evidence_rejects_boolean_domain_fields():
     )
     assert "sccp_destination_rollouts: record 0 missing integer domain" in blockers
     assert "sccp_route_allowlists: record 0 missing integer domain" in blockers
+
+
+def test_all_lanes_evidence_source_material_and_deployment_use_exact_keys():
+    module = load_evidence_module()
+    cases = (
+        (
+            "sccp_source_verifier_materials",
+            0,
+            "source_domain",
+            "sccp_source_verifier_materials: record 0 missing integer source_domain",
+        ),
+        (
+            "sccp_source_verifier_materials",
+            0,
+            "version",
+            "domain 1 (eth): version must be 1",
+        ),
+        (
+            "sccp_source_verifier_materials",
+            0,
+            "source_trust_anchor_hash",
+            (
+                "domain 1 (eth): source_trust_anchor_hash must be a non-zero "
+                "32-byte hex value"
+            ),
+        ),
+        (
+            "sccp_source_adapter_engine_deployments",
+            0,
+            "source_domain",
+            (
+                "sccp_source_adapter_engine_deployments: record 0 missing "
+                "integer source_domain"
+            ),
+        ),
+        (
+            "sccp_source_adapter_engine_deployments",
+            0,
+            "target_domain",
+            f"domain 1 (eth): target_domain must be {module.SCCP_DOMAIN_SORA!r}",
+        ),
+        (
+            "sccp_source_adapter_engine_deployments",
+            0,
+            "source_chain",
+            "domain 1 (eth): source_chain must match source verifier material",
+        ),
+        (
+            "sccp_source_adapter_engine_deployments",
+            0,
+            "adapter_verifier_vk_hash",
+            (
+                "domain 1 (eth): adapter_verifier_vk_hash must be a non-zero "
+                "32-byte hex value"
+            ),
+        ),
+    )
+
+    for section, index, field, expected_blocker in cases:
+        records = complete_bundle(module)
+        row = records[section][index]
+        row[HostileAllLanesFieldName(field)] = row.pop(field)
+
+        summary = module.validate_evidence_bundle(records)
+
+        blockers = "\n".join(summary["blockers"])
+        assert summary["production_ready"] is False, (section, field)
+        assert expected_blocker in blockers
+        assert "secret-token" not in blockers
+        assert "__str__" not in blockers
+        assert "__eq__" not in blockers
 
 
 def test_all_lanes_evidence_rejects_boolean_integer_aliases():
@@ -4162,6 +4453,35 @@ def test_all_lanes_evidence_rejects_non_string_section_keys():
     assert "evidence section name must be a string: 1" not in summary["blockers"]
 
 
+def test_all_lanes_evidence_uses_exact_keys_for_root_sections():
+    module = load_evidence_module()
+    records = {
+        HostileAllLanesFieldName(section): rows
+        for section, rows in complete_bundle(module).items()
+    }
+
+    summary = module.validate_evidence_bundle(records)
+
+    assert summary["production_ready"] is False
+    blockers = "\n".join(summary["blockers"])
+    assert "evidence section name must be a string" in blockers
+    for domain in module.SCCP_CORE_REMOTE_DOMAINS:
+        chain = module.LANE_PROFILES[domain].chain
+        assert (
+            f"domain {domain} ({chain}): missing source verifier material"
+            in blockers
+        )
+        assert (
+            f"domain {domain} ({chain}): missing source adapter deployment"
+            in blockers
+        )
+        assert f"domain {domain} ({chain}): missing destination rollout" in blockers
+        assert f"domain {domain} ({chain}): missing route allowlist" in blockers
+    assert "secret-token" not in blockers
+    assert "Traceback" not in blockers
+    assert "__eq__" not in blockers
+
+
 def test_route_allowlist_hash_matches_rust_vector():
     module = load_evidence_module()
 
@@ -4557,6 +4877,52 @@ def test_all_lanes_rejects_evm_destination_without_live_bridge_metadata():
     assert "EVM proof family hash metadata must be a non-zero" in blockers
 
 
+def test_all_lanes_evm_destination_live_metadata_uses_exact_keys():
+    module = load_evidence_module()
+    assert_destination_live_exact_key_cases(
+        module,
+        module.SCCP_DOMAIN_ETH,
+        (
+            (
+                "_comment_evm_rpc_chain_id",
+                "EVM live RPC chain-id metadata is required",
+            ),
+            (
+                "_comment_evm_block_tag",
+                "Ethereum destination live block-tag metadata must be finalized",
+            ),
+            (
+                "_comment_evm_bridge_code_hash",
+                "EVM bridge runtime code hash metadata must be a non-zero",
+            ),
+            (
+                "_comment_evm_bridge_runtime_bytecode_hex",
+                "EVM bridge runtime bytecode metadata must be present",
+            ),
+            (
+                "_comment_evm_verifier_code_hash",
+                "EVM verifier runtime code hash metadata must be a non-zero",
+            ),
+            (
+                "_comment_evm_verifier_runtime_bytecode_hex",
+                "EVM verifier runtime bytecode metadata must be present",
+            ),
+            (
+                "_comment_evm_verifier_key_hash",
+                "EVM verifier key hash metadata must be a non-zero",
+            ),
+            (
+                "_comment_evm_verifier_backend_hash",
+                "EVM verifier backend hash metadata must be a non-zero",
+            ),
+            (
+                "_comment_evm_proof_family_hash",
+                "EVM proof family hash metadata must be a non-zero",
+            ),
+        ),
+    )
+
+
 def test_all_lanes_rejects_evm_destination_with_invalid_runtime_bytecode_metadata():
     module = load_evidence_module()
     records = complete_bundle(module)
@@ -4702,6 +5068,74 @@ def test_all_lanes_rejects_evm_source_without_live_bridge_metadata():
     assert "EVM source deployment block hash metadata must be a non-zero" in blockers
     assert "EVM source deployment block number metadata must be a positive" in blockers
     assert "EVM source deployment block receiptsRoot metadata must be a non-zero" in blockers
+
+
+def test_all_lanes_evm_source_live_metadata_uses_exact_keys():
+    module = load_evidence_module()
+    eth_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(module.SCCP_DOMAIN_ETH)
+    cases = (
+        (
+            "_comment_evm_source_rpc_chain_id",
+            "EVM source live RPC chain-id metadata is required",
+        ),
+        (
+            "_comment_evm_source_block_tag",
+            "Ethereum source live block-tag metadata must be finalized",
+        ),
+        (
+            "_comment_evm_source_bridge_address",
+            "EVM source bridge address metadata must be a non-zero",
+        ),
+        (
+            "source_bridge_emitter_address",
+            (
+                "domain 1 (eth): source_bridge_emitter_address must be a "
+                "non-zero 20-byte hex value"
+            ),
+        ),
+        (
+            "_comment_evm_source_deployment_transaction_hash",
+            "EVM source deployment transaction hash metadata must be a non-zero",
+        ),
+        (
+            "_comment_evm_source_deployment_receipt_status",
+            "EVM source deployment receipt status metadata must be 0x1",
+        ),
+    )
+
+    for field, expected_blocker in cases:
+        records = complete_bundle(module)
+        material = records["sccp_source_verifier_materials"][eth_index]
+        material[HostileAllLanesFieldName(field)] = material.pop(field)
+
+        summary = module.validate_evidence_bundle(records)
+
+        blockers = "\n".join(summary["blockers"])
+        assert summary["production_ready"] is False, field
+        assert expected_blocker in blockers
+        assert "secret-token" not in blockers
+        assert "__str__" not in blockers
+        assert "__eq__" not in blockers
+
+
+def test_all_lanes_evm_source_receipt_status_rejects_string_subclasses_without_hooks():
+    module = load_evidence_module()
+    eth_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(module.SCCP_DOMAIN_ETH)
+    records = complete_bundle(module)
+    material = records["sccp_source_verifier_materials"][eth_index]
+    material["_comment_evm_source_deployment_receipt_status"] = (
+        HostileAllLanesMatchingText("0x1")
+    )
+
+    summary = module.validate_evidence_bundle(records)
+    blockers = "\n".join(summary["blockers"])
+
+    assert summary["production_ready"] is False
+    assert "EVM source deployment receipt status metadata must be 0x1" in blockers
+    assert "secret-token" not in blockers
+    assert "all-lanes matching text" not in blockers
+    assert "__eq__" not in blockers
+    assert "__ne__" not in blockers
 
 
 def test_all_lanes_rejects_evm_live_block_tag_drift():
@@ -6395,6 +6829,87 @@ def test_all_lanes_rejects_tron_records_without_live_metadata():
     assert "TRON destination verifier key hash metadata must be a non-zero" in blockers
 
 
+def test_all_lanes_tron_source_live_metadata_uses_exact_keys():
+    module = load_evidence_module()
+    tron_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(module.SCCP_DOMAIN_TRON)
+    cases = (
+        (
+            "_comment_tron_source_bridge_address",
+            "TRON source bridge address metadata must be a non-zero",
+        ),
+        (
+            "_comment_tron_source_bridge_code_hash",
+            "TRON source bridge runtime code hash metadata must be a non-zero",
+        ),
+        (
+            "_comment_tron_source_bridge_runtime_bytecode_hex",
+            "TRON source bridge runtime bytecode metadata must be present",
+        ),
+        (
+            "_comment_tron_source_bridge_config_hash",
+            "TRON source bridge config hash metadata must be a non-zero",
+        ),
+        (
+            "source_bridge_config_hash",
+            (
+                "domain 5 (tron): source_bridge_config_hash must be a "
+                "non-zero 32-byte hex value"
+            ),
+        ),
+    )
+
+    for field, expected_blocker in cases:
+        records = complete_bundle(module)
+        material = records["sccp_source_verifier_materials"][tron_index]
+        material[HostileAllLanesFieldName(field)] = material.pop(field)
+
+        summary = module.validate_evidence_bundle(records)
+
+        blockers = "\n".join(summary["blockers"])
+        assert summary["production_ready"] is False, field
+        assert expected_blocker in blockers
+        assert "secret-token" not in blockers
+        assert "__str__" not in blockers
+        assert "__eq__" not in blockers
+
+
+def test_all_lanes_tron_destination_live_metadata_uses_exact_keys():
+    module = load_evidence_module()
+    assert_destination_live_exact_key_cases(
+        module,
+        module.SCCP_DOMAIN_TRON,
+        (
+            (
+                "_comment_tron_destination_verifier_address",
+                "TRON destination verifier address metadata must be a non-zero",
+            ),
+            (
+                "_comment_tron_destination_verifier_code_hash",
+                (
+                    "TRON destination verifier runtime code hash metadata "
+                    "must be a non-zero"
+                ),
+            ),
+            (
+                "_comment_tron_destination_verifier_runtime_bytecode_hex",
+                "TRON destination verifier runtime bytecode metadata must be present",
+            ),
+            (
+                "_comment_tron_destination_verifier_key_hash",
+                "TRON destination verifier key hash metadata must be a non-zero",
+            ),
+            (
+                "_comment_tron_destination_verifier_backend_hash",
+                "TRON destination verifier backend hash metadata must be a non-zero",
+            ),
+            (
+                "_comment_tron_destination_proof_family_hash",
+                "TRON destination proof family hash metadata must be a non-zero",
+            ),
+        ),
+    )
+
+
 def test_all_lanes_rejects_tron_live_comments_on_foreign_lanes():
     module = load_evidence_module()
     records = complete_bundle(module)
@@ -6988,6 +7503,94 @@ def test_all_lanes_rejects_solana_destination_without_live_programdata_metadata(
     assert "Solana ProgramData metadata base64 metadata must be present" in blockers
     assert "Solana ProgramData executable hash metadata must be a non-zero" in blockers
     assert "Solana ProgramData executable base64 metadata must be present" in blockers
+
+
+def test_all_lanes_solana_destination_live_metadata_uses_exact_keys():
+    module = load_evidence_module()
+    assert_destination_live_exact_key_cases(
+        module,
+        module.SCCP_DOMAIN_SOL,
+        (
+            (
+                "_comment_solana_rpc_commitment",
+                "Solana live RPC commitment metadata must be finalized",
+            ),
+            (
+                "_comment_solana_program_owner",
+                (
+                    "Solana verifier program owner metadata must be the "
+                    "BPF upgradeable loader"
+                ),
+            ),
+            (
+                "_comment_solana_programdata_owner",
+                (
+                    "Solana ProgramData owner metadata must be the "
+                    "BPF upgradeable loader"
+                ),
+            ),
+            (
+                "_comment_solana_program_immutable",
+                "Solana verifier program immutable metadata must be true",
+            ),
+            (
+                "_comment_solana_program_account_data_len",
+                (
+                    "Solana Program account data length metadata must be a "
+                    "positive decimal string"
+                ),
+            ),
+            (
+                "_comment_solana_program_account_data_base64",
+                "Solana Program account data base64 metadata must be present",
+            ),
+            (
+                "_comment_solana_programdata_address",
+                "Solana live ProgramData account metadata is required",
+            ),
+            (
+                "_comment_solana_programdata_slot",
+                "Solana ProgramData slot metadata must be a positive decimal string",
+            ),
+            (
+                "_comment_solana_expected_programdata_slot",
+                (
+                    "Solana expected ProgramData slot metadata must be a "
+                    "positive decimal string"
+                ),
+            ),
+            (
+                "_comment_solana_program_account_context_slot",
+                (
+                    "Solana program account RPC context slot metadata must be "
+                    "a positive decimal string"
+                ),
+            ),
+            (
+                "_comment_solana_programdata_account_context_slot",
+                (
+                    "Solana ProgramData account RPC context slot metadata must be "
+                    "a positive decimal string"
+                ),
+            ),
+            (
+                "_comment_solana_programdata_metadata_blake2b256",
+                "Solana ProgramData metadata hash must be a non-zero",
+            ),
+            (
+                "_comment_solana_programdata_metadata_base64",
+                "Solana ProgramData metadata base64 metadata must be present",
+            ),
+            (
+                "_comment_solana_programdata_code_hash",
+                "Solana ProgramData executable hash metadata must be a non-zero",
+            ),
+            (
+                "_comment_solana_programdata_executable_base64",
+                "Solana ProgramData executable base64 metadata must be present",
+            ),
+        ),
+    )
 
 
 def test_all_lanes_rejects_noncanonical_destination_decimal_metadata():
@@ -7863,6 +8466,72 @@ def test_all_lanes_rejects_ton_destination_without_live_account_metadata():
     assert "TON code hash metadata must be a non-zero" in blockers
     assert "TON code BoC root hash metadata must be a non-zero" in blockers
     assert "TON verifier code BoC metadata must be present" in blockers
+
+
+def test_all_lanes_ton_destination_live_metadata_uses_exact_keys():
+    module = load_evidence_module()
+    assert_destination_live_exact_key_cases(
+        module,
+        module.SCCP_DOMAIN_TON,
+        (
+            (
+                "ton_account_status",
+                "TON live account status metadata must be active",
+            ),
+            (
+                "_comment_ton_account_status",
+                "TON live account status comment must be present",
+            ),
+            (
+                "ton_account_state_hash",
+                "TON account state hash metadata must be a non-zero",
+            ),
+            (
+                "_comment_ton_account_state_hash",
+                "TON account state hash comment must be present",
+            ),
+            (
+                "ton_last_transaction_lt",
+                "TON last transaction LT metadata must be a positive decimal",
+            ),
+            (
+                "_comment_ton_last_transaction_lt",
+                "TON last transaction LT comment must be present",
+            ),
+            (
+                "ton_last_transaction_hash",
+                "TON last transaction hash metadata must be a non-zero",
+            ),
+            (
+                "_comment_ton_last_transaction_hash",
+                "TON last transaction hash comment must be present",
+            ),
+            (
+                "_comment_ton_code_hash",
+                "TON code hash metadata must be a non-zero",
+            ),
+            (
+                "ton_verifier_code_boc_root_hash",
+                "TON code BoC root hash metadata must be a non-zero",
+            ),
+            (
+                "_comment_ton_code_boc_root_hash",
+                "TON code BoC root hash comment must be present",
+            ),
+            (
+                "ton_verifier_code_boc",
+                "TON verifier code BoC metadata must be present",
+            ),
+            (
+                "_comment_ton_code_boc_base64",
+                "TON code BoC base64 metadata must be present",
+            ),
+            (
+                "_comment_ton_code_boc_hash_matches",
+                "TON code BoC hash match metadata must be true",
+            ),
+        ),
+    )
 
 
 def test_all_lanes_rejects_ton_destination_without_live_account_comments():
@@ -9098,6 +9767,150 @@ def test_all_lanes_evidence_requires_route_canary_metadata():
     assert "domain 3 (sol): route canary destination binding hash metadata" in blockers
 
 
+def test_all_lanes_route_canary_common_metadata_uses_exact_keys():
+    module = load_evidence_module()
+    assert_route_canary_exact_key_cases(
+        module,
+        module.SCCP_DOMAIN_SOL,
+        (
+            (
+                "_comment_route_canary_status",
+                "route canary status metadata must be passed",
+            ),
+            (
+                "_comment_route_canary_evidence_hash",
+                "route canary evidence hash metadata must be a non-zero bytes32",
+            ),
+            (
+                "_comment_route_canary_route_allowlist_hash",
+                (
+                    "route canary route allowlist hash metadata must be a "
+                    "non-zero bytes32"
+                ),
+            ),
+            (
+                "_comment_route_canary_destination_binding_hash",
+                (
+                    "route canary destination binding hash metadata must be a "
+                    "non-zero bytes32"
+                ),
+            ),
+        ),
+    )
+
+
+def test_all_lanes_route_canary_status_rejects_string_subclasses_without_hooks():
+    # Source-inventory marker: all-lanes route canary status uses exact strings.
+    module = load_evidence_module()
+    records = complete_bundle(module)
+    sol_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(module.SCCP_DOMAIN_SOL)
+    route = records["sccp_route_allowlists"][sol_index]
+    route["_comment_route_canary_status"] = HostileAllLanesMatchingText("passed")
+
+    summary = module.validate_evidence_bundle(records)
+    blockers = "\n".join(summary["blockers"])
+    sol_lane = next(
+        lane for lane in summary["lanes"] if lane["domain"] == module.SCCP_DOMAIN_SOL
+    )
+
+    assert summary["production_ready"] is False
+    assert "domain 3 (sol): route canary status metadata must be passed" in blockers
+    assert sol_lane["route_allowlist"]["route_canary"]["status"] is None
+    assert "secret-token" not in blockers
+    assert "all-lanes matching text" not in blockers
+    assert "__eq__" not in blockers
+    assert "__ne__" not in blockers
+
+
+def test_all_lanes_evm_route_canary_metadata_uses_exact_keys():
+    module = load_evidence_module()
+    assert_route_canary_exact_key_cases(
+        module,
+        module.SCCP_DOMAIN_ETH,
+        (
+            (
+                "_comment_evm_route_canary_transaction_hash",
+                "EVM route canary transaction hash metadata must be a non-zero bytes32",
+            ),
+            (
+                "_comment_evm_route_canary_log_index",
+                "EVM route canary log index metadata must be a canonical u32",
+            ),
+            (
+                "_comment_evm_route_canary_used_message_proof",
+                "EVM route canary usedMessageProofs metadata must be true",
+            ),
+            (
+                "_comment_evm_route_canary_receipt_block_finalized",
+                "EVM route canary receipt block finalized metadata must be true",
+            ),
+        ),
+    )
+
+
+def test_all_lanes_tron_route_canary_metadata_uses_exact_keys():
+    module = load_evidence_module()
+    assert_route_canary_exact_key_cases(
+        module,
+        module.SCCP_DOMAIN_TRON,
+        (
+            (
+                "_comment_tron_route_canary_transaction_id",
+                "TRON route canary transaction id metadata must be a non-zero bytes32",
+            ),
+            (
+                "_comment_tron_route_canary_block_number",
+                (
+                    "TRON route canary block number metadata must be a "
+                    "canonical positive decimal"
+                ),
+            ),
+            (
+                "_comment_tron_route_canary_used_message_proof",
+                "TRON route canary usedMessageProofs metadata must be true",
+            ),
+            (
+                "_comment_tron_route_canary_signature_recovers_to_owner",
+                "TRON route canary signature recovery metadata must be true",
+            ),
+        ),
+    )
+
+
+def test_all_lanes_ton_route_canary_metadata_uses_exact_keys():
+    module = load_evidence_module()
+    assert_route_canary_exact_key_cases(
+        module,
+        module.SCCP_DOMAIN_TON,
+        (
+            (
+                (
+                    "ton_route_canary_account_state_hash",
+                    "_comment_ton_route_canary_account_state_hash",
+                ),
+                "TON route canary account state hash must be a non-zero bytes32",
+            ),
+            (
+                (
+                    "ton_route_canary_last_transaction_lt",
+                    "_comment_ton_route_canary_last_transaction_lt",
+                ),
+                (
+                    "TON route canary last transaction LT must be a canonical "
+                    "positive decimal"
+                ),
+            ),
+            (
+                (
+                    "ton_route_canary_last_transaction_hash",
+                    "_comment_ton_route_canary_last_transaction_hash",
+                ),
+                "TON route canary last transaction hash must be a non-zero bytes32",
+            ),
+        ),
+    )
+
+
 def test_all_lanes_evidence_rejects_route_canary_evidence_hash_template_replays():
     module = load_evidence_module()
 
@@ -10151,6 +10964,71 @@ def test_all_lanes_release_checklist_rejects_hostile_item_text_without_comparing
     ) in blockers
 
 
+def test_all_lanes_release_checklist_uses_exact_keys_for_required_fields():
+    module = load_evidence_module()
+    base_checklist = module.validate_evidence_bundle(
+        complete_bundle(module)
+    )["release_checklist"]
+
+    root_field_errors = {
+        "ready": "all-lanes summary release_checklist ready must be a boolean",
+        "items": "all-lanes summary release_checklist items must be a list",
+    }
+    for field, expected_error in root_field_errors.items():
+        checklist = copy.deepcopy(base_checklist)
+        checklist[HostileAllLanesFieldName(field)] = checklist.pop(field)
+
+        errors = module._public_release_checklist_errors(
+            checklist,
+            require_ready=True,
+        )
+        joined_errors = "\n".join(errors)
+
+        assert (
+            "all-lanes summary release_checklist unexpected non-string field name"
+            in joined_errors
+        )
+        assert expected_error in joined_errors
+        assert "secret-token" not in joined_errors
+        assert "Traceback" not in joined_errors
+        assert "__eq__" not in joined_errors
+
+    item_field_errors = {
+        "id": (
+            "all-lanes summary release_checklist items[0] id must be a "
+            "non-empty canonical string"
+        ),
+        "title": (
+            "all-lanes summary release_checklist items[0] title must be a "
+            "non-empty canonical string"
+        ),
+        "ready": "all-lanes summary release_checklist items[0] ready must be a boolean",
+        "blockers": (
+            "all-lanes summary release_checklist items[0] blockers must be a "
+            "list of non-empty canonical strings"
+        ),
+    }
+    for field, expected_error in item_field_errors.items():
+        checklist = copy.deepcopy(base_checklist)
+        first_item = checklist["items"][0]
+        first_item[HostileAllLanesFieldName(field)] = first_item.pop(field)
+
+        errors = module._public_release_checklist_errors(
+            checklist,
+            require_ready=True,
+        )
+        joined_errors = "\n".join(errors)
+
+        assert (
+            "all-lanes summary release_checklist items[0] unexpected non-string "
+            "field name"
+        ) in joined_errors
+        assert expected_error in joined_errors
+        assert "secret-token" not in joined_errors
+        assert "Traceback" not in joined_errors
+        assert "__eq__" not in joined_errors
+
+
 def test_all_lanes_public_summary_rejects_container_subclasses_without_leaking():
     module = load_evidence_module()
     base_summary = module.validate_evidence_bundle(complete_bundle(module))
@@ -10494,6 +11372,20 @@ def test_all_lanes_cli_error_detail_treats_system_exit_as_opaque():
     assert safe_message not in detail
 
 
+def test_all_lanes_cli_error_detail_redacts_unstringifiable_exceptions():
+    module = load_evidence_module()
+    fallback = "SCCP all-lanes evidence validation failed"
+
+    class HostileCliException(RuntimeError):
+        def __str__(self):
+            raise AssertionError("secret-token all-lanes CLI exception was stringified")
+
+    detail = module._cli_error_detail(HostileCliException(), fallback=fallback)
+
+    assert detail == fallback
+    assert "secret-token" not in detail
+
+
 def test_all_lanes_cli_rejects_duplicate_public_blockers_without_leaking(capsys):
     module = load_evidence_module()
     original_load = module.load_evidence_bundle
@@ -10644,6 +11536,19 @@ def test_all_lanes_public_blocker_helpers_reject_string_subclasses_without_norma
         "all-lanes root blockers[0] must be a non-empty canonical string"
         in unresolved_blockers
     )
+
+
+def test_all_lanes_public_blocker_decode_helpers_reject_string_subclasses_without_hooks():
+    """Decoded public blocker helpers must reject str subclasses before hooks."""
+
+    module = load_evidence_module()
+    blocker = HostileAllLanesBlockerText()
+
+    assert module._decoded_public_blocker_text(blocker) == ""
+    assert module._decoded_sensitive_public_marker_text(blocker) == ""
+    assert module._decoded_public_blocker_text_issue(blocker) == "non-string value"
+    assert module._decoded_public_nested_value_issue(blocker) == "non-string value"
+    assert module._canonical_public_blocker_key(blocker) == ""
 
 
 def test_all_lanes_cli_rejects_unknown_summary_fields_without_leaking(capsys):
@@ -10802,6 +11707,169 @@ def test_all_lanes_public_field_names_reject_string_subclasses_without_normalizi
         "all-lanes summary release_checklist items[0] unexpected non-string "
         "field name"
     ) in blockers
+
+
+def test_all_lanes_public_summary_root_uses_exact_keys_for_required_fields():
+    module = load_evidence_module()
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+
+    for field in (
+        "production_ready",
+        "blockers",
+        "required_domains",
+        "supported_launch_domains",
+        "unsupported_launch_domains",
+        "lanes",
+        "release_checklist",
+    ):
+        hostile_summary = copy.deepcopy(summary)
+        hostile_summary[HostileAllLanesFieldName(field)] = hostile_summary.pop(field)
+
+        public_summary = module._public_summary_payload(hostile_summary)
+        blockers = "\n".join(public_summary["blockers"])
+
+        assert public_summary["production_ready"] is False
+        assert "all-lanes summary unexpected non-string field name" in blockers
+        if field == "blockers":
+            assert "all-lanes summary blockers missing" in blockers
+        else:
+            assert f"all-lanes summary {field} missing" in blockers
+        if field not in ("production_ready", "blockers"):
+            assert field not in public_summary
+        assert "secret-token" not in blockers
+        assert "Traceback" not in blockers
+        assert "__eq__" not in blockers
+
+
+def test_all_lanes_release_checklist_uses_exact_public_keys_for_copied_lane_fields():
+    module = load_evidence_module()
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    base_lane = next(
+        lane for lane in summary["lanes"] if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+
+    def replace_key(mapping, key):
+        mapping[HostileAllLanesFieldName(key)] = mapping.pop(key)
+
+    cases = (
+        (
+            ("records", "source_verifier_material"),
+            "domain 1 (eth): missing source verifier material",
+        ),
+        (
+            ("source_record_hashes", "source_verifier_material_hash"),
+            "domain 1 (eth): source verifier material hash must be a canonical non-zero bytes32",
+        ),
+        (
+            ("source_adapter_gate", "required"),
+            "domain 1 (eth): source adapter gate required flag must be boolean",
+        ),
+        (
+            ("destination_binding", "expected_destination_binding_hash_matches"),
+            "domain 1 (eth): destination binding hash is not bound to rollout evidence",
+        ),
+        (
+            ("destination_binding", "destination_binding_hash"),
+            "domain 1 (eth): destination binding hash must be a canonical non-zero bytes32",
+        ),
+        (
+            ("route_allowlist", "expected_route_allowlist_hash_matches"),
+            "domain 1 (eth): route allowlist hash is not bound to source and destination evidence",
+        ),
+        (
+            ("route_allowlist", "route_allowlist_hash"),
+            "domain 1 (eth): route allowlist hash must be a canonical non-zero bytes32",
+        ),
+        (
+            ("route_allowlist", "route_canary", "evidence_hash"),
+            "domain 1 (eth): route canary evidence hash is missing",
+        ),
+        (
+            ("route_allowlist", "route_canary", "evidence_bound"),
+            "domain 1 (eth): route canary evidence is not bound",
+        ),
+        (
+            ("route_allowlist", "route_canary", "message_proof_used"),
+            "domain 1 (eth): route canary message proof must be used",
+        ),
+    )
+
+    for path, expected in cases:
+        lane = copy.deepcopy(base_lane)
+        target = lane
+        for key in path[:-1]:
+            target = target[key]
+        replace_key(target, path[-1])
+
+        checklist = module._release_checklist([lane], [])
+        blockers = "\n".join(
+            blocker
+            for item in checklist["items"]
+            for blocker in item.get("blockers", [])
+        )
+
+        assert checklist["ready"] is False
+        assert expected in blockers
+        assert "secret-token" not in blockers
+        assert "Traceback" not in blockers
+
+
+def test_all_lanes_public_lane_schema_uses_exact_keys_for_copied_fields():
+    module = load_evidence_module()
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    base_lane = next(
+        lane for lane in summary["lanes"] if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+
+    def replace_key(mapping, key):
+        mapping[HostileAllLanesFieldName(key)] = mapping.pop(key)
+
+    cases = (
+        (("domain",), "all-lanes summary lanes[0] domain must be an integer"),
+        (("blockers",), "all-lanes summary lanes[0] missing field blockers"),
+        (
+            ("records", "source_verifier_material"),
+            "all-lanes summary lanes[0] records.source_verifier_material must be a boolean",
+        ),
+        (
+            ("source_record_hashes", "source_verifier_material_hash"),
+            "all-lanes summary lanes[0].source_record_hashes.source_verifier_material_hash must be a canonical non-zero bytes32",
+        ),
+        (
+            ("source_adapter_gate", "blockers"),
+            "all-lanes summary lanes[0].source_adapter_gate missing field blockers",
+        ),
+        (
+            ("evm_live_metadata", "source_rpc_chain_id"),
+            "all-lanes summary lanes[0].evm_live_metadata missing field source_rpc_chain_id",
+        ),
+        (
+            ("destination_binding", "destination_binding_hash"),
+            "all-lanes summary lanes[0].destination_binding.destination_binding_hash must be a canonical non-zero bytes32",
+        ),
+        (
+            ("route_allowlist", "route_canary"),
+            "all-lanes summary lanes[0].route_allowlist missing field route_canary",
+        ),
+        (
+            ("route_allowlist", "route_canary", "route_allowlist_hash"),
+            "all-lanes summary lanes[0].route_allowlist.route_canary.route_allowlist_hash must be a canonical non-zero bytes32",
+        ),
+    )
+
+    for path, expected in cases:
+        lane = copy.deepcopy(base_lane)
+        target = lane
+        for key in path[:-1]:
+            target = target[key]
+        replace_key(target, path[-1])
+
+        errors = "\n".join(module._public_lanes_errors([lane], require_ready=True))
+
+        assert expected in errors
+        assert "secret-token" not in errors
+        assert "Traceback" not in errors
+        assert "__eq__" not in errors
 
 
 def test_all_lanes_cli_rejects_malformed_allowed_summary_roots_without_leaking(
@@ -11161,7 +12229,6 @@ def test_all_lanes_cli_rejects_nested_lane_field_drift_without_leaking(capsys):
         "all-lanes summary lanes[0].route_allowlist.route_canary unexpected "
         "non-string field name"
     ) in blockers
-    assert "all-lanes summary lanes[0] contains non-string field name" in blockers
     assert "all-lanes summary lanes are invalid" in blockers
     assert "safe lane int-key note" not in captured.out
     assert "safe source note" not in captured.out
@@ -13952,6 +15019,95 @@ def test_all_lanes_cli_rejects_active_copied_route_allowlist_recompute_drift_whe
     ) in blockers
     assert "operator pending active route recompute certification" not in captured.out
     assert forged_route_hash not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_copied_route_allowlist_recompute_source_hash_alias(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    eth_index, eth_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    eth_lane["production_ready"] = False
+    eth_lane["blockers"] = ["operator pending source-hash alias audit"]
+
+    taken_hashes: set[str] = set()
+
+    def collect_hashes(value):
+        if isinstance(value, dict):
+            for child in value.values():
+                collect_hashes(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect_hashes(child)
+        elif isinstance(value, str) and value.startswith("0x") and len(value) == 66:
+            taken_hashes.add(value)
+
+    collect_hashes(summary)
+    for seed in range(0xB9, 0x1B9):
+        forged_source_material_hash = hex32(seed)
+        if forged_source_material_hash not in taken_hashes:
+            break
+    else:
+        raise AssertionError("could not forge distinct source material hash")
+
+    source_hashes = eth_lane["source_record_hashes"]
+    source_hashes.pop("source_verifier_material_hash", None)
+    source_hashes[
+        HostileAllLanesFieldName("source_verifier_material_hash")
+    ] = forged_source_material_hash
+    profile = module.LANE_PROFILES[module.SCCP_DOMAIN_ETH]
+    route = eth_lane["route_allowlist"]
+    forged_route_hash = "0x" + module.route_allowlist_hash_for_lane_evidence(
+        profile,
+        raw_hex(forged_source_material_hash),
+        raw_hex(source_hashes["source_adapter_engine_deployment_hash"]),
+        raw_hex(eth_lane["destination_binding"]["expected_destination_binding_hash"]),
+    ).hex()
+    route["route_allowlist_hash"] = forged_route_hash
+    route["expected_route_allowlist_hash"] = forged_route_hash
+    route["expected_route_allowlist_hash_matches"] = True
+    route["route_canary"]["route_allowlist_hash"] = forged_route_hash
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    assert (
+        f"all-lanes summary lanes[{eth_index}].source_record_hashes "
+        "missing field source_verifier_material_hash"
+    ) in blockers
+    assert (
+        f"all-lanes summary lanes[{eth_index}].route_allowlist."
+        "route_allowlist_hash must recompute from source material, source "
+        "adapter deployment, and destination binding hashes"
+    ) in blockers
+    assert "operator pending source-hash alias audit" not in captured.out
+    assert forged_source_material_hash not in captured.out
+    assert forged_route_hash not in captured.out
+    assert "secret-token" not in captured.out
+    assert "secret-token" not in captured.err
+    assert "__eq__" not in captured.out
+    assert "__eq__" not in captured.err
     assert "Traceback" not in captured.err
 
 

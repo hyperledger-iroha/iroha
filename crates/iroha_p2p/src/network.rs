@@ -64,6 +64,76 @@ use crate::{
 #[cfg(feature = "quic")]
 static NEXT_QUIC_CONN_ID: OnceLock<AtomicU64> = OnceLock::new();
 
+const CONTROL_UPDATE_CHANNEL_CAP: usize = 64;
+const TCP_LISTEN_BACKLOG: i32 = 1024;
+
+fn bind_reusable_tcp_listener(addrs: &[std::net::SocketAddr]) -> io::Result<TcpListener> {
+    let mut last_error = None;
+    for addr in addrs {
+        match bind_reusable_tcp_listener_addr(*addr) {
+            Ok(listener) => return Ok(listener),
+            Err(err) => last_error = Some(err),
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::AddrNotAvailable,
+            "no socket addresses resolved for TCP listener",
+        )
+    }))
+}
+
+fn bind_reusable_tcp_listener_addr(addr: std::net::SocketAddr) -> io::Result<TcpListener> {
+    use socket2::{Domain, Protocol, Socket, Type};
+
+    let domain = if addr.is_ipv4() {
+        Domain::IPV4
+    } else {
+        Domain::IPV6
+    };
+    let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
+    socket.set_reuse_address(true)?;
+    socket.set_nonblocking(true)?;
+    socket.bind(&addr.into())?;
+    socket.listen(TCP_LISTEN_BACKLOG)?;
+    TcpListener::from_std(socket.into())
+}
+
+#[cfg(test)]
+mod tcp_listener_bind_tests {
+    use std::net::{Ipv4Addr, SocketAddr};
+
+    use super::bind_reusable_tcp_listener;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn reusable_tcp_listener_binds_loopback() {
+        let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
+        let listener = bind_reusable_tcp_listener(&[addr]).expect("reusable listener should bind");
+
+        assert_ne!(
+            listener
+                .local_addr()
+                .expect("listener has local addr")
+                .port(),
+            0,
+            "OS should assign an ephemeral port"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn reusable_tcp_listener_rejects_active_listener() {
+        let active = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .expect("active listener should bind");
+        let addr = active.local_addr().expect("active listener has local addr");
+
+        let err = bind_reusable_tcp_listener(&[addr])
+            .expect_err("active listener must not be shadowed by reusable bind");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::AddrInUse);
+    }
+}
+
 // Simple CIDR (IPv4/IPv6) representation for ACLs.
 #[derive(Clone, Debug)]
 struct IpNet {
@@ -1911,25 +1981,25 @@ struct Subscriber<T: Pload> {
 #[debug("core::any::type_name::<Self>()")]
 pub struct NetworkBaseHandle<T: Pload, K: Kex, E: Enc> {
     /// Sender to subscribe for messages received form other peers in the network
-    subscribe_to_peers_messages_sender: mpsc::UnboundedSender<Subscriber<T>>,
+    subscribe_to_peers_messages_sender: mpsc::Sender<Subscriber<T>>,
     /// Receiver of `OnlinePeer` message
     online_peers_receiver: watch::Receiver<OnlinePeers>,
     /// Receiver of online peer transport capabilities.
     online_peer_capabilities_receiver: watch::Receiver<message::OnlinePeerCapabilities>,
     /// [`UpdateTopology`] message sender
-    update_topology_sender: mpsc::UnboundedSender<UpdateTopology>,
+    update_topology_sender: mpsc::Sender<UpdateTopology>,
     /// [`UpdatePeers`] message sender
-    update_peers_sender: mpsc::UnboundedSender<UpdatePeers>,
+    update_peers_sender: mpsc::Sender<UpdatePeers>,
     /// [`UpdatePeerCapabilities`] message sender
-    update_peer_capabilities_sender: mpsc::UnboundedSender<message::UpdatePeerCapabilities>,
+    update_peer_capabilities_sender: mpsc::Sender<message::UpdatePeerCapabilities>,
     /// Trusted peers update sender
-    update_trusted_peers_sender: mpsc::UnboundedSender<UpdateTrustedPeers>,
+    update_trusted_peers_sender: mpsc::Sender<UpdateTrustedPeers>,
     /// [`UpdateAcl`] message sender
-    update_acl_sender: mpsc::UnboundedSender<message::UpdateAcl>,
+    update_acl_sender: mpsc::Sender<message::UpdateAcl>,
     /// [`UpdateHandshake`] message sender
-    update_handshake_sender: mpsc::UnboundedSender<message::UpdateHandshake>,
+    update_handshake_sender: mpsc::Sender<message::UpdateHandshake>,
     /// [`UpdateConsensusCaps`] message sender
-    update_consensus_caps_sender: mpsc::UnboundedSender<message::UpdateConsensusCaps>,
+    update_consensus_caps_sender: mpsc::Sender<message::UpdateConsensusCaps>,
     /// Service channel into the network actor (for inbound accept helpers)
     service_message_sender: mpsc::Sender<ServiceMessage<WireMessage<T>>>,
     /// Sender of high priority messages
@@ -1998,19 +2068,18 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
     /// The returned handle drops all outgoing messages and reports no online peers.
     #[must_use]
     pub fn closed_for_tests() -> Self {
-        let (subscribe_tx, _subscribe_rx) = mpsc::unbounded_channel::<Subscriber<T>>();
-        let (update_topology_tx, update_topology_rx) =
-            mpsc::unbounded_channel::<message::UpdateTopology>();
-        let (update_peers_tx, update_peers_rx) = mpsc::unbounded_channel::<message::UpdatePeers>();
+        let (subscribe_tx, _subscribe_rx) = mpsc::channel::<Subscriber<T>>(1);
+        let (update_topology_tx, update_topology_rx) = mpsc::channel::<message::UpdateTopology>(1);
+        let (update_peers_tx, update_peers_rx) = mpsc::channel::<message::UpdatePeers>(1);
         let (update_peer_capabilities_tx, update_peer_capabilities_rx) =
-            mpsc::unbounded_channel::<message::UpdatePeerCapabilities>();
+            mpsc::channel::<message::UpdatePeerCapabilities>(1);
         let (update_trusted_tx, update_trusted_rx) =
-            mpsc::unbounded_channel::<message::UpdateTrustedPeers>();
-        let (update_acl_tx, update_acl_rx) = mpsc::unbounded_channel::<message::UpdateAcl>();
+            mpsc::channel::<message::UpdateTrustedPeers>(1);
+        let (update_acl_tx, update_acl_rx) = mpsc::channel::<message::UpdateAcl>(1);
         let (update_handshake_tx, update_handshake_rx) =
-            mpsc::unbounded_channel::<message::UpdateHandshake>();
+            mpsc::channel::<message::UpdateHandshake>(1);
         let (update_consensus_caps_tx, update_consensus_caps_rx) =
-            mpsc::unbounded_channel::<message::UpdateConsensusCaps>();
+            mpsc::channel::<message::UpdateConsensusCaps>(1);
         let (service_message_tx, _service_message_rx) =
             mpsc::channel::<ServiceMessage<WireMessage<T>>>(1);
         let (network_message_high_sender, _network_message_high_rx) =
@@ -2367,7 +2436,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                     });
                 }
             };
-            let listener = match TcpListener::bind(addrs.as_slice()).await {
+            let listener = match bind_reusable_tcp_listener(addrs.as_slice()) {
                 Ok(l) => l,
                 Err(e) => {
                     let error = std::sync::Arc::new(e);
@@ -2391,17 +2460,20 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
         let (online_peer_capabilities_sender, online_peer_capabilities_receiver) =
             watch::channel(HashMap::new());
         let (subscribe_to_peers_messages_sender, subscribe_to_peers_messages_receiver) =
-            mpsc::unbounded_channel();
-        let (update_topology_sender, update_topology_receiver) = mpsc::unbounded_channel();
-        let (update_peers_sender, update_peers_receiver) = mpsc::unbounded_channel();
+            mpsc::channel(p2p_subscriber_queue_cap.get());
+        let (update_topology_sender, update_topology_receiver) =
+            mpsc::channel(CONTROL_UPDATE_CHANNEL_CAP);
+        let (update_peers_sender, update_peers_receiver) =
+            mpsc::channel(CONTROL_UPDATE_CHANNEL_CAP);
         let (update_peer_capabilities_sender, update_peer_capabilities_receiver) =
-            mpsc::unbounded_channel();
+            mpsc::channel(CONTROL_UPDATE_CHANNEL_CAP);
         let (update_trusted_peers_sender, update_trusted_peers_receiver) =
-            mpsc::unbounded_channel();
-        let (update_acl_sender, update_acl_receiver) = mpsc::unbounded_channel();
-        let (update_handshake_sender, update_handshake_receiver) = mpsc::unbounded_channel();
+            mpsc::channel(CONTROL_UPDATE_CHANNEL_CAP);
+        let (update_acl_sender, update_acl_receiver) = mpsc::channel(CONTROL_UPDATE_CHANNEL_CAP);
+        let (update_handshake_sender, update_handshake_receiver) =
+            mpsc::channel(CONTROL_UPDATE_CHANNEL_CAP);
         let (update_consensus_caps_sender, update_consensus_caps_receiver) =
-            mpsc::unbounded_channel();
+            mpsc::channel(CONTROL_UPDATE_CHANNEL_CAP);
         // Bounded queue capacities are supplied from node configuration so the
         // default build enforces backpressure without relying on feature flags.
         let (network_message_high_sender, network_message_high_receiver) =
@@ -2752,12 +2824,24 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
     ) -> Result<(), mpsc::Sender<PeerMessage<T>>> {
         let subscriber = Subscriber { sender, filter };
         self.subscribe_to_peers_messages_sender
-            .send(subscriber)
+            .try_send(subscriber)
             .map_err(|err| {
-                iroha_logger::warn!(
-                    "P2P subscriber registration failed because the network actor has already shut down"
-                );
-                err.0.sender
+                let subscriber = match err {
+                    mpsc::error::TrySendError::Full(subscriber) => {
+                        warn!(
+                            cap = self.subscriber_queue_cap.get(),
+                            "P2P subscriber registration queue is full; dropping subscription request"
+                        );
+                        subscriber
+                    }
+                    mpsc::error::TrySendError::Closed(subscriber) => {
+                        warn!(
+                            "P2P subscriber registration failed because the network actor has already shut down"
+                        );
+                        subscriber
+                    }
+                };
+                subscriber.sender
             })
     }
 
@@ -2853,51 +2937,46 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
 
     /// Send [`UpdateTopology`] message on network actor.
     pub fn update_topology(&self, topology: UpdateTopology) {
-        if self.update_topology_sender.send(topology).is_err() {
-            iroha_logger::debug!("Network actor is closed, dropping topology update");
+        if let Err(err) = self.update_topology_sender.try_send(topology) {
+            log_control_update_drop("topology", err);
         }
     }
 
     /// Send [`UpdatePeers`] message on network actor.
     pub fn update_peers_addresses(&self, peers: UpdatePeers) {
-        if self.update_peers_sender.send(peers).is_err() {
-            iroha_logger::debug!("Network actor is closed, dropping peers update");
+        if let Err(err) = self.update_peers_sender.try_send(peers) {
+            log_control_update_drop("peers", err);
         }
     }
 
     /// Send [`UpdatePeerCapabilities`] message on network actor.
     pub fn update_peer_capabilities(&self, capabilities: message::UpdatePeerCapabilities) {
-        if self
-            .update_peer_capabilities_sender
-            .send(capabilities)
-            .is_err()
-        {
-            iroha_logger::debug!("Network actor is closed, dropping peer capability update");
+        if let Err(err) = self.update_peer_capabilities_sender.try_send(capabilities) {
+            log_control_update_drop("peer capability", err);
         }
     }
 
     /// Update trusted peer list for reputation tracking.
     pub fn update_trusted_peers(&self, trusted: UpdateTrustedPeers) {
-        if self.update_trusted_peers_sender.send(trusted).is_err() {
-            iroha_logger::debug!("Network actor is closed, dropping trusted peers update");
+        if let Err(err) = self.update_trusted_peers_sender.try_send(trusted) {
+            log_control_update_drop("trusted peers", err);
         }
     }
 
     /// Update ACL configuration at runtime.
     pub fn update_acl(&self, acl: message::UpdateAcl) {
-        if self.update_acl_sender.send(acl).is_err() {
-            iroha_logger::debug!("Network actor is closed, dropping ACL update");
+        if let Err(err) = self.update_acl_sender.try_send(acl) {
+            log_control_update_drop("ACL", err);
         }
     }
 
     /// Update `SoraNet` handshake configuration at runtime.
     pub fn update_soranet_handshake(&self, handshake: ActualSoranetHandshake) {
-        if self
+        if let Err(err) = self
             .update_handshake_sender
-            .send(message::UpdateHandshake { handshake })
-            .is_err()
+            .try_send(message::UpdateHandshake { handshake })
         {
-            iroha_logger::debug!("Network actor is closed, dropping handshake update");
+            log_control_update_drop("handshake", err);
         }
     }
 
@@ -2907,15 +2986,14 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
         caps: crate::ConsensusHandshakeCaps,
         drop_existing_peers: bool,
     ) {
-        if self
+        if let Err(err) = self
             .update_consensus_caps_sender
-            .send(message::UpdateConsensusCaps {
+            .try_send(message::UpdateConsensusCaps {
                 caps,
                 drop_existing_peers,
             })
-            .is_err()
         {
-            iroha_logger::debug!("Network actor is closed, dropping consensus caps update");
+            log_control_update_drop("consensus caps", err);
         }
     }
 
@@ -2950,6 +3028,31 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
     }
 }
 
+fn log_control_update_drop<T>(label: &'static str, err: mpsc::error::TrySendError<T>) {
+    match err {
+        mpsc::error::TrySendError::Full(_) => {
+            warn!(
+                label = label,
+                cap = CONTROL_UPDATE_CHANNEL_CAP,
+                "P2P control update queue is full; dropping update"
+            );
+        }
+        mpsc::error::TrySendError::Closed(_) => {
+            debug!(
+                label = label,
+                "Network actor is closed, dropping P2P control update"
+            );
+        }
+    }
+}
+
+fn drain_latest<T>(receiver: &mut mpsc::Receiver<T>, mut value: T) -> T {
+    while let Ok(next) = receiver.try_recv() {
+        value = next;
+    }
+    value
+}
+
 #[cfg(test)]
 mod handle_update_tests {
     use std::collections::HashSet;
@@ -2977,19 +3080,21 @@ mod handle_update_tests {
     }
 
     fn closed_handle() -> NetworkBaseHandle<Dummy, X25519Sha256, ChaCha20Poly1305> {
-        let (subscribe_tx, _subscribe_rx) = mpsc::unbounded_channel::<Subscriber<Dummy>>();
+        let (subscribe_tx, _subscribe_rx) = mpsc::channel::<Subscriber<Dummy>>(1);
         let (update_topology_tx, update_topology_rx) =
-            mpsc::unbounded_channel::<message::UpdateTopology>();
-        let (update_peers_tx, update_peers_rx) = mpsc::unbounded_channel::<message::UpdatePeers>();
+            mpsc::channel::<message::UpdateTopology>(CONTROL_UPDATE_CHANNEL_CAP);
+        let (update_peers_tx, update_peers_rx) =
+            mpsc::channel::<message::UpdatePeers>(CONTROL_UPDATE_CHANNEL_CAP);
         let (update_peer_capabilities_tx, update_peer_capabilities_rx) =
-            mpsc::unbounded_channel::<message::UpdatePeerCapabilities>();
+            mpsc::channel::<message::UpdatePeerCapabilities>(CONTROL_UPDATE_CHANNEL_CAP);
         let (update_trusted_tx, update_trusted_rx) =
-            mpsc::unbounded_channel::<message::UpdateTrustedPeers>();
-        let (update_acl_tx, update_acl_rx) = mpsc::unbounded_channel::<message::UpdateAcl>();
+            mpsc::channel::<message::UpdateTrustedPeers>(CONTROL_UPDATE_CHANNEL_CAP);
+        let (update_acl_tx, update_acl_rx) =
+            mpsc::channel::<message::UpdateAcl>(CONTROL_UPDATE_CHANNEL_CAP);
         let (update_handshake_tx, update_handshake_rx) =
-            mpsc::unbounded_channel::<message::UpdateHandshake>();
+            mpsc::channel::<message::UpdateHandshake>(CONTROL_UPDATE_CHANNEL_CAP);
         let (update_consensus_caps_tx, update_consensus_caps_rx) =
-            mpsc::unbounded_channel::<message::UpdateConsensusCaps>();
+            mpsc::channel::<message::UpdateConsensusCaps>(CONTROL_UPDATE_CHANNEL_CAP);
         let (service_message_tx, _service_message_rx) =
             mpsc::channel::<ServiceMessage<WireMessage<Dummy>>>(1);
         let (network_message_high_sender, _network_message_high_rx) =
@@ -3033,19 +3138,21 @@ mod handle_update_tests {
         net_channel::Receiver<NetworkMessage<Dummy>>,
         net_channel::Receiver<NetworkMessage<Dummy>>,
     ) {
-        let (subscribe_tx, _subscribe_rx) = mpsc::unbounded_channel::<Subscriber<Dummy>>();
+        let (subscribe_tx, _subscribe_rx) = mpsc::channel::<Subscriber<Dummy>>(1);
         let (update_topology_tx, update_topology_rx) =
-            mpsc::unbounded_channel::<message::UpdateTopology>();
-        let (update_peers_tx, update_peers_rx) = mpsc::unbounded_channel::<message::UpdatePeers>();
+            mpsc::channel::<message::UpdateTopology>(CONTROL_UPDATE_CHANNEL_CAP);
+        let (update_peers_tx, update_peers_rx) =
+            mpsc::channel::<message::UpdatePeers>(CONTROL_UPDATE_CHANNEL_CAP);
         let (update_peer_capabilities_tx, update_peer_capabilities_rx) =
-            mpsc::unbounded_channel::<message::UpdatePeerCapabilities>();
+            mpsc::channel::<message::UpdatePeerCapabilities>(CONTROL_UPDATE_CHANNEL_CAP);
         let (update_trusted_tx, update_trusted_rx) =
-            mpsc::unbounded_channel::<message::UpdateTrustedPeers>();
-        let (update_acl_tx, update_acl_rx) = mpsc::unbounded_channel::<message::UpdateAcl>();
+            mpsc::channel::<message::UpdateTrustedPeers>(CONTROL_UPDATE_CHANNEL_CAP);
+        let (update_acl_tx, update_acl_rx) =
+            mpsc::channel::<message::UpdateAcl>(CONTROL_UPDATE_CHANNEL_CAP);
         let (update_handshake_tx, update_handshake_rx) =
-            mpsc::unbounded_channel::<message::UpdateHandshake>();
+            mpsc::channel::<message::UpdateHandshake>(CONTROL_UPDATE_CHANNEL_CAP);
         let (update_consensus_caps_tx, update_consensus_caps_rx) =
-            mpsc::unbounded_channel::<message::UpdateConsensusCaps>();
+            mpsc::channel::<message::UpdateConsensusCaps>(CONTROL_UPDATE_CHANNEL_CAP);
         let (service_message_tx, _service_message_rx) =
             mpsc::channel::<ServiceMessage<WireMessage<Dummy>>>(1);
         let (network_message_high_sender, network_message_high_rx) =
@@ -3084,6 +3191,91 @@ mod handle_update_tests {
         };
 
         (handle, network_message_high_rx, network_message_low_rx)
+    }
+
+    fn handle_with_subscriber_receiver() -> (
+        NetworkBaseHandle<Dummy, X25519Sha256, ChaCha20Poly1305>,
+        mpsc::Receiver<Subscriber<Dummy>>,
+    ) {
+        let (subscribe_tx, subscribe_rx) = mpsc::channel::<Subscriber<Dummy>>(1);
+        let (update_topology_tx, update_topology_rx) =
+            mpsc::channel::<message::UpdateTopology>(CONTROL_UPDATE_CHANNEL_CAP);
+        let (update_peers_tx, update_peers_rx) =
+            mpsc::channel::<message::UpdatePeers>(CONTROL_UPDATE_CHANNEL_CAP);
+        let (update_peer_capabilities_tx, update_peer_capabilities_rx) =
+            mpsc::channel::<message::UpdatePeerCapabilities>(CONTROL_UPDATE_CHANNEL_CAP);
+        let (update_trusted_tx, update_trusted_rx) =
+            mpsc::channel::<message::UpdateTrustedPeers>(CONTROL_UPDATE_CHANNEL_CAP);
+        let (update_acl_tx, update_acl_rx) =
+            mpsc::channel::<message::UpdateAcl>(CONTROL_UPDATE_CHANNEL_CAP);
+        let (update_handshake_tx, update_handshake_rx) =
+            mpsc::channel::<message::UpdateHandshake>(CONTROL_UPDATE_CHANNEL_CAP);
+        let (update_consensus_caps_tx, update_consensus_caps_rx) =
+            mpsc::channel::<message::UpdateConsensusCaps>(CONTROL_UPDATE_CHANNEL_CAP);
+        let (service_message_tx, _service_message_rx) =
+            mpsc::channel::<ServiceMessage<WireMessage<Dummy>>>(1);
+        let (network_message_high_sender, _network_message_high_rx) =
+            net_channel::channel_with_capacity(1);
+        let (network_message_low_sender, _network_message_low_rx) =
+            net_channel::channel_with_capacity(1);
+        let (_online_peers_tx, online_peers_receiver) = watch::channel(HashSet::new());
+        let (_online_peer_capabilities_tx, online_peer_capabilities_receiver) =
+            watch::channel(HashMap::new());
+
+        drop(update_topology_rx);
+        drop(update_peers_rx);
+        drop(update_peer_capabilities_rx);
+        drop(update_trusted_rx);
+        drop(update_acl_rx);
+        drop(update_handshake_rx);
+        drop(update_consensus_caps_rx);
+
+        (
+            NetworkBaseHandle {
+                subscribe_to_peers_messages_sender: subscribe_tx,
+                online_peers_receiver,
+                online_peer_capabilities_receiver,
+                update_topology_sender: update_topology_tx,
+                update_peers_sender: update_peers_tx,
+                update_peer_capabilities_sender: update_peer_capabilities_tx,
+                update_trusted_peers_sender: update_trusted_tx,
+                update_acl_sender: update_acl_tx,
+                update_handshake_sender: update_handshake_tx,
+                update_consensus_caps_sender: update_consensus_caps_tx,
+                service_message_sender: service_message_tx,
+                network_message_high_sender,
+                network_message_low_sender,
+                subscriber_queue_cap: core::num::NonZeroUsize::new(1).expect("nonzero"),
+                _key_exchange: core::marker::PhantomData,
+                _encryptor: core::marker::PhantomData,
+            },
+            subscribe_rx,
+        )
+    }
+
+    #[test]
+    fn drain_latest_keeps_newest_queued_value() {
+        let (tx, mut rx) = mpsc::channel(4);
+        tx.try_send(1).expect("first value fits");
+        tx.try_send(2).expect("second value fits");
+        tx.try_send(3).expect("third value fits");
+
+        let first = rx.try_recv().expect("first value queued");
+        assert_eq!(drain_latest(&mut rx, first), 3);
+        assert!(matches!(
+            rx.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
+    fn subscriber_registration_queue_is_bounded() {
+        let (handle, _subscribe_rx) = handle_with_subscriber_receiver();
+        let (first_tx, _first_rx) = mpsc::channel(1);
+        let (second_tx, _second_rx) = mpsc::channel(1);
+
+        assert!(handle.subscribe_to_peers_messages(first_tx).is_ok());
+        assert!(handle.subscribe_to_peers_messages(second_tx).is_err());
     }
 
     #[test]
@@ -4067,20 +4259,20 @@ mod accept_stream_tests {
             Err(e) => panic!("tcp listener from_std failed: {e:?}"),
         };
 
-        let (_subscribe_tx, subscribe_rx) = mpsc::unbounded_channel::<super::Subscriber<Dummy>>();
+        let (_subscribe_tx, subscribe_rx) = mpsc::channel::<super::Subscriber<Dummy>>(1);
         let (_update_topology_tx, update_topology_rx) =
-            mpsc::unbounded_channel::<super::message::UpdateTopology>();
+            mpsc::channel::<super::message::UpdateTopology>(CONTROL_UPDATE_CHANNEL_CAP);
         let (_update_peers_tx, update_peers_rx) =
-            mpsc::unbounded_channel::<super::message::UpdatePeers>();
+            mpsc::channel::<super::message::UpdatePeers>(CONTROL_UPDATE_CHANNEL_CAP);
         let (_update_trusted_tx, update_trusted_peers_receiver) =
-            mpsc::unbounded_channel::<super::message::UpdateTrustedPeers>();
+            mpsc::channel::<super::message::UpdateTrustedPeers>(CONTROL_UPDATE_CHANNEL_CAP);
         let (_update_acl_tx, update_acl_rx) =
-            mpsc::unbounded_channel::<super::message::UpdateAcl>();
+            mpsc::channel::<super::message::UpdateAcl>(CONTROL_UPDATE_CHANNEL_CAP);
         #[allow(unused_variables)]
         let (_update_handshake_tx, update_handshake_rx) =
-            mpsc::unbounded_channel::<super::message::UpdateHandshake>();
+            mpsc::channel::<super::message::UpdateHandshake>(CONTROL_UPDATE_CHANNEL_CAP);
         let (_update_consensus_caps_tx, update_consensus_caps_receiver) =
-            mpsc::unbounded_channel::<super::message::UpdateConsensusCaps>();
+            mpsc::channel::<super::message::UpdateConsensusCaps>(CONTROL_UPDATE_CHANNEL_CAP);
         let (peer_message_hi_tx, peer_message_hi_rx) =
             mpsc::channel::<super::PeerMessage<WireMessage<Dummy>>>(1);
         let (peer_message_lo_tx, peer_message_lo_rx) =
@@ -4093,7 +4285,7 @@ mod accept_stream_tests {
         let (online_peer_capabilities_tx, _online_peer_capabilities_rx) =
             watch::channel::<super::message::OnlinePeerCapabilities>(HashMap::new());
         let (_update_peer_capabilities_tx, update_peer_capabilities_receiver) =
-            mpsc::unbounded_channel::<super::message::UpdatePeerCapabilities>();
+            mpsc::channel::<super::message::UpdatePeerCapabilities>(CONTROL_UPDATE_CHANNEL_CAP);
 
         let soranet = Arc::new(SoranetHandshakeConfig::defaults());
 
@@ -4419,22 +4611,20 @@ mod accept_stream_tests {
             Err(e) => panic!("tcp stream from_std failed: {e:?}"),
         };
 
-        let (_subscribe_tx, subscribe_rx): (
-            mpsc::UnboundedSender<super::Subscriber<DummyConsensus>>,
-            _,
-        ) = mpsc::unbounded_channel();
+        let (_subscribe_tx, subscribe_rx): (mpsc::Sender<super::Subscriber<DummyConsensus>>, _) =
+            mpsc::channel(1);
         let (_update_topology_tx, update_topology_rx) =
-            mpsc::unbounded_channel::<super::message::UpdateTopology>();
+            mpsc::channel::<super::message::UpdateTopology>(CONTROL_UPDATE_CHANNEL_CAP);
         let (_update_peers_tx, update_peers_rx) =
-            mpsc::unbounded_channel::<super::message::UpdatePeers>();
+            mpsc::channel::<super::message::UpdatePeers>(CONTROL_UPDATE_CHANNEL_CAP);
         let (_update_trusted_tx, update_trusted_peers_receiver) =
-            mpsc::unbounded_channel::<super::message::UpdateTrustedPeers>();
+            mpsc::channel::<super::message::UpdateTrustedPeers>(CONTROL_UPDATE_CHANNEL_CAP);
         let (_update_acl_tx, update_acl_rx) =
-            mpsc::unbounded_channel::<super::message::UpdateAcl>();
+            mpsc::channel::<super::message::UpdateAcl>(CONTROL_UPDATE_CHANNEL_CAP);
         let (_update_handshake_tx, update_handshake_rx) =
-            mpsc::unbounded_channel::<super::message::UpdateHandshake>();
+            mpsc::channel::<super::message::UpdateHandshake>(CONTROL_UPDATE_CHANNEL_CAP);
         let (_update_consensus_caps_tx, update_consensus_caps_receiver) =
-            mpsc::unbounded_channel::<super::message::UpdateConsensusCaps>();
+            mpsc::channel::<super::message::UpdateConsensusCaps>(CONTROL_UPDATE_CHANNEL_CAP);
         let (peer_message_hi_tx, peer_message_hi_rx) =
             mpsc::channel::<super::PeerMessage<WireMessage<DummyConsensus>>>(1);
         let (peer_message_lo_tx, peer_message_lo_rx) =
@@ -4447,7 +4637,7 @@ mod accept_stream_tests {
         let (online_peer_capabilities_tx, _online_peer_capabilities_rx) =
             watch::channel::<super::message::OnlinePeerCapabilities>(HashMap::new());
         let (_update_peer_capabilities_tx, update_peer_capabilities_receiver) =
-            mpsc::unbounded_channel::<super::message::UpdatePeerCapabilities>();
+            mpsc::channel::<super::message::UpdatePeerCapabilities>(CONTROL_UPDATE_CHANNEL_CAP);
 
         let soranet = Arc::new(SoranetHandshakeConfig::defaults());
 
@@ -4635,21 +4825,21 @@ mod accept_stream_tests {
         };
 
         let (_subscribe_tx, subscribe_rx): (
-            mpsc::UnboundedSender<super::Subscriber<DummyConsensusPayload>>,
+            mpsc::Sender<super::Subscriber<DummyConsensusPayload>>,
             _,
-        ) = mpsc::unbounded_channel();
+        ) = mpsc::channel(1);
         let (_update_topology_tx, update_topology_rx) =
-            mpsc::unbounded_channel::<super::message::UpdateTopology>();
+            mpsc::channel::<super::message::UpdateTopology>(CONTROL_UPDATE_CHANNEL_CAP);
         let (_update_peers_tx, update_peers_rx) =
-            mpsc::unbounded_channel::<super::message::UpdatePeers>();
+            mpsc::channel::<super::message::UpdatePeers>(CONTROL_UPDATE_CHANNEL_CAP);
         let (_update_trusted_tx, update_trusted_peers_receiver) =
-            mpsc::unbounded_channel::<super::message::UpdateTrustedPeers>();
+            mpsc::channel::<super::message::UpdateTrustedPeers>(CONTROL_UPDATE_CHANNEL_CAP);
         let (_update_acl_tx, update_acl_rx) =
-            mpsc::unbounded_channel::<super::message::UpdateAcl>();
+            mpsc::channel::<super::message::UpdateAcl>(CONTROL_UPDATE_CHANNEL_CAP);
         let (_update_handshake_tx, update_handshake_rx) =
-            mpsc::unbounded_channel::<super::message::UpdateHandshake>();
+            mpsc::channel::<super::message::UpdateHandshake>(CONTROL_UPDATE_CHANNEL_CAP);
         let (_update_consensus_caps_tx, update_consensus_caps_receiver) =
-            mpsc::unbounded_channel::<super::message::UpdateConsensusCaps>();
+            mpsc::channel::<super::message::UpdateConsensusCaps>(CONTROL_UPDATE_CHANNEL_CAP);
         let (peer_message_hi_tx, peer_message_hi_rx) =
             mpsc::channel::<super::PeerMessage<WireMessage<DummyConsensusPayload>>>(1);
         let (peer_message_lo_tx, peer_message_lo_rx) =
@@ -4662,7 +4852,7 @@ mod accept_stream_tests {
         let (online_peer_capabilities_tx, _online_peer_capabilities_rx) =
             watch::channel::<super::message::OnlinePeerCapabilities>(HashMap::new());
         let (_update_peer_capabilities_tx, update_peer_capabilities_receiver) =
-            mpsc::unbounded_channel::<super::message::UpdatePeerCapabilities>();
+            mpsc::channel::<super::message::UpdatePeerCapabilities>(CONTROL_UPDATE_CHANNEL_CAP);
 
         let soranet = Arc::new(SoranetHandshakeConfig::defaults());
 
@@ -4867,21 +5057,21 @@ mod accept_stream_tests {
         };
 
         let (_subscribe_tx, subscribe_rx): (
-            mpsc::UnboundedSender<super::Subscriber<DummyConsensusChunk>>,
+            mpsc::Sender<super::Subscriber<DummyConsensusChunk>>,
             _,
-        ) = mpsc::unbounded_channel();
+        ) = mpsc::channel(1);
         let (_update_topology_tx, update_topology_rx) =
-            mpsc::unbounded_channel::<super::message::UpdateTopology>();
+            mpsc::channel::<super::message::UpdateTopology>(CONTROL_UPDATE_CHANNEL_CAP);
         let (_update_peers_tx, update_peers_rx) =
-            mpsc::unbounded_channel::<super::message::UpdatePeers>();
+            mpsc::channel::<super::message::UpdatePeers>(CONTROL_UPDATE_CHANNEL_CAP);
         let (_update_trusted_tx, update_trusted_peers_receiver) =
-            mpsc::unbounded_channel::<super::message::UpdateTrustedPeers>();
+            mpsc::channel::<super::message::UpdateTrustedPeers>(CONTROL_UPDATE_CHANNEL_CAP);
         let (_update_acl_tx, update_acl_rx) =
-            mpsc::unbounded_channel::<super::message::UpdateAcl>();
+            mpsc::channel::<super::message::UpdateAcl>(CONTROL_UPDATE_CHANNEL_CAP);
         let (_update_handshake_tx, update_handshake_rx) =
-            mpsc::unbounded_channel::<super::message::UpdateHandshake>();
+            mpsc::channel::<super::message::UpdateHandshake>(CONTROL_UPDATE_CHANNEL_CAP);
         let (_update_consensus_caps_tx, update_consensus_caps_receiver) =
-            mpsc::unbounded_channel::<super::message::UpdateConsensusCaps>();
+            mpsc::channel::<super::message::UpdateConsensusCaps>(CONTROL_UPDATE_CHANNEL_CAP);
         let (peer_message_hi_tx, peer_message_hi_rx) =
             mpsc::channel::<super::PeerMessage<WireMessage<DummyConsensusChunk>>>(1);
         let (peer_message_lo_tx, peer_message_lo_rx) =
@@ -4894,7 +5084,7 @@ mod accept_stream_tests {
         let (online_peer_capabilities_tx, _online_peer_capabilities_rx) =
             watch::channel::<super::message::OnlinePeerCapabilities>(HashMap::new());
         let (_update_peer_capabilities_tx, update_peer_capabilities_receiver) =
-            mpsc::unbounded_channel::<super::message::UpdatePeerCapabilities>();
+            mpsc::channel::<super::message::UpdatePeerCapabilities>(CONTROL_UPDATE_CHANNEL_CAP);
 
         let soranet = Arc::new(SoranetHandshakeConfig::defaults());
 
@@ -5689,19 +5879,19 @@ struct NetworkBase<T: Pload, K: Kex, E: Enc> {
     /// Recipients of messages received from other peers in the network.
     subscribers_to_peers_messages: Vec<Subscriber<T>>,
     /// Receiver to subscribe for messages received from other peers in the network.
-    subscribe_to_peers_messages_receiver: mpsc::UnboundedReceiver<Subscriber<T>>,
+    subscribe_to_peers_messages_receiver: mpsc::Receiver<Subscriber<T>>,
     /// Sender of `OnlinePeer` message
     online_peers_sender: watch::Sender<OnlinePeers>,
     /// Sender of online peer transport capabilities.
     online_peer_capabilities_sender: watch::Sender<message::OnlinePeerCapabilities>,
     /// [`UpdateTopology`] message receiver
-    update_topology_receiver: mpsc::UnboundedReceiver<UpdateTopology>,
+    update_topology_receiver: mpsc::Receiver<UpdateTopology>,
     /// [`UpdatePeers`] message receiver
-    update_peers_receiver: mpsc::UnboundedReceiver<UpdatePeers>,
+    update_peers_receiver: mpsc::Receiver<UpdatePeers>,
     /// [`UpdatePeerCapabilities`] message receiver
-    update_peer_capabilities_receiver: mpsc::UnboundedReceiver<message::UpdatePeerCapabilities>,
+    update_peer_capabilities_receiver: mpsc::Receiver<message::UpdatePeerCapabilities>,
     /// Trusted peers update receiver.
-    update_trusted_peers_receiver: mpsc::UnboundedReceiver<UpdateTrustedPeers>,
+    update_trusted_peers_receiver: mpsc::Receiver<UpdateTrustedPeers>,
     /// Receiver of high priority [`NetworkMessage`]
     network_message_high_receiver: net_channel::Receiver<NetworkMessage<T>>,
     /// Receiver of low priority [`NetworkMessage`]
@@ -5719,11 +5909,11 @@ struct NetworkBase<T: Pload, K: Kex, E: Enc> {
     /// Sender for service peer messages to provide clone of sender inside peer
     service_message_sender: mpsc::Sender<ServiceMessage<WireMessage<T>>>,
     /// ACL update receiver
-    update_acl_receiver: mpsc::UnboundedReceiver<message::UpdateAcl>,
+    update_acl_receiver: mpsc::Receiver<message::UpdateAcl>,
     /// Handshake update receiver
-    update_handshake_receiver: mpsc::UnboundedReceiver<message::UpdateHandshake>,
+    update_handshake_receiver: mpsc::Receiver<message::UpdateHandshake>,
     /// Consensus handshake caps update receiver.
-    update_consensus_caps_receiver: mpsc::UnboundedReceiver<message::UpdateConsensusCaps>,
+    update_consensus_caps_receiver: mpsc::Receiver<message::UpdateConsensusCaps>,
     /// Current available connection id
     current_conn_id: ConnectionId,
     /// Current topology
@@ -5942,16 +6132,25 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                 }
                 // Update topology is relative low rate message (at most once every block)
                 Some(update_topology) = self.update_topology_receiver.recv() => {
+                    let update_topology =
+                        drain_latest(&mut self.update_topology_receiver, update_topology);
                     self.set_current_topology(update_topology);
                 }
                 Some(update_peers) = self.update_peers_receiver.recv() => {
+                    let update_peers =
+                        drain_latest(&mut self.update_peers_receiver, update_peers);
                     self.set_current_peers_addresses(update_peers);
                 }
                 Some(update_capabilities) = self.update_peer_capabilities_receiver.recv() => {
+                    let update_capabilities = drain_latest(
+                        &mut self.update_peer_capabilities_receiver,
+                        update_capabilities,
+                    );
                     self.set_peer_capabilities(update_capabilities);
                 }
                 // Apply ACL updates (hot reload)
                 Some(acl) = self.update_acl_receiver.recv() => {
+                    let acl = drain_latest(&mut self.update_acl_receiver, acl);
                     self.allowlist_only = acl.allowlist_only;
                     self.allow_keys = acl.allow_keys.into_iter().collect();
                     self.deny_keys = acl.deny_keys.into_iter().collect();
@@ -5971,6 +6170,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                     self.current_topology = updated;
                 }
                 Some(handshake) = self.update_handshake_receiver.recv() => {
+                    let handshake = drain_latest(&mut self.update_handshake_receiver, handshake);
                     if let Err(err) = self.update_soranet_handshake_config(handshake.handshake) {
                         iroha_logger::error!(
                             error = %err,
@@ -5979,6 +6179,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                     }
                 }
                 Some(consensus_caps) = self.update_consensus_caps_receiver.recv() => {
+                    let consensus_caps =
+                        drain_latest(&mut self.update_consensus_caps_receiver, consensus_caps);
                     iroha_logger::info!(
                         mode_tag=?consensus_caps.caps.mode_tag,
                         drop_existing = consensus_caps.drop_existing_peers,
@@ -5997,7 +6199,9 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                 _ = update_topology_interval.tick() => {
                     self.update_topology()
                 }
-                Some(UpdateTrustedPeers(trusted)) = self.update_trusted_peers_receiver.recv() => {
+                Some(trusted_update) = self.update_trusted_peers_receiver.recv() => {
+                    let UpdateTrustedPeers(trusted) =
+                        drain_latest(&mut self.update_trusted_peers_receiver, trusted_update);
                     self.peer_reputations.set_trusted(&trusted);
                     if self.apply_trusted_observers() {
                         self.update_topology();
@@ -8454,17 +8658,19 @@ mod tests {
             Err(e) => panic!("tcp listener from_std failed: {e:?}"),
         };
 
-        let (_subscribe_tx, subscribe_rx) = mpsc::unbounded_channel::<Subscriber<T>>();
+        let (_subscribe_tx, subscribe_rx) = mpsc::channel::<Subscriber<T>>(1);
         let (_update_topology_tx, update_topology_rx) =
-            mpsc::unbounded_channel::<message::UpdateTopology>();
-        let (_update_peers_tx, update_peers_rx) = mpsc::unbounded_channel::<message::UpdatePeers>();
+            mpsc::channel::<message::UpdateTopology>(CONTROL_UPDATE_CHANNEL_CAP);
+        let (_update_peers_tx, update_peers_rx) =
+            mpsc::channel::<message::UpdatePeers>(CONTROL_UPDATE_CHANNEL_CAP);
         let (_update_trusted_tx, update_trusted_peers_receiver) =
-            mpsc::unbounded_channel::<message::UpdateTrustedPeers>();
-        let (_update_acl_tx, update_acl_rx) = mpsc::unbounded_channel::<message::UpdateAcl>();
+            mpsc::channel::<message::UpdateTrustedPeers>(CONTROL_UPDATE_CHANNEL_CAP);
+        let (_update_acl_tx, update_acl_rx) =
+            mpsc::channel::<message::UpdateAcl>(CONTROL_UPDATE_CHANNEL_CAP);
         let (_update_handshake_tx, update_handshake_rx) =
-            mpsc::unbounded_channel::<message::UpdateHandshake>();
+            mpsc::channel::<message::UpdateHandshake>(CONTROL_UPDATE_CHANNEL_CAP);
         let (_update_consensus_caps_tx, update_consensus_caps_receiver) =
-            mpsc::unbounded_channel::<message::UpdateConsensusCaps>();
+            mpsc::channel::<message::UpdateConsensusCaps>(CONTROL_UPDATE_CHANNEL_CAP);
         let (peer_message_hi_tx, peer_message_hi_rx) =
             mpsc::channel::<PeerMessage<WireMessage<T>>>(1);
         let (peer_message_lo_tx, peer_message_lo_rx) =
@@ -8477,7 +8683,7 @@ mod tests {
         let (online_peer_capabilities_tx, _online_peer_capabilities_rx) =
             watch::channel(HashMap::new());
         let (_update_peer_capabilities_tx, update_peer_capabilities_receiver) =
-            mpsc::unbounded_channel::<message::UpdatePeerCapabilities>();
+            mpsc::channel::<message::UpdatePeerCapabilities>(CONTROL_UPDATE_CHANNEL_CAP);
 
         let soranet = Arc::new(SoranetHandshakeConfig::defaults());
 

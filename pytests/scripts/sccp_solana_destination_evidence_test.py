@@ -861,6 +861,33 @@ def test_solana_program_bytes_file_rejects_unreadable_file_shapes(tmp_path):
         def __fspath__(self):
             raise AssertionError("secret-token Solana program path-like was coerced")
 
+    # Source-inventory marker: program bytes file native path helpers reject path-like inputs.
+    for path in (
+        str(outside),
+        HostileProgramBytesPath(),
+        HostileProgramBytesPathLike(),
+    ):
+        try:
+            module._read_program_bytes_file(path, label="verifier program bytes")
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            assert rendered == "verifier program bytes file cannot be read"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError("Solana program bytes helper accepted hostile path")
+
+        try:
+            module._reject_program_bytes_file_symlink_path(path)
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            assert rendered == "program bytes file cannot be read"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("Solana program bytes symlink helper accepted hostile path")
+
     for path in (
         str(symlink_input),
         str(directory_input),

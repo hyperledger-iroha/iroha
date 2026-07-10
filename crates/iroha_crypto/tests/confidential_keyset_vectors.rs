@@ -147,6 +147,16 @@ fn assert_negative_case(case: &NegativeCase) {
                 );
             }
         }
+        ("inert_spend_key", ConfidentialKeyError::InertSpendKey) => {
+            if let Some(expected_len) = case.expected_error.length_bytes {
+                assert_eq!(
+                    seed_bytes.len(),
+                    expected_len,
+                    "{}: length mismatch",
+                    case.case_id
+                );
+            }
+        }
         (other, unexpected) => panic!("{other}: unexpected error {unexpected:?}"),
     }
 }

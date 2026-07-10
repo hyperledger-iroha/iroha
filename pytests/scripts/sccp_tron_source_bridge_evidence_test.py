@@ -1253,6 +1253,11 @@ def test_tron_source_exact_string_parsers_reject_string_subclasses_without_hooks
 
     parser_cases = (
         (
+            lambda: module._strip_0x(hostile_hex),
+            module.argparse.ArgumentTypeError,
+            "0x text must be an exact string",
+        ),
+        (
             lambda: module._strip_lower_0x_hex(hostile_hex, label="network id"),
             module.argparse.ArgumentTypeError,
             "network id must be canonical lowercase 0x hex",
@@ -1764,6 +1769,36 @@ def test_tron_runtime_bytecode_file_rejects_unreadable_file_shapes(tmp_path):
 
         def __fspath__(self):
             raise AssertionError("secret-token TRON runtime path-like was coerced")
+
+    # Source-inventory marker: runtime bytecode file native path helpers reject path-like inputs.
+    for path in (
+        str(outside),
+        HostileRuntimeBytecodePath(),
+        HostileRuntimeBytecodePathLike(),
+    ):
+        try:
+            module._read_runtime_bytecode_file_text(
+                path,
+                label="source bridge runtime bytecode",
+            )
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            assert rendered == "source bridge runtime bytecode file cannot be read"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError("TRON runtime bytecode helper accepted hostile path")
+
+        try:
+            module._reject_runtime_bytecode_file_symlink_path(path)
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            assert rendered == "runtime bytecode file cannot be read"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("TRON runtime bytecode symlink helper accepted hostile path")
 
     for path in (
         str(symlink_input),

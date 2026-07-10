@@ -32018,10 +32018,24 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   ambiguous proof branch, including inside direct imported `Next` aliases.
   Source and top-level guarded transition disjuncts must not mix multiple action witnesses,
   so source and top-level liveness wrappers cannot conjoin two reviewed
-  transition actions into one ambiguous proof branch.
+  transition actions into one ambiguous proof branch, and guarded or
+  identity-gated imported branches or local helper wrappers such as
+  `Guard => Interleaving!ImportedAction`,
+  `TRUE /\ Interleaving!ImportedAction`, or
+  `SourceAliasPathNext == Guard => Interleaving!ImportedAction` cannot hide an
+  extra target-local action witness. Projected guarded and identity-gated
+  helper wrappers likewise cannot hide imported/local witness ambiguity behind
+  `WrappedRbcChunk`, and bare helper references cannot hide local mixed-action
+  helpers such as `WrappedMixed == Guard => (LocalOne /\ LocalTwo)`.
+  Multi-hop bare helper chains such as `OuterMixed == InnerMixed` inherit the
+  same mixed-witness check at the inner guarded helper body, including when a
+  bare helper or direct transition branch references an imported helper such as
+  `Imported!InnerMixed`.
   Nested progress transition aggregates must recursively obey the same branch contract,
   so helper `Next` aggregates cannot hide literal, temporal, or static branches
-  beneath a top-level action witness.
+  beneath a top-level action witness, including when an imported aggregate such
+  as `Imported!ImportedAggregate` is used as a direct branch or behind a local
+  wrapper.
   Source and top-level nested progress transition aggregates must recursively obey the same branch contract,
   so source and top-level liveness wrappers cannot hide literal, temporal, or
   static branches inside helper `Next` aggregates.
@@ -32032,6 +32046,30 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   Source and top-level single-reference progress transition wrappers must expose nested aggregate contracts,
   so source and top-level helper aliases cannot hide malformed aggregate
   branches from recursive transition-shape checks behind a bare wrapper name.
+  Progress transition boolean disjunct operands must inherit recursive resolution for onward aliases inside named helper operands,
+  so non-identity boolean disjuncts cannot hide imported aggregate transition
+  targets behind another local helper name.
+  Source and top-level progress transition boolean disjunct operands must inherit recursive resolution for onward aliases inside named helper operands,
+  so source and top-level non-identity boolean disjuncts cannot hide imported
+  aggregate transition targets behind another local helper name.
+  Progress transition boolean action-witness operands must expose transitive mixed action witnesses,
+  so non-identity boolean helper operands cannot hide multiple local action
+  witnesses behind another helper wrapper.
+  Source and top-level progress transition boolean action-witness operands must expose transitive mixed action witnesses,
+  so source and top-level non-identity boolean helper operands cannot hide
+  multiple local action witnesses behind another helper wrapper.
+  Progress transition boolean aggregate disjunct operands must expose nested aggregate contracts,
+  so non-identity boolean disjuncts cannot hide malformed local aggregate
+  branches behind a helper operand.
+  Source and top-level progress transition boolean aggregate disjunct operands must expose nested aggregate contracts,
+  so source and top-level non-identity boolean disjuncts cannot hide malformed
+  local aggregate branches behind a helper operand.
+  Progress transition boolean aggregate helper operands must expose transitive nested aggregate contracts,
+  so non-identity boolean helper operands cannot hide malformed local aggregate
+  branches behind another boolean helper wrapper.
+  Source and top-level progress transition boolean aggregate helper operands must expose transitive nested aggregate contracts,
+  so source and top-level non-identity boolean helper operands cannot hide
+  malformed local aggregate branches behind another boolean helper wrapper.
   Progress transition disjunct inventories must stay duplicate-free, so
   repeated action or helper branches, including inside direct imported `Next`
   aliases, cannot collapse before transition-shape checks run.
@@ -32044,20 +32082,97 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   disjuncts, direct imported `Next` aliases, and direct or transitive imported
   action aliases.
   Source and top-level progress transition action witness inventories must stay duplicate-free,
-  so source and top-level imported `Next` wrappers cannot duplicate the same
-  reachable action while keeping textual disjunct labels distinct.
+  so source and top-level bare module-alias disjuncts and imported `Next`
+  wrappers cannot duplicate the same reachable action while keeping textual
+  disjunct labels distinct.
   Progress transition aliases must be acyclic, so imported `Next` wrappers
   cannot satisfy the transition closure without resolving to inspectable
   transition operators, and direct imported `Next` wrappers still satisfy
   same-name imported fair-action reachability when they resolve to
-  action-shaped targets.
+  action-shaped targets. Whole imported `Next` aliases to helper bodies must
+  preserve helper-level mixed-witness diagnostics before fairness reachability
+  diagnostics are considered, including identity-gated helper bodies and
+  implication/equivalence literal-gated helper bodies. Whole imported `Next`
+  aliases to aggregate targets must do the same, including through
+  implication/equivalence literal-gated aggregate helpers, onward module-alias
+  aggregate helpers, nested local helper wrappers around those onward
+  aggregates, and false-disjunction identity wrappers around the same paths,
+  while preserving same-name imported fair-action reachability.
   Source and top-level progress transition aliases must be acyclic, so source
   and top-level imported `Next` wrappers cannot satisfy the transition closure
-  through recursive imported transition operators.
+  through recursive imported transition operators. Direct source and top-level
+  imported `Next` wrappers remain valid when their imported transition
+  branches and imported fairness action aliases share the same action-shaped
+  targets. Whole source and top-level imported `Next` aliases to helper bodies
+  must preserve helper-level mixed-witness diagnostics before fairness
+  reachability diagnostics are considered, including identity-gated helper
+  bodies and implication/equivalence literal-gated helper bodies. Whole source
+  and top-level imported `Next` aliases to aggregate targets must do the same,
+  including through implication/equivalence literal-gated aggregate helpers,
+  onward module-alias aggregate helpers, nested local helper wrappers around
+  those onward aggregates, and false-disjunction identity wrappers around the
+  same paths, while preserving same-name imported fair-action reachability.
   Source and top-level progress transition aliases must inherit recursive resolution for onward aliases inside imported transition targets,
   so source and top-level imported `Next` wrappers cannot hide missing,
-  undefined, parameterized, recursive, or uninspectable inner transition
-  aliases behind imported transition operators.
+  undefined, parameterized, recursive, uninspectable, or mixed-witness inner
+  transition aliases behind imported transition operators.
+  False-disjunction local helper wrappers around onward imported transition
+  paths must also surface missing `INSTANCE` aliases, missing modules,
+  undefined targets, parameterized targets, cyclic aliases, or uninspectable
+  module-alias targets before the dead literal branch can satisfy the local
+  helper shape. Regression coverage pins the full malformed target set across
+  projected, source, and top-level progress contract validators, with the
+  source and top-level validators each covering the malformed target classes
+  directly.
+  Direct false-disjunction module-alias transition disjuncts must likewise
+  surface missing `INSTANCE` aliases, missing modules, undefined targets,
+  parameterized targets, cyclic aliases, uninspectable targets, malformed
+  action-shaped target bodies, malformed aggregate target branches, mixed
+  target-local action witnesses, and onward helper-alias failures before the
+  dead literal branch can satisfy the checked transition operator. Regression
+  coverage pins this direct-disjunct path across projected, source, and
+  top-level progress contract validators, including same-name imported
+  fair-action aliases whose reachability must survive the dead literal branch
+  and whose malformed imported targets must surface before that literal branch
+  can satisfy the checked transition. Identity-gated same-name imported
+  fair-action branches behind the same dead literal must still surface their
+  malformed imported targets, nested-fairness, temporal, and purely static
+  imported target bodies, malformed imported target bodies, malformed or
+  cyclic module-alias operands inside imported target bodies,
+  helper-wrapped target-body action witnesses, guarded single-action helper
+  witnesses, module-alias-wrapped guarded helper witnesses, all-static,
+  action/static, static/temporal, guarded nested-static, and guarded nested
+  action/static aggregate branches, module-alias-wrapped all-static,
+  action/static, static/temporal, guarded nested-static, and guarded nested
+  action/static aggregate branches, multi-hop module-alias-wrapped all-static,
+  action/static, static/temporal, guarded nested-static, and guarded nested
+  action/static aggregate branches, local helper cycles, boolean helper-wrapper
+  cycles, direct, boolean, and multi-hop action-helper cycles, direct and
+  boolean invalid helper references, module-alias helper cycles, multi-hop
+  module-alias helper cycles, onward action aliases,
+  fair-action definitions aliasing different imported reviewed fair actions,
+  direct and multi-hop cyclic fair-action aliases, onward helper-alias
+  resolution failures, multi-hop helper-alias recursive helper bad targets,
+  helper aliases, direct and transitive fair-action helper aliases, boolean
+  direct/transitive fair-action helper aliases, boolean helper aliases, helper
+  wrappers, and direct and multi-hop helper actions composing other fair
+  actions, direct references to, direct and multi-hop helper-wrapper references to, and direct,
+  boolean-hidden, action-shaped wrapper, and boolean-operand helper-wrapper
+  compositions of other fair actions, module-alias conjunct fair-action composition plus direct,
+  boolean-helper, transitive, and multi-hop static-wrapper fair-action
+  conjunct operands, module-alias boolean fair-action composition plus direct, helper,
+  transitive, and multi-hop static-wrapper fair-action boolean operands,
+  multi-hop module-alias operand cycles,
+  mixed module-alias operand cycles, module-alias operand resolution
+  failures, mixed module-alias operand resolution failures, multi-hop
+  recursive helper failures behind module-alias conjunct and boolean
+  operands, mixed multi-hop recursive helper failures behind module-alias
+  operands, mixed onward helper-target failures and mixed invalid helper
+  references behind module-alias operands, boolean
+  and conjunct mixed fair-action composition/error pairings behind
+  module-alias operands,
+  helper-alias resolution failures, module-alias helper resolution failures,
+  and module-alias imported/target-local mixed action witnesses.
   Progress transition aliases must resolve through named local INSTANCE declarations,
   so imported `Next` wrappers cannot rely on implicit or misspelled module
   aliases, including onward aliases inside imported transition targets.
@@ -32100,6 +32215,16 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   Source and top-level progress transition boolean-gated helper wrappers must be acyclic,
   so source and top-level identity-literal boolean gates cannot obscure
   recursive transition helper cycles.
+  Progress transition boolean helper operands must inherit recursive resolution for onward aliases inside named helper operands,
+  so non-identity boolean helper wrappers cannot hide imported aggregate
+  transition targets behind another local helper name, including guarded
+  wrappers that reach imported aggregate targets with mixed-witness helper
+  branches.
+  Source and top-level progress transition boolean helper operands must inherit recursive resolution for onward aliases inside named helper operands,
+  so source and top-level non-identity boolean helper wrappers cannot hide
+  imported aggregate transition targets behind another local helper name,
+  including guarded wrappers that reach imported aggregate targets with
+  mixed-witness helper branches.
   Progress transition identity-gated helper wrappers must be acyclic, so
   identity-literal conjunction, disjunction, implication, or equivalence gates
   cannot downgrade recursive helper chains into generic non-bare branch
@@ -32309,6 +32434,10 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   Progress transition identity-gated module-alias disjuncts must resolve to inspectable transition operators,
   so imported transition branches hidden behind identity-literal gates cannot
   point at empty or otherwise uninspectable transition operators.
+  Identity-gated module-alias transition disjuncts must not mix imported and
+  target-local action witnesses, so `TRUE /\ Interleaving!Start` and
+  `TRUE /\ Interleaving!RbcReady` cannot satisfy the transition contract when
+  resolution exposes both alias and target action names.
   The regression suite pins identity-gated module-alias disjunct resolution
   for missing `INSTANCE` aliases, missing target modules, undefined targets,
   parameterized targets, and uninspectable targets.
@@ -32521,198 +32650,394 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   misspelled imported conjunct aliases.
   Progress fairness action module-alias conjuncts must resolve to local action modules,
   so local action bodies cannot reference missing imported action modules.
+  Source and top-level progress fairness action module-alias conjuncts must resolve to local action modules,
+  so source and top-level fairness action bodies cannot reference missing
+  imported action modules.
   Progress fairness action module-alias conjuncts must resolve to defined zero-arity actions,
   so local action bodies cannot reference undefined or parameterized imported
   conjunct operands.
+  Source and top-level progress fairness action module-alias conjuncts must resolve to defined zero-arity actions,
+  so source and top-level fairness action bodies cannot reference undefined
+  or parameterized imported conjunct operands.
   Progress fairness action module-alias conjuncts must resolve to inspectable action definitions,
   so local action bodies cannot point conjunct operands at empty or otherwise
   uninspectable imported action operators.
+  Source and top-level progress fairness action module-alias conjuncts must resolve to inspectable action definitions,
+  so source and top-level fairness action bodies cannot point conjunct operands
+  at empty or otherwise uninspectable imported action operators.
   Progress fairness action module-alias boolean operands must not hide composed fair actions,
   so local action bodies cannot bury imported fair-action helpers behind
   boolean structure, even when the imported operand aliases onward through
   nested module aliases or reaches boolean helper bodies.
+  Source and top-level progress fairness action module-alias boolean operands must not hide composed fair actions,
+  so source and top-level fairness action bodies cannot bury imported
+  fair-action helpers behind boolean structure.
   Progress fairness action module-alias boolean operands must be acyclic, so
   imported operands hidden behind boolean structure cannot recurse through
   local or imported helpers without surfacing a fairness-action cycle
   diagnostic.
+  Source and top-level progress fairness action module-alias boolean operands must be acyclic,
+  so source and top-level imported boolean operands cannot recurse through
+  local or imported action helpers without surfacing a fairness-action cycle
+  diagnostic.
   Progress fairness action module-alias boolean operands must inherit multi-hop recursive helper guards behind imported module-alias chains,
   so imported boolean operands cannot hide bad terminal helper targets after
   alternating module-alias and local-helper hops.
+  Source and top-level progress fairness action module-alias boolean operands must inherit multi-hop recursive helper guards behind imported module-alias chains,
+  so source and top-level imported boolean operands cannot hide bad terminal
+  helper targets after alternating module-alias and local-helper hops.
   Progress fairness action module-alias boolean operands must resolve through named local INSTANCE declarations,
   so local action bodies cannot rely on implicit or misspelled imported
   boolean operands.
+  Source and top-level progress fairness action module-alias boolean operands must resolve through named local INSTANCE declarations,
+  so source and top-level fairness action bodies cannot rely on implicit or
+  misspelled imported boolean operands.
   Progress fairness action module-alias boolean operands must resolve to local action modules,
   so local action bodies cannot bury references to missing imported action
   modules behind boolean structure.
+  Source and top-level progress fairness action module-alias boolean operands must resolve to local action modules,
+  so source and top-level fairness action bodies cannot bury references to
+  missing imported action modules behind boolean structure.
   Progress fairness action module-alias boolean operands must resolve to defined zero-arity actions,
   so local action bodies cannot bury undefined or parameterized imported action
   operands behind boolean structure.
+  Source and top-level progress fairness action module-alias boolean operands must resolve to defined zero-arity actions,
+  so source and top-level fairness action bodies cannot bury undefined or
+  parameterized imported action operands behind boolean structure.
   Progress fairness action module-alias boolean operands must resolve to inspectable action definitions,
   so local action bodies cannot bury empty or otherwise uninspectable imported
   action operators behind boolean structure.
+  Source and top-level progress fairness action module-alias boolean operands must resolve to inspectable action definitions,
+  so source and top-level fairness action bodies cannot bury empty or
+  otherwise uninspectable imported action operators behind boolean structure.
   Progress fairness action aliases must be acyclic, so fair action definitions
   that delegate through module-instance aliases cannot recurse through imported
   action modules instead of resolving to inspectable transition definitions.
+  Source and top-level progress fairness action aliases must be acyclic, so
+  source and top-level fair action definitions cannot delegate through
+  imported modules that recurse back into the reviewed action aliases.
   Progress fairness action aliases must not resolve directly to other fair actions,
   so one reviewed fair action cannot delegate to a different fair action through
   a module-instance alias.
+  Source and top-level progress fairness action aliases must not resolve directly to other fair actions,
+  so source and top-level fair action definitions cannot delegate to a
+  different reviewed fair action through an imported module alias.
   Progress fairness action aliases must not resolve to definitions that compose other fair actions,
   so imported action targets cannot hide the same cross-action composition
   behind a module-instance alias.
+  Source and top-level progress fairness action aliases must not resolve to definitions that compose other fair actions,
+  so source and top-level imported action targets cannot hide cross-action
+  composition behind a module-instance alias.
   Progress fairness action aliases must not resolve to definitions that hide other fair actions in boolean structure,
   so imported action targets cannot bury another reviewed transition action
   behind disjunction, implication, equivalence, or negation.
+  Source and top-level progress fairness action aliases must not resolve to definitions that hide other fair actions in boolean structure,
+  so source and top-level imported action targets cannot bury another reviewed
+  transition action behind boolean structure.
   Progress fairness action aliases must not resolve through helper wrappers that compose other fair actions,
   so imported action targets cannot hide cross-action composition behind local
   static helper chains in the target module, including when helper names are
   reached through boolean structure with direct fair-action targets or helper
   bodies use boolean structure.
+  Source and top-level progress fairness action aliases must not resolve through helper wrappers that compose other fair actions,
+  so source and top-level imported action targets cannot hide cross-action
+  composition behind local helper-wrapper chains, including boolean paths.
   Progress fairness action aliases must inherit helper-wrapper multi-hop local-helper composed-action guards inside imported action targets,
   so imported action targets cannot hide composed fair actions several static
   helper-wrapper hops below the resolved action alias.
+  Source and top-level progress fairness action aliases must inherit helper-wrapper multi-hop local-helper composed-action guards inside imported action targets,
+  so source and top-level imported action targets cannot hide composed fair
+  actions several helper-wrapper hops below the resolved action alias.
   Progress fairness action aliases must resolve helper references to defined zero-arity helper definitions,
   so declared helpers inside imported action targets cannot be parameterized
   operators that static traversal cannot inspect as named action predicates.
+  Source and top-level progress fairness action aliases must resolve helper references to defined zero-arity helper definitions,
+  so source and top-level imported action targets cannot reference
+  parameterized local helpers from reviewed action aliases.
   Progress fairness action aliases must resolve helper references to inspectable helper definitions,
   so declared helpers inside imported action targets cannot be empty or
   otherwise uninspectable operator bodies.
+  Source and top-level progress fairness action aliases must resolve helper references to inspectable helper definitions,
+  so source and top-level imported action targets cannot reference empty or
+  otherwise uninspectable local helpers from reviewed action aliases.
   Progress fairness action aliases must inherit helper-reference multi-hop recursive local-helper guards inside imported action targets,
   so imported action targets cannot hide parameterized or uninspectable helper
   definitions behind several local helper hops, including boolean helper paths.
+  Source and top-level progress fairness action aliases must inherit helper-reference multi-hop recursive local-helper guards inside imported action targets,
+  so source and top-level imported action targets cannot hide parameterized or
+  uninspectable helpers behind several local helper hops.
   Progress fairness action aliases must resolve through acyclic helper wrappers,
   so imported action targets cannot satisfy the alias review through recursive
   static helper chains in the target module.
+  Source and top-level progress fairness action aliases must resolve through acyclic helper wrappers,
+  so source and top-level imported action targets cannot satisfy alias review
+  through recursive static helper chains.
   Progress fairness action aliases must not resolve through helper actions that compose other fair actions,
   so imported action targets cannot hide cross-action composition behind local
   action-shaped helper chains in the target module, including when helper names
   are reached through boolean structure with direct fair-action targets or
   helper bodies use boolean structure.
+  Source and top-level progress fairness action aliases must not resolve through helper actions that compose other fair actions,
+  so source and top-level imported action targets cannot hide cross-action
+  composition behind action-shaped helper chains, including boolean paths.
   Progress fairness action aliases must inherit helper-action multi-hop local-helper composed-action guards inside imported action targets,
   so imported action targets cannot hide composed fair actions several
   action-shaped helper hops below the resolved action alias.
+  Source and top-level progress fairness action aliases must inherit helper-action multi-hop local-helper composed-action guards inside imported action targets,
+  so source and top-level imported action targets cannot hide composed fair
+  actions several action-shaped helper hops below the resolved action alias.
   Progress fairness action aliases must resolve through acyclic helper actions,
   so imported action targets cannot satisfy the alias review through recursive
   action-shaped helper chains in the target module.
+  Source and top-level progress fairness action aliases must resolve through acyclic helper actions,
+  so source and top-level imported action targets cannot satisfy the alias
+  review through recursive action-shaped helper chains in the target module.
   Progress fairness action aliases must not resolve through helper aliases that compose other fair actions,
   so imported action targets cannot hide cross-action composition behind local
   module-instance helper aliases in the target module, nested module-alias
   targets, or direct imported fair-action targets, including when helper
   aliases are reached through boolean structure with direct imported
   fair-action targets or helper bodies use boolean structure.
+  Source and top-level progress fairness action aliases must not resolve through helper aliases that compose other fair actions,
+  so source and top-level imported action targets cannot hide cross-action
+  composition behind local module-instance helper aliases in the target module.
   Progress fairness action aliases must resolve through acyclic helper aliases,
   so imported action targets cannot satisfy the alias review through recursive
   module-instance helper alias chains, including cycles hidden behind boolean
   helper operands.
+  Source and top-level progress fairness action aliases must resolve through acyclic helper aliases,
+  so source and top-level imported action targets cannot satisfy the alias
+  review through recursive module-instance helper alias chains.
   Progress fairness action aliases must inherit helper-alias multi-hop module-alias cycle guards inside imported action targets,
   so imported action targets cannot hide recursive module-alias helper loops
   several helper and module hops below the resolved action alias.
+  Source and top-level progress fairness action aliases must inherit helper-alias multi-hop module-alias cycle guards inside imported action targets,
+  so source and top-level imported action targets cannot hide recursive
+  module-alias helper loops several helper and module hops below the resolved
+  action alias.
   Progress fairness action aliases must resolve helper aliases through named local INSTANCE declarations,
   so imported action targets cannot hide unresolved helper module aliases
   behind a resolved fair-action alias.
+  Source and top-level progress fairness action aliases must resolve helper aliases through named local INSTANCE declarations,
+  so source and top-level imported action targets cannot hide unresolved
+  helper module aliases behind a resolved fair-action alias.
   Progress fairness action aliases must resolve helper aliases to local action modules,
   so imported action targets cannot point helper aliases at absent local
   modules.
+  Source and top-level progress fairness action aliases must resolve helper aliases to local action modules,
+  so source and top-level imported action targets cannot point helper aliases
+  at absent local modules.
   Progress fairness action aliases must resolve helper aliases to defined zero-arity actions,
   so imported action targets cannot point helper aliases at undefined or
   parameterized imported operators.
+  Source and top-level progress fairness action aliases must resolve helper aliases to defined zero-arity actions,
+  so source and top-level imported action targets cannot point helper aliases
+  at undefined or parameterized imported operators.
   Progress fairness action aliases must resolve helper-alias helper references to defined zero-arity helper definitions,
   so imported helper bodies reached through alias-target helper aliases cannot
   hide parameterized local helper operators from the fairness-action review.
+  Source and top-level progress fairness action aliases must resolve helper-alias helper references to defined zero-arity helper definitions,
+  so source and top-level imported helper bodies reached through alias-target
+  helper aliases cannot hide parameterized local helper operators from the
+  fairness-action review.
   Progress fairness action aliases must resolve helper-alias helper references to inspectable helper definitions,
   so imported helper bodies reached through alias-target helper aliases cannot
   hide empty or otherwise uninspectable local helper operators, including the
   helper alias target itself.
+  Source and top-level progress fairness action aliases must resolve helper-alias helper references to inspectable helper definitions,
+  so source and top-level imported helper bodies reached through alias-target
+  helper aliases cannot hide empty or otherwise uninspectable local helper
+  operators.
   Progress fairness action aliases must inherit helper-alias multi-hop recursive helper guards inside imported action targets,
   so imported action targets cannot hide parameterized or uninspectable
   terminal helper definitions after several module-alias and local-helper hops.
+  Source and top-level progress fairness action aliases must inherit helper-alias multi-hop recursive helper guards inside imported action targets,
+  so source and top-level imported action targets cannot hide parameterized or
+  uninspectable terminal helper definitions after several module-alias and
+  local-helper hops.
   Progress fairness action aliases must not resolve through module-alias conjuncts that compose other fair actions,
   so imported action targets cannot compose direct imported fair-action
   operators beside their own action update, even when the imported operand
   aliases onward or reaches boolean helper bodies.
+  Source and top-level progress fairness action aliases must not resolve through module-alias conjuncts that compose other fair actions,
+  so source and top-level imported action targets cannot compose direct
+  imported fair-action operators beside their own action update.
   Progress fairness action aliases must resolve through acyclic module-alias conjuncts,
   so imported action targets cannot satisfy the alias review through recursive
   module-alias conjunct chains.
+  Source and top-level progress fairness action aliases must resolve through acyclic module-alias conjuncts,
+  so source and top-level imported action targets cannot satisfy the alias
+  review through recursive module-alias conjunct chains.
   Progress fairness action aliases must inherit module-alias conjunct multi-hop cycle guards behind imported module-alias chains,
   so imported action targets cannot hide recursive module-alias conjunct loops
   after several imported and local helper hops.
+  Source and top-level progress fairness action aliases must inherit module-alias conjunct multi-hop cycle guards behind imported module-alias chains,
+  so source and top-level imported action targets cannot hide recursive
+  module-alias conjunct loops after several imported and local helper hops.
   Progress fairness action aliases must resolve module-alias conjuncts through named local INSTANCE declarations,
   so imported action targets cannot hide unresolved conjunct module aliases
   behind a resolved fair-action alias.
+  Source and top-level progress fairness action aliases must resolve module-alias conjuncts through named local INSTANCE declarations,
+  so source and top-level imported action targets cannot hide unresolved
+  conjunct module aliases behind a resolved fair-action alias.
   Progress fairness action aliases must resolve module-alias conjuncts to local action modules,
   so imported action targets cannot point conjunct operands at absent local
   modules.
+  Source and top-level progress fairness action aliases must resolve module-alias conjuncts to local action modules,
+  so source and top-level imported action targets cannot point conjunct
+  operands at absent local modules.
   Progress fairness action aliases must resolve module-alias conjuncts to defined zero-arity actions,
   so imported action targets cannot point conjunct operands at undefined or
   parameterized imported operators.
+  Source and top-level progress fairness action aliases must resolve module-alias conjuncts to defined zero-arity actions,
+  so source and top-level imported action targets cannot point conjunct
+  operands at undefined or parameterized imported operators.
   Progress fairness action aliases must resolve module-alias conjuncts to inspectable action definitions,
   so imported action targets cannot point conjunct operands at empty or
   otherwise uninspectable imported action operators.
+  Source and top-level progress fairness action aliases must resolve module-alias conjuncts to inspectable action definitions,
+  so source and top-level imported action targets cannot point conjunct
+  operands at empty or otherwise uninspectable imported action operators.
   Progress fairness action aliases must inherit module-alias conjunct multi-hop recursive helper guards behind imported module-alias chains,
   so imported action targets cannot hide bad terminal conjunct helper targets
   after alternating module-alias and local-helper hops.
+  Source and top-level progress fairness action aliases must inherit module-alias conjunct multi-hop recursive helper guards behind imported module-alias chains,
+  so source and top-level imported action targets cannot hide bad terminal
+  conjunct helper targets after alternating module-alias and local-helper hops.
   Progress fairness action aliases must not resolve through module-alias boolean operands that compose other fair actions,
   so imported action targets cannot bury direct imported fair-action operators
   behind boolean structure, even when the imported operand aliases onward or
   reaches boolean helper bodies.
+  Source and top-level progress fairness action aliases must not resolve through module-alias boolean operands that compose other fair actions,
+  so source and top-level imported action targets cannot bury direct imported
+  fair-action operators behind boolean structure.
   Progress fairness action aliases must resolve through acyclic module-alias boolean operands,
   so imported action targets cannot satisfy the alias review through recursive
   module-alias boolean operand chains.
+  Source and top-level progress fairness action aliases must resolve through acyclic module-alias boolean operands,
+  so source and top-level imported action targets cannot satisfy the alias
+  review through recursive module-alias boolean operand chains.
   Progress fairness action aliases must inherit module-alias boolean operand multi-hop cycle guards behind imported module-alias chains,
   so imported action targets cannot hide recursive module-alias boolean
   operand loops after several imported and local helper hops.
+  Source and top-level progress fairness action aliases must inherit module-alias boolean operand multi-hop cycle guards behind imported module-alias chains,
+  so source and top-level imported action targets cannot hide recursive
+  module-alias boolean operand loops after several imported and local helper
+  hops.
   Progress fairness action aliases must resolve module-alias boolean operands through named local INSTANCE declarations,
   so imported action targets cannot hide unresolved boolean-operand module
   aliases behind a resolved fair-action alias.
+  Source and top-level progress fairness action aliases must resolve module-alias boolean operands through named local INSTANCE declarations,
+  so source and top-level imported action targets cannot hide unresolved
+  boolean-operand module aliases behind a resolved fair-action alias.
   Progress fairness action aliases must resolve module-alias boolean operands to local action modules,
   so imported action targets cannot point boolean operands at absent local
   modules.
+  Source and top-level progress fairness action aliases must resolve module-alias boolean operands to local action modules,
+  so source and top-level imported action targets cannot point boolean
+  operands at absent local modules.
   Progress fairness action aliases must resolve module-alias boolean operands to defined zero-arity actions,
   so imported action targets cannot point boolean operands at undefined or
   parameterized imported operators.
+  Source and top-level progress fairness action aliases must resolve module-alias boolean operands to defined zero-arity actions,
+  so source and top-level imported action targets cannot point boolean
+  operands at undefined or parameterized imported operators.
   Progress fairness action aliases must resolve module-alias boolean operands to inspectable action definitions,
   so imported action targets cannot point boolean operands at empty or
   otherwise uninspectable imported action operators.
+  Source and top-level progress fairness action aliases must resolve module-alias boolean operands to inspectable action definitions,
+  so source and top-level imported action targets cannot point boolean
+  operands at empty or otherwise uninspectable imported action operators.
   Progress fairness action aliases must inherit module-alias boolean operand multi-hop recursive helper guards behind imported module-alias chains,
   so imported action targets cannot hide bad terminal boolean helper targets
   after alternating module-alias and local-helper hops.
+  Source and top-level progress fairness action aliases must inherit module-alias boolean operand multi-hop recursive helper guards behind imported module-alias chains,
+  so source and top-level imported action targets cannot hide bad terminal
+  boolean helper targets after alternating module-alias and local-helper hops.
   Progress fairness action aliases must resolve through named local INSTANCE declarations,
   so projection fairness cannot point at an undeclared module alias or a
   static predicate in the imported action module.
+  Source and top-level progress fairness action aliases must resolve through named local INSTANCE declarations,
+  so source and top-level fairness cannot point at undeclared module aliases.
   Same-name imported fair-action aliases remain valid when the imported
   action target is an inspectable action-shaped transition definition.
   Progress fairness action aliases must resolve to local action modules,
   so projection fairness cannot point at absent imported action modules.
+  Source and top-level progress fairness action aliases must resolve to local action modules,
+  so source and top-level fairness cannot point at absent imported action
+  modules.
   Progress fairness action aliases must resolve to defined zero-arity actions,
   so projection fairness cannot point at undefined or parameterized imported
   action operators.
+  Source and top-level progress fairness action aliases must resolve to defined zero-arity actions,
+  so source and top-level fairness cannot point at undefined or parameterized
+  imported action operators.
   Progress fairness action aliases must resolve to inspectable actions, so
   projection fairness cannot point at empty or otherwise uninspectable imported
   action operators.
+  Source and top-level progress fairness action aliases must resolve to inspectable actions,
+  so source and top-level fairness cannot point at empty or otherwise
+  uninspectable imported action operators. Same-name imported source and
+  top-level fair-action aliases remain valid when the imported targets are
+  inspectable action-shaped transition definitions.
   Progress fairness action aliases must inherit multi-hop module-alias cycle guards behind imported action targets,
   so projection fairness cannot hide recursive action-alias loops several
   imported modules below the resolved fair-action alias.
+  Source and top-level progress fairness action aliases must inherit multi-hop module-alias cycle guards behind imported action targets,
+  so source and top-level fairness cannot hide recursive action-alias loops
+  several imported modules below the resolved fair-action alias.
   Progress fairness action aliases must not resolve through onward action aliases inside imported action targets,
   so projection fairness cannot accept an imported fair-action target that
   aliases onward instead of being the inspected action-shaped transition
   definition.
+  Source and top-level progress fairness action aliases must not resolve through onward action aliases inside imported action targets,
+  so source and top-level fairness cannot accept imported fair-action targets
+  that alias onward instead of being inspected action-shaped transition
+  definitions.
   Progress fairness action aliases must resolve to action definitions without fairness clauses,
   so projection fairness cannot hide nested `WF_vars` obligations inside an
   imported action alias target.
+  Source and top-level progress fairness action aliases must resolve to action definitions without fairness clauses,
+  so source and top-level fairness cannot hide nested `WF_vars` obligations
+  inside imported action alias targets.
   Progress fairness action aliases must resolve to transition definitions without fairness or temporal operators,
   so projection fairness cannot hide temporal syntax inside an imported action
   alias target.
+  Source and top-level progress fairness action aliases must resolve to transition definitions without fairness or temporal operators,
+  so source and top-level fairness cannot hide temporal syntax inside imported
+  action alias targets.
   Progress fairness action aliases must resolve to transition definitions that mention next-state updates or UNCHANGED,
   so projection fairness cannot point at static imported predicates.
+  Source and top-level progress fairness action aliases must resolve to transition definitions that mention next-state updates or UNCHANGED,
+  so source and top-level fairness cannot point at static imported predicates.
   Progress transition closures must keep static [][Next]_vars shape, so
   progress liveness cannot switch to a dynamic or temporal closure outside the
   checked transition operator.
+  Source and top-level progress transition closures must keep static [][Next]_vars shape,
+  so source and top-level progress liveness cannot switch to dynamic or
+  temporal closures outside the checked transition operator.
   Progress transition operators must be defined zero-arity operators, so
   progress liveness cannot point at missing or parameterized transition roots.
+  Source and top-level progress transition operators must be defined zero-arity operators,
+  so source and top-level progress liveness cannot point at missing or
+  parameterized transition roots.
   Progress fairness actions must be reachable from the checked transition closure,
   so a liveness spec cannot keep the expected fairness aggregate while closing
   over a `Next` relation that omits one of those fair actions, including when
   fair actions and transition branches are paired through same-name imported
   module aliases.
+  Source and top-level progress fairness actions must be reachable from the checked transition closure,
+  so source and top-level liveness specs cannot keep the expected fairness
+  aggregate while closing over a transition relation that omits a fair action,
+  including when source and top-level fair actions and transition branches are
+  paired through same-name imported module aliases.
+  Progress fairness action reachability must follow transitive boolean local helper operands,
+  so guarded helper wrappers cannot create false missing-fair-action diagnostics
+  when they still reach the reviewed action through another local helper.
+  Source and top-level progress fairness action reachability must follow transitive boolean local helper operands,
+  so source and top-level guarded helper wrappers cannot create false
+  missing-fair-action diagnostics when they still reach the reviewed action
+  through another local helper.
   Source commit progress spec contract inventories must stay duplicate-free, so
   repeated source progress spec rows cannot inflate fairness coverage before
   spec/fairness wiring is checked.
