@@ -4006,6 +4006,8 @@ struct VkSubmissionJson {
     vk_bytes: Option<String>,
     #[norito(default)]
     status: Option<iroha::data_model::confidential::ConfidentialStatus>,
+    #[norito(default)]
+    namespace: Option<String>,
 }
 
 struct PreparedVkSubmission {
@@ -4151,7 +4153,7 @@ fn build_vk_record(
         payload.version,
         payload.circuit_id.clone(),
         None,
-        "core",
+        payload.namespace.clone().unwrap_or_else(|| "core".to_owned()),
         backend_tag,
         payload.curve.clone().unwrap_or_else(|| "unknown".into()),
         schema_hash,
