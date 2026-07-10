@@ -543,6 +543,10 @@ fn route_uses_legacy_default_public_lane(route: RoutingDecision, nexus: &Nexus) 
             .any(|lane| lane.dataspace_id == route.dataspace_id)
 }
 
+fn nexus_uses_multilane_route_catalogs(nexus: &Nexus) -> bool {
+    nexus.enabled && nexus.uses_multilane_catalogs()
+}
+
 fn resolve_routing_plan_against_nexus_at_height(
     plan: RoutingPlan,
     nexus: &Nexus,
@@ -550,7 +554,9 @@ fn resolve_routing_plan_against_nexus_at_height(
 ) -> Result<RoutingPlan, RoutingResolveError> {
     let plan =
         resolve_routing_plan_against_catalogs(plan, &nexus.lane_catalog, &nexus.dataspace_catalog)?;
-    ensure_routing_plan_active_at_height(&plan, nexus, block_height)?;
+    if nexus_uses_multilane_route_catalogs(nexus) {
+        ensure_routing_plan_active_at_height(&plan, nexus, block_height)?;
+    }
     Ok(plan)
 }
 
@@ -7162,7 +7168,7 @@ impl Queue {
     }
 
     fn nexus_uses_config_router(nexus: &Nexus) -> bool {
-        nexus.enabled && nexus.uses_multilane_catalogs()
+        nexus_uses_multilane_route_catalogs(nexus)
     }
 
     fn router_for_nexus(
@@ -13187,6 +13193,42 @@ pub mod tests {
             routing_ledger::get_plan(&hash),
             None,
             "rejected inactive state-free route must not enter the local routing ledger"
+        );
+    }
+
+    #[test]
+    fn state_backed_queue_routes_skip_catalog_validation_when_nexus_disabled() {
+        let mut state = state_with_future_created_autoscale_lane(7, 6);
+        state.nexus.get_mut().enabled = false;
+        let nexus = state.nexus_snapshot();
+        assert!(!nexus.enabled);
+        assert!(nexus.uses_multilane_catalogs());
+        assert_eq!(
+            crate::state::nexus_active_lane_dataspace_at_height(
+                LaneId::new(1),
+                &nexus,
+                state_height_for_routing(&state),
+            ),
+            None
+        );
+
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = queue_with_state_free_future_created_router(&state, &time_source);
+        let tx = accepted_tx_by_someone(&time_source);
+        let expected =
+            RoutingPlan::single(RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL));
+
+        assert_eq!(
+            queue
+                .route_plan_with_state(&tx, &state)
+                .expect("disabled Nexus should not enforce inactive catalog lanes"),
+            expected
+        );
+        assert_eq!(
+            queue
+                .route_plan_for_gossip_with_state(&tx, &state)
+                .expect("disabled Nexus gossip routing should not enforce inactive catalog lanes"),
+            expected
         );
     }
 
