@@ -1289,6 +1289,34 @@ mod tests {
     }
 
     #[test]
+    fn verify_accepts_native_amx_receipt_with_lane_local_height() {
+        let mut envelope = build_envelope(6, None);
+        envelope
+            .settlement_commitment
+            .native_amx_receipts
+            .push(NativeAmxReceipt {
+                version: 1,
+                source_id: [0x5A; 32],
+                chain_id_hash: Hash::new(b"native-amx-relay-test-chain"),
+                plan_digest: Hash::new(b"native-amx-relay-test-plan"),
+                lane_id: envelope.lane_id,
+                dataspace_id: envelope.dataspace_id,
+                lane_incarnation: Hash::new(b"native-amx-relay-test-incarnation"),
+                authority_context_height: envelope.block_height,
+                lane_block_height: 7,
+                lane_block_view: 2,
+                coordinator_proposal_hash: Hash::new(b"native-amx-relay-test-proposal"),
+                legs: Vec::new(),
+            });
+        envelope.settlement_hash =
+            compute_settlement_hash(&envelope.settlement_commitment).expect("settlement hash");
+
+        envelope
+            .verify()
+            .expect("lane-local height must not be compared with global block height");
+    }
+
+    #[test]
     fn relay_envelope_ref_state_key_is_canonical_and_deterministic() {
         let relay_ref = build_envelope(7, None).relay_ref();
         let first = relay_ref.relay_state_key();

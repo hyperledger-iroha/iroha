@@ -143,6 +143,11 @@ mod block {
             revert.commit();
         }
 
+        /// Return whether this block has staged a value mutation.
+        pub fn is_dirty(&self) -> bool {
+            self.dirty
+        }
+
         /// Get mutable access to the value stored in
         pub fn get_mut(&mut self) -> &mut V {
             let value = self.blocks.get_mut();
@@ -391,7 +396,7 @@ mod tests {
                 let mut transaction = block.transaction();
                 *transaction.get_mut() = 1;
             }
-            assert!(!block.dirty);
+            assert!(!block.is_dirty());
             block.commit();
         }
 
@@ -410,7 +415,7 @@ mod tests {
                 let mut transaction = block.transaction();
                 *transaction.get_mut() = 2;
             }
-            assert!(block.dirty);
+            assert!(block.is_dirty());
             block.commit();
         }
 
