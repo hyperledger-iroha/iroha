@@ -53,10 +53,14 @@ import {
   buildSubmitBallotTransaction,
   buildFinalizeElectionTransaction,
   hashSignedTransaction,
+  hashSignedTransactionPayload,
+  hashInstructionBatch,
 } from "../src/transaction.js";
 import {
   buildMintAssetInstruction,
   buildRegisterDomainInstruction,
+  buildSetAccountKeyValueInstruction,
+  buildTransferAssetInstruction,
 } from "../src/instructionBuilders.js";
 import { AccountAddress } from "../src/address.js";
 import { makeNativeTest } from "./helpers/native.js";
@@ -291,6 +295,55 @@ test("buildRegisterDomainTransaction returns canonical hash", () => {
     encoding: "buffer",
   });
   assert.deepEqual(recomputed, built.hash);
+});
+
+test("hashSignedTransactionPayload returns the detached scaffold preimage", () => {
+  const first = buildSampleRegisterDomain();
+  const second = buildSampleRegisterDomain({
+    privateKey: Buffer.alloc(32, 0x12),
+  });
+  const firstPayloadHash = hashSignedTransactionPayload(
+    first.signedTransaction,
+    { encoding: "buffer" },
+  );
+  const secondPayloadHash = hashSignedTransactionPayload(
+    second.signedTransaction,
+    { encoding: "buffer" },
+  );
+
+  assert.equal(firstPayloadHash.length, 32);
+  assert.deepEqual(firstPayloadHash, secondPayloadHash);
+  assert.notDeepEqual(first.hash, second.hash);
+});
+
+test("hashInstructionBatch binds a settlement batch to its source marker", () => {
+  const transfer = buildTransferAssetInstruction({
+    sourceAssetHoldingId: CANONICAL_ASSET_ID_INPUT,
+    quantity: "2800",
+    destinationAccountId: NEW_ACCOUNT_ID_INPUT,
+  });
+  const batchFor = (sourceTxHash) => [
+    buildSetAccountKeyValueInstruction({
+      accountId: AUTHORITY_ID_INPUT,
+      key: `pk_cbuae_settlement_${sourceTxHash}`,
+      value: {
+        protocol: "pk-cbuae-settlement",
+        version: 1,
+        source_tx_hash: sourceTxHash,
+      },
+    }),
+    transfer,
+  ];
+  const first = hashInstructionBatch(batchFor("a".repeat(64)), {
+    encoding: "buffer",
+  });
+  const second = hashInstructionBatch(batchFor("b".repeat(64)), {
+    encoding: "buffer",
+  });
+
+  assert.equal(first.length, 32);
+  assert.equal(second.length, 32);
+  assert.notDeepEqual(first, second);
 });
 
 test("buildRegisterDomainTransaction accepts metadata JSON strings", () => {

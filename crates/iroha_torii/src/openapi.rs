@@ -2528,7 +2528,7 @@ fn zk_paths() -> Map {
         Value::Object(json_get_operation(
             "ZK",
             "Fetch a verification key.",
-            "Fetch a verification key by backend and name.",
+            "Fetch a verification key by backend and name. The response includes namespace and owner_manifest_id identity metadata plus record_norito_base64, the standard-base64 canonical Norito VerifyingKeyRecord archive used by SDK proof-attachment builders.",
             "#/components/schemas/JsonValue",
             vec![
                 string_path_param("backend", "Verification backend label."),
@@ -9659,10 +9659,20 @@ fn openapi_schemas() -> Map {
         "NativeAmxAttestationBody".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["chain_id_hash", "source_id", "tx_entrypoint_hash", "plan_digest", "phase", "coordinator_lane_id", "coordinator_dataspace_id", "coordinator_lane_incarnation", "participant_lane_id", "participant_dataspace_id", "participant_lane_incarnation", "authority_context_height", "coordinator_lane_block_height", "coordinator_lane_block_view", "coordinator_proposal_hash"],
+            "required": ["round", "epoch", "source_id", "tx_entrypoint_hash", "plan_digest", "phase", "coordinator_lane_id", "coordinator_dataspace_id", "participant_lane_id", "participant_dataspace_id", "planned_coordinator_block_height"],
             "additionalProperties": false,
             "properties": {
-                "chain_id_hash": { "$ref": "#/components/schemas/Hash" },
+                "round": {
+                    "type": "object",
+                    "required": ["context_id", "height", "view"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "context_id": { "$ref": "#/components/schemas/Hash" },
+                        "height": { "type": "integer", "format": "uint64", "minimum": 1 },
+                        "view": { "type": "integer", "format": "uint64", "minimum": 0 }
+                    }
+                },
+                "epoch": { "type": "integer", "format": "uint64", "minimum": 0 },
                 "source_id": {
                     "type": "string",
                     "pattern": "^[0-9a-fA-F]{64}$",
@@ -9677,14 +9687,9 @@ fn openapi_schemas() -> Map {
                 },
                 "coordinator_lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4294967295u64 },
                 "coordinator_dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "coordinator_lane_incarnation": { "$ref": "#/components/schemas/Hash" },
                 "participant_lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4294967295u64 },
                 "participant_dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "participant_lane_incarnation": { "$ref": "#/components/schemas/Hash" },
-                "authority_context_height": { "type": "integer", "format": "uint64", "minimum": 1 },
-                "coordinator_lane_block_height": { "type": "integer", "format": "uint64", "minimum": 1 },
-                "coordinator_lane_block_view": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "coordinator_proposal_hash": { "$ref": "#/components/schemas/Hash" }
+                "planned_coordinator_block_height": { "type": "integer", "format": "uint64", "minimum": 1 }
             }
         }),
     );
@@ -9722,12 +9727,11 @@ fn openapi_schemas() -> Map {
         "NativeAmxLegRecord".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["lane_id", "dataspace_id", "lane_incarnation", "prepare_qc", "commit_qc"],
+            "required": ["lane_id", "dataspace_id", "prepare_qc", "commit_qc"],
             "additionalProperties": false,
             "properties": {
                 "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4294967295u64 },
                 "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "lane_incarnation": { "$ref": "#/components/schemas/Hash" },
                 "prepare_qc": { "$ref": "#/components/schemas/NativeAmxAttestationQc" },
                 "commit_qc": { "$ref": "#/components/schemas/NativeAmxAttestationQc" }
             }
@@ -9740,7 +9744,7 @@ fn openapi_schemas() -> Map {
             "required": ["version", "source_id", "chain_id_hash", "plan_digest", "lane_id", "dataspace_id", "lane_incarnation", "authority_context_height", "lane_block_height", "lane_block_view", "coordinator_proposal_hash", "legs"],
             "additionalProperties": false,
             "properties": {
-                "version": { "type": "integer", "format": "uint16", "enum": [1] },
+                "version": { "type": "integer", "format": "uint16", "enum": [2] },
                 "source_id": {
                     "type": "string",
                     "pattern": "^[0-9a-fA-F]{64}$",
@@ -9838,9 +9842,45 @@ fn openapi_schemas() -> Map {
         "SumeragiStatusResponse".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["lane_settlement_commitments", "lane_relay_envelopes"],
-            "additionalProperties": true,
+            "required": [
+                "protocol_version",
+                "node_fingerprint",
+                "build_fingerprint",
+                "config_fingerprint",
+                "height_context_id",
+                "height",
+                "view",
+                "phase",
+                "leader",
+                "body_state",
+                "last_committed_height",
+                "lane_settlement_commitments",
+                "lane_relay_envelopes"
+            ],
+            "additionalProperties": false,
             "properties": {
+                "protocol_version": { "type": "integer", "minimum": 2, "maximum": 2 },
+                "node_fingerprint": { "$ref": "#/components/schemas/Hash" },
+                "build_fingerprint": { "$ref": "#/components/schemas/Hash" },
+                "config_fingerprint": { "$ref": "#/components/schemas/Hash" },
+                "height_context_id": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 1,
+                    "items": { "$ref": "#/components/schemas/Hash" },
+                    "description": "Single-field HeightContextId tuple containing the frozen context hash."
+                },
+                "height": { "type": "integer", "minimum": 0 },
+                "view": { "type": "integer", "minimum": 0 },
+                "phase": { "$ref": "#/components/schemas/JsonValue" },
+                "leader": { "type": "integer", "minimum": 0 },
+                "locked_prepare_qc": { "$ref": "#/components/schemas/JsonValue", "nullable": true },
+                "highest_prepare_qc": { "$ref": "#/components/schemas/JsonValue", "nullable": true },
+                "last_timeout_certificate": { "$ref": "#/components/schemas/JsonValue", "nullable": true },
+                "body_state": { "$ref": "#/components/schemas/JsonValue" },
+                "pending_persistence_id": { "type": "integer", "minimum": 0, "nullable": true },
+                "last_committed_height": { "type": "integer", "minimum": 0 },
+                "last_committed_subject": { "$ref": "#/components/schemas/JsonValue", "nullable": true },
                 "lane_settlement_commitments": {
                     "type": "array",
                     "items": { "$ref": "#/components/schemas/LaneSettlementCommitment" },
@@ -13734,6 +13774,17 @@ mod tests {
         assert!(vpn_receipts_post_description.contains("SettleVpnLease"));
         assert!(paths.contains_key("/v1/mcp"));
         assert!(paths.contains_key("/v1/zk/attachments"));
+        let verifying_key_get_description = paths
+            .get("/v1/zk/vk/{backend}/{name}")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("get"))
+            .and_then(Value::as_object)
+            .and_then(|get| get.get("description"))
+            .and_then(Value::as_str)
+            .expect("verifying-key detail description");
+        assert!(verifying_key_get_description.contains("record_norito_base64"));
+        assert!(verifying_key_get_description.contains("namespace"));
+        assert!(verifying_key_get_description.contains("owner_manifest_id"));
         assert!(paths.contains_key("/v1/multisig/propose"));
         assert!(paths.contains_key("/v1/multisig/approve"));
         assert!(paths.contains_key("/v1/contracts/call/multisig/propose"));
@@ -15424,21 +15475,27 @@ mod tests {
             .and_then(|components| components.get("schemas"))
             .and_then(Value::as_object)
             .expect("components schemas");
-        let status_properties = schemas
+        let status_schema = schemas
             .get("SumeragiStatusResponse")
             .and_then(Value::as_object)
-            .and_then(|schema| schema.get("properties"))
+            .expect("status response schema");
+        assert_eq!(
+            status_schema
+                .get("additionalProperties")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        let status_properties = status_schema
+            .get("properties")
             .and_then(Value::as_object)
             .expect("status response properties");
         assert_eq!(
             status_properties
-                .get("lane_settlement_commitments")
+                .get("protocol_version")
                 .and_then(Value::as_object)
-                .and_then(|schema| schema.get("items"))
-                .and_then(Value::as_object)
-                .and_then(|items| items.get("$ref"))
-                .and_then(Value::as_str),
-            Some("#/components/schemas/LaneSettlementCommitment")
+                .and_then(|schema| schema.get("minimum"))
+                .and_then(Value::as_u64),
+            Some(2)
         );
         assert_eq!(
             status_properties
@@ -15449,6 +15506,44 @@ mod tests {
                 .and_then(|items| items.get("$ref"))
                 .and_then(Value::as_str),
             Some("#/components/schemas/LaneRelayEnvelope")
+        );
+        assert!(status_properties.contains_key("height_context_id"));
+        assert!(status_properties.contains_key("pending_persistence_id"));
+        assert!(status_properties.contains_key("last_committed_subject"));
+        assert!(status_properties.contains_key("lane_settlement_commitments"));
+        for field in [
+            "node_fingerprint",
+            "build_fingerprint",
+            "config_fingerprint",
+        ] {
+            assert_eq!(
+                status_properties
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("$ref"))
+                    .and_then(Value::as_str),
+                Some("#/components/schemas/Hash")
+            );
+        }
+        let height_context = status_properties
+            .get("height_context_id")
+            .and_then(Value::as_object)
+            .expect("height context id schema");
+        assert_eq!(
+            height_context.get("minItems").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            height_context.get("maxItems").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            height_context
+                .get("items")
+                .and_then(Value::as_object)
+                .and_then(|items| items.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/Hash")
         );
 
         let commitment_properties = schemas

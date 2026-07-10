@@ -6,8 +6,18 @@ deployment.
 
 ## Network identity
 
-- Public chain ID: `809574f5-fee7-5e69-bfcf-52451e42d50f`
+- Public Sumeragi-v2 chain ID: `fc56984b-2be7-431d-840e-21514d1883f0`
+- Archived pre-v2 chain ID: `809574f5-fee7-5e69-bfcf-52451e42d50f`
 - Address chain discriminant: `369` (this is what drives canonical I105 literals such as `testu...`)
+- Consensus protocol: Sumeragi v2 only (`wire_proto_versions = [2]`)
+- Timing profile: 1,000 ms block cadence and one absolute 10,000 ms round deadline
+- Candidate bounds: 96 transactions, 16 MiB canonical body, and a four-times bounded queue scan
+- Role/mode boundary: each validator config says `role = "validator"`; NPoS mode and DA/chunk
+  geometry come from signed genesis, not a mutable local mode or RBC selector
+
+The v2 chain is a fresh-genesis reset. Never point a v2 validator at the archived chain's Kura,
+queue journal, or RBC session directories, and never attempt a mixed v1/v2 rolling upgrade. Keep
+the archived chain data read-only for incident analysis.
 
 ## Public API contract
 
@@ -148,6 +158,15 @@ Do not hand-edit `config.toml` into multiple validator copies. Instead:
    - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir dist/taira-validators`
 4. Point each validator host at its own generated
    `dist/taira-validators/<validator-slug>/config.toml`.
+
+The bundle also contains one shared unsigned `genesis.json` whose dedicated
+topology transaction is rebuilt from the public roster and PoPs, plus
+`genesis-signing-command.txt`. Set `TAIRA_GENESIS_PRIVATE_KEY` only in the
+operator shell and run that command. `kagami genesis sign --config` executes
+genesis in a disposable state block, replaces the template Nexus/AMX context
+hash with the exact staged value, recomputes the consensus fingerprint, and
+then writes `genesis.signed.nrt`. Never copy the genesis signer or validator
+private keys into the checked-in template or rendered genesis JSON.
 
 The renderer rewrites the checked-in peer-1 baseline with the full
 `trusted_peers` / `trusted_peers_pop` roster so every validator starts from the
@@ -1000,8 +1019,9 @@ From `../iroha2-block-explorer-web`:
      script patches them from `configs/soranexus/taira/config.toml`, but a
      stale bundle can still bring the old default back.
    - confirm those peer configs also retain the Taira `[sumeragi.block]`
-     transaction caps, especially `fast_finality_max_transactions`, before
-     running public write canaries or scenario sweeps.
+     `max_transactions = 96`, `max_payload_bytes = 16777216`, and
+     `proposal_queue_scan_multiplier = 4` bounds before running public write
+     canaries or scenario sweeps. Fast-finality caps are retired in v2.
    - keep `[sorafs.quota] storage_pin_max_events = 64` in the Taira profile and
      served peer configs; otherwise a handful of failed storage-pin probes can
      exhaust the default `4 requests / 3600s` window before a real

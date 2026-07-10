@@ -321,6 +321,37 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
         use iroha_p2p::network::message::Topic as T;
         match self {
             NetworkMessage::SumeragiBlock(msg) => match msg.as_ref().as_ref() {
+                BlockMessage::V2(message) => match &message.payload {
+                    iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::PayloadChunk(
+                        _,
+                    ) => T::ConsensusChunk,
+                    iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::Proposal(_)
+                    | iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::PayloadManifest(
+                        _,
+                    )
+                    | iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::CertifiedBodyResponse(
+                        _,
+                    )
+                    | iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::CommitCertificateResponse(
+                        _,
+                    ) => T::ConsensusPayload,
+                    iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::Vote(_)
+                    | iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::QuorumCertificate(
+                        _,
+                    )
+                    | iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::TimeoutVote(
+                        _,
+                    )
+                    | iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::TimeoutCertificate(
+                        _,
+                    )
+                    | iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::CertifiedBodyRequest(
+                        _,
+                    )
+                    | iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::CommitCertificateRequest(
+                        _,
+                    ) => T::Consensus,
+                },
                 BlockMessage::FetchBlockBody(_)
                 | BlockMessage::FetchPendingBlock(_)
                 | BlockMessage::CertifiedBlockFetch(CertifiedBlockFetch::Request(_))
@@ -743,7 +774,7 @@ mod tests {
         assert!(matches!(
             decoded,
             NetworkMessage::CertifiedMergeSidecar(message)
-                if *message == CertifiedMergeSidecarMessage::Request(request)
+                if *message == CertifiedMergeSidecarMessage::Request(request.clone())
         ));
 
         let chunk = CertifiedMergeSidecarChunkV1 {
@@ -792,7 +823,7 @@ mod tests {
         assert!(matches!(
             decoded,
             NetworkMessage::MergeCandidate(message)
-                if *message == MergeCandidateMessage::Advert(advert)
+                if *message == MergeCandidateMessage::Advert(advert.clone())
         ));
 
         let candidate_request = MergeCandidateRequestV1 {
@@ -812,7 +843,7 @@ mod tests {
         assert!(matches!(
             decoded,
             NetworkMessage::MergeCandidate(message)
-                if *message == MergeCandidateMessage::Request(candidate_request)
+                if *message == MergeCandidateMessage::Request(candidate_request.clone())
         ));
 
         let candidate_chunk = MergeCandidateChunkV1 {

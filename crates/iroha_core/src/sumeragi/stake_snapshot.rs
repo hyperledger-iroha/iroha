@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use iroha_crypto::HashOf;
 use iroha_data_model::{
+    block::consensus_v2,
     nexus::{LaneId, PublicLaneValidatorStatus},
     peer::PeerId,
 };
@@ -323,6 +324,78 @@ pub(super) fn stake_map_from_world_with_active_lanes(
     stake_map
 }
 
+/// Convert a staged or finalized NPoS world snapshot into the exact voting
+/// powers frozen by a Sumeragi v2 height context.
+///
+/// Unlike the legacy commit-certificate helper, this function never invents a
+/// fallback stake. Every elected validator must have one active, integral,
+/// non-zero stake value representable by the v2 wire format. The returned
+/// roster is sorted by validator identity, matching the canonical context
+/// order used for validator indices and deterministic leader rotation.
+pub(crate) fn strict_v2_voting_roster(
+    world: &impl WorldReadOnly,
+    elected_roster: &[PeerId],
+    active_lane_ids: Option<&BTreeSet<LaneId>>,
+) -> Result<Vec<consensus_v2::ValidatorPower>, StrictV2StakeSnapshotError> {
+    if elected_roster.is_empty() {
+        return Err(StrictV2StakeSnapshotError::EmptyRoster);
+    }
+
+    let unique = elected_roster.iter().collect::<BTreeSet<_>>();
+    if unique.len() != elected_roster.len() {
+        return Err(StrictV2StakeSnapshotError::DuplicateValidator);
+    }
+
+    let stake_map = stake_map_from_world_with_active_lanes(world, active_lane_ids);
+    let mut roster = Vec::with_capacity(elected_roster.len());
+    for validator in elected_roster {
+        let stake = stake_map
+            .get(validator)
+            .ok_or(StrictV2StakeSnapshotError::MissingStake)?
+            .clone()
+            .trim_trailing_zeros();
+        if stake.scale() != 0 {
+            return Err(StrictV2StakeSnapshotError::FractionalStake);
+        }
+        let power = stake
+            .try_mantissa_u128()
+            .and_then(|value| u64::try_from(value).ok())
+            .ok_or(StrictV2StakeSnapshotError::PowerOutOfRange)?;
+        if power == 0 {
+            return Err(StrictV2StakeSnapshotError::ZeroStake);
+        }
+        roster.push(consensus_v2::ValidatorPower {
+            validator: validator.clone(),
+            power,
+        });
+    }
+    roster.sort_by(|left, right| left.validator.cmp(&right.validator));
+    Ok(roster)
+}
+
+/// Failure to freeze an exact NPoS voting-power snapshot for Sumeragi v2.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub(crate) enum StrictV2StakeSnapshotError {
+    /// The finalized election selected no voting validators.
+    #[error("Sumeragi v2 NPoS roster is empty")]
+    EmptyRoster,
+    /// The finalized election repeated one validator identity.
+    #[error("Sumeragi v2 NPoS roster contains a duplicate validator")]
+    DuplicateValidator,
+    /// An elected validator has no active stake in the frozen lane snapshot.
+    #[error("Sumeragi v2 NPoS roster is missing an elected validator stake")]
+    MissingStake,
+    /// Voting power cannot contain fractional stake units.
+    #[error("Sumeragi v2 NPoS voting power must be an integer")]
+    FractionalStake,
+    /// Voting power is required to be strictly positive.
+    #[error("Sumeragi v2 NPoS voting power must be non-zero")]
+    ZeroStake,
+    /// Voting power does not fit the canonical unsigned 64-bit wire field.
+    #[error("Sumeragi v2 NPoS voting power is outside the u64 wire range")]
+    PowerOutOfRange,
+}
+
 pub(super) fn fallback_stake_for_world(world: &impl WorldReadOnly) -> Numeric {
     let min_self_bond = world
         .sumeragi_npos_parameters()
@@ -609,6 +682,108 @@ mod tests {
         .expect("filtered stake snapshot");
         assert_eq!(snapshot.entries[0].peer_id, peer);
         assert_eq!(snapshot.entries[0].stake, Numeric::new(10, 0));
+    }
+
+    #[test]
+    fn strict_v2_roster_uses_exact_stake_and_canonical_identity_order() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
+
+        let keypair_a = checked_random_keypair();
+        let keypair_b = checked_random_keypair();
+        let peer_a = PeerId::new(keypair_a.public_key().clone());
+        let peer_b = PeerId::new(keypair_b.public_key().clone());
+        let account_a = AccountId::new(keypair_a.public_key().clone());
+        let account_b = AccountId::new(keypair_b.public_key().clone());
+        {
+            let mut block = state.world.public_lane_validators.block();
+            block.insert(
+                (LaneId::SINGLE, account_a.clone()),
+                active_validator_record(LaneId::SINGLE, &account_a, &peer_a, 7),
+            );
+            block.insert(
+                (LaneId::SINGLE, account_b.clone()),
+                active_validator_record(LaneId::SINGLE, &account_b, &peer_b, 3),
+            );
+            block.commit();
+        }
+
+        let view = state.view();
+        let powers = strict_v2_voting_roster(
+            view.world(),
+            &[peer_b.clone(), peer_a.clone()],
+            Some(&BTreeSet::from([LaneId::SINGLE])),
+        )
+        .expect("strict frozen powers");
+        assert!(
+            powers
+                .windows(2)
+                .all(|pair| pair[0].validator < pair[1].validator)
+        );
+        assert_eq!(
+            powers
+                .iter()
+                .find(|entry| entry.validator == peer_a)
+                .map(|entry| entry.power),
+            Some(7)
+        );
+        assert_eq!(
+            powers
+                .iter()
+                .find(|entry| entry.validator == peer_b)
+                .map(|entry| entry.power),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn strict_v2_roster_rejects_missing_duplicate_fractional_and_zero_stake() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
+
+        let keypair = checked_random_keypair();
+        let peer = PeerId::new(keypair.public_key().clone());
+        let account = AccountId::new(keypair.public_key().clone());
+        let missing = checked_random_peer_id();
+        assert_eq!(
+            strict_v2_voting_roster(state.view().world(), &[], None),
+            Err(StrictV2StakeSnapshotError::EmptyRoster)
+        );
+        assert_eq!(
+            strict_v2_voting_roster(state.view().world(), &[peer.clone(), peer.clone()], None),
+            Err(StrictV2StakeSnapshotError::DuplicateValidator)
+        );
+        assert_eq!(
+            strict_v2_voting_roster(state.view().world(), std::slice::from_ref(&missing), None),
+            Err(StrictV2StakeSnapshotError::MissingStake)
+        );
+
+        {
+            let mut block = state.world.public_lane_validators.block();
+            let mut record = active_validator_record(LaneId::SINGLE, &account, &peer, 1);
+            record.total_stake = Numeric::new(15, 1);
+            block.insert((LaneId::SINGLE, account.clone()), record);
+            block.commit();
+        }
+        assert_eq!(
+            strict_v2_voting_roster(state.view().world(), std::slice::from_ref(&peer), None),
+            Err(StrictV2StakeSnapshotError::FractionalStake)
+        );
+
+        {
+            let mut block = state.world.public_lane_validators.block();
+            block.insert(
+                (LaneId::SINGLE, account.clone()),
+                active_validator_record(LaneId::SINGLE, &account, &peer, 0),
+            );
+            block.commit();
+        }
+        assert_eq!(
+            strict_v2_voting_roster(state.view().world(), std::slice::from_ref(&peer), None),
+            Err(StrictV2StakeSnapshotError::ZeroStake)
+        );
     }
 
     #[test]

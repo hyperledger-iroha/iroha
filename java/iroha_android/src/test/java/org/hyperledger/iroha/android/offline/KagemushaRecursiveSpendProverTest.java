@@ -81,6 +81,8 @@ public final class KagemushaRecursiveSpendProverTest {
     javaVerifierRecordArchivesMatchSharedRustFixtures();
     recursiveSpendDecoderAcceptsNoritoLengthDelimitedOptionMetadata();
     typedEvidenceHelpersAssembleCheckedProofArchives();
+    redeemAttachmentRequiresNativeVerificationAndLifecycle();
+    redeemAttachmentRejectsNoncanonicalVerifierKeyIdAliases();
     typedEvidenceHelpersRejectAdversarialHopBindings();
     typedRequestCodecsRejectMalformedInputsBeforeNativeDispatch();
     typedEvidenceHelpersRejectUnsafeProofOnlyInputs();
@@ -2760,12 +2762,30 @@ public final class KagemushaRecursiveSpendProverTest {
             "unshield",
             "buildConfidentialUnshieldProofV3");
 
+    final byte[][] verifyRequestCapture = new byte[1][];
     final byte[] attachment =
         KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachmentChecked(
             unshieldFixture.proofOutputArchive,
             unshieldFixture.verifierRecordRef,
             null,
-            request -> successfulUnshieldVerifyResult(unshieldFixture.envelopeArchive));
+            request -> {
+              verifyRequestCapture[0] = Arrays.copyOf(request, request.length);
+              return successfulUnshieldVerifyResult(unshieldFixture.envelopeArchive);
+            });
+    final NoritoHeader.DecodeResult decodedVerifyRequest =
+        NoritoHeader.decode(verifyRequestCapture[0], null);
+    for (final byte value : decodedVerifyRequest.header().schemaHash()) {
+      assert (value & 0xff) == 0x52;
+    }
+    final List<byte[]> verifyRequestFields = fieldPayloads(decodedVerifyRequest.payload());
+    assert verifyRequestFields.size() == 6;
+    assert "unshield".equals(readStringPayload(verifyRequestFields.get(0)));
+    assert "buildConfidentialUnshieldProofV3"
+        .equals(readStringPayload(verifyRequestFields.get(1)));
+    assert PrivacyConfidentialWitness.CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF
+        .equals(readStringPayload(verifyRequestFields.get(2)));
+    assert Arrays.equals(
+        unshieldFixture.envelopeArchive, readBytesVecPayload(verifyRequestFields.get(5)));
 
     assertArchiveSchema(attachment, KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT);
     final List<byte[]> attachmentFields =
@@ -3089,6 +3109,208 @@ public final class KagemushaRecursiveSpendProverTest {
                     16L));
     assert "lineageKeyArtifacts must be append artifacts"
         .equals(autoAppendWrongProfile.getMessage());
+  }
+
+  private static void redeemAttachmentRequiresNativeVerificationAndLifecycle() {
+    final ProofFixture fixture =
+        proofFixture(
+            KagemushaRecursiveSpendRequestCodecs.CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
+            CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA,
+            "unshield",
+            "buildConfidentialUnshieldProofV3");
+
+    IllegalArgumentException rejected =
+        captureIllegalArgument(
+            () ->
+                KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachmentChecked(
+                    fixture.proofOutputArchive,
+                    fixture.verifierRecordRef,
+                    null,
+                    request ->
+                        privacyResultArchive(
+                            "unshield",
+                            "buildConfidentialUnshieldProofV3",
+                            fixture.envelopeArchive,
+                            0,
+                            0,
+                            "",
+                            PrivacyConfidentialWitness.CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF,
+                            false,
+                            0x56)));
+    assert "unshieldVerifyResult must confirm proof verification".equals(rejected.getMessage());
+
+    final byte[] mismatchedProof =
+        Arrays.copyOf(fixture.envelopeArchive, fixture.envelopeArchive.length + 1);
+    mismatchedProof[mismatchedProof.length - 1] = 1;
+    rejected =
+        captureIllegalArgument(
+            () ->
+                KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachmentChecked(
+                    fixture.proofOutputArchive,
+                    fixture.verifierRecordRef,
+                    null,
+                    request -> successfulUnshieldVerifyResult(mismatchedProof)));
+    assert "unshieldVerifyResult proof must match the unshield build result"
+        .equals(rejected.getMessage());
+
+    rejected =
+        captureIllegalArgument(
+            () ->
+                KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachmentChecked(
+                    fixture.proofOutputArchive,
+                    fixture.verifierRecordRef,
+                    null,
+                    request ->
+                        privacyResultArchive(
+                            "unshield",
+                            "buildConfidentialUnshieldProofV3",
+                            fixture.envelopeArchive,
+                            0,
+                            0,
+                            "",
+                            PrivacyConfidentialWitness.CONFIDENTIAL_TRANSFER_V2_VERIFIER_REF,
+                            true,
+                            0x56)));
+    assert ("unshieldVerifyResult vk_ref must be "
+            + PrivacyConfidentialWitness.CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF)
+        .equals(rejected.getMessage());
+
+    rejected =
+        captureIllegalArgument(
+            () ->
+                KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachmentChecked(
+                    fixture.proofOutputArchive,
+                    fixture.verifierRecordRef,
+                    null,
+                    request ->
+                        privacyResultArchive(
+                            "unshield",
+                            "buildConfidentialUnshieldProofV3",
+                            new byte[0],
+                            1,
+                            6,
+                            "privacy proof verification failed",
+                            PrivacyConfidentialWitness.CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF,
+                            false,
+                            0x56)));
+    assert "unshieldVerifyResult must be a successful privacy proof result: status=1 error_code=6"
+        .equals(rejected.getMessage());
+
+    rejected =
+        captureIllegalArgument(
+            () ->
+                KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachment(
+                    privacyResultArchive(
+                        "unshield",
+                        "buildConfidentialUnshieldProofV3",
+                        fixture.envelopeArchive,
+                        0,
+                        0,
+                        "",
+                        PrivacyConfidentialWitness.CONFIDENTIAL_TRANSFER_V2_VERIFIER_REF,
+                        false,
+                        0x42),
+                    fixture.verifierRecordRef));
+    assert ("unshieldProofOutputArchive vk_ref must be "
+            + PrivacyConfidentialWitness.CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF)
+        .equals(rejected.getMessage());
+
+    final byte[] verifierKey =
+        zk1VerifierKey(KagemushaRecursiveSpendRequestCodecs.CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID);
+    final KagemushaRecursiveSpendRequestCodecs.VerifierRecordRef windowedRecord =
+        new KagemushaRecursiveSpendRequestCodecs.VerifierRecordRef(
+            fixture.verifierRecordRef.verifierKeyId,
+            verifierRecordArchive(
+                KagemushaRecursiveSpendRequestCodecs.CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
+                CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA,
+                verifierKey,
+                1,
+                10L,
+                20L));
+
+    rejected =
+        captureIllegalArgument(() -> buildCheckedRedeemAttachmentAt(fixture, windowedRecord, null));
+    assert "unshieldVerifierRecord has a lifecycle window; blockHeight is required"
+        .equals(rejected.getMessage());
+    rejected =
+        captureIllegalArgument(() -> buildCheckedRedeemAttachmentAt(fixture, windowedRecord, 9L));
+    assert "unshieldVerifierRecord is not active at blockHeight".equals(rejected.getMessage());
+    assert buildCheckedRedeemAttachmentAt(fixture, windowedRecord, 10L).length > 0;
+    assert buildCheckedRedeemAttachmentAt(fixture, windowedRecord, 19L).length > 0;
+    rejected =
+        captureIllegalArgument(() -> buildCheckedRedeemAttachmentAt(fixture, windowedRecord, 20L));
+    assert "unshieldVerifierRecord is not active at blockHeight".equals(rejected.getMessage());
+  }
+
+  private static byte[] buildCheckedRedeemAttachmentAt(
+      final ProofFixture fixture,
+      final KagemushaRecursiveSpendRequestCodecs.VerifierRecordRef verifierRecord,
+      final Long blockHeight) {
+    return KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachmentChecked(
+        fixture.proofOutputArchive,
+        verifierRecord,
+        blockHeight,
+        request -> successfulUnshieldVerifyResult(fixture.envelopeArchive));
+  }
+
+  private static void redeemAttachmentRejectsNoncanonicalVerifierKeyIdAliases() {
+    final ProofFixture fixture =
+        proofFixture(
+            KagemushaRecursiveSpendRequestCodecs.CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
+            CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA,
+            "unshield",
+            "buildConfidentialUnshieldProofV3");
+    final String[][] invalidIds = {
+      {"uppercase backend", "Halo2/ipa:kagemusha-alias", "backend"},
+      {"uppercase name", "halo2/ipa:Kagemusha-alias", "name"},
+      {"leading separator", "halo2/ipa:-kagemusha-alias", "name"},
+      {"trailing separator", "halo2/ipa:kagemusha-alias-", "name"},
+      {"at-sign alias", "halo2/ipa:kagemusha@alias", "name"},
+      {"plus alias", "halo2/ipa:kagemusha+alias", "name"},
+      {"equals alias", "halo2/ipa:kagemusha=alias", "name"},
+      {"dot alias", "halo2/ipa:kagemusha..alias", "name"},
+      {"slash alias", "halo2/ipa:kagemusha//alias", "name"},
+      {"colon alias", "halo2/ipa:kagemusha:::alias", "name"},
+      {"slash-colon alias", "halo2/ipa:kagemusha/:alias", "name"},
+      {"colon-slash alias", "halo2/ipa:kagemusha:/alias", "name"},
+      {"slash-dot alias", "halo2/ipa:kagemusha/.alias", "name"},
+      {"dot-slash alias", "halo2/ipa:kagemusha./alias", "name"},
+      {"colon-dot alias", "halo2/ipa:kagemusha:.alias", "name"},
+      {"dot-colon alias", "halo2/ipa:kagemusha.:alias", "name"},
+    };
+
+    for (final String[] invalidId : invalidIds) {
+      final String label = invalidId[0];
+      final KagemushaRecursiveSpendRequestCodecs.VerifierRecordRef aliasedRecord =
+          new KagemushaRecursiveSpendRequestCodecs.VerifierRecordRef(
+              invalidId[1], fixture.verifierRecordRef.recordBytes());
+      final IllegalArgumentException rejected =
+          captureIllegalArgument(
+              () ->
+                  KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachmentChecked(
+                      fixture.proofOutputArchive,
+                      aliasedRecord,
+                      null,
+                      request -> {
+                        throw new AssertionError("native verification must not run for " + label);
+                      }));
+      assert ("unshieldVerifierRecord.verifierKeyId."
+              + invalidId[2]
+              + " must use portable registry syntax")
+          .equals(rejected.getMessage())
+          : label;
+    }
+
+    final KagemushaRecursiveSpendRequestCodecs.VerifierRecordRef canonicalDoubleColonRecord =
+        new KagemushaRecursiveSpendRequestCodecs.VerifierRecordRef(
+            "halo2/ipa:kagemusha::alias", fixture.verifierRecordRef.recordBytes());
+    assert KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachmentChecked(
+                fixture.proofOutputArchive,
+                canonicalDoubleColonRecord,
+                null,
+                request -> successfulUnshieldVerifyResult(fixture.envelopeArchive))
+            .length
+        > 0;
   }
 
   private static void typedEvidenceHelpersRejectAdversarialHopBindings() {

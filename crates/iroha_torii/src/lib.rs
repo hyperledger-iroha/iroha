@@ -36353,6 +36353,31 @@ fn recipient_lookup_unresolved_response(
 }
 
 #[cfg(feature = "app_api")]
+fn recipient_lookup_account_identity_matches(
+    actual_account_id: Option<&str>,
+    expected_account_id: &AccountId,
+) -> bool {
+    actual_account_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| AccountId::parse_encoded(value).ok())
+        .map(|parsed| parsed.into_account_id())
+        .is_some_and(|actual| actual == *expected_account_id)
+}
+
+#[cfg(feature = "app_api")]
+fn recipient_lookup_upstream_request_id(headers: &HeaderMap, body: &[u8]) -> String {
+    const MAX_REQUEST_ID_LEN: usize = 256;
+    headers
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && value.len() <= MAX_REQUEST_ID_LEN)
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("torii-recipient-lookup-{}", blake3_hash(body).to_hex()))
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_retail_recipient_lookup(
     State(app): State<SharedAppState>,
     method: axum::http::Method,
@@ -36381,7 +36406,8 @@ async fn handler_retail_recipient_lookup(
         ));
     }
 
-    let (account_id, canonical_account_id, _) = AccountId::parse_encoded(request.account_id.trim())
+    let requested_account_id_literal = request.account_id.trim().to_owned();
+    let (account_id, _, _) = AccountId::parse_encoded(request.account_id.trim())
         .map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
@@ -36417,7 +36443,7 @@ async fn handler_retail_recipient_lookup(
         Some((_, bound_account_id, _)) if bound_account_id == account_id => {}
         _ => {
             return recipient_lookup_unresolved_response(
-                &canonical_account_id,
+                &requested_account_id_literal,
                 &canonical_alias,
                 fi_id,
             );
@@ -36442,8 +36468,9 @@ async fn handler_retail_recipient_lookup(
         "{}/v1/retail/recipients/lookup",
         route.base_url.as_str().trim_end_matches('/')
     );
+    let upstream_request_id = recipient_lookup_upstream_request_id(&headers, body.as_ref());
     let body = norito::json::to_vec(&routing::RetailRecipientLookupRequestDto {
-        account_id: canonical_account_id.clone(),
+        account_id: requested_account_id_literal.clone(),
         alias_fqn: canonical_alias.clone(),
     })
     .map_err(|err| {
@@ -36456,6 +36483,7 @@ async fn handler_retail_recipient_lookup(
         .header("accept", "application/json")
         .header("content-type", "application/json")
         .header("authorization", format!("Bearer {}", route.bearer_token))
+        .header("x-request-id", upstream_request_id)
         .body(body)
         .timeout(app.recipient_lookup.request_timeout)
         .send()
@@ -36524,8 +36552,10 @@ async fn handler_retail_recipient_lookup(
         .and_then(Value::as_str)
         .and_then(recipient_lookup_normalize_fi_id);
     let confirmed = upstream_object.get("resolved") == Some(&Value::Bool(true))
-        && upstream_object.get("account_id").and_then(Value::as_str)
-            == Some(canonical_account_id.as_str())
+        && recipient_lookup_account_identity_matches(
+            upstream_object.get("account_id").and_then(Value::as_str),
+            &account_id,
+        )
         && upstream_object
             .get("alias_fqn")
             .and_then(Value::as_str)
@@ -36536,7 +36566,7 @@ async fn handler_retail_recipient_lookup(
         StatusCode::OK,
         recipient_lookup_response(
             confirmed,
-            canonical_account_id,
+            requested_account_id_literal,
             canonical_alias,
             fi_id.to_owned(),
             full_name,
@@ -46296,6 +46326,10 @@ pub(crate) mod tests_runtime_handlers {
             sorafs_limits,
             #[cfg(feature = "app_api")]
             por_coordinator: Arc::new(sorafs::PorCoordinator::new()),
+            #[cfg(feature = "app_api")]
+            por_runtime: None,
+            #[cfg(feature = "app_api")]
+            por_auditor_signature_threshold: 1,
             #[cfg(feature = "app_api")]
             sorafs_alias_cache_policy: sorafs_alias_cache,
             #[cfg(feature = "app_api")]
@@ -66307,6 +66341,186 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("recipient_lookup_not_configured")
         );
+    }
+
+    #[tokio::test]
+    async fn retail_recipient_lookup_preserves_requested_account_literal_for_bank_lookup() {
+        const PK2_RECIPIENT_LOOKUP_ACCOUNT: &str =
+            "sorauﾛ1Nﾅ9XﾂﾜｶPTCﾈﾜ1ﾌｲ3wF4ZxnjAeEﾆｷgYN1ｶﾕｷkAﾔﾋUWP59S";
+        const PK2_RECIPIENT_LOOKUP_ALIAS: &str = "bright-brook-5859@ubl.sbp";
+
+        let target = AccountId::parse_encoded(PK2_RECIPIENT_LOOKUP_ACCOUNT)
+            .expect("pk2 recipient account fixture must parse")
+            .into_account_id();
+        let mut app = mk_app_state_for_tests_with_world(world_with_account(&target));
+        configure_recipient_lookup_sbp_dataspace_for_test(
+            &mut app,
+            iroha_data_model::nexus::LaneVisibility::Public,
+        );
+        bind_account_alias_for_test(&app, &target, PK2_RECIPIENT_LOOKUP_ALIAS);
+
+        let captured = Arc::new(std::sync::Mutex::new(
+            Vec::<(String, String, String, String)>::new(),
+        ));
+        let captured_for_route = Arc::clone(&captured);
+        let response_account_id = PK2_RECIPIENT_LOOKUP_ACCOUNT.to_owned();
+        let response_alias = PK2_RECIPIENT_LOOKUP_ALIAS.to_owned();
+        let upstream = axum::Router::new().route(
+            "/v1/retail/recipients/lookup",
+            axum::routing::post(move |headers: HeaderMap, body: Bytes| {
+                let captured = Arc::clone(&captured_for_route);
+                let response_account_id = response_account_id.clone();
+                let response_alias = response_alias.clone();
+                async move {
+                    let request: routing::RetailRecipientLookupRequestDto =
+                        norito::json::from_slice(body.as_ref())
+                            .expect("recipient lookup upstream request");
+                    let authorization = headers
+                        .get("authorization")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or_default()
+                        .to_owned();
+                    let request_id = headers
+                        .get("x-request-id")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or_default()
+                        .to_owned();
+                    captured.lock().expect("capture lock").push((
+                        request.account_id,
+                        request.alias_fqn,
+                        authorization,
+                        request_id,
+                    ));
+                    let body = norito::json::to_vec(&recipient_lookup_response(
+                        true,
+                        response_account_id,
+                        response_alias,
+                        "ubl.sbp".to_owned(),
+                        Some("Ayesha Khan".to_owned()),
+                    ))
+                    .expect("recipient lookup response body");
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header(axum::http::header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(body))
+                        .expect("upstream response")
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind recipient lookup upstream");
+        let addr = listener
+            .local_addr()
+            .expect("recipient lookup upstream addr");
+        let upstream_task = tokio::spawn(async move {
+            axum::serve(listener, upstream.into_make_service())
+                .await
+                .expect("serve recipient lookup upstream");
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .recipient_lookup = Arc::new(actual::ToriiRecipientLookup {
+            request_timeout: Duration::from_secs(2),
+            routes: vec![actual::ToriiRecipientLookupRoute {
+                fi_id: "ubl.sbp".to_owned(),
+                base_url: format!("http://{addr}")
+                    .parse()
+                    .expect("recipient lookup upstream url"),
+                bearer_token: "lookup-service-token".to_owned(),
+            }],
+        });
+
+        let body = norito::json::to_vec(&routing::RetailRecipientLookupRequestDto {
+            account_id: PK2_RECIPIENT_LOOKUP_ACCOUNT.to_owned(),
+            alias_fqn: PK2_RECIPIENT_LOOKUP_ALIAS.to_owned(),
+        })
+        .expect("encode request");
+        let response = handler_retail_recipient_lookup(
+            State(app),
+            axum::http::Method::POST,
+            "/v1/retail/recipients/lookup"
+                .parse()
+                .expect("recipient lookup uri"),
+            HeaderMap::new(),
+            axum::body::Bytes::from(body),
+        )
+        .await
+        .expect("recipient lookup should execute")
+        .into_response();
+        upstream_task.abort();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let response_body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("recipient lookup response body");
+        let payload: Value =
+            norito::json::from_slice(response_body.as_ref()).expect("recipient lookup json");
+        assert_eq!(payload["resolved"], Value::Bool(true));
+        assert_eq!(
+            payload["account_id"].as_str(),
+            Some(PK2_RECIPIENT_LOOKUP_ACCOUNT)
+        );
+        assert_eq!(
+            payload["alias_fqn"].as_str(),
+            Some(PK2_RECIPIENT_LOOKUP_ALIAS)
+        );
+        assert_eq!(payload["fi_id"].as_str(), Some("ubl.sbp"));
+        assert_eq!(payload["full_name"].as_str(), Some("Ayesha Khan"));
+
+        let captured = captured.lock().expect("capture lock");
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].0, PK2_RECIPIENT_LOOKUP_ACCOUNT);
+        assert_eq!(captured[0].1, PK2_RECIPIENT_LOOKUP_ALIAS);
+        assert_eq!(captured[0].2, "Bearer lookup-service-token");
+        assert!(
+            captured[0].3.starts_with("torii-recipient-lookup-"),
+            "Torii must send an upstream request ID for Core API audit"
+        );
+    }
+
+    #[test]
+    fn recipient_lookup_account_identity_confirmation_parses_upstream_account() {
+        let account_id = checked_torii_test_account_id(
+            0x95,
+            "derive recipient lookup identity match fixture key",
+        );
+        let literal = account_id
+            .canonical_i105()
+            .expect("recipient lookup account fixture i105");
+
+        assert!(recipient_lookup_account_identity_matches(
+            Some(&literal),
+            &account_id,
+        ));
+        assert!(!recipient_lookup_account_identity_matches(
+            Some("not-an-account"),
+            &account_id,
+        ));
+        assert!(!recipient_lookup_account_identity_matches(
+            None,
+            &account_id
+        ));
+    }
+
+    #[test]
+    fn recipient_lookup_upstream_request_id_forwards_valid_header_or_generates_private_id() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-request-id",
+            HeaderValue::from_static("client-request-123"),
+        );
+        assert_eq!(
+            recipient_lookup_upstream_request_id(&headers, b"lookup-body"),
+            "client-request-123"
+        );
+
+        headers.insert("x-request-id", HeaderValue::from_static("   "));
+        let generated = recipient_lookup_upstream_request_id(&headers, b"lookup-body");
+        assert!(generated.starts_with("torii-recipient-lookup-"));
+        assert!(!generated.contains("lookup-body"));
     }
 
     #[tokio::test]

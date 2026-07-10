@@ -160,6 +160,20 @@ derivation inside the native bridge remains unchanged; top-up derivation
 consumes the init request archive, not the init result bundle alone, because
 the request carries the checked hop proof, verifier records, and Pallas opening
 metadata needed for validation.
+
+For confidential-unshield redemption, use
+`KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachment` with the
+native unshield-v3 build result, the exact `halo2/ipa` verifier-record
+reference, and the current block height when the record has an activation or
+withdrawal boundary. The builder requires the production
+`halo2-ipa-pasta:confidential_unshield_v3` proof reference, computes the schema
+and envelope bindings with canonical Iroha `Hash` prehashes, and invokes the
+existing `PrivacyNativeBridge.verifyProof` path before it emits an attachment.
+The verify result must report the same operation and byte-identical proof with
+`verified = true`; native-unavailable, malformed, substituted-key, and invalid
+proof results fail closed. Windowless active records may omit the height,
+activation is inclusive, and withdrawal is exclusive.
+
 Use
 `canRedeemWitnessless(circuitId, hopCount)` or
 `requiresLineageWitnessForRedeem(circuitId, hopCount)` before online redeem

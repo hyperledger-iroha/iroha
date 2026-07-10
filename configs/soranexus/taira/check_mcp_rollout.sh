@@ -22,15 +22,22 @@ POST_CANARY_STATUS_RECHECK_DELAY_SECONDS="${POST_CANARY_STATUS_RECHECK_DELAY_SEC
 MCP_ROLLOUT_CURL_CONNECT_TIMEOUT_SECONDS="${MCP_ROLLOUT_CURL_CONNECT_TIMEOUT_SECONDS:-5}"
 MCP_ROLLOUT_CURL_MAX_TIME_SECONDS="${MCP_ROLLOUT_CURL_MAX_TIME_SECONDS:-20}"
 MIN_VALIDATOR_SET_LEN="${MIN_VALIDATOR_SET_LEN:-4}"
+VALIDATOR_PROGRESS_SAMPLES="${VALIDATOR_PROGRESS_SAMPLES:-3}"
+VALIDATOR_PROGRESS_DELAY_SECONDS="${VALIDATOR_PROGRESS_DELAY_SECONDS:-2}"
+VALIDATOR_ALIGNMENT_ATTEMPTS="${VALIDATOR_ALIGNMENT_ATTEMPTS:-10}"
 EXPECTED_TAIRA_GIT_SHA="${EXPECTED_TAIRA_GIT_SHA:-}"
 PUBLIC_LANE_ID="${PUBLIC_LANE_ID:-0}"
 CONTRACT_NAMESPACE="${CONTRACT_NAMESPACE:-universal}"
 SKIP_LOCAL=0
 SKIP_PUBLIC=0
 SKIP_WRITE_CANARY=0
+REQUIRE_ALL_VALIDATORS=0
 IROHA_RUNNER=()
 CHECKED_LABELS=()
 CHECKED_ROOTS=()
+VALIDATOR_ROOT_SPECS=()
+VALIDATOR_LABELS=()
+VALIDATOR_ROOTS=()
 CURL_RESOLVE_RULES=()
 CURL_URL_RESOLVE_ARGS=()
 
@@ -38,6 +45,7 @@ usage() {
   cat <<'EOF'
 Usage: check_mcp_rollout.sh [--local-root URL] [--public-root URL] [--local-url URL] [--public-url URL]
                             [--skip-local] [--skip-public]
+                            [--validator-root LABEL=URL]... [--require-all-validators]
                             [--write-config PATH] [--write-target local|public|URL]
                             [--gas-asset-id ASSET_DEFINITION_ID]
                             [--iroha-bin PATH] [--resolve-host HOST:IP|HOST:PORT:IP]
@@ -63,17 +71,21 @@ The check fails unless:
   - when `--expected-git-sha` is supplied, GET /status reports a matching
     `build.git_commit_sha` (published and expected values must be 7 to 40
     hexadecimal characters; short or full prefix matches are accepted)
-  - GET /v1/sumeragi/status reports at least 4 validators in the commit QC set
+  - GET /v1/sumeragi/status reports protocol v2 durable reducer state
+  - when validator roots are supplied, every labeled validator reports the same
+    protocol/build/config/context/commit tuple across repeated advancing samples
   - direct public Torii ingress also exposes SCCP, ZK, bridge, validator-set,
     public-lane, contract, and Musubi routes on the same node URL
 
-When diagnosing public write failures, prefer `/status` and
-`/v1/sumeragi/status` fields such as `blocks`, `queue_size`,
-`commit_qc.height`, `highest_qc.height`, `locked_qc.height`, `canonical.height`,
-`membership.height`, `tx_queue.depth`, `tx_queue.capacity`,
+When diagnosing public write failures, prefer `/status` fields such as
+`blocks`, `queue_size`, `tx_queue.depth`, `tx_queue.capacity`,
 `tx_queue.saturated_by_count`, `tx_queue.saturated_by_age`,
 `tx_queue.oldest_queued_age_ms`, `view_change_causes.last_cause`, and
-`teu_dataspace_backlog`. Do not use `/status.peers` as validator-set size; it
+`teu_dataspace_backlog`, together with `/v1/sumeragi/status` v2 fields such as
+`protocol_version`, `height_context_id`, `height`, `view`, `leader`,
+`locked_prepare_qc`, `highest_prepare_qc`, `last_timeout_certificate`,
+`body_state`, `pending_persistence_id`, `last_committed_height`, and
+`last_committed_subject`. Do not use `/status.peers` as validator-set size; it
 is the queried node's current remote-peer count.
 
 For final public rollout, use a runtime-only canary signer config. When
@@ -170,6 +182,18 @@ while [[ $# -gt 0 ]]; do
       }
       PUBLIC_MCP_URL="$2"
       shift 2
+      ;;
+    --validator-root)
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --validator-root" >&2
+        exit 1
+      }
+      VALIDATOR_ROOT_SPECS+=("$2")
+      shift 2
+      ;;
+    --require-all-validators)
+      REQUIRE_ALL_VALIDATORS=1
+      shift
       ;;
     --skip-local)
       SKIP_LOCAL=1
@@ -313,6 +337,15 @@ validate_numeric_inputs() {
   require_positive_integer \
     "MIN_VALIDATOR_SET_LEN" \
     "$MIN_VALIDATOR_SET_LEN"
+  require_positive_integer \
+    "VALIDATOR_PROGRESS_SAMPLES" \
+    "$VALIDATOR_PROGRESS_SAMPLES"
+  require_nonnegative_integer \
+    "VALIDATOR_PROGRESS_DELAY_SECONDS" \
+    "$VALIDATOR_PROGRESS_DELAY_SECONDS"
+  require_positive_integer \
+    "VALIDATOR_ALIGNMENT_ATTEMPTS" \
+    "$VALIDATOR_ALIGNMENT_ATTEMPTS"
   require_nonnegative_integer \
     "PUBLIC_LANE_ID" \
     "$PUBLIC_LANE_ID"
@@ -371,6 +404,55 @@ normalize_root_url() {
   printf '%s\n' "${url%/}"
 }
 
+parse_validator_roots() {
+  local spec label root existing
+
+  for spec in "${VALIDATOR_ROOT_SPECS[@]}"; do
+    if [[ "$spec" != *=* ]]; then
+      echo "--validator-root must use LABEL=URL syntax: ${spec}" >&2
+      exit 1
+    fi
+    label="${spec%%=*}"
+    root="${spec#*=}"
+    if [[ -z "$label" || -z "$root" ]]; then
+      echo "--validator-root requires a non-empty label and URL: ${spec}" >&2
+      exit 1
+    fi
+    if [[ ! "$label" =~ ^[A-Za-z0-9._-]+$ ]]; then
+      echo "validator label contains unsupported characters: ${label}" >&2
+      exit 1
+    fi
+    root="$(normalize_root_url "$root")"
+    if [[ ! "$root" =~ ^https?:// ]]; then
+      echo "validator root must be an http(s) URL: ${root}" >&2
+      exit 1
+    fi
+    for existing in "${VALIDATOR_LABELS[@]}"; do
+      if [[ "$existing" == "$label" ]]; then
+        echo "duplicate validator label: ${label}" >&2
+        exit 1
+      fi
+    done
+    for existing in "${VALIDATOR_ROOTS[@]}"; do
+      if [[ "$existing" == "$root" ]]; then
+        echo "duplicate validator root: ${root}" >&2
+        exit 1
+      fi
+    done
+    VALIDATOR_LABELS+=("$label")
+    VALIDATOR_ROOTS+=("$root")
+  done
+
+  if [[ $REQUIRE_ALL_VALIDATORS -eq 1 && ${#VALIDATOR_ROOTS[@]} -eq 0 ]]; then
+    echo "--require-all-validators requires repeated --validator-root LABEL=URL arguments" >&2
+    exit 1
+  fi
+  if [[ ${#VALIDATOR_ROOTS[@]} -gt 0 && ${#VALIDATOR_ROOTS[@]} -lt $MIN_VALIDATOR_SET_LEN ]]; then
+    echo "validator fleet check requires at least ${MIN_VALIDATOR_SET_LEN} distinct labeled roots; received ${#VALIDATOR_ROOTS[@]}" >&2
+    exit 1
+  fi
+}
+
 mcp_url_from_root() {
   local root_url
   root_url="$(normalize_root_url "$1")"
@@ -381,6 +463,8 @@ mcp_root_from_url() {
   local url="$1"
   printf '%s\n' "${url%/v1/mcp}"
 }
+
+parse_validator_roots
 
 build_curl_resolve_args() {
   local url="$1"
@@ -783,7 +867,7 @@ PY
 check_sumeragi_snapshot() {
   local label="$1"
   local sumeragi_url="$2"
-  local allow_pending_commit_qc="${3:-0}"
+  local _allow_pending_commit_qc="${3:-0}"
 
   echo "==> ${label}: GET ${sumeragi_url}"
   http_request GET "$sumeragi_url"
@@ -792,295 +876,59 @@ check_sumeragi_snapshot() {
     sed -n '1,20p' "$last_headers" >&2 || true
     exit 1
   fi
-  python3 - "$label" "$last_body" "$MIN_VALIDATOR_SET_LEN" "$allow_pending_commit_qc" <<'PY'
+  python3 - "$label" "$last_body" <<'PY'
 import json
 import sys
 
-def dig(obj, *path):
-    cur = obj
-    for key in path:
-        if not isinstance(cur, dict):
-            return None
-        cur = cur.get(key)
-    return cur
-
-def has_path(obj, *path):
-    cur = obj
-    for key in path:
-        if not isinstance(cur, dict) or key not in cur:
-            return False
-        cur = cur[key]
-    return True
-
-def first_int(*values):
-    for value in values:
-        if isinstance(value, int):
-            return value
-    return None
-
-def first_bool(*values):
-    for value in values:
-        if isinstance(value, bool):
-            return value
-    return None
-
-label = sys.argv[1]
-path = sys.argv[2]
-min_validator_set_len = int(sys.argv[3])
-allow_pending_commit_qc = sys.argv[4] == "1"
+label, path = sys.argv[1:]
 with open(path, "r", encoding="utf-8") as handle:
-    payload = json.load(handle)
+    envelope = json.load(handle)
 
-commit_qc_height = first_int(
-    payload.get("commit_qc_height"),
-    dig(payload, "commit_qc", "height"),
-)
-highest_qc_height = first_int(
-    payload.get("highest_qc_height"),
-    dig(payload, "highest_qc", "height"),
-)
-locked_qc_height = first_int(
-    payload.get("locked_qc_height"),
-    dig(payload, "locked_qc", "height"),
-)
-canonical_height = first_int(
-    payload.get("canonical_height"),
-    dig(payload, "canonical", "height"),
-)
-canonical_phase = str(
-    dig(payload, "canonical", "phase") or payload.get("canonical_phase") or ""
-).strip().lower()
-canonical_view = first_int(
-    payload.get("canonical_view"),
-    dig(payload, "canonical", "view"),
-    dig(payload, "membership", "view"),
-)
-worker_stage = str(
-    dig(payload, "worker_loop", "stage") or payload.get("worker_stage") or ""
-).strip().lower()
-canonical_pending_finality_published = has_path(payload, "canonical", "pending_finality") or (
-    "canonical_pending_finality" in payload
-)
-canonical_pending_finality = (
-    dig(payload, "canonical", "pending_finality")
-    if has_path(payload, "canonical", "pending_finality")
-    else payload.get("canonical_pending_finality")
-)
-canonical_rbc_status = str(
-    dig(payload, "canonical", "rbc_status")
-    or payload.get("canonical_rbc_status")
-    or ""
-).strip().lower()
-membership_height = first_int(
-    payload.get("membership_height"),
-    dig(payload, "membership", "height"),
-)
-validator_set_len = first_int(
-    payload.get("commit_qc_validator_set_len"),
-    dig(payload, "commit_qc", "validator_set_len"),
-)
-tx_queue_depth = first_int(
-    payload.get("tx_queue_depth"),
-    dig(payload, "tx_queue", "depth"),
-)
-tx_queue_capacity = first_int(
-    payload.get("tx_queue_capacity"),
-    dig(payload, "tx_queue", "capacity"),
-)
-tx_queue_saturated = first_bool(
-    payload.get("tx_queue_saturated"),
-    dig(payload, "tx_queue", "saturated"),
-)
-tx_queue_saturated_by_count = first_bool(
-    payload.get("tx_queue_saturated_by_count"),
-    dig(payload, "tx_queue", "saturated_by_count"),
-)
-tx_queue_saturated_by_age = first_bool(
-    payload.get("tx_queue_saturated_by_age"),
-    dig(payload, "tx_queue", "saturated_by_age"),
-)
-tx_queue_oldest_queued_age_ms = first_int(
-    payload.get("tx_queue_oldest_queued_age_ms"),
-    dig(payload, "tx_queue", "oldest_queued_age_ms"),
-)
-view_change_last_cause = dig(payload, "view_change_causes", "last_cause")
-pending_rbc_sessions = first_int(
-    payload.get("pending_rbc_sessions"),
-    dig(payload, "pending_rbc", "sessions"),
-)
+status = envelope.get("v2") if isinstance(envelope.get("v2"), dict) else envelope
+if status.get("protocol_version") != 2:
+    raise SystemExit(
+        f"{label}: expected the Sumeragi v2 reducer status; "
+        "legacy RBC/recovery status is not accepted for Taira rollout"
+    )
 
-if commit_qc_height is None or commit_qc_height < 1:
-    if allow_pending_commit_qc:
-        print(
-            f"{label}: /v1/sumeragi/status is still missing a commit QC snapshot; "
-            "deferring validator-set enforcement until after the signed write canary",
-            file=sys.stderr,
-        )
-        sys.exit(10)
-    print(
-        f"{label}: /v1/sumeragi/status reported an unhealthy commit QC height: {commit_qc_height!r}",
-        file=sys.stderr,
-    )
-    sys.exit(1)
-if highest_qc_height is not None and highest_qc_height < commit_qc_height:
-    print(
-        f"{label}: /v1/sumeragi/status highest QC height {highest_qc_height} is behind commit QC height {commit_qc_height}",
-        file=sys.stderr,
-    )
-    sys.exit(1)
-if locked_qc_height is not None and locked_qc_height < commit_qc_height:
-    print(
-        f"{label}: /v1/sumeragi/status locked QC height {locked_qc_height} is behind commit QC height {commit_qc_height}",
-        file=sys.stderr,
-    )
-    sys.exit(1)
-if canonical_height is not None and canonical_height < commit_qc_height:
-    print(
-        f"{label}: /v1/sumeragi/status canonical height {canonical_height} is behind commit QC height {commit_qc_height}",
-        file=sys.stderr,
-    )
-    sys.exit(1)
-if not isinstance(validator_set_len, int) or validator_set_len < 1:
-    if allow_pending_commit_qc:
-        print(
-            f"{label}: /v1/sumeragi/status is still missing a commit QC validator set; "
-            "deferring validator-set enforcement until after the signed write canary",
-            file=sys.stderr,
-        )
-        sys.exit(10)
-    print(
-        f"{label}: /v1/sumeragi/status reported an empty commit validator set: {validator_set_len!r}",
-        file=sys.stderr,
-    )
-    sys.exit(1)
-if validator_set_len < min_validator_set_len:
-    print(
-        f"{label}: /v1/sumeragi/status reported only {validator_set_len} validators in the commit QC set; "
-        f"Taira rollout expects at least {min_validator_set_len}. "
-        "Remember that /status.peers is only the queried node's remote-peer count. "
-        "Render per-validator configs from configs/soranexus/taira/validator_roster.example.toml "
-        "with scripts/render_taira_validator_bundle.py before cutting traffic.",
-        file=sys.stderr,
-    )
-    sys.exit(1)
-
-missing_finality_fields = []
-if highest_qc_height is None:
-    missing_finality_fields.append("highest_qc_height")
-if locked_qc_height is None:
-    missing_finality_fields.append("locked_qc_height")
-if canonical_height is None:
-    missing_finality_fields.append("canonical_height")
-if membership_height is None:
-    missing_finality_fields.append("membership_height")
-if pending_rbc_sessions is None:
-    missing_finality_fields.append("pending_rbc.sessions")
-if not canonical_pending_finality_published:
-    missing_finality_fields.append("canonical.pending_finality")
-
-legacy_count_saturated = (
-    tx_queue_saturated is True
-    and tx_queue_saturated_by_age is not True
-    and (
-        tx_queue_capacity is None
-        or tx_queue_depth is None
-        or tx_queue_depth >= tx_queue_capacity
-    )
+required = (
+    "node_fingerprint",
+    "build_fingerprint",
+    "config_fingerprint",
+    "height_context_id",
+    "phase",
+    "body_state",
 )
-if (
-    membership_height is not None
-    and commit_qc_height is not None
-    and membership_height > commit_qc_height
+missing = [name for name in required if status.get(name) in (None, "", {})]
+if missing:
+    raise SystemExit(
+        f"{label}: v2 status omitted required field(s): {', '.join(missing)}"
+    )
+
+for name in ("height", "view", "leader", "last_committed_height"):
+    value = status.get(name)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise SystemExit(f"{label}: v2 status reported invalid {name}: {value!r}")
+
+if status["last_committed_height"] > status["height"]:
+    raise SystemExit(
+        f"{label}: committed height {status['last_committed_height']} "
+        f"is ahead of reducer height {status['height']}"
+    )
+if status["last_committed_height"] > 0 and status.get("last_committed_subject") is None:
+    raise SystemExit(
+        f"{label}: v2 status omitted last_committed_subject for a non-genesis commit"
+    )
+
+pending = status.get("pending_persistence_id")
+if pending is not None and (
+    not isinstance(pending, int) or isinstance(pending, bool) or pending < 1
 ):
-    cause = view_change_last_cause or "unknown"
-    pending_finality_present = canonical_pending_finality not in (None, False, "", "false", "0")
-    rbc_waiting = canonical_rbc_status not in (
-        "",
-        "0",
-        "false",
-        "none",
-        "null",
-        "idle",
-        "disabled",
-        "ready",
-        "complete",
-        "completed",
-        "delivered",
+    raise SystemExit(
+        f"{label}: v2 status reported invalid pending persistence id: {pending!r}"
     )
-    one_ahead_prepare = (
-        canonical_phase == "prepare"
-        and canonical_height == membership_height == commit_qc_height + 1
-        and highest_qc_height == commit_qc_height
-        and locked_qc_height == commit_qc_height
-    )
-    stalled_one_ahead_idle = (
-        one_ahead_prepare
-        and worker_stage == "idle"
-        and canonical_view is not None
-        and canonical_view > 1
-    )
-    if (
-        one_ahead_prepare
-        and not stalled_one_ahead_idle
-        and not pending_finality_present
-        and not rbc_waiting
-        and (pending_rbc_sessions in (None, 0))
-        and cause not in ("missing_qc", "quorum_timeout", "stake_quorum_timeout")
-    ):
-        pass
-    else:
-        detail = "membership height ahead of commit QC"
-        if one_ahead_prepare:
-            detail = "one-block-ahead prepare did not settle"
-        pending_rbc_text = (
-            f", pending_rbc_sessions={pending_rbc_sessions!r}"
-            if pending_rbc_sessions is not None
-            else ""
-        )
-        pending_finality_text = (
-            f", pending_finality={canonical_pending_finality!r}"
-            if pending_finality_present
-            else ""
-        )
-        rbc_text = (
-            f", rbc_status={canonical_rbc_status!r}"
-            if canonical_rbc_status
-            else ""
-        )
-        worker_text = f", worker_stage={worker_stage!r}" if worker_stage else ""
-        view_text = f", canonical_view={canonical_view!r}" if canonical_view is not None else ""
-        phase_text = f", phase={canonical_phase!r}" if canonical_phase else ""
-        print(
-            f"{label}: /v1/sumeragi/status reports a finality fault "
-            f"({cause}) with {detail} "
-            f"({membership_height} > {commit_qc_height}); "
-            f"queue depth={tx_queue_depth!r}, capacity={tx_queue_capacity!r}, "
-            f"saturated_by_count={tx_queue_saturated_by_count!r}, "
-            f"saturated_by_age={tx_queue_saturated_by_age!r}, "
-            f"oldest_queued_age_ms={tx_queue_oldest_queued_age_ms!r}"
-            f"{phase_text}{worker_text}{view_text}{pending_finality_text}{rbc_text}{pending_rbc_text}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-if missing_finality_fields:
-    print(
-        f"{label}: /v1/sumeragi/status did not publish required finality field(s): "
-        + ", ".join(missing_finality_fields),
-        file=sys.stderr,
-    )
-    sys.exit(1)
-if tx_queue_saturated_by_count is True or (
-    tx_queue_saturated_by_count is None and legacy_count_saturated
-):
-    print(
-        f"{label}: /v1/sumeragi/status reports transaction queue capacity saturation "
-        f"(depth={tx_queue_depth!r}, capacity={tx_queue_capacity!r})",
-        file=sys.stderr,
-    )
-    sys.exit(1)
 PY
 }
-
 check_status_snapshot_with_retry() {
   local label="$1"
   local status_url="$2"
@@ -1131,6 +979,202 @@ check_sumeragi_snapshot_with_retry() {
   done
 
   return 1
+}
+
+capture_validator_fleet_sample() {
+  local records_file status_copy
+  local idx label root
+  records_file="$(mktemp)"
+
+  for idx in "${!VALIDATOR_ROOTS[@]}"; do
+    label="${VALIDATOR_LABELS[$idx]}"
+    root="${VALIDATOR_ROOTS[$idx]}"
+    echo "==> validator ${label}: GET ${root}/status" >&2
+    http_request GET "${root}/status"
+    if [[ "$last_status" != "200" ]]; then
+      echo "validator ${label}: /status failed with HTTP ${last_status}" >&2
+      rm -f "$records_file"
+      return 1
+    fi
+    status_copy="$(mktemp)"
+    cp "$last_body" "$status_copy"
+
+    echo "==> validator ${label}: GET ${root}/v1/sumeragi/status" >&2
+    http_request GET "${root}/v1/sumeragi/status"
+    if [[ "$last_status" != "200" ]]; then
+      echo "validator ${label}: /v1/sumeragi/status failed with HTTP ${last_status}" >&2
+      rm -f "$status_copy" "$records_file"
+      return 1
+    fi
+
+    if ! python3 - "$label" "$status_copy" "$last_body" "$EXPECTED_TAIRA_GIT_SHA" >>"$records_file" <<'PY'
+import json
+import re
+import sys
+
+label, status_path, sumeragi_path, expected_sha = sys.argv[1:]
+with open(status_path, "r", encoding="utf-8") as handle:
+    node_status = json.load(handle)
+with open(sumeragi_path, "r", encoding="utf-8") as handle:
+    envelope = json.load(handle)
+
+status = envelope.get("v2") if isinstance(envelope.get("v2"), dict) else envelope
+if status.get("protocol_version") != 2:
+    raise SystemExit(f"validator {label}: expected Sumeragi protocol_version 2")
+
+required = (
+    "node_fingerprint",
+    "build_fingerprint",
+    "config_fingerprint",
+    "height_context_id",
+    "height",
+    "view",
+    "last_committed_height",
+)
+missing = [name for name in required if status.get(name) is None]
+if missing:
+    raise SystemExit(
+        f"validator {label}: v2 status omitted required fields: {', '.join(missing)}"
+    )
+for name in ("height", "view", "last_committed_height"):
+    value = status[name]
+    if not isinstance(value, int) or value < 0:
+        raise SystemExit(f"validator {label}: invalid {name}: {value!r}")
+if status["last_committed_height"] > 0 and status.get("last_committed_subject") is None:
+    raise SystemExit(f"validator {label}: missing committed subject/hash")
+
+if expected_sha:
+    build = node_status.get("build") or {}
+    published = next(
+        (
+            build.get(key).strip().lower()
+            for key in ("git_commit_sha", "git_sha", "commit_sha", "commit")
+            if isinstance(build.get(key), str) and build.get(key).strip()
+        ),
+        None,
+    )
+    if published is None or re.fullmatch(r"[0-9a-f]{7,40}", published) is None:
+        raise SystemExit(f"validator {label}: /status omitted a valid build git SHA")
+    if not (published.startswith(expected_sha) or expected_sha.startswith(published)):
+        raise SystemExit(
+            f"validator {label}: build git SHA {published} does not match {expected_sha}"
+        )
+
+def canonical(value):
+    return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+
+record = {
+    "label": label,
+    "node": canonical(status["node_fingerprint"]),
+    "build": canonical(status["build_fingerprint"]),
+    "config": canonical(status["config_fingerprint"]),
+    "context": canonical(status["height_context_id"]),
+    "height": status["height"],
+    "view": status["view"],
+    "committed_height": status["last_committed_height"],
+    "committed_subject": canonical(status.get("last_committed_subject")),
+}
+print(json.dumps(record, ensure_ascii=True, sort_keys=True))
+PY
+    then
+      rm -f "$status_copy" "$records_file"
+      return 1
+    fi
+    rm -f "$status_copy"
+  done
+
+  python3 - "$records_file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    records = [json.loads(line) for line in handle if line.strip()]
+if not records:
+    raise SystemExit("validator fleet sample contained no records")
+
+nodes = [record["node"] for record in records]
+if len(nodes) != len(set(nodes)):
+    raise SystemExit(
+        "validator roots do not identify distinct nodes; check tunnels and ingress routing"
+    )
+
+baseline = records[0]
+for record in records[1:]:
+    for field in (
+        "build",
+        "config",
+        "context",
+        "height",
+        "committed_height",
+        "committed_subject",
+    ):
+        if record[field] != baseline[field]:
+            raise SystemExit(
+                f"validator {record['label']} disagrees with {baseline['label']} on {field}: "
+                f"{record[field]!r} != {baseline[field]!r}"
+            )
+
+summary = {
+    "build": baseline["build"],
+    "config": baseline["config"],
+    "context": baseline["context"],
+    "height": baseline["height"],
+    "committed_height": baseline["committed_height"],
+    "committed_subject": baseline["committed_subject"],
+    "nodes": sorted(nodes),
+}
+print(json.dumps(summary, ensure_ascii=True, sort_keys=True))
+PY
+  local rc=$?
+  rm -f "$records_file"
+  return "$rc"
+}
+
+check_validator_fleet() {
+  [[ ${#VALIDATOR_ROOTS[@]} -gt 0 ]] || return 0
+
+  local sample attempt summary previous_summary="" aligned=0
+  for ((sample = 1; sample <= VALIDATOR_PROGRESS_SAMPLES; sample++)); do
+    aligned=0
+    for ((attempt = 1; attempt <= VALIDATOR_ALIGNMENT_ATTEMPTS; attempt++)); do
+      if summary="$(capture_validator_fleet_sample)"; then
+        aligned=1
+        break
+      fi
+      if [[ $attempt -lt $VALIDATOR_ALIGNMENT_ATTEMPTS ]]; then
+        sleep 1
+      fi
+    done
+    if [[ $aligned -ne 1 ]]; then
+      echo "validator fleet did not converge on one build/config/context/commit tuple after ${VALIDATOR_ALIGNMENT_ATTEMPTS} attempts" >&2
+      exit 1
+    fi
+
+    if [[ -n "$previous_summary" ]]; then
+      python3 - "$previous_summary" "$summary" <<'PY'
+import json
+import sys
+
+previous = json.loads(sys.argv[1])
+current = json.loads(sys.argv[2])
+for field in ("build", "config", "nodes"):
+    if current[field] != previous[field]:
+        raise SystemExit(f"validator fleet changed {field} between progress samples")
+if current["committed_height"] <= previous["committed_height"]:
+    raise SystemExit(
+        "validator fleet did not advance a common committed height: "
+        f"{current['committed_height']} <= {previous['committed_height']}"
+    )
+if current["committed_subject"] == previous["committed_subject"]:
+    raise SystemExit("validator fleet advanced height without changing the common block hash")
+PY
+    fi
+    echo "validator fleet sample ${sample}/${VALIDATOR_PROGRESS_SAMPLES}: ${summary}"
+    previous_summary="$summary"
+    if [[ $sample -lt $VALIDATOR_PROGRESS_SAMPLES ]]; then
+      sleep "$VALIDATOR_PROGRESS_DELAY_SECONDS"
+    fi
+  done
 }
 
 check_route_parity() {
@@ -1462,6 +1506,7 @@ except ModuleNotFoundError:
 KNOWN_PREFIXES = {
     "iroha3-taira": 369,
     "809574f5-fee7-5e69-bfcf-52451e42d50f": 369,
+    "fc56984b-2be7-431d-840e-21514d1883f0": 369,
     "iroha3-nexus": 753,
     "00000000-0000-0000-0000-000000000753": 753,
 }
@@ -1687,6 +1732,8 @@ recheck_status_targets_after_write_canary() {
     fi
   done
 }
+
+check_validator_fleet
 
 if [[ $SKIP_LOCAL -eq 0 ]]; then
   check_endpoint "local" "$LOCAL_MCP_URL"

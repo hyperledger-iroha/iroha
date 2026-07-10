@@ -325,6 +325,70 @@ def _render_governance_manifest(validators: list[ValidatorEntry]) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
 
 
+def render_genesis_template(
+    base_genesis_path: Path,
+    validators: list[ValidatorEntry],
+    output_dir: Path,
+) -> Path:
+    """Render the unsigned shared genesis template with the exact public BLS roster.
+
+    The matching private validator keys are intentionally absent. ``kagami
+    genesis sign --config`` stages this template, derives the signed Nexus/AMX
+    height-context commitment from the chosen validator config, and only then
+    emits the final Norito genesis block.
+    """
+
+    payload = json.loads(base_genesis_path.read_text(encoding="utf-8"))
+    transactions = payload.get("transactions")
+    if not isinstance(transactions, list) or not transactions:
+        raise ValueError(
+            f"base genesis {base_genesis_path} must contain a non-empty transactions array"
+        )
+    if not isinstance(payload.get("sumeragi_v2"), dict):
+        raise ValueError(
+            f"base genesis {base_genesis_path} is missing required sumeragi_v2 parameters"
+        )
+    for transaction in transactions:
+        if not isinstance(transaction, dict):
+            raise ValueError(
+                f"base genesis {base_genesis_path} contains a non-object transaction"
+            )
+        transaction["topology"] = []
+    transactions.append(
+        {
+            "instructions": [],
+            "ivm_triggers": [],
+            "topology": [
+                {"peer": validator.public_key, "pop_hex": validator.pop_hex}
+                for validator in validators
+            ],
+        }
+    )
+
+    target = output_dir / "genesis.json"
+    target.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    signing_command = output_dir / "genesis-signing-command.txt"
+    signing_command.write_text(
+        " ".join(
+            [
+                "kagami genesis sign",
+                str(target),
+                "--config",
+                str(output_dir / validators[0].slug / "config.toml"),
+                "--private-key \"$TAIRA_GENESIS_PRIVATE_KEY\"",
+                "--out-file",
+                str(output_dir / "genesis.signed.nrt"),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return target
+
+
 def load_roster(
     path: Path,
     secrets_path: Path | None = None,
@@ -579,6 +643,7 @@ def render_bundle(
     output_dir: Path,
     secrets_path: Path | None = None,
     only: str | None = None,
+    base_genesis_path: Path | None = None,
 ) -> list[Path]:
     """Render one config.toml per validator into output_dir."""
 
@@ -615,6 +680,8 @@ def render_bundle(
 
     if only is not None and not written:
         raise ValueError(f"validator `{only}` is not present in {roster_path}")
+    if base_genesis_path is not None:
+        render_genesis_template(base_genesis_path, validators, output_dir)
     return written
 
 
@@ -628,6 +695,11 @@ def main(argv: list[str] | None = None) -> int:
         "--base-config",
         default="configs/soranexus/taira/config.toml",
         help="checked-in peer-1 baseline config to rewrite",
+    )
+    parser.add_argument(
+        "--base-genesis",
+        default="configs/soranexus/taira/genesis.json",
+        help="checked-in unsigned Taira genesis template to populate with the public roster",
     )
     parser.add_argument(
         "--roster",
@@ -655,6 +727,7 @@ def main(argv: list[str] | None = None) -> int:
         Path(args.output_dir),
         secrets_path=Path(args.secrets) if args.secrets else None,
         only=args.only,
+        base_genesis_path=Path(args.base_genesis),
     )
     for path in written:
         print(path)

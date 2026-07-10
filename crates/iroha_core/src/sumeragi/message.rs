@@ -3,7 +3,10 @@ use std::{io::Write, sync::Arc};
 
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
-    block::{BlockHeader, BlockSignature, SignedBlock, consensus::SumeragiMembershipStatus},
+    block::{
+        BlockHeader, BlockSignature, SignedBlock, consensus::SumeragiMembershipStatus,
+        consensus_v2::ConsensusMessageV2,
+    },
     peer::PeerId,
 };
 use iroha_logger::prelude::*;
@@ -85,6 +88,12 @@ pub enum BlockMessage {
     LaneBlockVote(#[skip_try_from] crate::lane_consensus::LaneBlockVoteV1),
     /// Standalone lane-local block QC aggregating lane-validator BLS signatures.
     LaneBlockQc(#[skip_try_from] super::consensus::LaneBlockQcV1),
+    /// Explicitly versioned global Sumeragi v2 message.
+    ///
+    /// This variant is appended so legacy v1 discriminants remain stable for
+    /// archival decoding. Live protocol-v2 consensus rejects the legacy global
+    /// Proposal/QC/RBC variants above.
+    V2(#[skip_try_from] ConsensusMessageV2),
 }
 
 impl BlockMessage {

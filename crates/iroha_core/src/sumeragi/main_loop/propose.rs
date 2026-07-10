@@ -1102,284 +1102,27 @@ fn da_payload_budget(
 }
 
 impl Actor {
-    #[allow(clippy::too_many_arguments)]
-    fn native_amx_attestation_body(
-        &self,
-        tx: &AcceptedTransaction<'_>,
-        plan_digest: Hash,
-        coordinator: RoutingDecision,
-        participant: crate::queue::RouteLeg,
-        participant_validator_set: &[PeerId],
-        participant_min_quorum: usize,
-        phase: NativeAmxPhase,
-        authority_context_height: u64,
-        coordinator_lane_block_height: u64,
-        coordinator_lane_block_view: u64,
-        coordinator_proposal_hash: Hash,
-    ) -> Result<NativeAmxAttestationBodyV1, &'static str> {
-        let mut source_id = [0u8; iroha_crypto::Hash::LENGTH];
-        source_id.copy_from_slice(tx.hash().as_ref());
-        let coordinator_lane_incarnation = self
-            .state
-            .lane_incarnation_at_height(coordinator.lane_id, authority_context_height)
-            .ok_or("native AMX coordinator lane incarnation is unavailable")?;
-        let participant_lane_incarnation = self
-            .state
-            .lane_incarnation_at_height(participant.route.lane_id, authority_context_height)
-            .ok_or("native AMX participant lane incarnation is unavailable")?;
-        let participant_validator_count = u32::try_from(participant_validator_set.len())
-            .map_err(|_| "native AMX participant validator count exceeds u32")?;
-        let participant_min_quorum = u32::try_from(participant_min_quorum)
-            .map_err(|_| "native AMX participant quorum exceeds u32")?;
-        Ok(NativeAmxAttestationBodyV1 {
-            chain_id_hash: self.chain_hash,
-            source_id,
-            tx_entrypoint_hash: tx.hash_as_entrypoint(),
-            plan_digest,
-            phase,
-            coordinator_lane_id: coordinator.lane_id,
-            coordinator_dataspace_id: coordinator.dataspace_id,
-            coordinator_lane_incarnation,
-            participant_lane_id: participant.route.lane_id,
-            participant_dataspace_id: participant.route.dataspace_id,
-            participant_lane_incarnation,
-            participant_validator_set_hash: HashOf::new(&participant_validator_set.to_vec()),
-            participant_validator_count,
-            participant_min_quorum,
-            authority_context_height,
-            coordinator_lane_block_height,
-            coordinator_lane_block_view,
-            coordinator_proposal_hash,
-        })
-    }
-
-    fn native_amx_vote_roster(
-        &self,
-        participant_lane: LaneId,
-        block_height: u64,
-    ) -> Result<(Vec<PeerId>, Vec<Vec<u8>>, usize), &'static str> {
-        let mut roster = self
-            .state
-            .authoritative_lane_peer_ids_at_height(participant_lane, block_height);
-        roster.sort();
-        if roster.is_empty()
-            || roster.len() > crate::native_amx::MAX_NATIVE_AMX_VALIDATORS
-            || roster.windows(2).any(|pair| pair[0] == pair[1])
-            || roster.iter().any(|peer| !roster_member_allowed_bls(peer))
-        {
-            return Err("native AMX participant lane attestation roster is malformed");
-        }
-        let world = self.state.world_view();
-        let pops = roster
-            .iter()
-            .map(|peer| {
-                crate::state::live_consensus_key_pop_for_peer(&world, peer, block_height)
-                    .filter(|pop| {
-                        pop.len() == crate::native_amx::NATIVE_AMX_BLS_PROOF_BYTES
-                            && iroha_crypto::bls_normal_pop_verify(peer.public_key(), pop).is_ok()
-                    })
-                    .ok_or("native AMX participant validator is missing a valid historical PoP")
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let min_signers =
-            crate::sumeragi::network_topology::commit_quorum_from_len(roster.len()).max(1);
-        Ok((roster, pops, min_signers))
-    }
-
     fn native_amx_receipt_for_plan(
         &mut self,
-        tx: &AcceptedTransaction<'_>,
+        _tx: &AcceptedTransaction<'_>,
         plan: &crate::queue::RoutingPlan,
-        authority_context_height: u64,
-        coordinator_proposal: &crate::sumeragi::consensus::LaneBlockProposalV1,
+        _block_height: u64,
     ) -> Result<Option<NativeAmxReceipt>, &'static str> {
-        let crate::queue::RoutingPlan::NativeAmx(native_plan) = plan else {
+        let crate::queue::RoutingPlan::NativeAmx(_) = plan else {
             return Ok(None);
         };
-        let coordinator = native_plan.coordinator.route;
-        crate::lane_consensus::validate_lane_block_proposal(coordinator_proposal)
-            .map_err(|_| "native AMX coordinator lane proposal is malformed")?;
-        let coordinator_descriptor = &coordinator_proposal.descriptor;
-        let tx_entrypoint_hash = Hash::from(tx.hash_as_entrypoint());
-        if coordinator_descriptor.lane_id != coordinator.lane_id
-            || coordinator_descriptor.dataspace_id != coordinator.dataspace_id
-            || coordinator_descriptor.proposal_height != authority_context_height
-            || coordinator_descriptor
-                .accepted_transaction_hashes
-                .iter()
-                .filter(|hash| **hash == tx_entrypoint_hash)
-                .count()
-                != 1
-        {
-            return Err("native AMX coordinator lane proposal does not own the transaction");
-        }
-        let coordinator_proposal_hash = coordinator_proposal.proposal_hash;
-        let plan_legs = plan.legs();
-        let key = {
-            let mut source_id = [0u8; iroha_crypto::Hash::LENGTH];
-            source_id.copy_from_slice(tx.hash().as_ref());
-            NativeAmxSessionKey {
-                source_id,
-                plan_digest: native_plan.plan_digest,
-            }
-        };
-
-        let mut pending = false;
-        let mut legs = Vec::with_capacity(native_plan.participants.len());
-        for participant in &native_plan.participants {
-            let (validator_set, validator_set_pops, min_signers) =
-                self.native_amx_vote_roster(participant.route.lane_id, authority_context_height)?;
-            let prepare_body = self.native_amx_attestation_body(
-                tx,
-                native_plan.plan_digest,
-                coordinator,
-                *participant,
-                &validator_set,
-                min_signers,
-                NativeAmxPhase::Prepare,
-                authority_context_height,
-                coordinator_descriptor.lane_block_height,
-                coordinator_descriptor.lane_block_view,
-                coordinator_proposal_hash,
-            )?;
-            let commit_body = self.native_amx_attestation_body(
-                tx,
-                native_plan.plan_digest,
-                coordinator,
-                *participant,
-                &validator_set,
-                min_signers,
-                NativeAmxPhase::Commit,
-                authority_context_height,
-                coordinator_descriptor.lane_block_height,
-                coordinator_descriptor.lane_block_view,
-                coordinator_proposal_hash,
-            )?;
-
-            let prepare_votes = self.native_amx_sessions.sorted_votes_for_body_from(
-                key,
-                &prepare_body,
-                &validator_set,
-            );
-            let commit_votes = self.native_amx_sessions.sorted_votes_for_body_from(
-                key,
-                &commit_body,
-                &validator_set,
-            );
-            if prepare_votes.len() < min_signers {
-                pending = true;
-                self.request_native_amx_attestation_votes(
-                    &validator_set,
-                    NativeAmxAttestationRequestV1 {
-                        body: prepare_body,
-                        plan_legs: plan_legs.clone(),
-                        coordinator_proposal: coordinator_proposal.clone(),
-                        prepare_qc: None,
-                    },
-                );
-                continue;
-            }
-            let prepare_qc = aggregate_votes_to_qc(
-                prepare_body,
-                validator_set.clone(),
-                validator_set_pops.clone(),
-                &prepare_votes,
-                min_signers,
-            )
-            .map_err(|_| "native AMX prepare QC could not be assembled")?;
-            if commit_votes.len() < min_signers {
-                pending = true;
-                self.request_native_amx_attestation_votes(
-                    &validator_set,
-                    NativeAmxAttestationRequestV1 {
-                        body: commit_body,
-                        plan_legs: plan_legs.clone(),
-                        coordinator_proposal: coordinator_proposal.clone(),
-                        prepare_qc: Some(prepare_qc.clone()),
-                    },
-                );
-                continue;
-            }
-
-            let commit_qc = aggregate_votes_to_qc(
-                commit_body,
-                validator_set.clone(),
-                validator_set_pops,
-                &commit_votes,
-                min_signers,
-            )
-            .map_err(|_| "native AMX commit QC could not be assembled")?;
-            legs.push(NativeAmxLegRecord {
-                lane_id: participant.route.lane_id,
-                dataspace_id: participant.route.dataspace_id,
-                lane_incarnation: prepare_body.participant_lane_incarnation,
-                prepare_qc,
-                commit_qc,
-            });
-        }
-
-        if pending {
-            return Err("native AMX participant attestations are still pending");
-        }
-
-        let mut source_id = [0u8; iroha_crypto::Hash::LENGTH];
-        source_id.copy_from_slice(tx.hash().as_ref());
-        Ok(Some(NativeAmxReceipt {
-            version: 1,
-            source_id,
-            chain_id_hash: self.chain_hash,
-            plan_digest: native_plan.plan_digest,
-            lane_id: coordinator.lane_id,
-            dataspace_id: coordinator.dataspace_id,
-            lane_incarnation: self
-                .state
-                .lane_incarnation_at_height(coordinator.lane_id, authority_context_height)
-                .ok_or("native AMX coordinator lane incarnation is unavailable")?,
-            authority_context_height,
-            lane_block_height: coordinator_descriptor.lane_block_height,
-            lane_block_view: coordinator_descriptor.lane_block_view,
-            coordinator_proposal_hash,
-            legs,
-        }))
+        Err("native AMX receipt generation is owned exclusively by Sumeragi v2")
     }
 
     pub(super) fn native_amx_receipts_for_batch(
         &mut self,
         tx_batch: &[AcceptedTransaction<'static>],
         routing_plan_batch: &[crate::queue::RoutingPlan],
-        authority_context_height: u64,
-        coordinator_proposals: &[crate::sumeragi::consensus::LaneBlockProposalV1],
+        block_height: u64,
     ) -> Result<Vec<Option<NativeAmxReceipt>>, &'static str> {
         let mut receipts = Vec::with_capacity(tx_batch.len());
         for (tx, plan) in tx_batch.iter().zip(routing_plan_batch) {
-            if !matches!(plan, crate::queue::RoutingPlan::NativeAmx(_)) {
-                receipts.push(None);
-                continue;
-            }
-            let coordinator = plan.coordinator_route();
-            let tx_hash = Hash::from(tx.hash_as_entrypoint());
-            let mut matches = coordinator_proposals.iter().filter(|proposal| {
-                let descriptor = &proposal.descriptor;
-                descriptor.lane_id == coordinator.lane_id
-                    && descriptor.dataspace_id == coordinator.dataspace_id
-                    && descriptor.proposal_height == authority_context_height
-                    && descriptor
-                        .accepted_transaction_hashes
-                        .iter()
-                        .any(|hash| *hash == tx_hash)
-            });
-            let Some(coordinator_proposal) = matches.next() else {
-                return Err("native AMX coordinator lane proposal is unavailable");
-            };
-            if matches.next().is_some() {
-                return Err("native AMX transaction appears in multiple coordinator proposals");
-            }
-            receipts.push(self.native_amx_receipt_for_plan(
-                tx,
-                plan,
-                authority_context_height,
-                coordinator_proposal,
-            )?);
+            receipts.push(self.native_amx_receipt_for_plan(tx, plan, block_height)?);
         }
         Ok(receipts)
     }
@@ -5078,23 +4821,9 @@ impl Actor {
         let tx_prepare_ms = tx_prepare_started_at.elapsed().as_millis();
 
         let native_precheck_started_at = Instant::now();
-        let native_precheck_hashes = tx_batch
-            .iter()
-            .map(|tx| Hash::from(tx.hash_as_entrypoint()))
-            .collect::<Vec<_>>();
-        let native_precheck_lane_plan = self.plan_final_lane_payload(
-            self.state.as_ref(),
-            &routing_batch,
-            &native_precheck_hashes,
-            proposal_height,
-            view,
-        )?;
-        if let Err(reason) = self.native_amx_receipts_for_batch(
-            &tx_batch,
-            &routing_plan_batch,
-            proposal_height,
-            &native_precheck_lane_plan.lane_block_proposal_artifacts,
-        ) {
+        if let Err(reason) =
+            self.native_amx_receipts_for_batch(&tx_batch, &routing_plan_batch, proposal_height)
+        {
             self.queue.release_transaction_guards(&mut tx_guards);
             for (tx, routing) in tx_batch.drain(..).zip(routing_plan_batch.drain(..)) {
                 if crate::tx::is_heartbeat_accepted_transaction(&tx) {
@@ -5611,12 +5340,7 @@ impl Actor {
                     view,
                 )?;
                 let native_amx_receipts = self
-                    .native_amx_receipts_for_batch(
-                        &tx_batch,
-                        &routing_plan_batch,
-                        proposal_height,
-                        &final_lane_payload_plan.lane_block_proposal_artifacts,
-                    )
+                    .native_amx_receipts_for_batch(&tx_batch, &routing_plan_batch, proposal_height)
                     .map_err(|reason| {
                         eyre!("native AMX participant attestations unavailable: {reason}")
                     })?;

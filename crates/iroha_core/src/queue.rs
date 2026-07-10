@@ -3372,6 +3372,58 @@ impl Queue {
         })
     }
 
+    /// Clone at most `max_scan` pending transactions from the stable enqueue
+    /// ring without popping queue ownership.
+    ///
+    /// Sumeragi v2 uses this bounded snapshot so an abandoned candidate cannot
+    /// lose transactions through `TransactionGuard` drop semantics. The ring
+    /// order is serialized with queue insertion, unlike `DashMap` iteration,
+    /// and every inspected slot counts against the explicit scan bound even if
+    /// the slot became stale concurrently.
+    pub(crate) fn bounded_pending_snapshot(
+        &self,
+        state_view: &StateView<'_>,
+        max_scan: NonZeroUsize,
+    ) -> Vec<AcceptedTransaction<'static>> {
+        let mut age_ring = self.queued_age_ring.lock();
+        let mut remaining_scan = max_scan.get();
+        while remaining_scan > 0
+            && let Some((hash, enqueued_at_ms)) = age_ring.front().copied()
+        {
+            let is_current = self
+                .queued_tx_enqueued_at_ms
+                .get(&hash)
+                .is_some_and(|entry| *entry.value() == enqueued_at_ms)
+                && !self.removed_hashes.contains_key(&hash);
+            if is_current {
+                break;
+            }
+            age_ring.pop_front();
+            remaining_scan = remaining_scan.saturating_sub(1);
+        }
+        if remaining_scan == 0 {
+            return Vec::new();
+        }
+        let mut seen = HashSet::with_capacity(remaining_scan);
+        age_ring
+            .iter()
+            .take(remaining_scan)
+            .filter_map(|(hash, enqueued_at_ms)| {
+                let is_current = self
+                    .queued_tx_enqueued_at_ms
+                    .get(hash)
+                    .is_some_and(|entry| *entry.value() == *enqueued_at_ms);
+                if !is_current || !seen.insert(*hash) || self.removed_hashes.contains_key(hash) {
+                    return None;
+                }
+                let transaction = self.txs.get(hash)?;
+                let transaction = transaction.value().as_ref();
+                self.is_pending(transaction, state_view)
+                    .then(|| transaction.as_accepted().clone())
+            })
+            .collect()
+    }
+
     /// Returns `n` transactions in a batch for gossiping
     pub fn gossip_batch(&self, n: u32, state_view: &StateView) -> Vec<GossipBatchEntry> {
         #[cfg(feature = "telemetry")]
@@ -7361,7 +7413,7 @@ pub mod tests {
         borrow::Cow,
         collections::{BTreeMap, BTreeSet},
         fs,
-        num::NonZeroU32,
+        num::{NonZeroU32, NonZeroUsize},
         path::PathBuf,
         sync::{
             Arc,
@@ -11222,6 +11274,112 @@ pub mod tests {
             .expect("push should succeed");
 
         assert!(matches!(wake_rx.try_recv(), Ok(())));
+    }
+
+    #[test]
+    fn bounded_pending_snapshot_is_fifo_bounded_and_non_destructive() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(world_with_test_domains(), kura, query_handle);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+
+        let first = accepted_tx_by_someone(&time_source);
+        let first_hash = first.hash();
+        let second = accepted_tx_by_someone(&time_source);
+        let second_hash = second.hash();
+        queue.push(first, state.view()).expect("push first");
+        queue.push(second, state.view()).expect("push second");
+
+        let snapshot = queue
+            .bounded_pending_snapshot(&state.view(), NonZeroUsize::new(1).expect("non-zero bound"));
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].hash(), first_hash);
+        assert!(queue.contains_transaction_hash(first_hash));
+        assert!(queue.contains_transaction_hash(second_hash));
+        assert_eq!(queue.active_len(), 2);
+    }
+
+    #[test]
+    fn bounded_pending_snapshot_prunes_stale_front_and_excludes_inflight_guard() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(world_with_test_domains(), kura, query_handle);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+
+        let first = accepted_tx_by_someone(&time_source);
+        let first_hash = first.hash();
+        let second = accepted_tx_by_someone(&time_source);
+        let second_hash = second.hash();
+        queue.push(first, state.view()).expect("push first");
+        queue.push(second, state.view()).expect("push second");
+
+        let mut expired = Vec::new();
+        let inflight = queue
+            .pop_from_queue(&state.view(), &mut expired)
+            .expect("oldest transaction becomes in-flight");
+        assert_eq!(inflight.as_ref().hash(), first_hash);
+
+        let snapshot = queue
+            .bounded_pending_snapshot(&state.view(), NonZeroUsize::new(2).expect("non-zero bound"));
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].hash(), second_hash);
+        assert!(
+            snapshot
+                .iter()
+                .all(|transaction| transaction.hash() != first_hash)
+        );
+
+        drop(inflight);
+    }
+
+    #[test]
+    fn bounded_pending_snapshot_charges_stale_front_pruning_to_scan_budget() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(world_with_test_domains(), kura, query_handle);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+
+        let first = accepted_tx_by_someone(&time_source);
+        let first_hash = first.hash();
+        let second = accepted_tx_by_someone(&time_source);
+        let second_hash = second.hash();
+        let third = accepted_tx_by_someone(&time_source);
+        let third_hash = third.hash();
+        queue.push(first, state.view()).expect("push first");
+        queue.push(second, state.view()).expect("push second");
+        queue.push(third, state.view()).expect("push third");
+
+        let mut expired = Vec::new();
+        let first_inflight = queue
+            .pop_from_queue(&state.view(), &mut expired)
+            .expect("first transaction becomes in-flight");
+        let second_inflight = queue
+            .pop_from_queue(&state.view(), &mut expired)
+            .expect("second transaction becomes in-flight");
+        assert_eq!(first_inflight.hash(), first_hash);
+        assert_eq!(second_inflight.hash(), second_hash);
+
+        let one = NonZeroUsize::new(1).expect("non-zero bound");
+        assert!(
+            queue
+                .bounded_pending_snapshot(&state.view(), one)
+                .is_empty(),
+            "first call spends its only scan slot pruning the first stale entry"
+        );
+        assert!(
+            queue
+                .bounded_pending_snapshot(&state.view(), one)
+                .is_empty(),
+            "second call spends its only scan slot pruning the second stale entry"
+        );
+        let snapshot = queue.bounded_pending_snapshot(&state.view(), one);
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].hash(), third_hash);
+
+        drop((first_inflight, second_inflight));
     }
 
     #[test]

@@ -1039,7 +1039,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         )
         let copiedVerifierRecordBytes = mutableVerifierRecordBytes
         let copiedVerifierRecord = try KagemushaRecursiveSpendVerifierRecordRef(
-            verifierKeyId: "halo2/ipa:copiedVerifierRecord",
+            verifierKeyId: "halo2/ipa:copied-verifier-record",
             recordBytes: mutableVerifierRecordBytes
         )
         mutableVerifierRecordBytes[mutableVerifierRecordBytes.index(before: mutableVerifierRecordBytes.endIndex)] ^= 0x7f

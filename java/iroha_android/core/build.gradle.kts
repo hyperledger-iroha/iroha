@@ -30,6 +30,12 @@ java {
 tasks.withType<Test>().configureEach {
     useJUnit()
     enableAssertions = true
+    inputs.file(
+        rootProject.layout.projectDirectory
+            .dir("..")
+            .dir("..")
+            .file("fixtures/sumeragi_v2/wire_v2.tsv"),
+    )
     val harnessFilter = System.getenv("ANDROID_HARNESS_MAINS")
     if (!harnessFilter.isNullOrBlank()) {
         systemProperty("android.test.mains", harnessFilter)

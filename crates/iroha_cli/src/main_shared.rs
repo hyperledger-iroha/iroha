@@ -8483,6 +8483,8 @@ mod tests {
             "recursive-compact-key-artifacts.norito",
             "--verifier-keys-out",
             "recursive-compact-verifier-keys.norito",
+            "--confidential-transfer-v2-verifier-record-out",
+            "confidential-transfer-v2-verifier-record.norito",
             "--record-out",
             "recursive-compact-len4.record.norito",
         ])

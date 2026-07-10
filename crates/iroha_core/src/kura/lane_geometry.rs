@@ -1958,10 +1958,8 @@ impl Kura {
             }
             if context.native_amx_receipt.as_ref().is_some_and(|receipt| {
                 receipt.legs.iter().any(|leg| {
-                    retiring.contains(&LaneRetirementIdentity {
-                        lane_id: leg.lane_id,
-                        dataspace_id: leg.dataspace_id,
-                        lane_incarnation: leg.lane_incarnation,
+                    retiring.iter().any(|identity| {
+                        identity.lane_id == leg.lane_id && identity.dataspace_id == leg.dataspace_id
                     })
                 })
             }) {
@@ -4053,10 +4051,9 @@ fn lane_payload_targets_retirement(
                 .any(|(planned, leg)| {
                     planned.route.lane_id == leg.lane_id
                         && planned.route.dataspace_id == leg.dataspace_id
-                        && retiring.contains(&LaneRetirementIdentity {
-                            lane_id: leg.lane_id,
-                            dataspace_id: leg.dataspace_id,
-                            lane_incarnation: leg.lane_incarnation,
+                        && retiring.iter().any(|identity| {
+                            identity.lane_id == leg.lane_id
+                                && identity.dataspace_id == leg.dataspace_id
                         })
                 })
         })
@@ -4265,9 +4262,11 @@ mod tests {
             BlockExecutionContextBundle, SignedBlock,
             consensus::{
                 CertPhase, LaneBlockDescriptorV1, LaneBlockProposalPayloadHintV1,
-                LaneBlockProposalV1, NativeAmxAttestationBodyV1, NativeAmxAttestationQcV1,
-                NativeAmxLegRecord, NativeAmxPhase, NativeAmxReceipt, SumeragiLanePayloadOwnership,
+                LaneBlockProposalV1, NativeAmxAttestationBodyV2, NativeAmxAttestationQcV2,
+                NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
+                SumeragiLanePayloadOwnership,
             },
+            consensus_v2::{ConsensusRound, HeightContext, HeightContextId},
         },
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
         isi::Log,
@@ -4663,7 +4662,7 @@ mod tests {
         entrypoint_hash: HashOf<TransactionEntrypoint>,
         plan: &crate::queue::RoutingPlan,
         coordinator_proposal: &LaneBlockProposalV1,
-        participant_lane_incarnation: Hash,
+        epoch: u64,
         participant_keypair: &KeyPair,
     ) -> NativeAmxReceipt {
         let crate::queue::RoutingPlan::NativeAmx(native_plan) = plan else {
@@ -4675,32 +4674,30 @@ mod tests {
             .expect("geometry retirement fixture participant");
         let participant_validator_set = vec![PeerId::new(participant_keypair.public_key().clone())];
         let descriptor = &coordinator_proposal.descriptor;
-        let prepare_body = NativeAmxAttestationBodyV1 {
-            chain_id_hash,
+        let prepare_body = NativeAmxAttestationBodyV2 {
+            round: ConsensusRound {
+                context_id: HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
+                    Hash::new(b"geometry-native-amx-v2-context"),
+                )),
+                height: descriptor.proposal_height,
+                view: descriptor.lane_block_view,
+            },
+            epoch,
             source_id,
             tx_entrypoint_hash: entrypoint_hash,
             plan_digest: plan.digest(),
             phase: NativeAmxPhase::Prepare,
             coordinator_lane_id: descriptor.lane_id,
             coordinator_dataspace_id: descriptor.dataspace_id,
-            coordinator_lane_incarnation: descriptor.lane_incarnation,
             participant_lane_id: participant.route.lane_id,
             participant_dataspace_id: participant.route.dataspace_id,
-            participant_lane_incarnation,
-            participant_validator_set_hash: HashOf::new(&participant_validator_set),
-            participant_validator_count: 1,
-            participant_min_quorum: 1,
-            authority_context_height: descriptor.proposal_height,
-            coordinator_lane_block_height: descriptor.lane_block_height,
-            coordinator_lane_block_view: descriptor.lane_block_view,
-            coordinator_proposal_hash: coordinator_proposal.proposal_hash,
+            planned_coordinator_block_height: descriptor.lane_block_height,
         };
-        let qc = |body| NativeAmxAttestationQcV1 {
+        let qc = |body| NativeAmxAttestationQcV2 {
             body,
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set_hash: HashOf::new(&participant_validator_set),
             validator_set: participant_validator_set.clone(),
-            validator_set_pops: vec![vec![0_u8; crate::native_amx::NATIVE_AMX_BLS_PROOF_BYTES]],
             signers_bitmap: vec![1],
             bls_aggregate_signature: vec![0_u8; crate::native_amx::NATIVE_AMX_BLS_PROOF_BYTES],
         };
@@ -4709,7 +4706,7 @@ mod tests {
         commit_body.phase = NativeAmxPhase::Commit;
         let commit_qc = qc(commit_body);
         NativeAmxReceipt {
-            version: 1,
+            version: 2,
             source_id,
             chain_id_hash,
             plan_digest: plan.digest(),
@@ -4720,10 +4717,9 @@ mod tests {
             lane_block_height: descriptor.lane_block_height,
             lane_block_view: descriptor.lane_block_view,
             coordinator_proposal_hash: coordinator_proposal.proposal_hash,
-            legs: vec![NativeAmxLegRecord {
+            legs: vec![NativeAmxLegRecordV2 {
                 lane_id: participant.route.lane_id,
                 dataspace_id: participant.route.dataspace_id,
-                lane_incarnation: participant_lane_incarnation,
                 prepare_qc,
                 commit_qc,
             }],
@@ -4734,7 +4730,6 @@ mod tests {
         coordinator_incarnation: Hash,
         participant_lane_id: LaneId,
         participant_dataspace_id: DataSpaceId,
-        participant_incarnation: Hash,
         producer: &KeyPair,
     ) -> (Hash, u64, crate::lane_consensus::LaneExecutablePayloadV1) {
         let chain: ChainId = "geometry-retirement-autonomous"
@@ -4770,13 +4765,14 @@ mod tests {
             producer,
         );
         let chain_id_hash = Hash::new(chain.into_inner().as_bytes());
+        let epoch = 9;
         let receipt = geometry_native_amx_receipt(
             chain_id_hash,
             source_id,
             entrypoint_hash,
             &plan,
             &proposal,
-            participant_incarnation,
+            epoch,
             producer,
         );
         let reservation = crate::queue::LaneQueueReservationKeyV1 {
@@ -4793,7 +4789,6 @@ mod tests {
             reservation_owner_hash: Hash::new(b"geometry-retirement-reservation-owner"),
             proposal_identity_hash: Hash::new(b"geometry-retirement-proposal-identity"),
         };
-        let epoch = 9;
         let payload = crate::lane_consensus::LaneExecutablePayloadV1::new_signed_with_reservations(
             chain_id_hash,
             epoch,
@@ -4810,7 +4805,7 @@ mod tests {
     }
 
     #[test]
-    fn scale_in_rejects_pending_native_amx_participant_work_from_another_lane() {
+    fn scale_in_conservatively_rejects_pending_native_amx_participant_route() {
         let temp = TempDir::new().expect("temporary directory");
         let root = temp.path().join("kura");
         let (initial, extended) = retirement_test_configs();
@@ -4825,7 +4820,6 @@ mod tests {
             extended_incarnations[&LaneId::SINGLE],
             LaneId::new(1),
             DataSpaceId::new(8),
-            extended_incarnations[&LaneId::new(1)],
             &producer,
         );
         kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
@@ -4841,7 +4835,7 @@ mod tests {
                 &initial_activations,
                 &BTreeSet::new(),
             )
-            .expect_err("pending participant work must pin the retired incarnation");
+            .expect_err("pending participant route must conservatively pin retirement");
         assert!(
             error
                 .to_string()
@@ -4866,52 +4860,36 @@ mod tests {
     }
 
     #[test]
-    fn scale_in_allows_recreated_incarnation_and_unrelated_participant_work() {
-        for (label, participant_lane, participant_dataspace, participant_incarnation) in [
-            (
-                "recreated-incarnation",
-                LaneId::new(1),
-                DataSpaceId::new(8),
-                Hash::prehashed([0x63; Hash::LENGTH]),
-            ),
-            (
-                "unrelated-lane",
-                LaneId::new(9),
-                DataSpaceId::new(19),
-                Hash::prehashed([0x69; Hash::LENGTH]),
-            ),
-        ] {
-            let temp = TempDir::new().expect("temporary directory");
-            let root = temp.path().join(label);
-            let (initial, extended) = retirement_test_configs();
-            let (extended_incarnations, extended_activations) = retirement_test_geometry();
-            let initial_incarnations =
-                BTreeMap::from([(LaneId::SINGLE, extended_incarnations[&LaneId::SINGLE])]);
-            let initial_activations =
-                BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
-            let kura = open_kura(&root, &extended);
-            let producer = crate::kura::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let (chain_id_hash, epoch, payload) = autonomous_retirement_payload(
-                extended_incarnations[&LaneId::SINGLE],
-                participant_lane,
-                participant_dataspace,
-                participant_incarnation,
-                &producer,
-            );
-            kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
-                .expect("persist non-target participant work");
+    fn scale_in_allows_unrelated_participant_work() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("unrelated-lane");
+        let (initial, extended) = retirement_test_configs();
+        let (extended_incarnations, extended_activations) = retirement_test_geometry();
+        let initial_incarnations =
+            BTreeMap::from([(LaneId::SINGLE, extended_incarnations[&LaneId::SINGLE])]);
+        let initial_activations =
+            BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
+        let kura = open_kura(&root, &extended);
+        let producer = crate::kura::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let (chain_id_hash, epoch, payload) = autonomous_retirement_payload(
+            extended_incarnations[&LaneId::SINGLE],
+            LaneId::new(9),
+            DataSpaceId::new(19),
+            &producer,
+        );
+        kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+            .expect("persist non-target participant work");
 
-            kura.apply_lane_geometry_transition(
-                &extended,
-                &initial,
-                &extended_incarnations,
-                &initial_incarnations,
-                &extended_activations,
-                &initial_activations,
-                &BTreeSet::new(),
-            )
-            .unwrap_or_else(|error| panic!("{label} should not pin old retirement: {error}"));
-        }
+        kura.apply_lane_geometry_transition(
+            &extended,
+            &initial,
+            &extended_incarnations,
+            &initial_incarnations,
+            &extended_activations,
+            &initial_activations,
+            &BTreeSet::new(),
+        )
+        .unwrap_or_else(|error| panic!("unrelated lane should not pin old retirement: {error}"));
     }
 
     #[test]
@@ -5105,7 +5083,7 @@ mod tests {
             entrypoint_hash,
             &plan,
             &proposal,
-            extended_incarnations[&LaneId::new(1)],
+            0,
             &producer,
         );
         let context = crate::queue::execution_context_for_routing_plan(entrypoint_hash, &plan)

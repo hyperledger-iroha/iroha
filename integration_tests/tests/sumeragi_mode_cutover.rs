@@ -33,7 +33,7 @@ const EPOCH_LENGTH_BLOCKS: u64 = 6;
 const BLOCK_TIME_MS: u64 = 500;
 const STATUS_POLL_LIMIT: usize = 600;
 const HEIGHT_POLL_LIMIT: usize = 600;
-const NPOS_BLS_DOMAIN: &str = "bls-iroha2:npos-sumeragi:v1";
+const NPOS_BLS_DOMAIN: &str = "bls-iroha2:npos-sumeragi:v2";
 const MODE_POLL_DELAY: Duration = Duration::from_millis(200);
 const HEIGHT_POLL_DELAY: Duration = Duration::from_millis(500);
 
@@ -274,6 +274,12 @@ fn consensus_params_for_mode(
         epoch_length_blocks,
         bls_domain: bls_domain.to_string(),
         npos,
+        protocol_version: iroha_config::parameters::defaults::sumeragi::PROTOCOL_VERSION,
+        round_timeout_ms: iroha_config::parameters::defaults::sumeragi::ROUND_TIMEOUT_MS,
+        v2_context: Some(
+            iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(
+            ),
+        ),
     }
 }
 

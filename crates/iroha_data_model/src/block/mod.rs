@@ -53,6 +53,8 @@ fn enforce_payload_len_limit(len: usize) -> Result<(), NoritoFrameError> {
 pub mod builder;
 #[doc = "Consensus message types shared by Sumeragi implementations."]
 pub mod consensus;
+#[doc = "Canonical Sumeragi v2 consensus messages and height context."]
+pub mod consensus_v2;
 #[doc = "Durable execution context committed by block headers."]
 pub mod execution_context;
 #[doc = "Block header structures and helpers."]

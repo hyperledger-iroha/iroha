@@ -2158,6 +2158,55 @@ verifier profiles. Multi-profile record-backed lineage
 witnesses must provide records for every Reserved-lineage previous proof. SDK
 typed builders may place all Reserved-lineage records in the plural field, while
 one-profile callers may use the single-record field.
+
+Swift can now assemble that final proof boundary without hand-encoding private
+witness or proof-attachment archives. The preferred production sequence is to
+call
+`IrohaSDK.buildKagemushaConfidentialUnshieldRedeemProofAttachment(witness:verifierKeyId:blockHeight:)`.
+It fetches the exact registry entry from Torii, consumes the authoritative
+`record_norito_base64` archive, constructs the native proof, locally verifies
+it, and returns the checked attachment. The equivalent lower-level sequence is:
+
+1. Call
+   `PrivacyConfidentialWitnessCodecs.buildConfidentialUnshieldProofRequestV1`
+   with the unshield witness. The builder requires no transfer outputs, accepts
+   zero or one private change output and any canonical `u128` public amount,
+   and binds the exact unshield-v3 verifier reference and nine-column schema.
+2. Pass the request archive to
+   `PrivacyNativeBridge.buildConfidentialUnshieldProofV3(requestArchive:)`.
+3. Fetch the verifier detail from Torii, then convert its exact archived record
+   with `asKagemushaRecursiveSpendVerifierRecordRef()`. Do not reconstruct the
+   record archive from the JSON projection.
+4. Pass the successful native proof-output archive and verifier-record snapshot
+   to `KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachment`, along
+   with the current block height when the record has an activation or withdrawal
+   boundary. The builder calls the existing native `verifyProofV1` bridge and
+   requires a successful result containing the byte-identical proof and
+   `verified == true`.
+5. Put the returned canonical attachment in
+   `KagemushaRecursiveSpendRedeemRequest.redeemProof`, then call
+   `encodeRedeemRequest` and the existing native recursive redeem transaction
+   builder.
+
+The attachment builder checks the exact unshield operation and production
+verifier reference, open-verify envelope, unshield-v3 circuit/schema,
+`offline_kagemusha` namespace, Pallas backend/curve, active record, canonical
+inline key commitment and length, proof-size cap, and canonical fixed-array
+framing. A bridge-unavailable error, malformed or all-zero proof, substituted
+canonical key, or mismatched verify result fails closed. Windowless active
+records are accepted without a height. Windowed records require a resolved
+height at or after activation and strictly before withdrawal.
+
+The six-field attachment carries the full envelope, verifier id and commitment,
+the canonical Iroha `Hash` of the envelope (Blake2b-256 with the required
+low-bit marker), and no privacy lane. Recursive redeem must use this builder
+rather than Swift's generic `ProofAttachment` encoder, whose general
+variable-tail/default-hash behavior is not the compact recursive-redeem wire
+contract. The checked boundary also requires canonical zero Norito header
+padding for the native privacy result, open-verify envelope, and verifier
+record. The generic 64-byte frame-padding limit is not permission to add
+padding to these 8-byte-aligned types.
+
 Torii offline-v2 redeem ingress routes `/v1/offline/v2/notes/redeem` requests
 that carry `redeem_request_norito_base64`,
 `compact_payment_token_norito_base64`, or
@@ -2380,6 +2429,14 @@ loaded; malformed, duplicate, incomplete, or missing native evidence keeps the
 SDK capability surface fail-closed. Unshield v3 also rejects overflowing input
 amount sums before proving, so malformed witness archives return the proving
 failure status instead of wrapping the private total.
+
+Apple builds follow the same gate. The default
+`scripts/build_norito_xcframework.sh` output remains fail-closed; after the
+production evidence is approved, operators can build all Apple slices with
+`scripts/build_norito_xcframework.sh --privacy-production-enabled`, or select
+the corresponding default-off input on the manual `Mobile SDK Artifacts`
+workflow. The enabled artifact is explicitly marked, and the builder rejects
+the option with skip-build mode so an older library cannot be mislabeled.
 Public JavaScript production-evidence rows now mirror the Python privacy catalog
 by requiring exact `sdk_exports` and `review_scope` sections before a row can
 promote readiness: every SDK surface repeats the admitted entrypoint list, and

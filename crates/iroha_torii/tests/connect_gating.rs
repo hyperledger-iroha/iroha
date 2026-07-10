@@ -479,6 +479,10 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             eviction_required_replicas: iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         },
         sumeragi: A::Sumeragi {
+            protocol_version: iroha_config::parameters::defaults::sumeragi::PROTOCOL_VERSION,
+            round_timeout: std::time::Duration::from_millis(
+                iroha_config::parameters::defaults::sumeragi::ROUND_TIMEOUT_MS,
+            ),
             role: A::NodeRole::Validator,
             consensus_mode: A::ConsensusMode::Permissioned,
             mode_flip: A::SumeragiModeFlip {

@@ -245,6 +245,12 @@ fn rng_consensus_genesis_params(rng: &mut DeterministicRng) -> ConsensusGenesisP
         epoch_length_blocks: rng.next_u64(),
         bls_domain: rng_ascii_string(rng, 24),
         npos,
+        protocol_version: rng.next_u32(),
+        round_timeout_ms: rng.next_u64(),
+        v2_context: Some(
+            iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(
+            ),
+        ),
     }
 }
 
@@ -1392,8 +1398,8 @@ fn sumeragi_wire_status_roundtrip() {
     let relay = rng_lane_relay_envelope(&mut rng);
     let status = SumeragiStatusWire {
         canonical: SumeragiV1StatusWire::default(),
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_string(),
-        staged_mode_tag: Some("iroha2-consensus::npos-sumeragi@v1".to_string()),
+        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
+        staged_mode_tag: Some("iroha2-consensus::npos-sumeragi@v2".to_string()),
         staged_mode_activation_height: Some(42),
         mode_activation_lag_blocks: Some(2),
         mode_flip_kill_switch: true,
@@ -1957,8 +1963,14 @@ fn consensus_genesis_norito_roundtrip() {
         block_max_transactions: 512,
         da_enabled: true,
         epoch_length_blocks: 120,
-        bls_domain: "bls-iroha2:npos-sumeragi:v1".to_owned(),
+        bls_domain: "bls-iroha2:npos-sumeragi:v2".to_owned(),
         npos: Some(npos),
+        protocol_version: 2,
+        round_timeout_ms: 10_000,
+        v2_context: Some(
+            iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(
+            ),
+        ),
     };
     let without_npos = ConsensusGenesisParams {
         npos: None,

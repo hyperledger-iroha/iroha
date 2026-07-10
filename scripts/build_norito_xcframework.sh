@@ -11,6 +11,7 @@ set -euo pipefail
 # Usage:
 #   scripts/build_norito_xcframework.sh
 #   scripts/build_norito_xcframework.sh --bridge-version 1.0.0
+#   scripts/build_norito_xcframework.sh --privacy-production-enabled
 #
 # Outputs into ./dist/NoritoBridge.xcframework
 
@@ -31,9 +32,9 @@ FRAMEWORK_BUNDLE_ID="${FRAMEWORK_BUNDLE_ID:-org.hyperledger.iroha.NoritoBridge}"
 : "${MACOSX_DEPLOYMENT_TARGET:=12.0}"
 export IPHONESIMULATOR_DEPLOYMENT_TARGET
 export MACOSX_DEPLOYMENT_TARGET
-CARGO_BUILD_DIR_BASE="$BUILD_DIR/cargo-ios${IPHONEOS_DEPLOYMENT_TARGET//./_}-sim${IPHONESIMULATOR_DEPLOYMENT_TARGET//./_}"
 
 BRIDGE_VERSION=""
+PRIVACY_PRODUCTION_ENABLED=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --bridge-version)
@@ -47,14 +48,35 @@ while [[ $# -gt 0 ]]; do
     --bridge-version=*)
       BRIDGE_VERSION="${1#*=}"
       ;;
+    --privacy-production-enabled)
+      PRIVACY_PRODUCTION_ENABLED=1
+      ;;
     *)
       echo "[-] Unknown argument: $1" >&2
-      echo "    Usage: $0 [--bridge-version <version>]" >&2
+      echo "    Usage: $0 [--bridge-version <version>] [--privacy-production-enabled]" >&2
       exit 1
       ;;
   esac
   shift
 done
+
+if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" && "${NORITO_BRIDGE_SKIP_CARGO_BUILDS:-0}" == "1" ]]; then
+  echo "[-] --privacy-production-enabled cannot be combined with NORITO_BRIDGE_SKIP_CARGO_BUILDS=1" >&2
+  exit 1
+fi
+
+CARGO_FEATURE_ARGS=()
+if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" ]]; then
+  CARGO_FEATURE_ARGS+=(--features privacy-production-enabled)
+  CARGO_FEATURE_PROFILE="privacy-production-enabled"
+  echo "[+] Enabling the audited privacy production bridge feature for every Apple slice" >&2
+else
+  CARGO_FEATURE_PROFILE="privacy-production-disabled"
+  echo "[+] Privacy proof dispatch remains fail-closed (default bridge build)" >&2
+fi
+# Keep feature variants in disjoint Cargo targets. In particular, the default
+# skip-build fast path must never package libraries left by an enabled build.
+CARGO_BUILD_DIR_BASE="$BUILD_DIR/cargo-ios${IPHONEOS_DEPLOYMENT_TARGET//./_}-sim${IPHONESIMULATOR_DEPLOYMENT_TARGET//./_}-${CARGO_FEATURE_PROFILE}"
 
 echo "[+] Using iOS deployment target (device): $IPHONEOS_DEPLOYMENT_TARGET" >&2
 echo "[+] Using iOS deployment target (simulator): $IPHONESIMULATOR_DEPLOYMENT_TARGET" >&2
@@ -88,21 +110,25 @@ else
   env IPHONEOS_DEPLOYMENT_TARGET="$IPHONEOS_DEPLOYMENT_TARGET" \
     NORITO_SKIP_BINDINGS_SYNC=1 \
     CARGO_TARGET_DIR="$CARGO_BUILD_DIR_DEVICE" \
-    cargo build -p "$LIB_CRATE_NAME" --lib --release --target "$DEVICE_TRIPLE"
+    cargo build -p "$LIB_CRATE_NAME" --lib --release --target "$DEVICE_TRIPLE" \
+      "${CARGO_FEATURE_ARGS[@]}"
   env IPHONEOS_DEPLOYMENT_TARGET="$IPHONESIMULATOR_DEPLOYMENT_TARGET" \
     IPHONESIMULATOR_DEPLOYMENT_TARGET="$IPHONESIMULATOR_DEPLOYMENT_TARGET" \
     NORITO_SKIP_BINDINGS_SYNC=1 \
     CARGO_TARGET_DIR="$CARGO_BUILD_DIR_SIM_ARM" \
-    cargo build -p "$LIB_CRATE_NAME" --lib --release --target "$SIM_ARM_TRIPLE"
+    cargo build -p "$LIB_CRATE_NAME" --lib --release --target "$SIM_ARM_TRIPLE" \
+      "${CARGO_FEATURE_ARGS[@]}"
   env IPHONEOS_DEPLOYMENT_TARGET="$IPHONESIMULATOR_DEPLOYMENT_TARGET" \
     IPHONESIMULATOR_DEPLOYMENT_TARGET="$IPHONESIMULATOR_DEPLOYMENT_TARGET" \
     NORITO_SKIP_BINDINGS_SYNC=1 \
     CARGO_TARGET_DIR="$CARGO_BUILD_DIR_SIM_X64" \
-    cargo build -p "$LIB_CRATE_NAME" --lib --release --target "$SIM_X64_TRIPLE"
+    cargo build -p "$LIB_CRATE_NAME" --lib --release --target "$SIM_X64_TRIPLE" \
+      "${CARGO_FEATURE_ARGS[@]}"
   env MACOSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" \
     NORITO_SKIP_BINDINGS_SYNC=1 \
     CARGO_TARGET_DIR="$CARGO_BUILD_DIR_MACOS" \
-    cargo build -p "$LIB_CRATE_NAME" --lib --release --target "$MACOS_TRIPLE"
+    cargo build -p "$LIB_CRATE_NAME" --lib --release --target "$MACOS_TRIPLE" \
+      "${CARGO_FEATURE_ARGS[@]}"
 fi
 
 LIB_DEV="$CARGO_BUILD_DIR_DEVICE/$DEVICE_TRIPLE/release/lib${LIB_CRATE_NAME}.a"
@@ -276,6 +302,9 @@ if ! xcodebuild -create-xcframework \
 fi
 
 echo "[+] XCFramework created: $OUT_DIR/${FRAMEWORK_NAME}.xcframework" >&2
+if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" ]]; then
+  touch "$OUT_DIR/${FRAMEWORK_NAME}.xcframework/.privacy-production-enabled"
+fi
 
 IOS_BIN="$OUT_DIR/${FRAMEWORK_NAME}.xcframework/ios-arm64/${STATIC_LIB_NAME}"
 SIM_BIN="$OUT_DIR/${FRAMEWORK_NAME}.xcframework/ios-arm64_x86_64-simulator/${STATIC_LIB_NAME}"
@@ -288,10 +317,15 @@ fi
 IOS_HASH=$(shasum -a 256 "$IOS_BIN" | awk '{print $1}')
 SIM_HASH=$(shasum -a 256 "$SIM_BIN" | awk '{print $1}')
 MAC_HASH=$(shasum -a 256 "$MAC_BIN" | awk '{print $1}')
+PRIVACY_PRODUCTION_JSON=false
+if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" ]]; then
+  PRIVACY_PRODUCTION_JSON=true
+fi
 
 cat > "$OUT_DIR/NoritoBridge.artifacts.json" <<EOF
 {
   "version": "$BRIDGE_VERSION",
+  "privacy_production_enabled": $PRIVACY_PRODUCTION_JSON,
   "hashes": {
     "ios-arm64": "$IOS_HASH",
     "ios-arm64_x86_64-simulator": "$SIM_HASH",

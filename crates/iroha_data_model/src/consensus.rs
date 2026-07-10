@@ -20,6 +20,8 @@ pub use crate::block::consensus::{
     SumeragiVoteValidationDropStatus, SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
     ValidatorSetId, Vote, default_chain_order_hash,
 };
+/// Canonical Sumeragi v2 wire types.
+pub use crate::block::consensus_v2 as v2;
 use crate::prelude::*;
 
 /// Hash-version constant for validator set checkpoints.

@@ -11,7 +11,7 @@ import org.hyperledger.iroha.sdk.address.MultisigMemberPayload
 import org.hyperledger.iroha.sdk.address.MultisigPolicyPayload
 import org.hyperledger.iroha.sdk.core.model.instructions.ProofAttachment
 import org.hyperledger.iroha.sdk.core.model.instructions.ProofVerifierKeyRef
-import org.hyperledger.iroha.sdk.crypto.Blake2b
+import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
 import org.hyperledger.iroha.sdk.norito.NoritoEncoder
@@ -849,8 +849,9 @@ object KagemushaRecursiveSpendRequestCodecs {
             requireResolvedLifecycle = true,
         )
         val verifyRequest = PrivacyConfidentialWitnessCodecs.buildConfidentialUnshieldVerifyRequestV1(proof.proof)
+        val verifyResult = verifyProof(verifyRequest)
         parsePrivacyVerifyResult(
-            verifyProof(verifyRequest),
+            verifyResult,
             CONFIDENTIAL_UNSHIELD_ALGORITHM_ID,
             CONFIDENTIAL_UNSHIELD_ENTRYPOINT,
             PrivacyConfidentialWitnessCodecs.CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF,
@@ -2775,11 +2776,7 @@ private fun fixed32(value: ByteArray, field: String): ByteArray {
 
 private fun isZero32(value: ByteArray): Boolean = value.all { it.toInt() == 0 }
 
-private fun irohaHash(value: ByteArray): ByteArray {
-    val digest = Blake2b.digest256(value)
-    digest[digest.lastIndex] = (digest.last().toInt() or 0x01).toByte()
-    return digest
-}
+private fun irohaHash(value: ByteArray): ByteArray = IrohaHash.prehash(value)
 
 private fun requireNonNegativeHeight(blockHeight: Long?) {
     require(blockHeight == null || blockHeight >= 0L) { "blockHeight must be non-negative" }
@@ -3507,17 +3504,44 @@ private fun compact(decoder: NoritoDecoder): Boolean =
     decoder.flags and NoritoHeader.COMPACT_LEN != 0
 
 private fun parseVerifierKeyId(value: String, field: String): VerifierKeyIdValue {
-    requirePortableId(value, field)
     val separator = value.indexOf(':')
     require(separator > 0 && separator < value.lastIndex) {
         "$field must use backend:name syntax"
     }
     val backend = value.substring(0, separator)
     val name = value.substring(separator + 1)
-    requirePortableId(backend, "$field.backend")
-    requirePortableId(name, "$field.name")
+    requireVerifierKeyIdComponent(backend, "$field.backend")
+    requireVerifierKeyIdComponent(name, "$field.name")
     return VerifierKeyIdValue(backend, name)
 }
+
+private fun requireVerifierKeyIdComponent(value: String, field: String) {
+    fun isLowercaseAsciiAlphanumeric(character: Char): Boolean =
+        character in 'a'..'z' || character in '0'..'9'
+
+    require(value.isNotEmpty() && value.length <= 256) {
+        "$field must use portable registry syntax"
+    }
+    require(isLowercaseAsciiAlphanumeric(value.first()) && isLowercaseAsciiAlphanumeric(value.last())) {
+        "$field must use portable registry syntax"
+    }
+    require(value.all { character ->
+        isLowercaseAsciiAlphanumeric(character) ||
+            character == '-' ||
+            character == '_' ||
+            character == '/' ||
+            character == ':' ||
+            character == '.'
+    }) {
+        "$field must use portable registry syntax"
+    }
+    require(VERIFIER_KEY_ID_FORBIDDEN_SEPARATORS.none(value::contains)) {
+        "$field must use portable registry syntax"
+    }
+}
+
+private val VERIFIER_KEY_ID_FORBIDDEN_SEPARATORS =
+    listOf("..", "//", ":::", "/:", ":/", "/.", "./", ":.", ".:")
 
 private fun verifyingKeyCommitment(backend: String, bytes: ByteArray): ByteArray {
     requireNonBlankUnpadded(backend, "verifierKeyBackend")

@@ -6808,36 +6808,13 @@ mod state {
                 hex_bytes(&got.nexus_policy_digest),
             ));
         }
-        macro_rules! check {
-            ($field:ident) => {
-                if expected.$field != got.$field {
-                    return Some(format!(
-                        "{} mismatch (expected {}, got {})",
-                        stringify!($field),
-                        expected.$field,
-                        got.$field
-                    ));
-                }
-            };
-        }
-
-        check!(collectors_k);
-        check!(redundant_send_r);
-        check!(da_enabled);
-        check!(rbc_chunk_max_bytes);
-        if expected.rbc_encoding != got.rbc_encoding {
+        if expected.v2_config_fingerprint != got.v2_config_fingerprint {
             return Some(format!(
-                "rbc_encoding mismatch (expected {:?}, got {:?})",
-                expected.rbc_encoding, got.rbc_encoding,
+                "v2_config_fingerprint mismatch (expected 0x{}, got 0x{})",
+                hex_bytes(&expected.v2_config_fingerprint),
+                hex_bytes(&got.v2_config_fingerprint),
             ));
         }
-        check!(rbc_rs16_data_shards);
-        check!(rbc_rs16_parity_shards);
-        check!(rbc_session_ttl_ms);
-        check!(rbc_store_max_sessions);
-        check!(rbc_store_soft_sessions);
-        check!(rbc_store_max_bytes);
-        check!(rbc_store_soft_bytes);
         None
     }
 
@@ -8370,8 +8347,56 @@ mod state {
         #[cfg(feature = "noise_handshake")]
         use iroha_crypto::{encryption::ChaCha20Poly1305, kex::X25519Sha256 as KexAlgo};
 
-        #[cfg(feature = "noise_handshake")]
         use super::*;
+
+        fn consensus_caps(fingerprint: [u8; 32]) -> ConsensusConfigCaps {
+            ConsensusConfigCaps {
+                nexus_policy_digest: [0xC1; 32],
+                v2_config_fingerprint: fingerprint,
+                collectors_k: 1,
+                redundant_send_r: 3,
+                da_enabled: true,
+                rbc_chunk_max_bytes: 64 * 1024,
+                rbc_encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+                rbc_rs16_data_shards: 0,
+                rbc_rs16_parity_shards: 0,
+                rbc_session_ttl_ms: 120_000,
+                rbc_store_max_sessions: 1_024,
+                rbc_store_soft_sessions: 768,
+                rbc_store_max_bytes: 512 * 1024 * 1024,
+                rbc_store_soft_bytes: 384 * 1024 * 1024,
+            }
+        }
+
+        #[test]
+        fn v2_peer_admission_compares_canonical_shared_config_fingerprint() {
+            let expected = consensus_caps([0xA5; 32]);
+            let mut same_v2_config = expected;
+            same_v2_config.collectors_k = u16::MAX;
+            same_v2_config.redundant_send_r = u8::MAX;
+            same_v2_config.da_enabled = false;
+            same_v2_config.rbc_chunk_max_bytes = 1;
+            same_v2_config.rbc_encoding = iroha_data_model::block::consensus::RbcEncoding::Rs16;
+            same_v2_config.rbc_rs16_data_shards = u16::MAX;
+            same_v2_config.rbc_rs16_parity_shards = u16::MAX;
+            same_v2_config.rbc_session_ttl_ms = 1;
+            same_v2_config.rbc_store_max_sessions = 1;
+            same_v2_config.rbc_store_soft_sessions = 1;
+            same_v2_config.rbc_store_max_bytes = 1;
+            same_v2_config.rbc_store_soft_bytes = 1;
+            assert_eq!(
+                consensus_config_mismatch(&expected, &same_v2_config),
+                None,
+                "legacy collector/global-RBC status fields must not gate v2 peers",
+            );
+
+            let changed = consensus_caps([0x5A; 32]);
+            let mismatch = consensus_config_mismatch(&expected, &changed)
+                .expect("different shared v2 config hashes must be rejected");
+            assert!(mismatch.contains("v2_config_fingerprint mismatch"));
+            assert!(mismatch.contains(&hex_bytes(&[0xA5; 32])));
+            assert!(mismatch.contains(&hex_bytes(&[0x5A; 32])));
+        }
 
         #[cfg(feature = "noise_handshake")]
         #[tokio::test(flavor = "current_thread")]
@@ -8454,6 +8479,7 @@ mod tests {
     fn sample_consensus_config_caps() -> ConsensusConfigCaps {
         ConsensusConfigCaps {
             nexus_policy_digest: [0xA5; 32],
+            v2_config_fingerprint: [0xC3; 32],
             collectors_k: 1,
             redundant_send_r: 1,
             da_enabled: true,

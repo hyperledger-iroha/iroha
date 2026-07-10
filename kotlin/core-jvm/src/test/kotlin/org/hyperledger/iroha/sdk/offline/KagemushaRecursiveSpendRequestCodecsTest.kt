@@ -1361,11 +1361,26 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             entrypoint = "buildConfidentialUnshieldProofV3",
         )
 
+        var verifyRequest: ByteArray? = null
         val attachment = KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachmentChecked(
             fixture.proofOutputArchive,
             fixture.verifierRecordRef,
             null,
-        ) { successfulUnshieldVerifyResult(fixture.envelopeArchive) }
+        ) { request ->
+            verifyRequest = request.copyOf()
+            successfulUnshieldVerifyResult(fixture.envelopeArchive)
+        }
+        val decodedVerifyRequest = NoritoHeader.decode(verifyRequest!!, null)
+        assertTrue(decodedVerifyRequest.header.schemaHash.all { (it.toInt() and 0xff) == 0x52 })
+        val verifyRequestFields = fieldPayloads(decodedVerifyRequest.payload)
+        assertEquals(6, verifyRequestFields.size)
+        assertEquals("unshield", readStringPayload(verifyRequestFields[0]))
+        assertEquals("buildConfidentialUnshieldProofV3", readStringPayload(verifyRequestFields[1]))
+        assertEquals(
+            PrivacyConfidentialWitnessCodecs.CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF,
+            readStringPayload(verifyRequestFields[2]),
+        )
+        assertContentEquals(fixture.envelopeArchive, readBytesVecPayload(verifyRequestFields[5]))
 
         assertArchiveSchema(attachment, KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT)
         val fields = requestFields(attachment, KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT)
@@ -1387,6 +1402,172 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         assertContentEquals(
             expectedEnvelopeHash,
             readFixedArrayPayload(optionSomePayload(fields[4]), 32),
+        )
+    }
+
+    @Test
+    fun `redeem proof attachment requires an exact successful native verification result`() {
+        val fixture = proofFixture(
+            circuitId = KagemushaRecursiveSpendRequestCodecs.CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
+            schema = CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA,
+            algorithmId = "unshield",
+            entrypoint = "buildConfidentialUnshieldProofV3",
+        )
+
+        fun rejectedResult(result: ByteArray): IllegalArgumentException = assertFailsWith {
+            KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachmentChecked(
+                fixture.proofOutputArchive,
+                fixture.verifierRecordRef,
+                null,
+            ) { result }
+        }
+
+        assertEquals(
+            "unshieldVerifyResult must confirm proof verification",
+            rejectedResult(
+                privacyResultArchive(
+                    algorithmId = "unshield",
+                    entrypoint = "buildConfidentialUnshieldProofV3",
+                    proof = fixture.envelopeArchive,
+                    status = 0,
+                    errorCode = 0,
+                    message = "",
+                    vkRef = PrivacyConfidentialWitnessCodecs.CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF,
+                    verified = false,
+                    schemaMarker = 0x56,
+                ),
+            ).message,
+        )
+        assertEquals(
+            "unshieldVerifyResult proof must match the unshield build result",
+            rejectedResult(successfulUnshieldVerifyResult(fixture.envelopeArchive + byteArrayOf(0x01))).message,
+        )
+        assertEquals(
+            "unshieldVerifyResult vk_ref must be " +
+                PrivacyConfidentialWitnessCodecs.CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF,
+            rejectedResult(
+                privacyResultArchive(
+                    algorithmId = "unshield",
+                    entrypoint = "buildConfidentialUnshieldProofV3",
+                    proof = fixture.envelopeArchive,
+                    status = 0,
+                    errorCode = 0,
+                    message = "",
+                    vkRef = PrivacyConfidentialWitnessCodecs.CONFIDENTIAL_TRANSFER_V2_VERIFIER_REF,
+                    verified = true,
+                    schemaMarker = 0x56,
+                ),
+            ).message,
+        )
+        assertEquals(
+            "unshieldVerifyResult must be a successful privacy proof result: status=1 error_code=6",
+            rejectedResult(
+                privacyResultArchive(
+                    algorithmId = "unshield",
+                    entrypoint = "buildConfidentialUnshieldProofV3",
+                    proof = ByteArray(0),
+                    status = 1,
+                    errorCode = 6,
+                    message = "privacy proof verification failed",
+                    vkRef = PrivacyConfidentialWitnessCodecs.CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF,
+                    verified = false,
+                    schemaMarker = 0x56,
+                ),
+            ).message,
+        )
+    }
+
+    @Test
+    fun `redeem proof attachment resolves verifier lifecycle at the supplied block height`() {
+        val fixture = proofFixture(
+            circuitId = KagemushaRecursiveSpendRequestCodecs.CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
+            schema = CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA,
+            algorithmId = "unshield",
+            entrypoint = "buildConfidentialUnshieldProofV3",
+        )
+        val windowedRecord = VerifierRecordRef(
+            fixture.verifierRecordRef.verifierKeyId,
+            verifierRecordArchive(
+                circuitId = KagemushaRecursiveSpendRequestCodecs.CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
+                schema = CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA,
+                verifierKey = fixture.verifierKey,
+                activationHeight = 10,
+                withdrawHeight = 20,
+            ),
+        )
+
+        fun buildAt(blockHeight: Long?): ByteArray =
+            KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachmentChecked(
+                fixture.proofOutputArchive,
+                windowedRecord,
+                blockHeight,
+            ) { successfulUnshieldVerifyResult(fixture.envelopeArchive) }
+
+        assertEquals(
+            "unshieldVerifierRecord has a lifecycle window; blockHeight is required",
+            assertFailsWith<IllegalArgumentException> { buildAt(null) }.message,
+        )
+        assertEquals(
+            "unshieldVerifierRecord is not active at blockHeight",
+            assertFailsWith<IllegalArgumentException> { buildAt(9) }.message,
+        )
+        assertTrue(buildAt(10).isNotEmpty())
+        assertTrue(buildAt(19).isNotEmpty())
+        assertEquals(
+            "unshieldVerifierRecord is not active at blockHeight",
+            assertFailsWith<IllegalArgumentException> { buildAt(20) }.message,
+        )
+    }
+
+    @Test
+    fun `redeem proof attachment rejects noncanonical verifier key id aliases`() {
+        val fixture = proofFixture(
+            circuitId = KagemushaRecursiveSpendRequestCodecs.CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
+            schema = CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA,
+            algorithmId = "unshield",
+            entrypoint = "buildConfidentialUnshieldProofV3",
+        )
+        val invalidIds = listOf(
+            Triple("uppercase backend", "Halo2/ipa:kagemusha-alias", "backend"),
+            Triple("uppercase name", "halo2/ipa:Kagemusha-alias", "name"),
+            Triple("leading separator", "halo2/ipa:-kagemusha-alias", "name"),
+            Triple("trailing separator", "halo2/ipa:kagemusha-alias-", "name"),
+            Triple("at-sign alias", "halo2/ipa:kagemusha@alias", "name"),
+            Triple("plus alias", "halo2/ipa:kagemusha+alias", "name"),
+            Triple("equals alias", "halo2/ipa:kagemusha=alias", "name"),
+        ) + listOf("..", "//", ":::", "/:", ":/", "/.", "./", ":.", ".:").map { separator ->
+            Triple("separator alias $separator", "halo2/ipa:kagemusha${separator}alias", "name")
+        }
+
+        for ((label, verifierKeyId, component) in invalidIds) {
+            val aliasedRecord = VerifierRecordRef(
+                verifierKeyId,
+                fixture.verifierRecordRef.recordBytes,
+            )
+            val error = assertFailsWith<IllegalArgumentException>(label) {
+                KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachmentChecked(
+                    fixture.proofOutputArchive,
+                    aliasedRecord,
+                    null,
+                ) { error("native verification must not run for $label") }
+            }
+            assertEquals(
+                "unshieldVerifierRecord.verifierKeyId.$component must use portable registry syntax",
+                error.message,
+                label,
+            )
+        }
+
+        val canonicalDoubleColonRecord = VerifierRecordRef(
+            "halo2/ipa:kagemusha::alias",
+            fixture.verifierRecordRef.recordBytes,
+        )
+        assertTrue(
+            KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachmentChecked(
+                fixture.proofOutputArchive,
+                canonicalDoubleColonRecord,
+                null,
+            ) { successfulUnshieldVerifyResult(fixture.envelopeArchive) }.isNotEmpty(),
         )
     }
 
@@ -2034,6 +2215,23 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         assertEquals(
             "unshieldProofOutputArchive must be a successful privacy proof result: status=1 error_code=5",
             rejectedProofResult.message,
+        )
+
+        val crossWiredVkRef = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachment(
+                privacyBuildResultArchive(
+                    algorithmId = "unshield",
+                    entrypoint = "buildConfidentialUnshieldProofV3",
+                    proof = fixture.envelopeArchive,
+                    vkRef = PrivacyConfidentialWitnessCodecs.CONFIDENTIAL_TRANSFER_V2_VERIFIER_REF,
+                ),
+                fixture.verifierRecordRef,
+            )
+        }
+        assertEquals(
+            "unshieldProofOutputArchive vk_ref must be " +
+                PrivacyConfidentialWitnessCodecs.CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF,
+            crossWiredVkRef.message,
         )
 
         val inactiveUnshieldVerifierRecord = assertFailsWith<IllegalArgumentException> {

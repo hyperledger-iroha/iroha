@@ -16039,7 +16039,7 @@ implementation surfaces it abstracts:
 
 | Model concept | Implementation surface |
 | --- | --- |
-| mode/domain projection | `compute_consensus_handshake_caps_from_world(...)` derives `PERMISSIONED_TAG` plus `bls-iroha2:permissioned-sumeragi:v1` for permissioned mode, and `NPOS_TAG` plus `bls-iroha2:npos-sumeragi:v1` for NPoS mode. |
+| mode/domain projection | `compute_consensus_handshake_caps_from_world(...)` derives `PERMISSIONED_TAG` plus `bls-iroha2:permissioned-sumeragi:v2` for permissioned mode, and `NPOS_TAG` plus `bls-iroha2:npos-sumeragi:v2` for NPoS mode. |
 | caps and fingerprint binding | The returned handshake caps copy `PROTO_VERSION` and configured transport caps, and `compute_consensus_fingerprint_from_params(...)` binds mode tag, protocol version, chain id, and `Norito(ConsensusGenesisParams)`. |
 | canonical params | `consensus_genesis_params_from_parameters(...)` preserves block timing, collector config, block transaction cap, DA flag, BLS domain, and mode-specific NPoS fields in the canonical fingerprint payload. |
 | permissioned payload | Permissioned mode carries `npos = None` and `epoch_length_blocks = 0`, keeping NPoS-only parameters out of permissioned fingerprints. |

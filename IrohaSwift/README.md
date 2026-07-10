@@ -53,6 +53,20 @@ instead of the Git URL so Xcode consumes the local sources.
 
 `Package.swift` checks for `dist/NoritoBridge.xcframework` next to the repository root and fails package resolution when the bridge is missing. Runtime errors such as `ConnectCodecError.bridgeUnavailable` and `SwiftTransactionEncoderError.nativeBridgeUnavailable` include the same bridge-location hint for broken or unloaded bridge symbols.
 
+The default bridge build deliberately keeps real privacy proving and verification
+fail-closed. After the privacy production-gate evidence has been approved, build
+an opt-in Apple artifact with:
+
+```bash
+scripts/build_norito_xcframework.sh --privacy-production-enabled
+```
+
+That option passes the existing `privacy-production-enabled` Cargo feature to
+every Apple slice and marks the XCFramework plus its artifact manifest. The
+`Mobile SDK Artifacts` manual workflow exposes the same default-off option.
+Do not use skip-build mode with this option: the builder rejects that ambiguous
+combination rather than labeling pre-existing libraries as production-enabled.
+
 CI runs `.github/workflows/swift-packaging.yml` (see `ci/check_swift_spm_validation.sh` and `ci/check_swift_pod_bridge.sh`) to verify bridge packaging.
 
 ### CocoaPods
@@ -800,6 +814,72 @@ Canonical `ProofAttachment` encoding also omits an absent trailing default
 `lane_privacy` field instead of writing an explicit `None`. Swift does not
 expose a proof-output-only verified-fold
 builder; Pallas opening evidence is required to validate every hop.
+
+For confidential-unshield redemption, fetch the exact verifier record from
+Torii and keep it bound to the native proof through the complete
+request-to-redeem flow. The high-level helper performs the fetch, canonical
+Norito archive conversion, proof construction, and local proof verification:
+
+```swift
+let unshieldVerifierKeyId = try ToriiVerifyingKeyId(
+    backend: "halo2/ipa",
+    name: "vk_unshield"
+)
+let redeemProof = try await sdk
+    .buildKagemushaConfidentialUnshieldRedeemProofAttachment(
+        witness: unshieldWitness,
+        verifierKeyId: unshieldVerifierKeyId,
+        blockHeight: currentBlockHeight
+    )
+let redeemRequest = try KagemushaRecursiveSpendRedeemRequest(
+    bundle: recursiveBundle,
+    recipient: recipient,
+    publicAmount: publicAmount,
+    redeemProof: redeemProof,
+    lineageWitness: lineageWitness,
+    changeOutput: changeCommitment,
+    lineageVerifierRecord: lineageVerifierRecord,
+    lineageVerifierRecords: lineageVerifierRecords,
+    blockHeight: currentBlockHeight
+)
+let redeemRequestArchive = try KagemushaRecursiveSpendRequestCodecs
+    .encodeRedeemRequest(redeemRequest)
+```
+
+For lower-level integrations, fetch with
+`ToriiClient.getVerifyingKey(backend:name:)`, then call
+`ToriiVerifyingKeyDetail.asKagemushaRecursiveSpendVerifierRecordRef()` before
+passing the result to `buildRedeemProofAttachment`. Torii's
+`record_norito_base64` is the authoritative record archive; the SDK does not
+reconstruct it from the JSON projection.
+
+The unshield witness builder rejects transfer outputs, permits zero or one
+private change output, accepts every canonical `u128` public amount, and binds
+the production unshield-v3 verifier reference and nine-column public-input
+schema. The redeem attachment builder accepts only successful native build and
+verify results for `unshield`/`buildConfidentialUnshieldProofV3`. It requires
+the verify result to contain the byte-identical proof and `verified == true`,
+so a missing native bridge, malformed envelope, all-zero or garbage proof, or
+canonical-key substitution fails closed. The matching verifier record must be
+active, use the `offline_kagemusha` namespace and Pallas backend/curve, and have
+consistent inline key, commitment, schema, circuit, and proof-size metadata.
+Windowless active records remain usable without a height. If either activation
+or withdrawal is present, pass `blockHeight`: activation is inclusive and
+withdrawal is exclusive.
+
+The builder emits the canonical logical six-field Norito `ProofAttachment`,
+including
+the complete open-verify envelope and its Iroha `Hash` value (Blake2b-256 with
+the required low-bit marker). Its absent trailing default `lane_privacy` field
+is omitted from the archive, so five fields are serialized. Do not substitute
+the generic Swift
+`ProofAttachment` encoder for a recursive redeem attachment: its general
+variable-tail/default-hash behavior is not the compact recursive-redeem
+contract. Native privacy results, open-verify envelopes, and
+verifier records must also use their canonical zero header padding; the shared
+Norito frame decoder's 64-byte ceiling is only the generic safety bound for
+types with different alignment requirements.
+
 Native append streams the previous recursive proof bytes and per-hop accumulator
 material into native-owned accumulator digests (`recursive_proof_chain_digest`,
 lineage/aggregation transcript, fixed-window schedule/shared-manifest/table-base,
@@ -879,15 +959,19 @@ The confidential-v2 Swift wallet helpers expose
 `ConfidentialNoteDecryption.decryptNote`,
 `ConfidentialNoteDecryption.decryptNoteWithOwnerTag`,
 `PrivacyConfidentialWitnessV1`, `buildConfidentialTransferProofRequestV1`,
+`buildConfidentialUnshieldProofRequestV1`,
 `LocalZkAssetMerklePathProvider`, and
 `ToriiClient.getMerklePathForCommitment(asset:commitment:)`. Default note
 decryption derives the expected owner tag from the supplied spend key;
 diversified notes must use the explicit expected-owner-tag overload. Decrypted
 note plaintext rejects noncanonical length varints before reconstructing the
-opening. Their compact Norito encoders keep fixed32 values as raw 32-byte
-fields, and the confidential-transfer-v2 verifier-record `status` field is
-encoded as a 32-bit integer. Swift Merkle providers reject ambiguous local
-frontiers and Torii responses with duplicate JSON keys, noncanonical integer
+opening. Confidential note and witness byte-vector contents keep their raw
+bytes after the vector length. Direct verifier-record hashes use packed fixed
+arrays, hashes inside `Option` or `Vec` use ConstVec element framing, and all
+Iroha `Hash` values retain their marker bit. The verifier-record `status` field
+uses the canonical four-byte `u32` enum discriminant. Swift
+Merkle providers reject ambiguous local frontiers and Torii responses with
+duplicate JSON keys, noncanonical integer
 fields, non-lowercase fixed32 hex, depth/count drift, root drift,
 direction-bit drift, or non-verifying paths before wallet code receives proof
 material.

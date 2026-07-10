@@ -2993,11 +2993,21 @@ pub mod sumeragi {
     use iroha_crypto::Algorithm;
     use nonzero_ext::nonzero;
 
-    /// Number of collectors to use (K). Default is 1; small topologies still widen via
-    /// `collector_fanout_floor()` when quorum-sized collector sets are required.
+    /// Consensus wire/state-machine protocol version required by this release.
+    pub const PROTOCOL_VERSION: u32 = 2;
+    /// Absolute Sumeragi v2 round deadline in milliseconds.
+    pub const ROUND_TIMEOUT_MS: u64 = 10_000;
+    /// Derive the critical-message retransmission interval as `round_timeout / 5`.
+    pub const RETRANSMIT_DIVISOR: u32 = 5;
+    /// Smallest serialized reducer FIFO that leaves distinct normal, progress,
+    /// and completion regions under the v2 reserve ratios.
+    pub const V2_MIN_RUNTIME_COMMAND_CAPACITY: usize = 8;
+    /// Aggregate ready-body byte budget as a multiple of the per-body bound.
+    pub const V2_READY_BODY_BYTE_MULTIPLIER: u64 = 2;
+
+    /// Legacy collector count retained while the v1 actor is removed; v2 ignores it.
     pub const COLLECTORS_K: usize = 1;
-    /// Redundant send fanout (r): how many distinct collectors a validator sends to over time.
-    /// Default targets 2f+1 for a 4-peer topology (r=3).
+    /// Legacy collector fanout retained for archival/status scaffolding; v2 ignores it.
     pub const COLLECTORS_REDUNDANT_SEND_R: u8 = 3;
     /// Extra topology fanout alongside collector routing (0 = disabled).
     pub const COLLECTORS_PARALLEL_TOPOLOGY_FANOUT: usize = 1;
@@ -3005,8 +3015,10 @@ pub mod sumeragi {
     pub const FANOUT_LARGE_SET_THRESHOLD: u32 = 256;
     /// Number of finalized blocks to inspect when scoring validator activity.
     pub const FANOUT_ACTIVITY_LOOKBACK_BLOCKS: u32 = 128;
-    /// Optional cap on transactions per block (None = unlimited).
-    pub const BLOCK_MAX_TRANSACTIONS: Option<NonZeroUsize> = None;
+    /// Required v2 cap on transactions per block.
+    pub const V2_BLOCK_MAX_TRANSACTIONS: NonZeroUsize = nonzero!(512_usize);
+    /// Legacy optional view of [`V2_BLOCK_MAX_TRANSACTIONS`].
+    pub const BLOCK_MAX_TRANSACTIONS: Option<NonZeroUsize> = Some(V2_BLOCK_MAX_TRANSACTIONS);
     /// Optional cap on VM-heavy transactions per block (None = unlimited).
     pub const BLOCK_MAX_IVM_TRANSACTIONS: Option<NonZeroUsize> = None;
     /// Commit-time threshold (ms) for applying fast-finality proposal caps.
@@ -3015,8 +3027,10 @@ pub mod sumeragi {
     pub const FAST_FINALITY_MAX_TRANSACTIONS: Option<NonZeroUsize> = None;
     /// Optional cap on block gas limit when commit time is <= fast-finality threshold.
     pub const FAST_FINALITY_GAS_LIMIT_PER_BLOCK: Option<NonZeroU64> = None;
-    /// Optional cap on payload bytes per block when RBC is disabled (None = unlimited).
-    pub const BLOCK_MAX_PAYLOAD_BYTES: Option<NonZeroUsize> = None;
+    /// Required v2 canonical body bound.
+    pub const V2_BLOCK_MAX_PAYLOAD_BYTES: NonZeroUsize = nonzero!(16_usize * 1024 * 1024);
+    /// Legacy optional view of [`V2_BLOCK_MAX_PAYLOAD_BYTES`].
+    pub const BLOCK_MAX_PAYLOAD_BYTES: Option<NonZeroUsize> = Some(V2_BLOCK_MAX_PAYLOAD_BYTES);
     /// Multiplier applied to the proposal queue scan budget (relative to max tx per block).
     pub const PROPOSAL_QUEUE_SCAN_MULTIPLIER: NonZeroUsize = nonzero!(4_usize);
     /// Maximum DA commitments (blobs) permitted in a single block.
@@ -3079,8 +3093,8 @@ pub mod sumeragi {
     pub const RECOVERY_EXACT_BODY_FETCH_RETRY_FLOOR_MS: u64 = 25;
     /// Default runtime consensus mode: "permissioned".
     pub const CONSENSUS_MODE: &str = "permissioned";
-    /// Default: allow runtime consensus mode flips driven by on-chain parameters.
-    pub const MODE_FLIP_ENABLED: bool = true;
+    /// Runtime mode changes are disabled; mode is fixed by the finalized height context.
+    pub const MODE_FLIP_ENABLED: bool = false;
     /// Default: data availability (RBC + availability QC gating) disabled.
     pub const DA_ENABLED: bool = true;
     /// Multiplier for DA commit-quorum timeout.
@@ -3222,8 +3236,8 @@ pub mod sumeragi {
     pub const VRF_COMMIT_DEADLINE_OFFSET: u64 = 100;
     /// Default VRF reveal deadline offset from epoch start (blocks).
     pub const VRF_REVEAL_DEADLINE_OFFSET: u64 = 140;
-    /// Use stake snapshot provider for epoch validator roster (NPoS). Default: false.
-    pub const USE_STAKE_SNAPSHOT_ROSTER: bool = false;
+    /// Use the finalized stake snapshot for the epoch validator roster (mandatory in v2 NPoS).
+    pub const USE_STAKE_SNAPSHOT_ROSTER: bool = true;
     /// Default proof policy: off (no additional validity gating beyond consensus).
     pub const PROOF_POLICY: &str = "off";
     /// Default zk parent-proving depth (0 disables zk finality gate).
@@ -3243,7 +3257,7 @@ pub mod sumeragi {
     /// Cooldown (ms) before adaptive mitigation may re-apply or reset after a trigger.
     pub const ADAPTIVE_COOLDOWN_MS: u64 = 5_000;
     /// Enable volatile Sumeragi resilience tuning by default.
-    pub const RESILIENCE_ENABLED: bool = true;
+    pub const RESILIENCE_ENABLED: bool = false;
     /// Maximum collector redundancy used while resilience mitigation is active.
     pub const RESILIENCE_MAX_REDUNDANT_SEND_R: u8 = 13;
     /// Maximum extra topology fan-out used while resilience mitigation is active.

@@ -20554,6 +20554,16 @@ export function hashSignedTransaction(
   options?: { encoding?: BufferEncoding | "buffer" },
 ): string | Buffer;
 
+export function hashSignedTransactionPayload(
+  signedTransaction: ArrayBufferView | ArrayBuffer | Buffer,
+  options?: { encoding?: BufferEncoding | "buffer" },
+): string | Buffer;
+
+export function hashInstructionBatch(
+  instructions: Array<object | string>,
+  options?: { encoding?: BufferEncoding | "buffer" },
+): string | Buffer;
+
 export function resignSignedTransaction(
   signedTransaction: ArrayBufferView | ArrayBuffer | Buffer,
   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
@@ -21225,6 +21235,20 @@ export function buildGrantAccountPermissionInstruction(options: {
   name?: string;
   payload?: JsonValue;
 }): object;
+
+export function buildSetAccountKeyValueInstruction(options: {
+  accountId: string;
+  key: string;
+  value: JsonValue;
+}): {
+  SetKeyValue: {
+    Account: {
+      object: string;
+      key: string;
+      value: JsonValue;
+    };
+  };
+};
 
 export function buildSetAssetDefinitionAliasInstruction(options: {
   assetDefinitionId?: string;

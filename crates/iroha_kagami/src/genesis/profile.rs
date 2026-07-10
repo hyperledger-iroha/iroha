@@ -39,6 +39,8 @@ pub struct ProfileDefaults {
     pub chain_id: ChainId,
     /// Optional canonical I105 chain discriminant to use when rendering account literals.
     pub chain_discriminant: Option<u16>,
+    /// Genesis-selected target block cadence in milliseconds.
+    pub block_cadence_ms: u64,
     /// Collector quorum size.
     pub collectors_k: u16,
     /// Redundant send fanout.
@@ -65,6 +67,7 @@ pub fn profile_defaults(profile: GenesisProfile) -> ProfileDefaults {
         GenesisProfile::Iroha3Dev => ProfileDefaults {
             chain_id: ChainId::from("iroha3-dev.local"),
             chain_discriminant: None,
+            block_cadence_ms: 100,
             collectors_k: 1,
             min_peers: 1,
             collectors_redundant_send_r: redundant_send_r_from_len(1),
@@ -73,6 +76,7 @@ pub fn profile_defaults(profile: GenesisProfile) -> ProfileDefaults {
         GenesisProfile::Iroha3Taira => ProfileDefaults {
             chain_id: ChainId::from("iroha3-taira"),
             chain_discriminant: Some(TAIRA_CHAIN_DISCRIMINANT),
+            block_cadence_ms: 1_000,
             collectors_k: 3,
             min_peers: 4,
             collectors_redundant_send_r: redundant_send_r_from_len(4),
@@ -81,6 +85,7 @@ pub fn profile_defaults(profile: GenesisProfile) -> ProfileDefaults {
         GenesisProfile::Iroha3Nexus => ProfileDefaults {
             chain_id: ChainId::from("iroha3-nexus"),
             chain_discriminant: Some(NEXUS_CHAIN_DISCRIMINANT),
+            block_cadence_ms: 100,
             collectors_k: 5,
             min_peers: 4,
             collectors_redundant_send_r: redundant_send_r_from_len(4),
@@ -252,6 +257,7 @@ mod tests {
         let dev = profile_defaults(GenesisProfile::Iroha3Dev);
         assert_eq!(dev.chain_id, ChainId::from("iroha3-dev.local"));
         assert_eq!(dev.chain_discriminant, None);
+        assert_eq!(dev.block_cadence_ms, 100);
         assert_eq!(dev.collectors_k, 1);
         assert_eq!(dev.collectors_redundant_send_r, 1);
         assert_eq!(dev.min_peers, 1);
@@ -259,6 +265,7 @@ mod tests {
         let taira = profile_defaults(GenesisProfile::Iroha3Taira);
         assert_eq!(taira.chain_id, ChainId::from("iroha3-taira"));
         assert_eq!(taira.chain_discriminant, Some(TAIRA_CHAIN_DISCRIMINANT));
+        assert_eq!(taira.block_cadence_ms, 1_000);
         assert_eq!(taira.collectors_k, 3);
         assert_eq!(taira.collectors_redundant_send_r, 3);
         assert_eq!(taira.min_peers, 4);
@@ -266,6 +273,7 @@ mod tests {
         let nexus = profile_defaults(GenesisProfile::Iroha3Nexus);
         assert_eq!(nexus.chain_id, ChainId::from("iroha3-nexus"));
         assert_eq!(nexus.chain_discriminant, Some(NEXUS_CHAIN_DISCRIMINANT));
+        assert_eq!(nexus.block_cadence_ms, 100);
         assert_eq!(nexus.collectors_k, 5);
         assert_eq!(nexus.collectors_redundant_send_r, 3);
         assert_eq!(nexus.min_peers, 4);

@@ -12552,7 +12552,6 @@ pub mod collectors;
 pub mod consensus;
 pub mod da;
 pub mod election;
-pub mod engine;
 pub mod epoch;
 pub mod epoch_report;
 pub(crate) mod evidence;
@@ -12566,9 +12565,67 @@ pub(crate) mod penalties;
 pub mod rbc_sampling;
 pub mod rbc_status;
 pub mod rbc_store;
+pub(crate) mod safety_wal;
 pub(crate) mod smt;
 pub(crate) mod stake_snapshot;
 pub mod status;
+// TODO: Remove this temporary allowance when the actor's canonical height-context/body rollover
+// adapter is wired and Sumeragi v2 can safely open network ingress.
+#[allow(dead_code)]
+pub(crate) mod v2;
+// TODO: Remove this temporary allowance when the production v2 service thread
+// owns the idempotent apply transaction.
+#[allow(dead_code)]
+pub(crate) mod v2_apply;
+pub(crate) mod v2_body_store;
+// TODO: Remove this temporary allowance when the v2 runner schedules
+// sequential CommitQC discovery and routes its responses into the reducer.
+#[allow(dead_code)]
+pub(crate) mod v2_block_sync;
+// TODO: Remove this temporary allowance when the live v2 height runner owns
+// bounded candidate assembly and losing-candidate requeue.
+#[allow(dead_code)]
+pub(crate) mod v2_candidate;
+// TODO: Remove this temporary allowance when the live v2 transport service
+// owns the persistent chunk sessions.
+#[allow(dead_code)]
+pub(crate) mod v2_chunks;
+pub(crate) mod v2_context;
+// TODO: Remove this temporary allowance when the live v2 worker owns context
+// persistence for every height.
+#[allow(dead_code)]
+pub(crate) mod v2_context_store;
+pub use v2_context::{
+    GenesisV2Bootstrap, V2GenesisBootstrapError, freeze_staged_genesis_v2,
+    signed_genesis_voting_peers, staged_genesis_nexus_amx_context_hash,
+};
+// TODO: Remove this temporary allowance when the live v2 worker owns and drains the effect executor.
+#[allow(dead_code)]
+pub(crate) mod v2_effects;
+// TODO: Remove this temporary allowance when the v2 production gate is opened
+// after the lane/AMX chaos and soak gates complete.
+#[allow(dead_code)]
+pub(crate) mod v2_lane_work;
+// TODO: Remove this temporary allowance when the v2 startup path transfers exclusive adapter
+// ownership to the serialized runtime shell.
+#[allow(dead_code)]
+pub(crate) mod v2_runtime;
+// TODO: Remove this temporary allowance when the live v2 height runner calls
+// active-height recovery before opening network ingress.
+#[allow(dead_code)]
+pub(crate) mod v2_recovery;
+// TODO: Remove this temporary allowance when SumeragiWorker delegates global
+// consensus to the serialized v2 height runner.
+#[allow(dead_code)]
+pub(crate) mod v2_runner;
+// TODO: Remove this temporary allowance when the production v2 network adapter routes
+// payload dissemination and certified fetch traffic through the authenticated boundary.
+#[allow(dead_code)]
+pub(crate) mod v2_transport;
+// TODO: Remove this temporary allowance when SumeragiWorker delegates its
+// global-consensus loop to the v2 height runner below.
+#[allow(dead_code)]
+pub(crate) mod v2_worker;
 pub(crate) mod vnext;
 pub mod witness;
 pub use evidence::EvidenceValidationContext;
@@ -12618,6 +12675,9 @@ pub struct GenesisWithPubKey {
     pub genesis: Option<GenesisBlock>,
     /// Public key used to sign the genesis payload.
     pub public_key: PublicKey,
+    /// Verified, uncommitted height-one context derived from fresh genesis.
+    /// Absent only on the preserved non-empty-storage restart path.
+    pub v2_bootstrap: Option<GenesisV2Bootstrap>,
 }
 
 /// Configuration for the persisted RBC session store.
@@ -13307,6 +13367,12 @@ impl InboundBlockMessage {
         }
     }
 
+    /// Consume ingress metadata and return the normalized message plus its
+    /// authenticated outer sender.
+    pub(crate) fn into_message_and_sender(self) -> (BlockMessage, Option<PeerId>) {
+        (self.message, self.sender)
+    }
+
     fn with_enqueue_metadata(mut self, queue: status::WorkerQueueKind) -> Self {
         self.enqueued_at = Some(Instant::now());
         self.queue = Some(queue);
@@ -13460,6 +13526,7 @@ pub struct SumeragiHandle {
     vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>>,
     block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>>,
     frontier_block_sync_hint: Arc<FrontierBlockSyncHint>,
+    ingress_ready: Arc<AtomicBool>,
     state: Option<Arc<State>>,
 }
 
@@ -13497,8 +13564,16 @@ impl SumeragiHandle {
             vote_dedup,
             block_payload_dedup,
             frontier_block_sync_hint,
+            // Low-level unit fixtures construct handles directly. Production
+            // start replaces this with a shared, initially closed replay gate.
+            ingress_ready: Arc::new(AtomicBool::new(true)),
             state: None,
         }
+    }
+
+    fn with_ingress_ready(mut self, ingress_ready: Arc<AtomicBool>) -> Self {
+        self.ingress_ready = ingress_ready;
+        self
     }
 
     fn with_wake(mut self, wake: mpsc::SyncSender<()>) -> Self {
@@ -13515,6 +13590,10 @@ impl SumeragiHandle {
         if let Some(wake) = self.wake.as_ref() {
             let _ = wake.try_send(());
         }
+    }
+
+    fn ingress_is_ready(&self) -> bool {
+        self.ingress_ready.load(Ordering::Acquire)
     }
 
     fn committed_height_hint(&self) -> Option<u64> {
@@ -13734,6 +13813,7 @@ impl SumeragiHandle {
                 | BlockMessage::RbcChunk(_)
                 | BlockMessage::RbcReady(_)
                 | BlockMessage::RbcDeliver(_)
+                | BlockMessage::V2(_)
         );
         let mode = if blocking {
             IngressMode::Blocking
@@ -13778,6 +13858,7 @@ impl SumeragiHandle {
                 | BlockMessage::RbcChunk(_)
                 | BlockMessage::RbcReady(_)
                 | BlockMessage::RbcDeliver(_)
+                | BlockMessage::V2(_)
         );
         let mode = if blocking {
             IngressMode::Blocking
@@ -13794,6 +13875,12 @@ impl SumeragiHandle {
         sender: Option<PeerId>,
         mode: IngressMode,
     ) -> bool {
+        if !self.ingress_is_ready() {
+            iroha_logger::debug!(
+                "rejecting Sumeragi ingress until context and safety WAL replay complete"
+            );
+            return false;
+        }
         let inbound = InboundBlockMessage::new(msg, sender);
         let log_drop = |kind: &'static str,
                         queue: status::WorkerQueueKind,
@@ -14590,6 +14677,9 @@ impl SumeragiHandle {
         msg: ControlFlow,
         mode: IngressMode,
     ) -> bool {
+        if !self.ingress_is_ready() {
+            return false;
+        }
         match mode {
             IngressMode::Blocking => {
                 self.wake();
@@ -14649,6 +14739,9 @@ impl SumeragiHandle {
         envelope: LaneRelayEnvelope,
         mode: IngressMode,
     ) -> bool {
+        if !self.ingress_is_ready() {
+            return false;
+        }
         match mode {
             IngressMode::Blocking => {
                 self.wake();
@@ -14708,6 +14801,9 @@ impl SumeragiHandle {
         signature: MergeCommitteeSignature,
         mode: IngressMode,
     ) -> bool {
+        if !self.ingress_is_ready() {
+            return false;
+        }
         match mode {
             IngressMode::Blocking => {
                 self.wake();
@@ -14835,6 +14931,9 @@ impl SumeragiHandle {
         message: crate::native_amx::NativeAmxMessage,
         mode: IngressMode,
     ) -> bool {
+        if !self.ingress_is_ready() {
+            return false;
+        }
         let relay_message = || LaneRelayMessage::NativeAmx {
             sender: sender.clone(),
             message: message.clone(),
@@ -15371,8 +15470,15 @@ pub struct SumeragiStartArgs {
 
 impl SumeragiStartArgs {
     /// Launch the Sumeragi actor, returning handles for control and supervision.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error before allocating ingress channels or spawning the
+    /// worker when the configured live protocol has no complete production
+    /// runtime in this build.
     #[allow(clippy::too_many_lines)]
-    pub fn start(self, shutdown_signal: ShutdownSignal) -> (SumeragiHandle, Child) {
+    pub fn start(self, shutdown_signal: ShutdownSignal) -> Result<(SumeragiHandle, Child)> {
+        ensure_authoritative_consensus_runtime(self.config.protocol_version)?;
         let SumeragiStartArgs {
             config,
             common_config,
@@ -15420,6 +15526,7 @@ impl SumeragiStartArgs {
                 BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
                 BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
             )));
+        let ingress_ready = Arc::new(AtomicBool::new(false));
 
         let handle = SumeragiHandle::new(
             block_payload_tx.clone(),
@@ -15432,6 +15539,7 @@ impl SumeragiStartArgs {
             Arc::clone(&vote_dedup),
             Arc::clone(&block_payload_dedup),
         )
+        .with_ingress_ready(Arc::clone(&ingress_ready))
         .with_wake(wake_tx.clone())
         .with_state(Arc::clone(&state));
         let frontier_block_sync_hint = handle.frontier_block_sync_hint();
@@ -15464,6 +15572,7 @@ impl SumeragiStartArgs {
             vote_dedup,
             block_payload_dedup,
             frontier_block_sync_hint,
+            ingress_ready,
             vote_rx,
             block_payload_rx,
             block_rx,
@@ -15481,10 +15590,10 @@ impl SumeragiStartArgs {
             move || actor.run(),
         ));
 
-        (
+        Ok((
             handle,
             Child::new(join_handle, OnShutdown::Wait(Duration::from_secs(5))),
-        )
+        ))
     }
 }
 
@@ -15512,6 +15621,7 @@ struct SumeragiWorker {
     vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>>,
     block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>>,
     frontier_block_sync_hint: Arc<FrontierBlockSyncHint>,
+    ingress_ready: Arc<AtomicBool>,
     vote_rx: mpsc::Receiver<InboundBlockMessage>,
     block_payload_rx: mpsc::Receiver<InboundBlockMessage>,
     block_rx: mpsc::Receiver<InboundBlockMessage>,
@@ -15522,6 +15632,79 @@ struct SumeragiWorker {
     wake_rx: mpsc::Receiver<()>,
     shutdown_signal: ShutdownSignal,
     rbc_status_handle: rbc_status::Handle,
+}
+
+/// Whether the production actor can execute every asynchronous effect emitted
+/// by the authoritative v2 reducer for the full lifetime of a chain.
+///
+/// Keep this false until the actor owns a replayed reducer for every height and
+/// can bind body-store, deterministic-validation, certified-fetch, apply, and
+/// next-height effects to their production adapters.  Advertising protocol v2
+/// while falling through to the legacy actor would violate the protocol
+/// fingerprint and, more importantly, the reducer's durability proof.
+// TODO: Set this true only after the v2 adapter exposes per-height rollover and
+// the actor implements every body, validation, signing, fetch, apply, and timer effect.
+const SUMERAGI_V2_PRODUCTION_RUNTIME_COMPLETE: bool = false;
+
+fn ensure_authoritative_consensus_runtime(protocol_version: u32) -> Result<()> {
+    let expected = u32::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION);
+    if protocol_version != expected {
+        return Err(eyre::eyre!(
+            "live consensus protocol {protocol_version} is unsupported; this build requires Sumeragi v2 ({expected})"
+        ));
+    }
+    if !SUMERAGI_V2_PRODUCTION_RUNTIME_COMPLETE {
+        return Err(eyre::eyre!(
+            "Sumeragi v2 is configured, but its production effect runtime is incomplete; refusing to start the legacy consensus actor under a v2 handshake"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod authoritative_runtime_gate_tests {
+    use std::sync::atomic::Ordering;
+
+    use super::{BlockMessage, ensure_authoritative_consensus_runtime, test_sumeragi_handle};
+
+    #[test]
+    fn v2_cannot_fall_through_to_legacy_actor() {
+        let error = ensure_authoritative_consensus_runtime(u32::from(
+            iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
+        ))
+        .expect_err("incomplete v2 effect runtime must fail closed");
+
+        assert!(
+            error
+                .to_string()
+                .contains("refusing to start the legacy consensus actor")
+        );
+    }
+
+    #[test]
+    fn legacy_protocol_is_not_a_live_fallback() {
+        let error = ensure_authoritative_consensus_runtime(1)
+            .expect_err("v1 is decode-only and cannot be selected for live consensus");
+
+        assert!(
+            error
+                .to_string()
+                .contains("live consensus protocol 1 is unsupported")
+        );
+    }
+
+    #[test]
+    fn ingress_stays_closed_until_replay_owner_acknowledges_ready() {
+        let (handle, receiver) = test_sumeragi_handle(1);
+        handle.ingress_ready.store(false, Ordering::Release);
+
+        assert!(!handle.incoming_block_message(BlockMessage::invalid_wire_sentinel()));
+        assert!(receiver.try_recv().is_err());
+
+        handle.ingress_ready.store(true, Ordering::Release);
+        assert!(handle.incoming_block_message(BlockMessage::invalid_wire_sentinel()));
+        assert!(receiver.try_recv().is_ok());
+    }
 }
 
 /// Rate-limit ticks by the minimum gap so queue backlogs do not throttle consensus progress.
@@ -17705,7 +17888,16 @@ impl SumeragiWorker {
             vote_dedup: _vote_dedup,
             block_payload_dedup,
             frontier_block_sync_hint,
+            ingress_ready: _,
         } = self;
+        if let Err(error) = ensure_authoritative_consensus_runtime(config.protocol_version) {
+            iroha_logger::error!(
+                ?error,
+                protocol_version = config.protocol_version,
+                "Sumeragi consensus startup failed closed"
+            );
+            return;
+        }
         let fallback_params = iroha_data_model::parameter::system::SumeragiParameters::default();
         let msg_channel_cap_block_payload = config.queues.block_payload;
         let msg_channel_cap_votes = config.queues.votes;

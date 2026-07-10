@@ -2148,9 +2148,10 @@ pub(crate) enum LaneBlockSessionError {
 /// Bounded in-memory cache for standalone lane-block consensus sessions.
 ///
 /// The capacity bounds ordinary uncommitted session state. Sessions that
-/// already carry a proposal plus prepare and commit QCs are protected from
-/// eviction until the executor boundary drains them, because dropping certified
-/// lane blocks under queue backpressure can strand lane-local progress.
+/// already carry a proposal plus Prepare and Commit QCs are protected from
+/// eviction until the durable consumer boundary drains them, because dropping
+/// certified lane blocks under queue backpressure can strand lane-local
+/// progress.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LaneBlockSessionCache {
     capacity: usize,
@@ -2161,7 +2162,7 @@ pub(crate) struct LaneBlockSessionCache {
 }
 
 impl LaneBlockSessionCache {
-    /// Build a cache that stores at most `capacity.max(1)` uncommitted sessions.
+    /// Build a cache that stores at most `capacity.max(1)` unprotected sessions.
     #[must_use]
     pub(crate) fn new(capacity: usize) -> Self {
         Self {
@@ -2827,7 +2828,6 @@ impl LaneBlockSessionCache {
         }
         vote.verify_signatures()
             .map_err(LaneBlockSessionError::InvalidVote)?;
-
         self.touch(key);
         let session = self.sessions.entry(key).or_default();
         let votes = votes_for_phase_mut(session, phase).ok_or(
@@ -4840,7 +4840,7 @@ mod tests {
         let (chain_id_hash, epoch, payload) = autonomous_payload_fixture(&keypairs);
         let descriptor = &payload.origin_proposal.descriptor;
         let receipt = NativeAmxReceipt {
-            version: 1,
+            version: 2,
             source_id: [0xA5; Hash::LENGTH],
             chain_id_hash,
             plan_digest: Hash::new(b"payload-hash-bound-native-amx-plan"),
@@ -7234,9 +7234,10 @@ mod tests {
 
         assert_eq!(
             cache.retain_sessions_for_admissible_lanes(
-                |lane_id, dataspace_id, lane_block_height, _proposal_height| {
+                |lane_id, dataspace_id, lane_incarnation, lane_block_height, _proposal_height| {
                     lane_id == active_lane
                         && dataspace_id == active_dataspace
+                        && lane_incarnation == active_proposal.descriptor.lane_incarnation
                         && lane_block_height > 12
                 },
             ),
@@ -7326,12 +7327,14 @@ mod tests {
         );
 
         let admissible_pending = cache.pending_lane_ids_for_admissible_lanes(
-            |lane_id, dataspace_id, lane_block_height, _proposal_height| {
+            |lane_id, dataspace_id, lane_incarnation, lane_block_height, _proposal_height| {
                 (lane_id == pending_lane
                     && dataspace_id == pending_dataspace
+                    && lane_incarnation == pending_proposal.descriptor.lane_incarnation
                     && lane_block_height == pending_proposal.descriptor.lane_block_height)
                     || (lane_id == drained_lane
                         && dataspace_id == drained_dataspace
+                        && lane_incarnation == drained_proposal.descriptor.lane_incarnation
                         && lane_block_height == drained_proposal.descriptor.lane_block_height)
             },
         );
@@ -7344,14 +7347,17 @@ mod tests {
         let admissible_inflight_before_drain = cache.inflight_lane_ids_for_admissible_lanes(
             |lane_id,
              dataspace_id,
+             lane_incarnation,
              lane_block_height,
              _proposal_height,
              _has_consensus_evidence| {
                 (lane_id == pending_lane
                     && dataspace_id == pending_dataspace
+                    && lane_incarnation == pending_proposal.descriptor.lane_incarnation
                     && lane_block_height == pending_proposal.descriptor.lane_block_height)
                     || (lane_id == drained_lane
                         && dataspace_id == drained_dataspace
+                        && lane_incarnation == drained_proposal.descriptor.lane_incarnation
                         && lane_block_height == drained_proposal.descriptor.lane_block_height)
             },
         );
@@ -7363,15 +7369,18 @@ mod tests {
 
         assert_eq!(cache.drain_committed_sessions().len(), 1);
         let admissible_after_drain = cache.pending_lane_ids_for_admissible_lanes(
-            |lane_id, dataspace_id, lane_block_height, _proposal_height| {
+            |lane_id, dataspace_id, lane_incarnation, lane_block_height, _proposal_height| {
                 (lane_id == pending_lane
                     && dataspace_id == pending_dataspace
+                    && lane_incarnation == pending_proposal.descriptor.lane_incarnation
                     && lane_block_height == pending_proposal.descriptor.lane_block_height)
                     || (lane_id == drained_lane
                         && dataspace_id == drained_dataspace
+                        && lane_incarnation == drained_proposal.descriptor.lane_incarnation
                         && lane_block_height == drained_proposal.descriptor.lane_block_height)
                     || (lane_id == inactive_lane
                         && dataspace_id == inactive_dataspace
+                        && lane_incarnation == inactive_proposal.descriptor.lane_incarnation
                         && lane_block_height == inactive_proposal.descriptor.lane_block_height)
             },
         );
@@ -7384,17 +7393,21 @@ mod tests {
         let admissible_inflight_after_drain = cache.inflight_lane_ids_for_admissible_lanes(
             |lane_id,
              dataspace_id,
+             lane_incarnation,
              lane_block_height,
              _proposal_height,
              _has_consensus_evidence| {
                 (lane_id == pending_lane
                     && dataspace_id == pending_dataspace
+                    && lane_incarnation == pending_proposal.descriptor.lane_incarnation
                     && lane_block_height == pending_proposal.descriptor.lane_block_height)
                     || (lane_id == drained_lane
                         && dataspace_id == drained_dataspace
+                        && lane_incarnation == drained_proposal.descriptor.lane_incarnation
                         && lane_block_height == drained_proposal.descriptor.lane_block_height)
                     || (lane_id == inactive_lane
                         && dataspace_id == inactive_dataspace
+                        && lane_incarnation == inactive_proposal.descriptor.lane_incarnation
                         && lane_block_height == inactive_proposal.descriptor.lane_block_height)
             },
         );

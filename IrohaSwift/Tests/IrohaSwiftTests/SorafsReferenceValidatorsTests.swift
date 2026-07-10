@@ -134,7 +134,7 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
         ) { error in
             XCTAssertEqual(
                 error as? SorafsReferenceValidationError,
-                .invalidOrderbookField("nonce must be positive")
+                .invalidOrderbookField("nonce must be greater than zero")
             )
         }
     }

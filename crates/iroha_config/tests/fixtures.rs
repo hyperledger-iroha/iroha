@@ -4,6 +4,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fs,
+    num::NonZeroUsize,
     path::{Path, PathBuf},
     str::FromStr,
     sync::{Mutex, MutexGuard, Once},
@@ -1325,10 +1326,12 @@ fn minimal_config_snapshot() {
                 fsync_interval: 50ms,
             },
             sumeragi: Sumeragi {
+                protocol_version: 2,
+                round_timeout: 10s,
                 role: Validator,
                 consensus_mode: Permissioned,
                 mode_flip: SumeragiModeFlip {
-                    enabled: true,
+                    enabled: false,
                 },
                 collectors: SumeragiCollectors {
                     k: 1,
@@ -1336,11 +1339,15 @@ fn minimal_config_snapshot() {
                     parallel_topology_fanout: 1,
                 },
                 block: SumeragiBlock {
-                    max_transactions: None,
+                    max_transactions: Some(
+                        512,
+                    ),
                     max_ivm_transactions: None,
                     fast_finality_max_transactions: None,
                     fast_gas_limit_per_block: None,
-                    max_payload_bytes: None,
+                    max_payload_bytes: Some(
+                        16777216,
+                    ),
                     proposal_queue_scan_multiplier: 4,
                 },
                 queues: SumeragiQueues {
@@ -1395,7 +1402,7 @@ fn minimal_config_snapshot() {
                     max_factor_bps: 20000,
                 },
                 resilience: SumeragiResilience {
-                    enabled: true,
+                    enabled: false,
                     profile: Balanced,
                     max_redundant_send_r: 13,
                     max_parallel_topology_fanout: 8,
@@ -1542,7 +1549,7 @@ fn minimal_config_snapshot() {
                         slashing_delay_blocks: 259200,
                     },
                     epoch_length_blocks: 3600,
-                    use_stake_snapshot_roster: false,
+                    use_stake_snapshot_roster: true,
                 },
                 adaptive_observability: AdaptiveObservability {
                     enabled: false,
@@ -3069,6 +3076,16 @@ fn sumeragi_rejects_zero_rbc_payload_chunks_per_tick() {
     assert!(
         result.is_err(),
         "zero payload chunk budget must be rejected"
+    );
+}
+
+#[test]
+fn sumeragi_v2_round_timeout_requires_exact_one_fifth_interval() {
+    let result = load_config_from_fixtures("bad.sumeragi_round_timeout_not_divisible.toml");
+    let report = result.expect_err("non-divisible round timeout must be rejected");
+    assert_contains!(
+        format!("{report:?}"),
+        "sumeragi.round_timeout_ms must be exactly divisible by 5",
     );
 }
 
@@ -4931,13 +4948,53 @@ fn torii_transport_trusted_proxy_cidrs_default_to_empty() {
 #[test]
 fn sumeragi_timeout_defaults_target_one_second() {
     use defaults::sumeragi::npos;
+    use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
+    use iroha_config_base::read::ConfigReader;
 
+    assert_eq!(defaults::sumeragi::PROTOCOL_VERSION, 2);
+    assert_eq!(defaults::sumeragi::ROUND_TIMEOUT_MS, 10_000);
+    assert_eq!(defaults::sumeragi::RETRANSMIT_DIVISOR, 5);
+    assert_eq!(
+        defaults::sumeragi::BLOCK_MAX_TRANSACTIONS.map(NonZeroUsize::get),
+        Some(512),
+    );
+    assert_eq!(
+        defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES.map(NonZeroUsize::get),
+        Some(16 * 1024 * 1024),
+    );
+    assert!(!defaults::sumeragi::RESILIENCE_ENABLED);
+    assert!(defaults::sumeragi::USE_STAKE_SNAPSHOT_ROSTER);
     assert_eq!(npos::BLOCK_TIME_MS, 1_000);
     assert_eq!(npos::TIMEOUT_PROPOSE_MS, 350);
     assert_eq!(npos::TIMEOUT_PREVOTE_MS, 450);
     assert_eq!(npos::TIMEOUT_PRECOMMIT_MS, 550);
     assert_eq!(npos::TIMEOUT_COMMIT_MS, 850);
     assert_eq!(npos::TIMEOUT_DA_MS, 750);
+
+    let cfg: Actual = ConfigReader::new()
+        .read_toml_with_extends(fixtures_dir().join("base.toml"))
+        .expect("base file should be valid")
+        .read_and_complete::<User>()
+        .expect("user config")
+        .parse()
+        .expect("actual config");
+    assert_eq!(cfg.sumeragi.protocol_version, 2);
+    assert_eq!(cfg.sumeragi.round_timeout, Duration::from_secs(10));
+    assert_eq!(cfg.sumeragi.retransmit_interval(), Duration::from_secs(2));
+    assert_eq!(
+        cfg.sumeragi.block.max_transactions.map(NonZeroUsize::get),
+        Some(512),
+    );
+    assert_eq!(
+        cfg.sumeragi.block.max_payload_bytes.map(NonZeroUsize::get),
+        Some(16 * 1024 * 1024),
+    );
+    cfg.sumeragi
+        .v2_config(
+            Duration::from_secs(1),
+            iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+        )
+        .expect("default parsed configuration must satisfy the v2 contract");
 }
 // type alias used through fixtures for newer error-stack API
 type Result<T, E> = core::result::Result<T, Report<E>>;

@@ -1,9 +1,10 @@
 {
-  "bls_domain": "bls-iroha2:npos-sumeragi:v1",
+  "bls_domain": "bls-iroha2:npos-sumeragi:v2",
   "chain": "00000000-0000-0000-0000-000000000000",
   "chain_discriminant": 753,
-  "consensus_fingerprint": "0xfed0dd949356d73782acd30f024f9a1a72a64344417c96ff195f19362812fe62",
+  "consensus_fingerprint": "0xdb90b8d01252710ab35f273c6b07aa3b9f2668e393f99d9b01d18349e614bbab",
   "consensus_mode": "Npos",
+  "sumeragi_v2": {"da_layout":{"encoding":{"encoding":"ReedSolomon16"},"chunk_size_bytes":262144,"data_shards":4,"parity_shards":2,"max_payload_size_bytes":16777216,"max_chunk_count":1024},"nexus_amx_context_hash":"76FC637FEC320C7EAD22A65E693658FBB1187A3B0152900D64644C841E77CA7F"},
   "crypto": {
     "allowed_curve_ids": [
       1,
@@ -256,6 +257,6 @@
     }
   ],
   "wire_proto_versions": [
-    1
+    2
   ]
 }

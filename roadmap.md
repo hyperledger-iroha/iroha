@@ -25531,6 +25531,21 @@ digest-bound pending-XSD source probe summaries for reviewed
   hop evidence plus caller-supplied Pallas open-envelopes archives before
   serializing recursive-spend request archives instead of constructing
   preverified folded public inputs themselves. The same
+  Swift path now assembles checked redeem attachments from the exact Torii
+  `VerifyingKeyRecord` archive: verifier-key detail responses include canonical
+  `record_norito_base64`, namespace, owner, key, and lifecycle metadata; the
+  public Swift builder performs native confidential-unshield-v3 verification;
+  and the async SDK helper owns the Torii fetch, proof build, verification, and
+  attachment sequence. Swift, Kotlin/JVM, and Java Android all enforce exact
+  unshield verifier references, marked Iroha schema/envelope hashes, inclusive
+  activation, and exclusive withdrawal before an attachment is emitted.
+  Production Apple bridge packaging keeps privacy dispatch opt-in through
+  `--privacy-production-enabled`, records that mode in the artifact manifest
+  and XCFramework marker, and uses disjoint Cargo targets for gated builds.
+  The focused macOS native lane runtime-generates the governed Rust verifier
+  record, builds and verifies a real Swift unshield proof, and has Rust decode
+  and cryptographically verify the emitted attachment without changing the
+  bridge ABI or tracking generated artifacts. The same
   SDK surfaces now expose the ABI-6 recursive aggregation proof-bundle prover,
   which accepts record-backed bundle bytes plus proof-derived Pallas
   open-envelope archive bytes and returns an admission-neutral

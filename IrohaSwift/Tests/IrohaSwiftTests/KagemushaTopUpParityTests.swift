@@ -23,8 +23,9 @@ final class KagemushaTopUpParityTests: XCTestCase {
     }
 
     func testVerifierRecordArchiveUsesMarkedSchemaHashAndThirtyTwoBitStatus() throws {
+        let verifierKey = verifierKey()
         let record = try KagemushaRecursiveSpendRequestCodecs
-            .encodeConfidentialTransferV2VerifierRecordArchive(verifierKey: verifierKey())
+            .encodeConfidentialTransferV2VerifierRecordArchive(verifierKey: verifierKey)
         let payload = try KagemushaRecursiveSpendRequestCodecs.compactPayloadForRequest(
             record,
             schema: KagemushaRecursiveSpendRequestCodecs.verifyingKeyRecordWireName,
@@ -38,6 +39,13 @@ final class KagemushaTopUpParityTests: XCTestCase {
             IrohaHash.hash(PrivacyConfidentialWitnessCodecs.confidentialTransferPublicInputsSchema())
         )
         XCTAssertEqual(fields[6].last.map { $0 & 1 }, 1)
+        XCTAssertEqual(
+            fields[7],
+            verifyingKeyCommitment(
+                backend: KagemushaRecursiveSpendProver.recursiveAggregationProofBackend,
+                bytes: verifierKey
+            )
+        )
         XCTAssertEqual(fields.last, Data([1, 0, 0, 0]))
     }
 
@@ -131,6 +139,812 @@ final class KagemushaTopUpParityTests: XCTestCase {
         let envelopeHash = try optionFixed32(attachmentFields[4])
         XCTAssertEqual(envelopeHash, IrohaHash.hash(envelope))
         XCTAssertEqual(envelopeHash.last.map { $0 & 1 }, 1)
+    }
+
+    func testBuildRedeemProofAttachmentEmitsCanonicalArchiveAndComposesWithRedeemRequest() throws {
+        let fixture = try unshieldProofFixture()
+        let unshieldSchemaHash = IrohaHash.hash(
+            PrivacyConfidentialWitnessCodecs.confidentialUnshieldPublicInputsSchema()
+        )
+        XCTAssertEqual(unshieldSchemaHash, Data([
+            0x43, 0xcd, 0xb5, 0x63, 0x9d, 0x62, 0xc1, 0xc5,
+            0x39, 0xb2, 0xc5, 0x76, 0x81, 0x8a, 0x38, 0xa6,
+            0x81, 0xc8, 0xbe, 0x9d, 0x8f, 0x9f, 0x97, 0x23,
+            0x3a, 0x56, 0xa4, 0x90, 0x6f, 0x28, 0x24, 0xbd,
+        ]))
+        XCTAssertNotEqual(
+            Blake2b.hash256(PrivacyConfidentialWitnessCodecs.confidentialUnshieldPublicInputsSchema()),
+            unshieldSchemaHash
+        )
+
+        let attachment = try KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachmentStructurally(
+            unshieldProofOutputArchive: fixture.proofOutputArchive,
+            unshieldVerifierRecord: fixture.verifierRecord
+        )
+        let payload = try KagemushaRecursiveSpendRequestCodecs.compactPayloadForRequest(
+            attachment,
+            schema: KagemushaRecursiveSpendRequestCodecs.proofAttachmentWireName,
+            field: "redeemProof"
+        )
+        let fields = try compactFields(payload)
+
+        XCTAssertEqual(fields.count, 5)
+        XCTAssertEqual(
+            fields[0],
+            OfflineCompactNorito.encodeString(KagemushaRecursiveSpendProver.recursiveAggregationProofBackend)
+        )
+        let proofBoxFields = try compactFields(fields[1])
+        XCTAssertEqual(proofBoxFields.count, 2)
+        XCTAssertEqual(
+            proofBoxFields[0],
+            OfflineCompactNorito.encodeString(KagemushaRecursiveSpendProver.recursiveAggregationProofBackend)
+        )
+        XCTAssertEqual(proofBoxFields[1], byteVec(fixture.envelopeArchive))
+        let verifierKeyIdFields = try compactFields(fields[2])
+        XCTAssertEqual(verifierKeyIdFields.count, 2)
+        XCTAssertEqual(
+            verifierKeyIdFields[0],
+            OfflineCompactNorito.encodeString(KagemushaRecursiveSpendProver.recursiveAggregationProofBackend)
+        )
+        XCTAssertEqual(verifierKeyIdFields[1], OfflineCompactNorito.encodeString("unshield-v3"))
+        XCTAssertEqual(try optionFixed32Payload(fields[3]), fixture.commitment)
+        let canonicalEnvelopeHash = IrohaHash.hash(fixture.envelopeArchive)
+        XCTAssertEqual(
+            try optionFixed32Payload(fields[4]),
+            canonicalEnvelopeHash
+        )
+        XCTAssertNotEqual(Blake2b.hash256(fixture.envelopeArchive), canonicalEnvelopeHash)
+        XCTAssertThrowsError(try fixed32Payload(fixture.commitment))
+        XCTAssertThrowsError(try fixed32Payload(canonicalEnvelopeHash))
+        let redeemRequest = try KagemushaRecursiveSpendRedeemRequest(
+            bundle: sharedRecursiveSpendArchive(name: "init_bundle"),
+            recipient: sampleRecipient(),
+            publicAmount: "7",
+            redeemProof: attachment,
+            lineageVerifierRecord: syntheticLineageVerifierRecord()
+        )
+        let redeemArchive = try KagemushaRecursiveSpendRequestCodecs.encodeRedeemRequest(redeemRequest)
+        let redeemPayload = try KagemushaRecursiveSpendRequestCodecs.compactPayloadForRequest(
+            redeemArchive,
+            schema: KagemushaRecursiveSpendRequestCodecs.redeemRequestWireName,
+            field: "redeemRequest"
+        )
+        XCTAssertEqual(try compactFields(redeemPayload)[3], payload)
+    }
+
+    func testBuildRedeemProofAttachmentRejectsInvalidUnshieldEvidence() throws {
+        let fixture = try unshieldProofFixture()
+
+        let invalidBuildResults = [
+            privacyBuildResult(
+                proof: fixture.envelopeArchive,
+                algorithmId: "unshield",
+                entrypoint: "buildConfidentialUnshieldProofV3",
+                vkRef: PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3VerifierRef,
+                version: 2
+            ),
+            privacyBuildResult(
+                proof: fixture.envelopeArchive,
+                algorithmId: "unshield",
+                entrypoint: "buildConfidentialUnshieldProofV3",
+                vkRef: PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3VerifierRef,
+                status: 1
+            ),
+            privacyBuildResult(
+                proof: fixture.envelopeArchive,
+                algorithmId: "unshield",
+                entrypoint: "buildConfidentialUnshieldProofV3",
+                vkRef: PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3VerifierRef,
+                errorCode: 5
+            ),
+            privacyBuildResult(
+                proof: fixture.envelopeArchive,
+                algorithmId: "unshield",
+                entrypoint: "buildConfidentialUnshieldProofV3",
+                vkRef: PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3VerifierRef,
+                message: "rejected"
+            ),
+            privacyBuildResult(
+                proof: fixture.envelopeArchive,
+                algorithmId: "confidential-transfer-v2",
+                entrypoint: "buildConfidentialUnshieldProofV3",
+                vkRef: PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3VerifierRef
+            ),
+            privacyBuildResult(
+                proof: fixture.envelopeArchive,
+                algorithmId: "unshield",
+                entrypoint: "buildConfidentialTransferProofV2",
+                vkRef: PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3VerifierRef
+            ),
+            privacyBuildResult(
+                proof: fixture.envelopeArchive,
+                algorithmId: "unshield",
+                entrypoint: "buildConfidentialUnshieldProofV3",
+                vkRef: PrivacyConfidentialWitnessCodecs.confidentialTransferV2VerifierRef
+            ),
+            privacyBuildResult(
+                proof: fixture.envelopeArchive,
+                algorithmId: "unshield",
+                entrypoint: "buildConfidentialUnshieldProofV3",
+                vkRef: PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3VerifierRef,
+                publicInputs: Data([0x01])
+            ),
+            privacyBuildResult(
+                proof: Data(),
+                algorithmId: "unshield",
+                entrypoint: "buildConfidentialUnshieldProofV3",
+                vkRef: PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3VerifierRef
+            ),
+            privacyBuildResult(
+                proof: fixture.envelopeArchive,
+                algorithmId: "unshield",
+                entrypoint: "buildConfidentialUnshieldProofV3",
+                vkRef: PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3VerifierRef,
+                verified: true
+            ),
+            privacyBuildResult(
+                proof: fixture.envelopeArchive,
+                algorithmId: "unshield",
+                entrypoint: "buildConfidentialUnshieldProofV3",
+                vkRef: PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3VerifierRef,
+                trailingField: Data([0x00])
+            ),
+            privacyBuildResult(
+                proof: fixture.envelopeArchive,
+                algorithmId: "unshield",
+                entrypoint: "buildConfidentialUnshieldProofV3",
+                vkRef: PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3VerifierRef,
+                flags: 0
+            ),
+            privacyBuildResult(
+                proof: fixture.envelopeArchive,
+                algorithmId: "unshield",
+                entrypoint: "buildConfidentialUnshieldProofV3",
+                vkRef: PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3VerifierRef,
+                schemaByte: 0x41
+            ),
+            archiveWithHeaderPadding(
+                privacyBuildResult(
+                    proof: fixture.envelopeArchive,
+                    algorithmId: "unshield",
+                    entrypoint: "buildConfidentialUnshieldProofV3",
+                    vkRef: PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3VerifierRef
+                ),
+                count: NoritoHeader.maxHeaderPadding + 1
+            ),
+            Data([0x00])
+        ]
+        for invalidBuildResult in invalidBuildResults {
+            assertRedeemProofAttachmentRejected(
+                proofOutputArchive: invalidBuildResult,
+                verifierRecord: fixture.verifierRecord,
+                expected: .invalidArchive("unshieldProofOutputArchive")
+            )
+        }
+
+        assertRedeemProofAttachmentRejected(
+            proofOutputArchive: privacyBuildResult(
+                proof: fixture.envelopeArchive,
+                algorithmId: "unshield",
+                entrypoint: "buildConfidentialUnshieldProofV3",
+                vkRef: " invalid"
+            ),
+            verifierRecord: fixture.verifierRecord,
+            expected: .invalidField("unshieldProofOutputArchive.vk_ref")
+        )
+
+        let invalidRecords = [
+            try unshieldVerifierRecord(verifierKey: verifierKey(), status: 2),
+            try unshieldVerifierRecord(
+                verifierKey: verifierKey(),
+                circuitId: KagemushaRecursiveSpendRequestCodecs.confidentialTransferV2CircuitId
+            ),
+            try unshieldVerifierRecord(
+                verifierKey: verifierKey(),
+                schema: PrivacyConfidentialWitnessCodecs.confidentialTransferPublicInputsSchema()
+            ),
+            try unshieldVerifierRecord(
+                verifierKey: verifierKey(),
+                publicInputsSchemaHash: Blake2b.hash256(
+                    PrivacyConfidentialWitnessCodecs.confidentialUnshieldPublicInputsSchema()
+                )
+            ),
+            try unshieldVerifierRecord(
+                verifierKey: Data((0..<96).map { UInt8(($0 * 11 + 5) & 0xff) })
+            ),
+            try unshieldVerifierRecord(
+                verifierKey: verifierKey(),
+                namespace: "privacy"
+            ),
+            try unshieldVerifierRecord(
+                verifierKey: verifierKey(),
+                backendTag: VerifyingKeyBackendTag.halo2Bn254.rawValue
+            ),
+            try unshieldVerifierRecord(
+                verifierKey: verifierKey(),
+                curve: "vesta"
+            ),
+            try unshieldVerifierRecord(
+                verifierKey: verifierKey(),
+                verifierKeyId: "test:unshield-v3"
+            ),
+            try unshieldVerifierRecord(
+                verifierKey: verifierKey(),
+                maxProofBytes: 0
+            ),
+            try unshieldVerifierRecord(
+                verifierKey: verifierKey(),
+                maxProofBytes: UInt32(192 * 1024 + 1)
+            ),
+            try unshieldVerifierRecord(
+                verifierKey: verifierKey(),
+                maxProofBytes: UInt32(fixture.envelopeArchive.count - 1)
+            )
+        ]
+        for invalidRecord in invalidRecords {
+            assertRedeemProofAttachmentRejected(
+                proofOutputArchive: fixture.proofOutputArchive,
+                verifierRecord: invalidRecord,
+                expected: .invalidArchive("unshieldVerifierRecord")
+            )
+        }
+    }
+
+    func testBuildRedeemProofAttachmentRequiresExactSuccessfulNativeVerification() throws {
+        let fixture = try unshieldProofFixture()
+        let successfulVerifyResult = privacyBuildResult(
+            proof: fixture.envelopeArchive,
+            algorithmId: "unshield",
+            entrypoint: "buildConfidentialUnshieldProofV3",
+            vkRef: PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3VerifierRef,
+            verified: true,
+            schemaByte: 0x56
+        )
+        var observedVerifyRequest: Data?
+        XCTAssertNoThrow(
+            try KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachment(
+                unshieldProofOutputArchive: fixture.proofOutputArchive,
+                unshieldVerifierRecord: fixture.verifierRecord,
+                verifyProof: { request in
+                    observedVerifyRequest = request
+                    return successfulVerifyResult
+                }
+            )
+        )
+        XCTAssertNotNil(observedVerifyRequest)
+
+        let invalidVerifyResults = [
+            privacyBuildResult(
+                proof: fixture.envelopeArchive,
+                algorithmId: "unshield",
+                entrypoint: "buildConfidentialUnshieldProofV3",
+                vkRef: PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3VerifierRef,
+                version: 2,
+                verified: true,
+                schemaByte: 0x56
+            ),
+            privacyBuildResult(
+                proof: Data(),
+                algorithmId: "unshield",
+                entrypoint: "buildConfidentialUnshieldProofV3",
+                vkRef: PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3VerifierRef,
+                status: 1,
+                errorCode: 6,
+                message: "privacy proof verification failed",
+                schemaByte: 0x56
+            ),
+            privacyBuildResult(
+                proof: fixture.envelopeArchive,
+                algorithmId: "confidential-transfer-v2",
+                entrypoint: "buildConfidentialUnshieldProofV3",
+                vkRef: PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3VerifierRef,
+                verified: true,
+                schemaByte: 0x56
+            ),
+            privacyBuildResult(
+                proof: fixture.envelopeArchive,
+                algorithmId: "unshield",
+                entrypoint: "buildConfidentialTransferProofV2",
+                vkRef: PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3VerifierRef,
+                verified: true,
+                schemaByte: 0x56
+            ),
+            privacyBuildResult(
+                proof: fixture.envelopeArchive,
+                algorithmId: "unshield",
+                entrypoint: "buildConfidentialUnshieldProofV3",
+                vkRef: PrivacyConfidentialWitnessCodecs.confidentialTransferV2VerifierRef,
+                verified: true,
+                schemaByte: 0x56
+            ),
+            privacyBuildResult(
+                proof: fixture.envelopeArchive,
+                algorithmId: "unshield",
+                entrypoint: "buildConfidentialUnshieldProofV3",
+                vkRef: PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3VerifierRef,
+                publicInputs: Data([0x01]),
+                verified: true,
+                schemaByte: 0x56
+            ),
+            privacyBuildResult(
+                proof: Data([0x01]),
+                algorithmId: "unshield",
+                entrypoint: "buildConfidentialUnshieldProofV3",
+                vkRef: PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3VerifierRef,
+                verified: true,
+                schemaByte: 0x56
+            ),
+            privacyBuildResult(
+                proof: fixture.envelopeArchive,
+                algorithmId: "unshield",
+                entrypoint: "buildConfidentialUnshieldProofV3",
+                vkRef: PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3VerifierRef,
+                verified: false,
+                schemaByte: 0x56
+            ),
+            privacyBuildResult(
+                proof: fixture.envelopeArchive,
+                algorithmId: "unshield",
+                entrypoint: "buildConfidentialUnshieldProofV3",
+                vkRef: PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3VerifierRef,
+                verified: true,
+                trailingField: Data([0x00]),
+                schemaByte: 0x56
+            ),
+            privacyBuildResult(
+                proof: fixture.envelopeArchive,
+                algorithmId: "unshield",
+                entrypoint: "buildConfidentialUnshieldProofV3",
+                vkRef: PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3VerifierRef,
+                verified: true,
+                flags: 0,
+                schemaByte: 0x56
+            ),
+            privacyBuildResult(
+                proof: fixture.envelopeArchive,
+                algorithmId: "unshield",
+                entrypoint: "buildConfidentialUnshieldProofV3",
+                vkRef: PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3VerifierRef,
+                verified: true,
+                schemaByte: 0x55
+            )
+        ]
+        for invalidVerifyResult in invalidVerifyResults {
+            XCTAssertThrowsError(
+                try KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachment(
+                    unshieldProofOutputArchive: fixture.proofOutputArchive,
+                    unshieldVerifierRecord: fixture.verifierRecord,
+                    verifyProof: { _ in invalidVerifyResult }
+                )
+            ) { error in
+                XCTAssertEqual(
+                    error as? KagemushaRecursiveSpendRequestCodecError,
+                    .invalidArchive("unshieldProofVerification")
+                )
+            }
+        }
+
+        let allZeroProofEnvelope = openVerifyEnvelope(
+            vkHash: fixture.commitment,
+            proof: Data(repeating: 0, count: 64),
+            circuitId: KagemushaRecursiveSpendRequestCodecs.confidentialUnshieldV3CircuitId,
+            schema: PrivacyConfidentialWitnessCodecs.confidentialUnshieldPublicInputsSchema()
+        )
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachment(
+                unshieldProofOutputArchive: unshieldProofOutput(envelope: allZeroProofEnvelope),
+                unshieldVerifierRecord: fixture.verifierRecord,
+                verifyProof: { _ in invalidVerifyResults[1] }
+            )
+        )
+
+        let falselySuccessfulZeroProofResult = privacyBuildResult(
+            proof: allZeroProofEnvelope,
+            algorithmId: "unshield",
+            entrypoint: "buildConfidentialUnshieldProofV3",
+            vkRef: PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3VerifierRef,
+            verified: true,
+            schemaByte: 0x56
+        )
+        var zeroProofVerifyWasCalled = false
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachment(
+                unshieldProofOutputArchive: unshieldProofOutput(envelope: allZeroProofEnvelope),
+                unshieldVerifierRecord: fixture.verifierRecord,
+                verifyProof: { _ in
+                    zeroProofVerifyWasCalled = true
+                    return falselySuccessfulZeroProofResult
+                }
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidArchive("unshield proof")
+            )
+        }
+        XCTAssertTrue(zeroProofVerifyWasCalled)
+    }
+
+    func testPublicBuildRedeemProofAttachmentFailsClosedForCanonicalKeySubstitutionAndZeroProof() throws {
+        let fixture = try unshieldProofFixture()
+        let substitutedKey = Data((0..<96).map { UInt8(($0 * 17 + 9) & 0xff) })
+        let substitutedCommitment = verifyingKeyCommitment(
+            backend: KagemushaRecursiveSpendProver.recursiveAggregationProofBackend,
+            bytes: substitutedKey
+        )
+        let substitutedEnvelope = openVerifyEnvelope(
+            vkHash: substitutedCommitment,
+            circuitId: KagemushaRecursiveSpendRequestCodecs.confidentialUnshieldV3CircuitId,
+            schema: PrivacyConfidentialWitnessCodecs.confidentialUnshieldPublicInputsSchema()
+        )
+        let substitutedRecord = try unshieldVerifierRecord(verifierKey: substitutedKey)
+
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachment(
+                unshieldProofOutputArchive: unshieldProofOutput(envelope: substitutedEnvelope),
+                unshieldVerifierRecord: substitutedRecord
+            )
+        )
+
+        let allZeroProofEnvelope = openVerifyEnvelope(
+            vkHash: fixture.commitment,
+            proof: Data(repeating: 0, count: 64),
+            circuitId: KagemushaRecursiveSpendRequestCodecs.confidentialUnshieldV3CircuitId,
+            schema: PrivacyConfidentialWitnessCodecs.confidentialUnshieldPublicInputsSchema()
+        )
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachment(
+                unshieldProofOutputArchive: unshieldProofOutput(envelope: allZeroProofEnvelope),
+                unshieldVerifierRecord: fixture.verifierRecord
+            )
+        )
+    }
+
+    func testBuildRedeemProofAttachmentRejectsAdversarialUnshieldEnvelopes() throws {
+        let fixture = try unshieldProofFixture()
+        let circuitId = KagemushaRecursiveSpendRequestCodecs.confidentialUnshieldV3CircuitId
+        let schema = PrivacyConfidentialWitnessCodecs.confidentialUnshieldPublicInputsSchema()
+
+        let malformedEnvelopes = [
+            Data([0x00]),
+            openVerifyEnvelope(
+                vkHash: fixture.commitment,
+                circuitId: circuitId,
+                schema: schema,
+                backendTag: VerifyingKeyBackendTag.halo2Bn254.rawValue
+            ),
+            openVerifyEnvelope(
+                vkHash: Data(repeating: 0, count: 32),
+                circuitId: circuitId,
+                schema: schema
+            ),
+            openVerifyEnvelope(
+                vkHash: fixture.commitment,
+                proof: Data(),
+                circuitId: circuitId,
+                schema: schema
+            ),
+            openVerifyEnvelope(
+                vkHash: fixture.commitment,
+                circuitId: circuitId,
+                schema: schema,
+                aux: Data([0x01])
+            ),
+            openVerifyEnvelope(
+                vkHash: fixture.commitment,
+                circuitId: circuitId,
+                schema: schema,
+                trailingField: Data([0x00])
+            ),
+            openVerifyEnvelope(
+                vkHash: fixture.commitment,
+                circuitId: circuitId,
+                schema: schema,
+                flags: 0
+            ),
+            openVerifyEnvelope(
+                vkHash: fixture.commitment,
+                circuitId: circuitId,
+                schema: schema,
+                archiveTypeName: "test.WrongOpenVerifyEnvelope"
+            ),
+            archiveWithHeaderPadding(
+                openVerifyEnvelope(
+                    vkHash: fixture.commitment,
+                    circuitId: circuitId,
+                    schema: schema
+                ),
+                count: NoritoHeader.maxHeaderPadding + 1
+            )
+        ]
+        for malformedEnvelope in malformedEnvelopes {
+            assertRedeemProofAttachmentRejected(
+                proofOutputArchive: unshieldProofOutput(envelope: malformedEnvelope),
+                verifierRecord: fixture.verifierRecord,
+                expected: .invalidArchive("unshield proof")
+            )
+        }
+
+        let crossWiredEnvelopes = [
+            openVerifyEnvelope(
+                vkHash: fixture.commitment,
+                circuitId: KagemushaRecursiveSpendRequestCodecs.confidentialTransferV2CircuitId,
+                schema: schema
+            ),
+            openVerifyEnvelope(
+                vkHash: fixture.commitment,
+                circuitId: circuitId,
+                schema: PrivacyConfidentialWitnessCodecs.confidentialTransferPublicInputsSchema()
+            )
+        ]
+        for crossWiredEnvelope in crossWiredEnvelopes {
+            assertRedeemProofAttachmentRejected(
+                proofOutputArchive: unshieldProofOutput(envelope: crossWiredEnvelope),
+                verifierRecord: fixture.verifierRecord,
+                expected: .invalidArchive("unshieldVerifierRecord")
+            )
+        }
+    }
+
+    func testBuildRedeemProofAttachmentValidatesInlineKeyAndProofCapBoundaries() throws {
+        let fixture = try unshieldProofFixture()
+        let key = verifierKey()
+        let otherKey = Data((0..<96).map { UInt8(($0 * 13 + 7) & 0xff) })
+
+        let invalidInlineKeys = [
+            try unshieldVerifierRecord(verifierKey: key, inlineKey: .absent),
+            try unshieldVerifierRecord(
+                verifierKey: key,
+                inlineKey: .explicit(backend: "test", bytes: key)
+            ),
+            try unshieldVerifierRecord(
+                verifierKey: key,
+                inlineKey: .explicit(
+                    backend: KagemushaRecursiveSpendProver.recursiveAggregationProofBackend,
+                    bytes: Data()
+                )
+            ),
+            try unshieldVerifierRecord(
+                verifierKey: key,
+                vkLen: UInt32(key.count - 1)
+            ),
+            try unshieldVerifierRecord(
+                verifierKey: key,
+                inlineKey: .explicit(
+                    backend: KagemushaRecursiveSpendProver.recursiveAggregationProofBackend,
+                    bytes: otherKey
+                )
+            )
+        ]
+        for invalidInlineKey in invalidInlineKeys {
+            assertRedeemProofAttachmentRejected(
+                proofOutputArchive: fixture.proofOutputArchive,
+                verifierRecord: invalidInlineKey,
+                expected: .invalidArchive("unshieldVerifierRecord.key")
+            )
+        }
+
+        let exactProofCap = try unshieldVerifierRecord(
+            verifierKey: key,
+            maxProofBytes: UInt32(fixture.envelopeArchive.count)
+        )
+        XCTAssertNoThrow(
+            try KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachmentStructurally(
+                unshieldProofOutputArchive: fixture.proofOutputArchive,
+                unshieldVerifierRecord: exactProofCap
+            )
+        )
+    }
+
+    func testBuildRedeemProofAttachmentRejectsNoncanonicalTypedArchivePadding() throws {
+        let fixture = try unshieldProofFixture()
+
+        assertRedeemProofAttachmentRejected(
+            proofOutputArchive: archiveWithHeaderPadding(fixture.proofOutputArchive, count: 1),
+            verifierRecord: fixture.verifierRecord,
+            expected: .invalidArchive("unshieldProofOutputArchive")
+        )
+        assertRedeemProofAttachmentRejected(
+            proofOutputArchive: unshieldProofOutput(
+                envelope: archiveWithHeaderPadding(fixture.envelopeArchive, count: 1)
+            ),
+            verifierRecord: fixture.verifierRecord,
+            expected: .invalidArchive("unshield proof")
+        )
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendVerifierRecordRef(
+                verifierKeyId: fixture.verifierRecord.verifierKeyId,
+                recordBytes: archiveWithHeaderPadding(
+                    fixture.verifierRecord.recordBytes,
+                    count: 1
+                )
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidArchive("recordBytes")
+            )
+        }
+    }
+
+    func testBuildRedeemProofAttachmentRejectsElementFramedDirectFixed32Fields() throws {
+        let fixture = try unshieldProofFixture()
+        let envelopePayload = try KagemushaRecursiveSpendRequestCodecs.compactPayloadForRequest(
+            fixture.envelopeArchive,
+            schema: KagemushaRecursiveSpendRequestCodecs.openVerifyEnvelopeWireName,
+            field: "envelope"
+        )
+        var envelopeFields = try compactFields(envelopePayload)
+        envelopeFields[2] = encodeFixed32Payload(fixture.commitment)
+        let elementFramedVkHashEnvelope = verifierRecordArchive(
+            fields: envelopeFields,
+            typeName: KagemushaRecursiveSpendRequestCodecs.openVerifyEnvelopeWireName
+        )
+        assertRedeemProofAttachmentRejected(
+            proofOutputArchive: unshieldProofOutput(envelope: elementFramedVkHashEnvelope),
+            verifierRecord: fixture.verifierRecord,
+            expected: .invalidArchive("unshield proof.vk_hash")
+        )
+
+        let recordPayload = try KagemushaRecursiveSpendRequestCodecs.compactPayloadForRequest(
+            fixture.verifierRecord.recordBytes,
+            schema: KagemushaRecursiveSpendRequestCodecs.verifyingKeyRecordWireName,
+            field: "record"
+        )
+        var recordFields = try compactFields(recordPayload)
+        recordFields[6] = encodeFixed32Payload(
+            IrohaHash.hash(PrivacyConfidentialWitnessCodecs.confidentialUnshieldPublicInputsSchema())
+        )
+        let elementFramedSchemaHashRecord = try KagemushaRecursiveSpendVerifierRecordRef(
+            verifierKeyId: fixture.verifierRecord.verifierKeyId,
+            recordBytes: verifierRecordArchive(fields: recordFields)
+        )
+        assertRedeemProofAttachmentRejected(
+            proofOutputArchive: fixture.proofOutputArchive,
+            verifierRecord: elementFramedSchemaHashRecord,
+            expected: .invalidArchive("unshieldVerifierRecord.public_inputs_schema_hash")
+        )
+
+        recordFields = try compactFields(recordPayload)
+        recordFields[7] = encodeFixed32Payload(fixture.commitment)
+        let elementFramedCommitmentRecord = try KagemushaRecursiveSpendVerifierRecordRef(
+            verifierKeyId: fixture.verifierRecord.verifierKeyId,
+            recordBytes: verifierRecordArchive(fields: recordFields)
+        )
+        assertRedeemProofAttachmentRejected(
+            proofOutputArchive: fixture.proofOutputArchive,
+            verifierRecord: elementFramedCommitmentRecord,
+            expected: .invalidArchive("unshieldVerifierRecord.commitment")
+        )
+    }
+
+    func testBuildRedeemProofAttachmentEnforcesVerifierLifecycleWindow() throws {
+        let fixture = try unshieldProofFixture()
+        let windowed = try unshieldVerifierRecord(
+            verifierKey: verifierKey(),
+            activationHeight: 10,
+            withdrawHeight: 20
+        )
+
+        for height in [nil, UInt64(9), UInt64(20)] {
+            assertRedeemProofAttachmentRejected(
+                proofOutputArchive: fixture.proofOutputArchive,
+                verifierRecord: windowed,
+                blockHeight: height,
+                expected: .invalidArchive("unshieldVerifierRecord")
+            )
+        }
+        for height in [UInt64(10), UInt64(19)] {
+            XCTAssertNoThrow(
+                try KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachmentStructurally(
+                    unshieldProofOutputArchive: fixture.proofOutputArchive,
+                    unshieldVerifierRecord: windowed,
+                    blockHeight: height
+                )
+            )
+        }
+
+        let invalidWindow = try unshieldVerifierRecord(
+            verifierKey: verifierKey(),
+            activationHeight: 20,
+            withdrawHeight: 20
+        )
+        assertRedeemProofAttachmentRejected(
+            proofOutputArchive: fixture.proofOutputArchive,
+            verifierRecord: invalidWindow,
+            blockHeight: 20,
+            expected: .invalidArchive("unshieldVerifierRecord")
+        )
+    }
+
+    func testBuildRedeemProofAttachmentRejectsMalformedVerifierRecordArchivesAndIds() throws {
+        let fixture = try unshieldProofFixture()
+        let canonicalArchive = fixture.verifierRecord.recordBytes
+        let canonicalPayload = try KagemushaRecursiveSpendRequestCodecs.compactPayloadForRequest(
+            canonicalArchive,
+            schema: KagemushaRecursiveSpendRequestCodecs.verifyingKeyRecordWireName,
+            field: "record"
+        )
+        let canonicalFields = try compactFields(canonicalPayload)
+
+        let noncompactRef = try KagemushaRecursiveSpendVerifierRecordRef(
+            verifierKeyId: fixture.verifierRecord.verifierKeyId,
+            recordBytes: verifierRecordArchive(fields: canonicalFields, flags: 0)
+        )
+        assertRedeemProofAttachmentRejected(
+            proofOutputArchive: fixture.proofOutputArchive,
+            verifierRecord: noncompactRef,
+            expected: .invalidArchive("unshieldVerifierRecord")
+        )
+
+        let trailingRef = try KagemushaRecursiveSpendVerifierRecordRef(
+            verifierKeyId: fixture.verifierRecord.verifierKeyId,
+            recordBytes: verifierRecordArchive(fields: canonicalFields + [Data([0])])
+        )
+        assertRedeemProofAttachmentRejected(
+            proofOutputArchive: fixture.proofOutputArchive,
+            verifierRecord: trailingRef,
+            expected: .invalidArchive("unshieldVerifierRecord")
+        )
+
+        var invalidOptionFields = canonicalFields
+        invalidOptionFields[2] = Data([2])
+        let invalidOptionRef = try KagemushaRecursiveSpendVerifierRecordRef(
+            verifierKeyId: fixture.verifierRecord.verifierKeyId,
+            recordBytes: verifierRecordArchive(fields: invalidOptionFields)
+        )
+        assertRedeemProofAttachmentRejected(
+            proofOutputArchive: fixture.proofOutputArchive,
+            verifierRecord: invalidOptionRef,
+            expected: .invalidArchive("optionString")
+        )
+
+        for verifierKeyId in ["halo2/ipa:Unshield-v3", "halo2//ipa:unshield-v3"] {
+            XCTAssertThrowsError(
+                try KagemushaRecursiveSpendVerifierRecordRef(
+                    verifierKeyId: verifierKeyId,
+                    recordBytes: canonicalArchive
+                )
+            ) { error in
+                guard case let KagemushaRecursiveSpendRequestCodecError.invalidField(field) = error else {
+                    return XCTFail("unexpected error: \(error)")
+                }
+                XCTAssertTrue(field.hasPrefix("verifierKeyId."))
+            }
+        }
+
+        let wrongSchemaArchive = verifierRecordArchive(
+            fields: canonicalFields,
+            typeName: "test.WrongVerifierRecord"
+        )
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendVerifierRecordRef(
+                verifierKeyId: fixture.verifierRecord.verifierKeyId,
+                recordBytes: wrongSchemaArchive
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidArchive("recordBytes")
+            )
+        }
+
+        let excessivePaddingArchive = archiveWithHeaderPadding(
+            canonicalArchive,
+            count: NoritoHeader.maxHeaderPadding + 1
+        )
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendVerifierRecordRef(
+                verifierKeyId: fixture.verifierRecord.verifierKeyId,
+                recordBytes: excessivePaddingArchive
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidArchive("recordBytes")
+            )
+        }
+
     }
 
     func testRejectsLegacyOneByteVerifierRecordStatus() throws {
@@ -257,6 +1071,103 @@ final class KagemushaTopUpParityTests: XCTestCase {
         Data((0..<96).map { UInt8(($0 * 7 + 3) & 0xff) })
     }
 
+    private struct UnshieldProofFixture {
+        let envelopeArchive: Data
+        let proofOutputArchive: Data
+        let verifierRecord: KagemushaRecursiveSpendVerifierRecordRef
+        let commitment: Data
+    }
+
+    private enum InlineVerifierKey {
+        case canonical
+        case absent
+        case explicit(backend: String, bytes: Data)
+    }
+
+    private func unshieldProofFixture() throws -> UnshieldProofFixture {
+        let verifierKey = verifierKey()
+        let commitment = verifyingKeyCommitment(
+            backend: KagemushaRecursiveSpendProver.recursiveAggregationProofBackend,
+            bytes: verifierKey
+        )
+        let envelope = openVerifyEnvelope(
+            vkHash: commitment,
+            circuitId: KagemushaRecursiveSpendRequestCodecs.confidentialUnshieldV3CircuitId,
+            schema: PrivacyConfidentialWitnessCodecs.confidentialUnshieldPublicInputsSchema()
+        )
+        return try UnshieldProofFixture(
+            envelopeArchive: envelope,
+            proofOutputArchive: privacyBuildResult(
+                proof: envelope,
+                algorithmId: "unshield",
+                entrypoint: "buildConfidentialUnshieldProofV3",
+                vkRef: PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3VerifierRef
+            ),
+            verifierRecord: unshieldVerifierRecord(verifierKey: verifierKey),
+            commitment: commitment
+        )
+    }
+
+    private func unshieldVerifierRecord(
+        verifierKey: Data,
+        circuitId: String = KagemushaRecursiveSpendRequestCodecs.confidentialUnshieldV3CircuitId,
+        schema: Data = PrivacyConfidentialWitnessCodecs.confidentialUnshieldPublicInputsSchema(),
+        publicInputsSchemaHash: Data? = nil,
+        status: UInt32 = 1,
+        maxProofBytes: UInt32 = 196_608,
+        namespace: String = "offline_kagemusha",
+        backendTag: UInt32 = VerifyingKeyBackendTag.halo2IpaPasta.rawValue,
+        curve: String = "pallas",
+        verifierKeyId: String = "halo2/ipa:unshield-v3",
+        vkLen: UInt32? = nil,
+        activationHeight: UInt64? = nil,
+        withdrawHeight: UInt64? = nil,
+        inlineKey: InlineVerifierKey = .canonical
+    ) throws -> KagemushaRecursiveSpendVerifierRecordRef {
+        let transferRecord = try KagemushaRecursiveSpendRequestCodecs
+            .encodeConfidentialTransferV2VerifierRecordArchive(
+                verifierKey: verifierKey
+            )
+        let payload = try KagemushaRecursiveSpendRequestCodecs.compactPayloadForRequest(
+            transferRecord,
+            schema: KagemushaRecursiveSpendRequestCodecs.verifyingKeyRecordWireName,
+            field: "record"
+        )
+        var fields = try compactFields(payload)
+        fields[1] = OfflineCompactNorito.encodeString(circuitId)
+        fields[3] = OfflineCompactNorito.encodeString(namespace)
+        fields[4] = OfflineCompactNorito.encodeUInt32(backendTag)
+        fields[5] = OfflineCompactNorito.encodeString(curve)
+        fields[6] = publicInputsSchemaHash ?? IrohaHash.hash(schema)
+        fields[8] = OfflineCompactNorito.encodeUInt32(vkLen ?? UInt32(verifierKey.count))
+        fields[9] = OfflineCompactNorito.encodeUInt32(maxProofBytes)
+        fields[13] = activationHeight.map {
+            optionPayload(OfflineCompactNorito.encodeUInt64($0))
+        } ?? Data([0])
+        fields[14] = withdrawHeight.map {
+            optionPayload(OfflineCompactNorito.encodeUInt64($0))
+        } ?? Data([0])
+        switch inlineKey {
+        case .canonical:
+            break
+        case .absent:
+            fields[15] = Data([0])
+        case let .explicit(backend, bytes):
+            fields[15] = optionPayload(verifyingKeyBoxPayload(backend: backend, bytes: bytes))
+        }
+        fields[16] = OfflineCompactNorito.encodeUInt32(status)
+        var writer = OfflineCompactNoritoWriter()
+        fields.forEach { writer.writeField($0) }
+        return try KagemushaRecursiveSpendVerifierRecordRef(
+            verifierKeyId: verifierKeyId,
+            recordBytes: noritoEncode(
+                typeName: KagemushaRecursiveSpendRequestCodecs.verifyingKeyRecordWireName,
+                payload: writer.data,
+                flags: NoritoHeader.compactLen
+            )
+        )
+    }
+
     private func transferHop(
         rootBefore: Data,
         rootAfter: Data,
@@ -298,46 +1209,140 @@ final class KagemushaTopUpParityTests: XCTestCase {
         )
     }
 
-    private func openVerifyEnvelope(vkHash: Data, proof: Data? = nil) -> Data {
+    private func openVerifyEnvelope(
+        vkHash: Data,
+        proof: Data? = nil,
+        circuitId: String = KagemushaRecursiveSpendRequestCodecs.confidentialTransferV2CircuitId,
+        schema: Data = PrivacyConfidentialWitnessCodecs.confidentialTransferPublicInputsSchema(),
+        backendTag: UInt32 = VerifyingKeyBackendTag.halo2IpaPasta.rawValue,
+        aux: Data = Data(),
+        trailingField: Data? = nil,
+        flags: UInt8 = NoritoHeader.compactLen,
+        archiveTypeName: String = KagemushaRecursiveSpendRequestCodecs.openVerifyEnvelopeWireName
+    ) -> Data {
         var writer = OfflineCompactNoritoWriter()
-        writer.writeField(OfflineCompactNorito.encodeUInt32(VerifyingKeyBackendTag.halo2IpaPasta.rawValue))
-        writer.writeField(OfflineCompactNorito.encodeString(
-            KagemushaRecursiveSpendRequestCodecs.confidentialTransferV2CircuitId
-        ))
+        writer.writeField(OfflineCompactNorito.encodeUInt32(backendTag))
+        writer.writeField(OfflineCompactNorito.encodeString(circuitId))
         writer.writeField(vkHash)
-        writer.writeField(byteVec(PrivacyConfidentialWitnessCodecs.confidentialTransferPublicInputsSchema()))
+        writer.writeField(byteVec(schema))
         writer.writeField(byteVec(proof ?? zk1Proof()))
-        writer.writeField(byteVec(Data()))
+        writer.writeField(byteVec(aux))
+        if let trailingField {
+            writer.writeField(trailingField)
+        }
         return noritoEncode(
-            typeName: KagemushaRecursiveSpendRequestCodecs.openVerifyEnvelopeWireName,
+            typeName: archiveTypeName,
             payload: writer.data,
-            flags: NoritoHeader.compactLen
+            flags: flags
         )
     }
 
     private func privacyBuildResult(
         proof: Data,
         algorithmId: String = "confidential-transfer-v2",
-        entrypoint: String = "buildConfidentialTransferProofV2"
+        entrypoint: String = "buildConfidentialTransferProofV2",
+        vkRef: String = PrivacyConfidentialWitnessCodecs.confidentialTransferV2VerifierRef,
+        version: UInt32 = 1,
+        status: UInt32 = 0,
+        errorCode: UInt32 = 0,
+        message: String = "",
+        publicInputs: Data = Data(),
+        verified: Bool = false,
+        trailingField: Data? = nil,
+        flags: UInt8 = NoritoHeader.compactLen,
+        schemaByte: UInt8 = 0x42
     ) -> Data {
         var writer = OfflineCompactNoritoWriter()
-        writer.writeField(OfflineCompactNorito.encodeUInt32(1))
-        writer.writeField(OfflineCompactNorito.encodeUInt32(0))
-        writer.writeField(OfflineCompactNorito.encodeUInt32(0))
-        writer.writeField(OfflineCompactNorito.encodeString(""))
+        writer.writeField(OfflineCompactNorito.encodeUInt32(version))
+        writer.writeField(OfflineCompactNorito.encodeUInt32(status))
+        writer.writeField(OfflineCompactNorito.encodeUInt32(errorCode))
+        writer.writeField(OfflineCompactNorito.encodeString(message))
         writer.writeField(OfflineCompactNorito.encodeString(algorithmId))
         writer.writeField(OfflineCompactNorito.encodeString(entrypoint))
-        writer.writeField(OfflineCompactNorito.encodeString("halo2-ipa-pasta:confidential_transfer_v2"))
-        writer.writeField(byteVec(Data()))
+        writer.writeField(OfflineCompactNorito.encodeString(vkRef))
+        writer.writeField(byteVec(publicInputs))
         writer.writeField(byteVec(proof))
-        writer.writeField(Data([0]))
+        writer.writeField(Data([verified ? 1 : 0]))
+        if let trailingField {
+            writer.writeField(trailingField)
+        }
         var archive = noritoEncode(
             typeName: "connect_norito_bridge::PrivacyBuildProofResultV1",
             payload: writer.data,
-            flags: NoritoHeader.compactLen
+            flags: flags
         )
-        archive.replaceSubrange(6..<22, with: Data(repeating: 0x42, count: 16))
+        archive.replaceSubrange(6..<22, with: Data(repeating: schemaByte, count: 16))
         return archive
+    }
+
+    private func unshieldProofOutput(envelope: Data) -> Data {
+        privacyBuildResult(
+            proof: envelope,
+            algorithmId: "unshield",
+            entrypoint: "buildConfidentialUnshieldProofV3",
+            vkRef: PrivacyConfidentialWitnessCodecs.confidentialUnshieldV3VerifierRef
+        )
+    }
+
+    private func assertRedeemProofAttachmentRejected(
+        proofOutputArchive: Data,
+        verifierRecord: KagemushaRecursiveSpendVerifierRecordRef,
+        blockHeight: UInt64? = nil,
+        expected: KagemushaRecursiveSpendRequestCodecError,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachmentStructurally(
+                unshieldProofOutputArchive: proofOutputArchive,
+                unshieldVerifierRecord: verifierRecord,
+                blockHeight: blockHeight
+            ),
+            file: file,
+            line: line
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                expected,
+                file: file,
+                line: line
+            )
+        }
+    }
+
+    private func verifyingKeyBoxPayload(backend: String, bytes: Data) -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(OfflineCompactNorito.encodeString(backend))
+        writer.writeField(byteVec(bytes))
+        return writer.data
+    }
+
+    private func optionPayload(_ payload: Data) -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeUInt8(1)
+        writer.writeField(payload)
+        return writer.data
+    }
+
+    private func encodeFixed32Payload(_ bytes: Data) -> Data {
+        precondition(bytes.count == 32)
+        var writer = OfflineCompactNoritoWriter()
+        for byte in bytes {
+            writer.writeField(Data([byte]))
+        }
+        return writer.data
+    }
+
+    private func optionFixed32Payload(_ payload: Data) throws -> Data {
+        try fixed32Payload(optionSomePayload(payload))
+    }
+
+    private func fixed32Payload(_ payload: Data) throws -> Data {
+        let fields = try compactFields(payload)
+        guard fields.count == 32, fields.allSatisfy({ $0.count == 1 }) else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("testFixed32")
+        }
+        return Data(fields.map { $0[$0.startIndex] })
     }
 
     private func zk1Proof(rootBefore: Data? = nil, extraColumns: [Data] = []) -> Data {
@@ -381,6 +1386,26 @@ final class KagemushaTopUpParityTests: XCTestCase {
         )
     }
 
+    private func verifierRecordArchive(
+        fields: [Data],
+        flags: UInt8 = NoritoHeader.compactLen,
+        typeName: String = KagemushaRecursiveSpendRequestCodecs.verifyingKeyRecordWireName
+    ) -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        fields.forEach { writer.writeField($0) }
+        return noritoEncode(typeName: typeName, payload: writer.data, flags: flags)
+    }
+
+    private func archiveWithHeaderPadding(_ archive: Data, count: Int) -> Data {
+        precondition(count >= 0)
+        var padded = archive
+        padded.insert(
+            contentsOf: Data(repeating: 0, count: count),
+            at: NoritoHeader.encodedLength
+        )
+        return padded
+    }
+
     private func statusRecord(_ record: Data, status: UInt32) throws -> Data {
         let payload = try KagemushaRecursiveSpendRequestCodecs.compactPayloadForRequest(
             record,
@@ -388,9 +1413,7 @@ final class KagemushaTopUpParityTests: XCTestCase {
             field: "record"
         )
         var fields = try compactFields(payload)
-        var statusBytes = Data()
-        appendUInt32LE(status, to: &statusBytes)
-        fields[fields.count - 1] = statusBytes
+        fields[fields.count - 1] = OfflineCompactNorito.encodeUInt32(status)
         var writer = OfflineCompactNoritoWriter()
         fields.forEach { writer.writeField($0) }
         return noritoEncode(
@@ -407,6 +1430,53 @@ final class KagemushaTopUpParityTests: XCTestCase {
             fields.append(try reader.readField())
         }
         return fields
+    }
+
+    private func optionSomePayload(_ payload: Data) throws -> Data {
+        guard payload.first == 1 else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("testOption")
+        }
+        var reader = KagemushaTestCompactReader(Data(payload.dropFirst()))
+        let value = try reader.readField()
+        guard reader.remaining == 0 else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("testOption")
+        }
+        return value
+    }
+
+    private func sharedRecursiveSpendArchive(name: String) throws -> Data {
+        var directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        for _ in 0..<10 {
+            let candidate = directory
+                .appendingPathComponent("fixtures/kagemusha_recursive_spend_abi6/archives.json")
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                let root = try XCTUnwrap(
+                    JSONSerialization.jsonObject(with: Data(contentsOf: candidate)) as? [String: Any]
+                )
+                let archives = try XCTUnwrap(root["archives"] as? [[String: Any]])
+                let entry = try XCTUnwrap(archives.first { $0["name"] as? String == name })
+                return try XCTUnwrap(Data(base64Encoded: try XCTUnwrap(entry["bytes_base64"] as? String)))
+            }
+            directory.deleteLastPathComponent()
+        }
+        throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("testFixture")
+    }
+
+    private func sampleRecipient() throws -> String {
+        try AccountAddress
+            .fromAccount(publicKey: Data(repeating: 0x2a, count: 32), algorithm: "ed25519")
+            .toI105(networkPrefix: 0x02F1)
+    }
+
+    private func syntheticLineageVerifierRecord() throws -> KagemushaRecursiveSpendVerifierRecordRef {
+        try KagemushaRecursiveSpendVerifierRecordRef(
+            verifierKeyId: "halo2/ipa:kagemusha-recursive-spend-lineage-test",
+            recordBytes: noritoEncode(
+                typeName: KagemushaRecursiveSpendRequestCodecs.verifyingKeyRecordWireName,
+                payload: Data([0x01, 0x02, 0x03]),
+                flags: NoritoHeader.compactLen
+            )
+        )
     }
 
     private func byteVec(_ bytes: Data) -> Data {

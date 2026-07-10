@@ -19806,7 +19806,7 @@ mod tests {
         };
         let status = SumeragiStatusWire {
             canonical: SumeragiV1StatusWire::default(),
-            mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_string(),
+            mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
             staged_mode_tag: None,
             staged_mode_activation_height: None,
             mode_activation_lag_blocks: None,
@@ -23470,7 +23470,7 @@ mod tests {
         let block_hash = block_header.hash();
         SumeragiStatusWire {
             canonical: SumeragiV1StatusWire::default(),
-            mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_string(),
+            mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
             staged_mode_tag: None,
             staged_mode_activation_height: None,
             mode_activation_lag_blocks: None,
@@ -23892,7 +23892,7 @@ mod tests {
             lane_block_view: 2,
             subject_hash,
             qc_mode_tag: relay_envelope
-                .lane_qc_mode_tag("iroha2-consensus::permissioned-sumeragi@v1"),
+                .lane_qc_mode_tag("iroha2-consensus::permissioned-sumeragi@v2"),
             accepted_candidate_indices: vec![0, 2],
             accepted_transaction_hashes: vec![
                 Hash::prehashed([0xBA; Hash::LENGTH]),
@@ -23909,7 +23909,7 @@ mod tests {
         };
         let status = SumeragiStatusWire {
             canonical: SumeragiV1StatusWire::default(),
-            mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_string(),
+            mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
             staged_mode_tag: None,
             staged_mode_activation_height: None,
             mode_activation_lag_blocks: None,

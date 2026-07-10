@@ -389,7 +389,7 @@ final class TxBuilderTests: XCTestCase {
                     openedAtMs: Self.fixtureClaimResolvedAtMs,
                     expiresAtMs: Self.fixtureClaimExpiresAtMs
                 ),
-                signature: String(repeating: "ff", count: 64)
+                signature: Self.fixtureClaimSignatureHex
             )
         )
         guard let payloadJSON = String(data: try JSONEncoder().encode(payload), encoding: .utf8) else {
@@ -400,6 +400,7 @@ final class TxBuilderTests: XCTestCase {
           "payload":\(payloadJSON),
           "attestation":{
             "kind":"signed",
+            "algorithm":"ed25519",
             "signature":"\(Self.fixtureClaimSignatureHex)"
           }
         }
@@ -958,6 +959,7 @@ final class TxBuilderTests: XCTestCase {
         let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let request = try makeClaimIdentifierRequest(authority: authority, ttlMs: 60)
+        XCTAssertEqual(request.receipt.attestation.algorithm, SigningAlgorithm.ed25519.wireName)
         let envelope = try sdk.buildClaimIdentifier(request: request, keypair: keypair)
         XCTAssertEqual(envelope.norito.first, 1)
         XCTAssertEqual(Data(envelope.norito.dropFirst()), envelope.signedTransaction)

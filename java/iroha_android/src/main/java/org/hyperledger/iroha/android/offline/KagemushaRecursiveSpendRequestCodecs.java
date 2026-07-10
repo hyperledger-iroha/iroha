@@ -13,7 +13,7 @@ import java.util.Optional;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.address.AccountAddress.AccountAddressException;
 import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
-import org.hyperledger.iroha.android.crypto.Blake2b;
+import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.model.instructions.ProofAttachment;
 import org.hyperledger.iroha.android.model.instructions.ProofVerifierKeyRef;
 import org.hyperledger.iroha.android.privacy.PrivacyConfidentialWitness;
@@ -82,6 +82,8 @@ public final class KagemushaRecursiveSpendRequestCodecs {
   private static final int CONFIDENTIAL_TRANSFER_V2_VK_RECORD_VERSION = 3;
   private static final int CONFIDENTIAL_UNSHIELD_V3_VK_RECORD_VERSION = 1;
   private static final String CONFIDENTIAL_VK_RECORD_GAS_SCHEDULE_ID = "halo2_default";
+  private static final String[] VERIFIER_KEY_ID_FORBIDDEN_SEPARATORS =
+      {"..", "//", ":::", "/:", ":/", "/.", "./", ":.", ".:"};
   private static final int ZK1_MAX_TLV_BYTES = 8 * 1024 * 1024;
   private static final int ZK1_MAX_INSTANCE_COLUMNS = 64;
   private static final int ZK1_MAX_INSTANCE_ROWS = 8192;
@@ -337,8 +339,9 @@ public final class KagemushaRecursiveSpendRequestCodecs {
             true);
     final byte[] verifyRequest =
         PrivacyConfidentialWitness.buildConfidentialUnshieldVerifyRequestV1(proof.proof);
+    final byte[] verifyResult = verifyProof.verify(verifyRequest);
     parsePrivacyVerifyResult(
-        verifyProof.verify(verifyRequest),
+        verifyResult,
         CONFIDENTIAL_UNSHIELD_ALGORITHM_ID,
         CONFIDENTIAL_UNSHIELD_ENTRYPOINT,
         PrivacyConfidentialWitness.CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF,
@@ -2722,9 +2725,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
   }
 
   private static byte[] irohaHash(final byte[] value) {
-    final byte[] digest = Blake2b.digest256(value);
-    digest[digest.length - 1] = (byte) (digest[digest.length - 1] | 0x01);
-    return digest;
+    return IrohaHash.prehash(value);
   }
 
   private static void requireNonNegativeHeight(final Long blockHeight) {
@@ -3646,14 +3647,38 @@ public final class KagemushaRecursiveSpendRequestCodecs {
   }
 
   private static VerifierKeyIdValue parseVerifierKeyId(final String value, final String field) {
-    requirePortableId(value, field);
     final int separator = value.indexOf(':');
     require(separator > 0 && separator < value.length() - 1, field + " must use backend:name syntax");
     final String backend = value.substring(0, separator);
     final String name = value.substring(separator + 1);
-    requirePortableId(backend, field + ".backend");
-    requirePortableId(name, field + ".name");
+    requireVerifierKeyIdComponent(backend, field + ".backend");
+    requireVerifierKeyIdComponent(name, field + ".name");
     return new VerifierKeyIdValue(backend, name);
+  }
+
+  private static void requireVerifierKeyIdComponent(final String value, final String field) {
+    require(value != null && !value.isEmpty() && value.length() <= 256,
+        field + " must use portable registry syntax");
+    require(isLowercaseAsciiAlphanumeric(value.charAt(0))
+            && isLowercaseAsciiAlphanumeric(value.charAt(value.length() - 1)),
+        field + " must use portable registry syntax");
+    for (int i = 0; i < value.length(); i++) {
+      final char character = value.charAt(i);
+      require(isLowercaseAsciiAlphanumeric(character)
+              || character == '-'
+              || character == '_'
+              || character == '/'
+              || character == ':'
+              || character == '.',
+          field + " must use portable registry syntax");
+    }
+    for (final String separator : VERIFIER_KEY_ID_FORBIDDEN_SEPARATORS) {
+      require(!value.contains(separator), field + " must use portable registry syntax");
+    }
+  }
+
+  private static boolean isLowercaseAsciiAlphanumeric(final char character) {
+    return (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9');
   }
 
   private static byte[] verifyingKeyCommitment(final String backend, final byte[] verifierKey) {

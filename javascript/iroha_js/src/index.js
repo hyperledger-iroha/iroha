@@ -279,6 +279,8 @@ export {
 } from "./nexusApp.js";
 export {
   hashSignedTransaction,
+  hashSignedTransactionPayload,
+  hashInstructionBatch,
   resignSignedTransaction,
   buildRegisterDomainTransaction,
   buildTransaction,
@@ -402,6 +404,7 @@ export {
   buildRegisterAccountInstruction,
   buildRegisterAssetDefinitionInstruction,
   buildGrantAccountPermissionInstruction,
+  buildSetAccountKeyValueInstruction,
   buildSetAssetDefinitionAliasInstruction,
   buildExecuteTriggerInstruction,
   buildExecuteTriggerNorito,

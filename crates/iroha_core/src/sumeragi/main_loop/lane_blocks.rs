@@ -2289,7 +2289,6 @@ impl Actor {
                 &accepted_transactions,
                 &routing_plans,
                 proposal_height,
-                std::slice::from_ref(&proposal),
             ) {
                 Ok(receipts) => receipts,
                 Err(reason) => {

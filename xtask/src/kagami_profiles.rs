@@ -9,9 +9,18 @@ use std::{
 
 use blake2::{Blake2b512, digest::Digest};
 use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair};
-use iroha_data_model::{parameter::system::SumeragiConsensusMode, peer::PeerId};
+use iroha_data_model::{
+    block::{consensus_v2::SumeragiV2GenesisContextParameters, decode_framed_signed_block},
+    isi::SetParameter,
+    parameter::{
+        Parameter,
+        system::{SumeragiConsensusMode, consensus_metadata},
+    },
+    peer::PeerId,
+    transaction::Executable,
+};
 use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
-use norito::json;
+use norito::{derive::JsonDeserialize, json};
 
 use crate::workspace_root;
 
@@ -154,6 +163,18 @@ fn write_profile_bundle(
     let genesis_path = bundle_root.join("genesis.json");
     write_json(&genesis_path, &patched_genesis)?;
 
+    let config_text = render_config(spec, &peers, genesis_key.public_key());
+    let config_path = bundle_root.join("config.toml");
+    fs::write(&config_path, &config_text)?;
+    let patched_genesis = bind_staged_context(
+        spec,
+        kagami_bin,
+        &genesis_path,
+        &config_path,
+        patched_genesis,
+    )?;
+    write_json(&genesis_path, &patched_genesis)?;
+
     let vrf_seed_hex = if spec.requires_seed {
         Some(spec.vrf_seed_hex())
     } else {
@@ -162,8 +183,6 @@ fn write_profile_bundle(
     let verify_out = run_verify(spec, kagami_bin, &genesis_path, vrf_seed_hex.as_deref())?;
     fs::write(bundle_root.join("verify.txt"), verify_out)?;
 
-    let config_text = render_config(spec, &peers, genesis_key.public_key());
-    fs::write(bundle_root.join("config.toml"), config_text)?;
     if spec.slug == "iroha3-taira" {
         fs::write(
             bundle_root.join("sorafs_sites.json"),
@@ -264,6 +283,102 @@ fn write_json(path: &Path, value: &RawGenesisTransaction) -> AnyResult<()> {
     rendered.push('\n');
     fs::write(path, rendered)?;
     Ok(())
+}
+
+#[derive(Debug, Clone, JsonDeserialize)]
+struct ConsensusHandshakeMeta {
+    mode: String,
+    bls_domain: String,
+    wire_proto_versions: Vec<u32>,
+    consensus_fingerprint: String,
+    sumeragi_v2: SumeragiV2GenesisContextParameters,
+}
+
+fn bind_staged_context(
+    spec: &ProfileSpec,
+    kagami_bin: &Path,
+    genesis_path: &Path,
+    config_path: &Path,
+    manifest: RawGenesisTransaction,
+) -> AnyResult<RawGenesisTransaction> {
+    let output = Command::new(kagami_bin)
+        .args([
+            "genesis",
+            "sign",
+            genesis_path.to_str().expect("genesis path utf-8"),
+            "--seed",
+            "kagami-profile-staged-context",
+            "--config",
+            config_path.to_str().expect("config path utf-8"),
+        ])
+        .output()
+        .map_err(|err| format!("failed to stage {} genesis: {err}", spec.slug))?;
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "kagami genesis sign failed while staging {} (status {:?}):\nstdout:\n{}\nstderr:\n{}",
+            spec.slug,
+            output.status.code(),
+            stdout,
+            stderr
+        )
+        .into());
+    }
+
+    let block = decode_framed_signed_block(&output.stdout)
+        .map_err(|err| format!("failed to decode staged {} genesis: {err}", spec.slug))?;
+    let mut metadata = None;
+    for transaction in block.external_transactions() {
+        if let Executable::Instructions(batch) = transaction.instructions() {
+            for instruction in batch {
+                if let Some(set_parameter) = instruction.as_any().downcast_ref::<SetParameter>()
+                    && let Parameter::Custom(custom) = set_parameter.inner()
+                    && custom.id() == &consensus_metadata::handshake_meta_id()
+                {
+                    metadata = Some(
+                        custom
+                            .payload()
+                            .try_into_any::<ConsensusHandshakeMeta>()
+                            .map_err(|err| {
+                                format!(
+                                    "failed to decode staged {} consensus metadata: {err}",
+                                    spec.slug
+                                )
+                            })?,
+                    );
+                }
+            }
+        }
+    }
+    let metadata = metadata
+        .ok_or_else(|| format!("staged {} genesis omitted consensus metadata", spec.slug))?;
+    if metadata.mode != "Npos" || metadata.bls_domain != "bls-iroha2:npos-sumeragi:v2" {
+        return Err(format!(
+            "staged {} genesis reported mode/domain {}/{}, expected NPoS v2",
+            spec.slug, metadata.mode, metadata.bls_domain
+        )
+        .into());
+    }
+    if metadata.wire_proto_versions != [2] {
+        return Err(format!(
+            "staged {} genesis advertised {:?}, expected only protocol v2",
+            spec.slug, metadata.wire_proto_versions
+        )
+        .into());
+    }
+
+    let rebound = manifest
+        .with_sumeragi_v2_context_parameters(metadata.sumeragi_v2)
+        .with_consensus_meta();
+    if rebound.consensus_fingerprint() != Some(metadata.consensus_fingerprint.as_str()) {
+        return Err(format!(
+            "staged {} consensus fingerprint did not cover the rebound Nexus/AMX context",
+            spec.slug
+        )
+        .into());
+    }
+    Ok(rebound)
 }
 
 fn run_verify(
@@ -390,6 +505,35 @@ max_sites = 1024
     } else {
         ""
     };
+    let taira_nexus_overrides = if spec.slug == "iroha3-taira" {
+        r#"
+[nexus.fees]
+fee_asset_id = "xor#universal"
+
+[nexus.staking]
+stake_asset_id = "xor#universal"
+"#
+    } else {
+        ""
+    };
+    let taira_mcp_overrides = if spec.slug == "iroha3-taira" {
+        r#"
+[torii.mcp]
+enabled = true
+profile = "writer"
+expose_operator_routes = false
+allow_tool_prefixes = ["iroha."]
+"#
+    } else {
+        ""
+    };
+    let max_transactions = if spec.slug == "iroha3-taira" {
+        96
+    } else {
+        iroha_config::parameters::defaults::sumeragi::V2_BLOCK_MAX_TRANSACTIONS.get()
+    };
+    let max_payload_bytes =
+        iroha_config::parameters::defaults::sumeragi::V2_BLOCK_MAX_PAYLOAD_BYTES.get();
     format!(
         r#"# Sample config for {slug} (generated via cargo xtask kagami-profiles)
 chain = "{chain}"
@@ -403,6 +547,22 @@ trusted_peers_pop = [
 {trusted_peers_pop}
 ]
 
+[sumeragi]
+protocol_version = 2
+round_timeout_ms = 10000
+role = "validator"
+
+[sumeragi.block]
+max_transactions = {max_transactions}
+max_payload_bytes = {max_payload_bytes}
+proposal_queue_scan_multiplier = 4
+
+[sumeragi.da]
+enabled = true
+
+[sumeragi.npos]
+use_stake_snapshot_roster = true
+
 [network]
 address = "0.0.0.0:{p2p}"
 public_address = "127.0.0.1:{p2p}"
@@ -410,6 +570,7 @@ public_address = "127.0.0.1:{p2p}"
 [torii]
 address = "0.0.0.0:8080"
 max_content_len = {torii_max_content_len}
+{taira_mcp_overrides}
 
 [streaming]
 identity_public_key = "{stream_pub}"
@@ -419,6 +580,7 @@ identity_private_key = "{stream_priv}"
 [nexus]
 enabled = true
 lane_count = 3
+{taira_nexus_overrides}
 {governance_overrides}
 
 [genesis]
@@ -431,10 +593,14 @@ public_key = "{genesis_pk}"
         node_sk = node.private_key,
         trusted_peers = trusted_peers,
         trusted_peers_pop = trusted_peers_pop,
+        max_transactions = max_transactions,
+        max_payload_bytes = max_payload_bytes,
         p2p = node.address.split(':').next_back().unwrap_or("1337"),
         torii_max_content_len = torii_max_content_len,
         sorafs_quota_overrides = sorafs_quota_overrides,
         sorafs_site_bindings = sorafs_site_bindings,
+        taira_nexus_overrides = taira_nexus_overrides,
+        taira_mcp_overrides = taira_mcp_overrides,
         governance_overrides = governance_overrides,
         genesis_pk = genesis_public_key,
         stream_pub = STREAM_ID_PUBLIC,
@@ -514,7 +680,7 @@ fn render_readme(
 {peer_rows}
 
 Files:
-- genesis.json — generated with `kagami genesis generate --profile {profile}` and patched with deterministic topology+PoPs
+- genesis.json — generated with `kagami genesis generate --profile {profile}`, patched with deterministic topology+PoPs, and rebound to the exact staged Nexus/AMX context through `kagami genesis sign`
 - verify.txt — stdout from `kagami verify --profile {profile} --genesis genesis.json`
 - config.toml — minimal Nexus config matching the topology (ports 8080/1337)
 {site_bindings_file}- docker-compose.yml — single-node snippet mounting the config/genesis
@@ -809,7 +975,7 @@ mod tests {
     }
 
     #[test]
-    fn taira_config_raises_storage_pin_quota() {
+    fn taira_config_pins_site_nexus_and_mcp_policy() {
         let peers = build_peers(&PROFILES[1]).expect("build deterministic peers");
         let genesis_key = deterministic_keypair("config-taira-quota-genesis", Algorithm::Ed25519)
             .expect("derive deterministic genesis key");
@@ -821,6 +987,21 @@ mod tests {
         assert!(rendered.contains("path = \"/config/sorafs_sites.json\""));
         assert!(rendered.contains("max_bytes = 1048576"));
         assert!(rendered.contains("max_sites = 1024"));
+        assert!(rendered.contains("[sumeragi.block]\nmax_transactions = 96\n"));
+        assert!(rendered.contains(
+            "[torii.mcp]\nenabled = true\nprofile = \"writer\"\nexpose_operator_routes = false\nallow_tool_prefixes = [\"iroha.\"]\n",
+        ));
+        assert!(rendered.contains("[nexus.fees]\nfee_asset_id = \"xor#universal\"\n"));
+        assert!(rendered.contains("[nexus.staking]\nstake_asset_id = \"xor#universal\"\n"));
+
+        let dev_peers = build_peers(&PROFILES[0]).expect("build deterministic dev peers");
+        let dev_genesis_key =
+            deterministic_keypair("config-dev-policy-genesis", Algorithm::Ed25519)
+                .expect("derive deterministic dev genesis key");
+        let dev = render_config(&PROFILES[0], &dev_peers, dev_genesis_key.public_key());
+        assert!(!dev.contains("[torii.mcp]"));
+        assert!(!dev.contains("[nexus.fees]"));
+        assert!(!dev.contains("[nexus.staking]"));
     }
 
     #[test]
