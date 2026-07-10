@@ -3779,7 +3779,7 @@ impl Actor {
             ))
     }
 
-    fn local_same_height_vote_has_live_proposal_material(
+    pub(super) fn local_same_height_vote_has_live_proposal_material(
         &self,
         proposal_height: u64,
         block_hash: HashOf<BlockHeader>,
