@@ -46297,6 +46297,12 @@ pub(crate) mod tests_runtime_handlers {
             #[cfg(feature = "app_api")]
             por_coordinator: Arc::new(sorafs::PorCoordinator::new()),
             #[cfg(feature = "app_api")]
+            por_runtime: None,
+            #[cfg(feature = "app_api")]
+            por_auditor_signature_threshold: usize::from(
+                defaults::sorafs::por::AUDITOR_SIGNATURE_THRESHOLD,
+            ),
+            #[cfg(feature = "app_api")]
             sorafs_alias_cache_policy: sorafs_alias_cache,
             #[cfg(feature = "app_api")]
             sorafs_alias_enforcement,

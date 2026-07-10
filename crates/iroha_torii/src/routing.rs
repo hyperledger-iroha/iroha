@@ -62756,6 +62756,9 @@ mod status_tests {
             checked_status_peer(0xA2, "derive native AMX status fixture peer key 2"),
         ];
         let validator_set_hash = HashOf::new(&validators);
+        let validator_count = u32::try_from(validators.len()).expect("fixture validator count");
+        let min_quorum =
+            u32::try_from(validators.len().saturating_mul(2) / 3 + 1).expect("fixture quorum");
         let native_amx_qc = |phase: NativeAmxPhase| NativeAmxAttestationQcV1 {
             body: NativeAmxAttestationBodyV1 {
                 chain_id_hash,
@@ -62769,6 +62772,9 @@ mod status_tests {
                 participant_lane_id,
                 participant_dataspace_id,
                 participant_lane_incarnation,
+                participant_validator_set_hash: validator_set_hash,
+                participant_validator_count: validator_count,
+                participant_min_quorum: min_quorum,
                 authority_context_height: 70,
                 coordinator_lane_block_height: 77,
                 coordinator_lane_block_view: 3,
@@ -62777,6 +62783,7 @@ mod status_tests {
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set_hash,
             validator_set: validators.clone(),
+            validator_set_pops: vec![vec![0x5A; 96]; validators.len()],
             signers_bitmap: vec![0b0000_0011],
             bls_aggregate_signature: vec![0xA5; 96],
         };
