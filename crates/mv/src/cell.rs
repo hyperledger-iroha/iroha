@@ -75,11 +75,6 @@ mod view {
         pub fn get(&self) -> &V {
             &self.blocks
         }
-
-        /// Return whether this block has staged a value mutation.
-        pub fn is_dirty(&self) -> bool {
-            self.dirty
-        }
     }
 
     impl<V: Value> Deref for View<'_, V> {
@@ -146,6 +141,11 @@ mod block {
                 blocks.commit();
             }
             revert.commit();
+        }
+
+        /// Return whether this block has staged a value mutation.
+        pub fn is_dirty(&self) -> bool {
+            self.dirty
         }
 
         /// Get mutable access to the value stored in
@@ -375,7 +375,7 @@ mod tests {
                 let mut transaction = block.transaction();
                 *transaction.get_mut() = 1;
             }
-            assert!(!block.dirty);
+            assert!(!block.is_dirty());
             block.commit();
         }
 
@@ -394,7 +394,7 @@ mod tests {
                 let mut transaction = block.transaction();
                 *transaction.get_mut() = 2;
             }
-            assert!(block.dirty);
+            assert!(block.is_dirty());
             block.commit();
         }
 
