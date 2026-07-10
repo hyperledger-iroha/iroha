@@ -1818,7 +1818,7 @@ fn parse_manifest_response(
     if manifest_digest_hex != computed_digest_hex {
         return Err(GatewayManifestError::DigestMismatch {
             provider: provider.to_string(),
-            expected: manifest_digest_hex,
+            expected: manifest_digest_hex.to_string(),
             actual: computed_digest_hex,
         });
     }

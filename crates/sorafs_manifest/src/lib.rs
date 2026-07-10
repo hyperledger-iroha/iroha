@@ -395,7 +395,10 @@ pub use reputation::{
     build_reputation_snapshot, build_reputation_snapshot_with_trust_edges,
     compute_reputation_merkle_root, score_provider_reputation,
 };
-pub use token::{STREAM_TOKEN_MAX_TTL_SECS_V1, StreamTokenBodyV1, StreamTokenError, StreamTokenV1};
+pub use token::{
+    STREAM_TOKEN_MAX_BASE64_BYTES_V1, STREAM_TOKEN_MAX_TTL_SECS_V1, STREAM_TOKEN_MAX_WIRE_BYTES_V1,
+    StreamTokenBodyV1, StreamTokenError, StreamTokenV1,
+};
 pub use validation::{
     ManifestValidationError, PinPolicyConstraints, validate_chunker_handle, validate_manifest,
     validate_pin_policy,
