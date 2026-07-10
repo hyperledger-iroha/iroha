@@ -5630,8 +5630,26 @@ impl Client {
 }
 
 #[cfg(test)]
+fn mk_response(status: StatusCode, body: Vec<u8>, content_type: Option<&str>) -> Response<Vec<u8>> {
+    let mut builder = Response::builder().status(status);
+    if let Some(ct) = content_type {
+        builder = builder.header("content-type", ct);
+    }
+    builder.body(body).unwrap()
+}
+
+#[cfg(test)]
+fn lifecycle_status(enabled: bool) -> LaneLifecycleStatusV1 {
+    let catalog = LaneCatalog::default();
+    let incarnations = std::collections::BTreeMap::from([(
+        LaneId::SINGLE,
+        Hash::new(b"client-lifecycle-status-incarnation"),
+    )]);
+    LaneLifecycleStatusV1::new(enabled, &catalog, &incarnations).expect("valid lifecycle status")
+}
+
+#[cfg(test)]
 mod status_tests {
-    use http::Response as HttpResponse;
     use iroha_telemetry::metrics::{
         BuildStatus, CryptoStatus, GovernanceStatus, Halo2Status, StackStatus,
         SumeragiConsensusStatus,
@@ -5639,28 +5657,6 @@ mod status_tests {
     use norito::json::Value as JsonValue;
 
     use super::*;
-
-    fn mk_response(
-        status: StatusCode,
-        body: Vec<u8>,
-        content_type: Option<&str>,
-    ) -> Response<Vec<u8>> {
-        let mut builder = HttpResponse::builder().status(status);
-        if let Some(ct) = content_type {
-            builder = builder.header("content-type", ct);
-        }
-        builder.body(body).unwrap()
-    }
-
-    fn lifecycle_status(enabled: bool) -> LaneLifecycleStatusV1 {
-        let catalog = LaneCatalog::default();
-        let incarnations = std::collections::BTreeMap::from([(
-            LaneId::SINGLE,
-            Hash::new(b"client-lifecycle-status-incarnation"),
-        )]);
-        LaneLifecycleStatusV1::new(enabled, &catalog, &incarnations)
-            .expect("valid lifecycle status")
-    }
 
     #[test]
     fn decode_status_prefers_norito_bare() {
@@ -6077,7 +6073,11 @@ mod evidence_response_tests {
         let response = mk_response(StatusCode::OK, body, Some(APPLICATION_JSON));
         let error = Client::decode_lane_lifecycle_status_for_test(&response)
             .expect_err("forged lifecycle commitment must fail closed");
-        assert!(error.to_string().contains("catalog hash mismatch"));
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("catalog hash mismatch"),
+            "unexpected error: {message}"
+        );
 
         let response = mk_response(
             StatusCode::OK,
