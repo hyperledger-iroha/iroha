@@ -17,7 +17,7 @@ use std::{
 };
 
 use derive_more::Constructor;
-use iroha_crypto::{HashOf, MerkleProof, PublicKey, SignatureOf};
+use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree, PublicKey, SignatureOf};
 use iroha_data_model_derive::model;
 use iroha_macro::FromVariant;
 use iroha_primitives::{json::Json, numeric::Numeric};
@@ -43,8 +43,9 @@ use crate::{
         id::{AssetDefinitionId, AssetId},
         value::Asset,
     },
-    block::{BlockHeader, SignedBlock},
+    block::{BlockHeader, CertifiedMergeLedgerReference, SignedBlock},
     domain::{Domain, DomainId},
+    merge::MergeLedgerEntry,
     metadata::Metadata,
     name::Name,
     nft::{Nft, NftId},
@@ -1745,6 +1746,31 @@ mod model {
         pub payload: QueryRequestWithAuthority,
     }
 
+    /// Verifiable source metadata for a transaction committed through a merge carrier.
+    #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    /// Proof context for an entrypoint/result pair ordered through a certified merge sidecar.
+    pub struct CertifiedMergeTransactionInclusion {
+        /// Inclusion schema version. Only version one is valid.
+        pub version: u8,
+        /// Canonical hash of the complete merge-ledger entry referenced by the carrier block.
+        pub merge_entry_hash: HashOf<MergeLedgerEntry>,
+        /// Contiguous merge-ledger epoch of the certified entry.
+        pub merge_epoch_id: u64,
+        /// Canonical hash of the self-contained merge execution batch.
+        pub execution_batch_hash: Hash,
+        /// Exact number of entrypoint/result leaves in the batch.
+        pub entrypoint_count: u64,
+        /// Typed Merkle root of entrypoint hashes in canonical merge execution order.
+        pub entrypoint_merkle_root: HashOf<MerkleTree<TransactionEntrypoint>>,
+        /// Typed Merkle root of result hashes in the same order.
+        pub result_merkle_root: HashOf<MerkleTree<TransactionResult>>,
+    }
+
     /// Response returned by [`FindTransactions`] query.
     #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Getters, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -1769,6 +1795,84 @@ mod model {
         pub result_proof: MerkleProof<TransactionResult>,
         /// The result of executing the transaction (trigger sequence or rejection).
         pub result: TransactionResult,
+        /// Certified merge-sidecar proof context, or `None` for an ordinary block entrypoint.
+        #[norito(default)]
+        #[norito(skip_serializing_if = "Option::is_none")]
+        pub merge_inclusion: Option<CertifiedMergeTransactionInclusion>,
+    }
+}
+
+impl CommittedTransaction {
+    /// Verify this transaction's merge proofs against a compact reference from its carrier block.
+    ///
+    /// Ordinary block transactions return `false`; callers should verify those against the block
+    /// header's ordinary entrypoint and result roots instead.
+    #[must_use]
+    pub fn verify_certified_merge_inclusion(
+        &self,
+        reference: &CertifiedMergeLedgerReference,
+    ) -> bool {
+        const MAX_MERKLE_HEIGHT: usize = 32;
+
+        let Some(inclusion) = self.merge_inclusion.as_ref() else {
+            return false;
+        };
+        let expected_merkle_height =
+            inclusion
+                .entrypoint_count
+                .checked_sub(1)
+                .map_or(0, |highest_index| {
+                    usize::try_from(u64::BITS - highest_index.leading_zeros()).unwrap_or(usize::MAX)
+                });
+        if reference.version != 1
+            || inclusion.version != 1
+            || inclusion.entrypoint_count == 0
+            || expected_merkle_height > MAX_MERKLE_HEIGHT
+            || self.entrypoint_proof.audit_path().len() != expected_merkle_height
+            || self.result_proof.audit_path().len() != expected_merkle_height
+            || u64::from(self.entrypoint_proof.leaf_index()) >= inclusion.entrypoint_count
+            || u64::from(self.result_proof.leaf_index()) >= inclusion.entrypoint_count
+            || self.entrypoint_proof.leaf_index() != self.result_proof.leaf_index()
+            || self.entrypoint_hash != self.entrypoint.hash()
+            || self.result_hash != self.result.hash()
+            || reference.entry_hash != inclusion.merge_entry_hash
+            || reference.epoch_id != inclusion.merge_epoch_id
+            || reference.execution_batch_hash != Some(inclusion.execution_batch_hash)
+            || reference.entrypoint_count != Some(inclusion.entrypoint_count)
+            || reference.entrypoint_merkle_root != Some(inclusion.entrypoint_merkle_root)
+            || reference.result_merkle_root != Some(inclusion.result_merkle_root)
+        {
+            return false;
+        }
+        self.entrypoint_proof.clone().verify(
+            &self.entrypoint_hash,
+            &inclusion.entrypoint_merkle_root,
+            MAX_MERKLE_HEIGHT,
+        ) && self.result_proof.clone().verify(
+            &self.result_hash,
+            &inclusion.result_merkle_root,
+            MAX_MERKLE_HEIGHT,
+        )
+    }
+
+    /// Verify this transaction against the exact signed carrier block.
+    ///
+    /// This additionally binds the compact merge reference to `block_hash`, so
+    /// callers cannot accidentally verify a valid sidecar proof against a
+    /// reference copied from a different canonical block.
+    #[must_use]
+    pub fn verify_certified_merge_inclusion_in_block(&self, block: &SignedBlock) -> bool {
+        block.hash() == self.block_hash
+            && block
+                .execution_context()
+                .and_then(|context| context.merge_entry.as_ref())
+                .is_some_and(|reference| {
+                    reference.merge_qc.carrier_height == block.header().height().get()
+                        && block.header().prev_block_hash()
+                            == Some(reference.merge_qc.carrier_parent_hash)
+                        && reference.merge_qc.view == block.header().view_change_index()
+                        && self.verify_certified_merge_inclusion(reference)
+                })
     }
 }
 
@@ -4931,13 +5035,188 @@ pub mod error {
 #[allow(ambiguous_glob_reexports)]
 pub mod prelude {
     pub use super::{
-        CommittedTransaction, QueryBox, QueryRequest, SingularQueryBox, account::prelude::*,
-        asset::prelude::*, block::prelude::*, builder::prelude::*, da::prelude::*,
-        domain::prelude::*, dsl::prelude::*, endorsement::prelude::*, escrow::prelude::*,
-        executor::prelude::*, nft::prelude::*, oracle::prelude::*, parameters::prelude::*,
-        peer::prelude::*, permission::prelude::*, role::prelude::*, rwa::prelude::*,
-        transaction::prelude::*, trigger::prelude::*,
+        CertifiedMergeTransactionInclusion, CommittedTransaction, QueryBox, QueryRequest,
+        SingularQueryBox, account::prelude::*, asset::prelude::*, block::prelude::*,
+        builder::prelude::*, da::prelude::*, domain::prelude::*, dsl::prelude::*,
+        endorsement::prelude::*, escrow::prelude::*, executor::prelude::*, nft::prelude::*,
+        oracle::prelude::*, parameters::prelude::*, peer::prelude::*, permission::prelude::*,
+        role::prelude::*, rwa::prelude::*, transaction::prelude::*, trigger::prelude::*,
     };
+}
+
+#[cfg(test)]
+mod certified_merge_inclusion_tests {
+    use iroha_crypto::{Hash, HashOf, KeyPair, MerkleProof, MerkleTree};
+
+    use super::*;
+    use crate::{
+        account::AccountId,
+        block::CertifiedMergeLedgerReference,
+        merge::{MergeQuorumCertificate, MergeSignerProof},
+        peer::PeerId,
+        transaction::{TransactionBuilder, signed::TransactionResult},
+        trigger::DataTriggerSequence,
+    };
+
+    #[derive(Encode)]
+    struct LegacyCommittedTransaction {
+        block_hash: HashOf<BlockHeader>,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+        entrypoint_proof: MerkleProof<TransactionEntrypoint>,
+        entrypoint: TransactionEntrypoint,
+        result_hash: HashOf<TransactionResult>,
+        result_proof: MerkleProof<TransactionResult>,
+        result: TransactionResult,
+    }
+
+    #[test]
+    fn certified_merge_inclusion_verifies_exact_reference_and_parallel_proofs() {
+        let key_pair = KeyPair::random();
+        let chain_id: crate::ChainId = "merge-query-proof".parse().expect("chain id");
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let signed = TransactionBuilder::new(chain_id, authority)
+            .with_instructions::<crate::isi::InstructionBox>([])
+            .sign(key_pair.private_key());
+        let entrypoint = TransactionEntrypoint::External(signed);
+        let result = TransactionResult::from(Ok(DataTriggerSequence::default()));
+        let entrypoint_hash = entrypoint.hash();
+        let result_hash = result.hash();
+        let entrypoint_tree: MerkleTree<TransactionEntrypoint> =
+            [entrypoint_hash].into_iter().collect();
+        let result_tree: MerkleTree<TransactionResult> = [result_hash].into_iter().collect();
+        let entrypoint_merkle_root = entrypoint_tree.root().expect("non-empty entrypoint tree");
+        let result_merkle_root = result_tree.root().expect("non-empty result tree");
+        let merge_entry_hash = HashOf::from_untyped_unchecked(Hash::new(b"merge-entry"));
+        let execution_batch_hash = Hash::new(b"merge-batch");
+        let validators = Vec::<PeerId>::new();
+        let reference = CertifiedMergeLedgerReference {
+            version: 1,
+            entry_hash: merge_entry_hash,
+            encoded_len: 1,
+            epoch_id: 7,
+            execution_batch_hash: Some(execution_batch_hash),
+            entrypoint_count: Some(1),
+            entrypoint_merkle_root: Some(entrypoint_merkle_root),
+            result_merkle_root: Some(result_merkle_root),
+            base_state_height: Some(4),
+            base_state_hash: Some(HashOf::from_untyped_unchecked(Hash::new(b"base-state"))),
+            merge_qc: MergeQuorumCertificate::new(
+                0,
+                7,
+                5,
+                HashOf::from_untyped_unchecked(Hash::new(b"carrier-parent")),
+                Hash::new(b"chain"),
+                1,
+                HashOf::new(&validators),
+                validators,
+                Vec::new(),
+                Vec::<MergeSignerProof>::new(),
+                Vec::new(),
+                Hash::new(b"message"),
+            ),
+        };
+        let inclusion = CertifiedMergeTransactionInclusion {
+            version: 1,
+            merge_entry_hash,
+            merge_epoch_id: 7,
+            execution_batch_hash,
+            entrypoint_count: 1,
+            entrypoint_merkle_root,
+            result_merkle_root,
+        };
+        let committed = CommittedTransaction {
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"carrier-block")),
+            entrypoint_hash,
+            entrypoint_proof: entrypoint_tree.get_proof(0).expect("entrypoint proof"),
+            entrypoint,
+            result_hash,
+            result_proof: result_tree.get_proof(0).expect("result proof"),
+            result,
+            merge_inclusion: Some(inclusion),
+        };
+
+        assert!(committed.verify_certified_merge_inclusion(&reference));
+
+        #[cfg(feature = "transparent_api")]
+        {
+            let carrier_header = BlockHeader::new(
+                core::num::NonZeroU64::new(5).expect("non-zero carrier height"),
+                Some(HashOf::from_untyped_unchecked(Hash::new(b"carrier-parent"))),
+                None,
+                None,
+                10,
+                0,
+            );
+            let mut carrier_builder = crate::block::builder::BlockBuilder::new(carrier_header);
+            carrier_builder.set_execution_context(Some(
+                crate::block::BlockExecutionContextBundle::new(Vec::new())
+                    .with_merge_entry(reference.clone()),
+            ));
+            let carrier = carrier_builder.build(Default::default());
+            let mut block_bound = committed.clone();
+            block_bound.block_hash = carrier.hash();
+            assert!(block_bound.verify_certified_merge_inclusion_in_block(&carrier));
+
+            let other_header = BlockHeader::new(
+                core::num::NonZeroU64::new(5).expect("non-zero carrier height"),
+                Some(HashOf::from_untyped_unchecked(Hash::new(b"carrier-parent"))),
+                None,
+                None,
+                11,
+                0,
+            );
+            let mut other_builder = crate::block::builder::BlockBuilder::new(other_header);
+            other_builder.set_execution_context(Some(
+                crate::block::BlockExecutionContextBundle::new(Vec::new())
+                    .with_merge_entry(reference.clone()),
+            ));
+            let other_carrier = other_builder.build(Default::default());
+            assert!(
+                !block_bound.verify_certified_merge_inclusion_in_block(&other_carrier),
+                "a valid proof and copied reference must not verify against a different block hash"
+            );
+        }
+
+        let mut wrong_reference = reference.clone();
+        wrong_reference.entrypoint_count = Some(2);
+        assert!(!committed.verify_certified_merge_inclusion(&wrong_reference));
+
+        let mut ambiguous_count_reference = reference.clone();
+        ambiguous_count_reference.entrypoint_count = Some(2);
+        let mut ambiguous_count = committed.clone();
+        ambiguous_count
+            .merge_inclusion
+            .as_mut()
+            .expect("merge inclusion")
+            .entrypoint_count = 2;
+        assert!(
+            !ambiguous_count.verify_certified_merge_inclusion(&ambiguous_count_reference),
+            "a one-leaf proof must not be rebound to a two-leaf certified count"
+        );
+
+        let mut wrong_version = reference.clone();
+        wrong_version.version = 2;
+        assert!(!committed.verify_certified_merge_inclusion(&wrong_version));
+
+        let mut misaligned = committed;
+        misaligned.result_proof = MerkleProof::from_audit_path(1, Vec::new());
+        assert!(!misaligned.verify_certified_merge_inclusion(&reference));
+
+        let legacy = LegacyCommittedTransaction {
+            block_hash: misaligned.block_hash,
+            entrypoint_hash: misaligned.entrypoint_hash,
+            entrypoint_proof: misaligned.entrypoint_proof,
+            entrypoint: misaligned.entrypoint,
+            result_hash: misaligned.result_hash,
+            result_proof: misaligned.result_proof,
+            result: misaligned.result,
+        };
+        let encoded = legacy.encode();
+        let mut cursor = encoded.as_slice();
+        let decoded = CommittedTransaction::decode_all(&mut cursor)
+            .expect("legacy committed transaction must decode without merge metadata");
+        assert_eq!(decoded.merge_inclusion, None);
+    }
 }
 
 #[cfg(all(test, feature = "fault_injection"))]
@@ -4988,6 +5267,7 @@ mod fault_injection_tests {
             result_hash: result.hash(),
             result_proof: MerkleProof::from_audit_path(0, vec![]),
             result,
+            merge_inclusion: None,
         }
     }
 
@@ -5050,6 +5330,7 @@ mod fault_injection_tests {
             result_hash: result.hash(),
             result_proof: MerkleProof::from_audit_path(0, vec![]),
             result,
+            merge_inclusion: None,
         }
     }
 
@@ -5199,6 +5480,7 @@ mod tests {
             result_hash: result.hash(),
             result_proof: MerkleProof::from_audit_path(0, vec![]),
             result,
+            merge_inclusion: None,
         }
     }
 

@@ -83,9 +83,9 @@ use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::chunker_registry;
 use sorafs_manifest::deal::{MICRO_XOR_PER_XOR, XorAmount};
 use sorafs_manifest::repair::{
-    REPAIR_ESCALATION_APPROVAL_VERSION_V1, REPAIR_SLASH_PROPOSAL_VERSION_V1,
-    REPAIR_WORKER_SIGNATURE_VERSION_V1, RepairEscalationApprovalV1, RepairSlashProposalV1,
-    RepairTicketId, RepairWorkerActionV1, RepairWorkerSignaturePayloadV1,
+    REPAIR_SLASH_PROPOSAL_VERSION_V1, REPAIR_WORKER_SIGNATURE_VERSION_V1,
+    RepairSlashProposalV1, RepairTicketId, RepairWorkerActionV1,
+    RepairWorkerSignaturePayloadV1,
 };
 use sorafs_manifest::{
     ChunkingProfileV1, DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1, PinPolicy,
@@ -3651,21 +3651,6 @@ pub struct RepairEscalateArgs {
     /// Optional timestamp for the proposal (RFC3339 or `@unix_seconds`).
     #[arg(long = "submitted-at", value_name = "RFC3339|@UNIX")]
     submitted_at: Option<String>,
-    /// Optional approval votes in favor of the slash decision.
-    #[arg(long = "approve-votes", value_name = "COUNT")]
-    approve_votes: Option<u32>,
-    /// Optional approval votes against the slash decision.
-    #[arg(long = "reject-votes", value_name = "COUNT")]
-    reject_votes: Option<u32>,
-    /// Optional approval abstain votes.
-    #[arg(long = "abstain-votes", value_name = "COUNT")]
-    abstain_votes: Option<u32>,
-    /// Optional timestamp when approval was recorded (RFC3339 or `@unix_seconds`).
-    #[arg(long = "approved-at", value_name = "RFC3339|@UNIX")]
-    approved_at: Option<String>,
-    /// Optional timestamp when the decision became final after appeals (RFC3339 or `@unix_seconds`).
-    #[arg(long = "finalized-at", value_name = "RFC3339|@UNIX")]
-    finalized_at: Option<String>,
 }
 
 impl Run for RepairEscalateArgs {
@@ -3692,34 +3677,6 @@ impl RepairEscalateArgs {
         };
         let submitted_at_unix =
             parse_timestamp_or_now(self.submitted_at.as_deref(), "submitted-at")?;
-        let wants_approval = self.approve_votes.is_some()
-            || self.reject_votes.is_some()
-            || self.abstain_votes.is_some()
-            || self.approved_at.is_some()
-            || self.finalized_at.is_some();
-        let approval = if wants_approval {
-            let approve_votes = self.approve_votes.ok_or_else(|| {
-                eyre!("--approve-votes is required when supplying an approval summary")
-            })?;
-            let approved_at = self.approved_at.as_deref().ok_or_else(|| {
-                eyre!("--approved-at is required when supplying an approval summary")
-            })?;
-            let finalized_at = self.finalized_at.as_deref().ok_or_else(|| {
-                eyre!("--finalized-at is required when supplying an approval summary")
-            })?;
-            let approved_at_unix = parse_timestamp_value(approved_at, "approved-at")?;
-            let finalized_at_unix = parse_timestamp_value(finalized_at, "finalized-at")?;
-            Some(RepairEscalationApprovalV1 {
-                version: REPAIR_ESCALATION_APPROVAL_VERSION_V1,
-                approve_votes,
-                reject_votes: self.reject_votes.unwrap_or(0),
-                abstain_votes: self.abstain_votes.unwrap_or(0),
-                approved_at_unix,
-                finalized_at_unix,
-            })
-        } else {
-            None
-        };
         let proposal = RepairSlashProposalV1 {
             version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
             ticket_id,
@@ -3729,7 +3686,10 @@ impl RepairEscalateArgs {
             proposed_penalty_nano: self.penalty_nano,
             submitted_at_unix,
             rationale: self.rationale.clone(),
-            approval,
+            // Approval summaries embedded by the proposal submitter are not an
+            // authority source. The repair store derives decisions only from
+            // its authenticated, durably recorded governance votes.
+            approval: None,
         };
         proposal
             .validate()
@@ -27941,7 +27901,7 @@ mod tests {
     }
 
     #[test]
-    fn repair_escalate_builds_slash_proposal() {
+    fn repair_escalate_builds_unapproved_slash_proposal() {
         let manifest_digest = [0x77_u8; 32];
         let provider_id = [0x88_u8; 32];
         let args = RepairEscalateArgs {
@@ -27952,11 +27912,6 @@ mod tests {
             rationale: "sla_missed".to_string(),
             auditor: None,
             submitted_at: Some("@1700000504".to_string()),
-            approve_votes: Some(2),
-            reject_votes: Some(1),
-            abstain_votes: Some(0),
-            approved_at: Some("@1700000600".to_string()),
-            finalized_at: Some("@1700000700".to_string()),
         };
         let mut ctx = TestContext::new();
         let expected_auditor = ctx.config().account.to_string();
@@ -27968,12 +27923,7 @@ mod tests {
             assert_eq!(proposal.auditor_account, expected_auditor);
             assert_eq!(proposal.proposed_penalty_nano, 900);
             assert_eq!(proposal.submitted_at_unix, 1_700_000_504);
-            let approval = proposal.approval.as_ref().expect("approval");
-            assert_eq!(approval.approve_votes, 2);
-            assert_eq!(approval.reject_votes, 1);
-            assert_eq!(approval.abstain_votes, 0);
-            assert_eq!(approval.approved_at_unix, 1_700_000_600);
-            assert_eq!(approval.finalized_at_unix, 1_700_000_700);
+            assert!(proposal.approval.is_none());
             Ok(Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "application/json")
@@ -27997,11 +27947,6 @@ mod tests {
             rationale: "missing-approval".to_string(),
             auditor: None,
             submitted_at: Some("@1700000605".to_string()),
-            approve_votes: None,
-            reject_votes: None,
-            abstain_votes: None,
-            approved_at: None,
-            finalized_at: None,
         };
         let mut ctx = TestContext::new();
         let expected_auditor = ctx.config().account.to_string();

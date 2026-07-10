@@ -369,12 +369,11 @@ The rollout evidence scripts have focused Python coverage in:
 - `iroha sorafs repair claim --ticket-id <id> --manifest-digest <hex> --provider-id <hex>`: signs a worker claim.
 - `iroha sorafs repair complete --ticket-id <id> --manifest-digest <hex> --provider-id <hex>`: signs a completion update.
 - `iroha sorafs repair fail --ticket-id <id> --manifest-digest <hex> --provider-id <hex>`: signs a failure update.
-- `iroha sorafs repair escalate --ticket-id <id> --manifest-digest <hex> --provider-id <hex> --penalty-nano <n> --rationale <text>`: submits a slash proposal for governance review (approval summary optional).
-- `iroha sorafs repair escalate ... --approve-votes <n> --approved-at <ts> --finalized-at <ts> [--reject-votes <n>] [--abstain-votes <n>]`: attaches a governance approval summary when a decision is already recorded.
+- `iroha sorafs repair escalate --ticket-id <id> --manifest-digest <hex> --provider-id <hex> --penalty-nano <n> --rationale <text>`: submits an unapproved slash proposal for governance review. The CLI never accepts or embeds vote counts or approval timestamps; decisions are derived exclusively from authenticated votes durably recorded by the repair store.
 - `iroha sorafs gc inspect`: reports retained manifests and retention deadlines (read-only).
 - `iroha sorafs gc dry-run`: reports only expired manifests that GC would evict (read-only).
 - CLI commands return JSON payloads from Torii (Norito-encoded values rendered as JSON).
-- Repair status listings include ordered `RepairTaskEventV1` logs for auditability, capped to the most recent transitions to bound payload size.
+- Repair status listings include ordered `RepairTaskEventV1` logs for auditability, capped to the most recent transitions to bound payload size. Every snapshot also returns `events_dropped`, the exact number of omitted oldest events, so truncation is never silent.
 - Torii exposes dedicated local repair event backlog, SSE, and WebSocket
   endpoints at `/v1/sorafs/audit/repair/events`,
   `/v1/sorafs/audit/repair/events/stream`, and
@@ -403,12 +402,12 @@ The rollout evidence scripts have focused Python coverage in:
 | `appeal_window_secs` | `604,800` (7d) | Minimum delay after approval before a decision is final. |
 | `max_penalty_nano` | `1,000,000,000` | Cap on slash penalties (nano-XOR). |
 
-Approval summaries may be attached to slash proposals via `RepairEscalationApprovalV1`:
-`approve_votes`, `reject_votes`, `abstain_votes`, `approved_at_unix`, and
-`finalized_at_unix`. When a summary is present, Torii rejects proposals that do
-not meet quorum, minimum-voter, dispute-window, or appeal-window requirements,
-and penalties are capped to the policy maximum. Proposals without a summary are
-accepted and remain in dispute until votes resolve at the dispute deadline.
+`RepairEscalationApprovalV1` remains a canonical output/reference payload for a
+decision derived from stored votes; it is not accepted as proposal authority.
+Slash proposals carrying an embedded approval summary fail closed. Unapproved
+proposals remain in dispute until authenticated votes satisfy the minimum-voter,
+quorum, dispute-window, and appeal-window policy, and penalties are capped to
+the policy maximum.
 
 ## Rollout Evidence Gate
 

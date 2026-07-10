@@ -24480,6 +24480,9 @@ pub struct SorafsGateway {
     pub enforce_capabilities: bool,
     /// Directory containing SoraNet salt announcements (Norito JSON files).
     pub salt_schedule_dir: Option<PathBuf>,
+    /// Named static-site bindings loaded and cached when Torii starts.
+    #[config(nested)]
+    pub site_bindings: SorafsGatewaySiteBindings,
     /// Rolling-window rate limiting configuration.
     #[config(nested)]
     pub rate_limit: SorafsGatewayRateLimit,
@@ -24508,6 +24511,7 @@ impl Default for SorafsGateway {
             enforce_admission: defaults::sorafs::gateway::ENFORCE_ADMISSION,
             enforce_capabilities: defaults::sorafs::gateway::ENFORCE_CAPABILITIES,
             salt_schedule_dir: None,
+            site_bindings: SorafsGatewaySiteBindings::default(),
             rate_limit: SorafsGatewayRateLimit::default(),
             denylist: SorafsGatewayDenylist::default(),
             acme: SorafsGatewayAcme::default(),
@@ -24526,6 +24530,7 @@ impl SorafsGateway {
             enforce_admission,
             enforce_capabilities,
             salt_schedule_dir,
+            site_bindings,
             rate_limit,
             denylist,
             acme,
@@ -24554,6 +24559,7 @@ impl SorafsGateway {
             enforce_admission,
             enforce_capabilities,
             salt_schedule_dir,
+            site_bindings: site_bindings.parse(),
             cdn_policy_path: None,
             rate_limit: rate_limit.parse(),
             denylist: denylist.parse(),
@@ -24564,6 +24570,39 @@ impl SorafsGateway {
                 explicit_stage.unwrap_or_else(|| rollout_phase.default_anonymity_policy()),
             ),
             direct_mode: direct_mode.map(SorafsGatewayDirectMode::parse),
+        }
+    }
+}
+
+/// User-level source and resource bounds for named static-site bindings.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct SorafsGatewaySiteBindings {
+    /// Optional JSON document path. Relative paths may not contain `.` or `..` components.
+    pub path: Option<PathBuf>,
+    /// Maximum encoded document size accepted at startup.
+    #[config(default = "defaults::sorafs::gateway::site_bindings::MAX_BYTES")]
+    pub max_bytes: Bytes<u64>,
+    /// Maximum number of host entries accepted at startup.
+    #[config(default = "defaults::sorafs::gateway::site_bindings::MAX_SITES")]
+    pub max_sites: NonZeroUsize,
+}
+
+impl Default for SorafsGatewaySiteBindings {
+    fn default() -> Self {
+        Self {
+            path: defaults::sorafs::gateway::site_bindings::path(),
+            max_bytes: defaults::sorafs::gateway::site_bindings::MAX_BYTES,
+            max_sites: defaults::sorafs::gateway::site_bindings::MAX_SITES,
+        }
+    }
+}
+
+impl SorafsGatewaySiteBindings {
+    fn parse(self) -> actual::SorafsGatewaySiteBindings {
+        actual::SorafsGatewaySiteBindings {
+            path: self.path,
+            max_bytes: self.max_bytes,
+            max_sites: self.max_sites,
         }
     }
 }

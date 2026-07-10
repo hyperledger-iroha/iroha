@@ -78,7 +78,7 @@ use sorafs_manifest::{
     OrderbookSettlementReceiptFieldsV1, OrderbookValidationPayloadKindV1, ValidationContextFieldV1,
     ValidationOutcomeV1, build_signed_orderbook_order_cancel_bytes_ed25519_v1,
     build_signed_orderbook_order_request_bytes_ed25519_v1,
-    build_signed_orderbook_settlement_receipt_bytes_ed25519_v1,
+    build_signed_orderbook_settlement_receipt_bytes_ed25519_v1, derive_orderbook_order_id_v1,
     reference_ffi as sorafs_reference_ffi, sign_orderbook_payload_bytes_ed25519_v1,
 };
 use zeroize::Zeroizing;
@@ -86,7 +86,7 @@ use zeroize::Zeroizing;
 #[cfg(feature = "privacy-production-enabled")]
 mod privacy_production;
 
-const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 15;
+const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 16;
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 256 * 1024 * 1024;
 const SORAFS_ORDERBOOK_SIDE_BID: u32 = 1;
 const SORAFS_ORDERBOOK_SIDE_ASK: u32 = 2;
@@ -10670,8 +10670,8 @@ mod offline_note_prover_tests {
     }
 
     #[test]
-    fn bridge_abi_version_advertises_sorafs_hedging_validation() {
-        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 15);
+    fn bridge_abi_version_advertises_sorafs_order_id_derivation() {
+        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 16);
     }
 
     #[test]
@@ -21579,6 +21579,41 @@ fn java_sorafs_reference_sign_orderbook_payload(
     target_os = "macos",
     target_os = "windows"
 ))]
+fn java_sorafs_reference_derive_orderbook_order_id(
+    env: &mut jni::JNIEnv<'_>,
+    owner_account: jni::objects::JByteArray<'_>,
+    nonce: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let owner_account = java_sorafs_orderbook_non_empty(
+            read_java_byte_array(env, &owner_account, "ownerAccount")
+                .ok_or_else(|| "invalid ownerAccount bytes".to_owned())?,
+            "ownerAccount",
+        )?;
+        let nonce = java_sorafs_orderbook_u64(nonce, "nonce")?;
+        if nonce == 0 {
+            return Err("nonce must be positive".to_owned());
+        }
+        let order_id = derive_orderbook_order_id_v1(&owner_account, nonce);
+        env.byte_array_from_slice(&order_id)
+            .map(|array| array.into_raw())
+            .map_err(|err| err.to_string())
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 fn java_sorafs_orderbook_u64(value: jni::sys::jlong, field: &str) -> Result<u64, String> {
     u64::try_from(value).map_err(|_| format!("{field} must be non-negative"))
 }
@@ -21647,12 +21682,25 @@ fn java_sorafs_reference_build_signed_orderbook_order_request(
             read_java_byte_array(env, &inputs.private_key, "privateKey")
                 .ok_or_else(|| "invalid orderbook private key bytes".to_owned())?,
         );
+        let supplied_order_id = java_sorafs_orderbook_fixed32(
+            read_java_byte_array(env, &inputs.order_id, "orderId")
+                .ok_or_else(|| "invalid orderId bytes".to_owned())?,
+            "orderId",
+        )?;
+        let owner_account = java_sorafs_orderbook_non_empty(
+            read_java_byte_array(env, &inputs.owner_account, "ownerAccount")
+                .ok_or_else(|| "invalid ownerAccount bytes".to_owned())?,
+            "ownerAccount",
+        )?;
+        let nonce = java_sorafs_orderbook_u64(inputs.nonce, "nonce")?;
+        let expected_order_id = derive_orderbook_order_id_v1(&owner_account, nonce);
+        if supplied_order_id != expected_order_id {
+            return Err(format!(
+                "orderId must equal the canonical owner-and-nonce derivation {}",
+                hex::encode(expected_order_id)
+            ));
+        }
         let fields = OrderbookOrderRequestFieldsV1 {
-            order_id: java_sorafs_orderbook_fixed32(
-                read_java_byte_array(env, &inputs.order_id, "orderId")
-                    .ok_or_else(|| "invalid orderId bytes".to_owned())?,
-                "orderId",
-            )?,
             side: sorafs_orderbook_side_from_bridge(
                 u32::try_from(inputs.side).map_err(|_| "side must be non-negative".to_owned())?,
             )
@@ -21668,13 +21716,9 @@ fn java_sorafs_reference_build_signed_orderbook_order_request(
             )?,
             quantity_gib: java_sorafs_orderbook_u64(inputs.quantity_gib, "quantityGib")?,
             remaining_gib: java_sorafs_orderbook_u64(inputs.remaining_gib, "remainingGib")?,
-            owner_account: java_sorafs_orderbook_non_empty(
-                read_java_byte_array(env, &inputs.owner_account, "ownerAccount")
-                    .ok_or_else(|| "invalid ownerAccount bytes".to_owned())?,
-                "ownerAccount",
-            )?,
+            owner_account,
             expiry_unix: java_sorafs_orderbook_u64(inputs.expiry_unix, "expiryUnix")?,
-            nonce: java_sorafs_orderbook_u64(inputs.nonce, "nonce")?,
+            nonce,
             maker_fee_bps: java_sorafs_orderbook_fee_bps(inputs.maker_fee_bps, "makerFeeBps")?,
             taker_fee_bps: java_sorafs_orderbook_fee_bps(inputs.taker_fee_bps, "takerFeeBps")?,
         };
@@ -24586,6 +24630,23 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
 ))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeDeriveOrderbookOrderId(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    owner_account: jni::objects::JByteArray<'_>,
+    nonce: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_derive_orderbook_order_id(&mut env, owner_account, nonce)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeBuildSignedOrderbookOrderRequest(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
@@ -24897,6 +24958,23 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
     private_key: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
     java_sorafs_reference_sign_orderbook_payload(&mut env, kind, payload, private_key)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeDeriveOrderbookOrderId(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    owner_account: jni::objects::JByteArray<'_>,
+    nonce: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_derive_orderbook_order_id(&mut env, owner_account, nonce)
 }
 
 #[cfg(any(
@@ -27252,6 +27330,7 @@ fn map_local_fetch_error(err: LocalFetchError) -> c_int {
         LocalFetchError::ScoreboardBuild(_) => ERR_FETCH_SCOREBOARD_BUILD,
         LocalFetchError::Fetch(_) => ERR_FETCH_EXECUTION,
         LocalFetchError::UnknownChunkerHandle(_) => ERR_FETCH_UNKNOWN_CHUNKER,
+        LocalFetchError::IntegrityVerificationDisabled(_) => ERR_FETCH_OPTIONS_JSON,
     }
 }
 
@@ -27847,6 +27926,29 @@ pub unsafe extern "C" fn connect_norito_sorafs_reference_sign_orderbook_payload(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_sorafs_reference_derive_orderbook_order_id(
+    owner_account_ptr: *const c_uchar,
+    owner_account_len: c_ulong,
+    nonce: u64,
+    out_order_id_ptr: *mut c_uchar,
+    out_order_id_len: c_ulong,
+) -> c_int {
+    if out_order_id_ptr.is_null() || out_order_id_len as usize != 32 || nonce == 0 {
+        return ERR_SORAFS_REFERENCE;
+    }
+    let owner_account =
+        match unsafe { sorafs_read_non_empty_bytes(owner_account_ptr, owner_account_len) } {
+            Ok(value) => value,
+            Err(code) => return code,
+        };
+    let order_id = derive_orderbook_order_id_v1(&owner_account, nonce);
+    unsafe {
+        ptr::copy_nonoverlapping(order_id.as_ptr(), out_order_id_ptr, order_id.len());
+    }
+    0
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_sorafs_reference_build_signed_orderbook_order_request(
     order_id_ptr: *const c_uchar,
     order_id_len: c_ulong,
@@ -27875,11 +27977,22 @@ pub unsafe extern "C" fn connect_norito_sorafs_reference_build_signed_orderbook_
         Ok(private_key) => Zeroizing::new(private_key),
         Err(err) => return err.code(),
     };
-    let fields = OrderbookOrderRequestFieldsV1 {
-        order_id: match unsafe { sorafs_read_fixed32(order_id_ptr, order_id_len) } {
+    let supplied_order_id = match unsafe { sorafs_read_fixed32(order_id_ptr, order_id_len) } {
+        Ok(value) => value,
+        Err(code) => return code,
+    };
+    let owner_account =
+        match unsafe { sorafs_read_non_empty_bytes(owner_account_ptr, owner_account_len) } {
             Ok(value) => value,
             Err(code) => return code,
-        },
+        };
+    if nonce == 0 {
+        return ERR_SORAFS_REFERENCE;
+    }
+    if supplied_order_id != derive_orderbook_order_id_v1(&owner_account, nonce) {
+        return ERR_SORAFS_REFERENCE;
+    }
+    let fields = OrderbookOrderRequestFieldsV1 {
         side: match sorafs_orderbook_side_from_bridge(side) {
             Ok(value) => value,
             Err(code) => return code,
@@ -27896,12 +28009,7 @@ pub unsafe extern "C" fn connect_norito_sorafs_reference_build_signed_orderbook_
         },
         quantity_gib,
         remaining_gib,
-        owner_account: match unsafe {
-            sorafs_read_non_empty_bytes(owner_account_ptr, owner_account_len)
-        } {
-            Ok(value) => value,
-            Err(code) => return code,
-        },
+        owner_account,
         expiry_unix,
         nonce,
         maker_fee_bps: match sorafs_fee_bps_from_bridge(maker_fee_bps) {
@@ -35346,12 +35454,27 @@ mod sorafs_tests {
         let private_key = [0xB7; 32];
         let owner = b"merchant@paynet";
         let price = b"1000000";
+        let order_id = derive_orderbook_order_id_v1(owner, 7);
+        let mut derived_order_id = [0_u8; 32];
+        assert_eq!(
+            unsafe {
+                connect_norito_sorafs_reference_derive_orderbook_order_id(
+                    owner.as_ptr(),
+                    owner.len() as c_ulong,
+                    7,
+                    derived_order_id.as_mut_ptr(),
+                    derived_order_id.len() as c_ulong,
+                )
+            },
+            0
+        );
+        assert_eq!(derived_order_id, order_id);
         let mut order_ptr: *mut c_uchar = ptr::null_mut();
         let mut order_len: c_ulong = 0;
 
         let rc = unsafe {
             connect_norito_sorafs_reference_build_signed_orderbook_order_request(
-                [0x11; 32].as_ptr(),
+                order_id.as_ptr(),
                 32,
                 SORAFS_ORDERBOOK_SIDE_BID,
                 SORAFS_ORDERBOOK_TIER_HOT,
@@ -35391,7 +35514,7 @@ mod sorafs_tests {
         let mut cancel_len: c_ulong = 0;
         let cancel_rc = unsafe {
             connect_norito_sorafs_reference_build_signed_orderbook_order_cancel(
-                [0x11; 32].as_ptr(),
+                order_id.as_ptr(),
                 32,
                 owner.as_ptr(),
                 owner.len() as c_ulong,
@@ -35465,6 +35588,90 @@ mod sorafs_tests {
             receipt_outcome.get("status").and_then(JsonValue::as_str),
             Some("Ok")
         );
+    }
+
+    #[test]
+    fn sorafs_reference_order_id_bridge_rejects_noncanonical_inputs() {
+        let owner = b"merchant@paynet";
+        let mut output = [0_u8; 32];
+        assert_eq!(
+            unsafe {
+                connect_norito_sorafs_reference_derive_orderbook_order_id(
+                    owner.as_ptr(),
+                    0,
+                    1,
+                    output.as_mut_ptr(),
+                    output.len() as c_ulong,
+                )
+            },
+            ERR_SORAFS_REFERENCE
+        );
+        assert_eq!(
+            unsafe {
+                connect_norito_sorafs_reference_derive_orderbook_order_id(
+                    owner.as_ptr(),
+                    owner.len() as c_ulong,
+                    1,
+                    ptr::null_mut(),
+                    output.len() as c_ulong,
+                )
+            },
+            ERR_SORAFS_REFERENCE
+        );
+        assert_eq!(
+            unsafe {
+                connect_norito_sorafs_reference_derive_orderbook_order_id(
+                    owner.as_ptr(),
+                    owner.len() as c_ulong,
+                    0,
+                    output.as_mut_ptr(),
+                    output.len() as c_ulong,
+                )
+            },
+            ERR_SORAFS_REFERENCE
+        );
+        assert_eq!(
+            unsafe {
+                connect_norito_sorafs_reference_derive_orderbook_order_id(
+                    owner.as_ptr(),
+                    owner.len() as c_ulong,
+                    1,
+                    output.as_mut_ptr(),
+                    31,
+                )
+            },
+            ERR_SORAFS_REFERENCE
+        );
+
+        let price = b"1000000";
+        let private_key = [0xB7; 32];
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+        let rc = unsafe {
+            connect_norito_sorafs_reference_build_signed_orderbook_order_request(
+                [0x11; 32].as_ptr(),
+                32,
+                SORAFS_ORDERBOOK_SIDE_BID,
+                SORAFS_ORDERBOOK_TIER_HOT,
+                price.as_ptr(),
+                price.len() as c_ulong,
+                12,
+                12,
+                owner.as_ptr(),
+                owner.len() as c_ulong,
+                1_700_010_000,
+                7,
+                25,
+                30,
+                private_key.as_ptr(),
+                private_key.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(rc, ERR_SORAFS_REFERENCE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
     }
 
     #[test]

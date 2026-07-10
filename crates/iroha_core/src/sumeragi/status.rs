@@ -9315,6 +9315,7 @@ mod tests {
             validator_set: proposal.descriptor.validator_set.clone(),
             signers_bitmap: vec![0b0000_0001],
             bls_aggregate_signature: vec![seed.max(1)],
+            payload_availability_qc: None,
         };
         let commit_qc = LaneBlockQcV1 {
             body: proposal.vote_body(CertPhase::Commit),
@@ -9323,6 +9324,7 @@ mod tests {
             validator_set: proposal.descriptor.validator_set.clone(),
             signers_bitmap: vec![0b0000_0001],
             bls_aggregate_signature: vec![seed.max(1)],
+            payload_availability_qc: None,
         };
         let session = crate::lane_consensus::CommittedLaneBlockSession {
             proposal,

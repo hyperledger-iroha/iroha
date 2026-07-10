@@ -5,8 +5,8 @@ import java.net.URI
 import java.net.URISyntaxException
 
 private const val MAX_PROVIDER_NAME_BYTES = 128
-private const val MAX_STREAM_TOKEN_ENCODED_BYTES = 90 * 1024
-private const val MAX_STREAM_TOKEN_DECODED_BYTES = 64 * 1024
+private const val MAX_STREAM_TOKEN_ENCODED_BYTES = 4 * 1024
+private const val MAX_STREAM_TOKEN_DECODED_BYTES = 2 * 1024
 
 internal object SorafsInputValidator {
 

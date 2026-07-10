@@ -48,8 +48,9 @@ pub use limits::{
 pub use pin::{PinAuthError, PinPolicyError, PinSubmissionPolicy};
 #[cfg(feature = "app_api")]
 pub use por::{
-    FilesystemGovernancePublisher, GovernancePublisher, PorAutomationError, PorCoordinatorRuntime,
-    PorStorage, RandomnessProvider, VrfProvider,
+    DrandHttpRandomnessProvider, FilesystemGovernancePublisher, GovernancePublisher,
+    PorAutomationError, PorCoordinatorRuntime, PorStorage, RandomnessProvider, VerifiedVrfProvider,
+    VrfError, VrfProvider,
 };
 pub use por::{PorCoordinator, PorCoordinatorError, PorStatusExportV1, PorStatusFilter};
 pub(crate) use quota::{StreamTokenQuotaError, StreamTokenQuotaTracker};

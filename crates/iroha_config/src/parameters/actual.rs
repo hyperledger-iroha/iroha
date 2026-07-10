@@ -8119,6 +8119,8 @@ pub struct SorafsGateway {
     pub enforce_capabilities: bool,
     /// Directory containing SoraNet salt announcements (Norito JSON).
     pub salt_schedule_dir: Option<PathBuf>,
+    /// Named static-site bindings loaded and cached when Torii starts.
+    pub site_bindings: SorafsGatewaySiteBindings,
     /// Optional CDN policy payload (GarCdnPolicyV1) loaded from disk.
     pub cdn_policy_path: Option<PathBuf>,
     /// Client-facing rate limit configuration.
@@ -8144,6 +8146,7 @@ impl Default for SorafsGateway {
             enforce_admission: defaults::sorafs::gateway::ENFORCE_ADMISSION,
             enforce_capabilities: defaults::sorafs::gateway::ENFORCE_CAPABILITIES,
             salt_schedule_dir: None,
+            site_bindings: SorafsGatewaySiteBindings::default(),
             cdn_policy_path: None,
             rate_limit: SorafsGatewayRateLimit::default(),
             denylist: SorafsGatewayDenylist::default(),
@@ -8165,6 +8168,27 @@ impl SorafsGateway {
     pub fn effective_anonymity_policy(&self) -> SorafsAnonymityStage {
         self.anonymity_policy
             .unwrap_or_else(|| self.rollout_phase.default_anonymity_policy())
+    }
+}
+
+/// Startup-only static-site binding source and resource bounds.
+#[derive(Debug, Clone)]
+pub struct SorafsGatewaySiteBindings {
+    /// Optional absolute or traversal-free relative path to the versioned JSON document.
+    pub path: Option<PathBuf>,
+    /// Maximum encoded bytes read from the document.
+    pub max_bytes: Bytes<u64>,
+    /// Maximum number of host entries accepted from the document.
+    pub max_sites: NonZeroUsize,
+}
+
+impl Default for SorafsGatewaySiteBindings {
+    fn default() -> Self {
+        Self {
+            path: defaults::sorafs::gateway::site_bindings::path(),
+            max_bytes: defaults::sorafs::gateway::site_bindings::MAX_BYTES,
+            max_sites: defaults::sorafs::gateway::site_bindings::MAX_SITES,
+        }
     }
 }
 
@@ -10115,6 +10139,14 @@ mod tests_npos_timeouts {
             gateway.effective_anonymity_policy(),
             SorafsAnonymityStage::MajorityPq
         );
+    }
+
+    #[test]
+    fn sorafs_site_binding_defaults_are_disabled_and_bounded() {
+        let config = SorafsGatewaySiteBindings::default();
+        assert_eq!(config.path, None);
+        assert_eq!(config.max_bytes.get(), 1024 * 1024);
+        assert_eq!(config.max_sites.get(), 1024);
     }
 
     #[test]

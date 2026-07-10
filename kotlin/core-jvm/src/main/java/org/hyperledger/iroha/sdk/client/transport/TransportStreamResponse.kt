@@ -47,7 +47,9 @@ class TransportStreamResponse(
             if (source == null) return emptyMap()
             val copy = TreeMap<String, List<String>>(String.CASE_INSENSITIVE_ORDER)
             for ((key, value) in source) {
-                copy[key] = value?.toList() ?: emptyList()
+                val incoming = value.toList()
+                val existing = copy[key]
+                copy[key] = if (existing == null) incoming else existing + incoming
             }
             return copy
         }

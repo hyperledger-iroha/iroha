@@ -75,7 +75,12 @@ async fn main() -> Result<()> {
         .data_dir(args.data_dir.clone())
         .stream_token_signing_key_path(Some(args.signing_key.clone()))
         .build();
-    let node = sorafs_node::NodeHandle::new(config);
+    let node = sorafs_node::NodeHandle::try_new(config).wrap_err_with(|| {
+        format!(
+            "failed to initialise SoraFS runtime from {}",
+            args.data_dir.display()
+        )
+    })?;
     let dataset =
         GatewayDataset::load_from_storage_with_provider(&node, &args.manifest_digest, provider_id)?;
     let envelope_metadata = fs::metadata(&args.approved_manifest_envelope).wrap_err_with(|| {

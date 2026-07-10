@@ -1718,6 +1718,8 @@ struct AppState {
     #[cfg(feature = "app_api")]
     por_coordinator: Arc<sorafs::PorCoordinator>,
     #[cfg(feature = "app_api")]
+    por_runtime: Option<Arc<sorafs::PorCoordinatorRuntime>>,
+    #[cfg(feature = "app_api")]
     por_auditor_signature_threshold: usize,
     #[cfg(feature = "app_api")]
     sorafs_alias_cache_policy: sorafs::AliasCachePolicy,
@@ -1729,6 +1731,8 @@ struct AppState {
     sorafs_publish_discovery: iroha_config::parameters::actual::SorafsPublishDiscovery,
     #[cfg(feature = "app_api")]
     sorafs_gateway_config: iroha_config::parameters::actual::SorafsGateway,
+    #[cfg(feature = "app_api")]
+    sorafs_site_bindings: Option<Arc<sorafs::site::SiteBindingsDocument>>,
     #[cfg(feature = "app_api")]
     sorafs_gateway_policy: Option<Arc<sorafs::gateway::GatewayPolicy>>,
     #[cfg(feature = "app_api")]
@@ -30571,7 +30575,7 @@ async fn handler_post_sorafs_por_vrf(
             StatusCode::UNPROCESSABLE_ENTITY,
             JsonBody(norito::json!({
                 "error": "sorafs_por_vrf_invalid",
-                "detail": error.to_string(),
+                "detail": (format!("{error:?}")),
             })),
         )
             .into_response();
@@ -30590,12 +30594,12 @@ async fn handler_post_sorafs_por_vrf(
         )
             .into_response();
     };
-    if let Err(error) = submission.verify_signature_for_provider(record.advert_key()) {
+    if submission.signature.public_key.as_slice() != record.advert_key() {
         return (
             StatusCode::UNAUTHORIZED,
             JsonBody(norito::json!({
                 "error": "sorafs_por_vrf_signature_invalid",
-                "detail": error.to_string(),
+                "detail": "submission signer does not match the admitted provider key",
             })),
         )
             .into_response();
@@ -30608,6 +30612,16 @@ async fn handler_post_sorafs_por_vrf(
         )
             .into_response();
     }
+    if let Err(error) = submission.verify_signature_for_provider(record.advert_key()) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            JsonBody(norito::json!({
+                "error": "sorafs_por_vrf_signature_invalid",
+                "detail": (error.to_string()),
+            })),
+        )
+            .into_response();
+    }
     if let Err(error) = app
         .sorafs_limits
         .enforce(sorafs::SorafsAction::PorSubmission, &submission.provider_id)
@@ -30616,7 +30630,7 @@ async fn handler_post_sorafs_por_vrf(
             StatusCode::TOO_MANY_REQUESTS,
             JsonBody(norito::json!({
                 "error": "sorafs_por_vrf_quota_exceeded",
-                "detail": error.to_string(),
+                "detail": (format!("{error:?}")),
             })),
         )
             .into_response();
@@ -30649,7 +30663,7 @@ async fn handler_post_sorafs_por_vrf(
                 status,
                 JsonBody(norito::json!({
                     "error": "sorafs_por_vrf_rejected",
-                    "detail": error.to_string(),
+                    "detail": (error.to_string()),
                 })),
             )
                 .into_response()
@@ -30658,7 +30672,7 @@ async fn handler_post_sorafs_por_vrf(
             StatusCode::INTERNAL_SERVER_ERROR,
             JsonBody(norito::json!({
                 "error": "sorafs_por_vrf_worker_failed",
-                "detail": error.to_string(),
+                "detail": (error.to_string()),
             })),
         )
             .into_response(),
@@ -30913,6 +30927,7 @@ fn enforce_sorafs_repair_worker_auth(
     let record = app
         .sorafs_node
         .repair_task_record(ticket_id)
+        .map_err(crate::routing::repair_scheduler_error)?
         .ok_or_else(|| conversion_error(format!("unknown repair ticket `{ticket_id}`")))?;
     let manifest_digest = {
         let trimmed = manifest_digest_hex.trim_start_matches("0x");
@@ -38118,6 +38133,8 @@ pub struct Torii {
     #[cfg(feature = "app_api")]
     sorafs_gateway: iroha_config::parameters::actual::SorafsGateway,
     #[cfg(feature = "app_api")]
+    sorafs_site_bindings: Option<Arc<sorafs::site::SiteBindingsDocument>>,
+    #[cfg(feature = "app_api")]
     sorafs_gateway_security: Option<GatewaySecurityComponents>,
     #[cfg(feature = "app_api")]
     sorafs_pin_policy: sorafs::PinSubmissionPolicy,
@@ -41005,6 +41022,13 @@ impl Torii {
         let shared_sorafs_node = runtime_deps.sorafs_node.clone();
         #[cfg(feature = "app_api")]
         let shared_sorafs_cache = runtime_deps.sorafs_cache.clone();
+        #[cfg(feature = "app_api")]
+        let sorafs_gateway = config.sorafs_gateway.clone();
+        #[cfg(feature = "app_api")]
+        let sorafs_site_bindings =
+            sorafs::site::load_configured_site_bindings(&config.sorafs_gateway.site_bindings)
+                .unwrap_or_else(|err| panic!("invalid SoraFS static-site bindings: {err}"))
+                .map(Arc::new);
         let vpn_helper_ticket_secret = runtime_deps.vpn_helper_ticket_secret;
         let torii_proxy_bridge_signer = runtime_deps
             .torii_proxy_bridge_signer
@@ -41386,8 +41410,6 @@ impl Torii {
         #[cfg(feature = "app_api")]
         let sorafs_publish_discovery = config.sorafs_discovery.publish.clone();
         #[cfg(feature = "app_api")]
-        let sorafs_gateway = config.sorafs_gateway.clone();
-        #[cfg(feature = "app_api")]
         let sorafs_gateway_security = if sorafs_node.is_enabled() {
             Some(build_sorafs_gateway_security(
                 &config.sorafs_gateway,
@@ -41623,6 +41645,8 @@ impl Torii {
             sorafs_alias_enforcement,
             #[cfg(feature = "app_api")]
             sorafs_gateway,
+            #[cfg(feature = "app_api")]
+            sorafs_site_bindings,
             #[cfg(feature = "app_api")]
             sorafs_gateway_security,
             #[cfg(feature = "app_api")]
@@ -42046,6 +42070,8 @@ impl Torii {
             #[cfg(feature = "app_api")]
             por_coordinator: self.por_coordinator.clone(),
             #[cfg(feature = "app_api")]
+            por_runtime: self.por_runtime.clone(),
+            #[cfg(feature = "app_api")]
             por_auditor_signature_threshold: self.por_auditor_signature_threshold,
             #[cfg(feature = "app_api")]
             sorafs_alias_cache_policy: self.sorafs_alias_cache.clone(),
@@ -42057,6 +42083,8 @@ impl Torii {
             sorafs_publish_discovery: self.sorafs_publish_discovery.clone(),
             #[cfg(feature = "app_api")]
             sorafs_gateway_config: self.sorafs_gateway.clone(),
+            #[cfg(feature = "app_api")]
+            sorafs_site_bindings: self.sorafs_site_bindings.clone(),
             #[cfg(feature = "app_api")]
             sorafs_gateway_policy: gateway_components
                 .as_ref()
@@ -46046,6 +46074,8 @@ pub(crate) mod tests_runtime_handlers {
         #[cfg(feature = "app_api")]
         let sorafs_gateway_config = iroha_config::parameters::actual::SorafsGateway::default();
         #[cfg(feature = "app_api")]
+        let sorafs_site_bindings = None;
+        #[cfg(feature = "app_api")]
         let sorafs_pin_policy = sorafs::PinSubmissionPolicy::from_config(
             &iroha_config::parameters::actual::SorafsStoragePin::default(),
         )
@@ -46276,6 +46306,8 @@ pub(crate) mod tests_runtime_handlers {
             sorafs_publish_discovery,
             #[cfg(feature = "app_api")]
             sorafs_gateway_config,
+            #[cfg(feature = "app_api")]
+            sorafs_site_bindings,
             #[cfg(feature = "app_api")]
             sorafs_gateway_policy: None,
             #[cfg(feature = "app_api")]

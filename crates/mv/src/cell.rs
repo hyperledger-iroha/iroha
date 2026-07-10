@@ -366,6 +366,22 @@ mod tests {
     }
 
     #[test]
+    fn block_dirty_flag_tracks_staged_mutation() {
+        let cell = Cell::new(0_u64);
+        let mut block = cell.block();
+
+        assert!(!block.is_dirty());
+        assert_eq!(block.get(), &0);
+        assert!(
+            !block.is_dirty(),
+            "read-only access must keep the block clean"
+        );
+
+        *block.get_mut() = 1;
+        assert!(block.is_dirty());
+    }
+
+    #[test]
     fn aborted_transaction_dirty_commit_keeps_state_unchanged() {
         let cell = Cell::new(0_u64);
 

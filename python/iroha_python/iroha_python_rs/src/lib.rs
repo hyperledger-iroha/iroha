@@ -144,6 +144,7 @@ use sorafs_manifest::{
     build_signed_orderbook_order_request_bytes_ed25519_v1,
     build_signed_orderbook_settlement_receipt_bytes_ed25519_v1,
     capacity::ReplicationOrderV1,
+    derive_orderbook_order_id_v1,
     pin_registry::{
         AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
     },
@@ -4623,6 +4624,24 @@ fn sorafs_sign_orderbook_payload_py(
 }
 
 #[pyfunction]
+#[pyo3(name = "sorafs_derive_orderbook_order_id")]
+fn sorafs_derive_orderbook_order_id_py(
+    py: Python<'_>,
+    owner_account: &[u8],
+    nonce: &str,
+) -> PyResult<Py<PyBytes>> {
+    if owner_account.is_empty() {
+        return Err(PyValueError::new_err("owner_account must not be empty"));
+    }
+    let nonce = parse_sorafs_decimal_u64_text_py(nonce, "nonce")?;
+    if nonce == 0 {
+        return Err(PyValueError::new_err("nonce must be positive"));
+    }
+    let order_id = derive_orderbook_order_id_v1(owner_account, nonce);
+    Ok(Py::from(PyBytes::new(py, &order_id)))
+}
+
+#[pyfunction]
 #[pyo3(name = "sorafs_build_signed_orderbook_order_request")]
 #[allow(clippy::too_many_arguments)] // Python field-level constructor surface
 fn sorafs_build_signed_orderbook_order_request_py(
@@ -4641,8 +4660,22 @@ fn sorafs_build_signed_orderbook_order_request_py(
     private_key: &[u8],
 ) -> PyResult<Py<PyBytes>> {
     let quantity_gib = parse_sorafs_decimal_u64_text_py(quantity_gib, "quantity_gib")?;
+    if owner_account.is_empty() {
+        return Err(PyValueError::new_err("owner_account must not be empty"));
+    }
+    let nonce = parse_sorafs_decimal_u64_text_py(nonce, "nonce")?;
+    if nonce == 0 {
+        return Err(PyValueError::new_err("nonce must be positive"));
+    }
+    let supplied_order_id = sorafs_fixed32_from_bytes_py(order_id, "order_id")?;
+    let expected_order_id = derive_orderbook_order_id_v1(owner_account, nonce);
+    if supplied_order_id != expected_order_id {
+        return Err(PyValueError::new_err(format!(
+            "order_id must equal the canonical owner-and-nonce derivation {}",
+            hex::encode(expected_order_id)
+        )));
+    }
     let fields = OrderbookOrderRequestFieldsV1 {
-        order_id: sorafs_fixed32_from_bytes_py(order_id, "order_id")?,
         side: parse_sorafs_orderbook_side_py(side)?,
         tier: parse_sorafs_orderbook_tier_py(tier)?,
         price_per_gib_micro_xor: parse_sorafs_decimal_u128_text_py(
@@ -4656,7 +4689,7 @@ fn sorafs_build_signed_orderbook_order_request_py(
         },
         owner_account: owner_account.to_vec(),
         expiry_unix: parse_sorafs_decimal_u64_text_py(expiry_unix, "expiry_unix")?,
-        nonce: parse_sorafs_decimal_u64_text_py(nonce, "nonce")?,
+        nonce,
         maker_fee_bps: parse_sorafs_fee_bps_py(maker_fee_bps, "maker_fee_bps")?,
         taker_fee_bps: parse_sorafs_fee_bps_py(taker_fee_bps, "taker_fee_bps")?,
     };
@@ -24116,6 +24149,10 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(sorafs_sign_orderbook_payload_py, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        sorafs_derive_orderbook_order_id_py,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(
         sorafs_build_signed_orderbook_order_request_py,
         module

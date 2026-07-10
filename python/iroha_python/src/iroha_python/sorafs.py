@@ -68,6 +68,7 @@ __all__ = [
     "SORAFS_PDP_PAYLOAD_KINDS",
     "validate_orderbook_payload",
     "sign_orderbook_payload",
+    "derive_orderbook_order_id",
     "build_signed_orderbook_order_request",
     "build_signed_orderbook_order_cancel",
     "build_signed_orderbook_settlement_receipt",
@@ -734,6 +735,22 @@ def sign_orderbook_payload(
     )
 
 
+def derive_orderbook_order_id(
+    owner_account: bytes | bytearray | memoryview,
+    nonce: int | str,
+) -> bytes:
+    """Derive the canonical V1 order id from owner-account bytes and nonce."""
+
+    owner = _bytes_payload(owner_account, "owner_account")
+    if not owner:
+        raise ValueError("owner_account must not be empty")
+    canonical_nonce = _decimal_integer_text(nonce, "nonce", positive=True)
+    order_id = bytes(_crypto.sorafs_derive_orderbook_order_id(owner, canonical_nonce))
+    if len(order_id) != 32:
+        raise RuntimeError("native binding returned a non-32-byte orderbook order id")
+    return order_id
+
+
 def build_signed_orderbook_order_request(
     fields: Mapping[str, Any],
     private_key: bytes | bytearray | memoryview,
@@ -748,9 +765,24 @@ def build_signed_orderbook_order_request(
         positive=True,
     )
     remaining_gib = _optional_field(fields, "remaining_gib", "remainingGib")
+    owner_account = _bytes_field(fields, "owner_account", "owner_account", "ownerAccount")
+    nonce = _decimal_integer_text(
+        _required_field(fields, "nonce", "nonce"),
+        "nonce",
+        positive=True,
+    )
+    order_id = derive_orderbook_order_id(owner_account, nonce)
+    supplied_order_id = _optional_field(fields, "order_id", "orderId")
+    if supplied_order_id is not _MISSING:
+        supplied = _bytes_payload(supplied_order_id, "order_id")
+        if len(supplied) != 32 or supplied != order_id:
+            raise ValueError(
+                "order_id must equal the canonical owner-and-nonce derivation "
+                f"{order_id.hex()}"
+            )
     return bytes(
         _crypto.sorafs_build_signed_orderbook_order_request(
-            _fixed32_field(fields, "order_id", "order_id", "orderId"),
+            order_id,
             str(_required_field(fields, "side", "side")),
             str(_required_field(fields, "tier", "tier")),
             _decimal_integer_text(
@@ -767,17 +799,13 @@ def build_signed_orderbook_order_request(
             None
             if remaining_gib is _MISSING
             else _decimal_integer_text(remaining_gib, "remaining_gib", positive=True),
-            _bytes_field(fields, "owner_account", "owner_account", "ownerAccount"),
+            owner_account,
             _decimal_integer_text(
                 _required_field(fields, "expiry_unix", "expiry_unix", "expiryUnix"),
                 "expiry_unix",
                 positive=True,
             ),
-            _decimal_integer_text(
-                _required_field(fields, "nonce", "nonce"),
-                "nonce",
-                positive=True,
-            ),
+            nonce,
             _orderbook_fee_bps(
                 _required_field(fields, "maker_fee_bps", "maker_fee_bps", "makerFeeBps"),
                 "maker_fee_bps",

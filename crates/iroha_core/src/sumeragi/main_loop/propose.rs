@@ -9,7 +9,7 @@ use crate::state::WorldReadOnly;
 use crate::state::{StateBlock, StateReadOnly};
 use core::num::{NonZeroU64, NonZeroUsize};
 use iroha_data_model::block::{
-    BlockExecutionContextBundle,
+    BlockExecutionContextBundle, CertifiedMergeLedgerReference,
     consensus::{LaneBlockProposalPayloadHintV1, SumeragiLanePayloadOwnership},
 };
 use iroha_data_model::consensus::{
@@ -26,6 +26,14 @@ const PROPOSAL_STALE_WINDOW_TX_QUANTUM: usize = 128;
 const PROPOSAL_STALE_WINDOW_PREP_TX_QUANTUM: usize = 32;
 const PROPOSAL_STALE_WINDOW_FULL_BATCH_PREP_GRACE: usize = 2;
 const PROPOSAL_STALE_WINDOW_MAX_MULTIPLIER: u32 = 8;
+
+const fn should_defer_ordinary_proposal_for_merge(
+    has_queue_work: bool,
+    certified_merge_ready: bool,
+    preparation_grace_active: bool,
+) -> bool {
+    has_queue_work && !certified_merge_ready && preparation_grace_active
+}
 
 #[derive(Debug, Default)]
 struct FinalLanePayloadPlan {
@@ -984,7 +992,16 @@ fn proposal_sccp_commitment_root_after_execution(
         .map_err(|err| eyre!("failed to sign SCCP root probe block: {err}"))?
         .unpack(|_| {})
         .into();
-    let mut state_block = state.block(probe_block.header());
+    let mut state_block = if let Some(reference) = probe_block
+        .execution_context()
+        .and_then(|bundle| bundle.merge_entry.as_ref())
+    {
+        state
+            .block_with_certified_merge_reference(probe_block.header(), reference)
+            .map_err(|err| eyre!("failed to stage certified merge entry for SCCP probe: {err}"))?
+    } else {
+        state.block(probe_block.header())
+    };
     crate::block::ValidBlock::sccp_commitment_root_after_execution(probe_block, &mut state_block)
         .map_err(|err| eyre!("failed to derive SCCP commitment root after execution: {err}"))
 }
@@ -997,11 +1014,26 @@ pub(super) struct InternalProposalWork {
     pub(super) da_commitments: bool,
     pub(super) da_receipts: bool,
     pub(super) da_pin_intents: bool,
+    pub(super) certified_merge: bool,
+    pub(super) autoscale_maintenance: bool,
 }
 
 impl InternalProposalWork {
     pub(super) const fn has_work(self) -> bool {
-        self.time_triggers || self.da_commitments || self.da_receipts || self.da_pin_intents
+        self.time_triggers
+            || self.da_commitments
+            || self.da_receipts
+            || self.da_pin_intents
+            || self.certified_merge
+            || self.autoscale_maintenance
+    }
+
+    const fn has_non_autoscale_work(self) -> bool {
+        self.time_triggers
+            || self.da_commitments
+            || self.da_receipts
+            || self.da_pin_intents
+            || self.certified_merge
     }
 }
 
@@ -1077,6 +1109,8 @@ impl Actor {
         plan_digest: Hash,
         coordinator: RoutingDecision,
         participant: crate::queue::RouteLeg,
+        participant_validator_set: &[PeerId],
+        participant_min_quorum: usize,
         phase: NativeAmxPhase,
         authority_context_height: u64,
         coordinator_lane_block_height: u64,
@@ -1093,6 +1127,10 @@ impl Actor {
             .state
             .lane_incarnation_at_height(participant.route.lane_id, authority_context_height)
             .ok_or("native AMX participant lane incarnation is unavailable")?;
+        let participant_validator_count = u32::try_from(participant_validator_set.len())
+            .map_err(|_| "native AMX participant validator count exceeds u32")?;
+        let participant_min_quorum = u32::try_from(participant_min_quorum)
+            .map_err(|_| "native AMX participant quorum exceeds u32")?;
         Ok(NativeAmxAttestationBodyV1 {
             chain_id_hash: self.chain_hash,
             source_id,
@@ -1105,6 +1143,9 @@ impl Actor {
             participant_lane_id: participant.route.lane_id,
             participant_dataspace_id: participant.route.dataspace_id,
             participant_lane_incarnation,
+            participant_validator_set_hash: HashOf::new(&participant_validator_set.to_vec()),
+            participant_validator_count,
+            participant_min_quorum,
             authority_context_height,
             coordinator_lane_block_height,
             coordinator_lane_block_view,
@@ -1112,32 +1153,67 @@ impl Actor {
         })
     }
 
-    fn native_amx_vote_roster(&self, participant_lane: LaneId, block_height: u64) -> Vec<PeerId> {
+    fn native_amx_vote_roster(
+        &self,
+        participant_lane: LaneId,
+        block_height: u64,
+    ) -> Result<(Vec<PeerId>, Vec<Vec<u8>>, usize), &'static str> {
         let mut roster = self
             .state
             .authoritative_lane_peer_ids_at_height(participant_lane, block_height);
-        roster.retain(roster_member_allowed_bls);
         roster.sort();
-        roster.dedup();
-        roster
+        if roster.is_empty()
+            || roster.len() > crate::native_amx::MAX_NATIVE_AMX_VALIDATORS
+            || roster.windows(2).any(|pair| pair[0] == pair[1])
+            || roster.iter().any(|peer| !roster_member_allowed_bls(peer))
+        {
+            return Err("native AMX participant lane attestation roster is malformed");
+        }
+        let world = self.state.world_view();
+        let pops = roster
+            .iter()
+            .map(|peer| {
+                crate::state::live_consensus_key_pop_for_peer(&world, peer, block_height)
+                    .filter(|pop| {
+                        pop.len() == crate::native_amx::NATIVE_AMX_BLS_PROOF_BYTES
+                            && iroha_crypto::bls_normal_pop_verify(peer.public_key(), pop).is_ok()
+                    })
+                    .ok_or("native AMX participant validator is missing a valid historical PoP")
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let min_signers =
+            crate::sumeragi::network_topology::commit_quorum_from_len(roster.len()).max(1);
+        Ok((roster, pops, min_signers))
     }
 
     fn native_amx_receipt_for_plan(
         &mut self,
         tx: &AcceptedTransaction<'_>,
         plan: &crate::queue::RoutingPlan,
-        block_height: u64,
+        authority_context_height: u64,
+        coordinator_proposal: &crate::sumeragi::consensus::LaneBlockProposalV1,
     ) -> Result<Option<NativeAmxReceipt>, &'static str> {
         let crate::queue::RoutingPlan::NativeAmx(native_plan) = plan else {
             return Ok(None);
         };
         let coordinator = native_plan.coordinator.route;
-        let coordinator_proposal_hash = Hash::new_from_chunks(&[
-            b"iroha:native-amx:legacy-global-session:v1\0",
-            tx.hash_as_entrypoint().as_ref(),
-            native_plan.plan_digest.as_ref(),
-            &block_height.to_be_bytes(),
-        ]);
+        crate::lane_consensus::validate_lane_block_proposal(coordinator_proposal)
+            .map_err(|_| "native AMX coordinator lane proposal is malformed")?;
+        let coordinator_descriptor = &coordinator_proposal.descriptor;
+        let tx_entrypoint_hash = Hash::from(tx.hash_as_entrypoint());
+        if coordinator_descriptor.lane_id != coordinator.lane_id
+            || coordinator_descriptor.dataspace_id != coordinator.dataspace_id
+            || coordinator_descriptor.proposal_height != authority_context_height
+            || coordinator_descriptor
+                .accepted_transaction_hashes
+                .iter()
+                .filter(|hash| **hash == tx_entrypoint_hash)
+                .count()
+                != 1
+        {
+            return Err("native AMX coordinator lane proposal does not own the transaction");
+        }
+        let coordinator_proposal_hash = coordinator_proposal.proposal_hash;
         let plan_legs = plan.legs();
         let key = {
             let mut source_id = [0u8; iroha_crypto::Hash::LENGTH];
@@ -1151,23 +1227,19 @@ impl Actor {
         let mut pending = false;
         let mut legs = Vec::with_capacity(native_plan.participants.len());
         for participant in &native_plan.participants {
-            let validator_set =
-                self.native_amx_vote_roster(participant.route.lane_id, block_height);
-            if validator_set.is_empty() {
-                return Err("native AMX participant lane attestation roster is empty");
-            }
-            let min_signers =
-                crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len())
-                    .max(1);
+            let (validator_set, validator_set_pops, min_signers) =
+                self.native_amx_vote_roster(participant.route.lane_id, authority_context_height)?;
             let prepare_body = self.native_amx_attestation_body(
                 tx,
                 native_plan.plan_digest,
                 coordinator,
                 *participant,
+                &validator_set,
+                min_signers,
                 NativeAmxPhase::Prepare,
-                block_height,
-                block_height,
-                0,
+                authority_context_height,
+                coordinator_descriptor.lane_block_height,
+                coordinator_descriptor.lane_block_view,
                 coordinator_proposal_hash,
             )?;
             let commit_body = self.native_amx_attestation_body(
@@ -1175,10 +1247,12 @@ impl Actor {
                 native_plan.plan_digest,
                 coordinator,
                 *participant,
+                &validator_set,
+                min_signers,
                 NativeAmxPhase::Commit,
-                block_height,
-                block_height,
-                0,
+                authority_context_height,
+                coordinator_descriptor.lane_block_height,
+                coordinator_descriptor.lane_block_view,
                 coordinator_proposal_hash,
             )?;
 
@@ -1199,10 +1273,20 @@ impl Actor {
                     NativeAmxAttestationRequestV1 {
                         body: prepare_body,
                         plan_legs: plan_legs.clone(),
+                        coordinator_proposal: coordinator_proposal.clone(),
+                        prepare_qc: None,
                     },
                 );
                 continue;
             }
+            let prepare_qc = aggregate_votes_to_qc(
+                prepare_body,
+                validator_set.clone(),
+                validator_set_pops.clone(),
+                &prepare_votes,
+                min_signers,
+            )
+            .map_err(|_| "native AMX prepare QC could not be assembled")?;
             if commit_votes.len() < min_signers {
                 pending = true;
                 self.request_native_amx_attestation_votes(
@@ -1210,21 +1294,17 @@ impl Actor {
                     NativeAmxAttestationRequestV1 {
                         body: commit_body,
                         plan_legs: plan_legs.clone(),
+                        coordinator_proposal: coordinator_proposal.clone(),
+                        prepare_qc: Some(prepare_qc.clone()),
                     },
                 );
                 continue;
             }
 
-            let prepare_qc = aggregate_votes_to_qc(
-                prepare_body,
-                validator_set.clone(),
-                &prepare_votes,
-                min_signers,
-            )
-            .map_err(|_| "native AMX prepare QC could not be assembled")?;
             let commit_qc = aggregate_votes_to_qc(
                 commit_body,
                 validator_set.clone(),
+                validator_set_pops,
                 &commit_votes,
                 min_signers,
             )
@@ -1253,25 +1333,53 @@ impl Actor {
             dataspace_id: coordinator.dataspace_id,
             lane_incarnation: self
                 .state
-                .lane_incarnation_at_height(coordinator.lane_id, block_height)
+                .lane_incarnation_at_height(coordinator.lane_id, authority_context_height)
                 .ok_or("native AMX coordinator lane incarnation is unavailable")?,
-            authority_context_height: block_height,
-            lane_block_height: block_height,
-            lane_block_view: 0,
+            authority_context_height,
+            lane_block_height: coordinator_descriptor.lane_block_height,
+            lane_block_view: coordinator_descriptor.lane_block_view,
             coordinator_proposal_hash,
             legs,
         }))
     }
 
-    fn native_amx_receipts_for_batch(
+    pub(super) fn native_amx_receipts_for_batch(
         &mut self,
         tx_batch: &[AcceptedTransaction<'static>],
         routing_plan_batch: &[crate::queue::RoutingPlan],
-        block_height: u64,
+        authority_context_height: u64,
+        coordinator_proposals: &[crate::sumeragi::consensus::LaneBlockProposalV1],
     ) -> Result<Vec<Option<NativeAmxReceipt>>, &'static str> {
         let mut receipts = Vec::with_capacity(tx_batch.len());
         for (tx, plan) in tx_batch.iter().zip(routing_plan_batch) {
-            receipts.push(self.native_amx_receipt_for_plan(tx, plan, block_height)?);
+            if !matches!(plan, crate::queue::RoutingPlan::NativeAmx(_)) {
+                receipts.push(None);
+                continue;
+            }
+            let coordinator = plan.coordinator_route();
+            let tx_hash = Hash::from(tx.hash_as_entrypoint());
+            let mut matches = coordinator_proposals.iter().filter(|proposal| {
+                let descriptor = &proposal.descriptor;
+                descriptor.lane_id == coordinator.lane_id
+                    && descriptor.dataspace_id == coordinator.dataspace_id
+                    && descriptor.proposal_height == authority_context_height
+                    && descriptor
+                        .accepted_transaction_hashes
+                        .iter()
+                        .any(|hash| *hash == tx_hash)
+            });
+            let Some(coordinator_proposal) = matches.next() else {
+                return Err("native AMX coordinator lane proposal is unavailable");
+            };
+            if matches.next().is_some() {
+                return Err("native AMX transaction appears in multiple coordinator proposals");
+            }
+            receipts.push(self.native_amx_receipt_for_plan(
+                tx,
+                plan,
+                authority_context_height,
+                coordinator_proposal,
+            )?);
         }
         Ok(receipts)
     }
@@ -1408,14 +1516,18 @@ impl Actor {
         &mut self,
         proposal_height: u64,
         prev_block: Option<&SignedBlock>,
+        certified_merge: bool,
     ) -> InternalProposalWork {
         let time_triggers = self.proposal_time_triggers_due(proposal_height, prev_block);
+        let autoscale_maintenance = self.autoscale_maintenance_due();
         if !self.runtime_da_enabled() {
             return InternalProposalWork {
                 time_triggers,
                 da_commitments: false,
                 da_receipts: false,
                 da_pin_intents: false,
+                certified_merge,
+                autoscale_maintenance,
             };
         }
         let (da_commitments, da_receipts, da_pin_intents) = self.proposal_da_spool_work();
@@ -1424,7 +1536,82 @@ impl Actor {
             da_commitments,
             da_receipts,
             da_pin_intents,
+            certified_merge,
+            autoscale_maintenance,
         }
+    }
+
+    fn autoscale_maintenance_due(&self) -> bool {
+        let nexus = self.state.nexus_snapshot();
+        if !nexus.enabled || !nexus.autoscale.enabled {
+            return false;
+        }
+        let min_lane = nexus.autoscale.min_lanes.get();
+        let max_lane = nexus.autoscale.max_lanes.get();
+        let policy = &nexus.routing_policy;
+        nexus.lane_catalog.lanes().iter().any(|lane| {
+            lane.id != policy.default_lane
+                && lane.dataspace_id == policy.default_dataspace
+                && (min_lane..max_lane).contains(&lane.id.as_u32())
+                && lane.is_autoscale_managed_elastic()
+        })
+    }
+
+    fn pending_certified_merge_entry_for_proposal(
+        &self,
+        proposal_height: u64,
+        proposal_view: u64,
+        prev_block: Option<&SignedBlock>,
+    ) -> Option<iroha_data_model::merge::MergeLedgerEntry> {
+        let expected_epoch = self
+            .state
+            .merge_ledger()
+            .latest()
+            .map_or(1, |latest| latest.epoch_id.saturating_add(1));
+        let round_builder = BlockBuilder::new(Vec::new()).chain(proposal_view, prev_block);
+        let round_header = round_builder.carrier_context_header();
+        if round_header.height().get() != proposal_height {
+            return None;
+        }
+        match self
+            .state
+            .select_pending_certified_merge_entry_for_round(&round_header, expected_epoch)
+        {
+            Ok(Some((_, entry, _))) => Some(entry),
+            Ok(None) => None,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    height = proposal_height,
+                    view = proposal_view,
+                    "pending certified merge sidecars could not be inspected; ordinary proposal liveness remains enabled"
+                );
+                None
+            }
+        }
+    }
+
+    fn merge_preparation_grace_active(
+        &self,
+        proposal_height: u64,
+        proposal_view: u64,
+        now: Instant,
+    ) -> bool {
+        let Some(preparation) = self.subsystems.merge.committee.preparation else {
+            return false;
+        };
+        if preparation.round.height != proposal_height
+            || preparation.round.view != proposal_view
+            || self.state.latest_block_hash_fast() != Some(preparation.round.parent_hash)
+        {
+            return false;
+        }
+        let grace = self
+            .effective_timing
+            .get()
+            .commit_quorum_timeout
+            .max(Duration::from_millis(1));
+        now.saturating_duration_since(preparation.started_at) < grace
     }
 
     fn proposal_time_triggers_due(
@@ -2451,6 +2638,7 @@ impl Actor {
 
         Some(crate::lane_consensus::LaneBlockVoteV1 {
             body: vote.body.clone(),
+            payload_availability_vote: None,
             signer: vote.signer.clone(),
             bls_signature: signature.payload().to_vec(),
         })
@@ -4465,6 +4653,11 @@ impl Actor {
             }
             return Ok(false);
         }
+        let mut pending_certified_merge_entry = self.pending_certified_merge_entry_for_proposal(
+            proposal_height,
+            view,
+            prev_block.as_deref(),
+        );
 
         let preflight_elapsed_ms = now.elapsed().as_millis();
         let queue_len = self.queue.queued_len();
@@ -4681,7 +4874,11 @@ impl Actor {
                 );
                 None
             } else {
-                let work = self.internal_proposal_work(proposal_height, prev_block.as_deref());
+                let work = self.internal_proposal_work(
+                    proposal_height,
+                    prev_block.as_deref(),
+                    pending_certified_merge_entry.is_some(),
+                );
                 if !work.has_work() {
                     info!(
                         height,
@@ -4691,7 +4888,24 @@ impl Actor {
                     );
                     return Ok(false);
                 }
-                Some(work)
+                if work.autoscale_maintenance && !work.has_non_autoscale_work() {
+                    let heartbeat = self.build_recovery_heartbeat_transaction(proposal_height)?;
+                    let encoded_len = heartbeat.encoded_len();
+                    transactions.push(heartbeat);
+                    routing_decisions.push(RoutingDecision::default());
+                    routing_plans
+                        .push(crate::queue::RoutingPlan::single(RoutingDecision::default()));
+                    tx_sizes.push(encoded_len);
+                    info!(
+                        height = proposal_height,
+                        view,
+                        queue_len = queue_len_after_pop,
+                        "injecting view-0 autoscale maintenance heartbeat until elastic capacity reaches its floor"
+                    );
+                    None
+                } else {
+                    Some(work)
+                }
             }
         } else {
             None
@@ -4792,12 +5006,95 @@ impl Actor {
             &mut routing_plan_batch,
             &mut tx_sizes,
         );
+
+        if let Some(entry) = pending_certified_merge_entry.as_ref()
+            && let Some(batch) = entry.execution_batch.as_ref()
+        {
+            let merge_entrypoints = batch
+                .lanes
+                .iter()
+                .flat_map(|execution| execution.entrypoint_hashes.iter().copied())
+                .collect::<BTreeSet<_>>();
+            let application_time = batch.application_block_header.creation_time();
+            let mut index = 0;
+            while index < tx_batch.len() {
+                let entrypoint_hash = Hash::from(tx_batch[index].hash_as_entrypoint());
+                if merge_entrypoints.contains(&entrypoint_hash)
+                    || tx_batch[index].creation_time() >= application_time
+                {
+                    let transaction = tx_batch.remove(index);
+                    let _routing = routing_batch.remove(index);
+                    let plan = routing_plan_batch.remove(index);
+                    let _size = tx_sizes.remove(index);
+                    overflow_transactions.push((transaction, plan));
+                } else {
+                    index += 1;
+                }
+            }
+        }
+
+        if let Some(entry) = pending_certified_merge_entry.as_ref() {
+            let merge_probe_builder = if let Some(parent) = prev_block.as_deref() {
+                BlockBuilder::new(tx_batch.clone()).chain(view, Some(parent))
+            } else if let Some(parent_hash) = hash_only_parent_hash {
+                BlockBuilder::new(tx_batch.clone()).chain_with_parent_hash(
+                    view,
+                    parent_height,
+                    parent_hash,
+                )
+            } else {
+                BlockBuilder::new(tx_batch.clone()).chain(view, None)
+            };
+            let merge_probe_builder = if let Some(batch) = entry.execution_batch.as_ref() {
+                merge_probe_builder
+                    .bind_certified_merge_application_context(&batch.application_block_header)
+                    .map_err(str::to_owned)
+            } else {
+                Ok(merge_probe_builder)
+            };
+            let stage_result = merge_probe_builder.and_then(|merge_probe_builder| {
+                self.state
+                    .block_with_certified_merge_entry(
+                        merge_probe_builder.carrier_context_header(),
+                        entry,
+                    )
+                    .map(drop)
+                    .map_err(|err| err.to_string())
+            });
+            if let Err(reason) = stage_result {
+                warn!(
+                    height = proposal_height,
+                    view,
+                    merge_epoch = entry.epoch_id,
+                    reason,
+                    "certified merge sidecar is not eligible for this proposal; continuing without it"
+                );
+                pending_certified_merge_entry = None;
+                if let Some(work) = internal_work.as_mut() {
+                    work.certified_merge = false;
+                }
+            }
+        }
         let tx_prepare_ms = tx_prepare_started_at.elapsed().as_millis();
 
         let native_precheck_started_at = Instant::now();
-        if let Err(reason) =
-            self.native_amx_receipts_for_batch(&tx_batch, &routing_plan_batch, proposal_height)
-        {
+        let native_precheck_hashes = tx_batch
+            .iter()
+            .map(|tx| Hash::from(tx.hash_as_entrypoint()))
+            .collect::<Vec<_>>();
+        let native_precheck_lane_plan = self.plan_final_lane_payload(
+            self.state.as_ref(),
+            &routing_batch,
+            &native_precheck_hashes,
+            proposal_height,
+            view,
+        )?;
+        if let Err(reason) = self.native_amx_receipts_for_batch(
+            &tx_batch,
+            &routing_plan_batch,
+            proposal_height,
+            &native_precheck_lane_plan.lane_block_proposal_artifacts,
+        ) {
             self.queue.release_transaction_guards(&mut tx_guards);
             for (tx, routing) in tx_batch.drain(..).zip(routing_plan_batch.drain(..)) {
                 if crate::tx::is_heartbeat_accepted_transaction(&tx) {
@@ -4838,7 +5135,11 @@ impl Actor {
             }
             let has_internal_work = internal_work
                 .get_or_insert_with(|| {
-                    self.internal_proposal_work(proposal_height, prev_block.as_deref())
+                    self.internal_proposal_work(
+                        proposal_height,
+                        prev_block.as_deref(),
+                        pending_certified_merge_entry.is_some(),
+                    )
                 })
                 .has_work();
             if !has_internal_work {
@@ -4938,6 +5239,14 @@ impl Actor {
                 } else {
                     BlockBuilder::new(tx_batch.clone()).chain(view, None)
                 };
+                if let Some(batch) = pending_certified_merge_entry
+                    .as_ref()
+                    .and_then(|entry| entry.execution_batch.as_ref())
+                {
+                    builder = builder
+                        .bind_certified_merge_application_context(&batch.application_block_header)
+                        .map_err(|reason| eyre!(reason))?;
+                }
                 let routing_ledger_time_ms =
                     u64::try_from(builder.creation_time().as_millis()).unwrap_or(u64::MAX);
                 {
@@ -5302,7 +5611,12 @@ impl Actor {
                     view,
                 )?;
                 let native_amx_receipts = self
-                    .native_amx_receipts_for_batch(&tx_batch, &routing_plan_batch, proposal_height)
+                    .native_amx_receipts_for_batch(
+                        &tx_batch,
+                        &routing_plan_batch,
+                        proposal_height,
+                        &final_lane_payload_plan.lane_block_proposal_artifacts,
+                    )
                     .map_err(|reason| {
                         eyre!("native AMX participant attestations unavailable: {reason}")
                     })?;
@@ -5322,8 +5636,12 @@ impl Actor {
                         }
                     })
                     .collect::<Vec<_>>();
-                let execution_context = BlockExecutionContextBundle::new(execution_context)
+                let mut execution_context = BlockExecutionContextBundle::new(execution_context)
                     .with_lane_payload_ownerships(final_lane_payload_plan.ownerships.clone());
+                if let Some(entry) = pending_certified_merge_entry.as_ref() {
+                    execution_context = execution_context
+                        .with_merge_entry(CertifiedMergeLedgerReference::new(entry));
+                }
                 if !execution_context.is_empty() {
                     builder = builder.with_execution_context(Some(execution_context));
                 }
@@ -5392,11 +5710,51 @@ impl Actor {
                 let payload_bytes = block_payload_bytes(&signed_block);
                 last_payload_encode_ms = payload_encode_started_at.elapsed().as_millis();
                 if da_enabled {
+                    let payload_cap = da_payload_budget(
+                        self.config.rbc.chunk_max_bytes,
+                        self.config.rbc.pending_max_bytes,
+                        self.config.rbc.pending_max_chunks,
+                        self.config.block.max_payload_bytes,
+                    );
+                    if payload_bytes.len() > payload_cap {
+                        if tx_batch.is_empty()
+                            || (tx_batch.len() == 1 && pending_certified_merge_entry.is_none())
+                        {
+                            return Err(eyre!(
+                                "proposal payload size {} exceeds DA/RBC payload cap {payload_cap}",
+                                payload_bytes.len()
+                            ));
+                        }
+                        let excess = payload_bytes.len().saturating_sub(payload_cap);
+                        let removed = trim_batch_for_size_cap_with_plans(
+                            &mut tx_batch,
+                            &mut routing_batch,
+                            &mut routing_plan_batch,
+                            &mut tx_sizes,
+                            &mut removed_for_chunk_cap,
+                            excess,
+                        );
+                        if removed == 0
+                            && let Some(removed_tx) = tx_batch.pop()
+                        {
+                            let _removed_routing = routing_batch
+                                .pop()
+                                .expect("routing batch should align with tx batch");
+                            let removed_plan = routing_plan_batch
+                                .pop()
+                                .expect("routing plan batch should align with tx batch");
+                            let _ = tx_sizes.pop();
+                            removed_for_chunk_cap.push((removed_tx, removed_plan));
+                        }
+                        continue;
+                    }
                     let total_chunks =
                         rbc::chunk_count(payload_bytes.len(), self.config.rbc.chunk_max_bytes);
                     if total_chunks > usize::try_from(RBC_MAX_TOTAL_CHUNKS).expect("fits in usize")
                     {
-                        if tx_batch.len() <= 1 {
+                        if tx_batch.is_empty()
+                            || (tx_batch.len() == 1 && pending_certified_merge_entry.is_none())
+                        {
                             warn!(
                                 height = proposal_height,
                                 view,
@@ -5469,7 +5827,9 @@ impl Actor {
                     &block_created_msg,
                 );
                 if frame_len > self.consensus_payload_frame_cap && !da_enabled {
-                    if tx_batch.len() <= 1 {
+                    if tx_batch.is_empty()
+                        || (tx_batch.len() == 1 && pending_certified_merge_entry.is_none())
+                    {
                         warn!(
                             height = proposal_height,
                             view,
@@ -9253,16 +9613,32 @@ impl Actor {
             return false;
         };
 
+        let prev_block = resolve_prev_block_for_proposal(
+            height,
+            &highest_qc,
+            &self.kura,
+            &self.pending.pending_blocks,
+        );
+        let certified_merge = self
+            .pending_certified_merge_entry_for_proposal(height, view_idx, prev_block.as_deref())
+            .is_some();
+        if should_defer_ordinary_proposal_for_merge(
+            has_queue_work,
+            certified_merge,
+            self.merge_preparation_grace_active(height, view_idx, now),
+        ) {
+            trace!(
+                height,
+                view = view_idx,
+                queue_len = pending_queue_len,
+                "deferring ordinary proposal during bounded merge-candidate preparation grace"
+            );
+            return false;
+        }
         let has_internal_work = if has_queue_work {
             false
         } else {
-            let prev_block = resolve_prev_block_for_proposal(
-                height,
-                &highest_qc,
-                &self.kura,
-                &self.pending.pending_blocks,
-            );
-            self.internal_proposal_work(height, prev_block.as_deref())
+            self.internal_proposal_work(height, prev_block.as_deref(), certified_merge)
                 .has_work()
         };
         let allow_recovery_heartbeat = view_idx > 0 && height == committed_height.saturating_add(1);
@@ -9363,7 +9739,8 @@ mod tests {
         collect_sccp_messages_for_committable_proposal_routes, consensus_queue_backpressure,
         da_payload_budget, drain_aligned_batch, next_cached_slot_timeout_streak,
         refresh_proposal_routing_from_state, relay_tip_descriptor_hash_for_proposal,
-        reorder_vec_by_indices, trim_batch_for_size_cap, trim_batch_for_size_cap_with_plans,
+        reorder_vec_by_indices, should_defer_ordinary_proposal_for_merge, trim_batch_for_size_cap,
+        trim_batch_for_size_cap_with_plans,
     };
     use crate::queue::{
         BackpressureState, ConfigLaneRouter, LaneRouter, RoutingDecision, RoutingPlan,
@@ -9390,6 +9767,22 @@ mod tests {
     use std::borrow::Cow;
     use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn merge_preparation_grace_is_bounded_and_ready_merge_wins() {
+        assert!(should_defer_ordinary_proposal_for_merge(true, false, true));
+        assert!(
+            !should_defer_ordinary_proposal_for_merge(true, false, false),
+            "grace timeout must release ordinary proposal liveness"
+        );
+        assert!(
+            !should_defer_ordinary_proposal_for_merge(true, true, true),
+            "a ready certified merge must proceed without further preparation delay"
+        );
+        assert!(!should_defer_ordinary_proposal_for_merge(
+            false, false, true
+        ));
+    }
 
     fn checked_key_pair() -> KeyPair {
         KeyPair::try_random().expect("proposal fixture key generation should succeed")

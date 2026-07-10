@@ -1898,6 +1898,7 @@ mod tests {
                     crate::ValidationFail::NotPermitted("not permitted".into()),
                 ),
             )),
+            merge_inclusion: None,
         };
         let pct = ProofedCommittedTransaction::new(
             base,

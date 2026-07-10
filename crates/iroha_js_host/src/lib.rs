@@ -236,6 +236,7 @@ use sorafs_manifest::{
     build_signed_orderbook_order_request_bytes_ed25519_v1,
     build_signed_orderbook_settlement_receipt_bytes_ed25519_v1,
     capacity::ReplicationOrderV1,
+    derive_orderbook_order_id_v1,
     pin_registry::{
         AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
     },
@@ -6911,6 +6912,9 @@ fn map_local_fetch_error(err: LocalFetchError) -> napi::Error {
         LocalFetchError::UnknownChunkerHandle(handle) => {
             invalid_arg(format!("unknown chunker handle '{handle}'"))
         }
+        LocalFetchError::IntegrityVerificationDisabled(option) => invalid_arg(format!(
+            "{option} must remain enabled for first-release SoraFS fetch integrity"
+        )),
     }
 }
 
@@ -7445,8 +7449,32 @@ pub fn sorafs_build_signed_orderbook_order_request(
     private_key: Uint8Array,
 ) -> napi::Result<Buffer> {
     let quantity_gib = parse_sorafs_decimal_u64(&quantity_gib, "quantity_gib")?;
+    let owner_account = owner_account.as_ref().to_vec();
+    if owner_account.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "owner_account must not be empty",
+        ));
+    }
+    let nonce = parse_sorafs_decimal_u64(&nonce, "nonce")?;
+    if nonce == 0 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "nonce must be positive",
+        ));
+    }
+    let supplied_order_id = parse_sorafs_fixed32(&order_id, "order_id")?;
+    let expected_order_id = derive_orderbook_order_id_v1(&owner_account, nonce);
+    if supplied_order_id != expected_order_id {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!(
+                "order_id must equal the canonical owner-and-nonce derivation {}",
+                hex::encode(expected_order_id)
+            ),
+        ));
+    }
     let fields = OrderbookOrderRequestFieldsV1 {
-        order_id: parse_sorafs_fixed32(&order_id, "order_id")?,
         side: parse_sorafs_orderbook_side(&side)?,
         tier: parse_sorafs_orderbook_tier(&tier)?,
         price_per_gib_micro_xor: parse_sorafs_decimal_u128(
@@ -7458,15 +7486,40 @@ pub fn sorafs_build_signed_orderbook_order_request(
             Some(value) => parse_sorafs_decimal_u64(&value, "remaining_gib")?,
             None => quantity_gib,
         },
-        owner_account: owner_account.as_ref().to_vec(),
+        owner_account,
         expiry_unix: parse_sorafs_decimal_u64(&expiry_unix, "expiry_unix")?,
-        nonce: parse_sorafs_decimal_u64(&nonce, "nonce")?,
+        nonce,
         maker_fee_bps: parse_sorafs_fee_bps(maker_fee_bps, "maker_fee_bps")?,
         taker_fee_bps: parse_sorafs_fee_bps(taker_fee_bps, "taker_fee_bps")?,
     };
     build_signed_orderbook_order_request_bytes_ed25519_v1(fields, private_key.as_ref())
         .map(Buffer::from)
         .map_err(norito_to_napi)
+}
+
+/// Derive the canonical V1 SoraFS orderbook order id from owner bytes and nonce.
+#[napi]
+#[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
+pub fn sorafs_derive_orderbook_order_id(
+    owner_account: Uint8Array,
+    nonce: String,
+) -> napi::Result<Buffer> {
+    if owner_account.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "owner_account must not be empty",
+        ));
+    }
+    let nonce = parse_sorafs_decimal_u64(&nonce, "nonce")?;
+    if nonce == 0 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "nonce must be positive",
+        ));
+    }
+    Ok(Buffer::from(
+        derive_orderbook_order_id_v1(owner_account.as_ref(), nonce).to_vec(),
+    ))
 }
 
 /// Build and sign a canonical `SoraFS` orderbook cancellation from fields.

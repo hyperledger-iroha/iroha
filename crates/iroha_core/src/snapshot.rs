@@ -28,12 +28,13 @@ use iroha_data_model::{
             RevokeSpaceDirectoryManifest,
         },
     },
+    name::Name,
     nexus::{DataSpaceId, LaneCatalog, LaneId, UniversalAccountId},
     transaction::Executable,
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_logger::prelude::*;
-use mv::storage::StorageReadOnly;
+use mv::storage::{Storage, StorageReadOnly};
 use norito::codec::{DecodeAll, Encode as NoritoEncode};
 use norito::json::{self, JsonSerialize, JsonSerialize as JsonSerializeTrait};
 use sha2::{Digest, Sha256};
@@ -1668,17 +1669,18 @@ fn try_write_snapshot(
     promote_tmp_snapshot_file(&path_to_tmp_sig, &path_to_signature_file)?;
     promote_tmp_snapshot_file(&path_to_tmp_merkle, &path_to_merkle_file)?;
     sync_dir(store_dir.as_ref())?;
-    match state.kura().checkpoint_lane_geometry_after_durable_snapshot(
-        &geometry_checkpoint.lane_config,
-        &geometry_checkpoint.incarnations,
-        &geometry_checkpoint.activation_heights,
-        geometry_checkpoint.height,
-        geometry_checkpoint.block_hash,
-        geometry_checkpoint.state_hash,
-    ) {
-        Ok(summary)
-            if summary.compacted_transitions > 0 || summary.removed_archive_roots > 0 =>
-        {
+    match state
+        .kura()
+        .checkpoint_lane_geometry_after_durable_snapshot(
+            &geometry_checkpoint.lane_config,
+            &geometry_checkpoint.incarnations,
+            &geometry_checkpoint.activation_heights,
+            geometry_checkpoint.height,
+            geometry_checkpoint.block_hash,
+            geometry_checkpoint.state_hash,
+            &geometry_checkpoint.smart_contract_state,
+        ) {
+        Ok(summary) if summary.compacted_transitions > 0 || summary.removed_archive_roots > 0 => {
             info!(
                 compacted_transitions = summary.compacted_transitions,
                 removed_archive_roots = summary.removed_archive_roots,
@@ -1704,6 +1706,7 @@ struct DurableSnapshotGeometryCheckpoint {
     height: u64,
     block_hash: Option<HashOf<BlockHeader>>,
     state_hash: Hash,
+    smart_contract_state: BTreeMap<Name, Vec<u8>>,
 }
 
 fn geometry_checkpoint_from_snapshot_bytes(
@@ -1715,9 +1718,10 @@ fn geometry_checkpoint_from_snapshot_bytes(
             "snapshot root is not a JSON object".to_owned(),
         ))
     })?;
-    let runtime_value = root.get("nexus_runtime").cloned().ok_or_else(|| {
-        TryWriteError::Serialization(json::Error::missing_field("nexus_runtime"))
-    })?;
+    let runtime_value = root
+        .get("nexus_runtime")
+        .cloned()
+        .ok_or_else(|| TryWriteError::Serialization(json::Error::missing_field("nexus_runtime")))?;
     let runtime: SnapshotNexusRuntime =
         json::from_value(runtime_value).map_err(TryWriteError::Serialization)?;
     if runtime.version != SnapshotNexusRuntime::VERSION {
@@ -1726,9 +1730,10 @@ fn geometry_checkpoint_from_snapshot_bytes(
             runtime.version
         ))));
     }
-    let block_hashes_value = root.get("block_hashes").cloned().ok_or_else(|| {
-        TryWriteError::Serialization(json::Error::missing_field("block_hashes"))
-    })?;
+    let block_hashes_value = root
+        .get("block_hashes")
+        .cloned()
+        .ok_or_else(|| TryWriteError::Serialization(json::Error::missing_field("block_hashes")))?;
     let block_hashes: Vec<HashOf<BlockHeader>> =
         json::from_value(block_hashes_value).map_err(TryWriteError::Serialization)?;
     let height = u64::try_from(block_hashes.len()).map_err(|_| {
@@ -1751,7 +1756,9 @@ fn geometry_checkpoint_from_snapshot_bytes(
     let mut incarnations = BTreeMap::new();
     let mut activation_heights = BTreeMap::new();
     for entry in runtime.lane_incarnations {
-        if incarnations.insert(entry.lane_id, entry.incarnation).is_some()
+        if incarnations
+            .insert(entry.lane_id, entry.incarnation)
+            .is_some()
             || activation_heights
                 .insert(entry.lane_id, entry.activation_height)
                 .is_some()
@@ -1761,6 +1768,22 @@ fn geometry_checkpoint_from_snapshot_bytes(
             )));
         }
     }
+
+    let smart_contract_state_value = root
+        .get("world")
+        .and_then(json::Value::as_object)
+        .and_then(|world| world.get("smart_contract_state"))
+        .cloned()
+        .ok_or_else(|| {
+            TryWriteError::Serialization(json::Error::missing_field("world.smart_contract_state"))
+        })?;
+    let smart_contract_storage: Storage<Name, Vec<u8>> =
+        json::from_value(smart_contract_state_value).map_err(TryWriteError::Serialization)?;
+    let smart_contract_state = smart_contract_storage
+        .view()
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
 
     let mut canonical_value = value;
     normalize_mv_cell_fields_in_state_value(&mut canonical_value);
@@ -1774,6 +1797,7 @@ fn geometry_checkpoint_from_snapshot_bytes(
         height,
         block_hash: block_hashes.last().copied(),
         state_hash: Hash::new(canonical_json.as_bytes()),
+        smart_contract_state,
     })
 }
 

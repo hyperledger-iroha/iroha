@@ -620,6 +620,56 @@ impl Actor {
         super::status::set_lane_block_sessions(entries);
     }
 
+    fn authorize_cached_autonomous_lane_payload(
+        &mut self,
+        proposal: &crate::sumeragi::consensus::LaneBlockProposalV1,
+    ) -> bool {
+        let epoch = self.epoch_for_height(proposal.descriptor.proposal_height);
+        let Some(artifact) = self.state.kura().read_autonomous_lane_block_artifact(
+            proposal.descriptor.lane_id,
+            proposal.descriptor.lane_block_height,
+            self.chain_hash,
+            epoch,
+        ) else {
+            return true;
+        };
+        let body = match crate::lane_consensus::lane_payload_availability_body(
+            &artifact.executable_payload,
+            proposal,
+            self.chain_hash,
+            epoch,
+        ) {
+            Ok(body) => body,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    lane_id = proposal.descriptor.lane_id.as_u32(),
+                    lane_block_height = proposal.descriptor.lane_block_height,
+                    lane_block_view = proposal.descriptor.lane_block_view,
+                    "refusing to authorize mismatched autonomous payload session"
+                );
+                return false;
+            }
+        };
+        match self
+            .subsystems
+            .lane_blocks
+            .authorize_payload_availability(proposal, body)
+        {
+            Ok(()) => true,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    lane_id = proposal.descriptor.lane_id.as_u32(),
+                    lane_block_height = proposal.descriptor.lane_block_height,
+                    lane_block_view = proposal.descriptor.lane_block_view,
+                    "refusing to authorize autonomous payload session"
+                );
+                false
+            }
+        }
+    }
+
     fn cache_lane_block_proposal(
         &mut self,
         proposal: crate::sumeragi::consensus::LaneBlockProposalV1,
@@ -662,6 +712,9 @@ impl Actor {
         let proposal_for_repair = proposal.clone();
         match self.subsystems.lane_blocks.insert_proposal(proposal) {
             Ok(crate::lane_consensus::LaneBlockSessionInsertOutcome::Inserted) => {
+                if !self.authorize_cached_autonomous_lane_payload(&proposal_for_repair) {
+                    return LaneBlockProposalIngressOutcome::Dropped;
+                }
                 self.observe_lane_block_proposal_redrive(&proposal_for_repair);
                 self.request_lane_block_payload_hint_repair(
                     &proposal_for_repair,
@@ -679,6 +732,9 @@ impl Actor {
                 LaneBlockProposalIngressOutcome::Inserted
             }
             Ok(crate::lane_consensus::LaneBlockSessionInsertOutcome::Duplicate) => {
+                if !self.authorize_cached_autonomous_lane_payload(&proposal_for_repair) {
+                    return LaneBlockProposalIngressOutcome::Dropped;
+                }
                 self.observe_lane_block_proposal_redrive(&proposal_for_repair);
                 self.request_lane_block_payload_hint_repair(
                     &proposal_for_repair,
@@ -749,6 +805,9 @@ impl Actor {
             .insert_recovered_proposal_replacing_uncommitted_conflict(proposal)
         {
             Ok(crate::lane_consensus::LaneBlockSessionInsertOutcome::Inserted) => {
+                if !self.authorize_cached_autonomous_lane_payload(&proposal_for_repair) {
+                    return LaneBlockProposalIngressOutcome::Dropped;
+                }
                 self.observe_lane_block_proposal_redrive(&proposal_for_repair);
                 self.request_lane_block_payload_hint_repair(
                     &proposal_for_repair,
@@ -766,6 +825,9 @@ impl Actor {
                 LaneBlockProposalIngressOutcome::Inserted
             }
             Ok(crate::lane_consensus::LaneBlockSessionInsertOutcome::Duplicate) => {
+                if !self.authorize_cached_autonomous_lane_payload(&proposal_for_repair) {
+                    return LaneBlockProposalIngressOutcome::Dropped;
+                }
                 self.observe_lane_block_proposal_redrive(&proposal_for_repair);
                 self.request_lane_block_payload_hint_repair(
                     &proposal_for_repair,
@@ -876,6 +938,33 @@ impl Actor {
             return Ok(());
         }
 
+        if vote.payload_availability_vote.is_some() {
+            let key = crate::lane_consensus::LaneBlockSessionKey {
+                lane_id: vote.body.lane_id,
+                dataspace_id: vote.body.dataspace_id,
+                lane_incarnation: vote.body.lane_incarnation,
+                lane_block_height: vote.body.lane_block_height,
+                lane_block_view: vote.body.lane_block_view,
+                proposal_hash: vote.body.proposal_hash,
+            };
+            let Some(proposal) = self.subsystems.lane_blocks.proposal_for_key(&key) else {
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::LaneBlockVote,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::PayloadUnapplied,
+                );
+                return Ok(());
+            };
+            if !self.authorize_cached_autonomous_lane_payload(&proposal) {
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::LaneBlockVote,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::InvalidPayload,
+                );
+                return Ok(());
+            }
+        }
+
         match self.subsystems.lane_blocks.insert_vote(vote, sender) {
             Ok(crate::lane_consensus::LaneBlockSessionInsertOutcome::Inserted) => {
                 self.record_consensus_message_handling(
@@ -948,6 +1037,33 @@ impl Actor {
             return Ok(());
         }
 
+        if qc.payload_availability_qc.is_some() {
+            let key = crate::lane_consensus::LaneBlockSessionKey {
+                lane_id: qc.body.lane_id,
+                dataspace_id: qc.body.dataspace_id,
+                lane_incarnation: qc.body.lane_incarnation,
+                lane_block_height: qc.body.lane_block_height,
+                lane_block_view: qc.body.lane_block_view,
+                proposal_hash: qc.body.proposal_hash,
+            };
+            let Some(proposal) = self.subsystems.lane_blocks.proposal_for_key(&key) else {
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::LaneBlockQc,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::PayloadUnapplied,
+                );
+                return Ok(());
+            };
+            if !self.authorize_cached_autonomous_lane_payload(&proposal) {
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::LaneBlockQc,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::InvalidPayload,
+                );
+                return Ok(());
+            }
+        }
+
         let pops = self.lane_block_qc_signer_pops(&qc);
         match self
             .subsystems
@@ -1009,13 +1125,30 @@ impl Actor {
             // block availability path and do not need this sidecar.
             return true;
         };
+        if qc.payload_availability_qc.is_none() {
+            warn!(
+                lane_id = qc.body.lane_id.as_u32(),
+                lane_block_height = qc.body.lane_block_height,
+                lane_block_view = qc.body.lane_block_view,
+                "refusing autonomous prepare QC without exact signed payload availability proof"
+            );
+            return false;
+        }
         let durable = crate::lane_consensus::DurableLanePayloadAvailabilityCertificateV1 {
-            chain_id_hash: self.chain_hash,
-            epoch,
-            executable_payload_hash: artifact.executable_payload.payload_hash,
             certificate: qc.clone(),
-            signer_pops: self.lane_block_qc_signer_pops(qc),
         };
+        if let Err(err) = crate::lane_consensus::validate_lane_payload_availability_certificate(
+            &durable,
+            &artifact.executable_payload,
+            self.chain_hash,
+            epoch,
+        ) {
+            warn!(
+                ?err,
+                "refusing invalid autonomous payload availability certificate"
+            );
+            return false;
+        }
         match self
             .state
             .kura()
@@ -1784,6 +1917,53 @@ impl Actor {
             return None;
         }
         let body = proposal.vote_body(crate::sumeragi::consensus::Phase::Prepare);
+        let epoch = self.epoch_for_height(proposal.descriptor.proposal_height);
+        let payload_availability_vote = if let Some(artifact) =
+            self.state.kura().read_autonomous_lane_block_artifact(
+                proposal.descriptor.lane_id,
+                proposal.descriptor.lane_block_height,
+                self.chain_hash,
+                epoch,
+            ) {
+            let availability_body = match crate::lane_consensus::lane_payload_availability_body(
+                &artifact.executable_payload,
+                proposal,
+                self.chain_hash,
+                epoch,
+            ) {
+                Ok(body) => body,
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        "skipping READY vote for mismatched autonomous payload"
+                    );
+                    return None;
+                }
+            };
+            let Some(validator_set_pops) =
+                self.lane_block_validator_set_pops(&proposal.descriptor.validator_set)
+            else {
+                warn!("skipping READY vote because historical committee PoPs are incomplete");
+                return None;
+            };
+            match crate::lane_consensus::LanePayloadAvailabilityVoteV1::new_signed(
+                availability_body,
+                local_peer.clone(),
+                validator_set_pops,
+                self.common_config.key_pair.private_key(),
+            ) {
+                Ok(vote) => Some(vote),
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        "skipping READY vote after availability signing failure"
+                    );
+                    return None;
+                }
+            }
+        } else {
+            None
+        };
         let signature = match Signature::try_new(
             self.common_config.key_pair.private_key(),
             &body.signature_preimage(),
@@ -1803,6 +1983,7 @@ impl Actor {
 
         Some(crate::lane_consensus::LaneBlockVoteV1 {
             body,
+            payload_availability_vote,
             signer: local_peer.clone(),
             bls_signature: signature.payload().to_vec(),
         })
@@ -2100,6 +2281,31 @@ impl Actor {
                 .iter()
                 .map(|reservation| reservation.routing_plan().clone())
                 .collect::<Vec<_>>();
+            let accepted_transactions = reservations
+                .iter()
+                .map(crate::queue::LaneReservedTransaction::clone_accepted)
+                .collect::<Vec<_>>();
+            let native_amx_receipts = match self.native_amx_receipts_for_batch(
+                &accepted_transactions,
+                &routing_plans,
+                proposal_height,
+                std::slice::from_ref(&proposal),
+            ) {
+                Ok(receipts) => receipts,
+                Err(reason) => {
+                    debug!(
+                        lane_id = lane_id.as_u32(),
+                        lane_block_height,
+                        reason,
+                        "deferring autonomous lane payload while native AMX attestations converge"
+                    );
+                    self.release_unpersisted_lane_reservations(
+                        &reservations,
+                        "native_amx_attestations_pending",
+                    );
+                    continue;
+                }
+            };
             let payload =
                 match crate::lane_consensus::LaneExecutablePayloadV1::new_signed_with_reservations(
                     self.chain_hash,
@@ -2108,6 +2314,7 @@ impl Actor {
                     entrypoints,
                     reservation_keys,
                     routing_plans,
+                    native_amx_receipts,
                     local_peer.clone(),
                     self.common_config.key_pair.private_key(),
                 ) {
@@ -2649,6 +2856,7 @@ impl Actor {
 
         Some(crate::lane_consensus::LaneBlockVoteV1 {
             body,
+            payload_availability_vote: None,
             signer: local_peer.clone(),
             bls_signature: signature.payload().to_vec(),
         })
@@ -3019,6 +3227,42 @@ impl Actor {
             }
         }
         pops
+    }
+
+    fn lane_block_validator_set_pops(&self, validator_set: &[PeerId]) -> Option<Vec<Vec<u8>>> {
+        if validator_set.is_empty()
+            || validator_set.len() > crate::lane_consensus::MAX_LANE_BLOCK_VALIDATORS
+        {
+            return None;
+        }
+        let trusted = self.common_config.trusted_peers.value();
+        validator_set
+            .iter()
+            .map(|validator| {
+                if validator.public_key().try_algorithm().ok()
+                    != Some(iroha_crypto::Algorithm::BlsNormal)
+                {
+                    return None;
+                }
+                let public_key = validator.public_key();
+                let pop = if public_key == self.common_config.key_pair.public_key() {
+                    iroha_crypto::bls_normal_pop_prove(self.common_config.key_pair.private_key())
+                        .ok()?
+                } else {
+                    self.roster_validation_cache
+                        .pops
+                        .get(public_key)
+                        .or_else(|| trusted.pops.get(public_key))?
+                        .clone()
+                };
+                if pop.len() != crate::lane_consensus::LANE_BLS_PROOF_BYTES
+                    || iroha_crypto::bls_normal_pop_verify(public_key, &pop).is_err()
+                {
+                    return None;
+                }
+                Some(pop)
+            })
+            .collect()
     }
 
     fn lane_new_view_certificate_signer_pops(
@@ -3459,6 +3703,9 @@ fn lane_block_session_error_reason(
         | crate::lane_consensus::LaneBlockSessionError::EntrypointAlreadyClaimed
         | crate::lane_consensus::LaneBlockSessionError::VoteProposalMismatch
         | crate::lane_consensus::LaneBlockSessionError::VoteSignerNotInValidatorSet
+        | crate::lane_consensus::LaneBlockSessionError::AvailabilityNotAuthorized
+        | crate::lane_consensus::LaneBlockSessionError::AvailabilityMismatch
+        | crate::lane_consensus::LaneBlockSessionError::CommitBeforePrepareQc
         | crate::lane_consensus::LaneBlockSessionError::QcProposalMismatch
         | crate::lane_consensus::LaneBlockSessionError::ConflictingQc => {
             super::status::ConsensusMessageReason::InvalidPayload

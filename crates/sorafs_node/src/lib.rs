@@ -189,6 +189,7 @@ const GOVERNANCE_PUBLISH_INDEX_SCHEMA: &str = "sorafs.governance_dag.local_publi
 const APPEAL_FINANCE_WEEKLY_ROLLUP_KIND: &str = "appeal_finance_weekly_rollup";
 const ORDERBOOK_STATE_DIR: &str = "orderbook";
 const ORDERBOOK_RUNTIME_SNAPSHOT_FILE: &str = "runtime-snapshot.to";
+const ORDERBOOK_RUNTIME_STATE_VERSION_V1: u8 = 1;
 const MODERATION_MODEL_REGISTRY_DIR: &str = "moderation-model-registry";
 const MODERATION_MODEL_REGISTRY_SNAPSHOT_FILE: &str = "registry-snapshot.to";
 const MODERATION_SCREENING_DIR: &str = "moderation-screening";
@@ -196,12 +197,15 @@ const MODERATION_SCREENING_SNAPSHOT_FILE: &str = "screening-snapshot.to";
 const MODERATION_QUARANTINE_OBJECT_STORE_DIR: &str = "moderation-quarantine-objects";
 const MODERATION_QUARANTINE_OBJECT_INDEX_FILE: &str = "object-index.to";
 const MODERATION_QUARANTINE_OBJECT_KEY_FILE: &str = "local-seal.key";
+const MODERATION_QUARANTINE_OBJECT_STORE_MAX_DEPTH: usize = 4;
 const MODERATION_EVIDENCE_VIEWER_DIR: &str = "moderation-evidence-viewer";
 const MODERATION_EVIDENCE_VIEWER_SNAPSHOT_FILE: &str = "evidence-viewer-snapshot.to";
 const MODERATION_BALLOT_DIR: &str = "moderation-ballots";
 const MODERATION_BALLOT_SNAPSHOT_FILE: &str = "ballots-snapshot.to";
 const AUX_RUNTIME_STATE_DIR: &str = "runtime-state";
 const AUX_RUNTIME_STATE_SNAPSHOT_FILE: &str = "auxiliary-snapshot.to";
+const RUNTIME_STATE_INITIALIZATION_FILE: &str = "initialized-v1";
+const RUNTIME_STATE_INITIALIZATION_BYTES: &[u8] = b"sorafs.node.runtime-state.initialized.v1\n";
 const AUX_RUNTIME_STATE_VERSION_V1: u8 = 1;
 const LOCAL_RUNTIME_SNAPSHOT_TMP_EXT: &str = "tmp";
 const EVIDENCE_VIEWER_AUDIT_CYCLE_ID_DOMAIN_V1: &[u8] =
@@ -210,10 +214,10 @@ const PRIVACY_AGGREGATE_ENTRY_ID_DOMAIN_V1: &[u8] =
     b"sorafs.node.transparency.privacy_aggregate.entry_id.v1";
 
 #[cfg(unix)]
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque, hash_map::Entry},
-    env, fs,
+    fs,
     io::{self, ErrorKind, Read, Write},
     path::{Component, Path, PathBuf},
     sync::{Arc, Mutex, RwLock},
@@ -552,7 +556,177 @@ fn auxiliary_runtime_checkpoint_path(data_dir: &Path) -> PathBuf {
         .join(AUX_RUNTIME_STATE_SNAPSHOT_FILE)
 }
 
-fn write_local_checkpoint_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+fn runtime_state_initialization_path(data_dir: &Path) -> PathBuf {
+    data_dir
+        .join(AUX_RUNTIME_STATE_DIR)
+        .join(RUNTIME_STATE_INITIALIZATION_FILE)
+}
+
+fn required_runtime_checkpoint_paths(data_dir: &Path) -> [(&'static str, PathBuf); 7] {
+    [
+        (
+            "orderbook runtime",
+            orderbook_runtime_snapshot_path(data_dir),
+        ),
+        (
+            "moderation model registry",
+            moderation_model_registry_checkpoint_path(data_dir),
+        ),
+        (
+            "moderation screening",
+            moderation_screening_checkpoint_path(data_dir),
+        ),
+        (
+            "moderation quarantine object index",
+            moderation_quarantine_object_index_path(data_dir),
+        ),
+        (
+            "moderation evidence viewer",
+            moderation_evidence_viewer_checkpoint_path(data_dir),
+        ),
+        (
+            "moderation ballot",
+            moderation_ballot_checkpoint_path(data_dir),
+        ),
+        (
+            "auxiliary runtime",
+            auxiliary_runtime_checkpoint_path(data_dir),
+        ),
+    ]
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeCheckpointInitialization {
+    Fresh,
+    Initialized,
+}
+
+fn inspect_runtime_checkpoint_initialization(
+    data_dir: &Path,
+    checkpoint_max_bytes: u64,
+) -> Result<RuntimeCheckpointInitialization, NodeInitError> {
+    let marker_path = runtime_state_initialization_path(data_dir);
+    let marker = read_local_checkpoint_bounded(
+        &marker_path,
+        u64::try_from(RUNTIME_STATE_INITIALIZATION_BYTES.len()).unwrap_or(u64::MAX),
+    )
+    .map_err(|err| NodeInitError::checkpoint("runtime initialization marker", &marker_path, err))?;
+    match marker {
+        Some(bytes) => {
+            if bytes != RUNTIME_STATE_INITIALIZATION_BYTES {
+                return Err(NodeInitError::checkpoint(
+                    "runtime initialization marker",
+                    &marker_path,
+                    "marker contents are not canonical for runtime-state v1",
+                ));
+            }
+            for (component, path) in required_runtime_checkpoint_paths(data_dir) {
+                if read_local_checkpoint_bounded(&path, checkpoint_max_bytes)
+                    .map_err(|err| NodeInitError::checkpoint(component, &path, err))?
+                    .is_none()
+                {
+                    return Err(NodeInitError::checkpoint(
+                        component,
+                        &path,
+                        "checkpoint is missing after runtime initialization",
+                    ));
+                }
+            }
+            Ok(RuntimeCheckpointInitialization::Initialized)
+        }
+        None => {
+            for (component, path) in required_runtime_checkpoint_paths(data_dir) {
+                if read_local_checkpoint_bounded(&path, checkpoint_max_bytes)
+                    .map_err(|err| NodeInitError::checkpoint(component, &path, err))?
+                    .is_some()
+                {
+                    return Err(NodeInitError::checkpoint(
+                        "runtime initialization marker",
+                        &marker_path,
+                        format!(
+                            "marker is missing while {component} checkpoint `{}` exists",
+                            path.display()
+                        ),
+                    ));
+                }
+            }
+            Ok(RuntimeCheckpointInitialization::Fresh)
+        }
+    }
+}
+
+#[derive(Debug)]
+struct LocalCheckpointWriteError {
+    error: io::Error,
+    committed: bool,
+}
+
+impl LocalCheckpointWriteError {
+    fn precommit(error: io::Error) -> Self {
+        Self {
+            error,
+            committed: false,
+        }
+    }
+
+    fn committed(error: io::Error) -> Self {
+        Self {
+            error,
+            committed: true,
+        }
+    }
+
+    fn kind(&self) -> ErrorKind {
+        self.error.kind()
+    }
+}
+
+impl std::fmt::Display for LocalCheckpointWriteError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.committed {
+            write!(
+                formatter,
+                "checkpoint rename committed but durability is uncertain: {}",
+                self.error
+            )
+        } else {
+            self.error.fmt(formatter)
+        }
+    }
+}
+
+impl std::error::Error for LocalCheckpointWriteError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.error)
+    }
+}
+
+impl From<io::Error> for LocalCheckpointWriteError {
+    fn from(error: io::Error) -> Self {
+        Self::precommit(error)
+    }
+}
+
+#[derive(Debug, Error)]
+#[error("{message}")]
+struct RuntimeCheckpointPersistError {
+    message: String,
+    committed: bool,
+}
+
+impl RuntimeCheckpointPersistError {
+    fn precommit(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            committed: false,
+        }
+    }
+}
+
+fn write_local_checkpoint_atomic(
+    path: &Path,
+    bytes: &[u8],
+) -> Result<(), LocalCheckpointWriteError> {
     write_local_checkpoint_atomic_with_mode(path, bytes, false)
 }
 
@@ -560,26 +734,64 @@ fn write_local_checkpoint_atomic_bounded(
     path: &Path,
     bytes: &[u8],
     max_bytes: u64,
-) -> io::Result<()> {
+) -> Result<(), LocalCheckpointWriteError> {
     if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_bytes {
-        return Err(io::Error::other(format!(
-            "checkpoint `{}` is {} bytes, exceeding limit {max_bytes}",
-            path.display(),
-            bytes.len()
+        return Err(LocalCheckpointWriteError::precommit(io::Error::other(
+            format!(
+                "checkpoint `{}` is {} bytes, exceeding limit {max_bytes}",
+                path.display(),
+                bytes.len()
+            ),
         )));
     }
     write_local_checkpoint_atomic(path, bytes)
 }
 
-fn write_local_private_checkpoint_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+fn write_local_private_checkpoint_atomic(
+    path: &Path,
+    bytes: &[u8],
+) -> Result<(), LocalCheckpointWriteError> {
     write_local_checkpoint_atomic_with_mode(path, bytes, true)
 }
 
 fn write_local_checkpoint_atomic_with_mode(
     path: &Path,
     bytes: &[u8],
-    private: bool,
-) -> io::Result<()> {
+    _private: bool,
+) -> Result<(), LocalCheckpointWriteError> {
+    write_local_checkpoint_atomic_with_mode_and_parent_sync(
+        path,
+        bytes,
+        _private,
+        sync_local_checkpoint_parent,
+    )
+}
+
+fn sync_local_checkpoint_parent(parent: &Path) -> io::Result<()> {
+    let directory = fs::File::open(parent)?;
+    directory.sync_all()
+}
+
+fn remove_local_checkpoint_file_durably(path: &Path) -> io::Result<()> {
+    let path = absolute_local_checkpoint_path(path)?;
+    reject_unsafe_checkpoint_ancestors(&path)?;
+    let metadata = fs::symlink_metadata(&path)?;
+    validate_local_checkpoint_file_metadata(&path, &metadata)?;
+    fs::remove_file(&path)?;
+    if let Some(parent) = path.parent() {
+        sync_local_checkpoint_parent(parent)?;
+    }
+    Ok(())
+}
+
+fn write_local_checkpoint_atomic_with_mode_and_parent_sync(
+    path: &Path,
+    bytes: &[u8],
+    _private: bool,
+    parent_sync: fn(&Path) -> io::Result<()>,
+) -> Result<(), LocalCheckpointWriteError> {
+    let path = absolute_local_checkpoint_path(path)?;
+    let path = path.as_path();
     reject_unsafe_checkpoint_ancestors(path)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -587,40 +799,25 @@ fn write_local_checkpoint_atomic_with_mode(
     }
     reject_unsafe_checkpoint_target(path)?;
     let tmp_path = local_checkpoint_tmp_path(path)?;
-    let result = (|| {
+    let result: Result<(), LocalCheckpointWriteError> = (|| {
         let mut options = fs::OpenOptions::new();
         options.write(true).create_new(true);
         set_local_no_follow_flag(&mut options);
         #[cfg(unix)]
-        if private {
-            options.mode(0o600);
-        }
+        options.mode(0o600);
         let mut file = options.open(&tmp_path)?;
         file.write_all(bytes)?;
-        if private {
-            set_local_private_file_permissions(&tmp_path)?;
-        }
+        set_local_private_file_permissions(&tmp_path)?;
         file.sync_all()?;
         reject_unsafe_checkpoint_ancestors(path)?;
         reject_unsafe_checkpoint_target(path)?;
         fs::rename(&tmp_path, path)?;
         if let Some(parent) = path.parent() {
-            let directory = fs::File::open(parent).unwrap_or_else(|err| {
-                panic!(
-                    "checkpoint rename committed but parent directory `{}` could not be opened for sync: {err}",
-                    parent.display()
-                )
-            });
-            directory.sync_all().unwrap_or_else(|err| {
-                panic!(
-                    "checkpoint rename committed but parent directory `{}` could not be synced: {err}",
-                    parent.display()
-                )
-            });
+            parent_sync(parent).map_err(LocalCheckpointWriteError::committed)?;
         }
         Ok(())
     })();
-    if result.is_err() {
+    if result.as_ref().is_err_and(|err| !err.committed) {
         let _ = fs::remove_file(&tmp_path);
     }
     result
@@ -628,16 +825,70 @@ fn write_local_checkpoint_atomic_with_mode(
 
 fn reject_unsafe_checkpoint_target(path: &Path) -> io::Result<()> {
     match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
-            Err(io::Error::other(format!(
-                "checkpoint target `{}` must be a regular file",
-                path.display()
-            )))
-        }
-        Ok(_) => Ok(()),
+        Ok(metadata) => validate_local_checkpoint_file_metadata(path, &metadata),
         Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
         Err(err) => Err(err),
     }
+}
+
+fn absolute_local_checkpoint_path(path: &Path) -> io::Result<PathBuf> {
+    if path.file_name().is_none() {
+        return Err(io::Error::other("checkpoint path must name a file"));
+    }
+    let mut normalized = if path.is_absolute() {
+        PathBuf::new()
+    } else {
+        std::env::current_dir().map_err(|err| {
+            io::Error::new(
+                err.kind(),
+                format!("failed to resolve checkpoint working directory: {err}"),
+            )
+        })?
+    };
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                return Err(io::Error::other(format!(
+                    "checkpoint path `{}` must not contain parent-directory components",
+                    path.display()
+                )));
+            }
+            _ => normalized.push(component.as_os_str()),
+        }
+    }
+    if !normalized.is_absolute() {
+        return Err(io::Error::other(format!(
+            "checkpoint path `{}` could not be resolved absolutely",
+            path.display()
+        )));
+    }
+    Ok(normalized)
+}
+
+fn validate_local_checkpoint_file_metadata(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(io::Error::other(format!(
+            "checkpoint target `{}` must be a regular file",
+            path.display()
+        )));
+    }
+    #[cfg(unix)]
+    {
+        if metadata.nlink() != 1 {
+            return Err(io::Error::other(format!(
+                "checkpoint target `{}` must have exactly one hard link",
+                path.display()
+            )));
+        }
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(io::Error::other(format!(
+                "checkpoint target `{}` must not be accessible by group or other users",
+                path.display()
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn reject_unsafe_checkpoint_ancestors(path: &Path) -> io::Result<()> {
@@ -669,22 +920,33 @@ fn reject_unsafe_checkpoint_ancestors(path: &Path) -> io::Result<()> {
             Err(err) => return Err(err),
         }
     }
+    #[cfg(unix)]
+    {
+        match fs::symlink_metadata(parent) {
+            Ok(metadata) if metadata.permissions().mode() & 0o022 != 0 => {
+                return Err(io::Error::other(format!(
+                    "checkpoint parent `{}` must not be group- or world-writable",
+                    parent.display()
+                )));
+            }
+            Ok(_) => {}
+            Err(err) if err.kind() == ErrorKind::NotFound => {}
+            Err(err) => return Err(err),
+        }
+    }
     Ok(())
 }
 
 fn read_local_checkpoint_bounded(path: &Path, max_bytes: u64) -> io::Result<Option<Vec<u8>>> {
+    let path = absolute_local_checkpoint_path(path)?;
+    let path = path.as_path();
     reject_unsafe_checkpoint_ancestors(path)?;
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err),
     };
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(io::Error::other(format!(
-            "checkpoint `{}` must be a regular file",
-            path.display()
-        )));
-    }
+    validate_local_checkpoint_file_metadata(path, &metadata)?;
     if metadata.len() > max_bytes {
         return Err(io::Error::other(format!(
             "checkpoint `{}` is {} bytes, exceeding limit {max_bytes}",
@@ -698,10 +960,8 @@ fn read_local_checkpoint_bounded(path: &Path, max_bytes: u64) -> io::Result<Opti
     let file = options.open(path)?;
     let opened = file.metadata()?;
     reject_unsafe_checkpoint_ancestors(path)?;
-    if !opened.is_file()
-        || opened.len() > max_bytes
-        || !same_local_file_identity(&metadata, &opened)
-    {
+    validate_local_checkpoint_file_metadata(path, &opened)?;
+    if opened.len() > max_bytes || !same_local_file_identity(&metadata, &opened) {
         return Err(io::Error::other(format!(
             "checkpoint `{}` changed identity or exceeded its size limit while opening",
             path.display()
@@ -725,10 +985,69 @@ fn read_local_checkpoint_bounded(path: &Path, max_bytes: u64) -> io::Result<Opti
     Ok(Some(bytes))
 }
 
+fn collect_secure_object_store_files(
+    root: &Path,
+    current: &Path,
+    depth: usize,
+    file_limit: usize,
+    files: &mut BTreeSet<PathBuf>,
+) -> io::Result<()> {
+    if depth > MODERATION_QUARANTINE_OBJECT_STORE_MAX_DEPTH {
+        return Err(io::Error::other(format!(
+            "quarantine object store `{}` exceeds maximum directory depth {}",
+            root.display(),
+            MODERATION_QUARANTINE_OBJECT_STORE_MAX_DEPTH
+        )));
+    }
+    let entries = match fs::read_dir(current) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == ErrorKind::NotFound && current == root => return Ok(()),
+        Err(err) => return Err(err),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_symlink() {
+            return Err(io::Error::other(format!(
+                "quarantine object store entry `{}` must not be a symlink",
+                path.display()
+            )));
+        }
+        if metadata.is_dir() {
+            #[cfg(unix)]
+            if metadata.permissions().mode() & 0o022 != 0 {
+                return Err(io::Error::other(format!(
+                    "quarantine object directory `{}` must not be group- or world-writable",
+                    path.display()
+                )));
+            }
+            collect_secure_object_store_files(root, &path, depth + 1, file_limit, files)?;
+        } else if metadata.is_file() {
+            validate_local_checkpoint_file_metadata(&path, &metadata)?;
+            if !files.insert(path.clone()) {
+                return Err(io::Error::other(format!(
+                    "duplicate quarantine object store path `{}`",
+                    path.display()
+                )));
+            }
+            if files.len() > file_limit {
+                return Err(io::Error::other(format!(
+                    "quarantine object store exceeds file limit {file_limit}"
+                )));
+            }
+        } else {
+            return Err(io::Error::other(format!(
+                "quarantine object store entry `{}` must be a regular file or directory",
+                path.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(unix)]
 fn same_local_file_identity(expected: &fs::Metadata, opened: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
-
     expected.dev() == opened.dev() && expected.ino() == opened.ino()
 }
 
@@ -1751,11 +2070,27 @@ struct AuxiliaryRuntimeCheckpointV1 {
     reputation_snapshots: Vec<ReputationSnapshotV1>,
     latest_reputation_snapshot_id: Option<[u8; 16]>,
     reputation_events: Vec<ReputationSnapshotEventV1>,
-    orderbook_events: Vec<OrderbookEvent>,
     transparency_source_entries: Vec<TransparencyLedgerSourceEntry>,
     privacy_source_events: Vec<PrivacyAggregateSourceEvent>,
     published_privacy_aggregate_cycles: Vec<[u8; 16]>,
     published_evidence_viewer_audit_cycles: Vec<[u8; 16]>,
+}
+
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+struct OrderbookRuntimeCheckpointV1 {
+    version: u8,
+    runtime: OrderbookRuntimeSnapshotV1,
+    events: Vec<OrderbookEvent>,
+}
+
+#[derive(Debug)]
+struct OrderbookEventInput {
+    kind: OrderbookEventKind,
+    order_id: Option<[u8; 32]>,
+    trade_ids: Vec<[u8; 32]>,
+    settlement_channel_ids: Vec<[u8; 32]>,
+    receipt_id: Option<[u8; 32]>,
+    expired_order_ids: Vec<[u8; 32]>,
 }
 
 /// Error type returned by storage-related operations on [`NodeHandle`].
@@ -1770,6 +2105,40 @@ pub enum NodeStorageError {
     /// Scheduler admission refused work without parking the caller.
     #[error(transparent)]
     Scheduler(#[from] SchedulerAdmissionError),
+}
+
+/// Errors that prevent a SoraFS node handle from starting with trustworthy state.
+#[derive(Debug, Error)]
+pub enum NodeInitError {
+    /// The configured storage backend could not be opened or validated.
+    #[error("failed to initialise SoraFS storage backend: {0}")]
+    Storage(#[from] StorageError),
+    /// A durable runtime checkpoint could not be read, decoded, or validated.
+    #[error(
+        "failed to restore SoraFS {component} checkpoint `{path}`: {message}",
+        path = path.display()
+    )]
+    Checkpoint {
+        /// Logical checkpoint component.
+        component: &'static str,
+        /// Checkpoint path.
+        path: PathBuf,
+        /// Validation or I/O detail.
+        message: String,
+    },
+    /// Governance publication was configured but its durable publisher could not start.
+    #[error("failed to initialise SoraFS governance publisher: {0}")]
+    GovernancePublisher(String),
+}
+
+impl NodeInitError {
+    fn checkpoint(component: &'static str, path: &Path, error: impl std::fmt::Display) -> Self {
+        Self::Checkpoint {
+            component,
+            path: path.to_path_buf(),
+            message: error.to_string(),
+        }
+    }
 }
 
 /// Errors raised while computing reconciliation summaries.
@@ -1787,33 +2156,64 @@ pub enum ReconciliationError {
     /// Local appeal-finance Governance DAG data could not be reconciled.
     #[error("appeal finance reconciliation failed: {0}")]
     AppealFinance(String),
+    /// Durable repair state could not be read for reconciliation.
+    #[error("repair reconciliation state unavailable: {0}")]
+    RepairStore(String),
     /// Reconciliation report failed validation.
     #[error(transparent)]
     Validation(#[from] ReconciliationValidationError),
 }
 
-fn hard_fork_snapshot_bootstrap_enabled() -> bool {
-    hard_fork_snapshot_bootstrap_enabled_from(env::var_os("IROHA_HARD_FORK_SNAPSHOT_BOOTSTRAP"))
-}
-
-fn hard_fork_snapshot_bootstrap_enabled_from(value: Option<std::ffi::OsString>) -> bool {
-    value.is_some()
-}
-
 impl NodeHandle {
     /// Construct a new handle for the embedded storage worker.
+    ///
+    /// # Panics
+    ///
+    /// Panics when durable storage or checkpoint state cannot be trusted. Runtime
+    /// integrations should use [`Self::try_new`] and surface the startup error.
     #[must_use]
     pub fn new(config: StorageConfig) -> Self {
-        Self::new_with_policies(config, RepairConfig::default(), GcConfig::default())
+        Self::try_new(config)
+            .unwrap_or_else(|err| panic!("failed to initialise SoraFS node: {err}"))
+    }
+
+    /// Construct a new handle and report storage/checkpoint startup failures.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when configured durable state cannot be opened, decoded,
+    /// validated, or when a configured governance publisher cannot start.
+    pub fn try_new(config: StorageConfig) -> Result<Self, NodeInitError> {
+        Self::try_new_with_policies(config, RepairConfig::default(), GcConfig::default())
     }
 
     /// Construct a new handle with explicit repair/GC policies.
+    ///
+    /// # Panics
+    ///
+    /// Panics when durable storage or checkpoint state cannot be trusted. Runtime
+    /// integrations should use [`Self::try_new_with_policies`].
     #[must_use]
     pub fn new_with_policies(
         config: StorageConfig,
         repair_config: RepairConfig,
         gc_config: GcConfig,
     ) -> Self {
+        Self::try_new_with_policies(config, repair_config, gc_config)
+            .unwrap_or_else(|err| panic!("failed to initialise SoraFS node: {err}"))
+    }
+
+    /// Construct a new handle with explicit policies and fallible durable startup.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when configured durable state cannot be opened, decoded,
+    /// validated, or when a configured governance publisher cannot start.
+    pub fn try_new_with_policies(
+        config: StorageConfig,
+        repair_config: RepairConfig,
+        gc_config: GcConfig,
+    ) -> Result<Self, NodeInitError> {
         let repair_config = repair_config.with_default_state_dir(config.data_dir());
         let gc_config = gc_config.with_default_state_dir(config.data_dir());
         let scheduler_config = StorageSchedulerConfig::from_storage_config(&config);
@@ -1827,17 +2227,7 @@ impl NodeHandle {
                     schedulers.update_storage_bytes(backend.total_bytes(), capacity_limit);
                     Some(backend)
                 }
-                Err(StorageError::Norito(err)) if hard_fork_snapshot_bootstrap_enabled() => {
-                    iroha_logger::warn!(
-                        %err,
-                        "hard-fork snapshot bootstrap: disabling SoraFS storage backend after legacy Norito decode failure"
-                    );
-                    schedulers.update_storage_bytes(0, capacity_limit);
-                    None
-                }
-                Err(err) => {
-                    panic!("failed to initialise SoraFS storage backend: {err}")
-                }
+                Err(err) => return Err(NodeInitError::Storage(err)),
             }
         } else {
             schedulers.update_storage_bytes(0, capacity_limit);
@@ -1847,6 +2237,14 @@ impl NodeHandle {
         let smoothing = config.smoothing_config();
         let event_history_limit = config.runtime_retention().event_history_limit();
         let state_entry_limit = config.runtime_retention().state_entry_limit();
+        let runtime_checkpoint_initialization = if storage.is_some() {
+            Some(inspect_runtime_checkpoint_initialization(
+                config.data_dir(),
+                config.runtime_retention().checkpoint_max_bytes(),
+            )?)
+        } else {
+            None
+        };
         let deal_engine = DealEngine::with_entry_limit(state_entry_limit);
         let governance_dir = config.governance_dir().cloned();
         let governance_dag_publisher_peer_id = config.governance_dag_publisher_peer_id().cloned();
@@ -1888,12 +2286,15 @@ impl NodeHandle {
         let (moderation_event_sender, _) =
             broadcast::channel(MODERATION_BALLOT_EVENT_CHANNEL_CAPACITY);
 
-        let repair = RepairManager::new_with_config_policy_and_limits(
+        let repair_checkpoint_path = repair::repair_store_checkpoint_path(&repair_config)
+            .unwrap_or_else(|| PathBuf::from("<unconfigured-repair-state>"));
+        let repair = RepairManager::try_new_with_config_policy_and_limits(
             repair_config.clone(),
             *repair_config.escalation_policy(),
             state_entry_limit,
             config.runtime_retention().checkpoint_max_bytes(),
-        );
+        )
+        .map_err(|err| NodeInitError::checkpoint("repair", &repair_checkpoint_path, err))?;
         let node = Self {
             config,
             repair_config,
@@ -1963,57 +2364,47 @@ impl NodeHandle {
         };
 
         if node.storage.is_some() {
-            node.load_orderbook_checkpoint();
-            node.load_moderation_model_registry_checkpoint();
-            node.load_moderation_screening_checkpoint();
-            node.load_moderation_quarantine_object_index_checkpoint();
-            node.load_moderation_evidence_viewer_checkpoint();
-            node.load_moderation_ballot_checkpoint();
-            node.load_auxiliary_runtime_checkpoint();
-            if let Some(dir) = governance_dir.clone() {
-                match FilesystemGovernancePublisher::try_new(dir.clone()) {
-                    Ok(publisher) => {
-                        let publisher = match (
-                            governance_dag_publisher_peer_id.clone(),
-                            governance_dag_signing_key_path.clone(),
-                        ) {
-                            (Some(peer_id), Some(signing_key_path)) => publisher
-                                .with_runtime_dag_signer(peer_id.into_bytes(), signing_key_path),
-                            (Some(_), None) | (None, Some(_)) => {
-                                iroha_logger::warn!(
-                                    "SoraFS governance runtime DAG signer requires both publisher peer id and signing key path"
-                                );
-                                Ok(publisher)
-                            }
-                            (None, None) => Ok(publisher),
-                        };
-                        match publisher {
-                            Ok(publisher) => {
-                                iroha_logger::info!(
-                                    path = ?dir,
-                                    signed_runtime_dag = governance_dag_publisher_peer_id.is_some()
-                                        && governance_dag_signing_key_path.is_some(),
-                                    "SoraFS governance publisher initialised"
-                                );
-                                node.set_governance_publisher(Arc::new(publisher));
-                            }
-                            Err(err) => {
-                                iroha_logger::error!(
-                                    ?err,
-                                    path = ?dir,
-                                    "failed to initialise SoraFS signed governance runtime DAG publisher"
-                                );
-                            }
-                        }
-                    }
-                    Err(err) => {
-                        iroha_logger::error!(
-                            ?err,
-                            path = ?dir,
-                            "failed to initialise SoraFS governance publisher"
-                        );
-                    }
+            match runtime_checkpoint_initialization {
+                Some(RuntimeCheckpointInitialization::Fresh) => {
+                    node.initialize_runtime_checkpoints()?;
                 }
+                Some(RuntimeCheckpointInitialization::Initialized) => {
+                    node.load_orderbook_checkpoint()?;
+                    node.load_moderation_model_registry_checkpoint()?;
+                    node.load_moderation_screening_checkpoint()?;
+                    node.load_moderation_quarantine_object_index_checkpoint()?;
+                    node.audit_moderation_quarantine_object_store()?;
+                    node.load_moderation_evidence_viewer_checkpoint()?;
+                    node.load_moderation_ballot_checkpoint()?;
+                    node.load_auxiliary_runtime_checkpoint()?;
+                }
+                None => unreachable!("storage-backed node must inspect runtime checkpoints"),
+            }
+            if let Some(dir) = governance_dir.clone() {
+                let publisher = FilesystemGovernancePublisher::try_new(dir.clone())
+                    .map_err(|err| NodeInitError::GovernancePublisher(err.to_string()))?;
+                let publisher = match (
+                    governance_dag_publisher_peer_id.clone(),
+                    governance_dag_signing_key_path.clone(),
+                ) {
+                    (Some(peer_id), Some(signing_key_path)) => publisher
+                        .with_runtime_dag_signer(peer_id.into_bytes(), signing_key_path)
+                        .map_err(|err| NodeInitError::GovernancePublisher(err.to_string()))?,
+                    (Some(_), None) | (None, Some(_)) => {
+                        return Err(NodeInitError::GovernancePublisher(
+                            "runtime DAG signing requires both publisher peer id and signing key path"
+                                .to_owned(),
+                        ));
+                    }
+                    (None, None) => publisher,
+                };
+                iroha_logger::info!(
+                    path = ?dir,
+                    signed_runtime_dag = governance_dag_publisher_peer_id.is_some()
+                        && governance_dag_signing_key_path.is_some(),
+                    "SoraFS governance publisher initialised"
+                );
+                node.set_governance_publisher(Arc::new(publisher));
             }
         } else if governance_dir.is_some() {
             iroha_logger::warn!(
@@ -2021,7 +2412,7 @@ impl NodeHandle {
             );
         }
 
-        node
+        Ok(node)
     }
 
     /// Returns a reference to the storage configuration.
@@ -2050,9 +2441,10 @@ impl NodeHandle {
     pub fn durability_failure_reason(&self) -> Option<String> {
         match self.durability_failure.lock() {
             Ok(guard) => guard.clone(),
-            Err(poisoned) => poisoned.into_inner().clone().or_else(|| {
-                Some("durability health lock poisoned".to_owned())
-            }),
+            Err(poisoned) => poisoned
+                .into_inner()
+                .clone()
+                .or_else(|| Some("durability health lock poisoned".to_owned())),
         }
     }
 
@@ -2079,6 +2471,122 @@ impl NodeHandle {
                 }
             }
         }
+    }
+
+    fn record_unrecoverable_rollback(
+        &self,
+        context: &str,
+        rollback_error: impl std::fmt::Display,
+    ) -> String {
+        let reason = format!("{context}: {rollback_error}");
+        self.mark_durability_unhealthy(reason.clone());
+        reason
+    }
+
+    fn finish_local_checkpoint_write(
+        &self,
+        component: &'static str,
+        path: &Path,
+        result: Result<(), LocalCheckpointWriteError>,
+    ) -> Result<(), RuntimeCheckpointPersistError> {
+        match result {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                let committed = err.committed;
+                let message = format!("persist {component} checkpoint `{}`: {err}", path.display());
+                if committed {
+                    self.mark_durability_unhealthy(message.clone());
+                }
+                Err(RuntimeCheckpointPersistError { message, committed })
+            }
+        }
+    }
+
+    fn initialize_runtime_checkpoints(&self) -> Result<(), NodeInitError> {
+        let orderbook_path = self
+            .orderbook_checkpoint_path
+            .as_ref()
+            .expect("storage-backed node has an orderbook checkpoint path");
+        let orderbook = self
+            .orderbook
+            .read()
+            .map_err(|_| {
+                NodeInitError::checkpoint(
+                    "orderbook runtime",
+                    orderbook_path,
+                    "state lock poisoned",
+                )
+            })?
+            .runtime_snapshot(1);
+        let orderbook_checkpoint = OrderbookRuntimeCheckpointV1 {
+            version: ORDERBOOK_RUNTIME_STATE_VERSION_V1,
+            runtime: orderbook,
+            events: Vec::new(),
+        };
+        self.persist_orderbook_checkpoint(&orderbook_checkpoint)
+            .map_err(|err| NodeInitError::checkpoint("orderbook runtime", orderbook_path, err))?;
+
+        let model_path = self
+            .moderation_model_registry_checkpoint_path
+            .as_ref()
+            .expect("storage-backed node has a model registry checkpoint path");
+        self.persist_moderation_model_registry_snapshot(&ModerationModelRegistrySnapshot::default())
+            .map_err(|err| {
+                NodeInitError::checkpoint("moderation model registry", model_path, err)
+            })?;
+
+        let screening_path = self
+            .moderation_screening_checkpoint_path
+            .as_ref()
+            .expect("storage-backed node has a screening checkpoint path");
+        self.persist_moderation_screening_snapshot(&ModerationScreeningSnapshot::default())
+            .map_err(|err| {
+                NodeInitError::checkpoint("moderation screening", screening_path, err)
+            })?;
+
+        let object_index_path = self
+            .moderation_quarantine_object_index_path
+            .as_ref()
+            .expect("storage-backed node has an object-index checkpoint path");
+        self.persist_moderation_quarantine_object_index_snapshot(
+            &ModerationQuarantineObjectSnapshot::default(),
+        )
+        .map_err(|err| {
+            NodeInitError::checkpoint("moderation quarantine object index", object_index_path, err)
+        })?;
+
+        let viewer_path = self
+            .moderation_evidence_viewer_checkpoint_path
+            .as_ref()
+            .expect("storage-backed node has an evidence viewer checkpoint path");
+        self.persist_moderation_evidence_viewer_snapshot(
+            &ModerationEvidenceViewerSnapshot::default(),
+        )
+        .map_err(|err| NodeInitError::checkpoint("moderation evidence viewer", viewer_path, err))?;
+
+        let ballot_path = self
+            .moderation_checkpoint_path
+            .as_ref()
+            .expect("storage-backed node has a ballot checkpoint path");
+        self.persist_moderation_ballot_snapshot(&ModerationBallotSnapshot::default())
+            .map_err(|err| NodeInitError::checkpoint("moderation ballot", ballot_path, err))?;
+
+        let auxiliary_path = self
+            .auxiliary_runtime_checkpoint_path
+            .as_ref()
+            .expect("storage-backed node has an auxiliary checkpoint path");
+        self.persist_auxiliary_runtime_checkpoint_unlocked()
+            .map_err(|err| NodeInitError::checkpoint("auxiliary runtime", auxiliary_path, err))?;
+
+        let marker_path = runtime_state_initialization_path(self.config.data_dir());
+        self.finish_local_checkpoint_write(
+            "runtime initialization marker",
+            &marker_path,
+            write_local_private_checkpoint_atomic(&marker_path, RUNTIME_STATE_INITIALIZATION_BYTES),
+        )
+        .map_err(|err| {
+            NodeInitError::checkpoint("runtime initialization marker", &marker_path, err)
+        })
     }
 
     /// Returns a clone of the embedded deal engine handle.
@@ -2205,9 +2713,10 @@ impl NodeHandle {
 
     /// Persist and cache the latest SoraFS reputation snapshot.
     ///
-    /// When a governance publisher is configured, the snapshot is written to the
-    /// governance artefact directory before it becomes the in-memory latest
-    /// snapshot served by Torii.
+    /// The local snapshot, head linkage, and replay event are committed before
+    /// optional external publication. Retrying the exact same snapshot id is
+    /// idempotent and retries publication; conflicting ids or non-monotonic
+    /// heads are rejected.
     pub fn publish_reputation_snapshot(
         &self,
         snapshot: ReputationSnapshotV1,
@@ -2215,48 +2724,119 @@ impl NodeHandle {
         let _checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
             GovernancePublishError::other("auxiliary checkpoint transaction lock poisoned")
         })?;
+        self.ensure_durability_healthy()
+            .map_err(GovernancePublishError::other)?;
         snapshot
             .validate()
             .map_err(|err| GovernancePublishError::other(format!("invalid snapshot: {err}")))?;
         let encoded = norito::to_bytes(&snapshot)
             .map_err(|err| GovernancePublishError::other(format!("encode snapshot: {err}")))?;
-        if let Some(publisher) = self.governance_publisher() {
-            publisher.publish_reputation_snapshot(&snapshot, &encoded)?;
-        }
         let mut snapshots = self
             .reputation_snapshots
             .write()
             .map_err(|_| GovernancePublishError::other("reputation snapshot index poisoned"))?;
-        let previous_snapshots = snapshots.clone();
-        snapshots.insert(snapshot.snapshot_id, snapshot.clone());
-        let state_limit = self.config.runtime_retention().state_entry_limit();
-        while snapshots.len() > state_limit {
-            let evict = snapshots
-                .values()
-                .min_by_key(|candidate| (candidate.generated_at_unix, candidate.snapshot_id))
-                .map(|candidate| candidate.snapshot_id)
-                .expect("non-empty reputation snapshot index");
-            snapshots.remove(&evict);
+        if let Some(existing) = snapshots.get(&snapshot.snapshot_id) {
+            if existing != &snapshot {
+                return Err(GovernancePublishError::other(format!(
+                    "reputation snapshot id {} conflicts with retained canonical bytes",
+                    hex::encode(snapshot.snapshot_id)
+                )));
+            }
+            drop(snapshots);
+            if let Some(publisher) = self.governance_publisher() {
+                publisher.publish_reputation_snapshot(&snapshot, &encoded)?;
+            }
+            return Ok(());
         }
+        let previous_snapshots = snapshots.clone();
         let mut events = self
             .reputation_events
             .write()
             .map_err(|_| GovernancePublishError::other("reputation event history poisoned"))?;
         let previous_events = events.clone();
-        let event = events.append(|sequence| {
-            ReputationSnapshotEventV1::from_snapshot(sequence, &snapshot)
-                .expect("validated reputation snapshot must produce a valid event")
-        })?;
         let mut latest = self
             .latest_reputation_snapshot
             .write()
             .map_err(|_| GovernancePublishError::other("reputation snapshot cache poisoned"))?;
         let previous_latest = latest.clone();
-        *latest = Some(snapshot);
+        match latest.as_ref() {
+            Some(head) => {
+                if snapshot.previous_snapshot_id != Some(head.snapshot_id) {
+                    return Err(GovernancePublishError::other(format!(
+                        "reputation snapshot {} must extend current head {}",
+                        hex::encode(snapshot.snapshot_id),
+                        hex::encode(head.snapshot_id)
+                    )));
+                }
+                if snapshot.generated_at_unix <= head.generated_at_unix {
+                    return Err(GovernancePublishError::other(
+                        "reputation snapshot generated_at_unix must advance the current head",
+                    ));
+                }
+            }
+            None if snapshot.previous_snapshot_id.is_some() => {
+                return Err(GovernancePublishError::other(
+                    "first reputation snapshot must not reference a previous snapshot",
+                ));
+            }
+            None => {}
+        }
+        snapshots.insert(snapshot.snapshot_id, snapshot.clone());
+        let next_sequence = events
+            .latest_sequence
+            .checked_add(1)
+            .ok_or_else(|| GovernancePublishError::other("event sequence exhausted"))?;
+        let event =
+            ReputationSnapshotEventV1::from_snapshot(next_sequence, &snapshot).map_err(|err| {
+                GovernancePublishError::other(format!(
+                    "validated reputation snapshot could not produce an event: {err}"
+                ))
+            })?;
+        let event = events.append(|sequence| {
+            debug_assert_eq!(sequence, next_sequence);
+            event
+        })?;
+        let retained_snapshot_ids = events
+            .events
+            .iter()
+            .map(|event| event.snapshot_id)
+            .chain(std::iter::once(snapshot.snapshot_id))
+            .collect::<BTreeSet<_>>();
+        let state_limit = self.config.runtime_retention().state_entry_limit();
+        while snapshots.len() > state_limit {
+            let Some(evict) = snapshots
+                .values()
+                .filter(|candidate| !retained_snapshot_ids.contains(&candidate.snapshot_id))
+                .min_by_key(|candidate| (candidate.generated_at_unix, candidate.snapshot_id))
+                .map(|candidate| candidate.snapshot_id)
+            else {
+                *snapshots = previous_snapshots;
+                *events = previous_events;
+                return Err(GovernancePublishError::other(format!(
+                    "reputation snapshot retention exhausted (limit {state_limit}); retained events prevent safe eviction"
+                )));
+            };
+            snapshots.remove(&evict);
+        }
+        if events
+            .events
+            .iter()
+            .any(|event| !snapshots.contains_key(&event.snapshot_id))
+        {
+            *snapshots = previous_snapshots;
+            *events = previous_events;
+            return Err(GovernancePublishError::other(
+                "reputation event suffix references an evicted snapshot",
+            ));
+        }
+        *latest = Some(snapshot.clone());
         drop(snapshots);
         drop(events);
         drop(latest);
         if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
+            if err.committed {
+                return Err(GovernancePublishError::other(err.to_string()));
+            }
             *self.reputation_snapshots.write().map_err(|_| {
                 GovernancePublishError::other("reputation snapshot rollback lock poisoned")
             })? = previous_snapshots;
@@ -2266,9 +2846,12 @@ impl NodeHandle {
             *self.latest_reputation_snapshot.write().map_err(|_| {
                 GovernancePublishError::other("reputation latest rollback lock poisoned")
             })? = previous_latest;
-            return Err(err);
+            return Err(GovernancePublishError::other(err.to_string()));
         }
         let _ = self.reputation_event_sender.send(event);
+        if let Some(publisher) = self.governance_publisher() {
+            publisher.publish_reputation_snapshot(&snapshot, &encoded)?;
+        }
         Ok(())
     }
 
@@ -2474,6 +3057,8 @@ impl NodeHandle {
         let _checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
             GovernancePublishError::other("auxiliary checkpoint transaction lock poisoned")
         })?;
+        self.ensure_durability_healthy()
+            .map_err(GovernancePublishError::other)?;
         entry.validate().map_err(|err| {
             GovernancePublishError::other(format!(
                 "invalid transparency ledger source entry: {err}"
@@ -2501,6 +3086,9 @@ impl NodeHandle {
         guard.insert(event_id.clone(), entry);
         drop(guard);
         if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
+            if err.committed {
+                return Err(GovernancePublishError::other(err.to_string()));
+            }
             self.transparency_ledger_source_entries
                 .write()
                 .map_err(|_| {
@@ -2509,7 +3097,7 @@ impl NodeHandle {
                     )
                 })?
                 .remove(&event_id);
-            return Err(err);
+            return Err(GovernancePublishError::other(err.to_string()));
         }
         Ok(())
     }
@@ -2636,6 +3224,8 @@ impl NodeHandle {
         let _checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
             GovernancePublishError::other("auxiliary checkpoint transaction lock poisoned")
         })?;
+        self.ensure_durability_healthy()
+            .map_err(GovernancePublishError::other)?;
         let mut source_entries = self
             .transparency_ledger_source_entries
             .write()
@@ -2648,6 +3238,9 @@ impl NodeHandle {
         });
         drop(source_entries);
         if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
+            if err.committed {
+                return Err(GovernancePublishError::other(err.to_string()));
+            }
             *self
                 .transparency_ledger_source_entries
                 .write()
@@ -2656,7 +3249,7 @@ impl NodeHandle {
                         "transparency source-entry rollback lock poisoned",
                     )
                 })? = previous_entries;
-            return Err(err);
+            return Err(GovernancePublishError::other(err.to_string()));
         }
         Ok(publication)
     }
@@ -2669,6 +3262,8 @@ impl NodeHandle {
         let _checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
             GovernancePublishError::other("auxiliary checkpoint transaction lock poisoned")
         })?;
+        self.ensure_durability_healthy()
+            .map_err(GovernancePublishError::other)?;
         event.validate().map_err(|err| {
             GovernancePublishError::other(format!("invalid privacy aggregate source event: {err}"))
         })?;
@@ -2692,13 +3287,16 @@ impl NodeHandle {
         guard.insert(event_id.clone(), event);
         drop(guard);
         if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
+            if err.committed {
+                return Err(GovernancePublishError::other(err.to_string()));
+            }
             self.privacy_aggregate_source_events
                 .write()
                 .map_err(|_| {
                     GovernancePublishError::other("privacy source-event rollback lock poisoned")
                 })?
                 .remove(&event_id);
-            return Err(err);
+            return Err(GovernancePublishError::other(err.to_string()));
         }
         Ok(())
     }
@@ -2892,6 +3490,8 @@ impl NodeHandle {
         let _mutation_guard = self.runtime_mutation_lock.lock().map_err(|_| {
             GovernancePublishError::other("runtime publication transaction lock poisoned")
         })?;
+        self.ensure_durability_healthy()
+            .map_err(GovernancePublishError::other)?;
         let Some(latest_window) = schedule.due_window(now_unix).map_err(|err| {
             GovernancePublishError::other(format!("privacy aggregate schedule: {err}"))
         })?
@@ -3012,6 +3612,8 @@ impl NodeHandle {
         let _checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
             GovernancePublishError::other("auxiliary checkpoint transaction lock poisoned")
         })?;
+        self.ensure_durability_healthy()
+            .map_err(GovernancePublishError::other)?;
         let mut published = self
             .published_privacy_aggregate_cycles
             .write()
@@ -3032,6 +3634,9 @@ impl NodeHandle {
         drop(published);
         drop(events);
         if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
+            if err.committed {
+                return Err(GovernancePublishError::other(err.to_string()));
+            }
             *self
                 .published_privacy_aggregate_cycles
                 .write()
@@ -3041,7 +3646,7 @@ impl NodeHandle {
             *self.privacy_aggregate_source_events.write().map_err(|_| {
                 GovernancePublishError::other("privacy source-event rollback lock poisoned")
             })? = previous_events;
-            return Err(err);
+            return Err(GovernancePublishError::other(err.to_string()));
         }
         Ok(())
     }
@@ -3825,6 +4430,8 @@ impl NodeHandle {
             .runtime_mutation_lock
             .lock()
             .map_err(|_| ModerationModelRegistryError::StateLockPoisoned)?;
+        self.ensure_durability_healthy()
+            .map_err(|message| ModerationModelRegistryError::Checkpoint { message })?;
         let mut registry = self
             .moderation_model_registry
             .write()
@@ -3833,10 +4440,21 @@ impl NodeHandle {
         let record = registry.admit_repro_manifest(manifest)?;
         let committed = registry.snapshot();
         if let Err(err) = self.persist_moderation_model_registry_snapshot(&committed) {
-            registry.restore_snapshot(previous).unwrap_or_else(|rollback| {
-                panic!("failed to roll back moderation model registry checkpoint failure: {rollback}")
+            if err.committed {
+                return Err(ModerationModelRegistryError::Checkpoint {
+                    message: err.to_string(),
+                });
+            }
+            if let Err(rollback) = registry.restore_snapshot(previous) {
+                let message = self.record_unrecoverable_rollback(
+                    "failed to roll back moderation model registry checkpoint failure",
+                    rollback,
+                );
+                return Err(ModerationModelRegistryError::Checkpoint { message });
+            }
+            return Err(ModerationModelRegistryError::Checkpoint {
+                message: err.to_string(),
             });
-            return Err(err);
         }
         Ok(record)
     }
@@ -3857,6 +4475,8 @@ impl NodeHandle {
             .runtime_mutation_lock
             .lock()
             .map_err(|_| ModerationModelRegistryError::StateLockPoisoned)?;
+        self.ensure_durability_healthy()
+            .map_err(|message| ModerationModelRegistryError::Checkpoint { message })?;
         let mut registry = self
             .moderation_model_registry
             .write()
@@ -3865,10 +4485,21 @@ impl NodeHandle {
         let record = registry.admit_corpus_manifest(manifest)?;
         let committed = registry.snapshot();
         if let Err(err) = self.persist_moderation_model_registry_snapshot(&committed) {
-            registry.restore_snapshot(previous).unwrap_or_else(|rollback| {
-                panic!("failed to roll back moderation model registry checkpoint failure: {rollback}")
+            if err.committed {
+                return Err(ModerationModelRegistryError::Checkpoint {
+                    message: err.to_string(),
+                });
+            }
+            if let Err(rollback) = registry.restore_snapshot(previous) {
+                let message = self.record_unrecoverable_rollback(
+                    "failed to roll back moderation model registry checkpoint failure",
+                    rollback,
+                );
+                return Err(ModerationModelRegistryError::Checkpoint { message });
+            }
+            return Err(ModerationModelRegistryError::Checkpoint {
+                message: err.to_string(),
             });
-            return Err(err);
         }
         Ok(record)
     }
@@ -3921,6 +4552,8 @@ impl NodeHandle {
             .runtime_mutation_lock
             .lock()
             .map_err(|_| ModerationModelRegistryError::StateLockPoisoned)?;
+        self.ensure_durability_healthy()
+            .map_err(|message| ModerationModelRegistryError::Checkpoint { message })?;
         let mut registry = self
             .moderation_model_registry
             .write()
@@ -3929,10 +4562,21 @@ impl NodeHandle {
         registry.restore_snapshot(snapshot)?;
         let committed = registry.snapshot();
         if let Err(err) = self.persist_moderation_model_registry_snapshot(&committed) {
-            registry.restore_snapshot(previous).unwrap_or_else(|rollback| {
-                panic!("failed to roll back moderation model registry snapshot failure: {rollback}")
+            if err.committed {
+                return Err(ModerationModelRegistryError::Checkpoint {
+                    message: err.to_string(),
+                });
+            }
+            if let Err(rollback) = registry.restore_snapshot(previous) {
+                let message = self.record_unrecoverable_rollback(
+                    "failed to roll back moderation model registry snapshot failure",
+                    rollback,
+                );
+                return Err(ModerationModelRegistryError::Checkpoint { message });
+            }
+            return Err(ModerationModelRegistryError::Checkpoint {
+                message: err.to_string(),
             });
-            return Err(err);
         }
         Ok(())
     }
@@ -3955,6 +4599,8 @@ impl NodeHandle {
             .runtime_mutation_lock
             .lock()
             .map_err(|_| ModerationScreeningError::StateLockPoisoned)?;
+        self.ensure_durability_healthy()
+            .map_err(|message| ModerationScreeningError::Checkpoint { message })?;
         let mut runtime = self
             .moderation_screening
             .write()
@@ -3963,10 +4609,21 @@ impl NodeHandle {
         let outcome = runtime.record_screening(input)?;
         let committed = runtime.snapshot();
         if let Err(err) = self.persist_moderation_screening_snapshot(&committed) {
-            runtime.restore_snapshot(previous).unwrap_or_else(|rollback| {
-                panic!("failed to roll back moderation screening checkpoint failure: {rollback}")
+            if err.committed {
+                return Err(ModerationScreeningError::Checkpoint {
+                    message: err.to_string(),
+                });
+            }
+            if let Err(rollback) = runtime.restore_snapshot(previous) {
+                let message = self.record_unrecoverable_rollback(
+                    "failed to roll back moderation screening checkpoint failure",
+                    rollback,
+                );
+                return Err(ModerationScreeningError::Checkpoint { message });
+            }
+            return Err(ModerationScreeningError::Checkpoint {
+                message: err.to_string(),
             });
-            return Err(err);
         }
         Ok(outcome)
     }
@@ -3988,6 +4645,8 @@ impl NodeHandle {
             .runtime_mutation_lock
             .lock()
             .map_err(|_| ModerationScreeningError::StateLockPoisoned)?;
+        self.ensure_durability_healthy()
+            .map_err(|message| ModerationScreeningError::Checkpoint { message })?;
         let mut runtime = self
             .moderation_screening
             .write()
@@ -3996,10 +4655,21 @@ impl NodeHandle {
         let record = runtime.review_quarantine(input)?;
         let committed = runtime.snapshot();
         if let Err(err) = self.persist_moderation_screening_snapshot(&committed) {
-            runtime.restore_snapshot(previous).unwrap_or_else(|rollback| {
-                panic!("failed to roll back moderation quarantine review checkpoint failure: {rollback}")
+            if err.committed {
+                return Err(ModerationScreeningError::Checkpoint {
+                    message: err.to_string(),
+                });
+            }
+            if let Err(rollback) = runtime.restore_snapshot(previous) {
+                let message = self.record_unrecoverable_rollback(
+                    "failed to roll back moderation quarantine review checkpoint failure",
+                    rollback,
+                );
+                return Err(ModerationScreeningError::Checkpoint { message });
+            }
+            return Err(ModerationScreeningError::Checkpoint {
+                message: err.to_string(),
             });
-            return Err(err);
         }
         Ok(record)
     }
@@ -4022,6 +4692,8 @@ impl NodeHandle {
             .runtime_mutation_lock
             .lock()
             .map_err(|_| ModerationScreeningError::StateLockPoisoned)?;
+        self.ensure_durability_healthy()
+            .map_err(|message| ModerationScreeningError::Checkpoint { message })?;
         let mut runtime = self
             .moderation_screening
             .write()
@@ -4030,10 +4702,21 @@ impl NodeHandle {
         let record = runtime.release_quarantine(input)?;
         let committed = runtime.snapshot();
         if let Err(err) = self.persist_moderation_screening_snapshot(&committed) {
-            runtime.restore_snapshot(previous).unwrap_or_else(|rollback| {
-                panic!("failed to roll back moderation quarantine release checkpoint failure: {rollback}")
+            if err.committed {
+                return Err(ModerationScreeningError::Checkpoint {
+                    message: err.to_string(),
+                });
+            }
+            if let Err(rollback) = runtime.restore_snapshot(previous) {
+                let message = self.record_unrecoverable_rollback(
+                    "failed to roll back moderation quarantine release checkpoint failure",
+                    rollback,
+                );
+                return Err(ModerationScreeningError::Checkpoint { message });
+            }
+            return Err(ModerationScreeningError::Checkpoint {
+                message: err.to_string(),
             });
-            return Err(err);
         }
         Ok(record)
     }
@@ -4076,6 +4759,9 @@ impl NodeHandle {
             .runtime_mutation_lock
             .lock()
             .map_err(|_| ModerationScreeningError::StateLockPoisoned)?;
+        self.ensure_durability_healthy()
+            .map_err(|message| ModerationScreeningError::Checkpoint { message })?;
+        self.validate_moderation_screening_snapshot_downstream_refs(&snapshot)?;
         let mut runtime = self
             .moderation_screening
             .write()
@@ -4084,10 +4770,21 @@ impl NodeHandle {
         runtime.restore_snapshot(snapshot)?;
         let committed = runtime.snapshot();
         if let Err(err) = self.persist_moderation_screening_snapshot(&committed) {
-            runtime.restore_snapshot(previous).unwrap_or_else(|rollback| {
-                panic!("failed to roll back moderation screening snapshot failure: {rollback}")
+            if err.committed {
+                return Err(ModerationScreeningError::Checkpoint {
+                    message: err.to_string(),
+                });
+            }
+            if let Err(rollback) = runtime.restore_snapshot(previous) {
+                let message = self.record_unrecoverable_rollback(
+                    "failed to roll back moderation screening snapshot failure",
+                    rollback,
+                );
+                return Err(ModerationScreeningError::Checkpoint { message });
+            }
+            return Err(ModerationScreeningError::Checkpoint {
+                message: err.to_string(),
             });
-            return Err(err);
         }
         Ok(())
     }
@@ -4111,6 +4808,12 @@ impl NodeHandle {
             .runtime_mutation_lock
             .lock()
             .map_err(|_| ModerationQuarantineObjectError::StateLockPoisoned)?;
+        self.ensure_durability_healthy().map_err(|message| {
+            ModerationQuarantineObjectError::Io {
+                path: "durability-state".to_owned(),
+                message,
+            }
+        })?;
         let root = self
             .moderation_quarantine_object_root
             .as_ref()
@@ -4135,7 +4838,11 @@ impl NodeHandle {
             .map_err(|_| ModerationQuarantineObjectError::StateLockPoisoned)?;
         let previous = objects.snapshot();
         objects.ensure_insert_capacity(&input.quarantine_id)?;
-        let local_key = load_or_create_moderation_quarantine_object_key(key_path)?;
+        let local_key = if previous.objects.is_empty() {
+            load_or_create_moderation_quarantine_object_key(key_path)?
+        } else {
+            load_moderation_quarantine_object_key(key_path)?
+        };
         let (record, envelope_bytes) = seal_moderation_quarantine_object(input, local_key)?;
         let envelope_path = self.resolve_moderation_quarantine_object_path(root, &record)?;
         if let Some(existing) = objects.get(&record.quarantine_id) {
@@ -4144,28 +4851,118 @@ impl NodeHandle {
                     quarantine_id_hex: hex::encode(record.quarantine_id),
                 });
             }
-            if envelope_path.exists() {
-                return Ok(existing);
+            let existing_bytes = read_local_checkpoint_bounded(
+                &envelope_path,
+                self.config.runtime_retention().checkpoint_max_bytes(),
+            )
+            .map_err(|err| ModerationQuarantineObjectError::Io {
+                path: envelope_path.display().to_string(),
+                message: err.to_string(),
+            })?
+            .ok_or_else(|| ModerationQuarantineObjectError::MissingObject {
+                quarantine_id_hex: hex::encode(record.quarantine_id),
+            })?;
+            let existing_envelope =
+                norito::decode_from_bytes::<ModerationQuarantineObjectEnvelopeV1>(&existing_bytes)
+                    .map_err(|err| ModerationQuarantineObjectError::Codec {
+                        message: err.to_string(),
+                    })?;
+            if norito::to_bytes(&existing_envelope).map_err(|err| {
+                ModerationQuarantineObjectError::Codec {
+                    message: err.to_string(),
+                }
+            })? != existing_bytes
+            {
+                return Err(ModerationQuarantineObjectError::AuthenticationFailed {
+                    quarantine_id_hex: hex::encode(record.quarantine_id),
+                });
+            }
+            let plaintext =
+                open_moderation_quarantine_object(existing_envelope, &existing, local_key)?;
+            if *blake3::hash(&plaintext).as_bytes() != existing.payload_digest {
+                return Err(ModerationQuarantineObjectError::AuthenticationFailed {
+                    quarantine_id_hex: hex::encode(record.quarantine_id),
+                });
+            }
+            return Ok(existing);
+        }
+        match fs::symlink_metadata(&envelope_path) {
+            Ok(_) => {
+                return Err(ModerationQuarantineObjectError::ConflictingObject {
+                    quarantine_id_hex: hex::encode(record.quarantine_id),
+                });
+            }
+            Err(err) if err.kind() == ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(ModerationQuarantineObjectError::Io {
+                    path: envelope_path.display().to_string(),
+                    message: err.to_string(),
+                });
             }
         }
 
-        write_local_checkpoint_atomic_bounded(
+        self.finish_local_checkpoint_write(
+            "moderation quarantine object envelope",
             &envelope_path,
-            &envelope_bytes,
-            self.config.runtime_retention().checkpoint_max_bytes(),
+            write_local_checkpoint_atomic_bounded(
+                &envelope_path,
+                &envelope_bytes,
+                self.config.runtime_retention().checkpoint_max_bytes(),
+            ),
         )
         .map_err(|err| ModerationQuarantineObjectError::Io {
             path: envelope_path.display().to_string(),
             message: err.to_string(),
         })?;
 
-        let stored = objects.insert(record)?;
+        let stored = match objects.insert(record) {
+            Ok(stored) => stored,
+            Err(err) => {
+                if let Err(cleanup) = remove_local_checkpoint_file_durably(&envelope_path) {
+                    let message = format!(
+                        "failed to remove quarantine envelope after rejected index insertion: {cleanup}"
+                    );
+                    self.mark_durability_unhealthy(message.clone());
+                    return Err(ModerationQuarantineObjectError::Io {
+                        path: envelope_path.display().to_string(),
+                        message,
+                    });
+                }
+                return Err(err);
+            }
+        };
         let committed = objects.snapshot();
         if let Err(err) = self.persist_moderation_quarantine_object_index_snapshot(&committed) {
-            objects.restore_snapshot(previous).unwrap_or_else(|rollback| {
-                panic!("failed to roll back moderation quarantine object index checkpoint failure: {rollback}")
+            if err.committed {
+                return Err(ModerationQuarantineObjectError::Io {
+                    path: "durability-state".to_owned(),
+                    message: err.to_string(),
+                });
+            }
+            if let Err(rollback) = objects.restore_snapshot(previous) {
+                let message = self.record_unrecoverable_rollback(
+                    "failed to roll back moderation quarantine object index checkpoint failure",
+                    rollback,
+                );
+                return Err(ModerationQuarantineObjectError::Io {
+                    path: "durability-state".to_owned(),
+                    message,
+                });
+            }
+            if let Err(cleanup) = remove_local_checkpoint_file_durably(&envelope_path) {
+                let message = self.record_unrecoverable_rollback(
+                    "failed to remove quarantine envelope after index checkpoint failure",
+                    cleanup,
+                );
+                return Err(ModerationQuarantineObjectError::Io {
+                    path: envelope_path.display().to_string(),
+                    message,
+                });
+            }
+            return Err(ModerationQuarantineObjectError::Io {
+                path: "durability-state".to_owned(),
+                message: err.to_string(),
             });
-            return Err(err);
         }
         Ok(stored)
     }
@@ -4263,11 +5060,18 @@ impl NodeHandle {
             .runtime_mutation_lock
             .lock()
             .map_err(|_| ModerationQuarantineObjectError::StateLockPoisoned)?;
+        self.ensure_durability_healthy().map_err(|message| {
+            ModerationQuarantineObjectError::Io {
+                path: "durability-state".to_owned(),
+                message,
+            }
+        })?;
         self.moderation_quarantine_objects
             .read()
             .map_err(|_| ModerationQuarantineObjectError::StateLockPoisoned)?
             .ensure_snapshot_capacity(&snapshot)?;
         self.validate_moderation_quarantine_object_snapshot_refs(&snapshot)?;
+        self.validate_moderation_quarantine_snapshot_viewer_refs(&snapshot)?;
         let mut objects = self
             .moderation_quarantine_objects
             .write()
@@ -4276,10 +5080,26 @@ impl NodeHandle {
         objects.restore_snapshot(snapshot)?;
         let committed = objects.snapshot();
         if let Err(err) = self.persist_moderation_quarantine_object_index_snapshot(&committed) {
-            objects.restore_snapshot(previous).unwrap_or_else(|rollback| {
-                panic!("failed to roll back moderation quarantine object index snapshot failure: {rollback}")
+            if err.committed {
+                return Err(ModerationQuarantineObjectError::Io {
+                    path: "durability-state".to_owned(),
+                    message: err.to_string(),
+                });
+            }
+            if let Err(rollback) = objects.restore_snapshot(previous) {
+                let message = self.record_unrecoverable_rollback(
+                    "failed to roll back moderation quarantine object index snapshot failure",
+                    rollback,
+                );
+                return Err(ModerationQuarantineObjectError::Io {
+                    path: "durability-state".to_owned(),
+                    message,
+                });
+            }
+            return Err(ModerationQuarantineObjectError::Io {
+                path: "durability-state".to_owned(),
+                message: err.to_string(),
             });
-            return Err(err);
         }
         Ok(())
     }
@@ -4304,6 +5124,11 @@ impl NodeHandle {
             .runtime_mutation_lock
             .lock()
             .map_err(|_| ModerationEvidenceViewerError::StateLockPoisoned)?;
+        self.ensure_durability_healthy()
+            .map_err(|message| ModerationEvidenceViewerError::Io {
+                path: "durability-state".to_owned(),
+                message,
+            })?;
         let object = self.moderation_quarantine_object_record_for_viewer(&input.quarantine_id)?;
         let mut runtime = self
             .moderation_evidence_viewer
@@ -4313,10 +5138,26 @@ impl NodeHandle {
         let record = runtime.create_session(input, &object)?;
         let committed = runtime.snapshot();
         if let Err(err) = self.persist_moderation_evidence_viewer_snapshot(&committed) {
-            runtime.restore_snapshot(previous).unwrap_or_else(|rollback| {
-                panic!("failed to roll back moderation evidence viewer checkpoint failure: {rollback}")
+            if err.committed {
+                return Err(ModerationEvidenceViewerError::Io {
+                    path: "durability-state".to_owned(),
+                    message: err.to_string(),
+                });
+            }
+            if let Err(rollback) = runtime.restore_snapshot(previous) {
+                let message = self.record_unrecoverable_rollback(
+                    "failed to roll back moderation evidence viewer checkpoint failure",
+                    rollback,
+                );
+                return Err(ModerationEvidenceViewerError::Io {
+                    path: "durability-state".to_owned(),
+                    message,
+                });
+            }
+            return Err(ModerationEvidenceViewerError::Io {
+                path: "durability-state".to_owned(),
+                message: err.to_string(),
             });
-            return Err(err);
         }
         Ok(record)
     }
@@ -4336,6 +5177,11 @@ impl NodeHandle {
             .runtime_mutation_lock
             .lock()
             .map_err(|_| ModerationEvidenceViewerError::StateLockPoisoned)?;
+        self.ensure_durability_healthy()
+            .map_err(|message| ModerationEvidenceViewerError::Io {
+                path: "durability-state".to_owned(),
+                message,
+            })?;
         let mut runtime = self
             .moderation_evidence_viewer
             .write()
@@ -4344,10 +5190,26 @@ impl NodeHandle {
         let record = runtime.record_access(input)?;
         let committed = runtime.snapshot();
         if let Err(err) = self.persist_moderation_evidence_viewer_snapshot(&committed) {
-            runtime.restore_snapshot(previous).unwrap_or_else(|rollback| {
-                panic!("failed to roll back moderation evidence viewer access checkpoint failure: {rollback}")
+            if err.committed {
+                return Err(ModerationEvidenceViewerError::Io {
+                    path: "durability-state".to_owned(),
+                    message: err.to_string(),
+                });
+            }
+            if let Err(rollback) = runtime.restore_snapshot(previous) {
+                let message = self.record_unrecoverable_rollback(
+                    "failed to roll back moderation evidence viewer access checkpoint failure",
+                    rollback,
+                );
+                return Err(ModerationEvidenceViewerError::Io {
+                    path: "durability-state".to_owned(),
+                    message,
+                });
+            }
+            return Err(ModerationEvidenceViewerError::Io {
+                path: "durability-state".to_owned(),
+                message: err.to_string(),
             });
-            return Err(err);
         }
         Ok(record)
     }
@@ -4391,6 +5253,11 @@ impl NodeHandle {
             .runtime_mutation_lock
             .lock()
             .map_err(|_| ModerationEvidenceViewerError::StateLockPoisoned)?;
+        self.ensure_durability_healthy()
+            .map_err(|message| ModerationEvidenceViewerError::Io {
+                path: "durability-state".to_owned(),
+                message,
+            })?;
         self.validate_moderation_evidence_viewer_snapshot_refs(&snapshot)?;
         let mut runtime = self
             .moderation_evidence_viewer
@@ -4400,10 +5267,26 @@ impl NodeHandle {
         runtime.restore_snapshot(snapshot)?;
         let committed = runtime.snapshot();
         if let Err(err) = self.persist_moderation_evidence_viewer_snapshot(&committed) {
-            runtime.restore_snapshot(previous).unwrap_or_else(|rollback| {
-                panic!("failed to roll back moderation evidence viewer snapshot failure: {rollback}")
+            if err.committed {
+                return Err(ModerationEvidenceViewerError::Io {
+                    path: "durability-state".to_owned(),
+                    message: err.to_string(),
+                });
+            }
+            if let Err(rollback) = runtime.restore_snapshot(previous) {
+                let message = self.record_unrecoverable_rollback(
+                    "failed to roll back moderation evidence viewer snapshot failure",
+                    rollback,
+                );
+                return Err(ModerationEvidenceViewerError::Io {
+                    path: "durability-state".to_owned(),
+                    message,
+                });
+            }
+            return Err(ModerationEvidenceViewerError::Io {
+                path: "durability-state".to_owned(),
+                message: err.to_string(),
             });
-            return Err(err);
         }
         Ok(())
     }
@@ -4481,6 +5364,8 @@ impl NodeHandle {
         let _mutation_guard = self.runtime_mutation_lock.lock().map_err(|_| {
             GovernancePublishError::other("runtime publication transaction lock poisoned")
         })?;
+        self.ensure_durability_healthy()
+            .map_err(GovernancePublishError::other)?;
         let Some(latest_window) = schedule.due_window(now_unix).map_err(|err| {
             GovernancePublishError::other(format!("evidence viewer audit schedule: {err}"))
         })?
@@ -4604,6 +5489,8 @@ impl NodeHandle {
             let _checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
                 GovernancePublishError::other("auxiliary checkpoint transaction lock poisoned")
             })?;
+            self.ensure_durability_healthy()
+                .map_err(GovernancePublishError::other)?;
             self.published_evidence_viewer_audit_cycles
                 .write()
                 .map_err(|_| {
@@ -4613,6 +5500,9 @@ impl NodeHandle {
                 })?
                 .insert(cycle_id);
             if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
+                if err.committed {
+                    return Err(GovernancePublishError::other(err.to_string()));
+                }
                 self.published_evidence_viewer_audit_cycles
                     .write()
                     .map_err(|_| {
@@ -4621,7 +5511,7 @@ impl NodeHandle {
                         )
                     })?
                     .remove(&cycle_id);
-                return Err(err);
+                return Err(GovernancePublishError::other(err.to_string()));
             }
             return Ok(ModerationEvidenceViewerAuditScheduleOutcome::Published {
                 window,
@@ -4719,6 +5609,8 @@ impl NodeHandle {
             .runtime_mutation_lock
             .lock()
             .map_err(|_| ModerationBallotRuntimeError::StateLockPoisoned)?;
+        self.ensure_durability_healthy()
+            .map_err(ModerationBallotRuntimeError::Checkpoint)?;
         let mut runtime = self
             .moderation
             .write()
@@ -4727,24 +5619,26 @@ impl NodeHandle {
         let (outcome, input) = match mutate(&mut runtime) {
             Ok(value) => value,
             Err(err) => {
-                runtime
-                    .restore_snapshot(previous_runtime)
-                    .unwrap_or_else(|rollback| {
-                        panic!(
-                            "failed to roll back rejected moderation ballot mutation: {rollback}"
-                        )
-                    });
+                if let Err(rollback) = runtime.restore_snapshot(previous_runtime) {
+                    let message = self.record_unrecoverable_rollback(
+                        "failed to roll back rejected moderation ballot mutation",
+                        rollback,
+                    );
+                    return Err(ModerationBallotRuntimeError::Checkpoint(message));
+                }
                 return Err(err);
             }
         };
         let record = match runtime.ballot(&input.case_id, &input.round_id) {
             Some(record) => record,
             None => {
-                runtime
-                    .restore_snapshot(previous_runtime)
-                    .unwrap_or_else(|rollback| {
-                        panic!("failed to roll back missing moderation ballot after mutation: {rollback}")
-                    });
+                if let Err(rollback) = runtime.restore_snapshot(previous_runtime) {
+                    let message = self.record_unrecoverable_rollback(
+                        "failed to roll back missing moderation ballot after mutation",
+                        rollback,
+                    );
+                    return Err(ModerationBallotRuntimeError::Checkpoint(message));
+                }
                 return Err(ModerationBallotRuntimeError::InvalidSnapshot {
                     message: "accepted moderation mutation did not retain its ballot".to_owned(),
                 });
@@ -4753,11 +5647,13 @@ impl NodeHandle {
         let mut events = match self.moderation_events.write() {
             Ok(events) => events,
             Err(_) => {
-                runtime
-                    .restore_snapshot(previous_runtime)
-                    .unwrap_or_else(|rollback| {
-                        panic!("failed to roll back moderation mutation after event-lock failure: {rollback}")
-                    });
+                if let Err(rollback) = runtime.restore_snapshot(previous_runtime) {
+                    let message = self.record_unrecoverable_rollback(
+                        "failed to roll back moderation mutation after event-lock failure",
+                        rollback,
+                    );
+                    return Err(ModerationBallotRuntimeError::Checkpoint(message));
+                }
                 return Err(ModerationBallotRuntimeError::StateLockPoisoned);
             }
         };
@@ -4777,24 +5673,32 @@ impl NodeHandle {
         }) {
             Ok(event) => event,
             Err(_) => {
-                runtime
-                    .restore_snapshot(previous_runtime)
-                    .unwrap_or_else(|rollback| {
-                        panic!("failed to roll back moderation mutation after event-sequence exhaustion: {rollback}")
-                    });
+                if let Err(rollback) = runtime.restore_snapshot(previous_runtime) {
+                    let message = self.record_unrecoverable_rollback(
+                        "failed to roll back moderation mutation after event-sequence exhaustion",
+                        rollback,
+                    );
+                    return Err(ModerationBallotRuntimeError::Checkpoint(message));
+                }
                 return Err(ModerationBallotRuntimeError::EventSequenceOverflow);
             }
         };
         let mut snapshot = runtime.snapshot();
         snapshot.events = events.retained();
         if let Err(err) = self.persist_moderation_ballot_snapshot(&snapshot) {
-            runtime
-                .restore_snapshot(previous_runtime)
-                .unwrap_or_else(|rollback| {
-                    panic!("failed to roll back moderation checkpoint failure: {rollback}")
-                });
+            if err.committed {
+                return Err(ModerationBallotRuntimeError::Checkpoint(err.to_string()));
+            }
+            let rollback = runtime.restore_snapshot(previous_runtime);
             *events = previous_events;
-            return Err(err);
+            if let Err(rollback) = rollback {
+                let message = self.record_unrecoverable_rollback(
+                    "failed to roll back moderation checkpoint failure",
+                    rollback,
+                );
+                return Err(ModerationBallotRuntimeError::Checkpoint(message));
+            }
+            return Err(ModerationBallotRuntimeError::Checkpoint(err.to_string()));
         }
         drop(events);
         drop(runtime);
@@ -5055,21 +5959,25 @@ impl NodeHandle {
             .runtime_mutation_lock
             .lock()
             .map_err(|_| ModerationBallotRuntimeError::StateLockPoisoned)?;
+        self.ensure_durability_healthy()
+            .map_err(ModerationBallotRuntimeError::Checkpoint)?;
         let previous = self.export_moderation_ballot_snapshot()?;
         if let Err(err) = self.restore_moderation_ballot_snapshot_in_memory(snapshot) {
-            self.restore_moderation_ballot_snapshot_in_memory(previous)
-                .unwrap_or_else(|rollback| {
-                    panic!("failed to roll back rejected moderation snapshot: {rollback}")
-                });
             return Err(err);
         }
         let committed = self.export_moderation_ballot_snapshot()?;
         if let Err(err) = self.persist_moderation_ballot_snapshot(&committed) {
-            self.restore_moderation_ballot_snapshot_in_memory(previous)
-                .unwrap_or_else(|rollback| {
-                    panic!("failed to roll back moderation snapshot checkpoint failure: {rollback}")
-                });
-            return Err(err);
+            if err.committed {
+                return Err(ModerationBallotRuntimeError::Checkpoint(err.to_string()));
+            }
+            if let Err(rollback) = self.restore_moderation_ballot_snapshot_in_memory(previous) {
+                let message = self.record_unrecoverable_rollback(
+                    "failed to roll back moderation snapshot checkpoint failure",
+                    rollback,
+                );
+                return Err(ModerationBallotRuntimeError::Checkpoint(message));
+            }
+            return Err(ModerationBallotRuntimeError::Checkpoint(err.to_string()));
         }
         Ok(())
     }
@@ -5089,16 +5997,36 @@ impl NodeHandle {
         let outcome =
             validate_orderbook_admission_policy(self.config.orderbook_admission_policy(), &order)
                 .and_then(|()| {
-                    validate_orderbook_reserve_lifecycle_admission(&self.reserve_lifecycle, &order)
-                })
-                .and_then(|()| {
-                    self.orderbook
-                        .write()
-                        .map_err(|_| OrderbookRuntimeError::StateLockPoisoned)?
-                        .submit_order(order, now_unix)
+                    self.mutate_orderbook_durably(now_unix, |runtime| {
+                        // Reserve lifecycle changes use the same outer mutation lock. Keep this
+                        // check inside the transaction so an ask cannot race an advert-disable
+                        // transition between admission and the durable orderbook commit.
+                        validate_orderbook_reserve_lifecycle_admission(
+                            &self.reserve_lifecycle,
+                            &order,
+                        )?;
+                        let outcome = runtime.submit_order(order, now_unix)?;
+                        let input = OrderbookEventInput {
+                            kind: OrderbookEventKind::OrderAccepted,
+                            order_id: Some(outcome.accepted_order.order_id),
+                            trade_ids: outcome
+                                .fills
+                                .iter()
+                                .map(|fill| fill.trade.trade_id)
+                                .collect(),
+                            settlement_channel_ids: outcome
+                                .settlement_channels_opened
+                                .iter()
+                                .map(|channel| channel.channel_id)
+                                .collect(),
+                            receipt_id: None,
+                            expired_order_ids: outcome.expired_order_ids.clone(),
+                        };
+                        Ok((outcome, input))
+                    })
                 });
         match &outcome {
-            Ok(outcome) => {
+            Ok((_, event)) => {
                 global_or_default().record_sorafs_orderbook_order(
                     ORDERBOOK_METRIC_CLUSTER_LOCAL,
                     orderbook_tier_label(tier),
@@ -5106,34 +6034,19 @@ impl NodeHandle {
                     "accepted",
                 );
                 self.record_orderbook_snapshot_metrics(now_unix);
-                self.save_orderbook_checkpoint(now_unix);
-                self.publish_orderbook_event(
-                    OrderbookEventKind::OrderAccepted,
-                    now_unix,
-                    Some(outcome.accepted_order.order_id),
-                    outcome
-                        .fills
-                        .iter()
-                        .map(|fill| fill.trade.trade_id)
-                        .collect(),
-                    outcome
-                        .settlement_channels_opened
-                        .iter()
-                        .map(|channel| channel.channel_id)
-                        .collect(),
-                    None,
-                    outcome.expired_order_ids.clone(),
-                );
+                let _ = self.orderbook_event_sender.send(event.clone());
             }
             Err(err) => {
                 let status = match err {
-                    OrderbookRuntimeError::DuplicateOrderId { .. } => "duplicate",
+                    OrderbookRuntimeError::DuplicateOrderId { .. }
+                    | OrderbookRuntimeError::StaleOwnerNonce { .. } => "duplicate",
                     OrderbookRuntimeError::Validation(_)
                     | OrderbookRuntimeError::OrderBelowMinimum { .. }
                     | OrderbookRuntimeError::OrderPriceTickMismatch { .. }
                     | OrderbookRuntimeError::ReserveLifecycleAdvertDisabled { .. }
                     | OrderbookRuntimeError::ResourceExhausted { .. } => "rejected",
                     OrderbookRuntimeError::SequenceOverflow
+                    | OrderbookRuntimeError::EventSequenceOverflow
                     | OrderbookRuntimeError::MissingMatchedOrder
                     | OrderbookRuntimeError::InvalidMatchedSides
                     | OrderbookRuntimeError::StateLockPoisoned
@@ -5142,7 +6055,8 @@ impl NodeHandle {
                     | OrderbookRuntimeError::ReceiptRangeOverlap { .. }
                     | OrderbookRuntimeError::OrderNotFound { .. }
                     | OrderbookRuntimeError::CancelOwnerMismatch
-                    | OrderbookRuntimeError::InvalidSnapshot(_) => "error",
+                    | OrderbookRuntimeError::InvalidSnapshot(_)
+                    | OrderbookRuntimeError::Checkpoint(_) => "error",
                 };
                 global_or_default().record_sorafs_orderbook_order(
                     ORDERBOOK_METRIC_CLUSTER_LOCAL,
@@ -5152,7 +6066,7 @@ impl NodeHandle {
                 );
             }
         }
-        outcome
+        outcome.map(|(outcome, _)| outcome)
     }
 
     /// Cancel an open order from the local SoraFS orderbook mirror.
@@ -5161,31 +6075,27 @@ impl NodeHandle {
         cancel: OrderCancelV1,
         now_unix: u64,
     ) -> Result<OrderbookCancelOutcome, OrderbookRuntimeError> {
-        let outcome = self
-            .orderbook
-            .write()
-            .map_err(|_| OrderbookRuntimeError::StateLockPoisoned)?
-            .cancel_order(cancel);
-        if let Ok(outcome) = &outcome {
-            global_or_default().record_sorafs_orderbook_order(
-                ORDERBOOK_METRIC_CLUSTER_LOCAL,
-                "all",
-                "all",
-                "cancelled",
-            );
-            self.record_orderbook_snapshot_metrics(now_unix);
-            self.save_orderbook_checkpoint(now_unix);
-            self.publish_orderbook_event(
-                OrderbookEventKind::OrderCancelled,
-                now_unix,
-                Some(outcome.cancelled_order.order_id),
-                Vec::new(),
-                Vec::new(),
-                None,
-                Vec::new(),
-            );
-        }
-        outcome
+        let (outcome, event) = self.mutate_orderbook_durably(now_unix, |runtime| {
+            let outcome = runtime.cancel_order(cancel)?;
+            let input = OrderbookEventInput {
+                kind: OrderbookEventKind::OrderCancelled,
+                order_id: Some(outcome.cancelled_order.order_id),
+                trade_ids: Vec::new(),
+                settlement_channel_ids: Vec::new(),
+                receipt_id: None,
+                expired_order_ids: Vec::new(),
+            };
+            Ok((outcome, input))
+        })?;
+        global_or_default().record_sorafs_orderbook_order(
+            ORDERBOOK_METRIC_CLUSTER_LOCAL,
+            "all",
+            "all",
+            "cancelled",
+        );
+        self.record_orderbook_snapshot_metrics(now_unix);
+        let _ = self.orderbook_event_sender.send(event);
+        Ok(outcome)
     }
 
     /// Apply a streaming-settlement receipt to a local SoraFS orderbook channel.
@@ -5198,26 +6108,22 @@ impl NodeHandle {
         receipt: SettlementReceiptV1,
         now_unix: u64,
     ) -> Result<OrderbookReceiptOutcome, OrderbookRuntimeError> {
-        let outcome = self
-            .orderbook
-            .write()
-            .map_err(|_| OrderbookRuntimeError::StateLockPoisoned)?
-            .submit_receipt(receipt);
-        if let Ok(outcome) = &outcome {
-            self.record_orderbook_snapshot_metrics(now_unix);
-            self.save_orderbook_checkpoint(now_unix);
-            self.publish_orderbook_settlement_receipt(&outcome.accepted_receipt);
-            self.publish_orderbook_event(
-                OrderbookEventKind::SettlementReceiptAccepted,
-                now_unix,
-                None,
-                Vec::new(),
-                vec![outcome.updated_channel.channel_id],
-                Some(outcome.accepted_receipt.receipt_id),
-                Vec::new(),
-            );
-        }
-        outcome
+        let (outcome, event) = self.mutate_orderbook_durably(now_unix, |runtime| {
+            let outcome = runtime.submit_receipt(receipt)?;
+            let input = OrderbookEventInput {
+                kind: OrderbookEventKind::SettlementReceiptAccepted,
+                order_id: None,
+                trade_ids: Vec::new(),
+                settlement_channel_ids: vec![outcome.updated_channel.channel_id],
+                receipt_id: Some(outcome.accepted_receipt.receipt_id),
+                expired_order_ids: Vec::new(),
+            };
+            Ok((outcome, input))
+        })?;
+        self.record_orderbook_snapshot_metrics(now_unix);
+        self.publish_orderbook_settlement_receipt(&outcome.accepted_receipt);
+        let _ = self.orderbook_event_sender.send(event);
+        Ok(outcome)
     }
 
     /// Return a point-in-time snapshot of the local SoraFS orderbook mirror.
@@ -5264,303 +6170,433 @@ impl NodeHandle {
         snapshot: OrderbookRuntimeSnapshotV1,
     ) -> Result<(), OrderbookRuntimeError> {
         let generated_at_unix = snapshot.generated_at_unix;
-        self.orderbook
+        let _mutation_guard = self
+            .runtime_mutation_lock
+            .lock()
+            .map_err(|_| OrderbookRuntimeError::StateLockPoisoned)?;
+        self.ensure_durability_healthy()
+            .map_err(OrderbookRuntimeError::Checkpoint)?;
+        let retention = self.config.runtime_retention();
+        let mut restored = OrderbookRuntime::with_entry_limit(retention.state_entry_limit());
+        restored.restore_runtime_snapshot(snapshot)?;
+        let mut orderbook = self
+            .orderbook
             .write()
-            .map_err(|_| OrderbookRuntimeError::StateLockPoisoned)?
-            .restore_runtime_snapshot(snapshot)?;
+            .map_err(|_| OrderbookRuntimeError::StateLockPoisoned)?;
+        let mut events = self
+            .orderbook_events
+            .write()
+            .map_err(|_| OrderbookRuntimeError::StateLockPoisoned)?;
+        let previous_runtime = orderbook.runtime_snapshot(generated_at_unix.max(1));
+        let previous_events = events.clone();
+        *orderbook = restored;
+        *events = BoundedEventHistory::new(retention.event_history_limit());
+        let checkpoint = OrderbookRuntimeCheckpointV1 {
+            version: ORDERBOOK_RUNTIME_STATE_VERSION_V1,
+            runtime: orderbook.runtime_snapshot(generated_at_unix),
+            events: Vec::new(),
+        };
+        if let Err(err) = self.persist_orderbook_checkpoint(&checkpoint) {
+            if err.committed {
+                return Err(OrderbookRuntimeError::Checkpoint(err.to_string()));
+            }
+            let rollback = orderbook.restore_runtime_snapshot(previous_runtime);
+            *events = previous_events;
+            if let Err(rollback) = rollback {
+                let message = self.record_unrecoverable_rollback(
+                    "failed to roll back restored orderbook snapshot after checkpoint failure",
+                    rollback,
+                );
+                return Err(OrderbookRuntimeError::Checkpoint(message));
+            }
+            return Err(OrderbookRuntimeError::Checkpoint(err.to_string()));
+        }
+        drop(events);
+        drop(orderbook);
         self.record_orderbook_snapshot_metrics(generated_at_unix);
-        self.save_orderbook_checkpoint(generated_at_unix);
         Ok(())
     }
 
-    fn load_moderation_model_registry_checkpoint(&self) {
+    fn load_moderation_model_registry_checkpoint(&self) -> Result<(), NodeInitError> {
         let Some(path) = self.moderation_model_registry_checkpoint_path.as_ref() else {
-            return;
+            return Ok(());
         };
-        let bytes = match read_local_checkpoint_bounded(
+        let Some(bytes) = read_local_checkpoint_bounded(
             path,
             self.config.runtime_retention().checkpoint_max_bytes(),
-        ) {
-            Ok(Some(bytes)) => bytes,
-            Ok(None) => return,
-            Err(err) => panic!(
-                "failed to read SoraFS moderation model registry checkpoint `{}`: {err}",
-                path.display()
-            ),
+        )
+        .map_err(|err| NodeInitError::checkpoint("moderation model registry", path, err))?
+        else {
+            return Ok(());
         };
-        let snapshot = match norito::decode_from_bytes::<ModerationModelRegistrySnapshot>(&bytes) {
-            Ok(snapshot) => snapshot,
-            Err(err) => panic!(
-                "failed to decode SoraFS moderation model registry checkpoint `{}`: {err}",
-                path.display()
-            ),
-        };
+        let snapshot = norito::decode_from_bytes::<ModerationModelRegistrySnapshot>(&bytes)
+            .map_err(|err| NodeInitError::checkpoint("moderation model registry", path, err))?;
         let repro_count = snapshot.reproducibility_manifests.len();
         let corpus_count = snapshot.adversarial_corpora.len();
-        match self
-            .moderation_model_registry
+        self.moderation_model_registry
             .write()
             .map_err(|_| ModerationModelRegistryError::StateLockPoisoned)
             .and_then(|mut registry| registry.restore_snapshot(snapshot))
-        {
-            Ok(()) => {
-                iroha_logger::info!(
-                    path = %path.display(),
-                    repro_count,
-                    corpus_count,
-                    "restored SoraFS moderation model registry checkpoint"
-                );
-            }
-            Err(err) => panic!(
-                "rejected SoraFS moderation model registry checkpoint `{}`: {err}",
-                path.display()
-            ),
-        }
+            .map_err(|err| NodeInitError::checkpoint("moderation model registry", path, err))?;
+        iroha_logger::info!(
+            path = %path.display(),
+            repro_count,
+            corpus_count,
+            "restored SoraFS moderation model registry checkpoint"
+        );
+        Ok(())
     }
 
     fn persist_moderation_model_registry_snapshot(
         &self,
         snapshot: &ModerationModelRegistrySnapshot,
-    ) -> Result<(), ModerationModelRegistryError> {
+    ) -> Result<(), RuntimeCheckpointPersistError> {
         let Some(path) = self.moderation_model_registry_checkpoint_path.as_ref() else {
             return Ok(());
         };
         let bytes = norito::to_bytes(snapshot).map_err(|err| {
-            ModerationModelRegistryError::Checkpoint {
-                message: format!("encode `{}`: {err}", path.display()),
-            }
+            RuntimeCheckpointPersistError::precommit(format!(
+                "encode moderation model registry checkpoint `{}`: {err}",
+                path.display()
+            ))
         })?;
-        write_local_checkpoint_atomic_bounded(
+        self.finish_local_checkpoint_write(
+            "moderation model registry",
             path,
-            &bytes,
-            self.config.runtime_retention().checkpoint_max_bytes(),
+            write_local_checkpoint_atomic_bounded(
+                path,
+                &bytes,
+                self.config.runtime_retention().checkpoint_max_bytes(),
+            ),
         )
-        .map_err(|err| ModerationModelRegistryError::Checkpoint {
-            message: format!("persist `{}`: {err}", path.display()),
-        })
     }
 
-    fn load_moderation_screening_checkpoint(&self) {
+    fn load_moderation_screening_checkpoint(&self) -> Result<(), NodeInitError> {
         let Some(path) = self.moderation_screening_checkpoint_path.as_ref() else {
-            return;
+            return Ok(());
         };
-        let bytes = match read_local_checkpoint_bounded(
+        let Some(bytes) = read_local_checkpoint_bounded(
             path,
             self.config.runtime_retention().checkpoint_max_bytes(),
-        ) {
-            Ok(Some(bytes)) => bytes,
-            Ok(None) => return,
-            Err(err) => panic!(
-                "failed to read SoraFS moderation screening checkpoint `{}`: {err}",
-                path.display()
-            ),
+        )
+        .map_err(|err| NodeInitError::checkpoint("moderation screening", path, err))?
+        else {
+            return Ok(());
         };
-        let snapshot = match norito::decode_from_bytes::<ModerationScreeningSnapshot>(&bytes) {
-            Ok(snapshot) => snapshot,
-            Err(err) => panic!(
-                "failed to decode SoraFS moderation screening checkpoint `{}`: {err}",
-                path.display()
-            ),
-        };
+        let snapshot = norito::decode_from_bytes::<ModerationScreeningSnapshot>(&bytes)
+            .map_err(|err| NodeInitError::checkpoint("moderation screening", path, err))?;
         let screening_count = snapshot.screening_records.len();
         let quarantine_count = snapshot.quarantine_records.len();
-        match self
-            .moderation_screening
+        self.moderation_screening
             .write()
             .map_err(|_| ModerationScreeningError::StateLockPoisoned)
             .and_then(|mut runtime| runtime.restore_snapshot(snapshot))
-        {
-            Ok(()) => {
-                iroha_logger::info!(
-                    path = %path.display(),
-                    screening_count,
-                    quarantine_count,
-                    "restored SoraFS moderation screening checkpoint"
-                );
-            }
-            Err(err) => panic!(
-                "rejected SoraFS moderation screening checkpoint `{}`: {err}",
-                path.display()
-            ),
-        }
+            .map_err(|err| NodeInitError::checkpoint("moderation screening", path, err))?;
+        iroha_logger::info!(
+            path = %path.display(),
+            screening_count,
+            quarantine_count,
+            "restored SoraFS moderation screening checkpoint"
+        );
+        Ok(())
     }
 
     fn persist_moderation_screening_snapshot(
         &self,
         snapshot: &ModerationScreeningSnapshot,
-    ) -> Result<(), ModerationScreeningError> {
+    ) -> Result<(), RuntimeCheckpointPersistError> {
         let Some(path) = self.moderation_screening_checkpoint_path.as_ref() else {
             return Ok(());
         };
         let bytes = norito::to_bytes(snapshot).map_err(|err| {
-            ModerationScreeningError::Checkpoint {
-                message: format!("encode `{}`: {err}", path.display()),
-            }
+            RuntimeCheckpointPersistError::precommit(format!(
+                "encode moderation screening checkpoint `{}`: {err}",
+                path.display()
+            ))
         })?;
-        write_local_checkpoint_atomic_bounded(
+        self.finish_local_checkpoint_write(
+            "moderation screening",
             path,
-            &bytes,
-            self.config.runtime_retention().checkpoint_max_bytes(),
+            write_local_checkpoint_atomic_bounded(
+                path,
+                &bytes,
+                self.config.runtime_retention().checkpoint_max_bytes(),
+            ),
         )
-        .map_err(|err| ModerationScreeningError::Checkpoint {
-            message: format!("persist `{}`: {err}", path.display()),
-        })
     }
 
-    fn load_moderation_quarantine_object_index_checkpoint(&self) {
+    fn load_moderation_quarantine_object_index_checkpoint(&self) -> Result<(), NodeInitError> {
         let Some(path) = self.moderation_quarantine_object_index_path.as_ref() else {
-            return;
+            return Ok(());
         };
-        let bytes = match read_local_checkpoint_bounded(
+        let Some(bytes) = read_local_checkpoint_bounded(
             path,
             self.config.runtime_retention().checkpoint_max_bytes(),
-        ) {
-            Ok(Some(bytes)) => bytes,
-            Ok(None) => return,
-            Err(err) => panic!(
-                "failed to read SoraFS moderation quarantine object index `{}`: {err}",
-                path.display()
-            ),
+        )
+        .map_err(|err| {
+            NodeInitError::checkpoint("moderation quarantine object index", path, err)
+        })?
+        else {
+            return Ok(());
         };
-        let snapshot = match norito::decode_from_bytes::<ModerationQuarantineObjectSnapshot>(&bytes)
-        {
-            Ok(snapshot) => snapshot,
-            Err(err) => panic!(
-                "failed to decode SoraFS moderation quarantine object index `{}`: {err}",
-                path.display()
-            ),
-        };
+        let snapshot = norito::decode_from_bytes::<ModerationQuarantineObjectSnapshot>(&bytes)
+            .map_err(|err| {
+                NodeInitError::checkpoint("moderation quarantine object index", path, err)
+            })?;
         let object_count = snapshot.objects.len();
-        if let Err(err) = self
-            .moderation_quarantine_objects
+        self.moderation_quarantine_objects
             .read()
             .map_err(|_| ModerationQuarantineObjectError::StateLockPoisoned)
             .and_then(|objects| objects.ensure_snapshot_capacity(&snapshot))
-        {
-            panic!(
-                "rejected SoraFS moderation quarantine object index `{}`: {err}",
-                path.display()
-            );
-        }
-        if let Err(err) = self.validate_moderation_quarantine_object_snapshot_refs(&snapshot) {
-            panic!(
-                "rejected SoraFS moderation quarantine object index `{}`: {err}",
-                path.display()
-            );
-        }
-        match self
-            .moderation_quarantine_objects
+            .map_err(|err| {
+                NodeInitError::checkpoint("moderation quarantine object index", path, err)
+            })?;
+        self.validate_moderation_quarantine_object_snapshot_refs(&snapshot)
+            .map_err(|err| {
+                NodeInitError::checkpoint("moderation quarantine object index", path, err)
+            })?;
+        self.moderation_quarantine_objects
             .write()
             .map_err(|_| ModerationQuarantineObjectError::StateLockPoisoned)
             .and_then(|mut objects| objects.restore_snapshot(snapshot))
-        {
-            Ok(()) => {
-                iroha_logger::info!(
-                    path = %path.display(),
-                    object_count,
-                    "restored SoraFS moderation quarantine object index"
-                );
-            }
-            Err(err) => panic!(
-                "rejected SoraFS moderation quarantine object index `{}`: {err}",
-                path.display()
+            .map_err(|err| {
+                NodeInitError::checkpoint("moderation quarantine object index", path, err)
+            })?;
+        iroha_logger::info!(
+            path = %path.display(),
+            object_count,
+            "restored SoraFS moderation quarantine object index"
+        );
+        Ok(())
+    }
+
+    fn audit_moderation_quarantine_object_store(&self) -> Result<(), NodeInitError> {
+        let root = self
+            .moderation_quarantine_object_root
+            .as_ref()
+            .expect("storage-backed node has a quarantine object root");
+        let index_path = self
+            .moderation_quarantine_object_index_path
+            .as_ref()
+            .expect("storage-backed node has a quarantine index path");
+        let key_path = self
+            .moderation_quarantine_object_key_path
+            .as_ref()
+            .expect("storage-backed node has a quarantine key path");
+        let snapshot = self
+            .moderation_quarantine_objects
+            .read()
+            .map_err(|_| {
+                NodeInitError::checkpoint(
+                    "moderation quarantine object store",
+                    root,
+                    "object index lock poisoned",
+                )
+            })?
+            .snapshot();
+        let key = match read_local_checkpoint_bounded(key_path, 32).map_err(|err| {
+            NodeInitError::checkpoint("moderation quarantine object key", key_path, err)
+        })? {
+            Some(bytes) => Some(
+                decode_moderation_quarantine_object_key(key_path, bytes).map_err(|err| {
+                    NodeInitError::checkpoint("moderation quarantine object key", key_path, err)
+                })?,
             ),
+            None if snapshot.objects.is_empty() => None,
+            None => {
+                return Err(NodeInitError::checkpoint(
+                    "moderation quarantine object key",
+                    key_path,
+                    "sealing key is missing while indexed objects exist",
+                ));
+            }
+        };
+        let mut expected_files = BTreeSet::from([index_path.clone()]);
+        if key.is_some() {
+            expected_files.insert(key_path.clone());
         }
+        for record in &snapshot.objects {
+            let envelope_path = self
+                .resolve_moderation_quarantine_object_path(root, record)
+                .map_err(|err| {
+                    NodeInitError::checkpoint("moderation quarantine object store", root, err)
+                })?;
+            let bytes = read_local_checkpoint_bounded(
+                &envelope_path,
+                self.config.runtime_retention().checkpoint_max_bytes(),
+            )
+            .map_err(|err| {
+                NodeInitError::checkpoint(
+                    "moderation quarantine object envelope",
+                    &envelope_path,
+                    err,
+                )
+            })?
+            .ok_or_else(|| {
+                NodeInitError::checkpoint(
+                    "moderation quarantine object envelope",
+                    &envelope_path,
+                    "indexed envelope is missing",
+                )
+            })?;
+            let envelope = norito::decode_from_bytes::<ModerationQuarantineObjectEnvelopeV1>(
+                &bytes,
+            )
+            .map_err(|err| {
+                NodeInitError::checkpoint(
+                    "moderation quarantine object envelope",
+                    &envelope_path,
+                    err,
+                )
+            })?;
+            let canonical = norito::to_bytes(&envelope).map_err(|err| {
+                NodeInitError::checkpoint(
+                    "moderation quarantine object envelope",
+                    &envelope_path,
+                    err,
+                )
+            })?;
+            if canonical != bytes {
+                return Err(NodeInitError::checkpoint(
+                    "moderation quarantine object envelope",
+                    &envelope_path,
+                    "envelope is not canonically encoded",
+                ));
+            }
+            let payload = open_moderation_quarantine_object(
+                envelope,
+                record,
+                key.expect("non-empty object index requires a loaded sealing key"),
+            )
+            .map_err(|err| {
+                NodeInitError::checkpoint(
+                    "moderation quarantine object envelope",
+                    &envelope_path,
+                    err,
+                )
+            })?;
+            let quarantine = self
+                .moderation_quarantine_record_for_object(&record.quarantine_id)
+                .map_err(|err| {
+                    NodeInitError::checkpoint(
+                        "moderation quarantine object envelope",
+                        &envelope_path,
+                        err,
+                    )
+                })?;
+            if *blake3::hash(&payload).as_bytes() != quarantine.subject_digest {
+                return Err(NodeInitError::checkpoint(
+                    "moderation quarantine object envelope",
+                    &envelope_path,
+                    "decrypted payload digest does not match quarantine subject",
+                ));
+            }
+            expected_files.insert(envelope_path);
+        }
+
+        let file_limit = self
+            .config
+            .runtime_retention()
+            .state_entry_limit()
+            .saturating_add(2);
+        let mut actual_files = BTreeSet::new();
+        collect_secure_object_store_files(root, root, 0, file_limit, &mut actual_files).map_err(
+            |err| NodeInitError::checkpoint("moderation quarantine object store", root, err),
+        )?;
+        if actual_files != expected_files {
+            let unexpected = actual_files
+                .difference(&expected_files)
+                .next()
+                .or_else(|| expected_files.difference(&actual_files).next())
+                .cloned()
+                .unwrap_or_else(|| root.clone());
+            return Err(NodeInitError::checkpoint(
+                "moderation quarantine object store",
+                &unexpected,
+                "object store files do not exactly match the durable index",
+            ));
+        }
+        Ok(())
     }
 
     fn persist_moderation_quarantine_object_index_snapshot(
         &self,
         snapshot: &ModerationQuarantineObjectSnapshot,
-    ) -> Result<(), ModerationQuarantineObjectError> {
+    ) -> Result<(), RuntimeCheckpointPersistError> {
         let Some(path) = self.moderation_quarantine_object_index_path.as_ref() else {
             return Ok(());
         };
-        let bytes =
-            norito::to_bytes(snapshot).map_err(|err| ModerationQuarantineObjectError::Codec {
-                message: err.to_string(),
-            })?;
-        write_local_checkpoint_atomic_bounded(
+        let bytes = norito::to_bytes(snapshot).map_err(|err| {
+            RuntimeCheckpointPersistError::precommit(format!(
+                "encode moderation quarantine object index checkpoint `{}`: {err}",
+                path.display()
+            ))
+        })?;
+        self.finish_local_checkpoint_write(
+            "moderation quarantine object index",
             path,
-            &bytes,
-            self.config.runtime_retention().checkpoint_max_bytes(),
+            write_local_checkpoint_atomic_bounded(
+                path,
+                &bytes,
+                self.config.runtime_retention().checkpoint_max_bytes(),
+            ),
         )
-        .map_err(|err| ModerationQuarantineObjectError::Io {
-            path: path.display().to_string(),
-            message: err.to_string(),
-        })
     }
 
-    fn load_moderation_evidence_viewer_checkpoint(&self) {
+    fn load_moderation_evidence_viewer_checkpoint(&self) -> Result<(), NodeInitError> {
         let Some(path) = self.moderation_evidence_viewer_checkpoint_path.as_ref() else {
-            return;
+            return Ok(());
         };
-        let bytes = match read_local_checkpoint_bounded(
+        let Some(bytes) = read_local_checkpoint_bounded(
             path,
             self.config.runtime_retention().checkpoint_max_bytes(),
-        ) {
-            Ok(Some(bytes)) => bytes,
-            Ok(None) => return,
-            Err(err) => panic!(
-                "failed to read SoraFS moderation evidence viewer checkpoint `{}`: {err}",
-                path.display()
-            ),
+        )
+        .map_err(|err| NodeInitError::checkpoint("moderation evidence viewer", path, err))?
+        else {
+            return Ok(());
         };
-        let snapshot = match norito::decode_from_bytes::<ModerationEvidenceViewerSnapshot>(&bytes) {
-            Ok(snapshot) => snapshot,
-            Err(err) => panic!(
-                "failed to decode SoraFS moderation evidence viewer checkpoint `{}`: {err}",
-                path.display()
-            ),
-        };
+        let snapshot = norito::decode_from_bytes::<ModerationEvidenceViewerSnapshot>(&bytes)
+            .map_err(|err| NodeInitError::checkpoint("moderation evidence viewer", path, err))?;
         let session_count = snapshot.sessions.len();
         let access_event_count = snapshot.access_events.len();
-        if let Err(err) = self.validate_moderation_evidence_viewer_snapshot_refs(&snapshot) {
-            panic!(
-                "rejected SoraFS moderation evidence viewer checkpoint `{}`: {err}",
-                path.display()
-            );
-        }
-        match self
-            .moderation_evidence_viewer
+        self.validate_moderation_evidence_viewer_snapshot_refs(&snapshot)
+            .map_err(|err| NodeInitError::checkpoint("moderation evidence viewer", path, err))?;
+        self.moderation_evidence_viewer
             .write()
             .map_err(|_| ModerationEvidenceViewerError::StateLockPoisoned)
             .and_then(|mut runtime| runtime.restore_snapshot(snapshot))
-        {
-            Ok(()) => {
-                iroha_logger::info!(
-                    path = %path.display(),
-                    session_count,
-                    access_event_count,
-                    "restored SoraFS moderation evidence viewer checkpoint"
-                );
-            }
-            Err(err) => panic!(
-                "rejected SoraFS moderation evidence viewer checkpoint `{}`: {err}",
-                path.display()
-            ),
-        }
+            .map_err(|err| NodeInitError::checkpoint("moderation evidence viewer", path, err))?;
+        iroha_logger::info!(
+            path = %path.display(),
+            session_count,
+            access_event_count,
+            "restored SoraFS moderation evidence viewer checkpoint"
+        );
+        Ok(())
     }
 
     fn persist_moderation_evidence_viewer_snapshot(
         &self,
         snapshot: &ModerationEvidenceViewerSnapshot,
-    ) -> Result<(), ModerationEvidenceViewerError> {
+    ) -> Result<(), RuntimeCheckpointPersistError> {
         let Some(path) = self.moderation_evidence_viewer_checkpoint_path.as_ref() else {
             return Ok(());
         };
-        let bytes =
-            norito::to_bytes(snapshot).map_err(|err| ModerationEvidenceViewerError::Codec {
-                message: err.to_string(),
-            })?;
-        write_local_checkpoint_atomic_bounded(
+        let bytes = norito::to_bytes(snapshot).map_err(|err| {
+            RuntimeCheckpointPersistError::precommit(format!(
+                "encode moderation evidence viewer checkpoint `{}`: {err}",
+                path.display()
+            ))
+        })?;
+        self.finish_local_checkpoint_write(
+            "moderation evidence viewer",
             path,
-            &bytes,
-            self.config.runtime_retention().checkpoint_max_bytes(),
+            write_local_checkpoint_atomic_bounded(
+                path,
+                &bytes,
+                self.config.runtime_retention().checkpoint_max_bytes(),
+            ),
         )
-        .map_err(|err| ModerationEvidenceViewerError::Io {
-            path: path.display().to_string(),
-            message: err.to_string(),
-        })
     }
 
     fn restore_moderation_ballot_snapshot_in_memory(
@@ -5654,11 +6690,6 @@ impl NodeHandle {
             .read()
             .map_err(|_| GovernancePublishError::other("reputation event history poisoned"))?
             .retained();
-        let orderbook_events = self
-            .orderbook_events
-            .read()
-            .map_err(|_| GovernancePublishError::other("orderbook event history poisoned"))?
-            .retained();
         let transparency_source_entries = self
             .transparency_ledger_source_entries
             .read()
@@ -5698,7 +6729,6 @@ impl NodeHandle {
             reputation_snapshots,
             latest_reputation_snapshot_id,
             reputation_events,
-            orderbook_events,
             transparency_source_entries,
             privacy_source_events,
             published_privacy_aggregate_cycles,
@@ -5706,20 +6736,31 @@ impl NodeHandle {
         })
     }
 
-    fn persist_auxiliary_runtime_checkpoint_unlocked(&self) -> Result<(), GovernancePublishError> {
+    fn persist_auxiliary_runtime_checkpoint_unlocked(
+        &self,
+    ) -> Result<(), RuntimeCheckpointPersistError> {
         let Some(path) = self.auxiliary_runtime_checkpoint_path.as_ref() else {
             return Ok(());
         };
-        let checkpoint = self.export_auxiliary_runtime_checkpoint()?;
-        let bytes = norito::to_bytes(&checkpoint).map_err(|err| {
-            GovernancePublishError::other(format!("encode auxiliary runtime checkpoint: {err}"))
+        let checkpoint = self.export_auxiliary_runtime_checkpoint().map_err(|err| {
+            RuntimeCheckpointPersistError::precommit(format!(
+                "export auxiliary runtime checkpoint: {err}"
+            ))
         })?;
-        write_local_checkpoint_atomic_bounded(
+        let bytes = norito::to_bytes(&checkpoint).map_err(|err| {
+            RuntimeCheckpointPersistError::precommit(format!(
+                "encode auxiliary runtime checkpoint: {err}"
+            ))
+        })?;
+        self.finish_local_checkpoint_write(
+            "auxiliary runtime",
             path,
-            &bytes,
-            self.config.runtime_retention().checkpoint_max_bytes(),
+            write_local_checkpoint_atomic_bounded(
+                path,
+                &bytes,
+                self.config.runtime_retention().checkpoint_max_bytes(),
+            ),
         )
-        .map_err(GovernancePublishError::from)
     }
 
     fn mutate_reserve_runtime_durably<T, E>(
@@ -5728,38 +6769,62 @@ impl NodeHandle {
         state_lock_error: impl Fn() -> E,
         checkpoint_error: impl Fn(String) -> E,
     ) -> Result<T, E> {
+        // Orderbook ask admission takes this lock before reading reserve state.
+        // Reserve transitions must use the same ordering so advert disablement
+        // and order admission have one deterministic linearization point.
+        let _mutation_guard = self
+            .runtime_mutation_lock
+            .lock()
+            .map_err(|_| state_lock_error())?;
         let _checkpoint_guard = self
             .auxiliary_checkpoint_lock
             .lock()
             .map_err(|_| state_lock_error())?;
+        self.ensure_durability_healthy()
+            .map_err(&checkpoint_error)?;
         let mut runtime = self
             .reserve_lifecycle
             .write()
             .map_err(|_| state_lock_error())?;
         let previous = runtime.checkpoint();
-        let (outcome, changed) =
-            match mutate(&mut runtime) {
-                Ok(outcome) => outcome,
-                Err(err) => {
-                    runtime.restore_checkpoint(previous).unwrap_or_else(|restore_err| {
-                    panic!("failed to roll back rejected reserve runtime mutation: {restore_err}")
-                });
-                    return Err(err);
+        let (outcome, changed) = match mutate(&mut runtime) {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                if let Err(restore_err) = runtime.restore_checkpoint(previous) {
+                    let message = self.record_unrecoverable_rollback(
+                        "failed to roll back rejected reserve runtime mutation",
+                        restore_err,
+                    );
+                    return Err(checkpoint_error(message));
                 }
-            };
+                return Err(err);
+            }
+        };
         drop(runtime);
         if !changed {
             return Ok(outcome);
         }
         if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
-            let mut runtime = self.reserve_lifecycle.write().unwrap_or_else(|_| {
-                panic!("reserve runtime lock poisoned while rolling back checkpoint failure")
-            });
-            runtime
-                .restore_checkpoint(previous)
-                .unwrap_or_else(|restore_err| {
-                    panic!("failed to roll back reserve checkpoint failure: {restore_err}")
-                });
+            if err.committed {
+                return Err(checkpoint_error(err.to_string()));
+            }
+            let mut runtime = match self.reserve_lifecycle.write() {
+                Ok(runtime) => runtime,
+                Err(_) => {
+                    let message = self.record_unrecoverable_rollback(
+                        "failed to acquire reserve runtime lock while rolling back checkpoint failure",
+                        "state lock poisoned",
+                    );
+                    return Err(checkpoint_error(message));
+                }
+            };
+            if let Err(restore_err) = runtime.restore_checkpoint(previous) {
+                let message = self.record_unrecoverable_rollback(
+                    "failed to roll back reserve checkpoint failure",
+                    restore_err,
+                );
+                return Err(checkpoint_error(message));
+            }
             return Err(checkpoint_error(err.to_string()));
         }
         Ok(outcome)
@@ -5773,15 +6838,19 @@ impl NodeHandle {
             .auxiliary_checkpoint_lock
             .lock()
             .map_err(|_| DealEngineError::StateLockPoisoned)?;
+        self.ensure_durability_healthy()
+            .map_err(DealEngineError::Checkpoint)?;
         let previous = self.deal_engine.checkpoint()?;
         let (outcome, changed) = match mutate(&self.deal_engine) {
             Ok(outcome) => outcome,
             Err(err) => {
-                self.deal_engine
-                    .restore_checkpoint(previous)
-                    .unwrap_or_else(|restore_err| {
-                        panic!("failed to roll back rejected deal mutation: {restore_err}")
-                    });
+                if let Err(restore_err) = self.deal_engine.restore_checkpoint(previous) {
+                    let message = self.record_unrecoverable_rollback(
+                        "failed to roll back rejected deal mutation",
+                        restore_err,
+                    );
+                    return Err(DealEngineError::Checkpoint(message));
+                }
                 return Err(err);
             }
         };
@@ -5789,11 +6858,16 @@ impl NodeHandle {
             return Ok(outcome);
         }
         if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
-            self.deal_engine
-                .restore_checkpoint(previous)
-                .unwrap_or_else(|restore_err| {
-                    panic!("failed to roll back deal checkpoint failure: {restore_err}")
-                });
+            if err.committed {
+                return Err(DealEngineError::Checkpoint(err.to_string()));
+            }
+            if let Err(restore_err) = self.deal_engine.restore_checkpoint(previous) {
+                let message = self.record_unrecoverable_rollback(
+                    "failed to roll back deal checkpoint failure",
+                    restore_err,
+                );
+                return Err(DealEngineError::Checkpoint(message));
+            }
             return Err(DealEngineError::Checkpoint(err.to_string()));
         }
         Ok(outcome)
@@ -5807,15 +6881,19 @@ impl NodeHandle {
             .auxiliary_checkpoint_lock
             .lock()
             .map_err(|_| CapacityError::StateLockPoisoned)?;
+        self.ensure_durability_healthy()
+            .map_err(CapacityError::Checkpoint)?;
         let previous = self.capacity.checkpoint()?;
         let (outcome, changed) = match mutate(&self.capacity) {
             Ok(outcome) => outcome,
             Err(err) => {
-                self.capacity
-                    .restore_checkpoint(previous)
-                    .unwrap_or_else(|restore_err| {
-                        panic!("failed to roll back rejected capacity mutation: {restore_err}")
-                    });
+                if let Err(restore_err) = self.capacity.restore_checkpoint(previous) {
+                    let message = self.record_unrecoverable_rollback(
+                        "failed to roll back rejected capacity mutation",
+                        restore_err,
+                    );
+                    return Err(CapacityError::Checkpoint(message));
+                }
                 return Err(err);
             }
         };
@@ -5823,45 +6901,38 @@ impl NodeHandle {
             return Ok(outcome);
         }
         if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
-            self.capacity
-                .restore_checkpoint(previous)
-                .unwrap_or_else(|restore_err| {
-                    panic!("failed to roll back capacity checkpoint failure: {restore_err}")
-                });
+            if err.committed {
+                return Err(CapacityError::Checkpoint(err.to_string()));
+            }
+            if let Err(restore_err) = self.capacity.restore_checkpoint(previous) {
+                let message = self.record_unrecoverable_rollback(
+                    "failed to roll back capacity checkpoint failure",
+                    restore_err,
+                );
+                return Err(CapacityError::Checkpoint(message));
+            }
             return Err(CapacityError::Checkpoint(err.to_string()));
         }
         Ok(outcome)
     }
 
-    fn load_auxiliary_runtime_checkpoint(&self) {
+    fn load_auxiliary_runtime_checkpoint(&self) -> Result<(), NodeInitError> {
         let Some(path) = self.auxiliary_runtime_checkpoint_path.as_ref() else {
-            return;
+            return Ok(());
         };
-        let bytes = match read_local_checkpoint_bounded(
+        let Some(bytes) = read_local_checkpoint_bounded(
             path,
             self.config.runtime_retention().checkpoint_max_bytes(),
-        ) {
-            Ok(Some(bytes)) => bytes,
-            Ok(None) => return,
-            Err(err) => panic!(
-                "failed to read SoraFS auxiliary runtime checkpoint `{}`: {err}",
-                path.display()
-            ),
+        )
+        .map_err(|err| NodeInitError::checkpoint("auxiliary runtime", path, err))?
+        else {
+            return Ok(());
         };
         let checkpoint = norito::decode_from_bytes::<AuxiliaryRuntimeCheckpointV1>(&bytes)
-            .unwrap_or_else(|err| {
-                panic!(
-                    "failed to decode SoraFS auxiliary runtime checkpoint `{}`: {err}",
-                    path.display()
-                )
-            });
+            .map_err(|err| NodeInitError::checkpoint("auxiliary runtime", path, err))?;
         self.restore_auxiliary_runtime_checkpoint(checkpoint)
-            .unwrap_or_else(|err| {
-                panic!(
-                    "rejected SoraFS auxiliary runtime checkpoint `{}`: {err}",
-                    path.display()
-                )
-            });
+            .map_err(|err| NodeInitError::checkpoint("auxiliary runtime", path, err))?;
+        Ok(())
     }
 
     fn restore_auxiliary_runtime_checkpoint(
@@ -5908,11 +6979,6 @@ impl NodeHandle {
             (
                 "reputation events",
                 checkpoint.reputation_events.len(),
-                event_limit,
-            ),
-            (
-                "orderbook events",
-                checkpoint.orderbook_events.len(),
                 event_limit,
             ),
         ] {
@@ -5973,21 +7039,53 @@ impl NodeHandle {
         let mut repair_events = BoundedEventHistory::new(event_limit);
         repair_events.restore(checkpoint.repair_events, |event| event.sequence)?;
         let mut reputation_events = BoundedEventHistory::new(event_limit);
+        let mut previous_reputation_event: Option<&ReputationSnapshotEventV1> = None;
         for event in &checkpoint.reputation_events {
             event.validate().map_err(|err| {
                 GovernancePublishError::other(format!(
                     "invalid reputation event in auxiliary checkpoint: {err}"
                 ))
             })?;
-            if !snapshots.contains_key(&event.snapshot_id) {
+            let Some(snapshot) = snapshots.get(&event.snapshot_id) else {
                 return Err(GovernancePublishError::other(
                     "reputation event references a missing retained snapshot",
                 ));
+            };
+            let provider_count = u32::try_from(snapshot.providers.len()).map_err(|_| {
+                GovernancePublishError::other(
+                    "retained reputation snapshot provider count exceeds u32",
+                )
+            })?;
+            if event.generated_at_unix != snapshot.generated_at_unix
+                || event.merkle_root != snapshot.merkle_root
+                || event.provider_count != provider_count
+                || event.previous_snapshot_id != snapshot.previous_snapshot_id
+            {
+                return Err(GovernancePublishError::other(
+                    "reputation event metadata does not match its retained snapshot",
+                ));
             }
+            if let Some(previous) = previous_reputation_event {
+                if event.previous_snapshot_id != Some(previous.snapshot_id)
+                    || event.generated_at_unix <= previous.generated_at_unix
+                {
+                    return Err(GovernancePublishError::other(
+                        "reputation event suffix is not a monotonic snapshot chain",
+                    ));
+                }
+            }
+            previous_reputation_event = Some(event);
+        }
+        if let (Some(latest), Some(last_event)) = (
+            latest_snapshot.as_ref(),
+            checkpoint.reputation_events.last(),
+        ) && latest.snapshot_id != last_event.snapshot_id
+        {
+            return Err(GovernancePublishError::other(
+                "latest reputation snapshot does not match the final retained event",
+            ));
         }
         reputation_events.restore(checkpoint.reputation_events, |event| event.sequence)?;
-        let mut orderbook_events = BoundedEventHistory::new(event_limit);
-        orderbook_events.restore(checkpoint.orderbook_events, |event| event.sequence)?;
         let validated_capacity = CapacityManager::with_entry_limit(state_limit);
         validated_capacity
             .restore_checkpoint(checkpoint.capacity_runtime)
@@ -6105,11 +7203,6 @@ impl NodeHandle {
             .map_err(|_| GovernancePublishError::other("reputation event history poisoned"))? =
             reputation_events;
         *self
-            .orderbook_events
-            .write()
-            .map_err(|_| GovernancePublishError::other("orderbook event history poisoned"))? =
-            orderbook_events;
-        *self
             .reserve_lifecycle
             .write()
             .map_err(|_| GovernancePublishError::other("reserve lifecycle lock poisoned"))? =
@@ -6211,6 +7304,18 @@ impl NodeHandle {
         }
 
         if first_sequence > 1 {
+            #[derive(Default)]
+            struct RetainedReplayState {
+                last_counts: Option<(u64, u64, u64)>,
+                phase: u8,
+                commits: BTreeSet<String>,
+                reveals: BTreeSet<String>,
+                submitted_challenges: BTreeSet<String>,
+                resolved_challenges: BTreeSet<String>,
+                tallied: bool,
+            }
+
+            let mut retained = BTreeMap::<(String, String), RetainedReplayState>::new();
             for event in &snapshot.events {
                 let key = (event.case_id.clone(), event.round_id.clone());
                 let record = records.get(&key).ok_or_else(|| {
@@ -6219,6 +7324,7 @@ impl NodeHandle {
                         event.sequence, event.case_id, event.round_id
                     ))
                 })?;
+                let state = retained.entry(key).or_default();
                 if event.committed_count > record.commits.len() as u64
                     || event.revealed_count > record.reveals.len() as u64
                     || event.challenge_count > record.challenges.len() as u64
@@ -6228,21 +7334,325 @@ impl NodeHandle {
                         event.sequence
                     )));
                 }
-                if let Some(tally) = &event.tally
-                    && record.tally.as_ref() != Some(tally)
-                {
+                if state.tallied {
                     return Err(invalid(format!(
-                        "truncated moderation event `{}` tally does not match saved ballot state",
+                        "truncated moderation event `{}` appears after the ballot tally",
                         event.sequence
                     )));
                 }
-                if let Some(challenge) = &event.challenge
-                    && !record.challenges.iter().any(|saved| saved == challenge)
+                if let Some((committed, revealed, challenged)) = state.last_counts
+                    && (event.committed_count < committed
+                        || event.revealed_count < revealed
+                        || event.challenge_count < challenged)
                 {
                     return Err(invalid(format!(
-                        "truncated moderation event `{}` challenge does not match saved ballot state",
+                        "truncated moderation event `{}` regresses saved counters",
                         event.sequence
                     )));
+                }
+
+                let previous_counts = state.last_counts;
+                let phase = match event.kind {
+                    ModerationBallotEventKind::BallotAnnounced => {
+                        if previous_counts.is_some()
+                            || event.juror_id.is_some()
+                            || event.committed_count != 0
+                            || event.revealed_count != 0
+                            || event.challenge_count != 0
+                            || event.tally.is_some()
+                            || event.challenge.is_some()
+                            || event.generated_at_unix_ms
+                                != record.announcement.announced_at_unix_ms
+                        {
+                            return Err(invalid(format!(
+                                "truncated announcement event `{}` does not match saved ballot state",
+                                event.sequence
+                            )));
+                        }
+                        0
+                    }
+                    ModerationBallotEventKind::CommitAccepted => {
+                        let juror_id = event.juror_id.as_ref().ok_or_else(|| {
+                            invalid(format!(
+                                "truncated commit event `{}` is missing juror id",
+                                event.sequence
+                            ))
+                        })?;
+                        let commit = record
+                            .commits
+                            .iter()
+                            .find(|commit| commit.juror_id == *juror_id)
+                            .ok_or_else(|| {
+                                invalid(format!(
+                                    "truncated commit event `{}` references an absent commit",
+                                    event.sequence
+                                ))
+                            })?;
+                        if event.tally.is_some()
+                            || event.challenge.is_some()
+                            || event.generated_at_unix_ms < record.announcement.announced_at_unix_ms
+                            || event.generated_at_unix_ms
+                                > record.announcement.commit_deadline_unix_ms
+                            || event.generated_at_unix_ms != commit.committed_at_unix_ms
+                            || commit.context.case_id != record.announcement.context.case_id
+                            || commit.round_id != record.announcement.round_id
+                            || !state.commits.insert(juror_id.clone())
+                        {
+                            return Err(invalid(format!(
+                                "truncated commit event `{}` does not match saved commit state",
+                                event.sequence
+                            )));
+                        }
+                        if let Some((committed, revealed, challenged)) = previous_counts
+                            && (event.committed_count != committed.saturating_add(1)
+                                || event.revealed_count != revealed
+                                || event.challenge_count != challenged)
+                        {
+                            return Err(invalid(format!(
+                                "truncated commit event `{}` has an invalid counter transition",
+                                event.sequence
+                            )));
+                        }
+                        if event.committed_count == 0 {
+                            return Err(invalid(format!(
+                                "truncated commit event `{}` has a zero commit count",
+                                event.sequence
+                            )));
+                        }
+                        1
+                    }
+                    ModerationBallotEventKind::ChallengeSubmitted => {
+                        let challenge = event.challenge.as_ref().ok_or_else(|| {
+                            invalid(format!(
+                                "truncated challenge submission event `{}` is missing challenge data",
+                                event.sequence
+                            ))
+                        })?;
+                        let saved = record
+                            .challenges
+                            .iter()
+                            .find(|saved| saved.challenge_id == challenge.challenge_id)
+                            .ok_or_else(|| {
+                                invalid(format!(
+                                    "truncated challenge submission event `{}` references an absent challenge",
+                                    event.sequence
+                                ))
+                            })?;
+                        let mut expected = saved.clone();
+                        expected.decision = None;
+                        expected.resolved_by = None;
+                        expected.resolved_at_unix_ms = None;
+                        expected.resolution_note = None;
+                        if event.juror_id.is_some()
+                            || event.tally.is_some()
+                            || challenge != &expected
+                            || event.generated_at_unix_ms != challenge.raised_at_unix_ms
+                            || event.generated_at_unix_ms
+                                <= record.announcement.commit_deadline_unix_ms
+                            || event.generated_at_unix_ms
+                                > record.announcement.challenge_deadline_unix_ms
+                            || !state
+                                .submitted_challenges
+                                .insert(challenge.challenge_id.clone())
+                        {
+                            return Err(invalid(format!(
+                                "truncated challenge submission event `{}` does not match saved challenge state",
+                                event.sequence
+                            )));
+                        }
+                        if let Some((committed, revealed, challenged)) = previous_counts
+                            && (event.committed_count != committed
+                                || event.revealed_count != revealed
+                                || event.challenge_count != challenged.saturating_add(1))
+                        {
+                            return Err(invalid(format!(
+                                "truncated challenge submission event `{}` has an invalid counter transition",
+                                event.sequence
+                            )));
+                        }
+                        if event.challenge_count == 0 {
+                            return Err(invalid(format!(
+                                "truncated challenge submission event `{}` has a zero challenge count",
+                                event.sequence
+                            )));
+                        }
+                        2
+                    }
+                    ModerationBallotEventKind::ChallengeResolved => {
+                        let challenge = event.challenge.as_ref().ok_or_else(|| {
+                            invalid(format!(
+                                "truncated challenge resolution event `{}` is missing challenge data",
+                                event.sequence
+                            ))
+                        })?;
+                        let saved = record
+                            .challenges
+                            .iter()
+                            .find(|saved| saved.challenge_id == challenge.challenge_id);
+                        if event.juror_id.is_some()
+                            || event.tally.is_some()
+                            || saved != Some(challenge)
+                            || challenge.decision.is_none()
+                            || challenge
+                                .resolved_by
+                                .as_deref()
+                                .is_none_or(|resolver| resolver.trim().is_empty())
+                            || challenge.resolved_at_unix_ms.is_none()
+                            || event.generated_at_unix_ms
+                                != challenge.resolved_at_unix_ms.unwrap_or(0)
+                            || challenge
+                                .resolved_at_unix_ms
+                                .is_some_and(|resolved| resolved < challenge.raised_at_unix_ms)
+                            || !state
+                                .resolved_challenges
+                                .insert(challenge.challenge_id.clone())
+                        {
+                            return Err(invalid(format!(
+                                "truncated challenge resolution event `{}` does not match saved challenge state",
+                                event.sequence
+                            )));
+                        }
+                        if let Some((committed, revealed, challenged)) = previous_counts
+                            && (event.committed_count != committed
+                                || event.revealed_count != revealed
+                                || event.challenge_count != challenged)
+                        {
+                            return Err(invalid(format!(
+                                "truncated challenge resolution event `{}` changes ballot counters",
+                                event.sequence
+                            )));
+                        }
+                        if event.challenge_count == 0 {
+                            return Err(invalid(format!(
+                                "truncated challenge resolution event `{}` has a zero challenge count",
+                                event.sequence
+                            )));
+                        }
+                        2
+                    }
+                    ModerationBallotEventKind::RevealAccepted => {
+                        let juror_id = event.juror_id.as_ref().ok_or_else(|| {
+                            invalid(format!(
+                                "truncated reveal event `{}` is missing juror id",
+                                event.sequence
+                            ))
+                        })?;
+                        let reveal = record
+                            .reveals
+                            .iter()
+                            .find(|reveal| reveal.juror_id == *juror_id)
+                            .ok_or_else(|| {
+                                invalid(format!(
+                                    "truncated reveal event `{}` references an absent reveal",
+                                    event.sequence
+                                ))
+                            })?;
+                        if event.tally.is_some()
+                            || event.challenge.is_some()
+                            || event.generated_at_unix_ms
+                                <= record.announcement.challenge_deadline_unix_ms
+                            || event.generated_at_unix_ms
+                                > record.announcement.reveal_deadline_unix_ms
+                            || event.generated_at_unix_ms != reveal.revealed_at_unix_ms
+                            || reveal.context.case_id != record.announcement.context.case_id
+                            || reveal.round_id != record.announcement.round_id
+                            || !state.reveals.insert(juror_id.clone())
+                        {
+                            return Err(invalid(format!(
+                                "truncated reveal event `{}` does not match saved reveal state",
+                                event.sequence
+                            )));
+                        }
+                        if let Some((committed, revealed, challenged)) = previous_counts
+                            && (event.committed_count != committed
+                                || event.revealed_count != revealed.saturating_add(1)
+                                || event.challenge_count != challenged)
+                        {
+                            return Err(invalid(format!(
+                                "truncated reveal event `{}` has an invalid counter transition",
+                                event.sequence
+                            )));
+                        }
+                        if event.revealed_count == 0 {
+                            return Err(invalid(format!(
+                                "truncated reveal event `{}` has a zero reveal count",
+                                event.sequence
+                            )));
+                        }
+                        3
+                    }
+                    ModerationBallotEventKind::BallotTallied => {
+                        let tally = record.tally.as_ref().ok_or_else(|| {
+                            invalid(format!(
+                                "truncated tally event `{}` references an untallied ballot",
+                                event.sequence
+                            ))
+                        })?;
+                        if event.juror_id.is_some()
+                            || event.challenge.is_some()
+                            || event.tally.as_ref() != Some(tally)
+                            || event.generated_at_unix_ms != tally.tallied_at_unix_ms
+                            || event.committed_count != record.commits.len() as u64
+                            || event.revealed_count != record.reveals.len() as u64
+                            || event.challenge_count != record.challenges.len() as u64
+                        {
+                            return Err(invalid(format!(
+                                "truncated tally event `{}` does not match saved tally state",
+                                event.sequence
+                            )));
+                        }
+                        state.tallied = true;
+                        4
+                    }
+                };
+                if phase < state.phase {
+                    return Err(invalid(format!(
+                        "truncated moderation event `{}` regresses ballot lifecycle phase",
+                        event.sequence
+                    )));
+                }
+                state.phase = phase;
+                state.last_counts = Some((
+                    event.committed_count,
+                    event.revealed_count,
+                    event.challenge_count,
+                ));
+            }
+
+            for (key, state) in retained {
+                let record = records.get(&key).ok_or_else(|| {
+                    invalid("retained moderation event lost its ballot binding".to_owned())
+                })?;
+                let expected_counts = (
+                    record.commits.len() as u64,
+                    record.reveals.len() as u64,
+                    record.challenges.len() as u64,
+                );
+                if state.last_counts != Some(expected_counts)
+                    || state.tallied != record.tally.is_some()
+                {
+                    return Err(invalid(format!(
+                        "truncated event suffix does not reach saved ballot `{}` round `{}` state",
+                        key.0, key.1
+                    )));
+                }
+                for challenge_id in state.submitted_challenges {
+                    let saved = record
+                        .challenges
+                        .iter()
+                        .find(|challenge| challenge.challenge_id == challenge_id)
+                        .ok_or_else(|| {
+                            invalid(format!(
+                                "truncated challenge `{challenge_id}` disappeared from saved ballot state"
+                            ))
+                        })?;
+                    if saved.decision.is_some()
+                        && !state.resolved_challenges.contains(&challenge_id)
+                    {
+                        return Err(invalid(format!(
+                            "truncated challenge `{challenge_id}` omits its retained resolution"
+                        )));
+                    }
                 }
             }
             return Ok(());
@@ -6256,9 +7666,12 @@ impl NodeHandle {
                     event.sequence, event.case_id, event.round_id
                 ))
             })?;
-            let state = replay
-                .get_mut(&key)
-                .expect("replay state exists for record");
+            let state = replay.get_mut(&key).ok_or_else(|| {
+                invalid(format!(
+                    "moderation ballot replay state is missing for `{}` round `{}`",
+                    key.0, key.1
+                ))
+            })?;
             match event.kind {
                 ModerationBallotEventKind::BallotAnnounced => {
                     if state.announced {
@@ -6324,6 +7737,7 @@ impl NodeHandle {
                         })?;
                     if event.generated_at_unix_ms < record.announcement.announced_at_unix_ms
                         || event.generated_at_unix_ms > record.announcement.commit_deadline_unix_ms
+                        || event.generated_at_unix_ms != commit.committed_at_unix_ms
                     {
                         return Err(invalid(format!(
                             "commit event `{}` timestamp is outside the commit window",
@@ -6595,6 +8009,7 @@ impl NodeHandle {
                         })?;
                     if event.generated_at_unix_ms <= record.announcement.challenge_deadline_unix_ms
                         || event.generated_at_unix_ms > record.announcement.reveal_deadline_unix_ms
+                        || event.generated_at_unix_ms != reveal.revealed_at_unix_ms
                     {
                         return Err(invalid(format!(
                             "reveal event `{}` timestamp is outside the reveal window",
@@ -6689,7 +8104,12 @@ impl NodeHandle {
         }
 
         for (key, record) in &records {
-            let state = replay.get(key).expect("replay state exists for record");
+            let state = replay.get(key).ok_or_else(|| {
+                invalid(format!(
+                    "moderation ballot replay state is missing for `{}` round `{}`",
+                    key.0, key.1
+                ))
+            })?;
             if !state.announced {
                 return Err(invalid(format!(
                     "ballot `{}` round `{}` is missing its announcement event",
@@ -6712,62 +8132,54 @@ impl NodeHandle {
         Ok(())
     }
 
-    fn load_moderation_ballot_checkpoint(&self) {
+    fn load_moderation_ballot_checkpoint(&self) -> Result<(), NodeInitError> {
         let Some(path) = self.moderation_checkpoint_path.as_ref() else {
-            return;
+            return Ok(());
         };
-        let bytes = match read_local_checkpoint_bounded(
+        let Some(bytes) = read_local_checkpoint_bounded(
             path,
             self.config.runtime_retention().checkpoint_max_bytes(),
-        ) {
-            Ok(Some(bytes)) => bytes,
-            Ok(None) => return,
-            Err(err) => panic!(
-                "failed to read SoraFS moderation ballot checkpoint `{}`: {err}",
-                path.display()
-            ),
+        )
+        .map_err(|err| NodeInitError::checkpoint("moderation ballot", path, err))?
+        else {
+            return Ok(());
         };
-        let snapshot = match norito::decode_from_bytes::<ModerationBallotSnapshot>(&bytes) {
-            Ok(snapshot) => snapshot,
-            Err(err) => panic!(
-                "failed to decode SoraFS moderation ballot checkpoint `{}`: {err}",
-                path.display()
-            ),
-        };
-        match self.restore_moderation_ballot_snapshot_in_memory(snapshot) {
-            Ok((ballot_count, event_count)) => {
-                iroha_logger::info!(
-                    path = %path.display(),
-                    ballot_count,
-                    event_count,
-                    "restored SoraFS moderation ballot checkpoint"
-                );
-            }
-            Err(err) => panic!(
-                "rejected SoraFS moderation ballot checkpoint `{}`: {err}",
-                path.display()
-            ),
-        }
+        let snapshot = norito::decode_from_bytes::<ModerationBallotSnapshot>(&bytes)
+            .map_err(|err| NodeInitError::checkpoint("moderation ballot", path, err))?;
+        let (ballot_count, event_count) = self
+            .restore_moderation_ballot_snapshot_in_memory(snapshot)
+            .map_err(|err| NodeInitError::checkpoint("moderation ballot", path, err))?;
+        iroha_logger::info!(
+            path = %path.display(),
+            ballot_count,
+            event_count,
+            "restored SoraFS moderation ballot checkpoint"
+        );
+        Ok(())
     }
 
     fn persist_moderation_ballot_snapshot(
         &self,
         snapshot: &ModerationBallotSnapshot,
-    ) -> Result<(), ModerationBallotRuntimeError> {
+    ) -> Result<(), RuntimeCheckpointPersistError> {
         let Some(path) = self.moderation_checkpoint_path.as_ref() else {
             return Ok(());
         };
         let bytes = norito::to_bytes(snapshot).map_err(|err| {
-            ModerationBallotRuntimeError::Checkpoint(format!("encode `{}`: {err}", path.display()))
+            RuntimeCheckpointPersistError::precommit(format!(
+                "encode moderation ballot checkpoint `{}`: {err}",
+                path.display()
+            ))
         })?;
-        write_local_checkpoint_atomic_bounded(
+        self.finish_local_checkpoint_write(
+            "moderation ballot",
             path,
-            &bytes,
-            self.config.runtime_retention().checkpoint_max_bytes(),
+            write_local_checkpoint_atomic_bounded(
+                path,
+                &bytes,
+                self.config.runtime_retention().checkpoint_max_bytes(),
+            ),
         )
-        .map_err(|err| {
-            ModerationBallotRuntimeError::Checkpoint(format!("persist `{}`: {err}", path.display()))
-        })
     }
 
     fn moderation_quarantine_record_for_object(
@@ -6823,6 +8235,88 @@ impl NodeHandle {
         Ok(())
     }
 
+    fn validate_moderation_screening_snapshot_downstream_refs(
+        &self,
+        snapshot: &ModerationScreeningSnapshot,
+    ) -> Result<(), ModerationScreeningError> {
+        let quarantine_ids = snapshot
+            .quarantine_records
+            .iter()
+            .map(|record| record.quarantine_id)
+            .collect::<BTreeSet<_>>();
+        let objects = self
+            .moderation_quarantine_objects
+            .read()
+            .map_err(|_| ModerationScreeningError::StateLockPoisoned)?
+            .snapshot();
+        for object in objects.objects {
+            if !quarantine_ids.contains(&object.quarantine_id) {
+                return Err(ModerationScreeningError::InvalidSnapshot {
+                    message: format!(
+                        "screening snapshot removes quarantine `{}` referenced by object `{}`",
+                        hex::encode(object.quarantine_id),
+                        hex::encode(object.object_id)
+                    ),
+                });
+            }
+        }
+        let viewer = self
+            .moderation_evidence_viewer
+            .read()
+            .map_err(|_| ModerationScreeningError::StateLockPoisoned)?
+            .snapshot();
+        for session in viewer.sessions {
+            if !quarantine_ids.contains(&session.quarantine_id) {
+                return Err(ModerationScreeningError::InvalidSnapshot {
+                    message: format!(
+                        "screening snapshot removes quarantine `{}` referenced by viewer session `{}`",
+                        hex::encode(session.quarantine_id),
+                        hex::encode(session.session_id)
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_moderation_quarantine_snapshot_viewer_refs(
+        &self,
+        snapshot: &ModerationQuarantineObjectSnapshot,
+    ) -> Result<(), ModerationQuarantineObjectError> {
+        let objects = snapshot
+            .objects
+            .iter()
+            .map(|record| (record.quarantine_id, record))
+            .collect::<BTreeMap<_, _>>();
+        let viewer = self
+            .moderation_evidence_viewer
+            .read()
+            .map_err(|_| ModerationQuarantineObjectError::StateLockPoisoned)?
+            .snapshot();
+        for session in viewer.sessions {
+            let Some(object) = objects.get(&session.quarantine_id) else {
+                return Err(ModerationQuarantineObjectError::InvalidSnapshot {
+                    message: format!(
+                        "object snapshot removes quarantine `{}` referenced by viewer session `{}`",
+                        hex::encode(session.quarantine_id),
+                        hex::encode(session.session_id)
+                    ),
+                });
+            };
+            if session.object_id != object.object_id
+                || session.evidence_digest != object.payload_digest
+            {
+                return Err(ModerationQuarantineObjectError::InvalidSnapshot {
+                    message: format!(
+                        "viewer session `{}` does not match candidate object metadata",
+                        hex::encode(session.session_id)
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
     fn validate_moderation_evidence_viewer_snapshot_refs(
         &self,
         snapshot: &ModerationEvidenceViewerSnapshot,
@@ -6854,77 +8348,349 @@ impl NodeHandle {
         Ok(root.join(&record.envelope_path))
     }
 
-    fn load_orderbook_checkpoint(&self) {
-        let Some(path) = self.orderbook_checkpoint_path.as_ref() else {
-            return;
-        };
-        let bytes = match read_local_checkpoint_bounded(
-            path,
-            self.config.runtime_retention().checkpoint_max_bytes(),
-        ) {
-            Ok(Some(bytes)) => bytes,
-            Ok(None) => return,
-            Err(err) => panic!(
-                "failed to read SoraFS orderbook runtime checkpoint `{}`: {err}",
-                path.display()
-            ),
-        };
-        let snapshot = match norito::decode_from_bytes::<OrderbookRuntimeSnapshotV1>(&bytes) {
-            Ok(snapshot) => snapshot,
-            Err(err) => panic!(
-                "failed to decode SoraFS orderbook runtime checkpoint `{}`: {err}",
-                path.display()
-            ),
-        };
-        let generated_at_unix = snapshot.generated_at_unix;
-        match self
-            .orderbook
-            .write()
-            .map_err(|_| OrderbookRuntimeError::StateLockPoisoned)
-            .and_then(|mut orderbook| orderbook.restore_runtime_snapshot(snapshot))
-        {
-            Ok(()) => {
-                self.record_orderbook_snapshot_metrics(generated_at_unix);
-                iroha_logger::info!(
-                    path = %path.display(),
-                    "restored SoraFS orderbook runtime checkpoint"
-                );
+    fn validate_orderbook_event_checkpoint(
+        runtime: &OrderbookRuntimeSnapshotV1,
+        events: &[OrderbookEvent],
+    ) -> Result<(), OrderbookRuntimeError> {
+        runtime.validate()?;
+        let trade_ids = runtime
+            .trades
+            .iter()
+            .map(|trade| trade.trade_id)
+            .collect::<BTreeSet<_>>();
+        let channel_ids = runtime
+            .settlement_channels
+            .iter()
+            .map(|channel| channel.channel_id)
+            .collect::<BTreeSet<_>>();
+        let receipt_ids = runtime
+            .settlement_receipts
+            .iter()
+            .map(|receipt| receipt.receipt_id)
+            .collect::<BTreeSet<_>>();
+        let expired_ids = runtime
+            .expired_order_ids
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let mut retained_trade_ids = BTreeSet::new();
+        let mut retained_receipt_ids = BTreeSet::new();
+        let mut retained_expired_ids = BTreeSet::new();
+        for event in events {
+            if event.generated_at_unix == 0 {
+                return Err(OrderbookRuntimeError::InvalidSnapshot(format!(
+                    "orderbook event {} has a zero timestamp",
+                    event.sequence
+                )));
             }
-            Err(err) => panic!(
-                "rejected SoraFS orderbook runtime checkpoint `{}`: {err}",
-                path.display()
-            ),
+            if event.order_id.is_some_and(|order_id| order_id == [0; 32])
+                || event
+                    .receipt_id
+                    .is_some_and(|receipt_id| receipt_id == [0; 32])
+            {
+                return Err(OrderbookRuntimeError::InvalidSnapshot(format!(
+                    "orderbook event {} contains an all-zero identifier",
+                    event.sequence
+                )));
+            }
+            match event.kind {
+                OrderbookEventKind::OrderAccepted => {
+                    if event.order_id.is_none() || event.receipt_id.is_some() {
+                        return Err(OrderbookRuntimeError::InvalidSnapshot(format!(
+                            "accepted-order event {} has an invalid payload shape",
+                            event.sequence
+                        )));
+                    }
+                }
+                OrderbookEventKind::OrderCancelled => {
+                    if event.order_id.is_none()
+                        || event.receipt_id.is_some()
+                        || !event.trade_ids.is_empty()
+                        || !event.settlement_channel_ids.is_empty()
+                        || !event.expired_order_ids.is_empty()
+                    {
+                        return Err(OrderbookRuntimeError::InvalidSnapshot(format!(
+                            "cancelled-order event {} has an invalid payload shape",
+                            event.sequence
+                        )));
+                    }
+                }
+                OrderbookEventKind::SettlementReceiptAccepted => {
+                    if event.order_id.is_some()
+                        || event.receipt_id.is_none()
+                        || !event.trade_ids.is_empty()
+                        || event.settlement_channel_ids.len() != 1
+                        || !event.expired_order_ids.is_empty()
+                    {
+                        return Err(OrderbookRuntimeError::InvalidSnapshot(format!(
+                            "settlement-receipt event {} has an invalid payload shape",
+                            event.sequence
+                        )));
+                    }
+                }
+            }
+            for trade_id in &event.trade_ids {
+                if !trade_ids.contains(trade_id) || !retained_trade_ids.insert(*trade_id) {
+                    return Err(OrderbookRuntimeError::InvalidSnapshot(format!(
+                        "orderbook event {} references an absent or duplicate trade",
+                        event.sequence
+                    )));
+                }
+            }
+            for channel_id in &event.settlement_channel_ids {
+                if !channel_ids.contains(channel_id) {
+                    return Err(OrderbookRuntimeError::InvalidSnapshot(format!(
+                        "orderbook event {} references an absent settlement channel",
+                        event.sequence
+                    )));
+                }
+            }
+            if let Some(receipt_id) = event.receipt_id
+                && (!receipt_ids.contains(&receipt_id) || !retained_receipt_ids.insert(receipt_id))
+            {
+                return Err(OrderbookRuntimeError::InvalidSnapshot(format!(
+                    "orderbook event {} references an absent or duplicate receipt",
+                    event.sequence
+                )));
+            }
+            for expired_id in &event.expired_order_ids {
+                if !expired_ids.contains(expired_id) || !retained_expired_ids.insert(*expired_id) {
+                    return Err(OrderbookRuntimeError::InvalidSnapshot(format!(
+                        "orderbook event {} references an absent or duplicate expired order",
+                        event.sequence
+                    )));
+                }
+            }
         }
+        if let Some(last) = events.last() {
+            let open_channel_count = runtime
+                .settlement_channels
+                .iter()
+                .filter(|channel| matches!(channel.status, SettlementChannelStatusV1::Open))
+                .count() as u64;
+            if last.open_order_count != runtime.open_orders.len() as u64
+                || last.open_settlement_channel_count != open_channel_count
+                || last.settlement_receipt_count != runtime.settlement_receipts.len() as u64
+            {
+                return Err(OrderbookRuntimeError::InvalidSnapshot(
+                    "retained orderbook event suffix does not reach saved runtime counters"
+                        .to_owned(),
+                ));
+            }
+        }
+        Ok(())
     }
 
-    fn save_orderbook_checkpoint(&self, generated_at_unix: u64) {
-        let Some(path) = self.orderbook_checkpoint_path.as_ref() else {
-            return;
+    fn mutate_orderbook_durably<T>(
+        &self,
+        generated_at_unix: u64,
+        mutate: impl FnOnce(
+            &mut OrderbookRuntime,
+        ) -> Result<(T, OrderbookEventInput), OrderbookRuntimeError>,
+    ) -> Result<(T, OrderbookEvent), OrderbookRuntimeError> {
+        let _mutation_guard = self
+            .runtime_mutation_lock
+            .lock()
+            .map_err(|_| OrderbookRuntimeError::StateLockPoisoned)?;
+        self.ensure_durability_healthy()
+            .map_err(OrderbookRuntimeError::Checkpoint)?;
+        let mut runtime = self
+            .orderbook
+            .write()
+            .map_err(|_| OrderbookRuntimeError::StateLockPoisoned)?;
+        let previous_runtime = runtime.runtime_snapshot(generated_at_unix.max(1));
+        let (outcome, input) = match mutate(&mut runtime) {
+            Ok(value) => value,
+            Err(err) => {
+                if let Err(rollback) = runtime.restore_runtime_snapshot(previous_runtime) {
+                    let message = self.record_unrecoverable_rollback(
+                        "failed to roll back rejected orderbook mutation",
+                        rollback,
+                    );
+                    return Err(OrderbookRuntimeError::Checkpoint(message));
+                }
+                return Err(err);
+            }
         };
-        let snapshot = match self.export_orderbook_runtime_snapshot(generated_at_unix) {
-            Ok(snapshot) => snapshot,
-            Err(err) => panic!(
-                "failed to build SoraFS orderbook runtime checkpoint `{}`: {err}",
-                path.display()
-            ),
-        };
-        let bytes = match norito::to_bytes(&snapshot) {
-            Ok(bytes) => bytes,
-            Err(err) => panic!(
-                "failed to encode SoraFS orderbook runtime checkpoint `{}`: {err}",
-                path.display()
-            ),
-        };
-        if let Err(err) = write_local_checkpoint_atomic_bounded(
-            path,
-            &bytes,
-            self.config.runtime_retention().checkpoint_max_bytes(),
-        ) {
-            panic!(
-                "failed to persist SoraFS orderbook runtime checkpoint `{}`: {err}",
-                path.display()
-            );
+        let committed_runtime = runtime.runtime_snapshot(generated_at_unix);
+        if let Err(err) = committed_runtime.validate() {
+            if let Err(rollback) = runtime.restore_runtime_snapshot(previous_runtime) {
+                let message = self.record_unrecoverable_rollback(
+                    "failed to roll back invalid committed orderbook snapshot",
+                    rollback,
+                );
+                return Err(OrderbookRuntimeError::Checkpoint(message));
+            }
+            return Err(OrderbookRuntimeError::Validation(err));
         }
+        let open_settlement_channel_count = committed_runtime
+            .settlement_channels
+            .iter()
+            .filter(|channel| matches!(channel.status, SettlementChannelStatusV1::Open))
+            .count() as u64;
+        let mut events = match self.orderbook_events.write() {
+            Ok(events) => events,
+            Err(_) => {
+                if let Err(rollback) = runtime.restore_runtime_snapshot(previous_runtime) {
+                    let message = self.record_unrecoverable_rollback(
+                        "failed to roll back orderbook mutation after event-lock failure",
+                        rollback,
+                    );
+                    return Err(OrderbookRuntimeError::Checkpoint(message));
+                }
+                return Err(OrderbookRuntimeError::StateLockPoisoned);
+            }
+        };
+        let previous_events = events.clone();
+        let event = match events.append(|sequence| OrderbookEvent {
+            sequence,
+            kind: input.kind,
+            generated_at_unix,
+            order_id: input.order_id,
+            trade_ids: input.trade_ids,
+            settlement_channel_ids: input.settlement_channel_ids,
+            receipt_id: input.receipt_id,
+            expired_order_ids: input.expired_order_ids,
+            open_order_count: committed_runtime.open_orders.len() as u64,
+            open_settlement_channel_count,
+            settlement_receipt_count: committed_runtime.settlement_receipts.len() as u64,
+        }) {
+            Ok(event) => event,
+            Err(_) => {
+                if let Err(rollback) = runtime.restore_runtime_snapshot(previous_runtime) {
+                    let message = self.record_unrecoverable_rollback(
+                        "failed to roll back orderbook event-sequence exhaustion",
+                        rollback,
+                    );
+                    return Err(OrderbookRuntimeError::Checkpoint(message));
+                }
+                return Err(OrderbookRuntimeError::EventSequenceOverflow);
+            }
+        };
+        let checkpoint = OrderbookRuntimeCheckpointV1 {
+            version: ORDERBOOK_RUNTIME_STATE_VERSION_V1,
+            runtime: committed_runtime,
+            events: events.retained(),
+        };
+        if let Err(err) =
+            Self::validate_orderbook_event_checkpoint(&checkpoint.runtime, &checkpoint.events)
+        {
+            let rollback = runtime.restore_runtime_snapshot(previous_runtime);
+            *events = previous_events;
+            if let Err(rollback) = rollback {
+                let message = self.record_unrecoverable_rollback(
+                    "failed to roll back invalid orderbook event checkpoint",
+                    rollback,
+                );
+                return Err(OrderbookRuntimeError::Checkpoint(message));
+            }
+            return Err(err);
+        }
+        if let Err(err) = self.persist_orderbook_checkpoint(&checkpoint) {
+            if err.committed {
+                return Err(OrderbookRuntimeError::Checkpoint(err.to_string()));
+            }
+            let rollback = runtime.restore_runtime_snapshot(previous_runtime);
+            *events = previous_events;
+            if let Err(rollback) = rollback {
+                let message = self.record_unrecoverable_rollback(
+                    "failed to roll back orderbook checkpoint failure",
+                    rollback,
+                );
+                return Err(OrderbookRuntimeError::Checkpoint(message));
+            }
+            return Err(OrderbookRuntimeError::Checkpoint(err.to_string()));
+        }
+        drop(events);
+        drop(runtime);
+        Ok((outcome, event))
+    }
+
+    fn load_orderbook_checkpoint(&self) -> Result<(), NodeInitError> {
+        let Some(path) = self.orderbook_checkpoint_path.as_ref() else {
+            return Ok(());
+        };
+        let Some(bytes) = read_local_checkpoint_bounded(
+            path,
+            self.config.runtime_retention().checkpoint_max_bytes(),
+        )
+        .map_err(|err| NodeInitError::checkpoint("orderbook runtime", path, err))?
+        else {
+            return Ok(());
+        };
+        let checkpoint = norito::decode_from_bytes::<OrderbookRuntimeCheckpointV1>(&bytes)
+            .map_err(|err| NodeInitError::checkpoint("orderbook runtime", path, err))?;
+        if checkpoint.version != ORDERBOOK_RUNTIME_STATE_VERSION_V1 {
+            return Err(NodeInitError::checkpoint(
+                "orderbook runtime",
+                path,
+                format!("unsupported checkpoint version {}", checkpoint.version),
+            ));
+        }
+        let retention = self.config.runtime_retention();
+        if checkpoint.events.len() > retention.event_history_limit() {
+            return Err(NodeInitError::checkpoint(
+                "orderbook runtime",
+                path,
+                format!(
+                    "event count {} exceeds configured limit {}",
+                    checkpoint.events.len(),
+                    retention.event_history_limit()
+                ),
+            ));
+        }
+        Self::validate_orderbook_event_checkpoint(&checkpoint.runtime, &checkpoint.events)
+            .map_err(|err| NodeInitError::checkpoint("orderbook runtime", path, err))?;
+        let generated_at_unix = checkpoint.runtime.generated_at_unix;
+        let mut restored_orderbook =
+            OrderbookRuntime::with_entry_limit(retention.state_entry_limit());
+        restored_orderbook
+            .restore_runtime_snapshot(checkpoint.runtime)
+            .map_err(|err| NodeInitError::checkpoint("orderbook runtime", path, err))?;
+        let mut restored_events = BoundedEventHistory::new(retention.event_history_limit());
+        restored_events
+            .restore(checkpoint.events, |event| event.sequence)
+            .map_err(|err| NodeInitError::checkpoint("orderbook runtime", path, err))?;
+        let mut orderbook = self.orderbook.write().map_err(|_| {
+            NodeInitError::checkpoint("orderbook runtime", path, "state lock poisoned")
+        })?;
+        let mut events = self.orderbook_events.write().map_err(|_| {
+            NodeInitError::checkpoint("orderbook runtime", path, "event lock poisoned")
+        })?;
+        *orderbook = restored_orderbook;
+        *events = restored_events;
+        drop(events);
+        drop(orderbook);
+        self.record_orderbook_snapshot_metrics(generated_at_unix);
+        iroha_logger::info!(
+            path = %path.display(),
+            "restored SoraFS orderbook runtime checkpoint"
+        );
+        Ok(())
+    }
+
+    fn persist_orderbook_checkpoint(
+        &self,
+        checkpoint: &OrderbookRuntimeCheckpointV1,
+    ) -> Result<(), RuntimeCheckpointPersistError> {
+        let Some(path) = self.orderbook_checkpoint_path.as_ref() else {
+            return Ok(());
+        };
+        let bytes = norito::to_bytes(checkpoint).map_err(|err| {
+            RuntimeCheckpointPersistError::precommit(format!(
+                "encode orderbook checkpoint `{}`: {err}",
+                path.display()
+            ))
+        })?;
+        self.finish_local_checkpoint_write(
+            "orderbook runtime",
+            path,
+            write_local_checkpoint_atomic_bounded(
+                path,
+                &bytes,
+                self.config.runtime_retention().checkpoint_max_bytes(),
+            ),
+        )
     }
 
     fn record_orderbook_snapshot_metrics(&self, now_unix: u64) {
@@ -6999,60 +8765,6 @@ impl NodeHandle {
         }
         metrics
             .set_sorafs_orderbook_contract_mirror_divergence(ORDERBOOK_METRIC_CLUSTER_LOCAL, false);
-    }
-
-    // Orderbook events intentionally carry the accepted object ids and derived
-    // snapshot counters in one append point so replay and live streams agree.
-    #[allow(clippy::too_many_arguments)]
-    fn publish_orderbook_event(
-        &self,
-        kind: OrderbookEventKind,
-        generated_at_unix: u64,
-        order_id: Option<[u8; 32]>,
-        trade_ids: Vec<[u8; 32]>,
-        settlement_channel_ids: Vec<[u8; 32]>,
-        receipt_id: Option<[u8; 32]>,
-        expired_order_ids: Vec<[u8; 32]>,
-    ) {
-        let _checkpoint_guard = self
-            .auxiliary_checkpoint_lock
-            .lock()
-            .unwrap_or_else(|_| panic!("auxiliary checkpoint transaction lock poisoned"));
-        let snapshot = self.orderbook_snapshot(generated_at_unix);
-        let open_settlement_channel_count = snapshot
-            .settlement_channels
-            .iter()
-            .filter(|channel| matches!(channel.status, SettlementChannelStatusV1::Open))
-            .count() as u64;
-        let Ok(mut events) = self.orderbook_events.write() else {
-            return;
-        };
-        let previous_events = events.clone();
-        let Ok(event) = events.append(|sequence| OrderbookEvent {
-            sequence,
-            kind,
-            generated_at_unix,
-            order_id,
-            trade_ids,
-            settlement_channel_ids,
-            receipt_id,
-            expired_order_ids,
-            open_order_count: snapshot.open_orders.len() as u64,
-            open_settlement_channel_count,
-            settlement_receipt_count: snapshot.settlement_receipts.len() as u64,
-        }) else {
-            iroha_logger::error!("SoraFS orderbook event sequence exhausted");
-            return;
-        };
-        drop(events);
-        if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
-            *self
-                .orderbook_events
-                .write()
-                .expect("orderbook event rollback lock poisoned") = previous_events;
-            panic!("failed to persist SoraFS orderbook event before broadcast: {err}");
-        }
-        let _ = self.orderbook_event_sender.send(event);
     }
 
     fn publish_orderbook_settlement_receipt(&self, receipt: &SettlementReceiptV1) {
@@ -7219,28 +8931,51 @@ impl NodeHandle {
         Ok(outcome)
     }
 
-    fn record_repair_event(&self, event: RepairTaskEventV1) {
-        let _checkpoint_guard = self
-            .auxiliary_checkpoint_lock
-            .lock()
-            .unwrap_or_else(|_| panic!("auxiliary checkpoint transaction lock poisoned"));
-        let Ok(mut events) = self.repair_events.write() else {
-            return;
-        };
+    fn repair_durability_error(message: impl Into<String>) -> RepairSchedulerError {
+        RepairSchedulerError::Store(repair::RepairStoreError::Other(message.into()))
+    }
+
+    fn ensure_repair_durability_healthy(&self) -> Result<(), RepairSchedulerError> {
+        self.ensure_durability_healthy()
+            .map_err(Self::repair_durability_error)
+    }
+
+    fn record_repair_event(&self, event: RepairTaskEventV1) -> Result<(), RepairSchedulerError> {
+        let _checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
+            Self::repair_durability_error("auxiliary checkpoint transaction lock poisoned")
+        })?;
+        self.ensure_repair_durability_healthy()?;
+        let mut events = self
+            .repair_events
+            .write()
+            .map_err(|_| Self::repair_durability_error("repair event history lock poisoned"))?;
         let previous_events = events.clone();
-        let Ok(event) = events.append(|sequence| RepairEvent { sequence, event }) else {
-            iroha_logger::error!("SoraFS repair event sequence exhausted");
-            return;
-        };
+        let event = events
+            .append(|sequence| RepairEvent { sequence, event })
+            .map_err(|err| Self::repair_durability_error(err.to_string()))?;
         drop(events);
         if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
-            *self
-                .repair_events
-                .write()
-                .expect("repair event rollback lock poisoned") = previous_events;
-            panic!("failed to persist SoraFS repair event before broadcast: {err}");
+            if err.committed {
+                return Err(Self::repair_durability_error(err.to_string()));
+            }
+            match self.repair_events.write() {
+                Ok(mut events) => *events = previous_events,
+                Err(_) => {
+                    self.mark_durability_unhealthy(
+                        "repair event checkpoint failed and rollback lock was poisoned".to_owned(),
+                    );
+                    return Err(Self::repair_durability_error(
+                        "repair event checkpoint failed and rollback lock was poisoned",
+                    ));
+                }
+            }
+            let message =
+                format!("repair task state committed without its global event checkpoint: {err}");
+            self.mark_durability_unhealthy(message.clone());
+            return Err(Self::repair_durability_error(message));
         }
         let _ = self.repair_event_sender.send(event);
+        Ok(())
     }
 
     fn publish_repair_audit_event(&self, event: RepairTaskEventV1) {
@@ -7249,8 +8984,19 @@ impl NodeHandle {
         };
         let payload_bytes = event.encode();
         let payload_digest = Hash::new(payload_bytes);
+        let sequence = match self.repair.next_audit_sequence() {
+            Ok(sequence) => sequence,
+            Err(err) => {
+                iroha_logger::error!(
+                    %err,
+                    ticket = %event.ticket_id,
+                    "failed to durably reserve repair audit event sequence"
+                );
+                return;
+            }
+        };
         let header = SorafsAuditHeaderV1 {
-            sequence: self.repair.next_audit_sequence(),
+            sequence,
             occurred_at_unix: event.occurred_at_unix,
             signer: event
                 .actor
@@ -7290,8 +9036,15 @@ impl NodeHandle {
         };
         let payload_bytes = payload.encode();
         let payload_digest = Hash::new(payload_bytes);
+        let sequence = match self.repair.next_audit_sequence() {
+            Ok(sequence) => sequence,
+            Err(err) => {
+                iroha_logger::error!(%err, "failed to durably reserve GC audit event sequence");
+                return;
+            }
+        };
         let header = SorafsAuditHeaderV1 {
-            sequence: self.repair.next_audit_sequence(),
+            sequence,
             occurred_at_unix: payload.evicted_at_unix,
             signer: "sorafs-gc".to_string(),
             payload_digest: *payload_digest.as_ref(),
@@ -7369,9 +9122,9 @@ impl NodeHandle {
         &self,
         update: &repair::RepairTaskUpdate,
         slash_stage: Option<RepairSlashStage>,
-    ) {
+    ) -> Result<(), RepairSchedulerError> {
         if let Some(event) = update.event.clone() {
-            self.record_repair_event(event.clone());
+            self.record_repair_event(event.clone())?;
             self.publish_repair_audit_event(event);
         }
         if let Some(proposal) = update.slash_proposal.as_ref() {
@@ -7384,6 +9137,7 @@ impl NodeHandle {
                 );
             }
         }
+        Ok(())
     }
 
     /// Capture a snapshot of the deal ledger.
@@ -7392,9 +9146,8 @@ impl NodeHandle {
         self.deal_engine.deal_snapshot(deal_id)
     }
 
-    /// Returns a clone of the repair manager.
-    #[must_use]
-    pub fn repair_manager(&self) -> RepairManager {
+    #[cfg(test)]
+    fn repair_manager(&self) -> RepairManager {
         self.repair.clone()
     }
 
@@ -7403,8 +9156,9 @@ impl NodeHandle {
         &self,
         report: &RepairReportV1,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
+        self.ensure_repair_durability_healthy()?;
         let update = self.repair.enqueue_report_with_event(report.clone())?;
-        self.publish_repair_update(&update, None);
+        self.publish_repair_update(&update, None)?;
         Ok(update.record)
     }
 
@@ -7414,46 +9168,90 @@ impl NodeHandle {
         auditor_account: &str,
         nonce: u64,
     ) -> Result<(), RepairSchedulerError> {
+        self.ensure_repair_durability_healthy()?;
         self.repair.record_auditor_nonce(auditor_account, nonce)
     }
 
     /// Fetch repair tasks with optional filters applied.
-    #[must_use]
-    pub fn repair_tasks(&self, filters: RepairTaskFilters) -> Vec<RepairTaskRecordV1> {
-        self.repair.list_tasks(filters)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the durable repair store is unavailable or cannot
+    /// prove that its checkpoint state is trustworthy.
+    pub fn repair_tasks(
+        &self,
+        filters: RepairTaskFilters,
+    ) -> Result<Vec<RepairTaskRecordV1>, RepairSchedulerError> {
+        self.ensure_repair_durability_healthy()?;
+        self.repair.list_tasks(filters).map_err(Into::into)
     }
 
     /// Fetch repair task snapshots with optional filters applied.
-    #[must_use]
-    pub fn repair_task_snapshots(&self, filters: RepairTaskFilters) -> Vec<RepairTaskSnapshot> {
-        self.repair.list_task_snapshots(filters)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the durable repair store is unavailable or cannot
+    /// prove that its checkpoint state is trustworthy.
+    pub fn repair_task_snapshots(
+        &self,
+        filters: RepairTaskFilters,
+    ) -> Result<Vec<RepairTaskSnapshot>, RepairSchedulerError> {
+        self.ensure_repair_durability_healthy()?;
+        self.repair.list_task_snapshots(filters).map_err(Into::into)
     }
 
     /// Fetch repair tasks associated with the supplied manifest digest.
-    #[must_use]
-    pub fn repair_tasks_for_manifest(&self, manifest_digest: &[u8; 32]) -> Vec<RepairTaskRecordV1> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the durable repair store is unavailable or cannot
+    /// prove that its checkpoint state is trustworthy.
+    pub fn repair_tasks_for_manifest(
+        &self,
+        manifest_digest: &[u8; 32],
+    ) -> Result<Vec<RepairTaskRecordV1>, RepairSchedulerError> {
         self.repair_tasks(RepairTaskFilters::for_manifest(*manifest_digest))
     }
 
     /// Fetch repair task snapshots associated with the supplied manifest digest.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the durable repair store is unavailable or cannot
+    /// prove that its checkpoint state is trustworthy.
     pub fn repair_task_snapshots_for_manifest(
         &self,
         manifest_digest: &[u8; 32],
-    ) -> Vec<RepairTaskSnapshot> {
+    ) -> Result<Vec<RepairTaskSnapshot>, RepairSchedulerError> {
         self.repair_task_snapshots(RepairTaskFilters::for_manifest(*manifest_digest))
     }
 
     /// Fetch a repair task record by ticket id.
-    #[must_use]
-    pub fn repair_task_record(&self, ticket_id: &RepairTicketId) -> Option<RepairTaskRecordV1> {
-        self.repair.task_record(ticket_id)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the durable repair store is unavailable or cannot
+    /// prove that its checkpoint state is trustworthy.
+    pub fn repair_task_record(
+        &self,
+        ticket_id: &RepairTicketId,
+    ) -> Result<Option<RepairTaskRecordV1>, RepairSchedulerError> {
+        self.ensure_repair_durability_healthy()?;
+        self.repair.task_record(ticket_id).map_err(Into::into)
     }
 
     /// Fetch a repair task snapshot by ticket id.
-    #[must_use]
-    pub fn repair_task_snapshot(&self, ticket_id: &RepairTicketId) -> Option<RepairTaskSnapshot> {
-        self.repair.task_snapshot(ticket_id)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the durable repair store is unavailable or cannot
+    /// prove that its checkpoint state is trustworthy.
+    pub fn repair_task_snapshot(
+        &self,
+        ticket_id: &RepairTicketId,
+    ) -> Result<Option<RepairTaskSnapshot>, RepairSchedulerError> {
+        self.ensure_repair_durability_healthy()?;
+        self.repair.task_snapshot(ticket_id).map_err(Into::into)
     }
 
     /// Submit a slash proposal tied to an escalated repair ticket.
@@ -7461,10 +9259,11 @@ impl NodeHandle {
         &self,
         proposal: &RepairSlashProposalV1,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
+        self.ensure_repair_durability_healthy()?;
         let update = self
             .repair
             .submit_slash_proposal_with_event(proposal.clone())?;
-        self.publish_repair_update(&update, Some(RepairSlashStage::Submitted));
+        self.publish_repair_update(&update, Some(RepairSlashStage::Submitted))?;
         Ok(update.record)
     }
 
@@ -7475,10 +9274,11 @@ impl NodeHandle {
         started_at_unix: u64,
         repair_agent: Option<String>,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
+        self.ensure_repair_durability_healthy()?;
         let update =
             self.repair
                 .mark_in_progress_with_event(ticket_id, started_at_unix, repair_agent)?;
-        self.publish_repair_update(&update, None);
+        self.publish_repair_update(&update, None)?;
         Ok(update.record)
     }
 
@@ -7489,12 +9289,13 @@ impl NodeHandle {
         completed_at_unix: u64,
         resolution_notes: Option<String>,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
+        self.ensure_repair_durability_healthy()?;
         let update = self.repair.mark_completed_with_event(
             ticket_id,
             completed_at_unix,
             resolution_notes,
         )?;
-        self.publish_repair_update(&update, None);
+        self.publish_repair_update(&update, None)?;
         Ok(update.record)
     }
 
@@ -7505,10 +9306,11 @@ impl NodeHandle {
         failed_at_unix: u64,
         reason: String,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
+        self.ensure_repair_durability_healthy()?;
         let update = self
             .repair
             .mark_failed_with_event(ticket_id, failed_at_unix, reason)?;
-        self.publish_repair_update(&update, Some(RepairSlashStage::Drafted));
+        self.publish_repair_update(&update, Some(RepairSlashStage::Drafted))?;
         Ok(update.record)
     }
 
@@ -7520,13 +9322,14 @@ impl NodeHandle {
         claimed_at_unix: u64,
         idempotency_key: &str,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
+        self.ensure_repair_durability_healthy()?;
         let update = self.repair.claim_ticket_with_event(
             ticket_id,
             worker_id,
             claimed_at_unix,
             idempotency_key,
         )?;
-        self.publish_repair_update(&update, None);
+        self.publish_repair_update(&update, None)?;
         Ok(update.record)
     }
 
@@ -7538,6 +9341,7 @@ impl NodeHandle {
         heartbeat_at_unix: u64,
         idempotency_key: &str,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
+        self.ensure_repair_durability_healthy()?;
         self.repair
             .heartbeat_ticket(ticket_id, worker_id, heartbeat_at_unix, idempotency_key)
     }
@@ -7551,6 +9355,7 @@ impl NodeHandle {
         resolution_notes: Option<String>,
         idempotency_key: &str,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
+        self.ensure_repair_durability_healthy()?;
         let update = self.repair.complete_ticket_with_event(
             ticket_id,
             worker_id,
@@ -7558,7 +9363,7 @@ impl NodeHandle {
             resolution_notes,
             idempotency_key,
         )?;
-        self.publish_repair_update(&update, None);
+        self.publish_repair_update(&update, None)?;
         Ok(update.record)
     }
 
@@ -7571,6 +9376,7 @@ impl NodeHandle {
         reason: String,
         idempotency_key: &str,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
+        self.ensure_repair_durability_healthy()?;
         let update = self.repair.fail_ticket_with_event(
             ticket_id,
             worker_id,
@@ -7578,7 +9384,7 @@ impl NodeHandle {
             reason,
             idempotency_key,
         )?;
-        self.publish_repair_update(&update, Some(RepairSlashStage::Drafted));
+        self.publish_repair_update(&update, Some(RepairSlashStage::Drafted))?;
         Ok(update.record)
     }
 
@@ -7590,9 +9396,10 @@ impl NodeHandle {
         if !self.repair_config.enabled() || now_unix == 0 {
             return Ok(RepairWatchdogReport::default());
         }
+        self.ensure_repair_durability_healthy()?;
         let report = self.repair.run_watchdog(now_unix)?;
         for event in &report.events {
-            self.record_repair_event(event.clone());
+            self.record_repair_event(event.clone())?;
             self.publish_repair_audit_event(event.clone());
         }
         for proposal in &report.escalated {
@@ -7871,8 +9678,20 @@ impl NodeHandle {
             iroha_logger::error!(%err, "repair worker skipped: storage backend fail-stopped");
             return report;
         }
+        if let Err(err) = self.ensure_repair_durability_healthy() {
+            report.record_error();
+            iroha_logger::error!(%err, "repair worker skipped: node runtime fail-stopped");
+            return report;
+        }
 
-        let candidates = self.repair.claimable_tasks(now_unix);
+        let candidates = match self.repair.claimable_tasks(now_unix) {
+            Ok(candidates) => candidates,
+            Err(err) => {
+                report.record_error();
+                iroha_logger::error!(%err, "repair worker skipped: task store unavailable");
+                return report;
+            }
+        };
         if candidates.is_empty() {
             report.record_skipped();
             return report;
@@ -7903,7 +9722,15 @@ impl NodeHandle {
                 }
             };
             report.record_claim();
-            self.publish_repair_update(&update, None);
+            if let Err(err) = self.publish_repair_update(&update, None) {
+                report.record_error();
+                iroha_logger::error!(
+                    %err,
+                    ticket = %ticket_id,
+                    "repair worker fail-stopped after claim event persistence failure"
+                );
+                break;
+            }
 
             let manifest = storage.manifest_by_digest(&task.manifest_digest);
             let (update, stage) = match manifest {
@@ -8092,7 +9919,14 @@ impl NodeHandle {
             };
 
             report.record_state(&update.record.state);
-            self.publish_repair_update(&update, stage);
+            if let Err(err) = self.publish_repair_update(&update, stage) {
+                report.record_error();
+                iroha_logger::error!(
+                    %err,
+                    ticket = %ticket_id,
+                    "repair worker fail-stopped after update event persistence failure"
+                );
+            }
             break;
         }
 
@@ -8137,6 +9971,16 @@ impl NodeHandle {
             global_sorafs_gc_otel().record_run(RESULT_ERROR);
             return report;
         }
+        let repair_tasks = match self.repair.list_tasks(RepairTaskFilters::default()) {
+            Ok(tasks) => tasks,
+            Err(err) => {
+                report.errors = report.errors.saturating_add(1);
+                iroha_logger::error!(%err, "GC sweep skipped: repair state unavailable");
+                global_or_default().inc_sorafs_gc_runs(RESULT_ERROR);
+                global_sorafs_gc_otel().record_run(RESULT_ERROR);
+                return report;
+            }
+        };
 
         let grace_secs = self.gc_config.retention_grace_secs();
         let max_deletions = self.gc_config.max_deletions_per_run() as usize;
@@ -8199,8 +10043,10 @@ impl NodeHandle {
             }
 
             let digest = *manifest.manifest_digest();
-            let tasks = self.repair.tasks_for_manifest(&digest);
-            if tasks.iter().any(|task| !repair_task_terminal(task)) {
+            if repair_tasks
+                .iter()
+                .any(|task| task.manifest_digest == digest && !repair_task_terminal(task))
+            {
                 report.skipped.push(GcSkip {
                     manifest_id: manifest.manifest_id().to_owned(),
                     reason: REASON_REPAIR_ACTIVE.to_string(),
@@ -8402,7 +10248,10 @@ impl NodeHandle {
             }
         };
 
-        let repair_records = self.repair.list_tasks(RepairTaskFilters::default());
+        let repair_records = self
+            .repair
+            .list_tasks(RepairTaskFilters::default())
+            .map_err(|err| ReconciliationError::RepairStore(err.to_string()))?;
         let repair_entries = repair_records
             .iter()
             .map(|record| reconciliation::RepairReconciliationEntry {
@@ -8653,14 +10502,21 @@ impl NodeHandle {
                 "auxiliary checkpoint transaction lock poisoned".to_owned(),
             )
         })?;
+        self.ensure_durability_healthy()
+            .map_err(PorTrackerError::RuntimeCheckpoint)?;
         let previous = self.por.checkpoint();
         self.por.record_challenge(challenge)?;
         if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
-            self.por
-                .restore_checkpoint(previous)
-                .unwrap_or_else(|rollback| {
-                    panic!("failed to roll back PoR challenge after checkpoint error: {rollback}")
-                });
+            if err.committed {
+                return Err(PorTrackerError::RuntimeCheckpoint(err.to_string()));
+            }
+            if let Err(rollback) = self.por.restore_checkpoint(previous) {
+                let message = self.record_unrecoverable_rollback(
+                    "failed to roll back PoR challenge after checkpoint error",
+                    rollback,
+                );
+                return Err(PorTrackerError::RuntimeCheckpoint(message));
+            }
             return Err(PorTrackerError::RuntimeCheckpoint(err.to_string()));
         }
         Ok(())
@@ -8677,14 +10533,21 @@ impl NodeHandle {
                 "auxiliary checkpoint transaction lock poisoned".to_owned(),
             )
         })?;
+        self.ensure_durability_healthy()
+            .map_err(PorTrackerError::RuntimeCheckpoint)?;
         let previous = self.por.checkpoint();
         self.por.record_proof(proof, admitted_provider_key)?;
         if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
-            self.por
-                .restore_checkpoint(previous)
-                .unwrap_or_else(|rollback| {
-                    panic!("failed to roll back PoR proof after checkpoint error: {rollback}")
-                });
+            if err.committed {
+                return Err(PorTrackerError::RuntimeCheckpoint(err.to_string()));
+            }
+            if let Err(rollback) = self.por.restore_checkpoint(previous) {
+                let message = self.record_unrecoverable_rollback(
+                    "failed to roll back PoR proof after checkpoint error",
+                    rollback,
+                );
+                return Err(PorTrackerError::RuntimeCheckpoint(message));
+            }
             return Err(PorTrackerError::RuntimeCheckpoint(err.to_string()));
         }
         Ok(())
@@ -8702,6 +10565,8 @@ impl NodeHandle {
                 "auxiliary checkpoint transaction lock poisoned".to_owned(),
             ))
         })?;
+        self.ensure_durability_healthy()
+            .map_err(PorTrackerError::RuntimeCheckpoint)?;
         {
             let history = self.por_history.read().map_err(|_| {
                 PorTrackerError::RepairStore(repair::RepairStoreError::Other(
@@ -8724,28 +10589,49 @@ impl NodeHandle {
             trusted_auditor_keys,
             auditor_threshold,
             |stats| {
-                self.repair
-                    .register_por_verdict(verdict, stats.failed_samples)
+                if self.repair_config.enabled() {
+                    self.repair
+                        .register_por_verdict(verdict, stats.failed_samples)
+                } else {
+                    Ok(None)
+                }
             },
         )?;
         let previous_history = self
             .por_history
             .read()
-            .expect("PoR history lock poisoned")
+            .map_err(|_| {
+                PorTrackerError::RuntimeCheckpoint("PoR history lock poisoned".to_owned())
+            })?
             .clone();
-        let consecutive_failures = self.update_por_history_entry(verdict);
-        let slash = self.evaluate_por_penalty(verdict, &stats, consecutive_failures);
+        let consecutive_failures = self.update_por_history_entry(verdict)?;
+        let slash = self.evaluate_por_penalty(verdict, &stats, consecutive_failures)?;
         if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
-            *self
-                .por_history
-                .write()
-                .expect("PoR history rollback lock poisoned") = previous_history;
-            self.por
-                .restore_checkpoint(previous_tracker)
-                .unwrap_or_else(|rollback| {
-                    panic!("failed to roll back finalized PoR tracker state: {rollback}")
-                });
-            panic!("failed to persist finalized PoR history: {err}");
+            if err.committed {
+                return Err(PorTrackerError::RuntimeCheckpoint(err.to_string()));
+            }
+            let history_rollback = self.por_history.write().map(|mut history| {
+                *history = previous_history;
+            });
+            let tracker_rollback = self.por.restore_checkpoint(previous_tracker);
+            if history_rollback.is_err() || tracker_rollback.is_err() {
+                let rollback = match (history_rollback, tracker_rollback) {
+                    (Err(_), Err(tracker)) => format!(
+                        "PoR history rollback lock poisoned; tracker rollback failed: {tracker}"
+                    ),
+                    (Err(_), Ok(())) => "PoR history rollback lock poisoned".to_owned(),
+                    (Ok(()), Err(tracker)) => {
+                        format!("PoR tracker rollback failed: {tracker}")
+                    }
+                    (Ok(()), Ok(())) => unreachable!(),
+                };
+                let message = self.record_unrecoverable_rollback(
+                    "failed to roll back finalized PoR state after checkpoint error",
+                    rollback,
+                );
+                return Err(PorTrackerError::RuntimeCheckpoint(message));
+            }
+            return Err(PorTrackerError::RuntimeCheckpoint(err.to_string()));
         }
         if stats.success_samples > 0 {
             self.meter.record_por_samples(stats.success_samples, 0);
@@ -9161,8 +11047,10 @@ impl NodeHandle {
         Some(f(acc))
     }
 
-    fn update_por_history_entry(&self, verdict: &AuditVerdictV1) -> u64 {
-        let mut history = self.por_history.write().expect("por history poisoned");
+    fn update_por_history_entry(&self, verdict: &AuditVerdictV1) -> Result<u64, PorTrackerError> {
+        let mut history = self.por_history.write().map_err(|_| {
+            PorTrackerError::RuntimeCheckpoint("PoR history lock poisoned".to_owned())
+        })?;
         let entry = history
             .entry((verdict.manifest_digest, verdict.provider_id))
             .or_default();
@@ -9177,7 +11065,7 @@ impl NodeHandle {
                 entry.consecutive_failures = entry.consecutive_failures.saturating_add(1);
             }
         }
-        entry.consecutive_failures
+        Ok(entry.consecutive_failures)
     }
 
     fn evaluate_por_penalty(
@@ -9185,28 +11073,32 @@ impl NodeHandle {
         verdict: &AuditVerdictV1,
         stats: &PorVerdictStats,
         consecutive_failures: u64,
-    ) -> Option<SlashRecommendation> {
+    ) -> Result<Option<SlashRecommendation>, PorTrackerError> {
         if stats.failed_samples == 0 {
-            return None;
+            return Ok(None);
         }
         let policy = self.config.penalty();
         if consecutive_failures < u64::from(policy.strike_threshold) {
-            return None;
+            return Ok(None);
         }
 
-        let mut history = self.por_history.write().expect("por history poisoned");
+        let mut history = self.por_history.write().map_err(|_| {
+            PorTrackerError::RuntimeCheckpoint("PoR history lock poisoned".to_owned())
+        })?;
         let entry = history
             .entry((verdict.manifest_digest, verdict.provider_id))
             .or_default();
         if let Some(last_slash) = entry.last_slash_unix {
             let elapsed = verdict.decided_at.saturating_sub(last_slash);
             if elapsed < policy.cooldown_secs {
-                return None;
+                return Ok(None);
             }
         }
 
         let provider_id = ProviderId::new(verdict.provider_id);
-        let snapshot = self.deal_engine.provider_snapshot(provider_id)?;
+        let Some(snapshot) = self.deal_engine.provider_snapshot(provider_id) else {
+            return Ok(None);
+        };
         let bonded_total = snapshot
             .bond_available_nano
             .saturating_add(snapshot.bond_locked_nano);
@@ -9214,13 +11106,13 @@ impl NodeHandle {
             .saturating_mul(u128::from(policy.penalty_bond_bps))
             .saturating_div(10_000);
         if penalty == 0 {
-            return None;
+            return Ok(None);
         }
 
         entry.last_slash_unix = Some(verdict.decided_at);
         entry.consecutive_failures = 0;
 
-        Some(SlashRecommendation {
+        Ok(Some(SlashRecommendation {
             provider_id,
             manifest_digest: verdict.manifest_digest,
             penalty_nano: penalty,
@@ -9229,7 +11121,7 @@ impl NodeHandle {
                 "PoR failure streak reached {} (threshold {}), slashing {} bps of bonded collateral",
                 consecutive_failures, policy.strike_threshold, policy.penalty_bond_bps
             ),
-        })
+        }))
     }
 
     fn build_ingestion_status_map(
@@ -9254,7 +11146,12 @@ impl NodeHandle {
         statuses: &mut HashMap<PorHistoryKey, PorIngestionProviderStatus>,
         manifest_filter: Option<&[u8; 32]>,
     ) {
-        let history = self.por_history.read().expect("por history poisoned");
+        let Ok(history) = self.por_history.read() else {
+            iroha_logger::error!(
+                "PoR ingestion history is unavailable because its lock is poisoned"
+            );
+            return;
+        };
         for ((manifest, provider), entry) in history.iter() {
             if manifest_filter.is_some_and(|filter| manifest != filter) {
                 continue;
@@ -9377,6 +11274,9 @@ fn create_moderation_quarantine_object_key(
         })?;
     match write_local_private_checkpoint_atomic(path, &key) {
         Ok(()) => Ok(key),
+        // The key is already visible. A later successful object-index commit
+        // synchronizes this same directory, closing the durability window.
+        Err(err) if err.committed => Ok(key),
         Err(err) if err.kind() == ErrorKind::AlreadyExists => {
             load_moderation_quarantine_object_key(path)
         }
@@ -9557,16 +11457,16 @@ mod tests {
             ReplicationAssignmentV1, ReplicationOrderSlaV1, ReplicationOrderV1,
         },
         deal::{DealSettlementStatusV1, DealSettlementV1, XorAmount},
-        order_cancel_signature_digest_v1, order_request_signature_digest_v1,
+        derive_orderbook_order_id_v1, order_cancel_signature_digest_v1,
+        order_request_signature_digest_v1,
         provider_advert::SignatureAlgorithm,
         repair::{
             CompletedRepairStateV1, EscalatedRepairStateV1, FailedRepairStateV1,
             GC_AUDIT_EVENT_VERSION_V1, GC_AUDIT_PAYLOAD_VERSION_V1, GcAuditEventV1,
-            InProgressRepairStateV1, QueuedRepairStateV1, REPAIR_ESCALATION_APPROVAL_VERSION_V1,
-            REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1, REPAIR_SLASH_PROPOSAL_VERSION_V1,
-            RepairAuditEventV1, RepairCauseV1, RepairEscalationApprovalV1, RepairEvidenceV1,
-            RepairManualCauseV1, RepairPorFailureCauseV1, RepairReportV1, RepairSlashProposalV1,
-            RepairTaskStateV1, RepairTaskStatusV1, RepairTicketId,
+            InProgressRepairStateV1, QueuedRepairStateV1, REPAIR_EVIDENCE_VERSION_V1,
+            REPAIR_REPORT_VERSION_V1, REPAIR_SLASH_PROPOSAL_VERSION_V1, RepairAuditEventV1,
+            RepairCauseV1, RepairEvidenceV1, RepairManualCauseV1, RepairReportV1,
+            RepairSlashProposalV1, RepairTaskStateV1, RepairTaskStatusV1, RepairTicketId,
         },
         settlement_receipt_signature_digest_v1,
     };
@@ -9654,6 +11554,33 @@ mod tests {
     }
 
     #[test]
+    fn local_checkpoint_distinguishes_precommit_and_visible_uncertain_failures() {
+        fn fail_parent_sync(_: &Path) -> io::Result<()> {
+            Err(io::Error::other("injected parent sync failure"))
+        }
+
+        let temp = tempfile::tempdir().expect("temp dir");
+        let path = temp.path().join("checkpoint.to");
+        let precommit = write_local_checkpoint_atomic_bounded(&path, b"too-large", 4)
+            .expect_err("size limit fails before commit");
+        assert!(!precommit.committed);
+        assert!(!path.exists());
+
+        let uncertain = write_local_checkpoint_atomic_with_mode_and_parent_sync(
+            &path,
+            b"visible-state",
+            false,
+            fail_parent_sync,
+        )
+        .expect_err("parent sync failure follows rename");
+        assert!(uncertain.committed);
+        assert_eq!(
+            fs::read(&path).expect("visible committed bytes"),
+            b"visible-state"
+        );
+    }
+
+    #[test]
     fn concurrent_local_checkpoint_writers_never_publish_partial_bytes() {
         let temp = tempfile::tempdir().expect("temp dir");
         let path = Arc::new(temp.path().join("checkpoint.to"));
@@ -9687,7 +11614,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn local_checkpoint_rejects_symlink_targets_and_parents() {
-        use std::os::unix::fs::symlink;
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
 
         let temp = tempfile::tempdir().expect("temp dir");
         let victim = temp.path().join("victim");
@@ -9708,6 +11635,23 @@ mod tests {
         let nested_target = linked_parent.join("nested").join("state.to");
         assert!(write_local_checkpoint_atomic(&nested_target, b"state").is_err());
         assert!(!real_parent.join("nested").exists());
+
+        let hardlink_target = temp.path().join("hardlink-target.to");
+        write_local_checkpoint_atomic(&hardlink_target, b"state").expect("write hardlink target");
+        let hardlink_alias = temp.path().join("hardlink-alias.to");
+        fs::hard_link(&hardlink_target, &hardlink_alias).expect("create hardlink alias");
+        assert!(read_local_checkpoint_bounded(&hardlink_target, 128).is_err());
+        assert!(write_local_checkpoint_atomic(&hardlink_target, b"replacement").is_err());
+
+        let permissive_parent = temp.path().join("permissive-parent");
+        fs::create_dir(&permissive_parent).expect("create permissive parent");
+        fs::set_permissions(&permissive_parent, fs::Permissions::from_mode(0o777))
+            .expect("make parent writable");
+        assert!(
+            write_local_checkpoint_atomic(&permissive_parent.join("state.to"), b"state").is_err()
+        );
+        fs::set_permissions(&permissive_parent, fs::Permissions::from_mode(0o700))
+            .expect("restore parent permissions");
     }
 
     #[test]
@@ -9749,6 +11693,42 @@ mod tests {
         let second_meta = fs::metadata(&second).expect("second metadata");
         assert!(same_local_file_identity(&first_meta, &first_meta));
         assert!(!same_local_file_identity(&first_meta, &second_meta));
+    }
+
+    #[test]
+    fn runtime_initialization_requires_every_checkpoint_after_first_start() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::try_new(cfg.clone()).expect("initialize runtime checkpoints");
+        drop(handle);
+
+        let marker = runtime_state_initialization_path(cfg.data_dir());
+        assert_eq!(
+            fs::read(&marker).expect("read initialization marker"),
+            RUNTIME_STATE_INITIALIZATION_BYTES
+        );
+        for (_, path) in required_runtime_checkpoint_paths(cfg.data_dir()) {
+            assert!(
+                path.is_file(),
+                "missing initialized checkpoint {}",
+                path.display()
+            );
+            let bytes = fs::read(&path).expect("read initialized checkpoint");
+            fs::remove_file(&path).expect("remove initialized checkpoint");
+            assert!(matches!(
+                NodeHandle::try_new(cfg.clone()),
+                Err(NodeInitError::Checkpoint { .. })
+            ));
+            write_local_checkpoint_atomic(&path, &bytes).expect("restore checkpoint for next case");
+        }
+
+        fs::remove_file(&marker).expect("remove initialization marker");
+        assert!(matches!(
+            NodeHandle::try_new(cfg),
+            Err(NodeInitError::Checkpoint {
+                component: "runtime initialization marker",
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -10290,7 +12270,11 @@ mod tests {
         session
     }
 
-    fn reputation_snapshot_fixture() -> ReputationSnapshotV1 {
+    fn reputation_snapshot_fixture_with(
+        snapshot_id: [u8; 16],
+        generated_at_unix: u64,
+        previous_snapshot_id: Option<[u8; 16]>,
+    ) -> ReputationSnapshotV1 {
         let metrics = ReputationProviderMetricsV1 {
             version: REPUTATION_PROVIDER_METRICS_VERSION_V1,
             por_success_bps: 9_800,
@@ -10311,13 +12295,17 @@ mod tests {
             slashing_event: false,
         };
         build_reputation_snapshot(
-            [0x42; 16],
-            1_800_000_000,
+            snapshot_id,
+            generated_at_unix,
             ReputationWeightsV1::default(),
             &[input],
-            None,
+            previous_snapshot_id,
         )
         .expect("reputation snapshot fixture")
+    }
+
+    fn reputation_snapshot_fixture() -> ReputationSnapshotV1 {
+        reputation_snapshot_fixture_with([0x42; 16], 1_800_000_000, None)
     }
 
     fn transparency_ledger_publication_fixture() -> ModerationLedgerCyclePublicationV1 {
@@ -10657,24 +12645,6 @@ mod tests {
         }
     }
 
-    fn approval_for_default_policy(escalated_at_unix: u64) -> RepairEscalationApprovalV1 {
-        let policy = *crate::config::RepairConfig::default().escalation_policy();
-        let approved_at_unix = escalated_at_unix
-            .saturating_add(policy.dispute_window_secs())
-            .saturating_add(1);
-        let finalized_at_unix = approved_at_unix
-            .saturating_add(policy.appeal_window_secs())
-            .saturating_add(1);
-        RepairEscalationApprovalV1 {
-            version: REPAIR_ESCALATION_APPROVAL_VERSION_V1,
-            approve_votes: 2,
-            reject_votes: 1,
-            abstain_votes: 0,
-            approved_at_unix,
-            finalized_at_unix,
-        }
-    }
-
     #[test]
     fn moderation_model_registry_admits_repro_manifest_and_rejects_conflict() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -10931,6 +12901,7 @@ mod tests {
             Some("release-authority@moderation")
         );
 
+        drop(source);
         let restored = NodeHandle::new(cfg);
         let snapshot = restored
             .export_moderation_screening_snapshot()
@@ -11000,6 +12971,7 @@ mod tests {
             norito::decode_from_bytes(&index_bytes).expect("decode object index");
         assert_eq!(index.objects, vec![record.clone()]);
 
+        drop(source);
         let restored = NodeHandle::new(cfg);
         assert_eq!(
             restored
@@ -11090,6 +13062,165 @@ mod tests {
             err,
             ModerationQuarantineObjectError::AuthenticationFailed { .. }
         ));
+    }
+
+    #[test]
+    fn moderation_quarantine_store_rejects_authenticated_envelope_tampering_on_restart() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let payload = b"restart audit must authenticate every quarantine envelope".to_vec();
+        let mut screening = moderation_screening_input_fixture(
+            "cid:bafy-object-restart-tamper",
+            ModerationScreeningVerdict::Quarantine,
+        );
+        screening.subject_digest = *blake3::hash(&payload).as_bytes();
+        let handle = NodeHandle::new(cfg.clone());
+        let quarantine_id = handle
+            .record_moderation_screening_result(screening)
+            .expect("record quarantine result")
+            .quarantine
+            .expect("quarantine record")
+            .quarantine_id;
+        let record = handle
+            .store_moderation_quarantine_object(ModerationQuarantineObjectInput {
+                quarantine_id,
+                payload,
+                captured_at_unix: 1_800_000_083,
+                content_type: None,
+                notes: None,
+            })
+            .expect("store quarantine object");
+        drop(handle);
+
+        let envelope_path =
+            moderation_quarantine_object_store_root(cfg.data_dir()).join(&record.envelope_path);
+        let bytes = fs::read(&envelope_path).expect("read envelope");
+        let mut envelope: crate::moderation::ModerationQuarantineObjectEnvelopeV1 =
+            norito::decode_from_bytes(&bytes).expect("decode envelope");
+        envelope.ciphertext[0] ^= 0x80;
+        fs::write(
+            &envelope_path,
+            norito::to_bytes(&envelope).expect("encode canonical tampered envelope"),
+        )
+        .expect("write tampered envelope");
+
+        assert!(matches!(
+            NodeHandle::try_new(cfg),
+            Err(NodeInitError::Checkpoint {
+                component: "moderation quarantine object envelope",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn moderation_quarantine_store_rejects_missing_key_and_orphan_files_on_restart() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let payload = b"indexed quarantine object requires its original sealing key".to_vec();
+        let mut screening = moderation_screening_input_fixture(
+            "cid:bafy-object-missing-key",
+            ModerationScreeningVerdict::Quarantine,
+        );
+        screening.subject_digest = *blake3::hash(&payload).as_bytes();
+        let handle = NodeHandle::new(cfg.clone());
+        let quarantine_id = handle
+            .record_moderation_screening_result(screening)
+            .expect("record quarantine result")
+            .quarantine
+            .expect("quarantine record")
+            .quarantine_id;
+        handle
+            .store_moderation_quarantine_object(ModerationQuarantineObjectInput {
+                quarantine_id,
+                payload,
+                captured_at_unix: 1_800_000_084,
+                content_type: None,
+                notes: None,
+            })
+            .expect("store quarantine object");
+        drop(handle);
+
+        let key_path = moderation_quarantine_object_key_path(cfg.data_dir());
+        let key_bytes = fs::read(&key_path).expect("read sealing key");
+        fs::remove_file(&key_path).expect("remove sealing key");
+        assert!(matches!(
+            NodeHandle::try_new(cfg.clone()),
+            Err(NodeInitError::Checkpoint {
+                component: "moderation quarantine object key",
+                ..
+            })
+        ));
+
+        write_local_private_checkpoint_atomic(&key_path, &key_bytes).expect("restore sealing key");
+        let orphan = moderation_quarantine_object_store_root(cfg.data_dir()).join("orphan.to");
+        fs::write(&orphan, b"not indexed").expect("write orphan object");
+        assert!(matches!(
+            NodeHandle::try_new(cfg),
+            Err(NodeInitError::Checkpoint {
+                component: "moderation quarantine object store",
+                ..
+            })
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn moderation_quarantine_store_rejects_symlink_entries_on_restart() {
+        use std::os::unix::fs::symlink;
+
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        drop(NodeHandle::new(cfg.clone()));
+        let victim = cfg.data_dir().join("quarantine-symlink-victim");
+        fs::write(&victim, b"victim").expect("write symlink victim");
+        let link = moderation_quarantine_object_store_root(cfg.data_dir()).join("orphan-link.to");
+        symlink(&victim, &link).expect("create object-store symlink");
+
+        assert!(matches!(
+            NodeHandle::try_new(cfg),
+            Err(NodeInitError::Checkpoint {
+                component: "moderation quarantine object store",
+                ..
+            })
+        ));
+        assert_eq!(fs::read(victim).expect("victim remains intact"), b"victim");
+    }
+
+    #[test]
+    fn moderation_snapshot_restore_rejects_dangling_cross_checkpoint_references() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg);
+        seed_moderation_evidence_viewer_activity(
+            &handle,
+            "cid:bafy-cross-checkpoint-refs",
+            b"cross-checkpoint reference fixture",
+            1_800_000_100_000,
+            1_800_000_200_000,
+            &[],
+        );
+        let screening_before = handle.moderation_screening_snapshot();
+        let objects_before = handle.moderation_quarantine_object_snapshot();
+
+        let screening_error = handle
+            .restore_moderation_screening_snapshot(ModerationScreeningSnapshot::default())
+            .expect_err("referenced quarantine cannot be removed");
+        assert!(matches!(
+            screening_error,
+            ModerationScreeningError::InvalidSnapshot { .. }
+        ));
+        assert_eq!(handle.moderation_screening_snapshot(), screening_before);
+
+        let object_error = handle
+            .restore_moderation_quarantine_object_snapshot(
+                ModerationQuarantineObjectSnapshot::default(),
+            )
+            .expect_err("viewer-referenced object cannot be removed");
+        assert!(matches!(
+            object_error,
+            ModerationQuarantineObjectError::InvalidSnapshot { .. }
+        ));
+        assert_eq!(
+            handle.moderation_quarantine_object_snapshot(),
+            objects_before
+        );
     }
 
     #[test]
@@ -11870,18 +14001,20 @@ mod tests {
         price_micro: u128,
         owner: &[u8],
     ) -> OrderRequestV1 {
+        let owner_account = owner.to_vec();
+        let nonce = u64::from(id);
         sign_orderbook_order(
             OrderRequestV1 {
                 version: ORDERBOOK_ORDER_VERSION_V1,
-                order_id: [id; 32],
+                order_id: derive_orderbook_order_id_v1(&owner_account, nonce),
                 side,
                 tier: OrderTierV1::Hot,
                 price_per_gib: XorAmount::from_micro(price_micro),
                 quantity_gib: 4,
                 remaining_gib: 4,
-                owner_account: owner.to_vec(),
+                owner_account,
                 expiry_unix: 1_800_000_100,
-                nonce: u64::from(id),
+                nonce,
                 maker_fee_bps: 10,
                 taker_fee_bps: 20,
                 signature: orderbook_signature(),
@@ -11890,12 +14023,12 @@ mod tests {
         )
     }
 
-    fn orderbook_cancel(id: u8, owner: &[u8]) -> OrderCancelV1 {
+    fn orderbook_cancel(id: u8, order_owner: &[u8], cancel_owner: &[u8]) -> OrderCancelV1 {
         sign_orderbook_cancel(
             OrderCancelV1 {
                 version: ORDERBOOK_CANCEL_VERSION_V1,
-                order_id: [id; 32],
-                owner_account: owner.to_vec(),
+                order_id: derive_orderbook_order_id_v1(order_owner, u64::from(id)),
+                owner_account: cancel_owner.to_vec(),
                 reason: OrderCancelReasonV1::OwnerRequested,
                 nonce: u64::from(id).saturating_add(100),
                 signature: orderbook_signature(),
@@ -12599,12 +14732,12 @@ mod tests {
         handle.submit_orderbook_order(ask, now).expect("accept ask");
 
         assert!(matches!(
-            handle.cancel_orderbook_order(orderbook_cancel(3, b"other"), now),
+            handle.cancel_orderbook_order(orderbook_cancel(3, b"provider", b"other"), now),
             Err(OrderbookRuntimeError::CancelOwnerMismatch)
         ));
 
         let outcome = handle
-            .cancel_orderbook_order(orderbook_cancel(3, b"provider"), now)
+            .cancel_orderbook_order(orderbook_cancel(3, b"provider", b"provider"), now)
             .expect("cancel provider order");
         assert_eq!(outcome.open_order_count, 0);
         assert_eq!(handle.orderbook_snapshot(now).open_orders.len(), 0);
@@ -12831,10 +14964,14 @@ mod tests {
 
         let checkpoint_path = orderbook_runtime_snapshot_path(cfg.data_dir());
         let checkpoint_bytes = fs::read(&checkpoint_path).expect("read orderbook checkpoint");
-        let checkpoint: OrderbookRuntimeSnapshotV1 =
+        let checkpoint: OrderbookRuntimeCheckpointV1 =
             norito::decode_from_bytes(&checkpoint_bytes).expect("decode orderbook checkpoint");
-        checkpoint.validate().expect("checkpoint validates");
-        assert_eq!(checkpoint.generated_at_unix, now.saturating_add(20));
+        assert_eq!(checkpoint.version, ORDERBOOK_RUNTIME_STATE_VERSION_V1);
+        checkpoint.runtime.validate().expect("checkpoint validates");
+        assert_eq!(checkpoint.runtime.generated_at_unix, now.saturating_add(20));
+        assert_eq!(checkpoint.events.len(), 4);
+        NodeHandle::validate_orderbook_event_checkpoint(&checkpoint.runtime, &checkpoint.events)
+            .expect("event checkpoint validates");
 
         let source_snapshot = source.orderbook_snapshot(now.saturating_add(20));
         let source_events = source.orderbook_events_since(None, usize::MAX);
@@ -12867,6 +15004,83 @@ mod tests {
             restored.orderbook_events_since(None, usize::MAX),
             source_events
         );
+    }
+
+    #[test]
+    fn orderbook_checkpoint_failure_rolls_back_state_event_and_broadcast() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg.clone());
+        let now = 1_800_000_000;
+        handle
+            .submit_orderbook_order(
+                orderbook_order(0x71, OrderSideV1::Ask, 1_500_000, b"provider-a"),
+                now,
+            )
+            .expect("commit first order");
+        let checkpoint_path = orderbook_runtime_snapshot_path(cfg.data_dir());
+        let committed = fs::read(&checkpoint_path).expect("read committed orderbook checkpoint");
+        fs::remove_file(&checkpoint_path).expect("remove orderbook checkpoint");
+        fs::create_dir(&checkpoint_path).expect("inject checkpoint directory");
+        let mut receiver = handle.subscribe_orderbook_events();
+
+        assert!(matches!(
+            handle.submit_orderbook_order(
+                orderbook_order(0x72, OrderSideV1::Ask, 1_500_000, b"provider-b"),
+                now.saturating_add(1),
+            ),
+            Err(OrderbookRuntimeError::Checkpoint(_))
+        ));
+        let snapshot = handle.orderbook_snapshot(now.saturating_add(1));
+        assert_eq!(snapshot.open_orders.len(), 1);
+        assert_eq!(handle.latest_orderbook_event_sequence(), Some(1));
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
+
+        fs::remove_dir(&checkpoint_path).expect("remove injected checkpoint directory");
+        write_local_checkpoint_atomic(&checkpoint_path, &committed)
+            .expect("restore committed checkpoint");
+        drop(handle);
+        let restored = NodeHandle::try_new(cfg).expect("restart from committed checkpoint");
+        assert_eq!(restored.orderbook_snapshot(now).open_orders.len(), 1);
+        assert_eq!(restored.latest_orderbook_event_sequence(), Some(1));
+    }
+
+    #[test]
+    fn orderbook_startup_rejects_forged_event_suffix() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg.clone());
+        let now = 1_800_000_000;
+        handle
+            .submit_orderbook_order(
+                orderbook_order(0x73, OrderSideV1::Ask, 1_500_000, b"provider"),
+                now,
+            )
+            .expect("commit order");
+        let checkpoint_path = orderbook_runtime_snapshot_path(cfg.data_dir());
+        let bytes = fs::read(&checkpoint_path).expect("read orderbook checkpoint");
+        let mut checkpoint: OrderbookRuntimeCheckpointV1 =
+            norito::decode_from_bytes(&bytes).expect("decode orderbook checkpoint");
+        checkpoint
+            .events
+            .last_mut()
+            .expect("retained event")
+            .open_order_count = 0;
+        write_local_checkpoint_atomic(
+            &checkpoint_path,
+            &norito::to_bytes(&checkpoint).expect("encode forged checkpoint"),
+        )
+        .expect("write forged checkpoint");
+        drop(handle);
+
+        assert!(matches!(
+            NodeHandle::try_new(cfg),
+            Err(NodeInitError::Checkpoint {
+                component: "orderbook runtime",
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -12990,7 +15204,10 @@ mod tests {
         let event = receiver.try_recv().expect("live orderbook event");
         assert_eq!(event.sequence, 1);
         assert_eq!(event.kind, OrderbookEventKind::OrderAccepted);
-        assert_eq!(event.order_id, Some([12; 32]));
+        assert_eq!(
+            event.order_id,
+            Some(derive_orderbook_order_id_v1(b"provider", 12))
+        );
         assert_eq!(event.open_order_count, 1);
 
         handle
@@ -13235,7 +15452,8 @@ mod tests {
         ));
 
         fs::remove_dir(&checkpoint_path).expect("remove injected checkpoint directory");
-        fs::write(&checkpoint_path, committed_bytes).expect("restore committed checkpoint bytes");
+        write_local_checkpoint_atomic(&checkpoint_path, &committed_bytes)
+            .expect("restore committed checkpoint bytes");
         drop(handle);
         let restored = NodeHandle::new(cfg);
         assert!(
@@ -13485,6 +15703,38 @@ mod tests {
             ModerationBallotSnapshot::default()
         );
         assert_eq!(restored.latest_moderation_ballot_event_sequence(), None);
+
+        let full = source
+            .export_moderation_ballot_snapshot()
+            .expect("export complete moderation snapshot");
+        let mut valid_suffix = full.clone();
+        valid_suffix.events.drain(..4);
+        let suffix_target = NodeHandle::new(StorageConfig::builder().enabled(false).build());
+        suffix_target
+            .restore_moderation_ballot_snapshot(valid_suffix.clone())
+            .expect("canonical retained event suffix is accepted");
+        assert_eq!(suffix_target.moderation_ballots(), full.ballots);
+
+        let mut forged_timestamp = valid_suffix;
+        forged_timestamp.events[0].generated_at_unix_ms = forged_timestamp.events[0]
+            .generated_at_unix_ms
+            .saturating_add(1);
+        assert!(matches!(
+            NodeHandle::new(StorageConfig::builder().enabled(false).build())
+                .restore_moderation_ballot_snapshot(forged_timestamp),
+            Err(ModerationBallotRuntimeError::InvalidSnapshot { .. })
+        ));
+
+        let mut phase_regression = full;
+        phase_regression.events.drain(..2);
+        phase_regression.events.swap(0, 1);
+        phase_regression.events[0].sequence = 3;
+        phase_regression.events[1].sequence = 4;
+        assert!(matches!(
+            NodeHandle::new(StorageConfig::builder().enabled(false).build())
+                .restore_moderation_ballot_snapshot(phase_regression),
+            Err(ModerationBallotRuntimeError::InvalidSnapshot { .. })
+        ));
     }
 
     #[test]
@@ -15124,6 +17374,123 @@ mod tests {
     }
 
     #[test]
+    fn reputation_snapshot_rejects_conflicting_ids_and_evicts_only_unreferenced_history() {
+        let (base, _dir) = storage_config_with_temp_dir();
+        let cfg = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(base.data_dir().clone())
+            .runtime_retention(RuntimeRetentionPolicy::new(1, 1, 1024 * 1024))
+            .build();
+        let handle = NodeHandle::new(cfg);
+        let first = reputation_snapshot_fixture();
+        handle
+            .publish_reputation_snapshot(first.clone())
+            .expect("publish first snapshot");
+
+        let conflicting =
+            reputation_snapshot_fixture_with(first.snapshot_id, first.generated_at_unix + 1, None);
+        let conflict_error = handle
+            .publish_reputation_snapshot(conflicting)
+            .expect_err("conflicting canonical bytes under one id must fail");
+        assert!(conflict_error.to_string().contains("conflicts"));
+
+        let broken_head =
+            reputation_snapshot_fixture_with([0x43; 16], first.generated_at_unix + 1, None);
+        let head_error = handle
+            .publish_reputation_snapshot(broken_head)
+            .expect_err("snapshot must extend current head");
+        assert!(head_error.to_string().contains("must extend current head"));
+
+        let next = reputation_snapshot_fixture_with(
+            [0x44; 16],
+            first.generated_at_unix + 1,
+            Some(first.snapshot_id),
+        );
+        handle
+            .publish_reputation_snapshot(next)
+            .expect("unreferenced predecessor can be safely evicted");
+        assert_eq!(
+            handle
+                .latest_reputation_snapshot()
+                .map(|snapshot| snapshot.snapshot_id),
+            Some([0x44; 16])
+        );
+        assert!(handle.reputation_snapshot(first.snapshot_id).is_none());
+        assert_eq!(handle.reputation_events_since(None, 10).len(), 1);
+        assert_eq!(
+            handle.reputation_events_since(None, 10)[0].snapshot_id,
+            [0x44; 16]
+        );
+    }
+
+    #[test]
+    fn reputation_snapshot_publish_failure_keeps_durable_state_for_exact_retry() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg.clone());
+        let failing = Arc::new(FailingPublisher::default());
+        handle.set_governance_publisher(failing.clone());
+        let snapshot = reputation_snapshot_fixture();
+
+        handle
+            .publish_reputation_snapshot(snapshot.clone())
+            .expect_err("external publisher failure is surfaced");
+        assert_eq!(failing.attempts(), 1);
+        assert_eq!(
+            handle.latest_reputation_snapshot(),
+            Some(snapshot.clone()),
+            "local commit must survive publication failure"
+        );
+        assert_eq!(handle.reputation_events_since(None, 10).len(), 1);
+        drop(handle);
+
+        let restored = NodeHandle::new(cfg);
+        assert_eq!(
+            restored.latest_reputation_snapshot(),
+            Some(snapshot.clone())
+        );
+        assert_eq!(restored.reputation_events_since(None, 10).len(), 1);
+        let recording = Arc::new(RecordingPublisher::default());
+        restored.set_governance_publisher(recording.clone());
+        restored
+            .publish_reputation_snapshot(snapshot.clone())
+            .expect("exact retry publishes without appending another event");
+        assert_eq!(
+            recording.take(),
+            vec![to_bytes(&snapshot).expect("encode snapshot")]
+        );
+        assert_eq!(restored.reputation_events_since(None, 10).len(), 1);
+    }
+
+    #[test]
+    fn reputation_checkpoint_rejects_event_snapshot_metadata_tampering() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg.clone());
+        handle
+            .publish_reputation_snapshot(reputation_snapshot_fixture())
+            .expect("publish snapshot");
+        drop(handle);
+
+        let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
+        let bytes = fs::read(&path).expect("read auxiliary checkpoint");
+        let mut checkpoint: AuxiliaryRuntimeCheckpointV1 =
+            norito::decode_from_bytes(&bytes).expect("decode auxiliary checkpoint");
+        checkpoint.reputation_events[0].snapshot_id = [0x99; 16];
+        write_local_checkpoint_atomic(
+            &path,
+            &norito::to_bytes(&checkpoint).expect("encode tampered checkpoint"),
+        )
+        .expect("write tampered checkpoint");
+
+        assert!(matches!(
+            NodeHandle::try_new(cfg),
+            Err(NodeInitError::Checkpoint {
+                component: "auxiliary runtime",
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn publish_reserve_adjusted_reputation_snapshot_penalizes_defaulted_provider() {
         let cfg = StorageConfig::builder().enabled(false).build();
         let handle = NodeHandle::new(cfg);
@@ -16454,7 +18821,15 @@ mod tests {
     #[test]
     fn node_handle_manages_repair_queue() {
         let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
+        let repair_actual = iroha_config::parameters::actual::SorafsRepair {
+            enabled: true,
+            ..Default::default()
+        };
+        let handle = NodeHandle::new_with_policies(
+            cfg,
+            RepairConfig::from(&repair_actual),
+            GcConfig::default(),
+        );
 
         let report = RepairReportV1 {
             version: REPAIR_REPORT_VERSION_V1,
@@ -16466,10 +18841,8 @@ mod tests {
                 manifest_digest: [0x44; 32],
                 provider_id: [0x77; 32],
                 por_history_id: None,
-                cause: RepairCauseV1::PorFailure(RepairPorFailureCauseV1 {
-                    challenge_id: [0xAA; 32],
-                    failed_samples: 4,
-                    proof_digest: None,
+                cause: RepairCauseV1::Manual(RepairManualCauseV1 {
+                    reason: "operator-verified repair trigger".into(),
                 }),
                 evidence_json: None,
                 notes: Some("PoR sample failed twice".into()),
@@ -16520,12 +18893,16 @@ mod tests {
         let after_first = handle.repair_events_since(Some(1), 10);
         assert_eq!(after_first.len(), 2);
 
-        let tasks = handle.repair_tasks_for_manifest(&report.evidence.manifest_digest);
+        let tasks = handle
+            .repair_tasks_for_manifest(&report.evidence.manifest_digest)
+            .expect("repair task store");
         assert_eq!(tasks.len(), 1);
-        let provider_tasks = handle.repair_tasks(RepairTaskFilters {
-            provider_id: Some(report.evidence.provider_id),
-            ..RepairTaskFilters::default()
-        });
+        let provider_tasks = handle
+            .repair_tasks(RepairTaskFilters {
+                provider_id: Some(report.evidence.provider_id),
+                ..RepairTaskFilters::default()
+            })
+            .expect("repair task store");
         assert_eq!(provider_tasks.len(), 1);
 
         let mut live_events = handle.subscribe_repair_events();
@@ -16539,10 +18916,8 @@ mod tests {
                 manifest_digest: [0x45; 32],
                 provider_id: [0x88; 32],
                 por_history_id: None,
-                cause: RepairCauseV1::PorFailure(RepairPorFailureCauseV1 {
-                    challenge_id: [0xAB; 32],
-                    failed_samples: 6,
-                    proof_digest: None,
+                cause: RepairCauseV1::Manual(RepairManualCauseV1 {
+                    reason: "operator-verified escalation trigger".into(),
                 }),
                 evidence_json: None,
                 notes: None,
@@ -16566,9 +18941,7 @@ mod tests {
             proposed_penalty_nano: 500_000_000,
             submitted_at_unix: escalated_report.submitted_at_unix + 1_200,
             rationale: "Repeated PoR failures without acknowledgement".into(),
-            approval: Some(approval_for_default_policy(
-                escalated_report.submitted_at_unix + 1_200,
-            )),
+            approval: None,
         };
 
         let escalated = handle
@@ -16859,6 +19232,7 @@ mod tests {
 
         let completed = handle
             .repair_task_record(&report_complete.ticket_id)
+            .expect("repair task store")
             .expect("completed task");
         assert!(matches!(
             completed.state,
@@ -16866,6 +19240,7 @@ mod tests {
         ));
         let escalated = handle
             .repair_task_record(&report_missing.ticket_id)
+            .expect("repair task store")
             .expect("escalated task");
         assert!(matches!(
             escalated.state,
@@ -16998,6 +19373,7 @@ mod tests {
 
         let task = handle
             .repair_task_record(&report.ticket_id)
+            .expect("repair task store")
             .expect("repair task");
         assert!(matches!(
             task.state,
@@ -17097,6 +19473,7 @@ mod tests {
 
         let task = handle
             .repair_task_record(&report.ticket_id)
+            .expect("repair task store")
             .expect("repair task");
         assert!(matches!(
             task.state,
@@ -17707,14 +20084,6 @@ mod tests {
         handle.storage = None;
 
         assert!(!handle.is_enabled());
-    }
-
-    #[test]
-    fn hard_fork_bootstrap_flag_is_presence_based() {
-        assert!(!hard_fork_snapshot_bootstrap_enabled_from(None));
-        assert!(hard_fork_snapshot_bootstrap_enabled_from(Some(
-            std::ffi::OsString::new()
-        )));
     }
 
     #[test]

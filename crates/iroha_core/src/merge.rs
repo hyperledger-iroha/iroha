@@ -1,6 +1,6 @@
 //! Merge-ledger helpers (reduction, validation, and related utilities).
 
-use iroha_crypto::{Hash, HashOf};
+use iroha_crypto::{Hash, HashOf, MerkleTree};
 use iroha_data_model::{
     ChainId,
     block::BlockHeader,
@@ -10,9 +10,10 @@ use iroha_data_model::{
     },
     nexus::LaneConfig,
     peer::PeerId,
+    transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
 use iroha_zkp_halo2::poseidon;
-use norito::codec::Encode;
+use norito::codec::{Decode, Encode};
 
 /// Domain separator applied to the merge-hint reduction payloads.
 const MERGE_REDUCE_DOMAIN_TAG: &[u8] = b"iroha:merge:reduce:v1\0";
@@ -28,18 +29,25 @@ const MERGE_LANE_CONFIG_DOMAIN_TAG: &[u8] = b"iroha:merge:lane-config:v1\0";
 const MERGE_LANE_EXECUTION_DOMAIN_TAG: &[u8] = b"iroha:merge:lane-execution:v1\0";
 /// Domain separator for the ordered execution root.
 const MERGE_EXECUTION_ROOT_DOMAIN_TAG: &[u8] = b"iroha:merge:execution-root:v1\0";
+/// Domain separator for the stable, pre-write-set batch identity used by replay markers.
+const MERGE_EXECUTION_IDENTITY_DOMAIN_TAG: &[u8] = b"iroha:merge:execution-identity:v1\0";
 /// Domain separator for the deterministic post-state transition commitment.
 const MERGE_POST_STATE_DOMAIN_TAG: &[u8] = b"iroha:merge:post-state:v1\0";
 /// Domain separator for a complete merge execution batch.
 const MERGE_EXECUTION_BATCH_DOMAIN_TAG: &[u8] = b"iroha:merge:execution-batch:v1\0";
+const MERGE_CANDIDATE_BODY_DOMAIN_TAG: &[u8] = b"iroha:merge:candidate-body:v1\0";
 
 /// Merge-ledger entry data required for signature payloads.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct MergeLedgerCandidate {
     /// Epoch/height for the merge entry.
     pub epoch_id: u64,
     /// Merge committee view derived from lane tips.
     pub view: u64,
+    /// Exact global block height authorized to carry the candidate.
+    pub carrier_height: u64,
+    /// Exact canonical parent authorized for the global carrier.
+    pub carrier_parent_hash: HashOf<BlockHeader>,
     /// Canonical hash of the active catalog used to assemble the candidate.
     pub lane_catalog_hash: Hash,
     /// Exact active lane binding set bound to the catalog hash.
@@ -57,6 +65,25 @@ pub struct MergeLedgerCandidate {
 }
 
 impl MergeLedgerCandidate {
+    /// Return the canonical framed Norito body transferred before QC signing.
+    #[must_use]
+    pub fn canonical_bytes(&self) -> Vec<u8> {
+        norito::to_bytes(self).expect("merge candidate must have a canonical Norito encoding")
+    }
+
+    /// Return the domain-separated hash of [`Self::canonical_bytes`].
+    #[must_use]
+    pub fn canonical_hash(&self) -> Hash {
+        let bytes = self.canonical_bytes();
+        Hash::new_from_chunks(&[MERGE_CANDIDATE_BODY_DOMAIN_TAG, bytes.as_slice()])
+    }
+
+    /// Return whether the candidate fits the shared full-entry transfer cap.
+    #[must_use]
+    pub fn canonical_size_within_limit(&self) -> bool {
+        self.canonical_bytes().len() <= iroha_data_model::merge::MAX_MERGE_LEDGER_ENTRY_BYTES
+    }
+
     /// Canonical lane tips derived from [`Self::lane_snapshots`].
     #[must_use]
     pub fn lane_tips(&self) -> Vec<HashOf<BlockHeader>> {
@@ -97,6 +124,8 @@ impl From<&MergeLedgerEntry> for MergeLedgerCandidate {
         Self {
             epoch_id: entry.epoch_id,
             view: entry.merge_qc.view,
+            carrier_height: entry.merge_qc.carrier_height,
+            carrier_parent_hash: entry.merge_qc.carrier_parent_hash,
             lane_catalog_hash: entry.lane_catalog_hash,
             active_lanes: entry.active_lanes.clone(),
             incarnation_root: entry.incarnation_root,
@@ -108,6 +137,37 @@ impl From<&MergeLedgerEntry> for MergeLedgerCandidate {
     }
 }
 
+/// Return the canonical framed Norito bytes used by hash-addressed merge-entry
+/// sidecars and compact globally ordered references.
+#[must_use]
+pub fn canonical_merge_ledger_entry_bytes(entry: &MergeLedgerEntry) -> Vec<u8> {
+    entry.canonical_bytes()
+}
+
+/// Compute the domain-separated digest of a complete merge-ledger entry,
+/// including its merge QC and execution batch.
+#[must_use]
+pub fn merge_ledger_entry_hash(entry: &MergeLedgerEntry) -> HashOf<MergeLedgerEntry> {
+    entry.canonical_hash()
+}
+
+/// Return the exact canonical framed byte length committed by a compact
+/// merge-entry reference.
+#[must_use]
+pub fn merge_ledger_entry_encoded_len(entry: &MergeLedgerEntry) -> u64 {
+    entry.canonical_encoded_len()
+}
+
+/// Verify the hash and exact byte length of a caller-resolved merge sidecar.
+#[must_use]
+pub fn merge_ledger_entry_reference_matches(
+    entry: &MergeLedgerEntry,
+    expected_hash: HashOf<MergeLedgerEntry>,
+    expected_encoded_len: u64,
+) -> bool {
+    entry.canonical_encoded_len() == expected_encoded_len && entry.canonical_hash() == expected_hash
+}
+
 #[derive(Encode)]
 struct MergeLedgerSignPayload {
     chain_id_digest: Hash,
@@ -115,6 +175,8 @@ struct MergeLedgerSignPayload {
     validator_set_hash: HashOf<Vec<PeerId>>,
     view: u64,
     epoch_id: u64,
+    carrier_height: u64,
+    carrier_parent_hash: HashOf<BlockHeader>,
     lane_catalog_hash: Hash,
     active_lanes: Vec<MergeLaneBinding>,
     incarnation_root: Hash,
@@ -138,6 +200,8 @@ pub fn merge_qc_message_digest(
         validator_set_hash,
         view: candidate.view,
         epoch_id: candidate.epoch_id,
+        carrier_height: candidate.carrier_height,
+        carrier_parent_hash: candidate.carrier_parent_hash,
         lane_catalog_hash: candidate.lane_catalog_hash,
         active_lanes: candidate.active_lanes.clone(),
         incarnation_root: candidate.incarnation_root,
@@ -194,6 +258,73 @@ pub fn merge_execution_root(executions: &[MergeLaneExecution]) -> Hash {
     Hash::new_from_chunks(&[MERGE_EXECUTION_ROOT_DOMAIN_TAG, encoded.as_slice()])
 }
 
+/// Strip carrier payload roots while retaining every block-context field that
+/// can affect deterministic transaction admission/execution (height, parent,
+/// ledger time, and view). This avoids a hash cycle with the compact merge
+/// reference while preventing replay under a synthetic zero timestamp/view.
+#[must_use]
+pub fn merge_application_header_from_carrier(carrier: &BlockHeader) -> BlockHeader {
+    BlockHeader::new(
+        carrier.height(),
+        carrier.prev_block_hash(),
+        None,
+        None,
+        u64::try_from(carrier.creation_time().as_millis()).unwrap_or(u64::MAX),
+        carrier.view_change_index(),
+    )
+}
+
+/// Return entrypoint hashes in the exact lane/batch execution order used by
+/// merge-sidecar inclusion proofs.
+#[must_use]
+pub fn merge_execution_entrypoint_hashes(
+    executions: &[MergeLaneExecution],
+) -> Vec<HashOf<TransactionEntrypoint>> {
+    executions
+        .iter()
+        .flat_map(|execution| {
+            execution
+                .entrypoints
+                .iter()
+                .map(|entrypoint| entrypoint.hash())
+        })
+        .collect()
+}
+
+/// Return result hashes in the exact lane/batch execution order used by
+/// merge-sidecar inclusion proofs.
+#[must_use]
+pub fn merge_execution_result_hashes(
+    executions: &[MergeLaneExecution],
+) -> Vec<HashOf<TransactionResult>> {
+    executions
+        .iter()
+        .flat_map(|execution| execution.results.iter().map(|result| result.hash()))
+        .collect()
+}
+
+/// Compute the canonical ordered entrypoint Merkle root for a non-empty batch.
+#[must_use]
+pub fn merge_execution_entrypoint_merkle_root(
+    executions: &[MergeLaneExecution],
+) -> Option<HashOf<MerkleTree<TransactionEntrypoint>>> {
+    merge_execution_entrypoint_hashes(executions)
+        .into_iter()
+        .collect::<MerkleTree<TransactionEntrypoint>>()
+        .root()
+}
+
+/// Compute the canonical ordered result Merkle root for a non-empty batch.
+#[must_use]
+pub fn merge_execution_result_merkle_root(
+    executions: &[MergeLaneExecution],
+) -> Option<HashOf<MerkleTree<TransactionResult>>> {
+    merge_execution_result_hashes(executions)
+        .into_iter()
+        .collect::<MerkleTree<TransactionResult>>()
+        .root()
+}
+
 #[derive(Encode)]
 struct MergePostStatePreimage {
     base_state_height: u64,
@@ -233,7 +364,11 @@ struct MergeExecutionBatchPreimage {
     base_state_hash: HashOf<BlockHeader>,
     application_block_header: BlockHeader,
     lanes: Vec<MergeLaneExecution>,
+    entrypoint_count: u64,
+    entrypoint_merkle_root: HashOf<MerkleTree<TransactionEntrypoint>>,
+    result_merkle_root: HashOf<MerkleTree<TransactionResult>>,
     execution_root: Hash,
+    application_write_set_root: Hash,
     write_set_root: Hash,
     expected_post_state_hash: HashOf<BlockHeader>,
 }
@@ -247,7 +382,11 @@ pub fn merge_execution_batch_hash(batch: &MergeExecutionBatch) -> Hash {
         base_state_hash: batch.base_state_hash,
         application_block_header: batch.application_block_header.clone(),
         lanes: batch.lanes.clone(),
+        entrypoint_count: batch.entrypoint_count,
+        entrypoint_merkle_root: batch.entrypoint_merkle_root,
+        result_merkle_root: batch.result_merkle_root,
         execution_root: batch.execution_root,
+        application_write_set_root: batch.application_write_set_root,
         write_set_root: batch.write_set_root,
         expected_post_state_hash: batch.expected_post_state_hash,
     }
@@ -255,11 +394,61 @@ pub fn merge_execution_batch_hash(batch: &MergeExecutionBatch) -> Hash {
     Hash::new_from_chunks(&[MERGE_EXECUTION_BATCH_DOMAIN_TAG, encoded.as_slice()])
 }
 
+#[derive(Encode)]
+struct MergeExecutionIdentityPreimage {
+    version: u8,
+    base_state_height: u64,
+    base_state_hash: HashOf<BlockHeader>,
+    application_block_header: BlockHeader,
+    entrypoint_count: u64,
+    entrypoint_merkle_root: HashOf<MerkleTree<TransactionEntrypoint>>,
+    result_merkle_root: HashOf<MerkleTree<TransactionResult>>,
+    execution_root: Hash,
+    application_write_set_root: Hash,
+}
+
+/// Compute the stable pre-marker identity of a merge execution batch.
+///
+/// Replay markers use this identity instead of the final batch hash because the
+/// markers themselves are part of the final write set. Excluding only the
+/// marker-dependent fields avoids a commitment cycle while the final batch hash
+/// and merge QC still cover the complete marker-inclusive write-set root.
+#[must_use]
+pub fn merge_execution_batch_identity_hash(batch: &MergeExecutionBatch) -> Hash {
+    let encoded = MergeExecutionIdentityPreimage {
+        version: batch.version,
+        base_state_height: batch.base_state_height,
+        base_state_hash: batch.base_state_hash,
+        application_block_header: batch.application_block_header.clone(),
+        entrypoint_count: batch.entrypoint_count,
+        entrypoint_merkle_root: batch.entrypoint_merkle_root,
+        result_merkle_root: batch.result_merkle_root,
+        execution_root: batch.execution_root,
+        application_write_set_root: batch.application_write_set_root,
+    }
+    .encode();
+    Hash::new_from_chunks(&[MERGE_EXECUTION_IDENTITY_DOMAIN_TAG, encoded.as_slice()])
+}
+
 /// Return whether all redundant execution-batch commitments are canonical.
 #[must_use]
 pub fn merge_execution_batch_commitments_match(batch: &MergeExecutionBatch) -> bool {
     let execution_root = merge_execution_root(&batch.lanes);
+    let entrypoint_hashes = merge_execution_entrypoint_hashes(&batch.lanes);
+    let result_hashes = merge_execution_result_hashes(&batch.lanes);
     execution_root == batch.execution_root
+        && u64::try_from(entrypoint_hashes.len()).ok() == Some(batch.entrypoint_count)
+        && result_hashes.len() == entrypoint_hashes.len()
+        && entrypoint_hashes
+            .into_iter()
+            .collect::<MerkleTree<TransactionEntrypoint>>()
+            .root()
+            == Some(batch.entrypoint_merkle_root)
+        && result_hashes
+            .into_iter()
+            .collect::<MerkleTree<TransactionResult>>()
+            .root()
+            == Some(batch.result_merkle_root)
         && merge_expected_post_state_hash(
             batch.base_state_height,
             batch.base_state_hash,
@@ -295,6 +484,30 @@ pub fn reduce_merge_hint_roots(roots: &[Hash]) -> Hash {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typed_merge_proof_roots_bind_order_and_duplicate_leaves() {
+        let first = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(b"first"));
+        let second = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(b"second"));
+        let ordered = vec![first, second]
+            .into_iter()
+            .collect::<MerkleTree<TransactionEntrypoint>>()
+            .root()
+            .expect("non-empty root");
+        let reordered = vec![second, first]
+            .into_iter()
+            .collect::<MerkleTree<TransactionEntrypoint>>()
+            .root()
+            .expect("non-empty root");
+        let duplicated = vec![first, first]
+            .into_iter()
+            .collect::<MerkleTree<TransactionEntrypoint>>()
+            .root()
+            .expect("non-empty root");
+
+        assert_ne!(ordered, reordered);
+        assert_ne!(ordered, duplicated);
+    }
 
     #[test]
     fn reduces_empty_sequence_to_domain_digest() {
@@ -360,6 +573,8 @@ mod tests {
         let candidate = MergeLedgerCandidate {
             epoch_id: 7,
             view: 3,
+            carrier_height: 10,
+            carrier_parent_hash: HashOf::from_untyped_unchecked(Hash::new(b"carrier-parent")),
             lane_catalog_hash: Hash::new(b"catalog"),
             incarnation_root: Hash::new(b"incarnation-root"),
             activation_root: merge_activation_root(&active_lanes),
@@ -375,6 +590,7 @@ mod tests {
                 merge_hint_root: Hash::new(b"hint-0"),
                 settlement_hash: HashOf::new(&settlement_commitment),
                 settlement_commitment,
+                relay_envelope: None,
             }],
             execution_batch: None,
             global_state_root: Hash::new(b"global"),

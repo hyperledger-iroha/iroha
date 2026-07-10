@@ -114,6 +114,31 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
         }
     }
 
+    func testRejectsInvalidOrderIdDerivationInputsBeforeNativeDispatch() {
+        XCTAssertThrowsError(
+            try SorafsReferenceValidators.deriveOrderbookOrderId(
+                ownerAccount: Data(),
+                nonce: 7
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SorafsReferenceValidationError,
+                .invalidOrderbookField("ownerAccount must not be empty")
+            )
+        }
+        XCTAssertThrowsError(
+            try SorafsReferenceValidators.deriveOrderbookOrderId(
+                ownerAccount: Data([0x01]),
+                nonce: 0
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SorafsReferenceValidationError,
+                .invalidOrderbookField("nonce must be positive")
+            )
+        }
+    }
+
     func testRejectsOrderbookOrderRequestFieldsBeforeNativeDispatch() {
         let fields = SorafsSignedOrderbookOrderRequestFields(
             orderId: Data(repeating: 0x11, count: 31),
@@ -189,6 +214,81 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
         )
         XCTAssertFalse(signed.isEmpty)
         XCTAssertNotEqual(signed, payload)
+    }
+
+    func testDerivesCanonicalOrderIdAndRejectsExplicitMismatchWhenNativeBridgeIsAvailable() throws {
+        try XCTSkipIf(
+            !SorafsReferenceValidators.isOrderbookFieldBuilderAvailable,
+            "SoraFS orderbook field-builder bridge unavailable"
+        )
+        let owner = Data("buyer@sora".utf8)
+        let orderId = try SorafsReferenceValidators.deriveOrderbookOrderId(
+            ownerAccount: owner,
+            nonce: 7
+        )
+        XCTAssertEqual(
+            orderId,
+            Data(hexString: "9d91ad7700ca0c4762e031f9231aa38dd4502c6048c6ffa31d365e3c4e080b69")
+        )
+        XCTAssertNotEqual(
+            orderId,
+            try SorafsReferenceValidators.deriveOrderbookOrderId(ownerAccount: owner, nonce: 8)
+        )
+        XCTAssertNotEqual(
+            orderId,
+            try SorafsReferenceValidators.deriveOrderbookOrderId(
+                ownerAccount: Data("provider@sora".utf8),
+                nonce: 7
+            )
+        )
+
+        let canonicalFields = SorafsSignedOrderbookOrderRequestFields(
+            side: .bid,
+            tier: .hot,
+            pricePerGibMicroXor: "1250000",
+            quantityGib: 64,
+            ownerAccount: owner,
+            expiryUnix: 1_800_000_000,
+            nonce: 7,
+            makerFeeBps: 10,
+            takerFeeBps: 15
+        )
+        let signed = try SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
+            canonicalFields,
+            privateKey: Data(repeating: 0xB7, count: 32)
+        )
+        let outcome = try SorafsReferenceValidators.validateOrderbookPayloadJSON(
+            kind: .orderRequest,
+            payload: signed,
+            generatedAtUnix: 123
+        )
+        XCTAssertTrue(outcome.contains("\"status\": \"Ok\""), outcome)
+
+        let mismatchedFields = SorafsSignedOrderbookOrderRequestFields(
+            orderId: Data(repeating: 0x11, count: 32),
+            side: .bid,
+            tier: .hot,
+            pricePerGibMicroXor: "1250000",
+            quantityGib: 64,
+            ownerAccount: owner,
+            expiryUnix: 1_800_000_000,
+            nonce: 7,
+            makerFeeBps: 10,
+            takerFeeBps: 15
+        )
+        XCTAssertThrowsError(
+            try SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
+                mismatchedFields,
+                privateKey: Data(repeating: 0xB7, count: 32)
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SorafsReferenceValidationError,
+                .invalidOrderbookField(
+                    "orderId must equal the canonical owner-and-nonce derivation"
+                )
+            )
+        }
     }
 
     private func fixture(_ relativePath: String) throws -> Data {

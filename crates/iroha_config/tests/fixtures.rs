@@ -1036,6 +1036,11 @@ fn minimal_config_snapshot() {
                     enforce_admission: true,
                     enforce_capabilities: false,
                     salt_schedule_dir: None,
+                    site_bindings: SorafsGatewaySiteBindings {
+                        path: None,
+                        max_bytes: Bytes(1048576),
+                        max_sites: 1024,
+                    },
                     cdn_policy_path: None,
                     rate_limit: SorafsGatewayRateLimit {
                         max_requests: Some(
@@ -4126,6 +4131,14 @@ fn sorafs_telemetry_unknown_field_rejected() {
     );
 }
 
+#[test]
+fn sorafs_site_binding_zero_entry_limit_is_rejected() {
+    assert!(
+        load_config_from_fixtures("bad.sorafs_site_bindings_zero_sites.toml").is_err(),
+        "site binding entry limits must remain non-zero"
+    );
+}
+
 /// Aims the purpose of checking that every single provided env variable is consumed and parsed
 /// into a valid config.
 #[test]
@@ -4203,6 +4216,13 @@ fn full_config_parses_fine() {
     let alias_policy = cfg.torii.sorafs_alias_cache;
     assert_eq!(alias_policy.positive_ttl.as_secs(), 600);
     assert_eq!(alias_policy.refresh_window.as_secs(), 120);
+    let site_bindings = &cfg.torii.sorafs_gateway.site_bindings;
+    assert_eq!(
+        site_bindings.path,
+        Some(PathBuf::from("site-bindings/test.json"))
+    );
+    assert_eq!(site_bindings.max_bytes.get(), 4_096);
+    assert_eq!(site_bindings.max_sites.get(), 7);
     let storage = &cfg.torii.sorafs_storage;
     assert!(storage.enabled, "torii.sorafs.storage.enabled not parsed");
     assert_eq!(storage.data_dir, PathBuf::from("./storage/sorafs"));

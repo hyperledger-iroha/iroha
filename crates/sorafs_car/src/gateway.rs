@@ -1818,7 +1818,7 @@ fn parse_manifest_response(
     if manifest_digest_hex != computed_digest_hex {
         return Err(GatewayManifestError::DigestMismatch {
             provider: provider.to_string(),
-            expected: manifest_digest_hex,
+            expected: manifest_digest_hex.to_owned(),
             actual: computed_digest_hex,
         });
     }
@@ -2612,7 +2612,17 @@ mod tests {
             Err(StreamTokenDecodeError::NonCanonicalBase64)
         ));
         assert!(matches!(
-            decode_stream_token(&"A".repeat(MAX_STREAM_TOKEN_BASE64_BYTES + 1)),
+            decode_stream_token(&"A".repeat(STREAM_TOKEN_MAX_BASE64_BYTES_V1 + 1)),
+            Err(StreamTokenDecodeError::Oversized)
+        ));
+        let exact_wire = STANDARD.encode(vec![0_u8; STREAM_TOKEN_MAX_WIRE_BYTES_V1]);
+        assert!(matches!(
+            decode_stream_token(&exact_wire),
+            Err(StreamTokenDecodeError::InvalidPayload(_))
+        ));
+        let oversized_wire = STANDARD.encode(vec![0_u8; STREAM_TOKEN_MAX_WIRE_BYTES_V1 + 1]);
+        assert!(matches!(
+            decode_stream_token(&oversized_wire),
             Err(StreamTokenDecodeError::Oversized)
         ));
 

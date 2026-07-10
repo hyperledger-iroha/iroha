@@ -3299,7 +3299,7 @@ mod tests {
         let config = StorageConfig::builder()
             .stream_token_signing_key_path(Some(oversized.path().to_path_buf()))
             .build();
-        load_gateway_signing_key(&config).expect_err("oversized key must fail");
+        let _ = load_gateway_signing_key(&config).expect_err("oversized key must fail");
 
         #[cfg(unix)]
         {
@@ -3309,7 +3309,7 @@ mod tests {
             let config = StorageConfig::builder()
                 .stream_token_signing_key_path(Some(symlink))
                 .build();
-            load_gateway_signing_key(&config).expect_err("symlink key must fail");
+            let _ = load_gateway_signing_key(&config).expect_err("symlink key must fail");
         }
     }
 

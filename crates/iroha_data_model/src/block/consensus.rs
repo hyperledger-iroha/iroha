@@ -1214,6 +1214,102 @@ impl LaneBlockVoteBodyV1 {
     }
 }
 
+/// Exact autonomous lane payload retained by one READY signer.
+///
+/// The body names both the immutable payload's origin proposal and the
+/// view-specific proposal being prepared. This prevents a valid payload
+/// certificate from being rebound across chains, epochs, lane incarnations,
+/// proposals, NewView transitions, or DA/RBC instances.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct LanePayloadAvailabilityBodyV1 {
+    /// Artifact schema version. Only version one is accepted.
+    pub version: u8,
+    /// Hash of the chain identifier that owns the payload.
+    pub chain_id_hash: Hash,
+    /// Consensus epoch at the proposal compatibility height.
+    pub epoch: u64,
+    /// Lane whose executable payload is retained.
+    pub lane_id: LaneId,
+    /// Dataspace bound to the lane.
+    pub dataspace_id: DataSpaceId,
+    /// Exact lane lifecycle incarnation.
+    pub lane_incarnation: Hash,
+    /// Global compatibility height that selected the lane work.
+    pub proposal_height: u64,
+    /// Lane-local block height whose bytes are retained.
+    pub lane_block_height: u64,
+    /// View of the immutable producer-authenticated origin proposal.
+    pub origin_lane_block_view: u64,
+    /// Hash of the immutable producer-authenticated origin proposal.
+    pub origin_proposal_hash: Hash,
+    /// Descriptor hash of the immutable origin proposal.
+    pub origin_descriptor_hash: Hash,
+    /// View of the exact proposal currently being prepared.
+    pub current_lane_block_view: u64,
+    /// Hash of the exact proposal currently being prepared.
+    pub current_proposal_hash: Hash,
+    /// Descriptor hash of the exact proposal currently being prepared.
+    pub current_descriptor_hash: Hash,
+    /// View-specific lane subject hash.
+    pub current_subject_hash: Hash,
+    /// View-specific DA/RBC payload ownership hash.
+    pub current_payload_ownership_hash: Hash,
+    /// View-specific reliable-broadcast instance hash.
+    pub current_rbc_instance_hash: Hash,
+    /// View-neutral digest of the exact executable payload bytes.
+    pub executable_payload_hash: Hash,
+    /// Version of the validator-set hashing scheme.
+    pub validator_set_hash_version: u16,
+    /// Hash of the canonical lane committee.
+    pub validator_set_hash: HashOf<Vec<PeerId>>,
+    /// Number of validators in the canonical lane committee.
+    pub validator_count: u32,
+    /// Minimum distinct READY signers required for availability.
+    pub min_quorum: u32,
+    /// Lane consensus domain tag.
+    pub qc_mode_tag: String,
+}
+
+impl LanePayloadAvailabilityBodyV1 {
+    /// Build the domain-separated READY signature preimage.
+    #[must_use]
+    pub fn signature_preimage(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(32 + 512);
+        out.extend_from_slice(b"iroha:lane-payload-availability-ready:v1");
+        out.extend_from_slice(
+            &norito::to_bytes(self).expect("lane payload availability body must encode"),
+        );
+        out
+    }
+}
+
+/// Quorum proof that the exact autonomous executable payload is durably held.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct LanePayloadAvailabilityQcV1 {
+    /// READY body certified by the aggregate signature.
+    pub body: LanePayloadAvailabilityBodyV1,
+    /// Version of the validator-set hashing scheme.
+    pub validator_set_hash_version: u16,
+    /// Stable hash of the validator set that produced the certificate.
+    pub validator_set_hash: HashOf<Vec<PeerId>>,
+    /// Ordered historical validator set indexed by `signers_bitmap`.
+    pub validator_set: Vec<PeerId>,
+    /// Valid historical PoPs aligned exactly with `validator_set`.
+    pub validator_set_pops: Vec<Vec<u8>>,
+    /// Compact READY signer bitmap (LSB-first).
+    pub signers_bitmap: Vec<u8>,
+    /// BLS12-381 aggregate READY signature bytes (compressed).
+    pub bls_aggregate_signature: Vec<u8>,
+}
+
 /// Validator-set proof for a standalone lane-local block proposal.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1233,6 +1329,13 @@ pub struct LaneBlockQcV1 {
     pub signers_bitmap: Vec<u8>,
     /// BLS12-381 aggregate signature bytes (compressed).
     pub bls_aggregate_signature: Vec<u8>,
+    /// Exact payload-availability proof for autonomous prepare QCs.
+    ///
+    /// This is `None` for commit QCs and for compatibility lane proposals
+    /// whose payload availability is inherited from a canonical global block.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub payload_availability_qc: Option<LanePayloadAvailabilityQcV1>,
 }
 
 #[derive(Clone, Debug, Encode)]
@@ -1752,6 +1855,12 @@ pub struct NativeAmxAttestationBodyV1 {
     pub participant_dataspace_id: DataSpaceId,
     /// Exact active participant-lane incarnation at the authority context.
     pub participant_lane_incarnation: Hash,
+    /// Hash of the exact canonical participant committee that may attest this leg.
+    pub participant_validator_set_hash: HashOf<Vec<PeerId>>,
+    /// Number of validators in the exact participant committee.
+    pub participant_validator_count: u32,
+    /// Minimum number of participant signatures required by the lane quorum policy.
+    pub participant_min_quorum: u32,
     /// Global/catalog height used to resolve routes, incarnations, committee,
     /// key activation, and proofs of possession.
     pub authority_context_height: u64,
@@ -1791,6 +1900,12 @@ pub struct NativeAmxAttestationQcV1 {
     pub validator_set_hash: HashOf<Vec<PeerId>>,
     /// Ordered validator set used when assembling the certificate.
     pub validator_set: Vec<PeerId>,
+    /// Historical BLS proofs-of-possession aligned exactly with `validator_set`.
+    ///
+    /// Keeping the full aligned vector makes the certificate independently
+    /// verifiable after consensus-key rotation or lane retirement. The signed
+    /// attestation body binds the validator-set hash, count, and quorum.
+    pub validator_set_pops: Vec<Vec<u8>>,
     /// Compact signer bitmap (LSB-first).
     pub signers_bitmap: Vec<u8>,
     /// BLS12-381 aggregate signature bytes (compressed).
@@ -4235,6 +4350,10 @@ mod tests {
     ) -> NativeAmxAttestationQcV1 {
         let (coordinator_lane_id, coordinator_dataspace_id) = coordinator;
         let (participant_lane_id, participant_dataspace_id) = participant;
+        let validator_set_hash = HashOf::new(&validator_set);
+        let validator_count = u32::try_from(validator_set.len()).expect("fixture validator count");
+        let min_quorum =
+            u32::try_from(validator_set.len().saturating_mul(2) / 3 + 1).expect("fixture quorum");
         NativeAmxAttestationQcV1 {
             body: NativeAmxAttestationBodyV1 {
                 chain_id_hash: Hash::new(b"native-amx-model-chain"),
@@ -4248,13 +4367,17 @@ mod tests {
                 participant_lane_id,
                 participant_dataspace_id,
                 participant_lane_incarnation: Hash::new(participant_lane_id.as_u32().to_be_bytes()),
+                participant_validator_set_hash: validator_set_hash,
+                participant_validator_count: validator_count,
+                participant_min_quorum: min_quorum,
                 authority_context_height: 42,
                 coordinator_lane_block_height: 7,
                 coordinator_lane_block_view: 2,
                 coordinator_proposal_hash: Hash::new(b"native-amx-model-proposal"),
             },
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set_hash: HashOf::new(&validator_set),
+            validator_set_hash,
+            validator_set_pops: vec![vec![0x5A; 96]; validator_set.len()],
             validator_set,
             signers_bitmap: vec![0b0000_0111],
             bls_aggregate_signature: vec![0xA5; 96],
@@ -4411,6 +4534,9 @@ mod tests {
             participant_lane_id: LaneId::new(2),
             participant_dataspace_id: DataSpaceId::new(2),
             participant_lane_incarnation: Hash::new(b"native-amx-model-participant"),
+            participant_validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
+            participant_validator_count: 1,
+            participant_min_quorum: 1,
             authority_context_height: 7,
             coordinator_lane_block_height: 3,
             coordinator_lane_block_view: 1,

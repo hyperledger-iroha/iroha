@@ -4941,7 +4941,7 @@ pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>>
         council_signatures: council_signatures.clone(),
         notes: Some("Fixture council approval for provider alpha".to_owned()),
     };
-    let record = AdmissionRecord::new(envelope.clone())
+    let record = AdmissionRecord::new_untrusted_signers(envelope.clone())
         .map_err(|err| format!("envelope validation failed: {err}"))?;
     verify_advert_against_record(&advert, &record)
         .map_err(|err| format!("fixture advert mismatched envelope: {err}"))?;
@@ -7895,7 +7895,7 @@ mod tests {
         let envelope_bytes = fs::read(envelope_path).expect("read provider envelope");
         let envelope: ProviderAdmissionEnvelopeV1 =
             decode_from_bytes(&envelope_bytes).expect("decode provider envelope");
-        AdmissionRecord::new(envelope).expect("council signatures verify");
+        AdmissionRecord::new_untrusted_signers(envelope).expect("council signatures verify");
     }
 
     #[test]

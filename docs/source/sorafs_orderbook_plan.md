@@ -38,12 +38,17 @@ lag, settlement backlog/age, and contract/mirror divergence. It can also export
 and restore a validated canonical Norito local runtime replay snapshot for the
 open order set, emitted trades/channels, accepted receipts, and expired-order
 tombstones. When storage is enabled, accepted local order/cancel/receipt
-mutations atomically checkpoint that snapshot under
+mutations atomically checkpoint the runtime snapshot and its bounded,
+monotonically sequenced event suffix together under
 `<sorafs.data_dir>/orderbook/runtime-snapshot.to`, and startup reloads a
-validated checkpoint if present. Snapshot validation recomputes channel byte
+canonical, size-bounded checkpoint if present. Startup rejects unsupported,
+trailing, corrupt, over-limit, non-consecutive, misbound, or counter-divergent
+event/state checkpoints instead of silently resetting the mirror. Snapshot
+validation recomputes channel byte
 coverage from referenced trade fills, replays accepted receipts into remaining
 bytes and locked escrow, and rejects out-of-channel receipt ranges before a
-checkpoint can restore. Torii exposes that local mirror through Norito
+checkpoint can restore. A persistence failure rolls the state and event suffix
+back before any live event is broadcast. Torii exposes that local mirror through Norito
 POST routes for order, cancel, and settlement receipt submissions, requiring
 canonical `X-Iroha-*` request authentication and binding the embedded payload
 signer to the verified request signer. Order and cancel submissions also bind

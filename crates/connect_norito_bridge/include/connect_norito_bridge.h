@@ -708,6 +708,13 @@ int32_t connect_norito_sorafs_reference_sign_orderbook_payload(
     uint8_t** out_signed_ptr,
     unsigned long* out_signed_len);
 
+int32_t connect_norito_sorafs_reference_derive_orderbook_order_id(
+    const uint8_t* owner_account_ptr,
+    unsigned long owner_account_len,
+    uint64_t nonce,
+    uint8_t* out_order_id_ptr,
+    unsigned long out_order_id_len);
+
 int32_t connect_norito_sorafs_reference_build_signed_orderbook_order_request(
     const uint8_t* order_id_ptr,
     unsigned long order_id_len,

@@ -1028,6 +1028,10 @@ impl ConsensusIngressLimiter {
                 | BlockMessage::ProposalHint(_)
                 | BlockMessage::Proposal(_)
                 | BlockMessage::LaneBlockProposal(_)
+                | BlockMessage::LaneExecutablePayload(_)
+                | BlockMessage::LaneExecutablePayloadHandoff(_)
+                | BlockMessage::LaneBlockNewViewVote(_)
+                | BlockMessage::LaneBlockNewViewCertificate(_)
                 | BlockMessage::LaneBlockVote(_)
                 | BlockMessage::LaneBlockQc(_)
                 | BlockMessage::BlockCreated(_) => IngressPolicy::critical(),
@@ -1047,6 +1051,21 @@ impl ConsensusIngressLimiter {
                 }
             },
             iroha_core::NetworkMessage::SumeragiControlFlow(_) => IngressPolicy::critical(),
+            iroha_core::NetworkMessage::CertifiedMergeSidecar(message) => match message.as_ref() {
+                iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Request(_) => {
+                    IngressPolicy::limited()
+                }
+                iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Chunk(_) => {
+                    IngressPolicy::bulk()
+                }
+            },
+            iroha_core::NetworkMessage::MergeCandidate(message) => match message.as_ref() {
+                iroha_core::merge_sidecar::MergeCandidateMessage::Advert(_)
+                | iroha_core::merge_sidecar::MergeCandidateMessage::Request(_) => {
+                    IngressPolicy::limited()
+                }
+                iroha_core::merge_sidecar::MergeCandidateMessage::Chunk(_) => IngressPolicy::bulk(),
+            },
             iroha_core::NetworkMessage::NativeAmx(_) => IngressPolicy::critical(),
             iroha_core::NetworkMessage::BlockSync(_) => IngressPolicy::bulk(),
             _ => IngressPolicy::limited(),
@@ -1885,7 +1904,11 @@ impl NetworkRelayShared {
 
         if matches!(
             &msg,
-            SumeragiBlock(_) | SumeragiControlFlow(_) | BlockSync(_)
+            SumeragiBlock(_)
+                | SumeragiControlFlow(_)
+                | CertifiedMergeSidecar(_)
+                | MergeCandidate(_)
+                | BlockSync(_)
         ) {
             let reason = {
                 let mut limiter = self
@@ -1907,6 +1930,25 @@ impl NetworkRelayShared {
                 let (kind, height, view) = match &msg {
                     SumeragiBlock(data) => Self::block_message_meta(data.as_ref().as_ref()),
                     SumeragiControlFlow(data) => Self::control_flow_meta(data.as_ref()),
+                    CertifiedMergeSidecar(data) => match data.as_ref() {
+                        iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Request(_) => {
+                            ("CertifiedMergeSidecarRequest", None, None)
+                        }
+                        iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Chunk(_) => {
+                            ("CertifiedMergeSidecarChunk", None, None)
+                        }
+                    },
+                    MergeCandidate(data) => match data.as_ref() {
+                        iroha_core::merge_sidecar::MergeCandidateMessage::Advert(_) => {
+                            ("MergeCandidateAdvert", None, None)
+                        }
+                        iroha_core::merge_sidecar::MergeCandidateMessage::Request(_) => {
+                            ("MergeCandidateRequest", None, None)
+                        }
+                        iroha_core::merge_sidecar::MergeCandidateMessage::Chunk(_) => {
+                            ("MergeCandidateChunk", None, None)
+                        }
+                    },
                     BlockSync(data) => {
                         let label = match data.as_ref() {
                             iroha_core::block_sync::message::Message::GetBlocksAfter(_) => {
@@ -1996,6 +2038,16 @@ impl NetworkRelayShared {
             }
             MergeCommitteeSignature(signature) => {
                 let _ = self.sumeragi.try_incoming_merge_signature(*signature);
+            }
+            CertifiedMergeSidecar(message) => {
+                let _ = self
+                    .sumeragi
+                    .try_incoming_certified_merge_sidecar(peer.id().clone(), *message);
+            }
+            MergeCandidate(message) => {
+                let _ = self
+                    .sumeragi
+                    .try_incoming_merge_candidate(peer.id().clone(), *message);
             }
             NativeAmx(message) => {
                 let _ = self
@@ -2245,6 +2297,26 @@ impl NetworkRelayShared {
                 "LaneBlockProposal",
                 Some(proposal.descriptor.lane_block_height),
                 Some(proposal.descriptor.lane_block_view),
+            ),
+            LaneExecutablePayload(payload) => (
+                "LaneExecutablePayload",
+                Some(payload.origin_proposal.descriptor.lane_block_height),
+                Some(payload.origin_proposal.descriptor.lane_block_view),
+            ),
+            LaneExecutablePayloadHandoff(handoff) => (
+                "LaneExecutablePayloadHandoff",
+                Some(handoff.origin_proposal.descriptor.lane_block_height),
+                Some(handoff.origin_proposal.descriptor.lane_block_view),
+            ),
+            LaneBlockNewViewVote(vote) => (
+                "LaneBlockNewViewVote",
+                Some(vote.body.lane_block_height),
+                Some(vote.body.target_view),
+            ),
+            LaneBlockNewViewCertificate(certificate) => (
+                "LaneBlockNewViewCertificate",
+                Some(certificate.body.lane_block_height),
+                Some(certificate.body.target_view),
             ),
             LaneBlockVote(vote) => {
                 let label = match vote.body.phase {
@@ -2888,6 +2960,7 @@ mod network_relay_tests {
         let proposal = sample_lane_block_proposal();
         iroha_core::lane_consensus::LaneBlockVoteV1 {
             body: proposal.vote_body(phase),
+            payload_availability_vote: None,
             signer: proposal.descriptor.validator_set[0].clone(),
             bls_signature: vec![0xAA],
         }
@@ -2902,6 +2975,7 @@ mod network_relay_tests {
             validator_set: proposal.descriptor.validator_set.clone(),
             signers_bitmap: vec![0b1],
             bls_aggregate_signature: vec![0xBB],
+            payload_availability_qc: None,
         }
     }
 
@@ -4419,10 +4493,11 @@ impl Iroha {
                         &config.nexus.dataspace_catalog,
                     );
                 }
-                State::new(
+                State::new_with_chain(
                     world,
                     Arc::clone(&kura),
                     live_query_store.clone(),
+                    config.common.chain.clone(),
                     #[cfg(feature = "telemetry")]
                     state_telemetry.clone(),
                 )
@@ -4452,10 +4527,11 @@ impl Iroha {
                         &config.nexus.dataspace_catalog,
                     );
                 }
-                State::new(
+                State::new_with_chain(
                     world,
                     Arc::clone(&kura),
                     live_query_store.clone(),
+                    config.common.chain.clone(),
                     #[cfg(feature = "telemetry")]
                     state_telemetry.clone(),
                 )
@@ -5730,14 +5806,19 @@ impl Iroha {
             supervisor.monitor(snapshot_maker.start(supervisor.shutdown_signal()));
         }
 
-        let sorafs_node = sorafs_node::NodeHandle::new_with_policies(
+        let sorafs_node = sorafs_node::NodeHandle::try_new_with_policies(
             sorafs_node::config::StorageConfig::from(&config.torii.sorafs_storage),
             sorafs_node::config::RepairConfig::from_repair_and_policy(
                 &config.torii.sorafs_repair,
                 &state.gov.sorafs_repair_escalation,
             ),
             sorafs_node::config::GcConfig::from(&config.torii.sorafs_gc),
-        );
+        )
+        .map_err(|err| {
+            Report::new(StartError::StartTorii).attach(format!(
+                "failed to initialise embedded SoraFS runtime: {err}"
+            ))
+        })?;
         let shared_sorafs_cache = build_shared_sorafs_provider_cache(&config);
 
         let chain_id = Arc::new(config.common.chain.clone());

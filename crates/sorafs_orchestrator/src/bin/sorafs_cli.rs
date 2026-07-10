@@ -13586,7 +13586,6 @@ fn reputation_snapshot(raw_args: Vec<String>) -> Result<(), String> {
 fn reputation_fetch(raw_args: Vec<String>) -> Result<(), String> {
     let mut torii_url: Option<String> = None;
     let mut provider_id: Option<String> = None;
-    let mut gateway_public_key: Option<String> = None;
     let mut format = ReputationFetchFormat::Table;
     let mut summary_out: Option<PathBuf> = None;
 
@@ -20106,6 +20105,7 @@ fn qos_counts_value(priority: u64, standard: u64, bulk: u64) -> Value {
 fn parse_gateway_provider_spec(value: &str) -> Result<GatewayProviderSpec, String> {
     let mut name: Option<String> = None;
     let mut provider_id: Option<String> = None;
+    let mut gateway_public_key: Option<String> = None;
     let mut base_url: Option<String> = None;
     let mut stream_token: Option<String> = None;
     let mut privacy_events_url: Option<String> = None;

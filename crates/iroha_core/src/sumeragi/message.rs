@@ -1164,6 +1164,7 @@ mod tests {
             .expect("sign lane-block fixture vote");
         let vote = crate::lane_consensus::LaneBlockVoteV1 {
             body: body.clone(),
+            payload_availability_vote: None,
             signer: validator,
             bls_signature: signature.payload().to_vec(),
         };
@@ -1174,6 +1175,7 @@ mod tests {
             validator_set,
             signers_bitmap: vec![1],
             bls_aggregate_signature: vote.bls_signature.clone(),
+            payload_availability_qc: None,
         };
         (proposal, vote, qc)
     }

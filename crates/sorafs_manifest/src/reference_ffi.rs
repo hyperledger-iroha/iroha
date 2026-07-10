@@ -1442,17 +1442,19 @@ mod tests {
             public_key: vec![0xD7; PUBLIC_KEY_LENGTH],
             signature: vec![0x57; SIGNATURE_LENGTH],
         };
+        let owner_account = b"provider@sora".to_vec();
+        let nonce = 8;
         let order = OrderRequestV1 {
             version: ORDERBOOK_ORDER_VERSION_V1,
-            order_id: [0x73; 32],
+            order_id: crate::derive_orderbook_order_id_v1(&owner_account, nonce),
             side: OrderSideV1::Ask,
             tier: OrderTierV1::Hot,
             price_per_gib: XorAmount::from_micro(1_250_000),
             quantity_gib: 4,
             remaining_gib: 4,
-            owner_account: b"provider@sora".to_vec(),
+            owner_account,
             expiry_unix: 1_800_000_500,
-            nonce: 8,
+            nonce,
             maker_fee_bps: 10,
             taker_fee_bps: 15,
             signature,
@@ -1486,6 +1488,10 @@ mod tests {
             version: ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1,
             next_sequence: 4,
             generated_at_unix: 1_800_000_020,
+            owner_nonce_high_waters: vec![crate::OrderbookOwnerNonceHighWaterV1 {
+                owner_account: order.owner_account.clone(),
+                highest_nonce: order.nonce,
+            }],
             open_orders: vec![OrderBookEntryV1 { order, sequence: 3 }],
             trades: vec![trade],
             settlement_channels: vec![channel],

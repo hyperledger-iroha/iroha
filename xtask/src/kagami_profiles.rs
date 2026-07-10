@@ -164,6 +164,12 @@ fn write_profile_bundle(
 
     let config_text = render_config(spec, &peers, genesis_key.public_key());
     fs::write(bundle_root.join("config.toml"), config_text)?;
+    if spec.slug == "iroha3-taira" {
+        fs::write(
+            bundle_root.join("sorafs_sites.json"),
+            b"{\n  \"version\": 1,\n  \"sites\": []\n}\n",
+        )?;
+    }
 
     let compose = render_docker_compose(spec, &peers);
     fs::write(bundle_root.join("docker-compose.yml"), compose)?;
@@ -374,6 +380,16 @@ storage_pin_window_secs = {storage_pin_window_secs}
     } else {
         String::new()
     };
+    let sorafs_site_bindings = if spec.slug == "iroha3-taira" {
+        r#"
+[sorafs.gateway.site_bindings]
+path = "/config/sorafs_sites.json"
+max_bytes = 1048576
+max_sites = 1024
+"#
+    } else {
+        ""
+    };
     format!(
         r#"# Sample config for {slug} (generated via cargo xtask kagami-profiles)
 chain = "{chain}"
@@ -398,7 +414,7 @@ max_content_len = {torii_max_content_len}
 [streaming]
 identity_public_key = "{stream_pub}"
 identity_private_key = "{stream_priv}"
-{sorafs_quota_overrides}
+{sorafs_quota_overrides}{sorafs_site_bindings}
 
 [nexus]
 enabled = true
@@ -418,6 +434,7 @@ public_key = "{genesis_pk}"
         p2p = node.address.split(':').next_back().unwrap_or("1337"),
         torii_max_content_len = torii_max_content_len,
         sorafs_quota_overrides = sorafs_quota_overrides,
+        sorafs_site_bindings = sorafs_site_bindings,
         governance_overrides = governance_overrides,
         genesis_pk = genesis_public_key,
         stream_pub = STREAM_ID_PUBLIC,
@@ -427,6 +444,11 @@ public_key = "{genesis_pk}"
 
 fn render_docker_compose(spec: &ProfileSpec, peers: &[PeerMaterial]) -> String {
     let node = peers.first().expect("at least one peer per profile");
+    let site_bindings_volume = if spec.slug == "iroha3-taira" {
+        "\n      - ./sorafs_sites.json:/config/sorafs_sites.json:ro"
+    } else {
+        ""
+    };
     format!(
         r#"version: "3.9"
 services:
@@ -435,13 +457,14 @@ services:
     command: ["irohad", "--sora", "--config", "/config/config.toml", "--genesis", "/config/genesis.json"]
     volumes:
       - ./config.toml:/config/config.toml:ro
-      - ./genesis.json:/config/genesis.json:ro
+      - ./genesis.json:/config/genesis.json:ro{site_bindings_volume}
     ports:
       - "8080:8080"
       - "{p2p}:{p2p}"
 "#,
         slug = spec.slug,
         p2p = node.address.split(':').next_back().unwrap_or("1337"),
+        site_bindings_volume = site_bindings_volume,
     )
 }
 
@@ -474,6 +497,11 @@ fn render_readme(
     let chain_discriminant_line = spec.chain_discriminant.map_or_else(String::new, |value| {
         format!("- chain discriminant: {value}\n")
     });
+    let site_bindings_file = if spec.slug == "iroha3-taira" {
+        "- sorafs_sites.json — empty version-1 named-host binding document loaded, validated, and cached at Torii startup\n"
+    } else {
+        ""
+    };
 
     format!(
         r#"# {slug} sample bundle
@@ -489,7 +517,7 @@ Files:
 - genesis.json — generated with `kagami genesis generate --profile {profile}` and patched with deterministic topology+PoPs
 - verify.txt — stdout from `kagami verify --profile {profile} --genesis genesis.json`
 - config.toml — minimal Nexus config matching the topology (ports 8080/1337)
-- docker-compose.yml — single-node snippet mounting the config/genesis
+{site_bindings_file}- docker-compose.yml — single-node snippet mounting the config/genesis
 
 Regenerate:
 - cargo xtask kagami-profiles --profile {profile}
@@ -503,6 +531,7 @@ Regenerate:
         genesis_pk = genesis_public_key,
         peer_rows = peer_rows,
         profile = spec.profile_flag,
+        site_bindings_file = site_bindings_file,
     )
 }
 
@@ -788,6 +817,31 @@ mod tests {
         assert!(rendered.contains("[sorafs.quota]"));
         assert!(rendered.contains("storage_pin_max_events = 64"));
         assert!(rendered.contains("storage_pin_window_secs = 3600"));
+        assert!(rendered.contains("[sorafs.gateway.site_bindings]"));
+        assert!(rendered.contains("path = \"/config/sorafs_sites.json\""));
+        assert!(rendered.contains("max_bytes = 1048576"));
+        assert!(rendered.contains("max_sites = 1024"));
+    }
+
+    #[test]
+    fn taira_compose_mounts_config_backed_site_bindings_without_runtime_env() {
+        let peers = build_peers(&PROFILES[1]).expect("build deterministic peers");
+        let rendered = render_docker_compose(&PROFILES[1], &peers);
+        assert!(
+            rendered.contains("./sorafs_sites.json:/config/sorafs_sites.json:ro"),
+            "Taira compose must mount the startup-configured binding document"
+        );
+        assert!(!rendered.contains("IROHA_SORAFS_SITE_BINDINGS_FILE"));
+        let dev_peers = build_peers(&PROFILES[0]).expect("build deterministic dev peers");
+        assert!(
+            !render_docker_compose(&PROFILES[0], &dev_peers).contains("sorafs_sites.json"),
+            "profiles without a configured binding document must not mount one"
+        );
+
+        let genesis_key = deterministic_keypair("readme-taira-sites", Algorithm::Ed25519)
+            .expect("derive deterministic genesis key");
+        let readme = render_readme(&PROFILES[1], &peers, genesis_key.public_key(), Some("ABCD"));
+        assert!(readme.contains("sorafs_sites.json"));
     }
 
     #[test]
