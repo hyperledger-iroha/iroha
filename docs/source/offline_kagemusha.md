@@ -2752,10 +2752,10 @@ material and must not construct, rewrite, or mutate it; the native bridge and
 SDK append wrappers validate the metadata tuple (`vk_commitment`,
 `public_inputs_schema_hash`, `domain_tag`) against the exact previous bundle
 before proving or returning output bytes. Those Norito `Option<[u8; 32]>`
-metadata bodies are the raw 32-byte value inside the option payload, not a
-per-byte fixed-array child sequence; non-C# SDK request preflight and
-JavaScript package-dist coverage reject stale fixed-array metadata bodies before
-native dispatch. Native append
+metadata bodies use the canonical fixed-array child encoding inside the option
+payload (32 one-byte length-delimited elements); JVM decoders also accept the
+packed 32-byte compatibility form. Direct `[u8; 32]` struct fields are different:
+their canonical archive body is the packed 32 bytes. Native append
 preflight also caps the archive at
 `KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES` (8 MiB) before
 decoding and checks that each supplied previous-proof envelope is bounded Pallas
@@ -3222,8 +3222,11 @@ bytes on construction and accessor reads. Full record-backed lineage-witness
 validation remains enforced by native/core. Their request-layout regressions decode the emitted
 archives and pin
 raw embedded record/bundle/proof payloads, Norito `Option` child-length framing,
-and Rust `[u8; N]` fixed-array encoding as per-element compact
-length-prefixed bytes without an extra sequence-length header. C# exposes a
+protocol-special direct Rust `[u8; 32]` fields as packed bytes, and fixed arrays
+nested in generic `Vec`/`Option` containers as per-element compact
+length-prefixed bytes without an extra inner sequence-length header.
+`AssetDefinitionId` delegates to generic `[u8; 16]` encoding and therefore
+retains per-element framing. C# exposes a
 managed `DecodeBundleSummary(...)` for the same bundle-summary preflight before
 wallet code trusts decoded metadata. Swift exposes
 the same surface through value-typed request/result structs,
@@ -3240,6 +3243,18 @@ same surface through frozen request/result dataclasses,
 `decode_kagemusha_recursive_spend_verify_result(...)`,
 `decode_kagemusha_recursive_spend_bundle(...)`, and typed native convenience
 wrappers that delegate only after request encoding succeeds.
+Kotlin/JVM and Java Android additionally expose public canonical
+`encodeConfidentialTransferV2VerifierRecordArchive(...)` and
+`encodeConfidentialUnshieldV3VerifierRecordArchive(...)` helpers plus raw and
+typed `buildRedeemProofAttachment(...)` / `buildRedeemProofAttachmentValue(...)`
+forms. The record helpers fix the `offline_kagemusha`, Halo2/IPA/Pallas, marked
+schema-hash, gas-schedule, inline-key, proof-cap, and active-status fields. The
+attachment builders validate the record and envelope, resolve activation and
+withdrawal at the optional block height, and require an exact successful native
+unshield verification result before returning either representation; the typed
+value can be passed directly to `UnshieldInstruction.Builder.setProof`.
+Canonical attachment archives omit the absent trailing default `lane_privacy`
+field instead of serializing an explicit `None`.
 JavaScript/Node, Python, Swift, Kotlin/JVM, Java Android, and C# recursive-spend
 bundle decoders also fail closed on accumulator summaries with `hop_count == 0`
 or `hop_count > 64` before trusting the decoded chain, asset, root, or note

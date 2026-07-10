@@ -3910,11 +3910,16 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   deterministic X25519/HKDF-SHA256/XChaCha20-Poly1305 plaintext vector. Swift
   now also exposes the typed confidential transfer witness/request builders
   and verified-fold top-up bundle builders, including the
-  confidential-transfer-v2 verifier-record archive with its 32-bit `status`
-  field. Default decryption binds the plaintext owner tag to the supplied spend
-  key, while diversified notes must use the explicit expected-owner-tag
-  overload. Keep the higher-level wallet flows pinned to this contract when
-  wiring shield-note recovery into production clients. The focused JVM and
+  confidential-transfer-v2 verifier-record archive with packed direct fixed32
+  fields, length-delimited generic fixed32 `Vec`/`Option` payloads, marked Iroha
+  schema/envelope hashes, framed delegated `AssetDefinitionId` bytes, omitted
+  absent trailing attachment defaults, and a four-byte `u32` `status`
+  discriminant despite Rust's `ConfidentialStatus` `repr(u8)`. Default
+  decryption binds the plaintext
+  owner tag to the supplied spend key, while diversified notes must use the
+  explicit expected-owner-tag overload. Keep the higher-level wallet flows
+  pinned to this contract when wiring shield-note recovery into production
+  clients. The focused JVM and
   Swift SDK runners plus SDK parity guard now execute and pin the
   encrypted-payload model tests, confidential-note contract tests, Merkle-path
   parser tests, witness/request builder tests, and verified-fold top-up tests.

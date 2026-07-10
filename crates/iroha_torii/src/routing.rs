@@ -9303,16 +9303,7 @@ fn sccp_message_artifact_for_material_request(
             taira_diagnostic_local_admission,
         )
     {
-        #[cfg(any(test, feature = "sccp-test-fixtures"))]
-        {
-            return Ok(iroha_sccp::build_sccp_taira_tron_xor_diagnostic_transparent_proof(bundle));
-        }
-        #[cfg(not(any(test, feature = "sccp-test-fixtures")))]
-        {
-            return Err(sccp_bad_request(
-                "TAIRA TRON XOR diagnostic local-admission proofs are only available in fixture builds; production non-SORA source lanes require governed source-adapter material",
-            ));
-        }
+        return Ok(iroha_sccp::build_sccp_taira_tron_xor_diagnostic_transparent_proof(bundle));
     }
     sccp_message_artifact_for_destination_material(
         bundle,

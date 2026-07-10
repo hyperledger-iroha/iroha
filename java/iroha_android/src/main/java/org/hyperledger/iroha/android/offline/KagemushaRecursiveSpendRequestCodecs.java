@@ -16,6 +16,8 @@ import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
 import org.hyperledger.iroha.android.crypto.Blake2b;
 import org.hyperledger.iroha.android.model.instructions.ProofAttachment;
 import org.hyperledger.iroha.android.model.instructions.ProofVerifierKeyRef;
+import org.hyperledger.iroha.android.privacy.PrivacyConfidentialWitness;
+import org.hyperledger.iroha.android.privacy.PrivacyNativeBridge;
 import org.hyperledger.iroha.norito.NoritoCodec;
 import org.hyperledger.iroha.norito.NoritoDecoder;
 import org.hyperledger.iroha.norito.NoritoEncoder;
@@ -66,6 +68,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
   private static final int PRIVACY_FFI_VERSION_V1 = 1;
   private static final int PRIVACY_FFI_STATUS_OK = 0;
   private static final int PRIVACY_SCHEMA_BUILD_PROOF_RESULT = 0x42;
+  private static final int PRIVACY_SCHEMA_VERIFY_PROOF_RESULT = 0x56;
   private static final long BACKEND_TAG_HALO2_IPA_PASTA = 0L;
   private static final int CONFIDENTIAL_STATUS_ACTIVE = 1;
   private static final int CONFIDENTIAL_V2_MAX_PROOF_BYTES = 192 * 1024;
@@ -238,8 +241,29 @@ public final class KagemushaRecursiveSpendRequestCodecs {
 
   public static byte[] buildRedeemProofAttachment(
       final byte[] unshieldProofOutputArchive, final VerifierRecordRef unshieldVerifierRecord) {
+    return buildRedeemProofAttachment(unshieldProofOutputArchive, unshieldVerifierRecord, null);
+  }
+
+  /** Builds a canonical redeem attachment after native verification and lifecycle checks. */
+  public static byte[] buildRedeemProofAttachment(
+      final byte[] unshieldProofOutputArchive,
+      final VerifierRecordRef unshieldVerifierRecord,
+      final Long blockHeight) {
+    return buildRedeemProofAttachmentChecked(
+        unshieldProofOutputArchive,
+        unshieldVerifierRecord,
+        blockHeight,
+        PrivacyNativeBridge::verifyProof);
+  }
+
+  static byte[] buildRedeemProofAttachmentChecked(
+      final byte[] unshieldProofOutputArchive,
+      final VerifierRecordRef unshieldVerifierRecord,
+      final Long blockHeight,
+      final PrivacyProofVerifier verifyProof) {
     final RedeemProofAttachmentInputs inputs =
-        decodeRedeemProofAttachmentInputs(unshieldProofOutputArchive, unshieldVerifierRecord);
+        decodeRedeemProofAttachmentInputsChecked(
+            unshieldProofOutputArchive, unshieldVerifierRecord, blockHeight, verifyProof);
     return NoritoCodec.encode(
         proofAttachmentPayload(inputs.envelope, inputs.verifierRecord),
         SCHEMA_PROOF_ATTACHMENT,
@@ -247,11 +271,36 @@ public final class KagemushaRecursiveSpendRequestCodecs {
         REQUEST_FLAGS);
   }
 
-  /** Builds a typed proof attachment for {@code UnshieldInstruction.Builder.setProof}. */
+  /**
+   * Builds a typed proof attachment for {@code UnshieldInstruction.Builder.setProof} after native
+   * verification and lifecycle checks.
+   */
   public static ProofAttachment buildRedeemProofAttachmentValue(
       final byte[] unshieldProofOutputArchive, final VerifierRecordRef unshieldVerifierRecord) {
+    return buildRedeemProofAttachmentValue(
+        unshieldProofOutputArchive, unshieldVerifierRecord, null);
+  }
+
+  /** Builds a verified typed proof attachment at the supplied chain height. */
+  public static ProofAttachment buildRedeemProofAttachmentValue(
+      final byte[] unshieldProofOutputArchive,
+      final VerifierRecordRef unshieldVerifierRecord,
+      final Long blockHeight) {
+    return buildRedeemProofAttachmentValueChecked(
+        unshieldProofOutputArchive,
+        unshieldVerifierRecord,
+        blockHeight,
+        PrivacyNativeBridge::verifyProof);
+  }
+
+  static ProofAttachment buildRedeemProofAttachmentValueChecked(
+      final byte[] unshieldProofOutputArchive,
+      final VerifierRecordRef unshieldVerifierRecord,
+      final Long blockHeight,
+      final PrivacyProofVerifier verifyProof) {
     final RedeemProofAttachmentInputs inputs =
-        decodeRedeemProofAttachmentInputs(unshieldProofOutputArchive, unshieldVerifierRecord);
+        decodeRedeemProofAttachmentInputsChecked(
+            unshieldProofOutputArchive, unshieldVerifierRecord, blockHeight, verifyProof);
     return new ProofAttachment(
         ZK_BACKEND_HALO2_IPA,
         inputs.envelope.archive,
@@ -260,15 +309,20 @@ public final class KagemushaRecursiveSpendRequestCodecs {
         irohaHash(inputs.envelope.archive));
   }
 
-  private static RedeemProofAttachmentInputs decodeRedeemProofAttachmentInputs(
-      final byte[] unshieldProofOutputArchive, final VerifierRecordRef unshieldVerifierRecord) {
+  private static RedeemProofAttachmentInputs decodeRedeemProofAttachmentInputsChecked(
+      final byte[] unshieldProofOutputArchive,
+      final VerifierRecordRef unshieldVerifierRecord,
+      final Long blockHeight,
+      final PrivacyProofVerifier verifyProof) {
     require(unshieldProofOutputArchive != null, "unshieldProofOutputArchive is required");
     require(unshieldVerifierRecord != null, "unshieldVerifierRecord is required");
+    require(verifyProof != null, "verifyProof is required");
     final PrivacyBuildResult proof =
         parsePrivacyBuildResult(
             unshieldProofOutputArchive,
             CONFIDENTIAL_UNSHIELD_ALGORITHM_ID,
             CONFIDENTIAL_UNSHIELD_ENTRYPOINT,
+            PrivacyConfidentialWitness.CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF,
             "unshieldProofOutputArchive");
     final OpenVerifyEnvelopeValue envelope = decodeOpenVerifyEnvelope(proof.proof, "unshield proof");
     final VerifierRecordValue verifierRecord =
@@ -278,7 +332,18 @@ public final class KagemushaRecursiveSpendRequestCodecs {
             CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
             CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA,
             proof.proof.length,
-            "unshieldVerifierRecord");
+            "unshieldVerifierRecord",
+            blockHeight,
+            true);
+    final byte[] verifyRequest =
+        PrivacyConfidentialWitness.buildConfidentialUnshieldVerifyRequestV1(proof.proof);
+    parsePrivacyVerifyResult(
+        verifyProof.verify(verifyRequest),
+        CONFIDENTIAL_UNSHIELD_ALGORITHM_ID,
+        CONFIDENTIAL_UNSHIELD_ENTRYPOINT,
+        PrivacyConfidentialWitness.CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF,
+        proof.proof,
+        "unshieldVerifyResult");
     return new RedeemProofAttachmentInputs(envelope, verifierRecord);
   }
 
@@ -1897,6 +1962,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
             hop.proofOutputArchive(),
             CONFIDENTIAL_TRANSFER_ALGORITHM_ID,
             CONFIDENTIAL_TRANSFER_ENTRYPOINT,
+            PrivacyConfidentialWitness.CONFIDENTIAL_TRANSFER_V2_VERIFIER_REF,
             "hop " + index + " proofOutputArchive");
     final OpenVerifyEnvelopeValue envelope = decodeOpenVerifyEnvelope(proof.proof, "hop " + index + " proof");
     final TransferPublicInputs publicInputs = parseTransferPublicInputs(envelope.proofBytes, "hop " + index);
@@ -1922,6 +1988,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
       final byte[] archive,
       final String expectedAlgorithmId,
       final String expectedEntrypoint,
+      final String expectedVkRef,
       final String label) {
     final ArchivePayload payload = requirePrivacyBuildResultPayload(archive, label);
     require(payload.flags == REQUEST_FLAGS, label + " must use compact Norito layout");
@@ -1943,14 +2010,58 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     require(message.isEmpty(), label + " success message must be empty");
     require(expectedAlgorithmId.equals(algorithmId), label + " algorithm_id must be " + expectedAlgorithmId);
     require(expectedEntrypoint.equals(entrypoint), label + " entrypoint must be " + expectedEntrypoint);
-    requirePortableId(vkRef, label + ".vk_ref");
+    require(expectedVkRef.equals(vkRef), label + " vk_ref must be " + expectedVkRef);
     require(publicInputs.length == 0, label + " public_inputs must be empty; envelope carries authoritative inputs");
     require(proof.length > 0, label + " proof must not be empty");
     require(!verified, label + " build results must not claim online verification");
     return new PrivacyBuildResult(proof);
   }
 
+  private static void parsePrivacyVerifyResult(
+      final byte[] archive,
+      final String expectedAlgorithmId,
+      final String expectedEntrypoint,
+      final String expectedVkRef,
+      final byte[] expectedProof,
+      final String label) {
+    final ArchivePayload payload =
+        requirePrivacyResultPayload(
+            archive, label, PRIVACY_SCHEMA_VERIFY_PROOF_RESULT, "verify-result");
+    require(payload.flags == REQUEST_FLAGS, label + " must use compact Norito layout");
+    final NoritoDecoder decoder = new NoritoDecoder(payload.payload, payload.flags);
+    final int version = readField(decoder, child -> checkedInt(child.readUInt(32), label + ".version"));
+    final int status = readField(decoder, child -> checkedInt(child.readUInt(32), label + ".status"));
+    final int errorCode = readField(decoder, child -> checkedInt(child.readUInt(32), label + ".error_code"));
+    final String message = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readString);
+    final String algorithmId = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readString);
+    final String entrypoint = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readString);
+    final String vkRef = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readString);
+    final byte[] publicInputs = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readBytesVec);
+    final byte[] proof = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readBytesVec);
+    final boolean verified = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readBool);
+    require(decoder.remaining() == 0, "Trailing bytes after " + label);
+    require(version == PRIVACY_FFI_VERSION_V1, label + " version must be " + PRIVACY_FFI_VERSION_V1);
+    require(status == PRIVACY_FFI_STATUS_OK && errorCode == 0,
+        label + " must be a successful privacy proof result: status=" + status + " error_code=" + errorCode);
+    require(message.isEmpty(), label + " success message must be empty");
+    require(expectedAlgorithmId.equals(algorithmId), label + " algorithm_id must be " + expectedAlgorithmId);
+    require(expectedEntrypoint.equals(entrypoint), label + " entrypoint must be " + expectedEntrypoint);
+    require(expectedVkRef.equals(vkRef), label + " vk_ref must be " + expectedVkRef);
+    require(publicInputs.length == 0, label + " public_inputs must be empty; envelope carries authoritative inputs");
+    require(Arrays.equals(proof, expectedProof), label + " proof must match the unshield build result");
+    require(verified, label + " must confirm proof verification");
+  }
+
   private static ArchivePayload requirePrivacyBuildResultPayload(final byte[] archive, final String label) {
+    return requirePrivacyResultPayload(
+        archive, label, PRIVACY_SCHEMA_BUILD_PROOF_RESULT, "build-result");
+  }
+
+  private static ArchivePayload requirePrivacyResultPayload(
+      final byte[] archive,
+      final String label,
+      final int expectedSchemaMarker,
+      final String resultKind) {
     require(archive != null && archive.length > 0, label + " must not be empty");
     require(archive.length <= KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES,
         label + " must not exceed " + KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES + " bytes");
@@ -1958,12 +2069,12 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     try {
       decoded = NoritoHeader.decode(archive, null);
     } catch (final IllegalArgumentException ex) {
-      throw new IllegalArgumentException(label + " must be a valid privacy build-result Norito archive", ex);
+      throw new IllegalArgumentException(label + " must be a valid privacy " + resultKind + " Norito archive", ex);
     }
     final byte[] schemaHash = decoded.header().schemaHash();
     for (final byte b : schemaHash) {
-      require((b & 0xff) == PRIVACY_SCHEMA_BUILD_PROOF_RESULT,
-          label + " must use privacy build-result schema marker");
+      require((b & 0xff) == expectedSchemaMarker,
+          label + " must use privacy " + resultKind + " schema marker");
     }
     require(decoded.header().compression() == NoritoHeader.COMPRESSION_NONE, label + " must not be compressed");
     require(decoded.header().payloadLength() > 0, label + " must contain a non-empty Norito payload");
@@ -1997,12 +2108,28 @@ public final class KagemushaRecursiveSpendRequestCodecs {
       final byte[] expectedSchema,
       final int proofArchiveSize,
       final String label) {
+    return decodeAndValidateVerifierRecord(
+        ref, envelope, expectedCircuitId, expectedSchema, proofArchiveSize, label, null, false);
+  }
+
+  private static VerifierRecordValue decodeAndValidateVerifierRecord(
+      final VerifierRecordRef ref,
+      final OpenVerifyEnvelopeValue envelope,
+      final String expectedCircuitId,
+      final byte[] expectedSchema,
+      final int proofArchiveSize,
+      final String label,
+      final Long blockHeight,
+      final boolean requireResolvedLifecycle) {
     final byte[] recordPayload = compactPayloadForRequest(ref.recordBytes(), SCHEMA_VERIFYING_KEY_RECORD, label);
     final DecodedVerifierRecord record = decodeVerifierRecordPayload(recordPayload, label);
     final VerifierKeyIdValue id = parseVerifierKeyId(ref.verifierKeyId, label + ".verifierKeyId");
     require(ZK_BACKEND_HALO2_IPA.equals(id.backend),
         label + " verifierKeyId backend must be " + ZK_BACKEND_HALO2_IPA);
     require(record.status == CONFIDENTIAL_STATUS_ACTIVE, label + " status must be Active");
+    if (requireResolvedLifecycle) {
+      validateVerifierRecordLifecycle(record, blockHeight, label);
+    }
     require(KAGEMUSHA_VERIFIER_NAMESPACE.equals(record.namespace),
         label + " namespace must be " + KAGEMUSHA_VERIFIER_NAMESPACE);
     require(record.backendTag == BACKEND_TAG_HALO2_IPA_PASTA, label + " backend must be Halo2IpaPasta");
@@ -2043,8 +2170,10 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     readField(decoder, KagemushaRecursiveSpendRequestCodecs::readOptionString);
     readField(decoder, KagemushaRecursiveSpendRequestCodecs::readOptionString);
     readField(decoder, KagemushaRecursiveSpendRequestCodecs::readOptionString);
-    readField(decoder, KagemushaRecursiveSpendRequestCodecs::readOptionU64Value);
-    readField(decoder, KagemushaRecursiveSpendRequestCodecs::readOptionU64Value);
+    final Long activationHeight =
+        readField(decoder, KagemushaRecursiveSpendRequestCodecs::readOptionU64Value);
+    final Long withdrawHeight =
+        readField(decoder, KagemushaRecursiveSpendRequestCodecs::readOptionU64Value);
     final VerifyingKeyBoxValue key =
         readField(
             decoder,
@@ -2063,8 +2192,30 @@ public final class KagemushaRecursiveSpendRequestCodecs {
         commitment,
         vkLen,
         maxProofBytes,
+        activationHeight,
+        withdrawHeight,
         key,
         status);
+  }
+
+  private static void validateVerifierRecordLifecycle(
+      final DecodedVerifierRecord record, final Long blockHeight, final String label) {
+    requireNonNegativeHeight(blockHeight);
+    require(record.activationHeight == null || record.activationHeight >= 0L,
+        label + " activation_height exceeds supported JVM height range");
+    require(record.withdrawHeight == null || record.withdrawHeight >= 0L,
+        label + " withdraw_height exceeds supported JVM height range");
+    if (blockHeight == null) {
+      require(record.activationHeight == null && record.withdrawHeight == null,
+          label + " has a lifecycle window; blockHeight is required");
+      return;
+    }
+    if (record.activationHeight != null) {
+      require(blockHeight >= record.activationHeight, label + " is not active at blockHeight");
+    }
+    if (record.withdrawHeight != null) {
+      require(blockHeight < record.withdrawHeight, label + " is not active at blockHeight");
+    }
   }
 
   private static VerifyingKeyBoxValue readVerifyingKeyBoxPayload(final byte[] payload, final String label) {
@@ -2156,7 +2307,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     writeField(encoder, child -> writeVerifierKeyId(child, verifierRecord.id));
     writeField(encoder, child -> writeOptionFixed32(child, verifierRecord.commitment));
     writeField(encoder, child -> writeOptionFixed32(child, irohaHash(envelope.archive)));
-    writeField(encoder, child -> writeOptionRaw(child, null));
+    // Rust canonical encoding omits the absent trailing default `lane_privacy` field.
     return encoder.toByteArray();
   }
 
@@ -2889,7 +3040,9 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     } catch (final IllegalArgumentException ex) {
       throw new IllegalArgumentException("asset must be a canonical asset definition id", ex);
     }
-    encoder.writeBytes(bytes);
+    // AssetDefinitionId delegates to `[u8; 16]`, whose canonical Norito representation keeps
+    // per-element framing (unlike protocol-special direct `[u8; 32]` fields).
+    writeConstVec(encoder, bytes);
   }
 
   private static void writeAssetBalanceScope(
@@ -3560,6 +3713,11 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     }
   }
 
+  @FunctionalInterface
+  interface PrivacyProofVerifier {
+    byte[] verify(byte[] requestArchive);
+  }
+
   private static final class RedeemProofAttachmentInputs {
     final OpenVerifyEnvelopeValue envelope;
     final VerifierRecordValue verifierRecord;
@@ -3648,6 +3806,8 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     final byte[] commitment;
     final int vkLen;
     final int maxProofBytes;
+    final Long activationHeight;
+    final Long withdrawHeight;
     final VerifyingKeyBoxValue key;
     final int status;
 
@@ -3660,6 +3820,8 @@ public final class KagemushaRecursiveSpendRequestCodecs {
         final byte[] commitment,
         final int vkLen,
         final int maxProofBytes,
+        final Long activationHeight,
+        final Long withdrawHeight,
         final VerifyingKeyBoxValue key,
         final int status) {
       this.circuitId = circuitId;
@@ -3670,6 +3832,8 @@ public final class KagemushaRecursiveSpendRequestCodecs {
       this.commitment = Arrays.copyOf(commitment, commitment.length);
       this.vkLen = vkLen;
       this.maxProofBytes = maxProofBytes;
+      this.activationHeight = activationHeight;
+      this.withdrawHeight = withdrawHeight;
       this.key = key;
       this.status = status;
     }

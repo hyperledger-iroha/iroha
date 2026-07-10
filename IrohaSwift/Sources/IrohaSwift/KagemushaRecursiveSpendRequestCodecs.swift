@@ -958,7 +958,7 @@ public enum KagemushaRecursiveSpendRequestCodecs {
             backend: KagemushaRecursiveSpendProver.recursiveAggregationProofBackend,
             bytes: verifierKey
         )
-        let schemaHash = Blake2b.hash256(
+        let schemaHash = IrohaHash.hash(
             PrivacyConfidentialWitnessCodecs.confidentialTransferPublicInputsSchema()
         )
         var writer = OfflineCompactNoritoWriter()
@@ -1267,7 +1267,7 @@ extension KagemushaRecursiveSpendRequestCodecs {
               record.circuitId == expectedCircuitId,
               envelope.circuitId == expectedCircuitId,
               envelope.publicInputs == expectedSchema,
-              record.publicInputsSchemaHash == Blake2b.hash256(expectedSchema),
+              record.publicInputsSchemaHash == IrohaHash.hash(expectedSchema),
               record.commitment == envelope.vkHash,
               record.maxProofBytes > 0,
               record.maxProofBytes <= UInt32(confidentialV2MaxProofBytes),
@@ -1465,11 +1465,11 @@ extension KagemushaRecursiveSpendRequestCodecs {
         writer.writeUInt64LE(UInt64(hops.count))
         for hop in hops {
             var step = OfflineCompactNoritoWriter()
-            step.writeField(encodeFixedBytes(hop.publicInputs.rootBefore))
+            step.writeField(try encodePackedFixed32(hop.publicInputs.rootBefore, field: "rootBefore"))
             step.writeField(try encodeFixed32Vec(hop.publicInputs.inputNullifiers, field: "inputNullifiers"))
             step.writeField(try encodeFixed32Vec(hop.publicInputs.outputCommitments, field: "outputCommitments"))
-            step.writeField(encodeFixedBytes(hop.rootAfter))
-            step.writeField(proofAttachmentPayload(envelope: hop.envelope, verifierRecord: hop.verifierRecord))
+            step.writeField(try encodePackedFixed32(hop.rootAfter, field: "rootAfter"))
+            step.writeField(try proofAttachmentPayload(envelope: hop.envelope, verifierRecord: hop.verifierRecord))
             step.writeField(verifyingKeyBoxPayload(
                 backend: hop.verifierRecord.key.backend,
                 bytes: hop.verifierRecord.key.bytes
@@ -1502,14 +1502,14 @@ extension KagemushaRecursiveSpendRequestCodecs {
     private static func proofAttachmentPayload(
         envelope: KagemushaOpenVerifyEnvelopeValue,
         verifierRecord: KagemushaVerifierRecordValue
-    ) -> Data {
+    ) throws -> Data {
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(OfflineCompactNorito.encodeString(KagemushaRecursiveSpendProver.recursiveAggregationProofBackend))
         writer.writeField(proofBoxPayload(envelope.archive))
         writer.writeField(verifierKeyIdPayload(verifierRecord.id))
-        writer.writeField(encodeOptionRaw(verifierRecord.commitment))
-        writer.writeField(encodeOptionRaw(Blake2b.hash256(envelope.archive)))
-        writer.writeField(encodeOptionRaw(nil))
+        writer.writeField(try encodeOptionFixed32(verifierRecord.commitment, field: "vkCommitment"))
+        writer.writeField(try encodeOptionFixed32(IrohaHash.hash(envelope.archive), field: "envelopeHash"))
+        // Rust canonical encoding omits the absent trailing default `lane_privacy` field.
         return writer.data
     }
 
@@ -1537,7 +1537,9 @@ extension KagemushaRecursiveSpendRequestCodecs {
         guard let bytes = AssetDefinitionAddress.decode(assetDefinitionId) else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidField("assetDefinitionId")
         }
-        return bytes
+        // AssetDefinitionId delegates to `[u8; 16]`, whose canonical Norito representation keeps
+        // per-element framing (unlike protocol-special direct `[u8; 32]` fields).
+        return encodeConstVec(bytes)
     }
 
     private static func encodeFixed32Vec(_ values: [Data], field: String) throws -> Data {
@@ -1548,7 +1550,7 @@ extension KagemushaRecursiveSpendRequestCodecs {
         writer.writeUInt64LE(UInt64(values.count))
         for value in values {
             try requireFixed32(value, field: field)
-            writer.writeField(encodeFixedBytes(value))
+            writer.writeField(encodeConstVec(value))
         }
         return writer.data
     }
@@ -2102,9 +2104,13 @@ extension KagemushaRecursiveSpendRequestCodecs {
         _ reader: inout CompactReader,
         field: String
     ) throws {
-        guard let payload = try readOptionRawPayload(&reader, field: field),
-              payload.count == 32,
-              payload.contains(where: { $0 != 0 }) else {
+        guard let payload = try readOptionRawPayload(&reader, field: field) else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
+        }
+        var child = CompactReader(data: payload)
+        let value = try child.readFixed32Flexible(field: field)
+        guard child.remaining == 0,
+              value.contains(where: { $0 != 0 }) else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(field)
         }
     }
@@ -2339,13 +2345,20 @@ extension KagemushaRecursiveSpendRequestCodecs {
 
     private static func encodeSpendableNote(_ note: KagemushaRecursiveSpendableNoteDescriptor) throws -> Data {
         var writer = OfflineCompactNoritoWriter()
-        writer.writeField(encodeFixedBytes(note.noteCommitment))
-        writer.writeField(encodeFixedBytes(note.spendNullifier))
+        writer.writeField(try encodePackedFixed32(note.noteCommitment, field: "noteCommitment"))
+        writer.writeField(try encodePackedFixed32(note.spendNullifier, field: "spendNullifier"))
         writer.writeField(try encodeNumeric(note.amount))
         return writer.data
     }
 
-    private static func encodeFixedBytes(_ bytes: Data) -> Data {
+    // A direct `[u8; 32]` struct field is packed by Norito derive. Fixed arrays reached through a
+    // generic container (`Vec` element or `Option` inner) retain ConstVec's per-byte framing.
+    private static func encodePackedFixed32(_ bytes: Data, field: String) throws -> Data {
+        try requireFixed32(bytes, field: field)
+        return bytes
+    }
+
+    private static func encodeConstVec(_ bytes: Data) -> Data {
         var writer = OfflineCompactNoritoWriter()
         for byte in bytes {
             writer.writeLength(1)
@@ -2393,7 +2406,7 @@ extension KagemushaRecursiveSpendRequestCodecs {
             return encodeOptionRaw(nil)
         }
         try requireFixed32(bytes, field: field)
-        return encodeOptionRaw(encodeFixedBytes(bytes))
+        return encodeOptionRaw(encodeConstVec(bytes))
     }
 
     private static func encodeOptionUInt64(_ value: UInt64?) -> Data {
@@ -2469,7 +2482,7 @@ extension KagemushaRecursiveSpendRequestCodecs {
         let parsed = try parseAssetId(assetId, field: "assetId")
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(try accountIdPayload(parsed.accountId, field: "assetId.account"))
-        writer.writeField(parsed.definitionBytes)
+        writer.writeField(encodeConstVec(parsed.definitionBytes))
         writer.writeField(assetBalanceScopePayload(dataspaceId: parsed.dataspaceId))
         return writer.data
     }

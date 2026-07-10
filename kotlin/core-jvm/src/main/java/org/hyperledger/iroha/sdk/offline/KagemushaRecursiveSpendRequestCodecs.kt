@@ -18,6 +18,8 @@ import org.hyperledger.iroha.sdk.norito.NoritoEncoder
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.SchemaHash
 import org.hyperledger.iroha.sdk.norito.TypeAdapter
+import org.hyperledger.iroha.sdk.privacy.PrivacyConfidentialWitnessCodecs
+import org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridge
 
 private const val KAGEMUSHA_FOLD_STEP_MAX_INPUTS = 2
 
@@ -632,6 +634,7 @@ object KagemushaRecursiveSpendRequestCodecs {
     private const val PRIVACY_FFI_VERSION_V1 = 1
     private const val PRIVACY_FFI_STATUS_OK = 0
     private const val PRIVACY_SCHEMA_BUILD_PROOF_RESULT = 0x42
+    private const val PRIVACY_SCHEMA_VERIFY_PROOF_RESULT = 0x56
     private const val BACKEND_TAG_HALO2_IPA_PASTA = 0L
     private const val CONFIDENTIAL_STATUS_ACTIVE = 1
     private const val CONFIDENTIAL_V2_MAX_PROOF_BYTES = 192 * 1024
@@ -779,15 +782,37 @@ object KagemushaRecursiveSpendRequestCodecs {
     }
 
     /**
-     * Typed variant of [buildRedeemProofAttachment] returning the [ProofAttachment] instruction
-     * attachment consumed by `UnshieldInstruction.Builder.setProof`.
+     * Builds a verified typed redeem attachment for `UnshieldInstruction.Builder.setProof`.
+     *
+     * The proof output and verifier record are decoded and cross-checked, lifecycle bounds are
+     * resolved at [blockHeight], and the native verifier must return an exact successful result
+     * for the same unshield proof before this method returns.
      */
     @JvmStatic
+    @JvmOverloads
     fun buildRedeemProofAttachmentValue(
         unshieldProofOutputArchive: ByteArray?,
         unshieldVerifierRecord: VerifierRecordRef?,
+        blockHeight: Long? = null,
+    ): ProofAttachment = buildRedeemProofAttachmentValueChecked(
+        unshieldProofOutputArchive,
+        unshieldVerifierRecord,
+        blockHeight,
+        PrivacyNativeBridge::verifyProof,
+    )
+
+    internal fun buildRedeemProofAttachmentValueChecked(
+        unshieldProofOutputArchive: ByteArray?,
+        unshieldVerifierRecord: VerifierRecordRef?,
+        blockHeight: Long?,
+        verifyProof: (ByteArray) -> ByteArray,
     ): ProofAttachment {
-        val inputs = decodeRedeemProofAttachmentInputs(unshieldProofOutputArchive, unshieldVerifierRecord)
+        val inputs = decodeRedeemProofAttachmentInputsChecked(
+            unshieldProofOutputArchive,
+            unshieldVerifierRecord,
+            blockHeight,
+            verifyProof,
+        )
         return ProofAttachment(
             ZK_BACKEND_HALO2_IPA,
             inputs.envelope.archive,
@@ -797,9 +822,11 @@ object KagemushaRecursiveSpendRequestCodecs {
         )
     }
 
-    private fun decodeRedeemProofAttachmentInputs(
+    private fun decodeRedeemProofAttachmentInputsChecked(
         unshieldProofOutputArchive: ByteArray?,
         unshieldVerifierRecord: VerifierRecordRef?,
+        blockHeight: Long?,
+        verifyProof: (ByteArray) -> ByteArray,
     ): RedeemProofAttachmentInputs {
         require(unshieldProofOutputArchive != null) { "unshieldProofOutputArchive is required" }
         require(unshieldVerifierRecord != null) { "unshieldVerifierRecord is required" }
@@ -807,6 +834,7 @@ object KagemushaRecursiveSpendRequestCodecs {
             unshieldProofOutputArchive,
             CONFIDENTIAL_UNSHIELD_ALGORITHM_ID,
             CONFIDENTIAL_UNSHIELD_ENTRYPOINT,
+            PrivacyConfidentialWitnessCodecs.CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF,
             "unshieldProofOutputArchive",
         )
         val envelope = decodeOpenVerifyEnvelope(proof.proof, "unshield proof")
@@ -817,6 +845,17 @@ object KagemushaRecursiveSpendRequestCodecs {
             expectedSchema = CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA,
             proofArchiveSize = proof.proof.size,
             label = "unshieldVerifierRecord",
+            blockHeight = blockHeight,
+            requireResolvedLifecycle = true,
+        )
+        val verifyRequest = PrivacyConfidentialWitnessCodecs.buildConfidentialUnshieldVerifyRequestV1(proof.proof)
+        parsePrivacyVerifyResult(
+            verifyProof(verifyRequest),
+            CONFIDENTIAL_UNSHIELD_ALGORITHM_ID,
+            CONFIDENTIAL_UNSHIELD_ENTRYPOINT,
+            PrivacyConfidentialWitnessCodecs.CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF,
+            proof.proof,
+            "unshieldVerifyResult",
         )
         return RedeemProofAttachmentInputs(envelope, verifierRecord)
     }
@@ -867,12 +906,35 @@ object KagemushaRecursiveSpendRequestCodecs {
         return NoritoCodec.encode(prepared, SCHEMA_RECORD_BUNDLE, VerifiedFoldRecordBundleAdapter, REQUEST_FLAGS)
     }
 
+    /**
+     * Builds the canonical redeem attachment archive after the same native and lifecycle checks as
+     * [buildRedeemProofAttachmentValue].
+     */
     @JvmStatic
+    @JvmOverloads
     fun buildRedeemProofAttachment(
         unshieldProofOutputArchive: ByteArray?,
         unshieldVerifierRecord: VerifierRecordRef?,
+        blockHeight: Long? = null,
+    ): ByteArray = buildRedeemProofAttachmentChecked(
+        unshieldProofOutputArchive,
+        unshieldVerifierRecord,
+        blockHeight,
+        PrivacyNativeBridge::verifyProof,
+    )
+
+    internal fun buildRedeemProofAttachmentChecked(
+        unshieldProofOutputArchive: ByteArray?,
+        unshieldVerifierRecord: VerifierRecordRef?,
+        blockHeight: Long?,
+        verifyProof: (ByteArray) -> ByteArray,
     ): ByteArray {
-        val inputs = decodeRedeemProofAttachmentInputs(unshieldProofOutputArchive, unshieldVerifierRecord)
+        val inputs = decodeRedeemProofAttachmentInputsChecked(
+            unshieldProofOutputArchive,
+            unshieldVerifierRecord,
+            blockHeight,
+            verifyProof,
+        )
         return NoritoCodec.encode(
             proofAttachmentPayload(inputs.envelope, inputs.verifierRecord),
             SCHEMA_PROOF_ATTACHMENT,
@@ -1852,6 +1914,7 @@ object KagemushaRecursiveSpendRequestCodecs {
             hop.proofOutputArchive,
             CONFIDENTIAL_TRANSFER_ALGORITHM_ID,
             CONFIDENTIAL_TRANSFER_ENTRYPOINT,
+            PrivacyConfidentialWitnessCodecs.CONFIDENTIAL_TRANSFER_V2_VERIFIER_REF,
             "hop $index proofOutputArchive",
         )
         val envelope = decodeOpenVerifyEnvelope(proof.proof, "hop $index proof")
@@ -1879,6 +1942,7 @@ object KagemushaRecursiveSpendRequestCodecs {
         archive: ByteArray,
         expectedAlgorithmId: String,
         expectedEntrypoint: String,
+        expectedVkRef: String,
         label: String,
     ): PrivacyBuildResult {
         val payload = requirePrivacyBuildResultPayload(archive, label)
@@ -1902,14 +1966,68 @@ object KagemushaRecursiveSpendRequestCodecs {
         require(message.isEmpty()) { "$label success message must be empty" }
         require(algorithmId == expectedAlgorithmId) { "$label algorithm_id must be $expectedAlgorithmId" }
         require(entrypoint == expectedEntrypoint) { "$label entrypoint must be $expectedEntrypoint" }
-        requirePortableId(vkRef, "$label.vk_ref")
+        require(vkRef == expectedVkRef) { "$label vk_ref must be $expectedVkRef" }
         require(publicInputs.isEmpty()) { "$label public_inputs must be empty; envelope carries authoritative inputs" }
         require(proof.isNotEmpty()) { "$label proof must not be empty" }
         require(!verified) { "$label build results must not claim online verification" }
         return PrivacyBuildResult(proof)
     }
 
+    private fun parsePrivacyVerifyResult(
+        archive: ByteArray,
+        expectedAlgorithmId: String,
+        expectedEntrypoint: String,
+        expectedVkRef: String,
+        expectedProof: ByteArray,
+        label: String,
+    ) {
+        val payload = requirePrivacyResultPayload(
+            archive,
+            label,
+            PRIVACY_SCHEMA_VERIFY_PROOF_RESULT,
+            "verify-result",
+        )
+        require(payload.flags == REQUEST_FLAGS) { "$label must use compact Norito layout" }
+        val decoder = NoritoDecoder(payload.payload, payload.flags)
+        val version = readField(decoder) { checkedInt(it.readUInt(32), "$label.version") }
+        val status = readField(decoder) { checkedInt(it.readUInt(32), "$label.status") }
+        val errorCode = readField(decoder) { checkedInt(it.readUInt(32), "$label.error_code") }
+        val message = readField(decoder) { readString(it) }
+        val algorithmId = readField(decoder) { readString(it) }
+        val entrypoint = readField(decoder) { readString(it) }
+        val vkRef = readField(decoder) { readString(it) }
+        val publicInputs = readField(decoder) { readBytesVec(it) }
+        val proof = readField(decoder) { readBytesVec(it) }
+        val verified = readField(decoder) { it.readBool() }
+        require(decoder.remaining() == 0) { "Trailing bytes after $label" }
+        require(version == PRIVACY_FFI_VERSION_V1) { "$label version must be $PRIVACY_FFI_VERSION_V1" }
+        require(status == PRIVACY_FFI_STATUS_OK && errorCode == 0) {
+            "$label must be a successful privacy proof result: status=$status error_code=$errorCode"
+        }
+        require(message.isEmpty()) { "$label success message must be empty" }
+        require(algorithmId == expectedAlgorithmId) { "$label algorithm_id must be $expectedAlgorithmId" }
+        require(entrypoint == expectedEntrypoint) { "$label entrypoint must be $expectedEntrypoint" }
+        require(vkRef == expectedVkRef) { "$label vk_ref must be $expectedVkRef" }
+        require(publicInputs.isEmpty()) { "$label public_inputs must be empty; envelope carries authoritative inputs" }
+        require(proof.contentEquals(expectedProof)) { "$label proof must match the unshield build result" }
+        require(verified) { "$label must confirm proof verification" }
+    }
+
     private fun requirePrivacyBuildResultPayload(archive: ByteArray, label: String): ArchivePayload {
+        return requirePrivacyResultPayload(
+            archive,
+            label,
+            PRIVACY_SCHEMA_BUILD_PROOF_RESULT,
+            "build-result",
+        )
+    }
+
+    private fun requirePrivacyResultPayload(
+        archive: ByteArray,
+        label: String,
+        expectedSchemaMarker: Int,
+        resultKind: String,
+    ): ArchivePayload {
         require(archive.isNotEmpty()) { "$label must not be empty" }
         require(archive.size <= KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES) {
             "$label must not exceed ${KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES} bytes"
@@ -1917,10 +2035,10 @@ object KagemushaRecursiveSpendRequestCodecs {
         val decoded = try {
             NoritoHeader.decode(archive, null)
         } catch (ex: IllegalArgumentException) {
-            throw IllegalArgumentException("$label must be a valid privacy build-result Norito archive", ex)
+            throw IllegalArgumentException("$label must be a valid privacy $resultKind Norito archive", ex)
         }
-        require(decoded.header.schemaHash.all { (it.toInt() and 0xff) == PRIVACY_SCHEMA_BUILD_PROOF_RESULT }) {
-            "$label must use privacy build-result schema marker"
+        require(decoded.header.schemaHash.all { (it.toInt() and 0xff) == expectedSchemaMarker }) {
+            "$label must use privacy $resultKind schema marker"
         }
         require(decoded.header.compression == NoritoHeader.COMPRESSION_NONE) { "$label must not be compressed" }
         require(decoded.header.payloadLength > 0) { "$label must contain a non-empty Norito payload" }
@@ -1960,12 +2078,17 @@ object KagemushaRecursiveSpendRequestCodecs {
         expectedSchema: ByteArray,
         proofArchiveSize: Int,
         label: String,
+        blockHeight: Long? = null,
+        requireResolvedLifecycle: Boolean = false,
     ): VerifierRecordValue {
         val recordPayload = compactPayloadForRequest(ref.recordBytes, SCHEMA_VERIFYING_KEY_RECORD, label)
         val record = decodeVerifierRecordPayload(recordPayload, label)
         val id = parseVerifierKeyId(ref.verifierKeyId, "$label.verifierKeyId")
         require(id.backend == ZK_BACKEND_HALO2_IPA) { "$label verifierKeyId backend must be $ZK_BACKEND_HALO2_IPA" }
         require(record.status == CONFIDENTIAL_STATUS_ACTIVE) { "$label status must be Active" }
+        if (requireResolvedLifecycle) {
+            validateVerifierRecordLifecycle(record, blockHeight, label)
+        }
         require(record.namespace == KAGEMUSHA_VERIFIER_NAMESPACE) {
             "$label namespace must be $KAGEMUSHA_VERIFIER_NAMESPACE"
         }
@@ -2013,8 +2136,8 @@ object KagemushaRecursiveSpendRequestCodecs {
         readField(decoder) { readOptionString(it) }
         readField(decoder) { readOptionString(it) }
         readField(decoder) { readOptionString(it) }
-        readField(decoder) { readOptionU64Value(it) }
-        readField(decoder) { readOptionU64Value(it) }
+        val activationHeight = readField(decoder) { readOptionU64Value(it) }
+        val withdrawHeight = readField(decoder) { readOptionU64Value(it) }
         val key = readField(decoder) {
             readOptionRawPayload(it)?.let { keyPayload -> readVerifyingKeyBoxPayload(keyPayload, "$label.key") }
         }
@@ -2029,9 +2152,37 @@ object KagemushaRecursiveSpendRequestCodecs {
             commitment = commitment,
             vkLen = vkLen,
             maxProofBytes = maxProofBytes,
+            activationHeight = activationHeight,
+            withdrawHeight = withdrawHeight,
             key = key,
             status = status,
         )
+    }
+
+    private fun validateVerifierRecordLifecycle(
+        record: DecodedVerifierRecord,
+        blockHeight: Long?,
+        label: String,
+    ) {
+        requireNonNegativeHeight(blockHeight)
+        require(record.activationHeight == null || record.activationHeight >= 0L) {
+            "$label activation_height exceeds supported JVM height range"
+        }
+        require(record.withdrawHeight == null || record.withdrawHeight >= 0L) {
+            "$label withdraw_height exceeds supported JVM height range"
+        }
+        if (blockHeight == null) {
+            require(record.activationHeight == null && record.withdrawHeight == null) {
+                "$label has a lifecycle window; blockHeight is required"
+            }
+            return
+        }
+        record.activationHeight?.let { activationHeight ->
+            require(blockHeight >= activationHeight) { "$label is not active at blockHeight" }
+        }
+        record.withdrawHeight?.let { withdrawHeight ->
+            require(blockHeight < withdrawHeight) { "$label is not active at blockHeight" }
+        }
     }
 
     private fun readVerifyingKeyBoxPayload(payload: ByteArray, label: String): VerifyingKeyBoxValue {
@@ -2130,7 +2281,8 @@ object KagemushaRecursiveSpendRequestCodecs {
         // envelope_hash must equal iroha_crypto::Hash::new(proof.bytes): Blake2b-256 with the LSB
         // marker set (see irohaHash), not the bare digest, or the Rust attachment check rejects it.
         writeField(encoder) { writeOptionFixed32(it, irohaHash(envelope.archive)) }
-        writeField(encoder) { writeOptionRaw(it, null) }
+        // `lane_privacy` is a trailing `#[norito(default)]` field. Rust canonical encoding omits
+        // an absent trailing default instead of emitting an explicit `None` field.
         return encoder.toByteArray()
     }
 
@@ -2208,6 +2360,8 @@ private data class DecodedVerifierRecord(
     val commitment: ByteArray,
     val vkLen: Int,
     val maxProofBytes: Int,
+    val activationHeight: Long?,
+    val withdrawHeight: Long?,
     val key: VerifyingKeyBoxValue?,
     val status: Int,
 )
@@ -2908,7 +3062,9 @@ private fun writeAssetDefinitionId(encoder: NoritoEncoder, value: String) {
     } catch (ex: IllegalArgumentException) {
         throw IllegalArgumentException("asset must be a canonical asset definition id", ex)
     }
-    encoder.writeBytes(bytes)
+    // `AssetDefinitionId` delegates to `[u8; 16]`'s Norito implementation. Unlike the
+    // protocol-special direct `[u8; 32]` fields, that fixed array retains per-element framing.
+    writeConstVec(encoder, bytes)
 }
 
 private fun writeAssetBalanceScope(encoder: NoritoEncoder, dataspaceId: Long?) {

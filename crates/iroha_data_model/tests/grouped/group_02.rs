@@ -2,6 +2,8 @@
 
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
+#[path = "../kagemusha_topup_kotlin_fixture.rs"]
+mod kagemusha_topup_kotlin_fixture;
 #[path = "../model_parser.rs"]
 mod model_parser;
 #[path = "../mutators.rs"]
@@ -12,8 +14,6 @@ mod norito_chain_layout;
 mod norito_golden_scaffold;
 #[path = "../norito_pointer_abi_roundtrip.rs"]
 mod norito_pointer_abi_roundtrip;
-#[path = "../kagemusha_topup_kotlin_fixture.rs"]
-mod kagemusha_topup_kotlin_fixture;
 #[path = "../oracle_query_roundtrip.rs"]
 mod oracle_query_roundtrip;
 #[path = "../oracle_reference_fixtures.rs"]

@@ -22,7 +22,7 @@ final class KagemushaTopUpParityTests: XCTestCase {
         }
     }
 
-    func testVerifierRecordArchiveUsesThirtyTwoBitStatus() throws {
+    func testVerifierRecordArchiveUsesMarkedSchemaHashAndThirtyTwoBitStatus() throws {
         let record = try KagemushaRecursiveSpendRequestCodecs
             .encodeConfidentialTransferV2VerifierRecordArchive(verifierKey: verifierKey())
         let payload = try KagemushaRecursiveSpendRequestCodecs.compactPayloadForRequest(
@@ -33,6 +33,11 @@ final class KagemushaTopUpParityTests: XCTestCase {
         let fields = try compactFields(payload)
 
         XCTAssertEqual(fields.count, 17)
+        XCTAssertEqual(
+            fields[6],
+            IrohaHash.hash(PrivacyConfidentialWitnessCodecs.confidentialTransferPublicInputsSchema())
+        )
+        XCTAssertEqual(fields[6].last.map { $0 & 1 }, 1)
         XCTAssertEqual(fields.last, Data([1, 0, 0, 0]))
     }
 
@@ -69,6 +74,63 @@ final class KagemushaTopUpParityTests: XCTestCase {
             ),
             1
         )
+    }
+
+    func testVerifiedFoldRecordBundleUsesPackedDirectAndGenericFixed32Framing() throws {
+        let rootBefore = fixed32(0x21)
+        let rootAfter = fixed32(0x22)
+        let verifierKey = verifierKey()
+        let vkHash = verifyingKeyCommitment(
+            backend: KagemushaRecursiveSpendProver.recursiveAggregationProofBackend,
+            bytes: verifierKey
+        )
+        let envelope = openVerifyEnvelope(
+            vkHash: vkHash,
+            proof: zk1Proof(rootBefore: rootBefore)
+        )
+        let verifierRecord = try KagemushaRecursiveSpendRequestCodecs
+            .encodeConfidentialTransferV2VerifierRecordArchive(verifierKey: verifierKey)
+        let hop = try KagemushaVerifiedFoldHopEvidence(
+            proofOutputArchive: privacyBuildResult(proof: envelope),
+            verifierRecord: KagemushaRecursiveSpendVerifierRecordRef(
+                verifierKeyId: "halo2/ipa:transfer-v2",
+                recordBytes: verifierRecord
+            ),
+            chainId: "swift-kagemusha-chain",
+            assetDefinitionId: assetDefinitionId(),
+            rootAfter: rootAfter
+        )
+
+        let archive = try KagemushaRecursiveSpendRequestCodecs.buildVerifiedFoldRecordBundle(hops: [hop])
+        let payload = try KagemushaRecursiveSpendRequestCodecs.compactPayloadForRequest(
+            archive,
+            schema: KagemushaRecursiveSpendRequestCodecs.recordBundleWireName,
+            field: "recordBundle"
+        )
+        let recordBundleFields = try compactFields(payload)
+        let bundleFields = try compactFields(recordBundleFields[0])
+        var expectedAssetBytes = Data((0..<16).map { UInt8(0x01 + $0) })
+        expectedAssetBytes[6] = (expectedAssetBytes[6] & 0x0f) | 0x40
+        expectedAssetBytes[8] = (expectedAssetBytes[8] & 0x3f) | 0x80
+        XCTAssertEqual(try constVecBytes(bundleFields[1], expectedCount: 16), expectedAssetBytes)
+        var steps = KagemushaTestCompactReader(bundleFields[2])
+        XCTAssertEqual(try steps.readUInt64LE(), 1)
+        let stepFields = try compactFields(steps.readField())
+        XCTAssertEqual(steps.remaining, 0)
+
+        XCTAssertEqual(stepFields[0], rootBefore)
+        XCTAssertEqual(stepFields[0].count, 32)
+        XCTAssertEqual(stepFields[3], rootAfter)
+        XCTAssertEqual(stepFields[3].count, 32)
+        XCTAssertEqual(try fixed32VectorValues(stepFields[1]).count, 1)
+        XCTAssertEqual(try fixed32VectorValues(stepFields[2]).count, 1)
+
+        let attachmentFields = try compactFields(stepFields[4])
+        XCTAssertEqual(attachmentFields.count, 5)
+        XCTAssertEqual(try optionFixed32(attachmentFields[3]), vkHash)
+        let envelopeHash = try optionFixed32(attachmentFields[4])
+        XCTAssertEqual(envelopeHash, IrohaHash.hash(envelope))
+        XCTAssertEqual(envelopeHash.last.map { $0 & 1 }, 1)
     }
 
     func testRejectsLegacyOneByteVerifierRecordStatus() throws {
@@ -354,6 +416,42 @@ final class KagemushaTopUpParityTests: XCTestCase {
         return writer.data
     }
 
+    private func fixed32VectorValues(_ payload: Data) throws -> [Data] {
+        var reader = KagemushaTestCompactReader(payload)
+        let count = Int(try reader.readUInt64LE())
+        var values: [Data] = []
+        values.reserveCapacity(count)
+        for _ in 0..<count {
+            let item = try reader.readField()
+            XCTAssertEqual(item.count, 64)
+            values.append(try constVecFixed32(item))
+        }
+        XCTAssertEqual(reader.remaining, 0)
+        return values
+    }
+
+    private func optionFixed32(_ payload: Data) throws -> Data {
+        XCTAssertEqual(payload.count, 66)
+        XCTAssertEqual(payload.prefix(2), Data([1, 64]))
+        return try constVecFixed32(Data(payload.dropFirst(2)))
+    }
+
+    private func constVecFixed32(_ payload: Data) throws -> Data {
+        try constVecBytes(payload, expectedCount: 32)
+    }
+
+    private func constVecBytes(_ payload: Data, expectedCount: Int) throws -> Data {
+        var reader = KagemushaTestCompactReader(payload)
+        var value = Data()
+        while reader.remaining > 0 {
+            let byteField = try reader.readField()
+            XCTAssertEqual(byteField.count, 1)
+            value.append(byteField)
+        }
+        XCTAssertEqual(value.count, expectedCount)
+        return value
+    }
+
     private func fixed32(_ byte: UInt8) -> Data {
         Data(repeating: byte, count: 32)
     }
@@ -406,6 +504,16 @@ private struct KagemushaTestCompactReader {
 
     mutating func readField() throws -> Data {
         try readBytes(Int(readLength()))
+    }
+
+    mutating func readUInt64LE() throws -> UInt64 {
+        let bytes = try readBytes(8)
+        var value: UInt64 = 0
+        bytes.withUnsafeBytes { buffer in
+            guard let base = buffer.baseAddress else { return }
+            memcpy(&value, base, 8)
+        }
+        return UInt64(littleEndian: value)
     }
 
     private mutating func readLength() throws -> UInt64 {

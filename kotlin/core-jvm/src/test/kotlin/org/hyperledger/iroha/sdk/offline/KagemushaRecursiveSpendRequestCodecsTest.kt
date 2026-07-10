@@ -8,6 +8,7 @@ import java.util.Base64
 import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.address.AssetDefinitionIdEncoder
 import org.hyperledger.iroha.sdk.client.JsonParser
+import org.hyperledger.iroha.sdk.core.model.instructions.ProofAttachment
 import org.hyperledger.iroha.sdk.crypto.Blake2b
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
@@ -15,6 +16,7 @@ import org.hyperledger.iroha.sdk.norito.NoritoEncoder
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.SchemaHash
 import org.hyperledger.iroha.sdk.norito.TypeAdapter
+import org.hyperledger.iroha.sdk.privacy.PrivacyConfidentialWitnessCodecs
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -1359,14 +1361,15 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             entrypoint = "buildConfidentialUnshieldProofV3",
         )
 
-        val attachment = KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachment(
+        val attachment = KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachmentChecked(
             fixture.proofOutputArchive,
             fixture.verifierRecordRef,
-        )
+            null,
+        ) { successfulUnshieldVerifyResult(fixture.envelopeArchive) }
 
         assertArchiveSchema(attachment, KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT)
         val fields = requestFields(attachment, KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT)
-        assertEquals(6, fields.size)
+        assertEquals(5, fields.size)
         assertEquals("halo2/ipa", readStringPayload(fields[0]))
 
         val proofBoxFields = fieldPayloads(fields[1])
@@ -1385,7 +1388,6 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             expectedEnvelopeHash,
             readFixedArrayPayload(optionSomePayload(fields[4]), 32),
         )
-        assertOptionNone(fields[5])
     }
 
     @Test
@@ -1412,7 +1414,10 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         assertEquals(2, fields.size)
         val bundleFields = fieldPayloads(fields[0])
         assertEquals("kagemusha-test-chain", readStringPayload(fieldPayloads(bundleFields[0]).single()))
-        assertContentEquals(AssetDefinitionIdEncoder.parseAddressBytes(asset), bundleFields[1])
+        assertContentEquals(
+            AssetDefinitionIdEncoder.parseAddressBytes(asset),
+            readFixedArrayPayload(bundleFields[1], 16),
+        )
 
         val steps = sequencePayloads(bundleFields[2])
         assertEquals(1, steps.size)
@@ -1453,6 +1458,13 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         val fixture = transferProofFixture(rootBefore)
         val recordArchive = KagemushaRecursiveSpendRequestCodecs
             .encodeConfidentialTransferV2VerifierRecordArchive(fixture.verifierKey)
+        assertCanonicalVerifierRecord(
+            recordArchive,
+            version = 3,
+            circuitId = KagemushaRecursiveSpendRequestCodecs.CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+            schema = CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA,
+            verifierKey = fixture.verifierKey,
+        )
 
         // buildVerifiedFoldRecordBundle runs the full decodeAndValidateVerifierRecord path, which
         // requires zero trailing bytes plus a commitment matching the proof envelope's vk_hash.
@@ -1483,6 +1495,13 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         val verifierKey = zk1VerifierKey(KagemushaRecursiveSpendRequestCodecs.CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID)
         val recordArchive = KagemushaRecursiveSpendRequestCodecs
             .encodeConfidentialUnshieldV3VerifierRecordArchive(verifierKey)
+        assertCanonicalVerifierRecord(
+            recordArchive,
+            version = 1,
+            circuitId = KagemushaRecursiveSpendRequestCodecs.CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
+            schema = CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA,
+            verifierKey = verifierKey,
+        )
 
         assertArchiveSchema(recordArchive, KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFYING_KEY_RECORD)
         val fields = requestFields(recordArchive, KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFYING_KEY_RECORD)
@@ -1518,6 +1537,10 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             KagemushaRecursiveSpendRequestCodecs.encodeConfidentialUnshieldV3VerifierRecordArchive(ByteArray(0))
         }
         assertEquals("verifierKeyBytes must not be empty", error.message)
+        val transferError = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.encodeConfidentialTransferV2VerifierRecordArchive(ByteArray(0))
+        }
+        assertEquals("verifierKeyBytes must not be empty", transferError.message)
     }
 
     @Test
@@ -1533,10 +1556,11 @@ class KagemushaRecursiveSpendRequestCodecsTest {
 
         // buildRedeemProofAttachmentValue runs the full decodeAndValidateVerifierRecord path, which
         // requires zero trailing bytes plus a commitment matching the proof envelope's vk_hash.
-        val attachment = KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachmentValue(
+        val attachment = KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachmentValueChecked(
             fixture.proofOutputArchive,
             VerifierRecordRef("halo2/ipa:${fixture.verifierKeyName}", recordArchive),
-        )
+            null,
+        ) { successfulUnshieldVerifyResult(fixture.envelopeArchive) }
 
         assertEquals("halo2/ipa", attachment.backend)
         assertContentEquals(fixture.envelopeArchive, attachment.proofBytes)
@@ -1576,14 +1600,16 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             algorithmId = "unshield",
             entrypoint = "buildConfidentialUnshieldProofV3",
         )
-        val attachment = KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachmentValue(
+        val attachment = KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachmentValueChecked(
             fixture.proofOutputArchive,
             fixture.verifierRecordRef,
-        )
-        val wire = KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachment(
+            null,
+        ) { successfulUnshieldVerifyResult(fixture.envelopeArchive) }
+        val wire = KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachmentChecked(
             fixture.proofOutputArchive,
             fixture.verifierRecordRef,
-        )
+            null,
+        ) { successfulUnshieldVerifyResult(fixture.envelopeArchive) }
         val fields = requestFields(wire, KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT)
 
         assertEquals(readStringPayload(fields[0]), attachment.backend)
@@ -1593,6 +1619,79 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         assertEquals(readStringPayload(vkRefFields[1]), attachment.verifyingKeyRef.name)
         assertContentEquals(readFixedArrayPayload(optionSomePayload(fields[3]), 32), attachment.verifyingKeyCommitment)
         assertContentEquals(readFixedArrayPayload(optionSomePayload(fields[4]), 32), attachment.envelopeHash)
+    }
+
+    @Test
+    fun `checked redeem attachment builders reject failed verification and lifecycle gaps`() {
+        val fixture = proofFixture(
+            circuitId = KagemushaRecursiveSpendRequestCodecs.CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
+            schema = CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA,
+            algorithmId = "unshield",
+            entrypoint = "buildConfidentialUnshieldProofV3",
+        )
+        val mismatchedProof = fixture.envelopeArchive + byteArrayOf(1)
+        val typedMismatch = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachmentValueChecked(
+                fixture.proofOutputArchive,
+                fixture.verifierRecordRef,
+                null,
+            ) { successfulUnshieldVerifyResult(mismatchedProof) }
+        }
+        assertEquals(
+            "unshieldVerifyResult proof must match the unshield build result",
+            typedMismatch.message,
+        )
+        val rawFailed = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachmentChecked(
+                fixture.proofOutputArchive,
+                fixture.verifierRecordRef,
+                null,
+            ) {
+                privacyResultArchive(
+                    algorithmId = "unshield",
+                    entrypoint = "buildConfidentialUnshieldProofV3",
+                    proof = fixture.envelopeArchive,
+                    status = 0,
+                    errorCode = 0,
+                    message = "",
+                    vkRef = PrivacyConfidentialWitnessCodecs.CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF,
+                    verified = false,
+                    schemaMarker = 0x56,
+                )
+            }
+        }
+        assertEquals("unshieldVerifyResult must confirm proof verification", rawFailed.message)
+
+        val windowedRecord = VerifierRecordRef(
+            fixture.verifierRecordRef.verifierKeyId,
+            verifierRecordArchive(
+                circuitId = KagemushaRecursiveSpendRequestCodecs.CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
+                schema = CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA,
+                verifierKey = fixture.verifierKey,
+                activationHeight = 10,
+                withdrawHeight = 20,
+            ),
+        )
+        fun buildAt(height: Long?): ProofAttachment =
+            KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachmentValueChecked(
+                fixture.proofOutputArchive,
+                windowedRecord,
+                height,
+            ) { successfulUnshieldVerifyResult(fixture.envelopeArchive) }
+
+        assertEquals(
+            "unshieldVerifierRecord has a lifecycle window; blockHeight is required",
+            assertFailsWith<IllegalArgumentException> { buildAt(null) }.message,
+        )
+        assertEquals(
+            "unshieldVerifierRecord is not active at blockHeight",
+            assertFailsWith<IllegalArgumentException> { buildAt(9) }.message,
+        )
+        assertEquals("halo2/ipa", buildAt(10).backend)
+        assertEquals(
+            "unshieldVerifierRecord is not active at blockHeight",
+            assertFailsWith<IllegalArgumentException> { buildAt(20) }.message,
+        )
     }
 
     @Test
@@ -2248,7 +2347,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
     @Test
     fun `kotlin top-up archive matches the shared Rust fixture`() {
         val archive = sharedTopUpFixtureArchive()
-        val fixture = locateSharedTopUpFixture()
+        val fixture = locateSharedFixture("kagemusha_topup_request_kotlin.bin")
         if (fixture == null) {
             // The Rust workspace is not alongside this checkout (e.g. an SDK-only build); the Rust
             // decode test still guards the wire format, so skip rather than fail.
@@ -2266,14 +2365,42 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         )
     }
 
-    private fun locateSharedTopUpFixture(): java.io.File? {
+    @Test
+    fun `kotlin verifier record archives match the shared Rust fixtures`() {
+        val fixtures = listOf(
+            Triple(
+                "kagemusha_transfer_v2_verifier_record_kotlin.bin",
+                KagemushaRecursiveSpendRequestCodecs.CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+                KagemushaRecursiveSpendRequestCodecs::encodeConfidentialTransferV2VerifierRecordArchive,
+            ),
+            Triple(
+                "kagemusha_unshield_v3_verifier_record_kotlin.bin",
+                KagemushaRecursiveSpendRequestCodecs.CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
+                KagemushaRecursiveSpendRequestCodecs::encodeConfidentialUnshieldV3VerifierRecordArchive,
+            ),
+        )
+        for ((name, circuitId, encode) in fixtures) {
+            val fixture = locateSharedFixture(name) ?: return
+            val archive = encode(zk1VerifierKey(circuitId))
+            if (System.getenv("REGEN_KAGEMUSHA_FIXTURE") != null) {
+                fixture.parentFile.mkdirs()
+                fixture.writeBytes(archive)
+            } else {
+                assertContentEquals(
+                    fixture.readBytes(),
+                    archive,
+                    "Kotlin verifier-record encoder output drifted from $fixture",
+                )
+            }
+        }
+    }
+
+    private fun locateSharedFixture(name: String): java.io.File? {
         var dir: java.io.File? = java.io.File(System.getProperty("user.dir")).absoluteFile
         while (dir != null) {
-            val candidate = java.io.File(
-                dir,
-                "crates/iroha_data_model/tests/fixtures/kagemusha_topup_request_kotlin.bin",
-            )
-            if (candidate.isFile) return candidate
+            if (java.io.File(dir, "crates/iroha_data_model/Cargo.toml").isFile) {
+                return java.io.File(dir, "crates/iroha_data_model/tests/fixtures/$name")
+            }
             dir = dir.parentFile
         }
         return null
@@ -2960,6 +3087,44 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         status: Int = 0,
         errorCode: Int = 0,
         message: String = "",
+        vkRef: String = when (algorithmId) {
+            "unshield" -> PrivacyConfidentialWitnessCodecs.CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF
+            else -> PrivacyConfidentialWitnessCodecs.CONFIDENTIAL_TRANSFER_V2_VERIFIER_REF
+        },
+    ): ByteArray = privacyResultArchive(
+        algorithmId = algorithmId,
+        entrypoint = entrypoint,
+        proof = proof,
+        status = status,
+        errorCode = errorCode,
+        message = message,
+        vkRef = vkRef,
+        verified = false,
+        schemaMarker = 0x42,
+    )
+
+    private fun successfulUnshieldVerifyResult(proof: ByteArray): ByteArray = privacyResultArchive(
+        algorithmId = "unshield",
+        entrypoint = "buildConfidentialUnshieldProofV3",
+        proof = proof,
+        status = 0,
+        errorCode = 0,
+        message = "",
+        vkRef = PrivacyConfidentialWitnessCodecs.CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF,
+        verified = true,
+        schemaMarker = 0x56,
+    )
+
+    private fun privacyResultArchive(
+        algorithmId: String,
+        entrypoint: String,
+        proof: ByteArray,
+        status: Int,
+        errorCode: Int,
+        message: String,
+        vkRef: String,
+        verified: Boolean,
+        schemaMarker: Int,
     ): ByteArray {
         val archive = NoritoCodec.encode(
             Unit,
@@ -2972,10 +3137,10 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                     writeTestField(encoder) { writeTestString(it, message) }
                     writeTestField(encoder) { writeTestString(it, algorithmId) }
                     writeTestField(encoder) { writeTestString(it, entrypoint) }
-                    writeTestField(encoder) { writeTestString(it, "halo2/ipa:kagemusha-test") }
+                    writeTestField(encoder) { writeTestString(it, vkRef) }
                     writeTestField(encoder) { writeTestBytesVec(it, ByteArray(0)) }
                     writeTestField(encoder) { writeTestBytesVec(it, proof) }
-                    writeTestField(encoder) { it.writeByte(0) }
+                    writeTestField(encoder) { it.writeByte(if (verified) 1 else 0) }
                 }
 
                 override fun decode(decoder: NoritoDecoder): Unit =
@@ -2984,7 +3149,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             NoritoHeader.COMPACT_LEN,
         )
         for (index in 6 until 22) {
-            archive[index] = 0x42
+            archive[index] = schemaMarker.toByte()
         }
         return archive
     }
@@ -3020,6 +3185,8 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         schema: ByteArray,
         verifierKey: ByteArray,
         status: Int = 1,
+        activationHeight: Long? = null,
+        withdrawHeight: Long? = null,
     ): ByteArray {
         val commitment = verifyingKeyCommitment("halo2/ipa", verifierKey)
         return NoritoCodec.encode(
@@ -3040,8 +3207,12 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                     writeTestField(encoder) { writeTestOptionRaw(it, null) }
                     writeTestField(encoder) { writeTestOptionRaw(it, null) }
                     writeTestField(encoder) { writeTestOptionRaw(it, null) }
-                    writeTestField(encoder) { writeTestOptionRaw(it, null) }
-                    writeTestField(encoder) { writeTestOptionRaw(it, null) }
+                    writeTestField(encoder) {
+                        writeTestOptionRaw(it, activationHeight?.let(::testU64Payload))
+                    }
+                    writeTestField(encoder) {
+                        writeTestOptionRaw(it, withdrawHeight?.let(::testU64Payload))
+                    }
                     writeTestField(encoder) {
                         writeTestOptionRaw(
                             it,
@@ -3240,6 +3411,8 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         encoder.writePayload()
         return encoder.toByteArray()
     }
+
+    private fun testU64Payload(value: Long): ByteArray = testPayload { writeUInt(value, 64) }
 
     private fun writeTestString(encoder: NoritoEncoder, value: String) {
         val bytes = value.toByteArray(Charsets.UTF_8)
@@ -3456,6 +3629,38 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         decoded.header.validateChecksum(decoded.payload)
         assertEquals(NoritoHeader.COMPACT_LEN, decoded.header.flags)
         assertTrue(decoded.payload.isNotEmpty())
+    }
+
+    private fun assertCanonicalVerifierRecord(
+        archive: ByteArray,
+        version: Long,
+        circuitId: String,
+        schema: ByteArray,
+        verifierKey: ByteArray,
+    ) {
+        assertArchiveSchema(archive, KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFYING_KEY_RECORD)
+        val fields = requestFields(archive, KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFYING_KEY_RECORD)
+        assertEquals(17, fields.size)
+        assertEquals(version, readU32Payload(fields[0]))
+        assertEquals(circuitId, readStringPayload(fields[1]))
+        assertOptionNone(fields[2])
+        assertEquals("offline_kagemusha", readStringPayload(fields[3]))
+        assertEquals(0L, readU32Payload(fields[4]))
+        assertEquals("pallas", readStringPayload(fields[5]))
+        assertContentEquals(irohaHashForTest(schema), readPackedArrayPayload(fields[6], 32))
+        assertContentEquals(
+            verifyingKeyCommitment("halo2/ipa", verifierKey),
+            readPackedArrayPayload(fields[7], 32),
+        )
+        assertEquals(verifierKey.size.toLong(), readU32Payload(fields[8]))
+        assertEquals((192 * 1024).toLong(), readU32Payload(fields[9]))
+        assertEquals("halo2_default", readStringPayload(optionSomePayload(fields[10])))
+        for (index in 11..14) assertOptionNone(fields[index])
+        val keyFields = fieldPayloads(optionSomePayload(fields[15]))
+        assertEquals("halo2/ipa", readStringPayload(keyFields[0]))
+        assertContentEquals(verifierKey, readBytesVecPayload(keyFields[1]))
+        assertEquals(4, fields[16].size)
+        assertEquals(1L, readU32Payload(fields[16]))
     }
 
     private fun compactPayload(archive: ByteArray, schema: String): ByteArray {

@@ -251,6 +251,10 @@ The CLI wraps Torii VK registry endpoints to submit signed transactions.
 
 Register a verifying key (provide either `vk_bytes` as base64 or `commitment_hex`):
 
+The optional `namespace` field defaults to `core` when omitted or `null`. Set it
+to `offline_kagemusha` for Kagemusha verifier records. Explicit namespace values
+must be non-empty and must not contain leading or trailing whitespace.
+
 ```bash
 cat >vk_register.json <<'JSON'
 {
@@ -260,6 +264,7 @@ cat >vk_register.json <<'JSON'
   "name": "vk_add",
   "version": 1,
   "circuit_id": "circuit_alpha",
+  "namespace": "core",
   "public_inputs_schema_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "vk_bytes": "BASE64..."
 }

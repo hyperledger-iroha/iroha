@@ -3767,6 +3767,85 @@ mod tests {
         }
     }
 
+    fn sample_vk_submission(namespace: Option<&str>) -> VkSubmissionJson {
+        let key_pair = checked_zk_ed25519_key_fixture();
+        VkSubmissionJson {
+            authority: iroha::data_model::account::AccountId::new(key_pair.public_key().clone()),
+            private_key: iroha_crypto::ExposedPrivateKey(key_pair.private_key().clone()),
+            backend: "halo2/ipa".to_owned(),
+            name: "vk_namespace_test".to_owned(),
+            version: 1,
+            circuit_id: "namespace-test-v1".to_owned(),
+            public_inputs_schema_hash_hex: "11".repeat(32),
+            curve: Some("pallas".to_owned()),
+            gas_schedule_id: Some("zk-gas-v1".to_owned()),
+            vk_len: Some(32),
+            max_proof_bytes: Some(4096),
+            metadata_uri_cid: None,
+            vk_bytes_cid: None,
+            activation_height: None,
+            withdraw_height: None,
+            commitment_hex: Some("22".repeat(32)),
+            vk_bytes: None,
+            status: Some(iroha::data_model::confidential::ConfidentialStatus::Active),
+            namespace: namespace.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn vk_submission_namespace_explicit_and_defaults() {
+        let encoded = norito::json::to_value(&sample_vk_submission(Some("offline_kagemusha")))
+            .expect("serialize VK submission fixture");
+
+        let explicit: VkSubmissionJson =
+            norito::json::from_value(encoded.clone()).expect("deserialize explicit namespace");
+        assert_eq!(
+            build_vk_record(&explicit)
+                .expect("build explicit namespace record")
+                .namespace,
+            "offline_kagemusha"
+        );
+
+        let mut omitted = encoded.clone();
+        omitted
+            .as_object_mut()
+            .expect("VK submission JSON object")
+            .remove("namespace");
+        let omitted: VkSubmissionJson =
+            norito::json::from_value(omitted).expect("deserialize omitted namespace");
+        assert_eq!(
+            build_vk_record(&omitted)
+                .expect("build default namespace record")
+                .namespace,
+            DEFAULT_VK_NAMESPACE
+        );
+
+        let mut null = encoded;
+        null.as_object_mut()
+            .expect("VK submission JSON object")
+            .insert("namespace".to_owned(), norito::json::Value::Null);
+        let null: VkSubmissionJson =
+            norito::json::from_value(null).expect("deserialize null namespace");
+        assert_eq!(
+            build_vk_record(&null)
+                .expect("build null-defaulted namespace record")
+                .namespace,
+            DEFAULT_VK_NAMESPACE
+        );
+    }
+
+    #[test]
+    fn vk_submission_namespace_rejects_blank_or_untrimmed_values() {
+        for namespace in ["", " \t ", " offline_kagemusha", "offline_kagemusha "] {
+            let err = build_vk_record(&sample_vk_submission(Some(namespace)))
+                .expect_err("blank or untrimmed namespace must be rejected");
+            assert!(
+                err.to_string().contains("namespace must not"),
+                "unexpected error for {namespace:?}: {err}"
+            );
+        }
+    }
+
     fn sample_prepared_vk_submission(
         key_pair: &iroha_crypto::KeyPair,
         name: &str,
@@ -3970,12 +4049,15 @@ impl Run for VkCommand {
 
 #[derive(clap::Args, Debug)]
 pub struct VkRegisterArgs {
-    /// Path to a JSON DTO file for register (authority, `private_key`, backend, name, version, optional `vk_bytes` (base64) or `commitment_hex`)
+    /// Path to a JSON DTO file for register (authority, `private_key`, backend, name, version,
+    /// optional `vk_bytes` (base64) or `commitment_hex`). Optional `namespace` defaults to `core`
+    /// and must be non-empty without leading or trailing whitespace.
     #[arg(long, value_name = "PATH")]
     json: std::path::PathBuf,
 }
 
 #[derive(Debug, Clone, norito::json::JsonDeserialize)]
+#[cfg_attr(test, derive(norito::json::JsonSerialize))]
 struct VkSubmissionJson {
     authority: iroha::data_model::account::AccountId,
     private_key: iroha::data_model::prelude::ExposedPrivateKey,
@@ -4074,6 +4156,21 @@ fn vk_backend_tag_from_label(label: &str) -> iroha::data_model::zk::BackendTag {
     iroha::data_model::zk::BackendTag::from_catalog_label(label)
 }
 
+const DEFAULT_VK_NAMESPACE: &str = "core";
+
+fn resolve_vk_namespace(namespace: Option<&str>) -> Result<String> {
+    let Some(namespace) = namespace else {
+        return Ok(DEFAULT_VK_NAMESPACE.to_owned());
+    };
+    if namespace.trim().is_empty() {
+        eyre::bail!("namespace must not be empty or whitespace-only");
+    }
+    if namespace.trim() != namespace {
+        eyre::bail!("namespace must not contain leading or trailing whitespace");
+    }
+    Ok(namespace.to_owned())
+}
+
 fn build_vk_record(
     payload: &VkSubmissionJson,
 ) -> Result<iroha::data_model::proof::VerifyingKeyRecord> {
@@ -4153,7 +4250,7 @@ fn build_vk_record(
         payload.version,
         payload.circuit_id.clone(),
         None,
-        payload.namespace.clone().unwrap_or_else(|| "core".to_owned()),
+        resolve_vk_namespace(payload.namespace.as_deref())?,
         backend_tag,
         payload.curve.clone().unwrap_or_else(|| "unknown".into()),
         schema_hash,
@@ -4207,7 +4304,9 @@ impl Run for VkRegisterArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct VkUpdateArgs {
-    /// Path to a JSON DTO file for update (authority, `private_key`, backend, name, version, optional `vk_bytes` or `commitment_hex`)
+    /// Path to a JSON DTO file for update (authority, `private_key`, backend, name, version,
+    /// optional `vk_bytes` or `commitment_hex`). Optional `namespace` defaults to `core` and must
+    /// be non-empty without leading or trailing whitespace.
     #[arg(long, value_name = "PATH")]
     json: std::path::PathBuf,
 }

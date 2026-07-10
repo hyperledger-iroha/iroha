@@ -788,9 +788,18 @@ from native proof output archives, open-verify envelopes, verifier records, and
 Pallas opening archives. `buildPallasOpenEnvelopesArchive(hops:)` derives the
 per-hop opening archive bundle, and
 `encodeConfidentialTransferV2VerifierRecordArchive(verifierKey:)` emits the
-confidential-transfer-v2 verifier record. Swift does not expose a
-proof-output-only verified-fold builder; Pallas opening evidence is required to
-validate every hop.
+confidential-transfer-v2 verifier record. Its Norito layout matches the Rust
+derive exactly: direct `[u8; 32]` struct fields are packed as 32 raw bytes,
+while `[u8; 32]` values inside `Vec` and `Option` retain ConstVec's
+length-delimited per-byte framing. Public-input schema and proof-envelope
+hashes use the marked Iroha Blake2b-256 representation, and
+`ConfidentialStatus` is archived as a four-byte `u32` discriminant despite its
+Rust `repr(u8)`. `AssetDefinitionId` is not one of those packed protocol
+fields: its delegated `[u8; 16]` representation keeps per-element framing.
+Canonical `ProofAttachment` encoding also omits an absent trailing default
+`lane_privacy` field instead of writing an explicit `None`. Swift does not
+expose a proof-output-only verified-fold
+builder; Pallas opening evidence is required to validate every hop.
 Native append streams the previous recursive proof bytes and per-hop accumulator
 material into native-owned accumulator digests (`recursive_proof_chain_digest`,
 lineage/aggregation transcript, fixed-window schedule/shared-manifest/table-base,

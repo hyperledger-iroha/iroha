@@ -543,10 +543,6 @@ fn route_uses_legacy_default_public_lane(route: RoutingDecision, nexus: &Nexus) 
             .any(|lane| lane.dataspace_id == route.dataspace_id)
 }
 
-fn nexus_uses_multilane_route_catalogs(nexus: &Nexus) -> bool {
-    nexus.enabled && nexus.uses_multilane_catalogs()
-}
-
 fn resolve_routing_plan_against_nexus_at_height(
     plan: RoutingPlan,
     nexus: &Nexus,
@@ -554,9 +550,7 @@ fn resolve_routing_plan_against_nexus_at_height(
 ) -> Result<RoutingPlan, RoutingResolveError> {
     let plan =
         resolve_routing_plan_against_catalogs(plan, &nexus.lane_catalog, &nexus.dataspace_catalog)?;
-    if nexus_uses_multilane_route_catalogs(nexus) {
-        ensure_routing_plan_active_at_height(&plan, nexus, block_height)?;
-    }
+    ensure_routing_plan_active_at_height(&plan, nexus, block_height)?;
     Ok(plan)
 }
 
@@ -7168,7 +7162,7 @@ impl Queue {
     }
 
     fn nexus_uses_config_router(nexus: &Nexus) -> bool {
-        nexus_uses_multilane_route_catalogs(nexus)
+        nexus.enabled && nexus.uses_multilane_catalogs()
     }
 
     fn router_for_nexus(
@@ -7385,7 +7379,7 @@ pub mod tests {
     use iroha_data_model::{
         block::SignedBlock,
         events::pipeline::PipelineEventBox,
-        isi::runtime_upgrade::ProposeRuntimeUpgrade,
+        isi::{offline::KagemushaTransfer, runtime_upgrade::ProposeRuntimeUpgrade},
         metadata::Metadata,
         name::Name,
         nexus::{
@@ -7398,7 +7392,7 @@ pub mod tests {
         },
         parameter::TransactionParameters,
         prelude::*,
-        proof::{ProofAttachment, ProofAttachmentList, ProofBox},
+        proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
         runtime::RuntimeUpgradeManifest,
         transaction::signed::{
             SealedTransactionCommitmentPayload, SignedSealedTransactionCommitment,
@@ -13197,8 +13191,11 @@ pub mod tests {
     }
 
     #[test]
-    fn state_backed_queue_routes_skip_catalog_validation_when_nexus_disabled() {
+    fn state_backed_queue_routes_reject_inactive_catalog_lane_when_nexus_is_forcibly_disabled() {
         let mut state = state_with_future_created_autoscale_lane(7, 6);
+        // Simulate stale or corrupted persisted state. `State::set_nexus` rejects this
+        // disabled multi-lane shape, but queue admission must still fail closed if it
+        // ever observes one.
         state.nexus.get_mut().enabled = false;
         let nexus = state.nexus_snapshot();
         assert!(!nexus.enabled);
@@ -13215,21 +13212,28 @@ pub mod tests {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = queue_with_state_free_future_created_router(&state, &time_source);
         let tx = accepted_tx_by_someone(&time_source);
-        let expected =
-            RoutingPlan::single(RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL));
 
-        assert_eq!(
-            queue
-                .route_plan_with_state(&tx, &state)
-                .expect("disabled Nexus should not enforce inactive catalog lanes"),
-            expected
-        );
-        assert_eq!(
-            queue
-                .route_plan_for_gossip_with_state(&tx, &state)
-                .expect("disabled Nexus gossip routing should not enforce inactive catalog lanes"),
-            expected
-        );
+        let route_err = queue
+            .route_plan_with_state(&tx, &state)
+            .expect_err("disabled Nexus must reject inactive catalog lanes");
+        assert!(matches!(
+            route_err,
+            RoutingResolveError::InactiveLane {
+                lane_id,
+                dataspace_id,
+            } if lane_id == LaneId::new(1) && dataspace_id == DataSpaceId::UNIVERSAL
+        ));
+
+        let gossip_err = queue
+            .route_plan_for_gossip_with_state(&tx, &state)
+            .expect_err("disabled Nexus gossip routing must reject inactive catalog lanes");
+        assert!(matches!(
+            gossip_err,
+            RoutingResolveError::InactiveLane {
+                lane_id,
+                dataspace_id,
+            } if lane_id == LaneId::new(1) && dataspace_id == DataSpaceId::UNIVERSAL
+        ));
     }
 
     #[test]
@@ -13286,7 +13290,29 @@ pub mod tests {
             .expect("apply disabled Nexus state for default route test");
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Queue::test(config_factory(), &time_source);
-        let tx = accepted_tx_by_someone(&time_source);
+        let (authority, key_pair) = gen_account_in("wonderland");
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("cash", "universal").expect("Kagemusha asset domain"),
+            "unit".parse().expect("Kagemusha asset name"),
+        );
+        let transfer = KagemushaTransfer::new(
+            asset,
+            vec![[0x11; 32]],
+            vec![[0x22; 32]],
+            ProofAttachment::new_ref(
+                "halo2/ipa".into(),
+                ProofBox::new("halo2/ipa".into(), vec![0xCA, 0xFE]),
+                VerifyingKeyId::new("halo2/ipa", "offline-kagemusha-transfer"),
+            ),
+            Some([0x33; 32]),
+        );
+        let tx = accepted_tx_with(
+            authority,
+            &key_pair,
+            &time_source,
+            vec![InstructionBox::from(transfer)],
+            Metadata::default(),
+        );
         let expected =
             RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
 

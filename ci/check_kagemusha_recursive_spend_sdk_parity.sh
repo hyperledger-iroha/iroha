@@ -4506,7 +4506,7 @@ def check_c_bridge(texts, errors):
     require_regex(
         texts,
         "crates/connect_norito_bridge/src/lib.rs",
-        r"CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*15\s*;",
+        r"CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*16\s*;",
         "C native bridge ABI version",
         errors,
     )
@@ -6330,9 +6330,9 @@ def check_recursive_compact_surface(texts, errors):
             '"pallasOpenEnvelopes[0] transcript_label must be non-empty"',
             '"pallasOpenEnvelopes[0] transcript_label exceeds 128 bytes"',
             '"pallasOpenEnvelopes[0].domain_tag is required"',
-            '"pallasOpenEnvelopes[0].vk_commitment must be exactly 32 bytes"',
-            '"pallasOpenEnvelopes[0].public_inputs_schema_hash must be exactly 32 bytes"',
-            '"pallasOpenEnvelopes[0].domain_tag must be exactly 32 bytes"',
+            '"pallasOpenEnvelopes[0].vk_commitment option tag must be 0 or 1"',
+            '"pallasOpenEnvelopes[0].public_inputs_schema_hash payload length mismatch"',
+            '"pallasOpenEnvelopes[0].domain_tag option tag must be 0 or 1"',
             '"Trailing bytes after pallasOpenEnvelopes[0]"',
             '"Unexpected end of data"',
             "assertEquals(expectedMessage, archiveError.message)",
@@ -6358,12 +6358,12 @@ def check_recursive_compact_surface(texts, errors):
             '"pallasOpenEnvelopes[0] transcript_label exceeds 128 bytes"',
             "pallasOpenEnvelopeVectorArchive { it.includeDomainTag = false } to",
             '"pallasOpenEnvelopes[0].domain_tag is required"',
-            "pallasOpenEnvelopeVectorArchive { it.vkCommitmentPayload = fixedArrayPayload(0x70, 32) } to",
-            '"pallasOpenEnvelopes[0].vk_commitment must be exactly 32 bytes"',
-            "pallasOpenEnvelopeVectorArchive { it.publicInputsSchemaHashPayload = fixedArrayPayload(0x71, 32) } to",
-            '"pallasOpenEnvelopes[0].public_inputs_schema_hash must be exactly 32 bytes"',
-            "pallasOpenEnvelopeVectorArchive { it.domainTagPayload = fixedArrayPayload(0x72, 32) } to",
-            '"pallasOpenEnvelopes[0].domain_tag must be exactly 32 bytes"',
+            "it.vkCommitmentOptionPayload = testOptionRawWithUnknownTag()",
+            '"pallasOpenEnvelopes[0].vk_commitment option tag must be 0 or 1"',
+            "it.publicInputsSchemaHashOptionPayload = testOptionRawWithDeclaredLengthTooLong(fixedBytes(0x71))",
+            '"pallasOpenEnvelopes[0].public_inputs_schema_hash payload length mismatch"',
+            "it.domainTagOptionPayload = testOptionRawWithUnknownTag()",
+            '"pallasOpenEnvelopes[0].domain_tag option tag must be 0 or 1"',
             "pallasOpenEnvelopeVectorArchive { it.trailingEnvelopeBytes = byteArrayOf(0x7f) } to",
             '"Trailing bytes after pallasOpenEnvelopes[0]"',
             'pallasOpenEnvelopeVectorArchiveWithPayload(byteArrayOf(0x00)) to "Unexpected end of data"',
@@ -6620,9 +6620,9 @@ def check_recursive_compact_surface(texts, errors):
             '"pallasOpenEnvelopes[0] transcript_label must be non-empty"',
             '"pallasOpenEnvelopes[0] transcript_label exceeds 128 bytes"',
             '"pallasOpenEnvelopes[0].domain_tag is required"',
-            '"pallasOpenEnvelopes[0].vk_commitment must be exactly 32 bytes"',
-            '"pallasOpenEnvelopes[0].public_inputs_schema_hash must be exactly 32 bytes"',
-            '"pallasOpenEnvelopes[0].domain_tag must be exactly 32 bytes"',
+            '"pallasOpenEnvelopes[0].vk_commitment option tag must be 0 or 1"',
+            '"pallasOpenEnvelopes[0].public_inputs_schema_hash payload length mismatch"',
+            '"pallasOpenEnvelopes[0].domain_tag option tag must be 0 or 1"',
             '"Trailing bytes after pallasOpenEnvelopes[0]"',
             '"Unexpected end of data"',
             "assert expectedMessage.equals(archiveError.getMessage());",
@@ -6648,12 +6648,12 @@ def check_recursive_compact_surface(texts, errors):
             '"pallasOpenEnvelopes[0] transcript_label exceeds 128 bytes"',
             "pallasOpenEnvelopeVectorArchive(spec -> spec.includeDomainTag = false),",
             '"pallasOpenEnvelopes[0].domain_tag is required"',
-            "pallasOpenEnvelopeVectorArchive(spec -> spec.vkCommitmentPayload = fixedArrayPayload((byte) 0x70, 32)),",
-            '"pallasOpenEnvelopes[0].vk_commitment must be exactly 32 bytes"',
-            "spec.publicInputsSchemaHashPayload = fixedArrayPayload((byte) 0x71, 32)",
-            '"pallasOpenEnvelopes[0].public_inputs_schema_hash must be exactly 32 bytes"',
-            "pallasOpenEnvelopeVectorArchive(spec -> spec.domainTagPayload = fixedArrayPayload((byte) 0x72, 32)),",
-            '"pallasOpenEnvelopes[0].domain_tag must be exactly 32 bytes"',
+            "spec -> spec.vkCommitmentOptionPayload = testOptionRawWithUnknownTag()",
+            '"pallasOpenEnvelopes[0].vk_commitment option tag must be 0 or 1"',
+            "spec.publicInputsSchemaHashOptionPayload =",
+            '"pallasOpenEnvelopes[0].public_inputs_schema_hash payload length mismatch"',
+            "spec -> spec.domainTagOptionPayload = testOptionRawWithUnknownTag()",
+            '"pallasOpenEnvelopes[0].domain_tag option tag must be 0 or 1"',
             "pallasOpenEnvelopeVectorArchive(spec -> spec.trailingEnvelopeBytes = new byte[] {0x7f}),",
             '"Trailing bytes after pallasOpenEnvelopes[0]"',
             '{pallasOpenEnvelopeVectorArchiveWithPayload(new byte[] {0x00}), "Unexpected end of data"}',
@@ -22390,6 +22390,37 @@ def check_swift(texts, errors):
         "Swift typed recursive spend request codecs",
         errors,
     )
+    require_contains(
+        texts,
+        request_codecs,
+        (
+            "private static func encodePackedFixed32(_ bytes: Data, field: String) throws -> Data",
+            "private static func encodeConstVec(_ bytes: Data) -> Data",
+            'step.writeField(try encodePackedFixed32(hop.publicInputs.rootBefore, field: "rootBefore"))',
+            'step.writeField(try encodePackedFixed32(hop.rootAfter, field: "rootAfter"))',
+            "writer.writeField(encodeConstVec(value))",
+            "return encodeOptionRaw(encodeConstVec(bytes))",
+            "record.publicInputsSchemaHash == IrohaHash.hash(expectedSchema)",
+            'try encodeOptionFixed32(IrohaHash.hash(envelope.archive), field: "envelopeHash")',
+            "OfflineCompactNorito.encodeUInt32(confidentialStatusActive)",
+            'field: "\\(label).status") { try $0.readUInt32LE() }',
+        ),
+        "Swift Kagemusha canonical fixed32/hash/status wire policy",
+        errors,
+    )
+    require_contains(
+        texts,
+        request_codecs_test,
+        (
+            "testPallasMetadataAcceptsPackedAndConstVecFixed32Options",
+            "vkCommitmentPayload: Self.fixedArrayPayload(0x70, count: 32)",
+            "publicInputsSchemaHashPayload: Self.fixedArrayPayload(0x71, count: 32)",
+            "domainTagPayload: Self.fixedArrayPayload(0x72, count: 32)",
+            "for archive in [packed, constVec]",
+        ),
+        "Swift Kagemusha generic Option fixed32 compatibility tests",
+        errors,
+    )
     require_not_regex(
         texts,
         request_codecs,
@@ -22528,8 +22559,10 @@ def check_swift(texts, errors):
         (
             "readRequiredMetadataOption(",
             "readOptionRawPayload(&reader, field: field)",
-            "payload.count == 32",
-            "payload.contains(where: { $0 != 0 })",
+            "var child = CompactReader(data: payload)",
+            "let value = try child.readFixed32Flexible(field: field)",
+            "guard child.remaining == 0",
+            "value.contains(where: { $0 != 0 })",
             "private static func readOptionRawPayload(",
             "field: String",
             "guard reader.remaining >= length else {",
@@ -22538,7 +22571,7 @@ def check_swift(texts, errors):
             'readField(&reader, field: "\\(field).public_inputs_schema_hash")',
             'readField(&reader, field: "\\(field).domain_tag")',
         ),
-        "Swift Pallas metadata option raw fixed32 decoder",
+        "Swift Pallas metadata option generic fixed32 decoder",
         errors,
     )
     require_contains(
@@ -24921,16 +24954,16 @@ def check_java_kotlin(texts, errors):
     require_regex(
         texts,
         kotlin_request_codecs,
-        r"private fun readRequiredMetadataOption\([\s\S]*?val payload = readOptionRawPayload\(decoder, field\)[\s\S]*?require\(payload\.size == 32\) \{ \"\$field must be exactly 32 bytes\" \}[\s\S]*?val value = payload\.copyOf\(\)[\s\S]*?require\(!isZero32\(value\)\)",
-        "Kotlin Pallas metadata option raw fixed32 decoder",
+        r"private fun readRequiredMetadataOption\([\s\S]*?val payload = readOptionRawPayload\(decoder, field\)[\s\S]*?NoritoDecoder\(payload[\s\S]*?readFixed32\(field\)[\s\S]*?require\(child\.remaining\(\) == 0\)[\s\S]*?require\(!isZero32\(value\)\)",
+        "Kotlin Pallas metadata option generic fixed32 decoder",
         errors,
         flags=re.S,
     )
     require_not_regex(
         texts,
         kotlin_request_codecs,
-        r"private fun readRequiredMetadataOption\([\s\S]*?NoritoDecoder\(payload[\s\S]*?readFixed32\(field\)",
-        "Kotlin Pallas metadata option raw fixed32 decoder",
+        r"private fun readRequiredMetadataOption\([\s\S]*?require\(payload\.size == 32\)[\s\S]*?payload\.copyOf\(\)",
+        "Kotlin Pallas metadata option generic fixed32 decoder",
         errors,
         flags=re.S,
     )
@@ -25289,9 +25322,9 @@ def check_java_kotlin(texts, errors):
             '"previousProofOpenEnvelopes[0] transcript_label must be non-empty"',
             '"previousProofOpenEnvelopes[0] transcript_label exceeds 128 bytes"',
             '"previousProofOpenEnvelopes[0].vk_commitment is required"',
-            '"previousProofOpenEnvelopes[0].vk_commitment must be exactly 32 bytes"',
-            '"previousProofOpenEnvelopes[0].public_inputs_schema_hash must be exactly 32 bytes"',
-            '"previousProofOpenEnvelopes[0].domain_tag must be exactly 32 bytes"',
+            '"previousProofOpenEnvelopes[0].vk_commitment option tag must be 0 or 1"',
+            '"previousProofOpenEnvelopes[0].public_inputs_schema_hash payload length mismatch"',
+            '"previousProofOpenEnvelopes[0].domain_tag option tag must be 0 or 1"',
             '"Trailing bytes after previousProofOpenEnvelopes[0]"',
             '"Unexpected end of data"',
             "assertEquals(expectedMessage, archiveError.message)",
@@ -25317,12 +25350,12 @@ def check_java_kotlin(texts, errors):
             '"previousProofOpenEnvelopes[0] transcript_label exceeds 128 bytes"',
             "pallasOpenEnvelopeVectorArchive { it.includeVkCommitment = false } to",
             '"previousProofOpenEnvelopes[0].vk_commitment is required"',
-            "pallasOpenEnvelopeVectorArchive { it.vkCommitmentPayload = fixedArrayPayload(0x70, 32) } to",
-            '"previousProofOpenEnvelopes[0].vk_commitment must be exactly 32 bytes"',
-            "pallasOpenEnvelopeVectorArchive { it.publicInputsSchemaHashPayload = fixedArrayPayload(0x71, 32) } to",
-            '"previousProofOpenEnvelopes[0].public_inputs_schema_hash must be exactly 32 bytes"',
-            "pallasOpenEnvelopeVectorArchive { it.domainTagPayload = fixedArrayPayload(0x72, 32) } to",
-            '"previousProofOpenEnvelopes[0].domain_tag must be exactly 32 bytes"',
+            "it.vkCommitmentOptionPayload = testOptionRawWithUnknownTag()",
+            '"previousProofOpenEnvelopes[0].vk_commitment option tag must be 0 or 1"',
+            "it.publicInputsSchemaHashOptionPayload = testOptionRawWithDeclaredLengthTooLong(fixedBytes(0x71))",
+            '"previousProofOpenEnvelopes[0].public_inputs_schema_hash payload length mismatch"',
+            "it.domainTagOptionPayload = testOptionRawWithUnknownTag()",
+            '"previousProofOpenEnvelopes[0].domain_tag option tag must be 0 or 1"',
             "pallasOpenEnvelopeVectorArchive { it.trailingEnvelopeBytes = byteArrayOf(0x7f) } to",
             '"Trailing bytes after previousProofOpenEnvelopes[0]"',
             'pallasOpenEnvelopeVectorArchiveWithPayload(byteArrayOf(0x00)) to "Unexpected end of data"',
@@ -25343,6 +25376,7 @@ def check_java_kotlin(texts, errors):
         texts,
         kotlin_request_codecs_test,
         (
+            "recursive spend decoder accepts norito length-delimited option metadata",
             "var vkCommitmentPayload: ByteArray? = null",
             "var publicInputsSchemaHashPayload: ByteArray? = null",
             "var domainTagPayload: ByteArray? = null",
@@ -25352,14 +25386,10 @@ def check_java_kotlin(texts, errors):
             "it.vkCommitmentPayload = fixedArrayPayload(0x70, 32)",
             "it.publicInputsSchemaHashPayload = fixedArrayPayload(0x71, 32)",
             "it.domainTagPayload = fixedArrayPayload(0x72, 32)",
-            '"pallasOpenEnvelopes[0].vk_commitment must be exactly 32 bytes"',
-            '"pallasOpenEnvelopes[0].public_inputs_schema_hash must be exactly 32 bytes"',
-            '"pallasOpenEnvelopes[0].domain_tag must be exactly 32 bytes"',
-            '"previousProofOpenEnvelopes[0].vk_commitment must be exactly 32 bytes"',
-            '"previousProofOpenEnvelopes[0].public_inputs_schema_hash must be exactly 32 bytes"',
-            '"previousProofOpenEnvelopes[0].domain_tag must be exactly 32 bytes"',
+            "for (envelope in listOf(lengthDelimitedEnvelope, packedEnvelope))",
+            "previousProofOpenEnvelopes = lengthDelimitedEnvelope",
         ),
-        "Kotlin Pallas metadata option malformed fixed-array vectors",
+        "Kotlin Pallas metadata option generic fixed32 compatibility vectors",
         errors,
     )
     require_contains(
@@ -25448,16 +25478,16 @@ def check_java_kotlin(texts, errors):
     require_regex(
         texts,
         java_request_codecs,
-        r"private static byte\[\] readRequiredMetadataOption\([\s\S]*?final byte\[\] payload = readOptionRawPayload\(decoder, field\);[\s\S]*?require\(payload\.length == 32, field \+ \" must be exactly 32 bytes\"\);[\s\S]*?final byte\[\] value = Arrays\.copyOf\(payload, payload\.length\);[\s\S]*?require\(!isZero\(value\), field \+ \" must be non-zero\"\);",
-        "Android Java Pallas metadata option raw fixed32 decoder",
+        r"private static byte\[\] readRequiredMetadataOption\([\s\S]*?final byte\[\] payload = readOptionRawPayload\(decoder, field\);[\s\S]*?new NoritoDecoder\(payload[\s\S]*?readFixedBytes\(child, 32, field\)[\s\S]*?require\(child\.remaining\(\) == 0[\s\S]*?require\(!isZero\(value\), field \+ \" must be non-zero\"\);",
+        "Android Java Pallas metadata option generic fixed32 decoder",
         errors,
         flags=re.S,
     )
     require_not_regex(
         texts,
         java_request_codecs,
-        r"private static byte\[\] readRequiredMetadataOption\([\s\S]*?new NoritoDecoder\(payload[\s\S]*?readFixedBytes\(child, 32, field\)",
-        "Android Java Pallas metadata option raw fixed32 decoder",
+        r"private static byte\[\] readRequiredMetadataOption\([\s\S]*?require\(payload\.length == 32[\s\S]*?Arrays\.copyOf\(payload",
+        "Android Java Pallas metadata option generic fixed32 decoder",
         errors,
         flags=re.S,
     )
@@ -25780,9 +25810,9 @@ def check_java_kotlin(texts, errors):
             '"previousProofOpenEnvelopes[0] transcript_label must be non-empty"',
             '"previousProofOpenEnvelopes[0] transcript_label exceeds 128 bytes"',
             '"previousProofOpenEnvelopes[0].vk_commitment is required"',
-            '"previousProofOpenEnvelopes[0].vk_commitment must be exactly 32 bytes"',
-            '"previousProofOpenEnvelopes[0].public_inputs_schema_hash must be exactly 32 bytes"',
-            '"previousProofOpenEnvelopes[0].domain_tag must be exactly 32 bytes"',
+            '"previousProofOpenEnvelopes[0].vk_commitment option tag must be 0 or 1"',
+            '"previousProofOpenEnvelopes[0].public_inputs_schema_hash payload length mismatch"',
+            '"previousProofOpenEnvelopes[0].domain_tag option tag must be 0 or 1"',
             '"Trailing bytes after previousProofOpenEnvelopes[0]"',
             '"Unexpected end of data"',
             "assert expectedMessage.equals(archiveError.getMessage());",
@@ -25809,12 +25839,12 @@ def check_java_kotlin(texts, errors):
             '"previousProofOpenEnvelopes[0] transcript_label exceeds 128 bytes"',
             "pallasOpenEnvelopeVectorArchive(spec -> spec.includeVkCommitment = false),",
             '"previousProofOpenEnvelopes[0].vk_commitment is required"',
-            "pallasOpenEnvelopeVectorArchive(spec -> spec.vkCommitmentPayload = fixedArrayPayload((byte) 0x70, 32)),",
-            '"previousProofOpenEnvelopes[0].vk_commitment must be exactly 32 bytes"',
-            "spec.publicInputsSchemaHashPayload = fixedArrayPayload((byte) 0x71, 32)",
-            '"previousProofOpenEnvelopes[0].public_inputs_schema_hash must be exactly 32 bytes"',
-            "pallasOpenEnvelopeVectorArchive(spec -> spec.domainTagPayload = fixedArrayPayload((byte) 0x72, 32)),",
-            '"previousProofOpenEnvelopes[0].domain_tag must be exactly 32 bytes"',
+            "spec -> spec.vkCommitmentOptionPayload = testOptionRawWithUnknownTag()",
+            '"previousProofOpenEnvelopes[0].vk_commitment option tag must be 0 or 1"',
+            "spec.publicInputsSchemaHashOptionPayload =",
+            '"previousProofOpenEnvelopes[0].public_inputs_schema_hash payload length mismatch"',
+            "spec -> spec.domainTagOptionPayload = testOptionRawWithUnknownTag()",
+            '"previousProofOpenEnvelopes[0].domain_tag option tag must be 0 or 1"',
             "pallasOpenEnvelopeVectorArchive(spec -> spec.trailingEnvelopeBytes = new byte[] {0x7f}),",
             '"Trailing bytes after previousProofOpenEnvelopes[0]"',
             '{pallasOpenEnvelopeVectorArchiveWithPayload(new byte[] {0x00}), "Unexpected end of data"}',
@@ -25835,6 +25865,7 @@ def check_java_kotlin(texts, errors):
         texts,
         java_test,
         (
+            "recursiveSpendDecoderAcceptsNoritoLengthDelimitedOptionMetadata",
             "byte[] vkCommitmentPayload = null;",
             "byte[] publicInputsSchemaHashPayload = null;",
             "byte[] domainTagPayload = null;",
@@ -25845,14 +25876,10 @@ def check_java_kotlin(texts, errors):
             "spec.vkCommitmentPayload = fixedArrayPayload((byte) 0x70, 32)",
             "spec.publicInputsSchemaHashPayload = fixedArrayPayload((byte) 0x71, 32)",
             "spec.domainTagPayload = fixedArrayPayload((byte) 0x72, 32)",
-            '"pallasOpenEnvelopes[0].vk_commitment must be exactly 32 bytes"',
-            '"pallasOpenEnvelopes[0].public_inputs_schema_hash must be exactly 32 bytes"',
-            '"pallasOpenEnvelopes[0].domain_tag must be exactly 32 bytes"',
-            '"previousProofOpenEnvelopes[0].vk_commitment must be exactly 32 bytes"',
-            '"previousProofOpenEnvelopes[0].public_inputs_schema_hash must be exactly 32 bytes"',
-            '"previousProofOpenEnvelopes[0].domain_tag must be exactly 32 bytes"',
+            "for (final byte[] envelope : new byte[][] {lengthDelimitedEnvelope, packedEnvelope})",
+            "lengthDelimitedEnvelope,\n                appendArtifacts.typed",
         ),
-        "Android Java Pallas metadata option malformed fixed-array vectors",
+        "Android Java Pallas metadata option generic fixed32 compatibility vectors",
         errors,
     )
     require_contains(
@@ -29891,13 +29918,14 @@ def check_java_kotlin(texts, errors):
         texts,
         "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
         (
-            "vkCommitmentPayload: Self.fixedArrayPayload(0x70, count: 32)",
-            "publicInputsSchemaHashPayload: Self.fixedArrayPayload(0x71, count: 32)",
-            "domainTagPayload: Self.fixedArrayPayload(0x72, count: 32)",
+            "testPallasMetadataAcceptsPackedAndConstVecFixed32Options",
+            "requiredOptionPayloadWithTrailingByte",
+            "requiredOptionPayloadWithUnknownTag",
+            "requiredOptionPayloadWithDeclaredLengthTooLong",
             '.invalidArchive("pallasOpenEnvelopes.\\(metadataField)")',
             '.invalidArchive("previousProofOpenEnvelopes.\\(metadataField)")',
         ),
-        "Swift Pallas metadata option malformed fixed-array vectors",
+        "Swift Pallas metadata option generic fixed32 and malformed framing vectors",
         errors,
     )
     require_contains(
@@ -53115,29 +53143,25 @@ if mode == "--negative-control-non-csharp-pallas-metadata-option-shape":
             "Python Pallas metadata option raw fixed32 decoder",
         ),
         "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt": (
-            """    require(payload.size == 32) { "$field must be exactly 32 bytes" }
-    val value = payload.copyOf()""",
             """    val child = NoritoDecoder(payload, decoder.flags, decoder.flagsHint)
     val value = child.readFixed32(field)
     require(child.remaining() == 0) { "Trailing bytes after $field" }""",
-            "Kotlin Pallas metadata option raw fixed32 decoder",
+            """    require(payload.size == 32) { "$field must be exactly 32 bytes" }
+    val value = payload.copyOf()""",
+            "Kotlin Pallas metadata option generic fixed32 decoder",
         ),
         "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java": (
-            """    require(payload.length == 32, field + " must be exactly 32 bytes");
-    final byte[] value = Arrays.copyOf(payload, payload.length);""",
             """    final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
     final byte[] value = readFixedBytes(child, 32, field);
     require(child.remaining() == 0, "Trailing bytes after " + field);""",
-            "Android Java Pallas metadata option raw fixed32 decoder",
+            """    require(payload.length == 32, field + " must be exactly 32 bytes");
+    final byte[] value = Arrays.copyOf(payload, payload.length);""",
+            "Android Java Pallas metadata option generic fixed32 decoder",
         ),
         "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift": (
-            """        guard let payload = try readOptionRawPayload(&reader, field: field),
-              payload.count == 32,
-              payload.contains(where: { $0 != 0 }) else {""",
-            """        guard let payload = try readOptionRawPayload(&reader, field: field),
-              payload.count >= 32,
-              payload.contains(where: { $0 != 0 }) else {""",
-            "Swift Pallas metadata option raw fixed32 decoder",
+            "let value = try child.readFixed32Flexible(field: field)",
+            "let value = payload",
+            "Swift Pallas metadata option generic fixed32 decoder",
         ),
         "javascript/iroha_js/src/crypto.js": (
             """  const value = kagemushaReadFixedBytesPayload(
@@ -53163,19 +53187,19 @@ if mode == "--negative-control-non-csharp-pallas-metadata-option-shape":
             "Python Pallas metadata option malformed fixed-array vectors",
         ),
         "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt": (
-            "it.vkCommitmentPayload = fixedArrayPayload(0x70, 32)",
-            "it.vkCommitmentPayload = fixedBytes(0x70)",
-            "Kotlin Pallas metadata option malformed fixed-array vectors",
+            "recursive spend decoder accepts norito length-delimited option metadata",
+            "recursive spend decoder rejects norito length-delimited option metadata",
+            "Kotlin Pallas metadata option generic fixed32 compatibility vectors",
         ),
         "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java": (
-            "spec.vkCommitmentPayload = fixedArrayPayload((byte) 0x70, 32)",
-            "spec.vkCommitmentPayload = repeat((byte) 0x70, 32)",
-            "Android Java Pallas metadata option malformed fixed-array vectors",
+            "recursiveSpendDecoderAcceptsNoritoLengthDelimitedOptionMetadata",
+            "recursiveSpendDecoderRejectsNoritoLengthDelimitedOptionMetadata",
+            "Android Java Pallas metadata option generic fixed32 compatibility vectors",
         ),
         "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift": (
-            "vkCommitmentPayload: Self.fixedArrayPayload(0x70, count: 32)",
-            "vkCommitmentPayload: Self.fixed32(0x70)",
-            "Swift Pallas metadata option malformed fixed-array vectors",
+            "testPallasMetadataAcceptsPackedAndConstVecFixed32Options",
+            "testPallasMetadataRejectsPackedAndConstVecFixed32Options",
+            "Swift Kagemusha generic Option fixed32 compatibility tests",
         ),
         "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js": (
             "options: { vkCommitmentPayload: kagemushaFixedArrayPayload(0x70, 32) },",
@@ -53190,8 +53214,7 @@ if mode == "--negative-control-non-csharp-pallas-metadata-option-shape":
     }
     detected_messages = []
     replace_all_labels = {
-        "Kotlin Pallas metadata option malformed fixed-array vectors",
-        "Android Java Pallas metadata option malformed fixed-array vectors",
+        "Android Java Pallas metadata option generic fixed32 compatibility vectors",
     }
     pallas_metadata_decoder_patterns = {
         "Python Pallas metadata option raw fixed32 decoder": (
@@ -53205,18 +53228,20 @@ if mode == "--negative-control-non-csharp-pallas-metadata-option-shape":
             r"[\s\S]*?raise ValueError\(f\"\{field\} must be exactly 32 bytes\"\)"
             r"[\s\S]*?if not any\(value\):"
         ),
-        "Kotlin Pallas metadata option raw fixed32 decoder": (
+        "Kotlin Pallas metadata option generic fixed32 decoder": (
             r"private fun readRequiredMetadataOption\([\s\S]*?"
             r"val payload = readOptionRawPayload\(decoder, field\)"
-            r"[\s\S]*?require\(payload\.size == 32\) \{ \"\$field must be exactly 32 bytes\" \}"
-            r"[\s\S]*?val value = payload\.copyOf\(\)"
+            r"[\s\S]*?NoritoDecoder\(payload"
+            r"[\s\S]*?readFixed32\(field\)"
+            r"[\s\S]*?require\(child\.remaining\(\) == 0\)"
             r"[\s\S]*?require\(!isZero32\(value\)\)"
         ),
-        "Android Java Pallas metadata option raw fixed32 decoder": (
+        "Android Java Pallas metadata option generic fixed32 decoder": (
             r"private static byte\[\] readRequiredMetadataOption\([\s\S]*?"
             r"final byte\[\] payload = readOptionRawPayload\(decoder, field\);"
-            r"[\s\S]*?require\(payload\.length == 32, field \+ \" must be exactly 32 bytes\"\);"
-            r"[\s\S]*?final byte\[\] value = Arrays\.copyOf\(payload, payload\.length\);"
+            r"[\s\S]*?new NoritoDecoder\(payload"
+            r"[\s\S]*?readFixedBytes\(child, 32, field\)"
+            r"[\s\S]*?require\(child\.remaining\(\) == 0"
             r"[\s\S]*?require\(!isZero\(value\), field \+ \" must be non-zero\"\);"
         ),
     }
@@ -53224,8 +53249,8 @@ if mode == "--negative-control-non-csharp-pallas-metadata-option-shape":
     def expected_pallas_metadata_option_shape_label(old, label):
         if label in pallas_metadata_decoder_patterns:
             return f"{label} missing pattern {pallas_metadata_decoder_patterns[label]}"
-        if label == "Swift Pallas metadata option raw fixed32 decoder":
-            return f"{label} missing payload.count == 32"
+        if label == "Swift Pallas metadata option generic fixed32 decoder":
+            return f"{label} missing let value = try child.readFixed32Flexible(field: field)"
         if label in (
             "JavaScript Pallas metadata option raw fixed32 decoder",
             "JavaScript dist Pallas metadata option raw fixed32 decoder",
@@ -53309,6 +53334,24 @@ if mode == "--negative-control-non-csharp-pallas-metadata-option-shape":
             "readOptionRawPayload(&reader, field: field)",
             "readOptionRawPayload(&reader)",
             "Swift Pallas metadata option tag diagnostics",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            "private static func encodePackedFixed32(_ bytes: Data, field: String) throws -> Data",
+            "private static func encodeLegacyFixed32(_ bytes: Data, field: String) throws -> Data",
+            "Swift Kagemusha canonical fixed32/hash/status wire policy",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            "record.publicInputsSchemaHash == IrohaHash.hash(expectedSchema)",
+            "record.publicInputsSchemaHash == Blake2b.hash256(expectedSchema)",
+            "Swift Kagemusha canonical fixed32/hash/status wire policy",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            "OfflineCompactNorito.encodeUInt32(confidentialStatusActive)",
+            "Data([UInt8(confidentialStatusActive)])",
+            "Swift Kagemusha canonical fixed32/hash/status wire policy",
         ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
@@ -71597,11 +71640,11 @@ if mode == "--negative-control-native-c-bridge-abi-version":
     target = "crates/connect_norito_bridge/src/lib.rs"
     original = mutated[target]
     updated = original.replace(
-        "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 15;",
+        "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 16;",
         "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 12;",
         1,
     )
-    if updated == original or "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 15;" in updated:
+    if updated == original or "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 16;" in updated:
         raise SystemExit("negative control failed: unable to mutate native C bridge ABI version")
     mutated[target] = updated
     try:
@@ -71609,7 +71652,7 @@ if mode == "--negative-control-native-c-bridge-abi-version":
     except ParityError as error:
         message = str(error)
         expected_labels = (
-            r"C native bridge ABI version missing pattern CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*15\s*;",
+            r"C native bridge ABI version missing pattern CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*16\s*;",
         )
         missing = [label for label in expected_labels if label not in message]
         if missing:
