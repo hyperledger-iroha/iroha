@@ -17,6 +17,7 @@ import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
 import org.hyperledger.iroha.android.client.JsonParser;
 import org.hyperledger.iroha.android.crypto.Blake2b;
+import org.hyperledger.iroha.android.model.instructions.ProofAttachment;
 import org.hyperledger.iroha.norito.NoritoCodec;
 import org.hyperledger.iroha.norito.NoritoDecoder;
 import org.hyperledger.iroha.norito.NoritoEncoder;
@@ -74,6 +75,7 @@ public final class KagemushaRecursiveSpendProverTest {
     sharedRecursiveSpendAbi7FixtureManifestMatchesArchiveFixture();
     typedRequestCodecsRoundTripSharedFixtureArchives();
     typedRequestCodecsUseRustCompatibleCompactFieldLayouts();
+    javaTopUpArchiveMatchesSharedRustFixture();
     typedEvidenceHelpersAssembleCheckedProofArchives();
     typedEvidenceHelpersRejectAdversarialHopBindings();
     typedRequestCodecsRejectMalformedInputsBeforeNativeDispatch();
@@ -2398,10 +2400,10 @@ public final class KagemushaRecursiveSpendProverTest {
 
     final List<byte[]> noteFields = fieldPayloads(initFields.get(2));
     assert noteFields.size() == 3;
-    assert Arrays.equals(note.noteCommitment(), readFixedArrayPayload(noteFields.get(0), 32));
-    assert Arrays.equals(note.spendNullifier(), readFixedArrayPayload(noteFields.get(1), 32));
-    assert noteFields.get(0).length == 64;
-    assert noteFields.get(1).length == 64;
+    assert Arrays.equals(note.noteCommitment(), readPackedArrayPayload(noteFields.get(0), 32));
+    assert Arrays.equals(note.spendNullifier(), readPackedArrayPayload(noteFields.get(1), 32));
+    assert noteFields.get(0).length == 32;
+    assert noteFields.get(1).length == 32;
 
     final List<byte[]> lineageKeyFields = fieldPayloads(optionSomePayload(initFields.get(3)));
     assert lineageKeyFields.size() == 2;
@@ -2430,8 +2432,8 @@ public final class KagemushaRecursiveSpendProverTest {
         topUpInitFields.get(0));
     assert Arrays.equals(pallasOpenEnvelopes, readBytesVecPayload(topUpInitFields.get(1)));
     final List<byte[]> topUpNoteFields = fieldPayloads(topUpInitFields.get(2));
-    assert Arrays.equals(note.noteCommitment(), readFixedArrayPayload(topUpNoteFields.get(0), 32));
-    assert Arrays.equals(note.spendNullifier(), readFixedArrayPayload(topUpNoteFields.get(1), 32));
+    assert Arrays.equals(note.noteCommitment(), readPackedArrayPayload(topUpNoteFields.get(0), 32));
+    assert Arrays.equals(note.spendNullifier(), readPackedArrayPayload(topUpNoteFields.get(1), 32));
     assertOptionNone(topUpInitFields.get(3));
     assertOptionNone(topUpInitFields.get(4));
     assertOptionNone(topUpInitFields.get(5));
@@ -2640,6 +2642,31 @@ public final class KagemushaRecursiveSpendProverTest {
     assertOptionNone(verifyFields.get(2));
   }
 
+  private static void javaTopUpArchiveMatchesSharedRustFixture() {
+    final KagemushaRecursiveSpendRequestCodecs.SpendableNoteDescriptor note = sampleNote();
+    final byte[] topUpInit =
+        KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendTopUpInitRequest(
+            sampleRecordBundle(), pallasOpenEnvelopeVectorArchive(), note, null);
+    final byte[] archive =
+        KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendTopUpRequest(
+            sampleRecipient(), sampleAssetDefinition(), note.amount, topUpInit, null);
+    Path directory = Path.of("").toAbsolutePath();
+    while (directory != null) {
+      final Path fixture =
+          directory.resolve("crates/iroha_data_model/tests/fixtures/kagemusha_topup_request_kotlin.bin");
+      if (Files.isRegularFile(fixture)) {
+        try {
+          assert Arrays.equals(Files.readAllBytes(fixture), archive)
+              : "Java top-up encoder output drifted from the Rust compatibility fixture";
+          return;
+        } catch (final IOException error) {
+          throw new AssertionError("failed to read Kotlin top-up fixture", error);
+        }
+      }
+      directory = directory.getParent();
+    }
+  }
+
   private static void typedEvidenceHelpersAssembleCheckedProofArchives() {
     final ProofFixture unshieldFixture =
         proofFixture(
@@ -2667,9 +2694,39 @@ public final class KagemushaRecursiveSpendProverTest {
         unshieldFixture.commitment,
         readFixedArrayPayload(optionSomePayload(attachmentFields.get(3)), 32));
     assert Arrays.equals(
-        Blake2b.digest256(unshieldFixture.envelopeArchive),
+        irohaHash(unshieldFixture.envelopeArchive),
         readFixedArrayPayload(optionSomePayload(attachmentFields.get(4)), 32));
     assertOptionNone(attachmentFields.get(5));
+
+    final byte[] unshieldVerifierKey =
+        zk1VerifierKey(KagemushaRecursiveSpendRequestCodecs.CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID);
+    final byte[] unshieldVerifierRecord =
+        KagemushaRecursiveSpendRequestCodecs.encodeConfidentialUnshieldV3VerifierRecordArchive(
+            unshieldVerifierKey);
+    assertArchiveSchema(
+        unshieldVerifierRecord, KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFYING_KEY_RECORD);
+    final List<byte[]> unshieldRecordFields =
+        requestFields(
+            unshieldVerifierRecord,
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFYING_KEY_RECORD);
+    assert unshieldRecordFields.size() == 17;
+    assert readU32Payload(unshieldRecordFields.get(0)) == 1L;
+    assert Arrays.equals(
+        irohaHash(CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA),
+        readPackedArrayPayload(unshieldRecordFields.get(6), 32));
+    assert readU32Payload(unshieldRecordFields.get(16)) == 1L;
+
+    final ProofAttachment typedAttachment =
+        KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachmentValue(
+            unshieldFixture.proofOutputArchive,
+            new KagemushaRecursiveSpendRequestCodecs.VerifierRecordRef(
+                "halo2/ipa:" + unshieldFixture.verifierKeyName, unshieldVerifierRecord));
+    assert "halo2/ipa".equals(typedAttachment.backend());
+    assert Arrays.equals(unshieldFixture.envelopeArchive, typedAttachment.proofBytes());
+    assert "halo2/ipa".equals(typedAttachment.verifyingKeyRef().backend());
+    assert unshieldFixture.verifierKeyName.equals(typedAttachment.verifyingKeyRef().name());
+    assert Arrays.equals(unshieldFixture.commitment, typedAttachment.verifyingKeyCommitment());
+    assert Arrays.equals(irohaHash(unshieldFixture.envelopeArchive), typedAttachment.envelopeHash());
 
     final byte[] rootBefore = repeat((byte) 0x31, 32);
     final byte[] rootAfter = repeat((byte) 0x32, 32);
@@ -2683,6 +2740,21 @@ public final class KagemushaRecursiveSpendProverTest {
             "kagemusha-test-chain",
             asset,
             rootAfter);
+
+    final byte[] transferVerifierRecord =
+        KagemushaRecursiveSpendRequestCodecs.encodeConfidentialTransferV2VerifierRecordArchive(
+            zk1VerifierKey(KagemushaRecursiveSpendRequestCodecs.CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID));
+    assertArchiveSchema(
+        KagemushaRecursiveSpendRequestCodecs.buildVerifiedFoldRecordBundle(
+            Arrays.asList(
+                new KagemushaRecursiveSpendRequestCodecs.VerifiedFoldHopEvidence(
+                    transferFixture.proofOutputArchive,
+                    new KagemushaRecursiveSpendRequestCodecs.VerifierRecordRef(
+                        "halo2/ipa:" + transferFixture.verifierKeyName, transferVerifierRecord),
+                    "kagemusha-test-chain",
+                    asset,
+                    rootAfter))),
+        KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE);
 
     final byte[] recordBundle =
         KagemushaRecursiveSpendRequestCodecs.buildVerifiedFoldRecordBundle(
@@ -2699,10 +2771,10 @@ public final class KagemushaRecursiveSpendProverTest {
     final List<byte[]> steps = sequencePayloads(bundleFields.get(2));
     assert steps.size() == 1;
     final List<byte[]> stepFields = fieldPayloads(steps.get(0));
-    assert Arrays.equals(rootBefore, readFixedArrayPayload(stepFields.get(0), 32));
+    assert Arrays.equals(rootBefore, readPackedArrayPayload(stepFields.get(0), 32));
     assert Arrays.equals(repeat((byte) 0x43, 32), readFixed32VecPayload(stepFields.get(1)).get(0));
     assert Arrays.equals(repeat((byte) 0x44, 32), readFixed32VecPayload(stepFields.get(2)).get(0));
-    assert Arrays.equals(rootAfter, readFixedArrayPayload(stepFields.get(3), 32));
+    assert Arrays.equals(rootAfter, readPackedArrayPayload(stepFields.get(3), 32));
     assert "halo2/ipa".equals(readStringPayload(fieldPayloads(stepFields.get(4)).get(0)));
     assert "halo2/ipa".equals(readStringPayload(fieldPayloads(stepFields.get(5)).get(0)));
 
@@ -3485,8 +3557,6 @@ public final class KagemushaRecursiveSpendProverTest {
           "pallasOpenEnvelopes[0].params.g length must equal params.n"},
       {pallasOpenEnvelopeVectorArchive(spec -> spec.proofLSequencePayload = testPayload(child -> child.writeUInt(3, 64))),
           "pallasOpenEnvelopes[0].proof round count mismatch: expected 2, found count prefix"},
-      {pallasOpenEnvelopeVectorArchive(spec -> spec.vkCommitmentPayload = fixedArrayPayload((byte) 0x70, 32)),
-          "pallasOpenEnvelopes[0].vk_commitment must be exactly 32 bytes"},
       {pallasOpenEnvelopeVectorArchive(
               spec -> spec.vkCommitmentOptionPayload = testOptionRawWithTrailingByte(repeat((byte) 0x70, 32))),
           "pallasOpenEnvelopes[0].vk_commitment"},
@@ -3495,9 +3565,6 @@ public final class KagemushaRecursiveSpendProverTest {
       {pallasOpenEnvelopeVectorArchive(
               spec -> spec.vkCommitmentOptionPayload = testOptionRawWithDeclaredLengthTooLong(repeat((byte) 0x70, 32))),
           "pallasOpenEnvelopes[0].vk_commitment payload length mismatch"},
-      {pallasOpenEnvelopeVectorArchive(
-              spec -> spec.publicInputsSchemaHashPayload = fixedArrayPayload((byte) 0x71, 32)),
-          "pallasOpenEnvelopes[0].public_inputs_schema_hash must be exactly 32 bytes"},
       {pallasOpenEnvelopeVectorArchive(
               spec ->
                   spec.publicInputsSchemaHashOptionPayload =
@@ -3510,8 +3577,6 @@ public final class KagemushaRecursiveSpendProverTest {
                   spec.publicInputsSchemaHashOptionPayload =
                       testOptionRawWithDeclaredLengthTooLong(repeat((byte) 0x71, 32))),
           "pallasOpenEnvelopes[0].public_inputs_schema_hash payload length mismatch"},
-      {pallasOpenEnvelopeVectorArchive(spec -> spec.domainTagPayload = fixedArrayPayload((byte) 0x72, 32)),
-          "pallasOpenEnvelopes[0].domain_tag must be exactly 32 bytes"},
       {pallasOpenEnvelopeVectorArchive(
               spec -> spec.domainTagOptionPayload = testOptionRawWithTrailingByte(repeat((byte) 0x72, 32))),
           "pallasOpenEnvelopes[0].domain_tag"},
@@ -3755,8 +3820,6 @@ public final class KagemushaRecursiveSpendProverTest {
           "previousProofOpenEnvelopes[0].params.g length must equal params.n"},
       {pallasOpenEnvelopeVectorArchive(spec -> spec.proofLSequencePayload = testPayload(child -> child.writeUInt(3, 64))),
           "previousProofOpenEnvelopes[0].proof round count mismatch: expected 2, found count prefix"},
-      {pallasOpenEnvelopeVectorArchive(spec -> spec.vkCommitmentPayload = fixedArrayPayload((byte) 0x70, 32)),
-          "previousProofOpenEnvelopes[0].vk_commitment must be exactly 32 bytes"},
       {pallasOpenEnvelopeVectorArchive(
               spec -> spec.vkCommitmentOptionPayload = testOptionRawWithTrailingByte(repeat((byte) 0x70, 32))),
           "previousProofOpenEnvelopes[0].vk_commitment"},
@@ -3765,9 +3828,6 @@ public final class KagemushaRecursiveSpendProverTest {
       {pallasOpenEnvelopeVectorArchive(
               spec -> spec.vkCommitmentOptionPayload = testOptionRawWithDeclaredLengthTooLong(repeat((byte) 0x70, 32))),
           "previousProofOpenEnvelopes[0].vk_commitment payload length mismatch"},
-      {pallasOpenEnvelopeVectorArchive(
-              spec -> spec.publicInputsSchemaHashPayload = fixedArrayPayload((byte) 0x71, 32)),
-          "previousProofOpenEnvelopes[0].public_inputs_schema_hash must be exactly 32 bytes"},
       {pallasOpenEnvelopeVectorArchive(
               spec ->
                   spec.publicInputsSchemaHashOptionPayload =
@@ -3780,8 +3840,6 @@ public final class KagemushaRecursiveSpendProverTest {
                   spec.publicInputsSchemaHashOptionPayload =
                       testOptionRawWithDeclaredLengthTooLong(repeat((byte) 0x71, 32))),
           "previousProofOpenEnvelopes[0].public_inputs_schema_hash payload length mismatch"},
-      {pallasOpenEnvelopeVectorArchive(spec -> spec.domainTagPayload = fixedArrayPayload((byte) 0x72, 32)),
-          "previousProofOpenEnvelopes[0].domain_tag must be exactly 32 bytes"},
       {pallasOpenEnvelopeVectorArchive(
               spec -> spec.domainTagOptionPayload = testOptionRawWithTrailingByte(repeat((byte) 0x72, 32))),
           "previousProofOpenEnvelopes[0].domain_tag"},
@@ -4415,7 +4473,7 @@ public final class KagemushaRecursiveSpendProverTest {
             writeTestField(encoder, child -> writeTestString(child, "offline_kagemusha"));
             writeTestField(encoder, child -> child.writeUInt(0, 32));
             writeTestField(encoder, child -> writeTestString(child, "pallas"));
-            writeTestField(encoder, child -> child.writeBytes(Blake2b.digest256(schema)));
+            writeTestField(encoder, child -> child.writeBytes(irohaHash(schema)));
             writeTestField(encoder, child -> child.writeBytes(commitment));
             writeTestField(encoder, child -> child.writeUInt(verifierKey.length, 32));
             writeTestField(encoder, child -> child.writeUInt(192 * 1024, 32));
@@ -4434,7 +4492,7 @@ public final class KagemushaRecursiveSpendProverTest {
                               writeTestField(box, field -> writeTestString(field, "halo2/ipa"));
                               writeTestField(box, field -> writeTestBytesVec(field, verifierKey));
                             })));
-            writeTestField(encoder, child -> child.writeUInt(status, 8));
+            writeTestField(encoder, child -> child.writeUInt(status, 32));
           }
 
           @Override
@@ -5623,6 +5681,13 @@ public final class KagemushaRecursiveSpendProverTest {
     return bytes;
   }
 
+  private static byte[] readPackedArrayPayload(final byte[] payload, final int expectedSize) {
+    final NoritoDecoder decoder = new NoritoDecoder(payload, NoritoHeader.COMPACT_LEN);
+    final byte[] bytes = decoder.readBytes(expectedSize);
+    assert decoder.remaining() == 0;
+    return bytes;
+  }
+
   private static String readStringPayload(final byte[] payload) {
     final NoritoDecoder decoder = new NoritoDecoder(payload, NoritoHeader.COMPACT_LEN);
     final long length = decoder.readLength(true);
@@ -5635,6 +5700,13 @@ public final class KagemushaRecursiveSpendProverTest {
   private static long readU64Payload(final byte[] payload) {
     final NoritoDecoder decoder = new NoritoDecoder(payload, NoritoHeader.COMPACT_LEN);
     final long value = decoder.readUInt(64);
+    assert decoder.remaining() == 0;
+    return value;
+  }
+
+  private static long readU32Payload(final byte[] payload) {
+    final NoritoDecoder decoder = new NoritoDecoder(payload, NoritoHeader.COMPACT_LEN);
+    final long value = decoder.readUInt(32);
     assert decoder.remaining() == 0;
     return value;
   }
@@ -6052,6 +6124,12 @@ public final class KagemushaRecursiveSpendProverTest {
     } catch (final NoSuchAlgorithmException ex) {
       throw new AssertionError("SHA-256 is unavailable", ex);
     }
+  }
+
+  private static byte[] irohaHash(final byte[] value) {
+    final byte[] digest = Blake2b.digest256(value);
+    digest[digest.length - 1] = (byte) (digest[digest.length - 1] | 0x01);
+    return digest;
   }
 
   private static String sha256Hex(final byte[] bytes) {

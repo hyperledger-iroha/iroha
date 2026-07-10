@@ -14,6 +14,8 @@ import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.address.AccountAddress.AccountAddressException;
 import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
 import org.hyperledger.iroha.android.crypto.Blake2b;
+import org.hyperledger.iroha.android.model.instructions.ProofAttachment;
+import org.hyperledger.iroha.android.model.instructions.ProofVerifierKeyRef;
 import org.hyperledger.iroha.norito.NoritoCodec;
 import org.hyperledger.iroha.norito.NoritoDecoder;
 import org.hyperledger.iroha.norito.NoritoEncoder;
@@ -74,6 +76,9 @@ public final class KagemushaRecursiveSpendRequestCodecs {
   private static final String CONFIDENTIAL_UNSHIELD_ALGORITHM_ID = "unshield";
   private static final String CONFIDENTIAL_UNSHIELD_ENTRYPOINT = "buildConfidentialUnshieldProofV3";
   private static final String CONFIDENTIAL_RECORD_CURVE = "pallas";
+  private static final int CONFIDENTIAL_TRANSFER_V2_VK_RECORD_VERSION = 3;
+  private static final int CONFIDENTIAL_UNSHIELD_V3_VK_RECORD_VERSION = 1;
+  private static final String CONFIDENTIAL_VK_RECORD_GAS_SCHEDULE_ID = "halo2_default";
   private static final int ZK1_MAX_TLV_BYTES = 8 * 1024 * 1024;
   private static final int ZK1_MAX_INSTANCE_COLUMNS = 64;
   private static final int ZK1_MAX_INSTANCE_ROWS = 8192;
@@ -115,6 +120,76 @@ public final class KagemushaRecursiveSpendRequestCodecs {
   public static byte[] encodeRedeemRequest(final RedeemSpendRequest request) {
     return NoritoCodec.encode(
         Objects.requireNonNull(request, "request"), SCHEMA_REDEEM_REQUEST, REDEEM_REQUEST_ADAPTER, REQUEST_FLAGS);
+  }
+
+  /** Builds a canonical confidential-transfer-v2 verifier record from inline verifier-key bytes. */
+  public static byte[] encodeConfidentialTransferV2VerifierRecordArchive(
+      final byte[] verifierKeyBytes) {
+    return encodeConfidentialVerifierRecordArchive(
+        verifierKeyBytes,
+        CONFIDENTIAL_TRANSFER_V2_VK_RECORD_VERSION,
+        CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+        CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA);
+  }
+
+  /** Builds a canonical confidential-unshield-v3 verifier record from inline verifier-key bytes. */
+  public static byte[] encodeConfidentialUnshieldV3VerifierRecordArchive(
+      final byte[] verifierKeyBytes) {
+    return encodeConfidentialVerifierRecordArchive(
+        verifierKeyBytes,
+        CONFIDENTIAL_UNSHIELD_V3_VK_RECORD_VERSION,
+        CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
+        CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA);
+  }
+
+  private static byte[] encodeConfidentialVerifierRecordArchive(
+      final byte[] verifierKeyBytes,
+      final int version,
+      final String circuitId,
+      final byte[] publicInputsSchema) {
+    require(verifierKeyBytes != null && verifierKeyBytes.length > 0, "verifierKeyBytes must not be empty");
+    final byte[] vkBytes = Arrays.copyOf(verifierKeyBytes, verifierKeyBytes.length);
+    final byte[] commitment = verifyingKeyCommitment(ZK_BACKEND_HALO2_IPA, vkBytes);
+    final byte[] schemaHash = irohaHash(publicInputsSchema);
+    return NoritoCodec.encode(
+        null,
+        SCHEMA_VERIFYING_KEY_RECORD,
+        new TypeAdapter<Void>() {
+          @Override
+          public void encode(final NoritoEncoder encoder, final Void value) {
+            writeField(encoder, child -> child.writeUInt(version, 32));
+            writeField(encoder, child -> writeString(child, circuitId));
+            writeField(encoder, child -> writeOptionRaw(child, null));
+            writeField(encoder, child -> writeString(child, KAGEMUSHA_VERIFIER_NAMESPACE));
+            writeField(encoder, child -> child.writeUInt(BACKEND_TAG_HALO2_IPA_PASTA, 32));
+            writeField(encoder, child -> writeString(child, CONFIDENTIAL_RECORD_CURVE));
+            writeField(encoder, child -> child.writeBytes(schemaHash));
+            writeField(encoder, child -> child.writeBytes(commitment));
+            writeField(encoder, child -> child.writeUInt(vkBytes.length, 32));
+            writeField(encoder, child -> child.writeUInt(CONFIDENTIAL_V2_MAX_PROOF_BYTES, 32));
+            writeField(
+                encoder,
+                child ->
+                    writeOptionRaw(
+                        child, optionStringPayload(CONFIDENTIAL_VK_RECORD_GAS_SCHEDULE_ID)));
+            writeField(encoder, child -> writeOptionRaw(child, null));
+            writeField(encoder, child -> writeOptionRaw(child, null));
+            writeField(encoder, child -> writeOptionRaw(child, null));
+            writeField(encoder, child -> writeOptionRaw(child, null));
+            writeField(
+                encoder,
+                child ->
+                    writeOptionRaw(
+                        child, verifyingKeyBoxPayload(ZK_BACKEND_HALO2_IPA, vkBytes)));
+            writeField(encoder, child -> child.writeUInt(CONFIDENTIAL_STATUS_ACTIVE, 32));
+          }
+
+          @Override
+          public Void decode(final NoritoDecoder decoder) {
+            throw new UnsupportedOperationException("VerifyingKeyRecord archives are encode-only");
+          }
+        },
+        REQUEST_FLAGS);
   }
 
   public static byte[] buildPallasOpenEnvelopesArchive(final List<VerifiedFoldHopEvidence> hops) {
@@ -163,6 +238,30 @@ public final class KagemushaRecursiveSpendRequestCodecs {
 
   public static byte[] buildRedeemProofAttachment(
       final byte[] unshieldProofOutputArchive, final VerifierRecordRef unshieldVerifierRecord) {
+    final RedeemProofAttachmentInputs inputs =
+        decodeRedeemProofAttachmentInputs(unshieldProofOutputArchive, unshieldVerifierRecord);
+    return NoritoCodec.encode(
+        proofAttachmentPayload(inputs.envelope, inputs.verifierRecord),
+        SCHEMA_PROOF_ATTACHMENT,
+        RAW_PAYLOAD_ADAPTER,
+        REQUEST_FLAGS);
+  }
+
+  /** Builds a typed proof attachment for {@code UnshieldInstruction.Builder.setProof}. */
+  public static ProofAttachment buildRedeemProofAttachmentValue(
+      final byte[] unshieldProofOutputArchive, final VerifierRecordRef unshieldVerifierRecord) {
+    final RedeemProofAttachmentInputs inputs =
+        decodeRedeemProofAttachmentInputs(unshieldProofOutputArchive, unshieldVerifierRecord);
+    return new ProofAttachment(
+        ZK_BACKEND_HALO2_IPA,
+        inputs.envelope.archive,
+        new ProofVerifierKeyRef(inputs.verifierRecord.id.backend, inputs.verifierRecord.id.name),
+        inputs.verifierRecord.commitment,
+        irohaHash(inputs.envelope.archive));
+  }
+
+  private static RedeemProofAttachmentInputs decodeRedeemProofAttachmentInputs(
+      final byte[] unshieldProofOutputArchive, final VerifierRecordRef unshieldVerifierRecord) {
     require(unshieldProofOutputArchive != null, "unshieldProofOutputArchive is required");
     require(unshieldVerifierRecord != null, "unshieldVerifierRecord is required");
     final PrivacyBuildResult proof =
@@ -180,11 +279,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
             CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA,
             proof.proof.length,
             "unshieldVerifierRecord");
-    return NoritoCodec.encode(
-        proofAttachmentPayload(envelope, verifierRecord),
-        SCHEMA_PROOF_ATTACHMENT,
-        RAW_PAYLOAD_ADAPTER,
-        REQUEST_FLAGS);
+    return new RedeemProofAttachmentInputs(envelope, verifierRecord);
   }
 
   public static byte[] buildRecursiveSpendInitRequest(
@@ -1915,7 +2010,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     require(expectedCircuitId.equals(record.circuitId), label + " circuit_id must be " + expectedCircuitId);
     require(expectedCircuitId.equals(envelope.circuitId), label + " envelope circuit_id must be " + expectedCircuitId);
     require(Arrays.equals(envelope.publicInputs, expectedSchema), label + " public-input schema mismatch");
-    require(Arrays.equals(record.publicInputsSchemaHash, Blake2b.digest256(expectedSchema)),
+    require(Arrays.equals(record.publicInputsSchemaHash, irohaHash(expectedSchema)),
         label + " public_inputs_schema_hash mismatch");
     require(Arrays.equals(record.commitment, envelope.vkHash), label + " commitment must match envelope vk_hash");
     require(record.maxProofBytes > 0, label + " max_proof_bytes must be non-zero");
@@ -1957,7 +2052,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
               final byte[] keyPayload = readOptionRawPayload(child);
               return keyPayload == null ? null : readVerifyingKeyBoxPayload(keyPayload, label + ".key");
             });
-    final int status = readField(decoder, child -> checkedInt(child.readUInt(8), label + ".status"));
+    final int status = readField(decoder, child -> checkedInt(child.readUInt(32), label + ".status"));
     require(decoder.remaining() == 0, "Trailing bytes after " + label);
     return new DecodedVerifierRecord(
         circuitId,
@@ -2060,7 +2155,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     writeField(encoder, child -> writeProofBox(child, envelope.archive));
     writeField(encoder, child -> writeVerifierKeyId(child, verifierRecord.id));
     writeField(encoder, child -> writeOptionFixed32(child, verifierRecord.commitment));
-    writeField(encoder, child -> writeOptionFixed32(child, Blake2b.digest256(envelope.archive)));
+    writeField(encoder, child -> writeOptionFixed32(child, irohaHash(envelope.archive)));
     writeField(encoder, child -> writeOptionRaw(child, null));
     return encoder.toByteArray();
   }
@@ -2072,10 +2167,10 @@ public final class KagemushaRecursiveSpendRequestCodecs {
       writeField(
           encoder,
           step -> {
-            writeField(step, child -> writeConstVec(child, hop.publicInputs.rootBefore));
+            writeField(step, child -> writePackedFixed32(child, hop.publicInputs.rootBefore));
             writeField(step, child -> writeFixed32Vec(child, hop.publicInputs.inputNullifiers));
             writeField(step, child -> writeFixed32Vec(child, hop.publicInputs.outputCommitments));
-            writeField(step, child -> writeConstVec(child, hop.rootAfter));
+            writeField(step, child -> writePackedFixed32(child, hop.rootAfter));
             writeRawField(step, proofAttachmentPayload(hop.envelope, hop.verifierRecord));
             writeRawField(step, verifyingKeyBoxPayload(hop.verifierRecord.key.backend, hop.verifierRecord.key.bytes));
           });
@@ -2438,8 +2533,9 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     if (payload == null) {
       throw new IllegalArgumentException(field + " is required");
     }
-    require(payload.length == 32, field + " must be exactly 32 bytes");
-    final byte[] value = Arrays.copyOf(payload, payload.length);
+    final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+    final byte[] value = readFixedBytes(child, 32, field);
+    require(child.remaining() == 0, "Trailing bytes after " + field);
     require(!isZero(value), field + " must be non-zero");
     return value;
   }
@@ -2720,9 +2816,19 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     }
   }
 
+  private static void writePackedFixed32(final NoritoEncoder encoder, final byte[] value) {
+    encoder.writeBytes(fixedBytes(value, 32, "packed fixed32"));
+  }
+
   private static byte[] fixed32Payload(final byte[] value) {
     final NoritoEncoder encoder = new NoritoEncoder(NoritoHeader.COMPACT_LEN);
     writeConstVec(encoder, fixedBytes(value, 32, "fixed32"));
+    return encoder.toByteArray();
+  }
+
+  private static byte[] optionStringPayload(final String value) {
+    final NoritoEncoder encoder = new NoritoEncoder(NoritoHeader.COMPACT_LEN);
+    writeString(encoder, value);
     return encoder.toByteArray();
   }
 
@@ -2759,8 +2865,8 @@ public final class KagemushaRecursiveSpendRequestCodecs {
   }
 
   private static void writeSpendableNote(final NoritoEncoder encoder, final SpendableNoteDescriptor value) {
-    writeField(encoder, child -> writeConstVec(child, value.noteCommitment()));
-    writeField(encoder, child -> writeConstVec(child, value.spendNullifier()));
+    writeField(encoder, child -> writePackedFixed32(child, value.noteCommitment()));
+    writeField(encoder, child -> writePackedFixed32(child, value.spendNullifier()));
     writeField(encoder, child -> writeNumeric(child, value.amount));
   }
 
@@ -3014,7 +3120,9 @@ public final class KagemushaRecursiveSpendRequestCodecs {
 
   private static void writePublicKey(
       final NoritoEncoder encoder, final int curveId, final byte[] publicKey) {
-    writeConstVec(encoder, publicKeyCompactPayload(curveId, publicKey));
+    final byte[] payload = publicKeyCompactPayload(curveId, publicKey);
+    encoder.writeUInt(payload.length, 64);
+    writeConstVec(encoder, payload);
   }
 
   private static byte[] publicKeyCompactPayload(final int curveId, final byte[] publicKey) {
@@ -3449,6 +3557,17 @@ public final class KagemushaRecursiveSpendRequestCodecs {
 
     PrivacyBuildResult(final byte[] proof) {
       this.proof = Arrays.copyOf(proof, proof.length);
+    }
+  }
+
+  private static final class RedeemProofAttachmentInputs {
+    final OpenVerifyEnvelopeValue envelope;
+    final VerifierRecordValue verifierRecord;
+
+    RedeemProofAttachmentInputs(
+        final OpenVerifyEnvelopeValue envelope, final VerifierRecordValue verifierRecord) {
+      this.envelope = envelope;
+      this.verifierRecord = verifierRecord;
     }
   }
 
