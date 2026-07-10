@@ -87,7 +87,7 @@ Logs:
   - `signature` (hex Ed25519)
 - **Reglas de normalización.** Los campos se ordenan alfabéticamente antes de firmar para asegurar serialización canónica. Los valores numéricos se representan como enteros; los tiempos usan segundos Unix epoch.
 - **Alineación con el scoreboard.** El scoreboard del orquestador ingiere estos campos directamente, mapeando `max_streams`, `ttl_epoch` y `rate_limit_bytes` a factores de disponibilidad y penalización. Señales adicionales (por ejemplo, salud del token) derivan de la telemetría de emisión usando `token_id`.
-- **Helpers de validación.** El crate compartido en Rust `sorafs_token_schema` expondrá `Token::sign` / `Token::verify` y validación de esquema para minimizar duplicación entre los binarios del gateway y el orquestador.
+- **Helpers de validación.** El crate compartido en Rust `sorafs_manifest::{StreamTokenBodyV1, StreamTokenV1}` expondrá `Token::sign` / `Token::verify` y validación de esquema para minimizar duplicación entre los binarios del gateway y el orquestador.
 
 ## API segura de emisión de tokens
 

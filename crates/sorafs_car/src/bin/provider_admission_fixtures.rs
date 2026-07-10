@@ -8,6 +8,7 @@ use std::{
 
 use ed25519_dalek::{Signer, SigningKey};
 use hex::FromHex;
+use iroha_crypto::{BlsNormal, KeyGenOption, KeyPair};
 use norito::json::{Map, Value, to_string_pretty};
 use sorafs_car::CarBuildPlan;
 use sorafs_chunker::ChunkProfile;
@@ -16,11 +17,13 @@ use sorafs_manifest::{
     CapabilityType, CouncilSignature, ENDPOINT_ATTESTATION_VERSION_V1, EndpointAdmissionV1,
     EndpointAttestationKind, EndpointAttestationV1, EndpointKind,
     PROVIDER_ADMISSION_RENEWAL_VERSION_V1, PROVIDER_ADMISSION_REVOCATION_VERSION_V1,
-    PathDiversityPolicy, ProviderAdmissionEnvelopeError, ProviderAdmissionEnvelopeV1,
-    ProviderAdmissionProposalV1, ProviderAdmissionRenewalV1, ProviderAdmissionRevocationV1,
-    ProviderAdvertBodyV1, ProviderAdvertV1, ProviderCapabilityRangeV1, QosHints, RendezvousTopic,
+    PathDiversityPolicy, ProviderAdmissionCouncilPolicy, ProviderAdmissionEnvelopeError,
+    ProviderAdmissionEnvelopeV1, ProviderAdmissionProposalV1, ProviderAdmissionRenewalV1,
+    ProviderAdmissionRevocationV1, ProviderAdvertBodyV1, ProviderAdvertV1,
+    ProviderCapabilityRangeV1, ProviderVrfPublicKeyV1, QosHints, RendezvousTopic,
     SignatureAlgorithm, StakePointer, StreamBudgetV1, TransportHintV1, TransportProtocol,
-    chunker_registry, compute_advert_body_digest, compute_envelope_digest, compute_proposal_digest,
+    chunker_registry, compute_advert_body_digest, compute_envelope_authorization_digest,
+    compute_envelope_digest, compute_proposal_digest, verify_advert_against_record,
     verify_revocation_signatures,
 };
 
@@ -31,7 +34,6 @@ const DEFAULT_OUTPUT_DIR: &str = "fixtures/sorafs_manifest/provider_admission";
 
 const PROVIDER_ID_HEX: &str = "0a0b0c0d0e0f0011223344556677889900aa0bb0ccddeeff1122334455667788";
 const STAKE_POOL_ID_HEX: &str = "99887766554433221100ffeeddccbbaa99887766554433221100ffeeddccbbaa";
-const ADVERT_KEY_HEX: &str = "0101010101010101010101010101010101010101010101010101010101010101";
 const PROVIDER_ENDPOINT_TORII: &str = "torii:cluster.primary.svc.local";
 const PROVIDER_ENDPOINT_QUIC: &str = "quic:cluster.primary.svc.local";
 const RENDEZVOUS_TOPIC: &str = "sorafs.sf1.primary";
@@ -97,10 +99,11 @@ fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::erro
 
     let provider_id = decode_hex_array(PROVIDER_ID_HEX)?;
     let stake_pool_id = decode_hex_array(STAKE_POOL_ID_HEX)?;
-    let advert_key = decode_hex_array(ADVERT_KEY_HEX)?;
-
     let provider_signing_key = SigningKey::from_bytes(&PROVIDER_SIGNING_KEY_BYTES);
     let council_key = SigningKey::from_bytes(&COUNCIL_KEY_BYTES);
+    let advert_key = *provider_signing_key.verifying_key().as_bytes();
+    let council_policy =
+        ProviderAdmissionCouncilPolicy::new([*council_key.verifying_key().as_bytes()], 1)?;
 
     let proposal_v1 = build_proposal(ProposalParams {
         namespace: descriptor.namespace,
@@ -122,7 +125,8 @@ fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::erro
         600,
         &council_key,
     )?;
-    let record_v1 = AdmissionRecord::new(envelope_v1.clone())?;
+    let record_v1 = AdmissionRecord::new(envelope_v1.clone(), &council_policy)?;
+    verify_advert_against_record(&advert_v1, &record_v1)?;
 
     write_binary(out_dir, "proposal_v1.to", &norito::to_bytes(&proposal_v1)?)?;
     write_json(
@@ -176,7 +180,8 @@ fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::erro
         notes: Some("stake top-up 2025-03".into()),
     };
     // Ensure renewal respects invariants.
-    let _ = record_v1.apply_renewal(&renewal)?;
+    let renewed_record = record_v1.apply_renewal(&renewal, &council_policy)?;
+    verify_advert_against_record(&advert_v2, &renewed_record)?;
 
     write_binary(out_dir, "proposal_v2.to", &norito::to_bytes(&proposal_v2)?)?;
     write_binary(out_dir, "advert_v2.to", &norito::to_bytes(&advert_v2)?)?;
@@ -203,8 +208,8 @@ fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::erro
         signer: *council_key.verifying_key().as_bytes(),
         signature: revocation_signature.to_bytes().to_vec(),
     });
-    verify_revocation_signatures(&revocation)?;
-    record_v1.verify_revocation(&revocation)?;
+    verify_revocation_signatures(&revocation, &council_policy)?;
+    record_v1.verify_revocation(&revocation, &council_policy)?;
 
     write_binary(out_dir, "revocation_v1.to", &norito::to_bytes(&revocation)?)?;
     write_json(
@@ -282,6 +287,11 @@ fn build_proposal(params: ProposalParams<'_>) -> ProviderAdmissionProposalV1 {
     .to_bytes()
     .expect("encode range capability");
 
+    let (vrf_public, vrf_private) =
+        BlsNormal::keypair(KeyGenOption::UseSeed(params.provider_id.to_vec()))
+            .expect("derive fixture provider VRF key");
+    let vrf_pair: KeyPair = (vrf_public, vrf_private).into();
+
     ProviderAdmissionProposalV1 {
         version: 1,
         provider_id: params.provider_id,
@@ -338,6 +348,14 @@ fn build_proposal(params: ProposalParams<'_>) -> ProviderAdmissionProposalV1 {
             },
         ],
         advert_key: params.advert_key,
+        por_vrf_key: ProviderVrfPublicKeyV1::BlsNormal(
+            vrf_pair
+                .public_key()
+                .to_bytes()
+                .1
+                .try_into()
+                .expect("Normal BLS public key is 48 bytes"),
+        ),
         jurisdiction_code: "US".into(),
         contact_uri: Some("mailto:ops@example.com".into()),
         stream_budget: Some(StreamBudgetV1 {
@@ -395,9 +413,7 @@ fn build_advert(
         stream_budget: proposal.stream_budget,
         transport_hints: proposal.transport_hints.clone(),
     };
-    let body_bytes = norito::to_bytes(&body)?;
-    let signature = provider_key.sign(&body_bytes);
-    Ok(ProviderAdvertV1 {
+    let mut advert = ProviderAdvertV1 {
         version: 1,
         issued_at,
         expires_at: retention_epoch,
@@ -405,11 +421,15 @@ fn build_advert(
         signature: AdvertSignature {
             algorithm: SignatureAlgorithm::Ed25519,
             public_key: provider_key.verifying_key().as_bytes().to_vec(),
-            signature: signature.to_bytes().to_vec(),
+            signature: vec![0; 64],
         },
         signature_strict: true,
         allow_unknown_capabilities: false,
-    })
+    };
+    let payload = advert.signature_payload_bytes()?;
+    advert.signature.signature = provider_key.sign(&payload).to_bytes().to_vec();
+    advert.verify_signature()?;
+    Ok(advert)
 }
 
 fn build_envelope(
@@ -432,13 +452,7 @@ fn build_envelope(
         }
     })?;
 
-    let signature = council_key.sign(&proposal_digest);
-    let council_signature = CouncilSignature {
-        signer: *council_key.verifying_key().as_bytes(),
-        signature: signature.to_bytes().to_vec(),
-    };
-
-    let envelope = ProviderAdmissionEnvelopeV1 {
+    let mut envelope = ProviderAdmissionEnvelopeV1 {
         version: 1,
         proposal,
         proposal_digest,
@@ -446,10 +460,24 @@ fn build_envelope(
         advert_body_digest: advert_digest,
         issued_at,
         retention_epoch,
-        council_signatures: vec![council_signature],
+        council_signatures: Vec::new(),
         notes: None,
     };
-    AdmissionRecord::new(envelope.clone()).map(|_| envelope)
+    let authorization_digest =
+        compute_envelope_authorization_digest(&envelope).map_err(|source| {
+            ProviderAdmissionEnvelopeError::Serialization {
+                context: "envelope authorization",
+                source,
+            }
+        })?;
+    let signature = council_key.sign(&authorization_digest);
+    envelope.council_signatures.push(CouncilSignature {
+        signer: *council_key.verifying_key().as_bytes(),
+        signature: signature.to_bytes().to_vec(),
+    });
+    let policy = ProviderAdmissionCouncilPolicy::new([*council_key.verifying_key().as_bytes()], 1)
+        .expect("fixture council policy must be valid");
+    AdmissionRecord::new(envelope.clone(), &policy).map(|_| envelope)
 }
 
 fn build_proposal_summary(proposal: &ProviderAdmissionProposalV1) -> Map {
@@ -542,6 +570,8 @@ fn build_advert_summary(advert: &ProviderAdvertV1) -> Map {
 
 fn build_envelope_summary(envelope: &ProviderAdmissionEnvelopeV1, record: &AdmissionRecord) -> Map {
     let mut map = Map::new();
+    let authorization_digest = compute_envelope_authorization_digest(envelope)
+        .expect("envelope authorization digest should serialize");
     map.insert(
         "proposal_digest_hex".into(),
         Value::from(hex_lower(envelope.proposal_digest)),
@@ -554,6 +584,21 @@ fn build_envelope_summary(envelope: &ProviderAdmissionEnvelopeV1, record: &Admis
         "envelope_digest_hex".into(),
         Value::from(hex_lower(record.envelope_digest())),
     );
+    map.insert(
+        "authorization_digest_hex".into(),
+        Value::from(hex_lower(authorization_digest)),
+    );
+    map.insert(
+        "trusted_council_keys_hex".into(),
+        Value::Array(
+            envelope
+                .council_signatures
+                .iter()
+                .map(|signature| Value::from(hex_lower(signature.signer)))
+                .collect(),
+        ),
+    );
+    map.insert("signature_threshold".into(), Value::from(1_u64));
     map.insert(
         "council_signature_count".into(),
         Value::from(envelope.council_signatures.len() as u64),

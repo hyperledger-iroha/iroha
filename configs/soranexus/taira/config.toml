@@ -99,6 +99,8 @@ known_capabilities = ["torii_gateway", "chunk_range_fetch"]
 
 [sorafs.discovery.admission]
 envelopes_dir = "configs/soranexus/taira/sorafs_admission"
+trusted_council_keys = ["REPLACE_WITH_TAIRA_SORAFS_COUNCIL_PUBLIC_KEY"]
+signature_threshold = "REPLACE_WITH_TAIRA_SORAFS_COUNCIL_SIGNATURE_THRESHOLD"
 
 [sorafs.discovery.publish]
 gateway_base_url = "https://taira.sora.org"
@@ -240,6 +242,7 @@ poll_interval_ms = 10000
 
 [nexus.autoscale]
 enabled = true
+# Legacy names: this half-open lane-id range reserves lane 4 for deterministic creation.
 min_lanes = 4
 max_lanes = 5
 target_block_ms = 1000

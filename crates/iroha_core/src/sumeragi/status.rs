@@ -9230,6 +9230,9 @@ mod tests {
             proposal_view,
             lane_id,
             dataspace_id,
+            lane_incarnation: UntypedHash::new(
+                format!("status-test-lane-incarnation-{seed}").as_bytes(),
+            ),
             lane_block_height,
             lane_block_view,
             subject_hash: UntypedHash::new(format!("status-test-subject-{seed}").as_bytes()),
@@ -9273,6 +9276,9 @@ mod tests {
         let mut descriptor = LaneBlockDescriptorV1 {
             lane_id: LaneId::new(u32::from(seed)),
             dataspace_id: DataSpaceId::new(u64::from(seed) + 100),
+            lane_incarnation: UntypedHash::new(
+                format!("status-test-lane-incarnation-{seed}").as_bytes(),
+            ),
             proposal_height: 1,
             previous_lane_block_height: 0,
             previous_lane_block_descriptor_hash: None,
@@ -9566,6 +9572,7 @@ mod tests {
         let membership_hash = [0x44; 32];
         let prf_seed = [0x55; 32];
         let caps = iroha_p2p::ConsensusConfigCaps {
+            nexus_policy_digest: [0xA5; 32],
             collectors_k: 3,
             redundant_send_r: 2,
             da_enabled: true,
@@ -13435,6 +13442,7 @@ mod tests {
         LaneBlockCommitment {
             block_height,
             lane_id: LaneId::new(lane_id),
+            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::new(dataspace_id),
             tx_count: 1,
             total_local_micro: 10,

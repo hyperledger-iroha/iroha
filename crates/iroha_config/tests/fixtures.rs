@@ -869,9 +869,19 @@ fn minimal_config_snapshot() {
                         "chunk_range_fetch",
                         "vendor_reserved",
                     ],
+                    replay_checkpoint_path: "sorafs_discovery/provider_advert_replay.to",
+                    replay_checkpoint_max_entries: 65536,
                     admission: Some(
                         SorafsAdmission {
                             envelopes_dir: "tests/fixtures/sorafs_admission",
+                            trusted_council_keys: [
+                                PublicKey(
+                                    ed25519(
+                                        "ed01206355691C178A8FF91007A7478AFB955EF7352C63E7B25703984CF78B26E21A56",
+                                    ),
+                                ),
+                            ],
+                            signature_threshold: 1,
                         },
                     ),
                     publish: SorafsPublishDiscovery {
@@ -888,6 +898,11 @@ fn minimal_config_snapshot() {
                     max_parallel_fetches: 32,
                     max_pins: 10000,
                     por_sample_interval_secs: 600,
+                    runtime: SorafsRuntimeRetention {
+                        event_history_limit: 4096,
+                        state_entry_limit: 65536,
+                        checkpoint_max_bytes: Bytes(67108864),
+                    },
                     alias: None,
                     adverts: SorafsAdvertOverrides {
                         stake_pointer: None,
@@ -1077,7 +1092,28 @@ fn minimal_config_snapshot() {
                     epoch_interval_secs: 3600,
                     response_window_secs: 900,
                     governance_dag_dir: "./storage/sorafs/governance",
-                    randomness_seed: None,
+                    drand: SorafsPorDrand {
+                        scheme: "",
+                        chain_hash: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                        public_key: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                        genesis_time: 0,
+                        period_secs: 0,
+                        endpoints: [],
+                        quorum: 2,
+                        max_endpoints: 8,
+                        connect_timeout: 3s,
+                        request_timeout: 5s,
+                        max_body_bytes: 4096,
+                        max_beacon_age_secs: 30,
+                        max_future_skew_secs: 3,
+                        state_path: "./storage/sorafs/governance/drand-high-water.to",
+                    },
+                    vrf_state_path: "./storage/sorafs/governance/provider-vrf-state.to",
+                    vrf_submission_deadline_secs: 300,
+                    vrf_max_entries: 65536,
+                    vrf_retention_epochs: 168,
+                    vrf_max_clock_skew_secs: 60,
+                    auditor_signature_threshold: 1,
                 },
                 sorafs_appeal_finance_settlement: SorafsAppealFinanceSettlement {
                     submitter_signers: [],
@@ -4148,6 +4184,11 @@ fn full_config_parses_fine() {
             "vendor_reserved".to_string()
         ]
     );
+    assert_eq!(
+        sorafs.replay_checkpoint_path,
+        PathBuf::from("sorafs_discovery/test-provider-advert-replay.to")
+    );
+    assert_eq!(sorafs.replay_checkpoint_max_entries.get(), 4_096);
     let admission = sorafs
         .admission
         .as_ref()
@@ -4156,6 +4197,8 @@ fn full_config_parses_fine() {
         admission.envelopes_dir,
         PathBuf::from("tests/fixtures/sorafs_admission")
     );
+    assert_eq!(admission.trusted_council_keys.len(), 1);
+    assert_eq!(admission.signature_threshold.get(), 1);
 
     let alias_policy = cfg.torii.sorafs_alias_cache;
     assert_eq!(alias_policy.positive_ttl.as_secs(), 600);

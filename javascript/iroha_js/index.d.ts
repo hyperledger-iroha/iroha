@@ -12293,6 +12293,8 @@ export function appendSumeragiTelemetrySnapshot(
 export interface SorafsGatewayProviderSpec {
   name: string;
   providerIdHex: string;
+  /** Canonical lowercase Ed25519 public key used to verify the provider stream token. */
+  gatewayPublicKeyHex: string;
   baseUrl: string;
   streamTokenB64: string;
   privacyEventsUrl?: string;

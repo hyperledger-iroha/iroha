@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.android.sorafs;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -17,6 +19,8 @@ import org.hyperledger.iroha.android.client.PlatformHttpTransportExecutor;
 import org.hyperledger.iroha.android.client.HttpTransportExecutor;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
+import org.hyperledger.iroha.android.client.transport.StreamingTransportExecutor;
+import org.hyperledger.iroha.android.client.transport.TransportStreamResponse;
 
 /**
  * Minimal HTTP client that posts orchestrator fetch requests to a SoraFS gateway endpoint.
@@ -24,10 +28,17 @@ import org.hyperledger.iroha.android.client.transport.TransportResponse;
  * <p>The client mirrors the CLI/SDK JSON schema and routes requests through {@link
  * HttpTransportExecutor} so tests can provide deterministic transport fakes. Responses surface the
  * raw HTTP payload allowing callers to parse orchestrator summaries or binary artefacts as needed.
+ * A zero timeout is valid; negative durations are rejected instead of being rewritten.
+ *
+ * <p>Host syntax and literal addresses are validated here. A transport resolving DNS names must
+ * additionally reject non-public answers and pin the approved answer for the request; the generic
+ * executor interface cannot enforce that resolver-level DNS-rebinding boundary.
  */
 public final class SorafsGatewayClient {
 
   private static final String DEFAULT_PATH = "/v1/sorafs/gateway/fetch";
+  private static final int MAX_GATEWAY_REQUEST_BYTES = 32 * 1024 * 1024;
+  private static final int MAX_GATEWAY_RESPONSE_BYTES = 16 * 1024 * 1024;
   private static final RequestPayloadEncoder DEFAULT_JSON_ENCODER =
       request -> JsonWriter.encodeBytes(Objects.requireNonNull(request, "request").toJson());
 
@@ -42,12 +53,14 @@ public final class SorafsGatewayClient {
 
   private SorafsGatewayClient(final Builder builder) {
     this.executor = Objects.requireNonNull(builder.executor, "executor");
-    this.baseUri = Objects.requireNonNull(builder.baseUri, "baseUri");
+    this.baseUri =
+        SorafsInputValidator.requireCanonicalGatewayBaseUri(builder.baseUri, "baseUri");
     this.timeout = builder.timeout;
     this.defaultHeaders =
         Collections.unmodifiableMap(new LinkedHashMap<>(builder.defaultHeaders));
     this.observers = List.copyOf(builder.observers);
-    this.fetchPath = builder.fetchPath;
+    this.fetchPath =
+        SorafsInputValidator.requireCanonicalGatewayFetchPath(builder.fetchPath, "fetchPath");
   }
 
   /** Creates a new builder with default configuration. */
@@ -92,8 +105,7 @@ public final class SorafsGatewayClient {
     final TransportRequest httpRequest = buildRequest(request);
     notifyRequest(httpRequest);
     final CompletableFuture<ClientResponse> result = new CompletableFuture<>();
-    executor
-        .execute(httpRequest)
+    executeBounded(httpRequest)
         .whenComplete((response, throwable) -> {
           if (throwable != null) {
             final Throwable cause =
@@ -103,6 +115,16 @@ public final class SorafsGatewayClient {
                     ? new SorafsStorageException("SoraFS gateway fetch request failed")
                     : new SorafsStorageException(
                         "SoraFS gateway fetch request failed", cause);
+            notifyFailure(httpRequest, error);
+            result.completeExceptionally(error);
+            return;
+          }
+          if (response.body().length > MAX_GATEWAY_RESPONSE_BYTES) {
+            final SorafsStorageException error =
+                new SorafsStorageException(
+                    "SoraFS gateway response exceeds the "
+                        + MAX_GATEWAY_RESPONSE_BYTES
+                        + "-byte limit");
             notifyFailure(httpRequest, error);
             result.completeExceptionally(error);
             return;
@@ -141,31 +163,118 @@ public final class SorafsGatewayClient {
     final URI target = resolvePath(fetchPath);
     final TransportRequest.Builder builder =
         TransportRequest.builder().setUri(target).setMethod("POST").setTimeout(timeout);
-    final Duration effectiveTimeout = timeout;
-    if (effectiveTimeout != null && effectiveTimeout.isNegative()) {
-      builder.setTimeout(null);
-    }
     mergeHeaders()
         .forEach(
             (name, value) -> {
               builder.addHeader(name, value);
             });
     final byte[] payload = encodeRequestPayload(request);
+    if (payload.length > MAX_GATEWAY_REQUEST_BYTES) {
+      throw new IllegalArgumentException(
+          "SoraFS gateway request exceeds the "
+              + MAX_GATEWAY_REQUEST_BYTES
+              + "-byte limit");
+    }
     builder.setBody(payload);
     return builder.build();
   }
 
+  private CompletableFuture<TransportResponse> executeBounded(final TransportRequest request) {
+    if (!(executor instanceof StreamingTransportExecutor)) {
+      // Injected non-streaming transports must enforce the same network-read ceiling themselves.
+      // The post-materialisation check in fetch() still prevents oversized parsing/use.
+      return executor.execute(request);
+    }
+    final StreamingTransportExecutor streaming = (StreamingTransportExecutor) executor;
+    return streaming
+        .openStream(request)
+        .thenApply(
+            response -> {
+              try (TransportStreamResponse closeable = response) {
+                final Long declaredLength = canonicalContentLength(response);
+                if (declaredLength != null && declaredLength > MAX_GATEWAY_RESPONSE_BYTES) {
+                  throw new IOException(
+                      "SoraFS gateway declared a response larger than "
+                          + MAX_GATEWAY_RESPONSE_BYTES
+                          + " bytes");
+                }
+                final int initialCapacity =
+                    declaredLength == null ? 8192 : declaredLength.intValue();
+                try (ByteArrayOutputStream output = new ByteArrayOutputStream(initialCapacity)) {
+                  final byte[] chunk = new byte[8192];
+                  int total = 0;
+                  while (true) {
+                    final int read = response.body().read(chunk);
+                    if (read == -1) {
+                      break;
+                    }
+                    if (read == 0) {
+                      throw new IOException("SoraFS gateway response stream made no progress");
+                    }
+                    try {
+                      total = Math.addExact(total, read);
+                    } catch (final ArithmeticException ex) {
+                      throw new IOException("SoraFS gateway response length overflow", ex);
+                    }
+                    if (total > MAX_GATEWAY_RESPONSE_BYTES) {
+                      throw new IOException(
+                          "SoraFS gateway response exceeds the "
+                              + MAX_GATEWAY_RESPONSE_BYTES
+                              + "-byte limit");
+                    }
+                    output.write(chunk, 0, read);
+                  }
+                  if (declaredLength != null && declaredLength.longValue() != total) {
+                    throw new IOException(
+                        "SoraFS gateway response length does not match Content-Length");
+                  }
+                  return new TransportResponse(
+                      response.statusCode(),
+                      output.toByteArray(),
+                      response.message(),
+                      response.headers());
+                }
+              } catch (final IOException ex) {
+                throw new CompletionException(ex);
+              }
+            });
+  }
+
+  private static Long canonicalContentLength(final TransportStreamResponse response)
+      throws IOException {
+    List<String> values = null;
+    int matchingHeaders = 0;
+    for (final Map.Entry<String, List<String>> entry : response.headers().entrySet()) {
+      if ("Content-Length".equalsIgnoreCase(entry.getKey())) {
+        matchingHeaders++;
+        values = entry.getValue();
+      }
+    }
+    if (matchingHeaders == 0) {
+      return null;
+    }
+    if (matchingHeaders != 1 || values == null || values.size() != 1) {
+      throw new IOException("SoraFS gateway returned ambiguous Content-Length headers");
+    }
+    final String value = values.get(0);
+    if (value == null || value.isEmpty() || (value.length() > 1 && value.charAt(0) == '0')) {
+      throw new IOException("SoraFS gateway returned a noncanonical Content-Length");
+    }
+    for (int i = 0; i < value.length(); i++) {
+      final char c = value.charAt(i);
+      if (c < '0' || c > '9') {
+        throw new IOException("SoraFS gateway returned a noncanonical Content-Length");
+      }
+    }
+    try {
+      return Long.valueOf(value);
+    } catch (final NumberFormatException ex) {
+      throw new IOException("SoraFS gateway returned an overflowing Content-Length", ex);
+    }
+  }
+
   private URI resolvePath(final String path) {
-    if (path == null || path.isBlank()) {
-      return baseUri;
-    }
-    if (path.startsWith("http://") || path.startsWith("https://")) {
-      return URI.create(path);
-    }
-    final String normalised = path.startsWith("/") ? path.substring(1) : path;
-    final String base = baseUri.toString();
-    final String joined = base.endsWith("/") ? base + normalised : base + "/" + normalised;
-    return URI.create(joined);
+    return baseUri.resolve(path);
   }
 
   private Map<String, String> mergeHeaders() {
@@ -237,7 +346,7 @@ public final class SorafsGatewayClient {
   /** Builder for {@link SorafsGatewayClient}. */
   public static final class Builder {
     private HttpTransportExecutor executor = PlatformHttpTransportExecutor.createDefault();
-    private URI baseUri = URI.create("http://localhost:8080");
+    private URI baseUri;
     private Duration timeout = Duration.ofSeconds(15);
     private final Map<String, String> defaultHeaders = new LinkedHashMap<>();
     private final List<ClientObserver> observers = new ArrayList<>();
@@ -255,15 +364,17 @@ public final class SorafsGatewayClient {
 
     public Builder setTimeout(final Duration timeout) {
       if (timeout != null) {
-        this.timeout = timeout.isNegative() ? Duration.ZERO : timeout;
+        if (timeout.isNegative()) {
+          throw new IllegalArgumentException("timeout must be non-negative");
+        }
+        this.timeout = timeout;
       }
       return this;
     }
 
     public Builder setFetchPath(final String fetchPath) {
-      if (fetchPath != null && !fetchPath.isBlank()) {
-        this.fetchPath = fetchPath;
-      }
+      this.fetchPath =
+          SorafsInputValidator.requireCanonicalGatewayFetchPath(fetchPath, "fetchPath");
       return this;
     }
 
@@ -297,6 +408,9 @@ public final class SorafsGatewayClient {
     public SorafsGatewayClient build() {
       if (executor == null) {
         executor = PlatformHttpTransportExecutor.createDefault();
+      }
+      if (baseUri == null) {
+        throw new IllegalStateException("baseUri must be explicitly configured");
       }
       return new SorafsGatewayClient(this);
     }

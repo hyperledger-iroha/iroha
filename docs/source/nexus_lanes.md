@@ -225,12 +225,14 @@ LaneConfigEntry {
   storage preflight barrier: a failed Kura or tiered retire preflight preserves
   the committed WSV rows that would otherwise be reset for the retiring lane.
   Lane-geometry reconciliation dry-runs both Kura block/merge storage and
-  tiered-state snapshot geometry before either backend is mutated, and then
-  prepares tiered-state storage before Kura block/merge storage is provisioned,
-  so a Kura path conflict, tiered path conflict, occupied relabel target,
-  retired archive-root conflict, or invalid tiered cold root aborts lane
-  creation/relabel/retirement before the other storage backend creates new lane
-  artifacts. The same commit boundary applies to deterministic autoscale
+  tiered-state snapshot geometry before either backend is mutated. Kura then
+  fsyncs a Norito intent containing the complete before/after geometry and
+  incarnation bindings before it renames, archives, or provisions any path;
+  tiered-state reconciliation runs behind that durable barrier. A failure before
+  catalog publication rolls Kura back to the prior fingerprint, while restart
+  after publication rolls it forward. Archive collisions, path traversal,
+  symlinks, non-regular files, stale incarnation markers, and partial block/log
+  pairs fail closed. The same commit boundary applies to deterministic autoscale
   scale-out and scale-in, including staged DA indexes in the block: a Kura or
   tiered conflict for a new or retiring elastic lane aborts before tiered
   artifacts or DA runtime/query indexes are published.
@@ -297,7 +299,28 @@ LaneConfigEntry {
   lanes cannot retire an elastic lane. The `autoscale.min_lanes` and
   `autoscale.max_lanes` values bound the autoscaler-owned elastic id range;
   they do not count unrelated public-profile base lanes as default-route
-  capacity.
+  capacity. Despite their legacy names, these fields are not minimum and
+  maximum active-lane counts: `min_lanes` is the inclusive lane-id lower bound
+  and `max_lanes` is the exclusive upper bound. The range may contain vacant
+  ids, and it may start at the next id above the initial catalog namespace;
+  lifecycle creation expands that namespace deterministically. Live
+  default-route capacity is the configured base anchor plus valid managed
+  elastic entries that currently exist inside the half-open range.
+- WSV snapshots persist a versioned `nexus_runtime` section containing the
+  effective lane catalog and `autoscale.last_transition_height`. On restart,
+  those stateful values remain authoritative while static Nexus policy is
+  refreshed from node configuration; this prevents a tip snapshot from
+  silently recreating a retired lane, dropping an elastic lane, or clearing the
+  cooldown. Snapshot decoding rejects unknown layout versions, invalid or
+  duplicate catalogs, missing lane 0, malformed autoscale ownership metadata,
+  future lane-creation markers, and transition heights beyond the snapshot
+  height. Kura then reconciles the retained geometry journal to the snapshot
+  catalog and atomically rebinds its in-memory lane map without deleting inactive
+  rollback storage. It never fabricates an empty segment for a missing dynamic
+  lane: the exact lane/incarnation/activation marker and both block and merge
+  paths must be recoverable, otherwise startup fails closed.
+  Legacy snapshots without `nexus_runtime` retain the historical
+  configuration-sourced startup behavior.
 - Autoscale utilization samples count committed fragments, not just external
   transaction envelopes. Current-block decisions use the in-flight execution
   counter, and historical window samples read the persisted committed-fragment

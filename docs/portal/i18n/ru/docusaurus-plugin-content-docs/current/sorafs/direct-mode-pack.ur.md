@@ -69,7 +69,7 @@ cargo test -p sorafs_car --features cli fetch_command_respects_direct_transports
 ```bash
 ./scripts/sorafs_direct_mode_smoke.sh \
   --config docs/examples/sorafs_direct_mode_smoke.conf \
-  --provider name=gw-regulated,provider-id=001122...,base-url=https://gw.example/direct/,stream-token=BASE64
+  --provider name=gw-regulated,provider-id=001122...,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gw.example/,stream-token=BASE64
 ```- Флаги CLI сценариев, ключ=значение, файлы конфигурации. Дайджест манифеста, рекламные записи поставщика, производственные значения, заполнение.
 - `--policy` по умолчанию Загрузка `docs/examples/sorafs_direct_mode_policy.json` ہے، مگر `sorafs_orchestrator::bindings::config_to_json` سے بننے и оркестратор JSON سکتا ہے۔ Политика CLI и `--orchestrator-config=PATH`, необходимые для воспроизведения и воспроизведения воспроизводимых запусков, а также флаги ہاتھ سے мелодия کیے۔
 - جب `sorafs_cli` `PATH` میں نہ ہو تو helper اسے `sorafs_orchestrator` crate سے (профиль выпуска) сборка کرتا ہے تاکہ Smoke Runs поставляется в прямом режиме сантехника и упражнения کریں۔

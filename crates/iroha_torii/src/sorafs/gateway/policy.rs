@@ -590,10 +590,9 @@ impl GatewayPolicy {
                 (Some(_), None) => {
                     return PolicyDecision::Deny(PolicyViolation::MissingProviderId);
                 }
-                (None, Some(_)) => {
+                (None, _) => {
                     return PolicyDecision::Deny(PolicyViolation::AdmissionUnavailable);
                 }
-                (None, None) => {}
             }
         }
 
@@ -912,6 +911,20 @@ mod tests {
 
         assert!(matches!(
             decision,
+            PolicyDecision::Deny(PolicyViolation::AdmissionUnavailable)
+        ));
+    }
+
+    #[test]
+    fn policy_does_not_fail_open_without_registry_or_provider_id() {
+        let denylist = Arc::new(GatewayDenylist::new());
+        let policy = GatewayPolicy::new_default(None, denylist);
+        let client = ClientFingerprint::from_identifier("client");
+        let ctx = RequestContext::new(&client, SystemTime::now(), Instant::now())
+            .with_manifest_envelope(true);
+
+        assert!(matches!(
+            policy.evaluate(&ctx),
             PolicyDecision::Deny(PolicyViolation::AdmissionUnavailable)
         ));
     }

@@ -8,7 +8,7 @@ use std::{
     borrow::Cow,
     cell::Cell,
     cmp::Reverse,
-    collections::{BTreeMap, BTreeSet, HashSet, VecDeque, btree_map::Entry},
+    collections::{BTreeMap, BTreeSet, VecDeque, btree_map::Entry},
     convert::TryFrom,
     ffi::OsStr,
     fs,
@@ -22,6 +22,9 @@ use std::{
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+
+#[cfg(test)]
+use std::collections::HashSet;
 
 use crate::state::StateViewContextGuard;
 use blake3::{Hasher as Blake3Hasher, hash as blake3_hash};
@@ -53,7 +56,7 @@ use iroha_data_model::{
     },
     events::{EventBox, pipeline::PipelineEventBox},
     isi::register::RegisterPeerWithPop,
-    merge::{MergeCommitteeSignature, MergeQuorumCertificate},
+    merge::{MergeCommitteeSignature, MergeQuorumCertificate, MergeSignerProof},
     nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
     peer::PeerId,
     sorafs::pin_registry::ManifestDigest,
@@ -429,8 +432,9 @@ use crate::{
     block::{BlockBuilder, BlockValidationError, ValidBlock, valid::ValidationTimings},
     kura::{BlockCount, Kura},
     native_amx::{
-        NativeAmxMessage, NativeAmxSessionCache, NativeAmxSessionError, NativeAmxSessionKey,
-        NativeAmxVoteIngressError, NativeAmxVoteV1, aggregate_votes_to_qc,
+        NativeAmxAttestationRequestV1, NativeAmxMessage, NativeAmxSessionCache,
+        NativeAmxSessionError, NativeAmxSessionKey, NativeAmxVoteIngressError, NativeAmxVoteV1,
+        aggregate_votes_to_qc,
     },
     nexus::lane_relay::LaneRelayBroadcaster,
     peers_gossiper::PeersGossiperHandle,
@@ -545,6 +549,10 @@ const PAYLOAD_REBROADCAST_COOLDOWN_MULTIPLIER: u32 = 2;
 /// their retry cadence below the small control-plane cadence so recovery cannot
 /// flood per-peer post queues while waiting for a commit QC.
 const CACHED_PROPOSAL_REBROADCAST_COOLDOWN_FLOOR: Duration = Duration::from_millis(500);
+/// Standalone lane proposals, votes, and certificates fan out both directly to the committee and
+/// over the consensus topic. Keep retries bounded so stalled lane sessions cannot multiply traffic
+/// on every actor tick.
+const LANE_BLOCK_REBROADCAST_COOLDOWN_FLOOR: Duration = Duration::from_millis(500);
 /// Frontier recovery can locally retry at the pacemaker nudge cadence, but network-wide
 /// NEW_VIEW convergence rebroadcasts need a wider cadence to avoid filling per-peer post queues.
 const FRONTIER_RECOVERY_NEW_VIEW_REBROADCAST_MULTIPLIER: u32 = 4;
@@ -13267,6 +13275,9 @@ pub(super) struct Actor {
     queue_block_backpressure: QueueBlockBackpressure,
     new_view_rebroadcast_log: NewViewRebroadcastThrottle,
     proposal_rebroadcast_log: PayloadRebroadcastThrottle,
+    lane_block_redrive: lane_scheduler::LaneBlockRedriveTracker,
+    autonomous_lane_blocks_hydrated: bool,
+    lane_block_rebroadcast_log: LaneBlockRebroadcastThrottle,
     payload_rebroadcast_log: PayloadRebroadcastThrottle,
     block_sync_rebroadcast_log: PayloadRebroadcastThrottle,
     block_sync_fetch_log: PayloadRebroadcastThrottle,
@@ -13610,6 +13621,9 @@ struct ActorSubsystems {
     vrf: VrfActor,
     merge: MergeLaneState,
     lane_blocks: crate::lane_consensus::LaneBlockSessionCache,
+    lane_new_view_votes: crate::lane_consensus::LaneBlockNewViewVoteCache,
+    lane_new_view_certificates: crate::lane_consensus::LaneBlockNewViewCertificateCache,
+    lane_payload_handoffs: crate::lane_consensus::LaneExecutablePayloadHandoffCache,
     committed_lane_blocks: CommittedLaneBlockQueue,
 }
 
@@ -13702,7 +13716,7 @@ impl CommittedLaneBlockQueue {
     fn unapplied_lane_ids_for_admissible_lanes(
         &self,
         kura: &crate::kura::Kura,
-        admissible_lane: impl Fn(LaneId, DataSpaceId, u64, u64) -> bool,
+        admissible_lane: impl Fn(LaneId, DataSpaceId, Hash, u64, u64) -> bool,
     ) -> BTreeSet<LaneId> {
         self.pending
             .iter()
@@ -13714,6 +13728,7 @@ impl CommittedLaneBlockQueue {
                 admissible_lane(
                     descriptor.lane_id,
                     descriptor.dataspace_id,
+                    descriptor.lane_incarnation,
                     descriptor.lane_block_height,
                     descriptor.proposal_height,
                 )
@@ -13724,7 +13739,7 @@ impl CommittedLaneBlockQueue {
 
     fn retain_sessions_for_admissible_lanes(
         &mut self,
-        admissible_lane: impl Fn(LaneId, DataSpaceId, u64, u64) -> bool,
+        admissible_lane: impl Fn(LaneId, DataSpaceId, Hash, u64, u64) -> bool,
     ) -> usize {
         let before = self.pending.len();
         self.pending.retain(|session| {
@@ -13732,6 +13747,7 @@ impl CommittedLaneBlockQueue {
             admissible_lane(
                 descriptor.lane_id,
                 descriptor.dataspace_id,
+                descriptor.lane_incarnation,
                 descriptor.lane_block_height,
                 descriptor.proposal_height,
             )
@@ -13740,15 +13756,23 @@ impl CommittedLaneBlockQueue {
     }
 
     fn contains_session(&self, session: &crate::lane_consensus::CommittedLaneBlockSession) -> bool {
+        self.contains_proposal(&session.proposal)
+    }
+
+    fn contains_proposal(
+        &self,
+        proposal: &crate::sumeragi::consensus::LaneBlockProposalV1,
+    ) -> bool {
         self.pending.iter().any(|pending| {
-            pending.proposal.proposal_hash == session.proposal.proposal_hash
-                && pending.proposal.descriptor.lane_id == session.proposal.descriptor.lane_id
-                && pending.proposal.descriptor.dataspace_id
-                    == session.proposal.descriptor.dataspace_id
+            pending.proposal.proposal_hash == proposal.proposal_hash
+                && pending.proposal.descriptor.lane_id == proposal.descriptor.lane_id
+                && pending.proposal.descriptor.dataspace_id == proposal.descriptor.dataspace_id
+                && pending.proposal.descriptor.lane_incarnation
+                    == proposal.descriptor.lane_incarnation
                 && pending.proposal.descriptor.lane_block_height
-                    == session.proposal.descriptor.lane_block_height
+                    == proposal.descriptor.lane_block_height
                 && pending.proposal.descriptor.lane_block_view
-                    == session.proposal.descriptor.lane_block_view
+                    == proposal.descriptor.lane_block_view
         })
     }
 
@@ -13840,9 +13864,15 @@ impl CommittedLaneBlockQueue {
     fn durable_applied_status_snapshot_for_state(
         state: &crate::state::State,
     ) -> Vec<super::status::CommittedLaneBlockSnapshot> {
-        let mut latest_by_lane =
-            BTreeMap::<(LaneId, DataSpaceId), super::status::CommittedLaneBlockSnapshot>::new();
+        let mut latest_by_lane = BTreeMap::<
+            (LaneId, DataSpaceId, Hash),
+            super::status::CommittedLaneBlockSnapshot,
+        >::new();
         for session in state.certified_lane_block_sessions_snapshot_cached() {
+            let descriptor = &session.proposal.descriptor;
+            if state.lane_incarnation(descriptor.lane_id) != Some(descriptor.lane_incarnation) {
+                continue;
+            }
             let Some(execution_status) =
                 Self::application_receipted_session_status(state.kura(), &session)
             else {
@@ -13853,7 +13883,11 @@ impl CommittedLaneBlockQueue {
                     &session,
                     execution_status,
                 );
-            let key = (snapshot.lane_id, snapshot.dataspace_id);
+            let key = (
+                snapshot.lane_id,
+                snapshot.dataspace_id,
+                snapshot.proposal.descriptor.lane_incarnation,
+            );
             match latest_by_lane.entry(key) {
                 Entry::Vacant(entry) => {
                     entry.insert(snapshot);
@@ -13921,6 +13955,16 @@ impl CommittedLaneBlockQueue {
         recovered
     }
 
+    /// Recover immutable execution inputs while leaving shared WSV untouched.
+    ///
+    /// This is the only production handoff for commit-certified lane sessions
+    /// until the merge subsystem supplies a consensus-certified total order.
+    /// Its state argument is intentional: adversarial tests assert that neither
+    /// QC arrival order nor payload recovery changes the shared state identity.
+    fn recover_certified_inputs_awaiting_merge(&self, state: &crate::state::State) -> usize {
+        self.recover_available_payloads_into_kura(state.kura())
+    }
+
     fn payload_hint_repair_candidates(
         &self,
         kura: &crate::kura::Kura,
@@ -13943,6 +13987,7 @@ impl CommittedLaneBlockQueue {
             .collect()
     }
 
+    #[cfg(test)]
     fn preflight_recovered_execution_inputs_into_kura(&self, state: &crate::state::State) -> usize {
         let current_state_height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
         let current_state_hash = Some(state.lane_execution_state_hash());
@@ -14055,6 +14100,7 @@ impl CommittedLaneBlockQueue {
         preflighted
     }
 
+    #[cfg(test)]
     fn repair_missing_direct_application_receipts_from_state(state: &crate::state::State) -> usize {
         let mut repaired = 0_usize;
         for (key, marker) in state.direct_lane_block_application_markers_snapshot() {
@@ -14142,6 +14188,7 @@ impl CommittedLaneBlockQueue {
         repaired
     }
 
+    #[cfg(test)]
     fn replay_direct_application_receipts_into_state(state: &crate::state::State) -> usize {
         let mut replayed = 0_usize;
         let replay_limit = state
@@ -14211,6 +14258,7 @@ impl CommittedLaneBlockQueue {
         replayed
     }
 
+    #[cfg(test)]
     fn apply_preflighted_execution_inputs_to_state(&self, state: &crate::state::State) -> usize {
         let mut applied = 0_usize;
         for session in &self.pending {
@@ -14286,6 +14334,7 @@ impl CommittedLaneBlockQueue {
         applied
     }
 
+    #[cfg(test)]
     fn apply_direct_lane_block_receipt_to_state(
         state: &crate::state::State,
         input: &crate::kura::LaneBlockExecutionInputArtifact,
@@ -14363,6 +14412,7 @@ impl CommittedLaneBlockQueue {
         Ok(true)
     }
 
+    #[cfg(test)]
     fn repair_direct_committed_transaction_membership(
         state: &crate::state::State,
         input: &crate::kura::LaneBlockExecutionInputArtifact,
@@ -14394,12 +14444,14 @@ impl CommittedLaneBlockQueue {
         true
     }
 
+    #[cfg(test)]
     fn direct_application_transaction_height(application_block_height: u64) -> NonZeroUsize {
         let direct_height = application_block_height.saturating_add(1).max(1);
         NonZeroUsize::new(usize::try_from(direct_height).unwrap_or(usize::MAX))
             .expect("direct application transaction height is non-zero")
     }
 
+    #[cfg(test)]
     fn direct_committed_transaction_hashes(
         input: &crate::kura::LaneBlockExecutionInputArtifact,
     ) -> HashSet<HashOf<SignedTransaction>> {
@@ -14462,7 +14514,7 @@ impl CommittedLaneBlockQueue {
 
     fn lane_block_tips_snapshot_for_admissible_lanes(
         &self,
-        admissible_lane: impl Fn(LaneId, DataSpaceId, u64) -> bool,
+        admissible_lane: impl Fn(LaneId, DataSpaceId, Hash, u64) -> bool,
     ) -> Vec<lane_scheduler::LaneBlockTip> {
         self.pending
             .iter()
@@ -14471,11 +14523,13 @@ impl CommittedLaneBlockQueue {
                 admissible_lane(
                     descriptor.lane_id,
                     descriptor.dataspace_id,
+                    descriptor.lane_incarnation,
                     descriptor.lane_block_height,
                 )
                 .then_some(lane_scheduler::LaneBlockTip {
                     lane_id: descriptor.lane_id,
                     dataspace_id: descriptor.dataspace_id,
+                    lane_incarnation: descriptor.lane_incarnation,
                     latest_lane_block_height: descriptor.lane_block_height,
                     latest_lane_block_descriptor_hash: Some(descriptor.descriptor_hash),
                 })
@@ -22229,14 +22283,23 @@ impl Actor {
             lane_blocks: crate::lane_consensus::LaneBlockSessionCache::new(
                 config.recovery.pending_proposal_cap.max(1),
             ),
+            lane_new_view_votes: crate::lane_consensus::LaneBlockNewViewVoteCache::new(
+                config.recovery.pending_proposal_cap.max(1),
+            ),
+            lane_new_view_certificates:
+                crate::lane_consensus::LaneBlockNewViewCertificateCache::new(
+                    config.recovery.pending_proposal_cap.max(1),
+                ),
+            lane_payload_handoffs: crate::lane_consensus::LaneExecutablePayloadHandoffCache::new(
+                config.recovery.pending_proposal_cap.max(1),
+            ),
             committed_lane_blocks: CommittedLaneBlockQueue::new(
                 config.recovery.pending_proposal_cap.max(1),
             ),
         };
-        let repaired_direct_lane_application_receipts =
-            CommittedLaneBlockQueue::repair_missing_direct_application_receipts_from_state(&state);
-        let replayed_direct_lane_application_receipts =
-            CommittedLaneBlockQueue::replay_direct_application_receipts_into_state(&state);
+        // Direct lane receipts are intentionally not replayed or repaired here.
+        // Autonomous lane work must wait for a merge-certified total order;
+        // applying durable receipts in local recovery order would fork shared WSV.
         if let Err(err) = state.ensure_da_indexes_hydrated() {
             warn!(
                 ?err,
@@ -22251,41 +22314,13 @@ impl Actor {
             );
         let recovered_lane_block_execution_inputs = subsystems
             .committed_lane_blocks
-            .recover_available_payloads_into_kura(state.kura());
+            .recover_certified_inputs_awaiting_merge(&state);
         let recorded_lane_block_application_receipts_before_preflight = subsystems
             .committed_lane_blocks
             .record_available_payload_application_receipts_into_kura(state.kura());
         let pruned_canonical_receipted_committed_lane_blocks = subsystems
             .committed_lane_blocks
             .prune_application_receipted_sessions(state.kura());
-        let preflighted_lane_block_execution_inputs = subsystems
-            .committed_lane_blocks
-            .preflight_recovered_execution_inputs_into_kura(&state);
-        let mut directly_applied_lane_block_inputs = 0_usize;
-        let mut preflighted_lane_block_execution_inputs = preflighted_lane_block_execution_inputs;
-        let direct_application_limit = subsystems.committed_lane_blocks.len();
-        for _ in 0..direct_application_limit {
-            let applied = subsystems
-                .committed_lane_blocks
-                .apply_preflighted_execution_inputs_to_state(&state);
-            if applied == 0 {
-                break;
-            }
-            directly_applied_lane_block_inputs =
-                directly_applied_lane_block_inputs.saturating_add(applied);
-            preflighted_lane_block_execution_inputs = preflighted_lane_block_execution_inputs
-                .saturating_add(
-                    subsystems
-                        .committed_lane_blocks
-                        .preflight_recovered_execution_inputs_into_kura(&state),
-                );
-        }
-        let repaired_direct_lane_application_receipts = repaired_direct_lane_application_receipts
-            .saturating_add(
-                CommittedLaneBlockQueue::repair_missing_direct_application_receipts_from_state(
-                    &state,
-                ),
-            );
         let recorded_lane_block_application_receipts = subsystems
             .committed_lane_blocks
             .record_available_payload_application_receipts_into_kura(state.kura())
@@ -22310,34 +22345,6 @@ impl Actor {
                 recovered = recovered_lane_block_execution_inputs,
                 pending = subsystems.committed_lane_blocks.len(),
                 "persisted recovered lane-block execution inputs from Kura payloads"
-            );
-        }
-        if preflighted_lane_block_execution_inputs > 0 {
-            debug!(
-                preflighted = preflighted_lane_block_execution_inputs,
-                pending = subsystems.committed_lane_blocks.len(),
-                "persisted lane-block execution preflights from recovered inputs"
-            );
-        }
-        if replayed_direct_lane_application_receipts > 0 {
-            debug!(
-                replayed = replayed_direct_lane_application_receipts,
-                pending = subsystems.committed_lane_blocks.len(),
-                "replayed direct lane-block application receipts into state"
-            );
-        }
-        if directly_applied_lane_block_inputs > 0 {
-            debug!(
-                applied = directly_applied_lane_block_inputs,
-                pending = subsystems.committed_lane_blocks.len(),
-                "directly applied preflighted lane-block inputs during startup"
-            );
-        }
-        if repaired_direct_lane_application_receipts > 0 {
-            debug!(
-                repaired = repaired_direct_lane_application_receipts,
-                pending = subsystems.committed_lane_blocks.len(),
-                "repaired missing direct lane-block application receipts from state markers"
             );
         }
         if recorded_lane_block_application_receipts > 0 {
@@ -22401,6 +22408,12 @@ impl Actor {
         let initial_committed_height =
             initial_state_view.map_or_else(|| state.committed_height(), StateView::height);
         let initial_queue_len = queue.active_len();
+        let lane_block_rebroadcast_capacity = config
+            .recovery
+            .pending_proposal_cap
+            .max(1)
+            .saturating_mul(LaneBlockRebroadcastKind::VARIANT_COUNT);
+        let lane_block_redrive_capacity = config.recovery.pending_proposal_cap.max(1);
 
         let mut actor = Self {
             config,
@@ -22537,6 +22550,13 @@ impl Actor {
             queue_block_backpressure: QueueBlockBackpressure::default(),
             new_view_rebroadcast_log: NewViewRebroadcastThrottle::default(),
             proposal_rebroadcast_log: PayloadRebroadcastThrottle::default(),
+            lane_block_redrive: lane_scheduler::LaneBlockRedriveTracker::new(
+                lane_block_redrive_capacity,
+            ),
+            autonomous_lane_blocks_hydrated: false,
+            lane_block_rebroadcast_log: LaneBlockRebroadcastThrottle::new(
+                lane_block_rebroadcast_capacity,
+            ),
             payload_rebroadcast_log: PayloadRebroadcastThrottle::default(),
             block_sync_rebroadcast_log: PayloadRebroadcastThrottle::default(),
             block_sync_fetch_log: PayloadRebroadcastThrottle::default(),
@@ -22551,6 +22571,27 @@ impl Actor {
             "sumeragi.actor_init.struct_built",
             startup_trace_started_at,
         );
+        let recovered_lane_reservations = actor.queue.live_lane_reservations();
+        let released_orphans = actor
+            .queue
+            .reconcile_orphaned_lane_reservations(&recovered_lane_reservations, |key| {
+                actor
+                    .state
+                    .kura()
+                    .autonomous_lane_payload_matches_reservation(
+                        key,
+                        actor.chain_hash,
+                        actor.epoch_for_height(key.proposal_height),
+                    )
+            })
+            .map_err(|err| eyre!("failed to reconcile lane queue reservations: {err}"))?;
+        if !recovered_lane_reservations.is_empty() || released_orphans > 0 {
+            info!(
+                recovered = recovered_lane_reservations.len(),
+                released_orphans,
+                "reconciled durable lane queue reservations against Kura payload ownership"
+            );
+        }
         actor.seed_phase_ema_metrics();
         actor.refresh_p2p_topology();
         super::log_sumeragi_startup_trace(
@@ -22881,13 +22922,28 @@ impl Actor {
         self.reset_collector_state();
     }
 
-    fn recompute_consensus_caps(&self) -> iroha_p2p::ConsensusConfigCaps {
+    fn recompute_consensus_caps(&self) -> Result<iroha_p2p::ConsensusConfigCaps> {
         let sumeragi = &self.config;
         let (collectors_k, redundant_send_r) = self.collector_plan_params();
         let da_enabled = sumeragi_da_enabled(&self.state);
         let rbc_data_shards = sumeragi.rbc.effective_data_shards();
         let rbc_parity_shards = sumeragi.rbc.effective_parity_shards();
+        let nexus = self.state.nexus_snapshot();
+        let compliance_policy_digest = self
+            .state
+            .lane_compliance_engine()
+            .map(|engine| engine.consensus_policy_digest());
+        let lane_manifest_policy_digest =
+            Some(self.state.lane_manifests.read().consensus_policy_digest());
+        let nexus_policy_digest =
+            iroha_config::parameters::actual::nexus_consensus_policy_digest_with_runtime_policies(
+                &nexus,
+                compliance_policy_digest,
+                lane_manifest_policy_digest,
+            )
+            .map_err(|err| eyre!("failed to construct Nexus consensus-policy digest: {err}"))?;
         let config_caps = iroha_p2p::ConsensusConfigCaps {
+            nexus_policy_digest,
             collectors_k: u16::try_from(collectors_k).unwrap_or(u16::MAX),
             redundant_send_r,
             da_enabled,
@@ -22904,8 +22960,30 @@ impl Actor {
             rbc_store_max_bytes: u64::try_from(sumeragi.rbc.store_max_bytes).unwrap_or(u64::MAX),
             rbc_store_soft_bytes: u64::try_from(sumeragi.rbc.store_soft_bytes).unwrap_or(u64::MAX),
         };
+        Ok(config_caps)
+    }
+
+    fn refresh_consensus_handshake_caps(&self, force: bool) -> Result<()> {
+        let config_caps = self.recompute_consensus_caps()?;
+        let unchanged = super::status::consensus_caps().as_ref() == Some(&config_caps);
         super::status::set_consensus_caps(&config_caps);
-        config_caps
+        if unchanged && !force {
+            return Ok(());
+        }
+        let height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let world = self.state.world_view();
+        let (_mode_tag, _bls_domain, consensus_caps) =
+            super::consensus::compute_consensus_handshake_caps_from_world(
+                &world,
+                height,
+                &self.common_config,
+                &self.config,
+                &config_caps,
+            );
+        // Existing peers may be at an earlier committed height and need the connection to catch
+        // up. The updated caps gate subsequent handshakes without disconnecting healthy peers.
+        self.network.update_consensus_caps(consensus_caps, false);
+        Ok(())
     }
 
     fn update_effective_timing_status_from_world(
@@ -25072,6 +25150,34 @@ impl Actor {
                             super::status::ConsensusMessageReason::FutureWindow,
                         );
                     }
+                    BlockMessage::LaneExecutablePayload(_) => {
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::LaneBlockProposal,
+                            super::status::ConsensusMessageOutcome::Dropped,
+                            super::status::ConsensusMessageReason::FutureWindow,
+                        );
+                    }
+                    BlockMessage::LaneExecutablePayloadHandoff(_) => {
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::LaneBlockProposal,
+                            super::status::ConsensusMessageOutcome::Dropped,
+                            super::status::ConsensusMessageReason::FutureWindow,
+                        );
+                    }
+                    BlockMessage::LaneBlockNewViewVote(_) => {
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::LaneBlockVote,
+                            super::status::ConsensusMessageOutcome::Dropped,
+                            super::status::ConsensusMessageReason::FutureWindow,
+                        );
+                    }
+                    BlockMessage::LaneBlockNewViewCertificate(_) => {
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::LaneBlockQc,
+                            super::status::ConsensusMessageOutcome::Dropped,
+                            super::status::ConsensusMessageReason::FutureWindow,
+                        );
+                    }
                     BlockMessage::QcVote(_) => {
                         self.record_consensus_message_handling(
                             super::status::ConsensusMessageKind::QcVote,
@@ -25234,7 +25340,19 @@ impl Actor {
             BlockMessage::FetchPendingBlock(request) => self.handle_fetch_pending_block(request),
             BlockMessage::Proposal(proposal) => self.handle_proposal(proposal),
             BlockMessage::LaneBlockProposal(proposal) => {
-                self.handle_incoming_lane_block_proposal(proposal)
+                self.handle_incoming_lane_block_proposal(proposal, sender.as_ref())
+            }
+            BlockMessage::LaneExecutablePayload(payload) => {
+                self.handle_lane_executable_payload(payload, sender.as_ref())
+            }
+            BlockMessage::LaneExecutablePayloadHandoff(handoff) => {
+                self.handle_lane_executable_payload_handoff(handoff, sender.as_ref())
+            }
+            BlockMessage::LaneBlockNewViewVote(vote) => {
+                self.handle_lane_block_new_view_vote(vote, sender.as_ref())
+            }
+            BlockMessage::LaneBlockNewViewCertificate(certificate) => {
+                self.handle_lane_block_new_view_certificate(certificate, sender.as_ref())
             }
             BlockMessage::LaneBlockVote(vote) => self.handle_lane_block_vote(vote, sender.as_ref()),
             BlockMessage::LaneBlockQc(qc) => self.handle_lane_block_qc(qc),
@@ -26825,11 +26943,15 @@ impl Actor {
 
     fn on_native_amx_message(&mut self, sender: PeerId, message: NativeAmxMessage) -> Result<()> {
         match message {
-            NativeAmxMessage::PrepareRequest(body) => {
-                self.handle_native_amx_attestation_request(sender, body, NativeAmxPhase::Prepare);
+            NativeAmxMessage::PrepareRequest(request) => {
+                self.handle_native_amx_attestation_request(
+                    sender,
+                    request,
+                    NativeAmxPhase::Prepare,
+                );
             }
-            NativeAmxMessage::CommitRequest(body) => {
-                self.handle_native_amx_attestation_request(sender, body, NativeAmxPhase::Commit);
+            NativeAmxMessage::CommitRequest(request) => {
+                self.handle_native_amx_attestation_request(sender, request, NativeAmxPhase::Commit);
             }
             NativeAmxMessage::PrepareVote(vote) => {
                 self.record_native_amx_vote(vote, NativeAmxPhase::Prepare, Some(&sender));
@@ -26844,10 +26966,10 @@ impl Actor {
     fn handle_native_amx_attestation_request(
         &mut self,
         sender: PeerId,
-        body: NativeAmxAttestationBodyV1,
+        request: NativeAmxAttestationRequestV1,
         expected_phase: NativeAmxPhase,
     ) {
-        let Some(vote) = self.local_native_amx_vote(body, expected_phase, Some(&sender)) else {
+        let Some(vote) = self.local_native_amx_vote(request, expected_phase, Some(&sender)) else {
             return;
         };
         let message = match expected_phase {
@@ -26863,19 +26985,21 @@ impl Actor {
     fn request_native_amx_attestation_votes(
         &mut self,
         validator_set: &[PeerId],
-        body: NativeAmxAttestationBodyV1,
+        request: NativeAmxAttestationRequestV1,
     ) {
         let local_peer = self.common_config.peer.id().clone();
         for peer in validator_set {
             if peer == &local_peer {
-                if let Some(vote) = self.local_native_amx_vote(body, body.phase, None) {
-                    self.record_native_amx_vote(vote, body.phase, None);
+                if let Some(vote) =
+                    self.local_native_amx_vote(request.clone(), request.body.phase, None)
+                {
+                    self.record_native_amx_vote(vote, request.body.phase, None);
                 }
                 continue;
             }
-            let message = match body.phase {
-                NativeAmxPhase::Prepare => NativeAmxMessage::PrepareRequest(body),
-                NativeAmxPhase::Commit => NativeAmxMessage::CommitRequest(body),
+            let message = match request.body.phase {
+                NativeAmxPhase::Prepare => NativeAmxMessage::PrepareRequest(request.clone()),
+                NativeAmxPhase::Commit => NativeAmxMessage::CommitRequest(request.clone()),
             };
             self.schedule_background(BackgroundRequest::PostNativeAmx {
                 peer: peer.clone(),
@@ -26886,10 +27010,19 @@ impl Actor {
 
     fn local_native_amx_vote(
         &self,
-        body: NativeAmxAttestationBodyV1,
+        request: NativeAmxAttestationRequestV1,
         expected_phase: NativeAmxPhase,
         sender: Option<&PeerId>,
     ) -> Option<NativeAmxVoteV1> {
+        if let Err(err) = request.validate_plan_binding() {
+            iroha_logger::warn!(
+                ?err,
+                sender = ?sender,
+                "dropping native AMX request with invalid full-plan binding"
+            );
+            return None;
+        }
+        let body = request.body;
         if body.phase != expected_phase {
             iroha_logger::warn!(
                 expected = ?expected_phase,
@@ -26900,7 +27033,123 @@ impl Actor {
             return None;
         }
 
+        if body.chain_id_hash != self.chain_hash
+            || body.authority_context_height == 0
+            || body.coordinator_lane_block_height == 0
+            || body
+                .coordinator_lane_incarnation
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+            || body
+                .participant_lane_incarnation
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+            || body
+                .coordinator_proposal_hash
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+            || sender.is_some_and(|sender| {
+                !self
+                    .state
+                    .authoritative_lane_peer_ids_at_height(
+                        body.coordinator_lane_id,
+                        body.authority_context_height,
+                    )
+                    .contains(sender)
+            })
+        {
+            iroha_logger::warn!(
+                sender = ?sender,
+                height = body.authority_context_height,
+                "dropping native AMX request from unauthorized coordinator authority"
+            );
+            return None;
+        }
+
+        let nexus = self.state.nexus_snapshot();
+        if crate::state::nexus_active_lane_dataspace_at_height(
+            body.coordinator_lane_id,
+            &nexus,
+            body.authority_context_height,
+        ) != Some(body.coordinator_dataspace_id)
+            || crate::state::nexus_active_lane_dataspace_at_height(
+                body.participant_lane_id,
+                &nexus,
+                body.authority_context_height,
+            ) != Some(body.participant_dataspace_id)
+            || self
+                .state
+                .lane_incarnation_at_height(body.coordinator_lane_id, body.authority_context_height)
+                != Some(body.coordinator_lane_incarnation)
+            || self
+                .state
+                .lane_incarnation_at_height(body.participant_lane_id, body.authority_context_height)
+                != Some(body.participant_lane_incarnation)
+        {
+            iroha_logger::warn!(
+                sender = ?sender,
+                height = body.authority_context_height,
+                "dropping native AMX request for stale or mismatched lane route"
+            );
+            return None;
+        }
+
+        let coordinator_proposal = self
+            .subsystems
+            .lane_blocks
+            .proposals_without_commit_qc()
+            .into_iter()
+            .find(|proposal| {
+                let descriptor = &proposal.descriptor;
+                proposal.proposal_hash == body.coordinator_proposal_hash
+                    && descriptor.lane_id == body.coordinator_lane_id
+                    && descriptor.dataspace_id == body.coordinator_dataspace_id
+                    && descriptor.lane_incarnation == body.coordinator_lane_incarnation
+                    && descriptor.proposal_height == body.authority_context_height
+                    && descriptor.lane_block_height == body.coordinator_lane_block_height
+                    && descriptor.lane_block_view == body.coordinator_lane_block_view
+            });
+        let Some(coordinator_proposal) = coordinator_proposal else {
+            iroha_logger::warn!(
+                sender = ?sender,
+                proposal_hash = %body.coordinator_proposal_hash,
+                "dropping native AMX request for an unknown coordinator lane session"
+            );
+            return None;
+        };
+        let expected_leader = lane_scheduler::lane_block_redrive_leader(&coordinator_proposal, 0);
+        if sender.map_or_else(
+            || expected_leader != Some(self.common_config.peer.id()),
+            |sender| expected_leader != Some(sender),
+        ) {
+            iroha_logger::warn!(
+                sender = ?sender,
+                expected_leader = ?expected_leader,
+                "dropping native AMX request from a non-leader coordinator"
+            );
+            return None;
+        }
+
         let local_peer = self.common_config.peer.id().clone();
+        if !self
+            .state
+            .authoritative_lane_peer_ids_at_height(
+                body.participant_lane_id,
+                body.authority_context_height,
+            )
+            .contains(&local_peer)
+        {
+            iroha_logger::warn!(
+                sender = ?sender,
+                %local_peer,
+                participant_lane = body.participant_lane_id.as_u32(),
+                "dropping native AMX request outside the participant lane committee"
+            );
+            return None;
+        }
         if !roster_member_allowed_bls(&local_peer) {
             iroha_logger::warn!(
                 sender = ?sender,
@@ -26913,14 +27162,14 @@ impl Actor {
             if crate::state::live_consensus_key_pop_for_peer(
                 &world,
                 &local_peer,
-                body.planned_coordinator_block_height,
+                body.authority_context_height,
             )
             .is_none()
             {
                 iroha_logger::warn!(
                     sender = ?sender,
                     %local_peer,
-                    height = body.planned_coordinator_block_height,
+                    height = body.authority_context_height,
                     "dropping native AMX request because local consensus key has no live PoP"
                 );
                 return None;
@@ -26987,16 +27236,78 @@ impl Actor {
             }
             return;
         }
+        let body = &vote.body;
+        let nexus = self.state.nexus_snapshot();
+        let mut participant_committee = self.state.authoritative_lane_peer_ids_at_height(
+            body.participant_lane_id,
+            body.authority_context_height,
+        );
+        participant_committee.sort();
+        participant_committee.dedup();
+        if body.chain_id_hash != self.chain_hash
+            || body.authority_context_height == 0
+            || crate::state::nexus_active_lane_dataspace_at_height(
+                body.coordinator_lane_id,
+                &nexus,
+                body.authority_context_height,
+            ) != Some(body.coordinator_dataspace_id)
+            || crate::state::nexus_active_lane_dataspace_at_height(
+                body.participant_lane_id,
+                &nexus,
+                body.authority_context_height,
+            ) != Some(body.participant_dataspace_id)
+            || self
+                .state
+                .lane_incarnation_at_height(body.coordinator_lane_id, body.authority_context_height)
+                != Some(body.coordinator_lane_incarnation)
+            || self
+                .state
+                .lane_incarnation_at_height(body.participant_lane_id, body.authority_context_height)
+                != Some(body.participant_lane_incarnation)
+            || !participant_committee.contains(&vote.signer)
+        {
+            iroha_logger::warn!(
+                signer = %vote.signer,
+                authority_context_height = body.authority_context_height,
+                coordinator_lane = body.coordinator_lane_id.as_u32(),
+                participant_lane = body.participant_lane_id.as_u32(),
+                "dropping native AMX vote outside the exact active route/incarnation/committee"
+            );
+            return;
+        }
+        let known_coordinator_session = self
+            .subsystems
+            .lane_blocks
+            .proposals_without_commit_qc()
+            .into_iter()
+            .any(|proposal| {
+                let descriptor = proposal.descriptor;
+                proposal.proposal_hash == body.coordinator_proposal_hash
+                    && descriptor.lane_id == body.coordinator_lane_id
+                    && descriptor.dataspace_id == body.coordinator_dataspace_id
+                    && descriptor.lane_incarnation == body.coordinator_lane_incarnation
+                    && descriptor.proposal_height == body.authority_context_height
+                    && descriptor.lane_block_height == body.coordinator_lane_block_height
+                    && descriptor.lane_block_view == body.coordinator_lane_block_view
+            });
+        if !known_coordinator_session {
+            iroha_logger::warn!(
+                signer = %vote.signer,
+                proposal_hash = %body.coordinator_proposal_hash,
+                "dropping native AMX vote for an unknown coordinator lane session"
+            );
+            return;
+        }
         {
             let world = self.state.world_view();
             let Some(pop) = crate::state::live_consensus_key_pop_for_peer(
                 &world,
                 &vote.signer,
-                vote.body.planned_coordinator_block_height,
+                vote.body.authority_context_height,
             ) else {
                 iroha_logger::warn!(
                     signer = %vote.signer,
-                    height = vote.body.planned_coordinator_block_height,
+                    height = vote.body.authority_context_height,
                     "dropping native AMX vote because signer has no live PoP"
                 );
                 return;
@@ -27021,6 +27332,13 @@ impl Actor {
             }
             Err(NativeAmxSessionError::PhaseMismatch) => {
                 iroha_logger::warn!(%signer, ?phase, "dropping native AMX vote with phase mismatch");
+            }
+            Err(NativeAmxSessionError::PlanEquivocation) => {
+                iroha_logger::warn!(
+                    %signer,
+                    ?phase,
+                    "dropping native AMX vote that equivocates one source across routing plans"
+                );
             }
         }
     }
@@ -27091,7 +27409,13 @@ impl Actor {
             });
 
         if let Some(candidate) = entry.candidate.as_ref() {
-            let expected = crate::merge::merge_qc_message_digest(&self.chain_id, candidate);
+            let validator_set: Vec<_> = commit_topology.iter().cloned().collect();
+            let expected = crate::merge::merge_qc_message_digest(
+                &self.chain_id,
+                candidate,
+                VALIDATOR_SET_HASH_VERSION_V1,
+                HashOf::new(&validator_set),
+            );
             if expected != signature.message_digest {
                 iroha_logger::warn!(
                     epoch = signature.epoch_id,
@@ -27163,14 +27487,20 @@ impl Actor {
             return Ok(());
         }
 
-        let roster_len = commit_topology.len();
+        let validator_set: Vec<_> = commit_topology.iter().cloned().collect();
+        let validator_set_hash = HashOf::new(&validator_set);
         let topology = super::network_topology::Topology::new(commit_topology.clone());
         let local_index = self.local_validator_index_for_topology(&topology);
         let mut ordered_keys = Vec::with_capacity(candidates.len());
 
         for candidate in candidates {
             let view = candidate.view;
-            let message_digest = crate::merge::merge_qc_message_digest(&self.chain_id, &candidate);
+            let message_digest = crate::merge::merge_qc_message_digest(
+                &self.chain_id,
+                &candidate,
+                VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set_hash,
+            );
             let key = MergeCommitteeKey {
                 epoch_id: candidate.epoch_id,
                 view,
@@ -27226,18 +27556,17 @@ impl Actor {
             }
         }
 
-        self.try_commit_merge_candidates(&ordered_keys, roster_len);
+        self.try_commit_merge_candidates(&ordered_keys);
         Ok(())
     }
 
-    fn try_commit_merge_candidates(
-        &mut self,
-        ordered_keys: &[MergeCommitteeKey],
-        roster_len: usize,
-    ) {
+    fn try_commit_merge_candidates(&mut self, ordered_keys: &[MergeCommitteeKey]) {
+        let validator_set: Vec<_> = self.state.commit_topology.view().iter().cloned().collect();
+        let roster_len = validator_set.len();
         if roster_len == 0 {
             return;
         }
+        let validator_set_hash = HashOf::new(&validator_set);
         let required = crate::sumeragi::network_topology::commit_quorum_from_len(roster_len);
 
         for key in ordered_keys {
@@ -27262,6 +27591,20 @@ impl Actor {
                     break;
                 }
 
+                let expected_digest = crate::merge::merge_qc_message_digest(
+                    &self.chain_id,
+                    candidate,
+                    VALIDATOR_SET_HASH_VERSION_V1,
+                    validator_set_hash,
+                );
+                if expected_digest != key.message_digest {
+                    iroha_logger::warn!(
+                        epoch = key.epoch_id,
+                        "merge committee roster changed before QC assembly"
+                    );
+                    break;
+                }
+
                 let mut signature_refs = Vec::with_capacity(signers.len());
                 for signer in &signers {
                     if let Some(sig) = entry.signatures.get(signer) {
@@ -27281,10 +27624,44 @@ impl Actor {
                         }
                     };
                 let signers_bitmap = build_signers_bitmap(&signers, roster_len);
+                let world = self.state.world_view();
+                let mut signer_proofs = Vec::with_capacity(signers.len());
+                for signer in &signers {
+                    let Ok(index) = usize::try_from(*signer) else {
+                        signer_proofs.clear();
+                        break;
+                    };
+                    let Some(peer) = validator_set.get(index) else {
+                        signer_proofs.clear();
+                        break;
+                    };
+                    let Some(proof_of_possession) =
+                        crate::state::consensus_key_pop_for_public_key(&world, peer.public_key())
+                    else {
+                        signer_proofs.clear();
+                        break;
+                    };
+                    signer_proofs.push(MergeSignerProof {
+                        signer: *signer,
+                        proof_of_possession,
+                    });
+                }
+                if signer_proofs.len() != signers.len() {
+                    iroha_logger::warn!(
+                        epoch = key.epoch_id,
+                        "merge QC assembly requires an exact PoP for every signer"
+                    );
+                    break;
+                }
                 let qc = MergeQuorumCertificate::new(
                     key.view,
                     key.epoch_id,
+                    crate::merge::merge_chain_id_digest(&self.chain_id),
+                    VALIDATOR_SET_HASH_VERSION_V1,
+                    validator_set_hash,
+                    validator_set.clone(),
                     signers_bitmap,
+                    signer_proofs,
                     aggregate_signature,
                     key.message_digest,
                 );
@@ -27513,6 +27890,8 @@ impl Actor {
             | BlockMessage::CertifiedBlockFetch(super::message::CertifiedBlockFetch::Body(_))
             | BlockMessage::FetchPendingBlock(_)
             | BlockMessage::Proposal(_)
+            | BlockMessage::LaneExecutablePayload(_)
+            | BlockMessage::LaneExecutablePayloadHandoff(_)
             | BlockMessage::RbcChunk(_)
             | BlockMessage::RbcChunkCompact(_)
             | BlockMessage::RbcInit(_)
@@ -27524,6 +27903,8 @@ impl Actor {
             | BlockMessage::ConsensusParams(_)
             | BlockMessage::ExecWitness(_)
             | BlockMessage::LaneBlockProposal(_)
+            | BlockMessage::LaneBlockNewViewVote(_)
+            | BlockMessage::LaneBlockNewViewCertificate(_)
             | BlockMessage::LaneBlockQc(_)
             | BlockMessage::LaneBlockVote(_)
             | BlockMessage::RbcInitRequest(_)
@@ -27598,6 +27979,10 @@ impl Actor {
                     | BlockMessage::FetchBlockBody(_)
                     | BlockMessage::BlockBodyResponse(_)
                     | BlockMessage::LaneBlockProposal(_)
+                    | BlockMessage::LaneExecutablePayload(_)
+                    | BlockMessage::LaneExecutablePayloadHandoff(_)
+                    | BlockMessage::LaneBlockNewViewVote(_)
+                    | BlockMessage::LaneBlockNewViewCertificate(_)
                     | BlockMessage::LaneBlockQc(_)
                     | BlockMessage::LaneBlockVote(_)
                     | BlockMessage::Qc(_)
@@ -27615,6 +28000,10 @@ impl Actor {
                 BlockMessage::Proposal(_)
                     | BlockMessage::ProposalHint(_)
                     | BlockMessage::LaneBlockProposal(_)
+                    | BlockMessage::LaneExecutablePayload(_)
+                    | BlockMessage::LaneExecutablePayloadHandoff(_)
+                    | BlockMessage::LaneBlockNewViewVote(_)
+                    | BlockMessage::LaneBlockNewViewCertificate(_)
                     | BlockMessage::LaneBlockQc(_)
                     | BlockMessage::LaneBlockVote(_)
                     | BlockMessage::BlockCreated(_)
@@ -27913,6 +28302,10 @@ impl Actor {
             | BlockMessage::VrfReveal(_)
             | BlockMessage::FetchPendingBlock(_)
             | BlockMessage::LaneBlockProposal(_)
+            | BlockMessage::LaneExecutablePayload(_)
+            | BlockMessage::LaneExecutablePayloadHandoff(_)
+            | BlockMessage::LaneBlockNewViewVote(_)
+            | BlockMessage::LaneBlockNewViewCertificate(_)
             | BlockMessage::LaneBlockVote(_)
             | BlockMessage::LaneBlockQc(_)
             | BlockMessage::KuraReplicaAdvert(_) => None,
@@ -27971,6 +28364,18 @@ impl Actor {
             BlockMessage::Proposal(_) => super::status::ConsensusMessageKind::Proposal,
             BlockMessage::LaneBlockProposal(_) => {
                 super::status::ConsensusMessageKind::LaneBlockProposal
+            }
+            BlockMessage::LaneExecutablePayload(_) => {
+                super::status::ConsensusMessageKind::LaneBlockProposal
+            }
+            BlockMessage::LaneExecutablePayloadHandoff(_) => {
+                super::status::ConsensusMessageKind::LaneBlockProposal
+            }
+            BlockMessage::LaneBlockNewViewVote(_) => {
+                super::status::ConsensusMessageKind::LaneBlockVote
+            }
+            BlockMessage::LaneBlockNewViewCertificate(_) => {
+                super::status::ConsensusMessageKind::LaneBlockQc
             }
             BlockMessage::QcVote(_) => super::status::ConsensusMessageKind::QcVote,
             BlockMessage::Qc(_) => super::status::ConsensusMessageKind::Qc,
@@ -28034,6 +28439,10 @@ impl Actor {
             BlockMessage::ProposalHint(_) => "ProposalHint",
             BlockMessage::Proposal(_) => "Proposal",
             BlockMessage::LaneBlockProposal(_) => "LaneBlockProposal",
+            BlockMessage::LaneExecutablePayload(_) => "LaneExecutablePayload",
+            BlockMessage::LaneExecutablePayloadHandoff(_) => "LaneExecutablePayloadHandoff",
+            BlockMessage::LaneBlockNewViewVote(_) => "LaneBlockNewViewVote",
+            BlockMessage::LaneBlockNewViewCertificate(_) => "LaneBlockNewViewCertificate",
             BlockMessage::LaneBlockVote(vote) => match vote.body.phase {
                 crate::sumeragi::consensus::Phase::Prepare => "LaneBlockPrepareVote",
                 crate::sumeragi::consensus::Phase::Commit => "LaneBlockVote",
@@ -48264,6 +48673,155 @@ mod tick_heartbeat_interval_tests {
 #[derive(Debug, Default)]
 struct PayloadRebroadcastThrottle {
     last_sent: BTreeMap<HashOf<BlockHeader>, Instant>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum LaneBlockRebroadcastKind {
+    Proposal,
+    PrepareVote,
+    CommitVote,
+    NewViewVote,
+    PrepareQc,
+    CommitQc,
+}
+
+impl LaneBlockRebroadcastKind {
+    const VARIANT_COUNT: usize = 6;
+}
+
+#[derive(Debug)]
+struct LaneBlockRebroadcastThrottle {
+    last_sent: BTreeMap<
+        (
+            LaneBlockRebroadcastKind,
+            crate::lane_consensus::LaneBlockSessionKey,
+        ),
+        Instant,
+    >,
+    capacity: usize,
+}
+
+impl LaneBlockRebroadcastThrottle {
+    fn new(capacity: usize) -> Self {
+        Self {
+            last_sent: BTreeMap::new(),
+            capacity: capacity.max(LaneBlockRebroadcastKind::VARIANT_COUNT),
+        }
+    }
+
+    fn allow(
+        &mut self,
+        kind: LaneBlockRebroadcastKind,
+        key: crate::lane_consensus::LaneBlockSessionKey,
+        now: Instant,
+        cooldown: Duration,
+    ) -> bool {
+        let throttle_key = (kind, key);
+        if self.last_sent.get(&throttle_key).is_some_and(|previous| {
+            cooldown > Duration::ZERO && now.saturating_duration_since(*previous) < cooldown
+        }) {
+            return false;
+        }
+        self.last_sent.insert(throttle_key, now);
+
+        if cooldown > Duration::ZERO {
+            let expiry_window = cooldown.saturating_mul(8);
+            self.last_sent
+                .retain(|_, recorded| now.saturating_duration_since(*recorded) <= expiry_window);
+        }
+        while self.last_sent.len() > self.capacity {
+            let Some(oldest) = self
+                .last_sent
+                .iter()
+                .min_by_key(|(_, recorded)| **recorded)
+                .map(|(key, _)| *key)
+            else {
+                break;
+            };
+            self.last_sent.remove(&oldest);
+        }
+        true
+    }
+
+    fn record(
+        &mut self,
+        kind: LaneBlockRebroadcastKind,
+        key: crate::lane_consensus::LaneBlockSessionKey,
+        now: Instant,
+        cooldown: Duration,
+    ) {
+        let _ = self.allow(kind, key, now, cooldown);
+    }
+}
+
+#[cfg(test)]
+mod lane_block_rebroadcast_throttle_tests {
+    use super::*;
+
+    fn key(seed: u8) -> crate::lane_consensus::LaneBlockSessionKey {
+        crate::lane_consensus::LaneBlockSessionKey {
+            lane_id: LaneId::new(u32::from(seed)),
+            dataspace_id: DataSpaceId::new(u64::from(seed)),
+            lane_incarnation: Hash::prehashed([seed.wrapping_add(1); Hash::LENGTH]),
+            lane_block_height: u64::from(seed).saturating_add(1),
+            lane_block_view: 0,
+            proposal_hash: Hash::prehashed([seed; Hash::LENGTH]),
+        }
+    }
+
+    #[test]
+    fn lane_block_rebroadcast_throttle_is_scoped_by_artifact_kind_and_cooldown() {
+        let now = Instant::now();
+        let cooldown = Duration::from_secs(1);
+        let mut throttle = LaneBlockRebroadcastThrottle::new(10);
+        let key = key(1);
+
+        assert!(throttle.allow(LaneBlockRebroadcastKind::Proposal, key, now, cooldown));
+        assert!(!throttle.allow(
+            LaneBlockRebroadcastKind::Proposal,
+            key,
+            now + Duration::from_millis(999),
+            cooldown,
+        ));
+        assert!(throttle.allow(
+            LaneBlockRebroadcastKind::PrepareVote,
+            key,
+            now + Duration::from_millis(999),
+            cooldown,
+        ));
+        assert!(throttle.allow(
+            LaneBlockRebroadcastKind::Proposal,
+            key,
+            now + cooldown,
+            cooldown,
+        ));
+    }
+
+    #[test]
+    fn lane_block_rebroadcast_throttle_capacity_evicts_oldest_identity() {
+        let now = Instant::now();
+        let cooldown = Duration::from_secs(60);
+        let mut throttle = LaneBlockRebroadcastThrottle::new(5);
+        for seed in 1..=6 {
+            assert!(throttle.allow(
+                LaneBlockRebroadcastKind::Proposal,
+                key(seed),
+                now + Duration::from_millis(u64::from(seed)),
+                cooldown,
+            ));
+        }
+        assert_eq!(throttle.last_sent.len(), 5);
+        assert!(
+            throttle.allow(
+                LaneBlockRebroadcastKind::Proposal,
+                key(1),
+                now + Duration::from_secs(1),
+                cooldown,
+            ),
+            "the oldest identity should have been evicted at the hard capacity"
+        );
+        assert_eq!(throttle.last_sent.len(), 5);
+    }
 }
 
 impl PayloadRebroadcastThrottle {

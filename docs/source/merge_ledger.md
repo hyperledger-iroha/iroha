@@ -74,14 +74,23 @@ monotonically and are independent of per-lane block heights.
 ```
 MergeLaneSnapshot {
     lane_id: LaneId,
+    lane_incarnation: Hash32,
+    incarnation_activation_height: u64,
+    proposal_height: u64,
     dataspace_id: DataSpaceId,
     lane_block_height: u64,
     tip_hash: Hash32,
     merge_hint_root: Hash32,
+    settlement_commitment: LaneBlockCommitment,
+    settlement_hash: Hash32,
 }
 
 MergeLedgerEntry {
     epoch_id: u64,
+    lane_catalog_hash: Hash32,
+    active_lanes: Vec<MergeLaneBinding>,
+    incarnation_root: Hash32,
+    activation_root: Hash32,
     lane_snapshots: Vec<MergeLaneSnapshot>,
     global_state_root: Hash32,
     merge_qc: MergeQuorumCertificate,
@@ -92,6 +101,13 @@ MergeLedgerEntry {
   not contain duplicates.
 - `lane_snapshots[*].tip_hash` and `lane_snapshots[*].merge_hint_root` describe
   the verified relay selected for that active lane in this entry.
+- `active_lanes` is the complete, ordered lane/dataspace/config/incarnation
+  binding active for the entry. Its incarnation and first-eligible-height roots,
+  together with `lane_catalog_hash`, make historical lifecycle validation
+  independent of the node's current catalog.
+- Every snapshot embeds the exact settlement commitment and its hash. Restart
+  recovery therefore does not depend on an ephemeral relay cache to validate or
+  replay settlement.
 - `global_state_root` equals `ReduceMergeHints(lane_snapshots[*].merge_hint_root)`, a
   Poseidon2 fold with domain separation tag
   `"iroha:merge:reduce:v1\0"`. The reduction is deterministic and MUST
@@ -108,8 +124,15 @@ merge_qc_digest = blake2b32(
     "iroha:merge:qc:v1\0" ||
     chain_id ||
     norito(MergeLedgerSignPayload {
+        chain_id_digest,
+        validator_set_hash_version,
+        validator_set_hash,
         view,
         epoch_id,
+        lane_catalog_hash,
+        active_lanes,
+        incarnation_root,
+        activation_root,
         lane_snapshots,
         global_state_root,
     })
@@ -126,7 +149,9 @@ verified by BLS signatures.
 
 **Merge QC Construction (MUST):**
 
-- The merge committee roster is the current commit-topology validator set.
+- The merge committee roster is the current commit-topology validator set at
+  construction time. The exact ordered roster, its versioned hash, and a BLS
+  proof of possession for every bitmap signer are embedded in the QC.
 - Required quorum = `commit_quorum_from_len(roster_len)`.
 - `merge_qc.signers_bitmap` encodes participating validator indices (LSB-first)
   in commit-topology order.
@@ -143,8 +168,15 @@ verified by BLS signatures.
 3. Ensure no admitted relay points to an `Invalid` or unexecuted block. The
    non-empty policy above ensures the header includes state overlays.
 4. Recompute `ReduceMergeHints` and compare with `global_state_root`.
-5. Recompute the merge QC digest and verify the signer bitmap, quorum threshold,
-   and aggregate signature against the commit-topology roster.
+5. Recompute the versioned roster hash and merge QC digest; reject duplicate
+   validators, non-canonical bitmap length/padding, missing or misordered signer
+   proofs, invalid PoPs, quorum shortfall, and an invalid aggregate signature.
+   Historical verification uses the roster embedded in the QC, not the node's
+   current topology.
+6. Verify catalog/incarnation transitions across consecutive entries. An
+   unchanged lane binding must remain byte-identical; a reconfigured or
+   recreated lane must use a never-reused incarnation and a later activation
+   height.
 
 **Observability:** Merge nodes emit Prometheus counters for
 `merge_entry_lane_repeats_total{i}` to highlight lanes that skipped slots for
@@ -185,8 +217,10 @@ pauses until quorum is restored (emergency recovery is handled separately).
    FastPQ), and constructs the `MergeLedgerEntry` as defined above.
 2. After verifying the deterministic reduction, the merge committee signs the
 entry (`merge_qc`).
-3. Nodes append the entry to the merge ledger log and persist it alongside the
-lane block references.
+3. Nodes first prevalidate settlement without mutating WSV, then durably append
+   the entry under the state commit lock. Only after the append fsync succeeds
+   may the atomic WSV settlement transaction burn fees and write its idempotency
+   markers.
 4. `global_state_root` becomes the authoritative world state commitment for the
 epoch/slot. Full nodes update their WSV checkpoint metadata to mirror this
 value; deterministic replay must reproduce the same reduction.
@@ -197,6 +231,12 @@ value; deterministic replay must reproduce the same reduction.
   final `global_state_root`, bridging lane execution with the global checksum.
 - Kura persists `MergeLedgerEntry` adjacent to the lane block artifacts so a
   replay can reconstruct both lane-level and global finality sequences.
+- Startup verifies every complete entry from epoch 1 in order, including the
+  self-contained historical QC, catalog/incarnation context, contiguous
+  per-incarnation lane heights, embedded settlement hashes, and global
+  reduction. The first invalid entry and its suffix are truncated. A durable
+  entry missing its WSV settlement markers is replayed exactly once; a partial
+  marker set fails closed.
 - When a configured lane skips a slot, it is absent from that merge entry.
   Merge entries still advance whenever at least one active lane produces a new
   admissible relay.

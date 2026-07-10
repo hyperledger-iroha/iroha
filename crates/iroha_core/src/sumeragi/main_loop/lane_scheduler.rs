@@ -1,6 +1,9 @@
 //! Deterministic per-lane proposal scheduling helpers.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque, btree_map::Entry};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque, btree_map::Entry},
+    time::{Duration, Instant},
+};
 
 use crate::queue::RoutingDecision;
 use iroha_config::parameters::actual::Nexus;
@@ -187,6 +190,8 @@ pub(super) struct LaneBlockSubject {
     pub(super) lane_id: LaneId,
     /// Dataspace bound to the lane work.
     pub(super) dataspace_id: DataSpaceId,
+    /// Exact active lane incarnation commitment.
+    pub(super) lane_incarnation: Hash,
     /// Lane-local block height assigned by the caller.
     pub(super) lane_block_height: u64,
     /// Lane-local view assigned by the caller.
@@ -208,6 +213,8 @@ pub(super) struct LaneBlockTip {
     pub(super) lane_id: LaneId,
     /// Dataspace bound to the lane tip.
     pub(super) dataspace_id: DataSpaceId,
+    /// Exact active lane incarnation commitment.
+    pub(super) lane_incarnation: Hash,
     /// Latest committed lane-local block height. Use zero for a newly created
     /// lane with no committed lane-local block yet.
     pub(super) latest_lane_block_height: u64,
@@ -222,6 +229,8 @@ pub(super) struct LaneBlockSlot {
     pub(super) lane_id: LaneId,
     /// Dataspace expected for the lane slot.
     pub(super) dataspace_id: DataSpaceId,
+    /// Exact active lane incarnation commitment.
+    pub(super) lane_incarnation: Hash,
     /// Lane-local block height for this slot.
     pub(super) lane_block_height: u64,
     /// Lane-local view for this slot.
@@ -235,6 +244,8 @@ pub(super) struct LanePayloadOwnership {
     pub(super) lane_id: LaneId,
     /// Dataspace bound to the lane payload.
     pub(super) dataspace_id: DataSpaceId,
+    /// Exact active lane incarnation commitment.
+    pub(super) lane_incarnation: Hash,
     /// Lane-local block height for the payload.
     pub(super) lane_block_height: u64,
     /// Lane-local view for the payload.
@@ -260,6 +271,8 @@ pub(super) struct LaneBlockDescriptor {
     pub(super) lane_id: LaneId,
     /// Dataspace bound to the lane-local block.
     pub(super) dataspace_id: DataSpaceId,
+    /// Exact active lane incarnation commitment.
+    pub(super) lane_incarnation: Hash,
     /// Global proposal height that planned this lane-local block.
     pub(super) proposal_height: u64,
     /// Latest committed lane-local height used as this block's predecessor tip.
@@ -303,6 +316,304 @@ pub(super) struct LaneBlockProposal {
     pub(super) proposal_hash: Hash,
     /// Canonical public proposal artifact ready for broadcast.
     pub(super) artifact: LaneBlockProposalV1,
+}
+
+/// Stable identity used to pace proposal redrive independently for each lane slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct LaneBlockRedriveIdentity {
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
+    lane_block_height: u64,
+    lane_block_view: u64,
+    proposal_hash: Hash,
+}
+
+impl LaneBlockRedriveIdentity {
+    fn from_proposal(proposal: &LaneBlockProposalV1) -> Self {
+        Self {
+            lane_id: proposal.descriptor.lane_id,
+            dataspace_id: proposal.descriptor.dataspace_id,
+            lane_incarnation: proposal.descriptor.lane_incarnation,
+            lane_block_height: proposal.descriptor.lane_block_height,
+            lane_block_view: proposal.descriptor.lane_block_view,
+            proposal_hash: proposal.proposal_hash,
+        }
+    }
+
+    fn same_height(self, other: Self) -> bool {
+        self.lane_id == other.lane_id
+            && self.dataspace_id == other.dataspace_id
+            && self.lane_incarnation == other.lane_incarnation
+            && self.lane_block_height == other.lane_block_height
+    }
+}
+
+/// Result of admitting a canonical proposal into the per-lane redrive clock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum LaneBlockRedriveObservation {
+    /// A new lane height/view started its independent redrive clock.
+    Inserted,
+    /// The exact proposal was already tracked; its original clock was preserved.
+    Duplicate,
+    /// A canonical higher view replaced the tracked lower view for this lane height.
+    Superseded {
+        /// Previously tracked lane view.
+        previous_view: u64,
+    },
+    /// The proposal is older than the canonical view already tracked for this lane height.
+    Stale {
+        /// Newest tracked lane view.
+        current_view: u64,
+    },
+    /// A different proposal attempted to claim an already tracked lane height/view.
+    Conflicting,
+    /// The proposal failed canonical stateless validation.
+    Invalid,
+}
+
+/// Bounded per-lane proposal-redrive scheduler.
+///
+/// The persisted lane proposal is immutable: its lane view, descriptor, and DA/RBC
+/// ownership are all part of the canonical hash. This scheduler therefore rotates
+/// only the transport coordinator for that exact artifact. Each timeout advances
+/// to the next committee member. After one full committee cycle, every committee
+/// member may redrive; that bounded fallback preserves liveness even when peers
+/// observed the artifact at different local instants. This allows an available
+/// Kura-backed proposal to be recovered when its original producer or the global
+/// block leader disappears, without fabricating a new payload identity.
+#[derive(Debug)]
+pub(super) struct LaneBlockRedriveTracker {
+    capacity: usize,
+    observed_at: BTreeMap<LaneBlockRedriveIdentity, Instant>,
+    order: VecDeque<LaneBlockRedriveIdentity>,
+}
+
+impl LaneBlockRedriveTracker {
+    /// Construct a tracker with a hard bound on retained lane proposal identities.
+    #[must_use]
+    pub(super) fn new(capacity: usize) -> Self {
+        Self {
+            capacity: capacity.max(1),
+            observed_at: BTreeMap::new(),
+            order: VecDeque::new(),
+        }
+    }
+
+    /// Record an internally canonical proposal without resetting duplicate clocks.
+    pub(super) fn observe(
+        &mut self,
+        proposal: &LaneBlockProposalV1,
+        now: Instant,
+    ) -> LaneBlockRedriveObservation {
+        if crate::lane_consensus::validate_lane_block_proposal(proposal).is_err() {
+            return LaneBlockRedriveObservation::Invalid;
+        }
+
+        let identity = LaneBlockRedriveIdentity::from_proposal(proposal);
+        if self.observed_at.contains_key(&identity) {
+            return LaneBlockRedriveObservation::Duplicate;
+        }
+
+        let current = self
+            .observed_at
+            .keys()
+            .copied()
+            .filter(|candidate| candidate.same_height(identity))
+            .max_by_key(|candidate| candidate.lane_block_view);
+        let observation = match current {
+            Some(current) if identity.lane_block_view < current.lane_block_view => {
+                return LaneBlockRedriveObservation::Stale {
+                    current_view: current.lane_block_view,
+                };
+            }
+            Some(current)
+                if identity.lane_block_view == current.lane_block_view
+                    && identity.proposal_hash != current.proposal_hash =>
+            {
+                return LaneBlockRedriveObservation::Conflicting;
+            }
+            Some(current) => {
+                self.observed_at
+                    .retain(|candidate, _| !candidate.same_height(identity));
+                self.order
+                    .retain(|candidate| !candidate.same_height(identity));
+                LaneBlockRedriveObservation::Superseded {
+                    previous_view: current.lane_block_view,
+                }
+            }
+            None => LaneBlockRedriveObservation::Inserted,
+        };
+
+        self.observed_at.insert(identity, now);
+        self.order.push_back(identity);
+        self.enforce_capacity();
+        observation
+    }
+
+    /// Return the timeout round for the exact current proposal, if tracked.
+    #[must_use]
+    pub(super) fn redrive_round(
+        &self,
+        proposal: &LaneBlockProposalV1,
+        now: Instant,
+        timeout: Duration,
+    ) -> Option<u64> {
+        let observed_at = self
+            .observed_at
+            .get(&LaneBlockRedriveIdentity::from_proposal(proposal))?;
+        if timeout.is_zero() {
+            return Some(0);
+        }
+        let elapsed = now.saturating_duration_since(*observed_at).as_nanos();
+        let rounds = elapsed / timeout.as_nanos();
+        Some(u64::try_from(rounds).unwrap_or(u64::MAX))
+    }
+
+    /// Return true when `peer` is the deterministic coordinator for the exact
+    /// proposal's current redrive round.
+    #[must_use]
+    pub(super) fn peer_may_redrive(
+        &self,
+        proposal: &LaneBlockProposalV1,
+        peer: &PeerId,
+        now: Instant,
+        timeout: Duration,
+    ) -> bool {
+        let Some(round) = self.redrive_round(proposal, now, timeout) else {
+            return false;
+        };
+        let Ok(validator_count) = u64::try_from(proposal.descriptor.validator_set.len()) else {
+            return false;
+        };
+        if validator_count > 0 && round >= validator_count {
+            // Local monotonic time controls transport retries only; it never
+            // changes proposal identity, vote validity, or consensus admission.
+            // Opening the exact canonical artifact to the full committee after
+            // one cycle prevents clock/observation skew from creating a silent
+            // schedule in which every peer believes a different peer should send.
+            return proposal.descriptor.validator_set.contains(peer);
+        }
+        lane_block_redrive_leader(proposal, round) == Some(peer)
+    }
+
+    fn enforce_capacity(&mut self) {
+        while self.observed_at.len() > self.capacity {
+            let Some(oldest) = self.order.pop_front() else {
+                break;
+            };
+            self.observed_at.remove(&oldest);
+        }
+        self.order
+            .retain(|identity| self.observed_at.contains_key(identity));
+    }
+}
+
+/// Select the deterministic lane proposal transport coordinator for a redrive round.
+///
+/// The seed deliberately excludes transaction and proposal hashes, preventing a
+/// proposer from grinding payload contents to select itself. Lane view and redrive
+/// round are additive rotations over the canonical committee: a genuine future
+/// view change and a local timeout both move responsibility to the next validator.
+#[must_use]
+pub(super) fn lane_block_redrive_leader(
+    proposal: &LaneBlockProposalV1,
+    redrive_round: u64,
+) -> Option<&PeerId> {
+    if crate::lane_consensus::validate_lane_block_proposal(proposal).is_err() {
+        return None;
+    }
+    let descriptor = &proposal.descriptor;
+    lane_block_slot_leader(
+        descriptor.lane_id,
+        descriptor.dataspace_id,
+        descriptor.lane_incarnation,
+        descriptor.proposal_height,
+        descriptor.previous_lane_block_height,
+        descriptor.lane_block_height,
+        descriptor.lane_block_view,
+        descriptor.validator_set_hash,
+        &descriptor.validator_set,
+        redrive_round,
+    )
+}
+
+/// Select the deterministic producer for a lane slot before transaction
+/// selection. The seed excludes all candidate and payload hashes, preventing a
+/// producer from grinding queue contents to win ownership.
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub(super) fn lane_block_slot_leader<'a>(
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
+    proposal_height: u64,
+    previous_lane_block_height: u64,
+    lane_block_height: u64,
+    lane_block_view: u64,
+    validator_set_hash: HashOf<Vec<PeerId>>,
+    validator_set: &'a [PeerId],
+    redrive_round: u64,
+) -> Option<&'a PeerId> {
+    let validator_count = u64::try_from(validator_set.len()).ok()?;
+    if validator_count == 0 {
+        return None;
+    }
+
+    let mut seed = Vec::with_capacity(128);
+    seed.extend_from_slice(b"iroha:nexus:lane-block-redrive-leader:v1");
+    seed.extend_from_slice(&lane_id.as_u32().to_be_bytes());
+    seed.extend_from_slice(&dataspace_id.as_u64().to_be_bytes());
+    seed.extend_from_slice(lane_incarnation.as_ref());
+    seed.extend_from_slice(&proposal_height.to_be_bytes());
+    seed.extend_from_slice(&previous_lane_block_height.to_be_bytes());
+    seed.extend_from_slice(&lane_block_height.to_be_bytes());
+    seed.extend_from_slice(validator_set_hash.as_ref());
+    let digest = Hash::new(seed);
+    let mut prefix = [0_u8; 8];
+    prefix.copy_from_slice(&digest.as_ref()[..8]);
+    let base = u64::from_be_bytes(prefix) % validator_count;
+    let rotation =
+        (lane_block_view % validator_count + redrive_round % validator_count) % validator_count;
+    let index = usize::try_from((base + rotation) % validator_count).ok()?;
+    validator_set.get(index)
+}
+
+/// Derive content-independent durable queue ownership identities for one lane
+/// producer slot.
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub(super) fn lane_block_reservation_identities(
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
+    proposal_height: u64,
+    lane_block_height: u64,
+    lane_block_view: u64,
+    validator_set_hash: HashOf<Vec<PeerId>>,
+    leader: &PeerId,
+) -> (Hash, Hash) {
+    let slot = norito::to_bytes(&(
+        lane_id,
+        dataspace_id,
+        lane_incarnation,
+        proposal_height,
+        lane_block_height,
+        lane_block_view,
+        validator_set_hash,
+    ))
+    .expect("lane reservation slot identity must encode");
+    let owner = Hash::new_from_chunks(&[
+        b"iroha:nexus:lane-reservation-owner:v1\0",
+        &slot,
+        &norito::to_bytes(leader).expect("lane producer identity must encode"),
+    ]);
+    let proposal = Hash::new_from_chunks(&[
+        b"iroha:nexus:lane-reservation-proposal-slot:v1\0",
+        &slot,
+        owner.as_ref(),
+    ]);
+    (owner, proposal)
 }
 
 /// Lane-local vote record over a standalone lane block proposal.
@@ -440,6 +751,11 @@ pub(super) enum LaneBlockSlotPlanError {
 /// Error returned when latest lane tips cannot be reduced from known tip candidates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum LaneBlockTipPlanError {
+    /// Active lane has no non-zero incarnation commitment.
+    MissingLaneIncarnation {
+        /// Lane missing its active incarnation.
+        lane_id: LaneId,
+    },
     /// More than one accepted consensus domain was provided for the same lane.
     DuplicateLaneDomain {
         /// Duplicated lane identifier.
@@ -1152,22 +1468,20 @@ where
         .collect()
 }
 
-/// Reduce known lane-local tips while honoring lane reset watermarks.
+/// Reduce known lane-local tips within exact lane-incarnation namespaces.
 ///
 /// Accepted lanes without a known tip start from lane-local height zero. Missing
 /// lane-local relay history must not inherit global-height compatibility
 /// coordinates, because standalone lane-block execution requires contiguous
 /// predecessor application receipts.
-/// A reset watermark is treated as the latest height of the previous lane
-/// incarnation. Planning floors known tips at that watermark and uses the
-/// watermark as the missing-tip baseline for reset lanes, so recreated lanes
-/// resume at `reset_height + 1` instead of inheriting global-height
-/// compatibility coordinates from the old incarnation.
-pub(super) fn plan_latest_lane_block_tips_with_reset_heights(
+/// Tips from retired incarnations are ignored, and a recreated lane starts at
+/// lane-local height zero regardless of prior DA/global reset coordinates.
+pub(super) fn plan_latest_lane_block_tips_with_incarnations(
     domains: &[LaneConsensusDomain],
     known_tips: &[LaneBlockTip],
     _compatibility_latest_lane_block_height: u64,
-    reset_heights: &BTreeMap<LaneId, u64>,
+    _reset_heights: &BTreeMap<LaneId, u64>,
+    lane_incarnations: &BTreeMap<LaneId, Hash>,
 ) -> Result<Vec<LaneBlockTip>, LaneBlockTipPlanError> {
     let mut domains_by_lane = BTreeMap::new();
     for domain in domains {
@@ -1184,32 +1498,30 @@ pub(super) fn plan_latest_lane_block_tips_with_reset_heights(
         let Some(domain) = domains_by_lane.get(&tip.lane_id) else {
             continue;
         };
-        let reset_height = reset_heights.get(&tip.lane_id).copied();
+        let Some(expected_incarnation) = lane_incarnations.get(&tip.lane_id).copied() else {
+            return Err(LaneBlockTipPlanError::MissingLaneIncarnation {
+                lane_id: tip.lane_id,
+            });
+        };
+        if expected_incarnation.as_ref().iter().all(|byte| *byte == 0) {
+            return Err(LaneBlockTipPlanError::MissingLaneIncarnation {
+                lane_id: tip.lane_id,
+            });
+        }
+        if tip.lane_incarnation != expected_incarnation {
+            // Durable history from a retired incarnation is inert regardless
+            // of its local height. The current incarnation starts from zero
+            // unless a matching tip is also present.
+            continue;
+        }
         if tip.dataspace_id != domain.dataspace_id {
-            if reset_height.is_some_and(|height| tip.latest_lane_block_height <= height) {
-                continue;
-            }
             return Err(LaneBlockTipPlanError::LaneTipDataspaceMismatch {
                 lane_id: tip.lane_id,
                 expected: domain.dataspace_id,
                 actual: tip.dataspace_id,
             });
         }
-        let floor_height = reset_height.unwrap_or(0);
-        let latest_lane_block_height = tip.latest_lane_block_height.max(floor_height);
-        let latest_lane_block_descriptor_hash = if latest_lane_block_height
-            == tip.latest_lane_block_height
-            && reset_height.is_none_or(|height| tip.latest_lane_block_height > height)
-        {
-            tip.latest_lane_block_descriptor_hash
-        } else {
-            None
-        };
-        let floored_tip = LaneBlockTip {
-            latest_lane_block_height,
-            latest_lane_block_descriptor_hash,
-            ..*tip
-        };
+        let floored_tip = *tip;
         match latest_by_lane.entry(tip.lane_id) {
             Entry::Occupied(mut entry) => {
                 if floored_tip.latest_lane_block_height > entry.get().latest_lane_block_height {
@@ -1243,18 +1555,27 @@ pub(super) fn plan_latest_lane_block_tips_with_reset_heights(
     Ok(domains_by_lane
         .into_iter()
         .map(|(lane_id, domain)| {
-            let baseline = reset_heights.get(&lane_id).copied().unwrap_or(0);
-            latest_by_lane
+            let lane_incarnation = lane_incarnations
                 .get(&lane_id)
                 .copied()
-                .unwrap_or(LaneBlockTip {
-                    lane_id,
-                    dataspace_id: domain.dataspace_id,
-                    latest_lane_block_height: baseline,
-                    latest_lane_block_descriptor_hash: None,
-                })
+                .ok_or(LaneBlockTipPlanError::MissingLaneIncarnation { lane_id })?;
+            if lane_incarnation.as_ref().iter().all(|byte| *byte == 0) {
+                return Err(LaneBlockTipPlanError::MissingLaneIncarnation { lane_id });
+            }
+            latest_by_lane.get(&lane_id).copied().map_or_else(
+                || {
+                    Ok(LaneBlockTip {
+                        lane_id,
+                        dataspace_id: domain.dataspace_id,
+                        lane_incarnation,
+                        latest_lane_block_height: 0,
+                        latest_lane_block_descriptor_hash: None,
+                    })
+                },
+                Ok,
+            )
         })
-        .collect())
+        .collect::<Result<Vec<_>, _>>()?)
 }
 
 /// Derive the next lane-local block slots from explicit latest lane tips.
@@ -1308,6 +1629,7 @@ pub(super) fn plan_next_lane_block_slots(
         slots.push(LaneBlockSlot {
             lane_id: domain.lane_id,
             dataspace_id: domain.dataspace_id,
+            lane_incarnation: tip.lane_incarnation,
             lane_block_height,
             lane_block_view,
         });
@@ -1352,6 +1674,14 @@ fn plan_lane_block_subjects(
         .map(|domain| LaneBlockSlot {
             lane_id: domain.lane_id,
             dataspace_id: domain.dataspace_id,
+            lane_incarnation: Hash::new(
+                [
+                    b"lane-subject-test-incarnation:".as_slice(),
+                    &domain.lane_id.as_u32().to_be_bytes(),
+                    &domain.dataspace_id.as_u64().to_be_bytes(),
+                ]
+                .concat(),
+            ),
             lane_block_height,
             lane_block_view,
         })
@@ -1449,6 +1779,7 @@ pub(super) fn plan_lane_block_subjects_for_slots(
         let subject_hash = SumeragiLanePayloadOwnership::compute_replay_subject_hash(
             domain.lane_id,
             domain.dataspace_id,
+            slot.lane_incarnation,
             slot.lane_block_height,
             slot.lane_block_view,
             &candidate_indices,
@@ -1459,6 +1790,7 @@ pub(super) fn plan_lane_block_subjects_for_slots(
         subjects.push(LaneBlockSubject {
             lane_id: domain.lane_id,
             dataspace_id: domain.dataspace_id,
+            lane_incarnation: slot.lane_incarnation,
             lane_block_height: slot.lane_block_height,
             lane_block_view: slot.lane_block_view,
             accepted_candidate_indices: domain.accepted_candidate_indices.clone(),
@@ -1542,6 +1874,7 @@ pub(super) fn plan_lane_payload_ownership(
         let expected_subject_hash = SumeragiLanePayloadOwnership::compute_replay_subject_hash(
             subject.lane_id,
             subject.dataspace_id,
+            subject.lane_incarnation,
             subject.lane_block_height,
             subject.lane_block_view,
             &candidate_indices,
@@ -1576,6 +1909,7 @@ pub(super) fn plan_lane_payload_ownership(
             SumeragiLanePayloadOwnership::compute_replay_payload_ownership_hash(
                 subject.lane_id,
                 subject.dataspace_id,
+                subject.lane_incarnation,
                 subject.lane_block_height,
                 subject.lane_block_view,
                 subject.subject_hash,
@@ -1593,6 +1927,7 @@ pub(super) fn plan_lane_payload_ownership(
         let rbc_instance_hash = SumeragiLanePayloadOwnership::compute_replay_rbc_instance_hash(
             subject.lane_id,
             subject.dataspace_id,
+            subject.lane_incarnation,
             subject.lane_block_height,
             subject.lane_block_view,
             subject.subject_hash,
@@ -1606,6 +1941,7 @@ pub(super) fn plan_lane_payload_ownership(
         ownerships.push(LanePayloadOwnership {
             lane_id: subject.lane_id,
             dataspace_id: subject.dataspace_id,
+            lane_incarnation: subject.lane_incarnation,
             lane_block_height: subject.lane_block_height,
             lane_block_view: subject.lane_block_view,
             subject_hash: subject.subject_hash,
@@ -1635,20 +1971,22 @@ pub(super) fn plan_lane_payload_ownership(
 /// reduced, reset watermarks are applied, next lane-local slots are assigned,
 /// canonical lane block subjects are derived, and DA/RBC ownership identities
 /// are validated before being returned together.
-pub(super) fn plan_lane_payload(
+pub(super) fn plan_lane_payload_with_incarnations(
     domains: &[LaneConsensusDomain],
     known_tips: &[LaneBlockTip],
     candidate_hashes: &[Hash],
     compatibility_latest_lane_block_height: u64,
     reset_heights: &BTreeMap<LaneId, u64>,
+    lane_incarnations: &BTreeMap<LaneId, Hash>,
     proposal_height: u64,
     lane_block_view: u64,
 ) -> Result<LanePayloadPlan, LanePayloadPlanError> {
-    let lane_tips = plan_latest_lane_block_tips_with_reset_heights(
+    let lane_tips = plan_latest_lane_block_tips_with_incarnations(
         domains,
         known_tips,
         compatibility_latest_lane_block_height,
         reset_heights,
+        lane_incarnations,
     )
     .map_err(LanePayloadPlanError::Tips)?;
     let slots = plan_next_lane_block_slots(domains, &lane_tips, lane_block_view)
@@ -1786,7 +2124,9 @@ fn build_lane_payload_plan_entries(
             && subject.accepted_candidate_indices == domain.accepted_candidate_indices
             && subject.accepted_transaction_hashes == accepted_transaction_hashes
             && subject.qc_mode_tag == domain.qc_mode_tag
+            && subject.lane_incarnation == slot.lane_incarnation
             && ownership.dataspace_id == subject.dataspace_id
+            && ownership.lane_incarnation == subject.lane_incarnation
             && ownership.lane_block_height == subject.lane_block_height
             && ownership.lane_block_view == subject.lane_block_view
             && ownership.subject_hash == subject.subject_hash
@@ -1806,6 +2146,7 @@ fn build_lane_payload_plan_entries(
         let mut block_descriptor = LaneBlockDescriptor {
             lane_id: domain.lane_id,
             dataspace_id: domain.dataspace_id,
+            lane_incarnation: slot.lane_incarnation,
             proposal_height,
             previous_lane_block_height: tip.latest_lane_block_height,
             previous_lane_block_descriptor_hash: tip.latest_lane_block_descriptor_hash,
@@ -1858,6 +2199,7 @@ fn build_lane_block_proposal(
     }
     let is_consistent = block_descriptor.lane_id == subject.lane_id
         && block_descriptor.dataspace_id == subject.dataspace_id
+        && block_descriptor.lane_incarnation == subject.lane_incarnation
         && block_descriptor.lane_block_height == subject.lane_block_height
         && block_descriptor.lane_block_view == subject.lane_block_view
         && block_descriptor.subject_hash == subject.subject_hash
@@ -1871,6 +2213,7 @@ fn build_lane_block_proposal(
         && block_descriptor.qc_mode_tag == ownership.qc_mode_tag
         && ownership.lane_id == subject.lane_id
         && ownership.dataspace_id == subject.dataspace_id
+        && ownership.lane_incarnation == subject.lane_incarnation
         && ownership.lane_block_height == subject.lane_block_height
         && ownership.lane_block_view == subject.lane_block_view
         && ownership.subject_hash == subject.subject_hash;
@@ -1906,6 +2249,7 @@ fn lane_block_descriptor_artifact(descriptor: &LaneBlockDescriptor) -> LaneBlock
     LaneBlockDescriptorV1 {
         lane_id: descriptor.lane_id,
         dataspace_id: descriptor.dataspace_id,
+        lane_incarnation: descriptor.lane_incarnation,
         proposal_height: descriptor.proposal_height,
         previous_lane_block_height: descriptor.previous_lane_block_height,
         previous_lane_block_descriptor_hash: descriptor.previous_lane_block_descriptor_hash,
@@ -2360,6 +2704,73 @@ impl LaneProposalBatch {
 }
 
 #[cfg(test)]
+fn test_lane_incarnations(
+    domains: &[LaneConsensusDomain],
+    known_tips: &[LaneBlockTip],
+) -> BTreeMap<LaneId, Hash> {
+    domains
+        .iter()
+        .map(|domain| {
+            let incarnation = known_tips
+                .iter()
+                .find(|tip| tip.lane_id == domain.lane_id)
+                .map_or_else(
+                    || {
+                        Hash::new(
+                            format!(
+                                "lane-tip-incarnation:{}:{}",
+                                domain.lane_id.as_u32(),
+                                domain.dataspace_id.as_u64()
+                            )
+                            .as_bytes(),
+                        )
+                    },
+                    |tip| tip.lane_incarnation,
+                );
+            (domain.lane_id, incarnation)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+fn plan_latest_lane_block_tips_with_reset_heights(
+    domains: &[LaneConsensusDomain],
+    known_tips: &[LaneBlockTip],
+    compatibility_latest_lane_block_height: u64,
+    reset_heights: &BTreeMap<LaneId, u64>,
+) -> Result<Vec<LaneBlockTip>, LaneBlockTipPlanError> {
+    plan_latest_lane_block_tips_with_incarnations(
+        domains,
+        known_tips,
+        compatibility_latest_lane_block_height,
+        reset_heights,
+        &test_lane_incarnations(domains, known_tips),
+    )
+}
+
+#[cfg(test)]
+fn plan_lane_payload(
+    domains: &[LaneConsensusDomain],
+    known_tips: &[LaneBlockTip],
+    candidate_hashes: &[Hash],
+    compatibility_latest_lane_block_height: u64,
+    reset_heights: &BTreeMap<LaneId, u64>,
+    proposal_height: u64,
+    lane_block_view: u64,
+) -> Result<LanePayloadPlan, LanePayloadPlanError> {
+    plan_lane_payload_with_incarnations(
+        domains,
+        known_tips,
+        candidate_hashes,
+        compatibility_latest_lane_block_height,
+        reset_heights,
+        &test_lane_incarnations(domains, known_tips),
+        proposal_height,
+        lane_block_view,
+    )
+}
+
+#[cfg(test)]
 mod tests {
     use std::{collections::BTreeMap, num::NonZeroU32};
 
@@ -2515,6 +2926,9 @@ mod tests {
         LaneBlockTip {
             lane_id: LaneId::new(lane),
             dataspace_id: DataSpaceId::new(dataspace),
+            lane_incarnation: Hash::new(
+                format!("lane-tip-incarnation:{lane}:{dataspace}").as_bytes(),
+            ),
             latest_lane_block_height,
             latest_lane_block_descriptor_hash: None,
         }
@@ -2580,6 +2994,228 @@ mod tests {
         let proposal_hash = proposal.artifact.computed_proposal_hash();
         proposal.artifact.proposal_hash = proposal_hash;
         proposal.proposal_hash = proposal_hash;
+    }
+
+    fn lane_redrive_artifact() -> LaneBlockProposalV1 {
+        let mut artifact = lane_block_proposal_with_committee(
+            vec![test_peer(4), test_peer(1), test_peer(3), test_peer(2)],
+            None,
+        )
+        .artifact;
+        artifact.descriptor.lane_block_view = 0;
+        artifact.descriptor.descriptor_hash = artifact.descriptor.computed_descriptor_hash();
+        artifact.proposal_hash = artifact.computed_proposal_hash();
+        artifact
+    }
+
+    fn retarget_lane_redrive_artifact(
+        mut proposal: LaneBlockProposalV1,
+        lane: u32,
+        dataspace: u64,
+        lane_block_height: u64,
+        lane_block_view: u64,
+    ) -> LaneBlockProposalV1 {
+        proposal.descriptor.lane_id = LaneId::new(lane);
+        proposal.descriptor.dataspace_id = DataSpaceId::new(dataspace);
+        proposal.descriptor.previous_lane_block_height = lane_block_height.saturating_sub(1);
+        proposal.descriptor.previous_lane_block_descriptor_hash =
+            (lane_block_height > 1).then_some(Hash::prehashed([0xA7; Hash::LENGTH]));
+        proposal.descriptor.lane_block_height = lane_block_height;
+        proposal.descriptor.lane_block_view = lane_block_view;
+        proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
+        proposal.proposal_hash = proposal.computed_proposal_hash();
+        proposal
+    }
+
+    #[test]
+    fn lane_redrive_leader_is_deterministic_and_rotates_by_view_and_timeout() {
+        let proposal = lane_redrive_artifact();
+        let validators = &proposal.descriptor.validator_set;
+        let leader_view_0 = lane_block_redrive_leader(&proposal, 0)
+            .expect("canonical proposal has a transport leader");
+        assert!(validators.contains(leader_view_0));
+        assert_eq!(
+            lane_block_redrive_leader(&proposal, 0),
+            Some(leader_view_0),
+            "leader selection must be deterministic"
+        );
+
+        let leader_after_timeout =
+            lane_block_redrive_leader(&proposal, 1).expect("backup transport leader exists");
+        assert_ne!(leader_view_0, leader_after_timeout);
+
+        let next_view = retarget_lane_redrive_artifact(proposal.clone(), 1, 11, 4, 1);
+        assert_eq!(
+            lane_block_redrive_leader(&next_view, 0),
+            Some(leader_after_timeout),
+            "a lane view change and one timeout use the same canonical one-step rotation"
+        );
+
+        let mut forged = proposal;
+        forged.proposal_hash = Hash::prehashed([0xFF; Hash::LENGTH]);
+        assert_eq!(
+            lane_block_redrive_leader(&forged, 0),
+            None,
+            "a forged proposal cannot acquire a scheduler leader"
+        );
+    }
+
+    #[test]
+    fn lane_redrive_tracker_rejects_conflicts_and_stale_views() {
+        let now = Instant::now();
+        let view_0 = lane_redrive_artifact();
+        let mut tracker = LaneBlockRedriveTracker::new(8);
+        assert_eq!(
+            tracker.observe(&view_0, now),
+            LaneBlockRedriveObservation::Inserted
+        );
+        assert_eq!(
+            tracker.observe(&view_0, now + Duration::from_secs(1)),
+            LaneBlockRedriveObservation::Duplicate,
+            "duplicate relay must not reset its timeout clock"
+        );
+
+        let mut conflicting = view_0.clone();
+        conflicting.descriptor.subject_hash = Hash::prehashed([0xD1; Hash::LENGTH]);
+        conflicting.descriptor.descriptor_hash = conflicting.descriptor.computed_descriptor_hash();
+        conflicting.proposal_hash = conflicting.computed_proposal_hash();
+        assert_eq!(
+            tracker.observe(&conflicting, now),
+            LaneBlockRedriveObservation::Conflicting
+        );
+
+        let view_2 = retarget_lane_redrive_artifact(view_0.clone(), 1, 11, 4, 2);
+        assert_eq!(
+            tracker.observe(&view_2, now + Duration::from_secs(2)),
+            LaneBlockRedriveObservation::Superseded { previous_view: 0 }
+        );
+        let view_1 = retarget_lane_redrive_artifact(view_0, 1, 11, 4, 1);
+        assert_eq!(
+            tracker.observe(&view_1, now + Duration::from_secs(3)),
+            LaneBlockRedriveObservation::Stale { current_view: 2 }
+        );
+        assert_eq!(
+            tracker.redrive_round(
+                &view_1,
+                now + Duration::from_secs(4),
+                Duration::from_secs(1)
+            ),
+            None,
+            "stale lane views must never be redriven"
+        );
+    }
+
+    #[test]
+    fn lane_redrive_timeout_is_independent_per_lane_and_height() {
+        let now = Instant::now();
+        let lane_1_height_4 = lane_redrive_artifact();
+        let lane_1_height_5 = retarget_lane_redrive_artifact(lane_1_height_4.clone(), 1, 11, 5, 0);
+        let lane_2 = retarget_lane_redrive_artifact(lane_1_height_4.clone(), 2, 22, 9, 0);
+        let idle_lane = retarget_lane_redrive_artifact(lane_1_height_4.clone(), 3, 33, 1, 0);
+        let timeout = Duration::from_secs(1);
+        let mut tracker = LaneBlockRedriveTracker::new(8);
+
+        assert_eq!(
+            tracker.observe(&lane_1_height_4, now),
+            LaneBlockRedriveObservation::Inserted
+        );
+        assert_eq!(
+            tracker.observe(&lane_1_height_5, now + Duration::from_millis(250)),
+            LaneBlockRedriveObservation::Inserted,
+            "out-of-order successor heights retain an independent clock"
+        );
+        assert_eq!(
+            tracker.observe(&lane_2, now + Duration::from_millis(900)),
+            LaneBlockRedriveObservation::Inserted
+        );
+
+        let sample_at = now + Duration::from_millis(1_100);
+        assert_eq!(
+            tracker.redrive_round(&lane_1_height_4, sample_at, timeout),
+            Some(1)
+        );
+        assert_eq!(
+            tracker.redrive_round(&lane_1_height_5, sample_at, timeout),
+            Some(0)
+        );
+        assert_eq!(tracker.redrive_round(&lane_2, sample_at, timeout), Some(0));
+        assert_eq!(
+            tracker.redrive_round(&idle_lane, sample_at, timeout),
+            None,
+            "an idle lane creates no clock and cannot stall active lane redrive"
+        );
+
+        let fallback_at = now + Duration::from_secs(4);
+        for validator in &lane_1_height_4.descriptor.validator_set {
+            assert!(
+                tracker.peer_may_redrive(&lane_1_height_4, validator, fallback_at, timeout),
+                "after one full coordinator cycle every committee member must be able to recover despite observation skew"
+            );
+        }
+    }
+
+    #[test]
+    fn lane_redrive_tracker_is_bounded_and_evicts_oldest_identity() {
+        let now = Instant::now();
+        let first = lane_redrive_artifact();
+        let second = retarget_lane_redrive_artifact(first.clone(), 2, 22, 1, 0);
+        let mut tracker = LaneBlockRedriveTracker::new(1);
+        assert_eq!(
+            tracker.observe(&first, now),
+            LaneBlockRedriveObservation::Inserted
+        );
+        assert_eq!(
+            tracker.observe(&second, now + Duration::from_millis(1)),
+            LaneBlockRedriveObservation::Inserted
+        );
+        assert_eq!(
+            tracker.redrive_round(&first, now + Duration::from_secs(1), Duration::from_secs(1)),
+            None
+        );
+        assert_eq!(
+            tracker.redrive_round(
+                &second,
+                now + Duration::from_secs(1),
+                Duration::from_secs(1)
+            ),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn lane_redrive_tracker_compacts_superseded_views_with_interleaved_lanes() {
+        let now = Instant::now();
+        let lane_a = lane_redrive_artifact();
+        let lane_b = retarget_lane_redrive_artifact(lane_a.clone(), 2, 22, 7, 0);
+        let mut tracker = LaneBlockRedriveTracker::new(2);
+        assert_eq!(
+            tracker.observe(&lane_a, now),
+            LaneBlockRedriveObservation::Inserted
+        );
+        assert_eq!(
+            tracker.observe(&lane_b, now),
+            LaneBlockRedriveObservation::Inserted
+        );
+
+        for view in 1..=64 {
+            let lane_a_view = retarget_lane_redrive_artifact(lane_a.clone(), 1, 11, 4, view);
+            assert!(matches!(
+                tracker.observe(&lane_a_view, now + Duration::from_millis(view)),
+                LaneBlockRedriveObservation::Superseded { .. }
+            ));
+        }
+
+        assert_eq!(tracker.observed_at.len(), 2);
+        assert_eq!(
+            tracker.order.len(),
+            2,
+            "superseded identities must not accumulate behind an interleaved lane"
+        );
+        assert!(
+            tracker
+                .redrive_round(&lane_b, now, Duration::from_secs(1))
+                .is_some()
+        );
     }
 
     #[test]
@@ -3540,12 +4176,14 @@ mod tests {
                 LaneBlockTip {
                     lane_id: LaneId::new(1),
                     dataspace_id: DataSpaceId::new(11),
+                    lane_incarnation: Hash::new(b"lane-tip-incarnation:1:11"),
                     latest_lane_block_height: 7,
                     latest_lane_block_descriptor_hash: Some(Hash::prehashed([0x71; Hash::LENGTH])),
                 },
                 LaneBlockTip {
                     lane_id: LaneId::new(2),
                     dataspace_id: DataSpaceId::new(22),
+                    lane_incarnation: Hash::new(b"lane-tip-incarnation:2:22"),
                     latest_lane_block_height: 0,
                     latest_lane_block_descriptor_hash: None,
                 },

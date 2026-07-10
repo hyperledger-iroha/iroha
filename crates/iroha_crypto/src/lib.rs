@@ -3,6 +3,9 @@
 
 mod algorithm;
 mod confidential;
+#[cfg(feature = "bls")]
+/// Verification primitives for drand BLS12-381 randomness beacons.
+pub mod drand;
 #[cfg(not(feature = "ffi_import"))]
 /// Symmetric/asymmetric encryption utilities.
 pub mod encryption;

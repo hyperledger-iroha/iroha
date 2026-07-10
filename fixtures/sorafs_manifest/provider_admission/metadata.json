@@ -1,7 +1,7 @@
 {
-  "envelope_digest_hex": "80b9f9285062bee7cc2d9b5f29948cbfd26c1cbfea274b6937f9e2f2279defbf",
+  "envelope_digest_hex": "f6dac4124c10bfc9905d58ec1b880ec85f747120c8d27fb0d15328f96095a4d4",
   "notes": "Deterministic fixtures for tests",
-  "proposal_digest_hex": "75ae7423ac495a9417be3b7a3ec3ef641a51632fbfa46833a3c68b43c9d1025a",
-  "renewal_envelope_digest_hex": "e838cc856d1b70a34c8503154dd0f858328365a1b3f1c36f1560f002ee9494b1",
-  "revocation_digest_hex": "9c04ca10c8573ab653000a83388871beeb90b9b9f53f1208bc3b695521eda5c3"
+  "proposal_digest_hex": "69f5a339695ce00ce917b94865ce38ea67d11d53bdf1c0583768c18ee13b2daa",
+  "renewal_envelope_digest_hex": "b703263247bdd59c285f699931f57e1e8e5f33d1b26607951bf1ba3ce891b8f1",
+  "revocation_digest_hex": "eafe0515b73971ea5aefb4fa3c6680936a1dae1843a0f05b09e0fbde29809d5b"
 }

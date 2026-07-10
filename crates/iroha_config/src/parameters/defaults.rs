@@ -1163,6 +1163,12 @@ pub mod sorafs {
         pub const MAX_PINS: usize = 10_000;
         /// Background Proof-of-Retrievability sampling cadence (seconds).
         pub const POR_SAMPLE_INTERVAL_SECS: u64 = 600;
+        /// Maximum replay events retained for each embedded runtime event stream.
+        pub const RUNTIME_EVENT_HISTORY_LIMIT: usize = 4_096;
+        /// Maximum entries retained in each auxiliary runtime state index.
+        pub const RUNTIME_STATE_ENTRY_LIMIT: usize = 65_536;
+        /// Maximum encoded size accepted for one auxiliary runtime checkpoint.
+        pub const RUNTIME_CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(64 * 1024 * 1024);
         /// Default telemetry alias advertised by the node.
         pub fn alias() -> Option<String> {
             None
@@ -1306,18 +1312,47 @@ pub mod sorafs {
         use std::path::PathBuf;
 
         /// Enable the PoR coordinator runtime.
+        ///
         pub const ENABLED: bool = false;
         /// Length of a PoR epoch (seconds).
         pub const EPOCH_INTERVAL_SECS: u64 = 60 * 60;
         /// Response window allowed for proofs (seconds).
         pub const RESPONSE_WINDOW_SECS: u64 = 15 * 60;
+        /// Minimum number of trusted operator/auditor signatures on a verdict.
+        pub const AUDITOR_SIGNATURE_THRESHOLD: u16 = 1;
+        /// Required strict-majority drand endpoint agreement.
+        pub const DRAND_QUORUM: u16 = 2;
+        /// Maximum configured drand endpoint count.
+        pub const DRAND_MAX_ENDPOINTS: usize = 8;
+        /// Drand connection timeout in milliseconds.
+        pub const DRAND_CONNECT_TIMEOUT_MS: u64 = 3_000;
+        /// Drand request timeout in milliseconds.
+        pub const DRAND_REQUEST_TIMEOUT_MS: u64 = 5_000;
+        /// Maximum accepted drand response body size.
+        pub const DRAND_MAX_BODY_BYTES: usize = 4 * 1024;
+        /// Maximum age of a verified drand beacon.
+        pub const DRAND_MAX_BEACON_AGE_SECS: u64 = 30;
+        /// Maximum tolerated local-clock future skew.
+        pub const DRAND_MAX_FUTURE_SKEW_SECS: u64 = 3;
+        /// Deadline within an epoch for authenticated provider VRF submissions.
+        pub const VRF_SUBMISSION_DEADLINE_SECS: u64 = 5 * 60;
+        /// Maximum durable VRF submission count.
+        pub const VRF_MAX_ENTRIES: usize = 65_536;
+        /// Number of epochs for which accepted VRFs/replay state remain live.
+        pub const VRF_RETENTION_EPOCHS: u64 = 7 * 24;
+        /// Maximum accepted clock skew for signed VRF submissions.
+        pub const VRF_MAX_CLOCK_SKEW_SECS: u64 = 60;
         /// Default filesystem directory used to persist governance DAG payloads.
         pub fn governance_dir() -> PathBuf {
             PathBuf::from("./storage/sorafs/governance")
         }
-        /// Optional deterministic randomness seed (hex). `None` falls back to runtime derivation.
-        pub fn randomness_seed_hex() -> Option<String> {
-            None
+        /// Durable verified drand high-water state path.
+        pub fn drand_state_path() -> PathBuf {
+            governance_dir().join("drand-high-water.to")
+        }
+        /// Durable authenticated provider VRF state path.
+        pub fn vrf_state_path() -> PathBuf {
+            governance_dir().join("provider-vrf-state.to")
         }
     }
 
@@ -2145,6 +2180,12 @@ pub mod torii {
     }
     /// SoraFS discovery disabled by default (iroha2 builds).
     pub const SORAFS_DISCOVERY_ENABLED: bool = false;
+    /// Maximum number of admitted provider replay high-water marks persisted by Torii.
+    pub const SORAFS_DISCOVERY_REPLAY_MAX_ENTRIES: NonZeroUsize = nonzero!(65_536usize);
+    /// Default path for the durable SoraFS provider advert replay checkpoint.
+    pub fn sorafs_discovery_replay_checkpoint_path() -> PathBuf {
+        PathBuf::from("sorafs_discovery/provider_advert_replay.to")
+    }
     /// Maximum SoraFS capacity declarations per provider per hour.
     pub const SORAFS_QUOTA_DECLARATION_MAX_EVENTS: Option<u32> = Some(4);
     /// Rolling window (seconds) for SoraFS capacity declarations.
@@ -2338,9 +2379,9 @@ pub mod nexus {
     pub mod autoscale {
         /// Whether consensus-driven lane autoscaling is enabled.
         pub const ENABLED: bool = false;
-        /// Minimum active lane count.
+        /// Inclusive lower lane-id bound reserved for autoscale-managed elastic lanes.
         pub const MIN_LANES: u32 = 1;
-        /// Maximum active lane count.
+        /// Exclusive upper lane-id bound reserved for autoscale-managed elastic lanes.
         pub const MAX_LANES: u32 = 8;
         /// Target block interval used by the autoscaler (milliseconds).
         pub const TARGET_BLOCK_MS: u64 = 1_000;

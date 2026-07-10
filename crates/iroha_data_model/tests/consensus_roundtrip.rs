@@ -954,6 +954,7 @@ fn rng_lane_relay_envelope(rng: &mut DeterministicRng) -> LaneRelayEnvelope {
     let settlement = LaneBlockCommitment {
         block_height: header.height().get(),
         lane_id: LaneId::new(rng.next_u32()),
+        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id: DataSpaceId::new(rng.next_u64()),
         tx_count: 1,
         total_local_micro: receipt.local_amount_micro,
@@ -1079,6 +1080,7 @@ fn rng_consensus_caps_status(rng: &mut DeterministicRng) -> SumeragiConsensusCap
         }
     };
     SumeragiConsensusCapsStatus {
+        nexus_policy_digest: rng.array32(),
         collectors_k: rng.next_u16(),
         redundant_send_r: rng.next_u8(),
         da_enabled: rng.next_bool(),
@@ -1402,6 +1404,7 @@ fn sumeragi_wire_status_roundtrip() {
         last_mode_flip_timestamp_ms: Some(123),
         last_mode_flip_error: None,
         consensus_caps: Some(SumeragiConsensusCapsStatus {
+            nexus_policy_digest: [0xA5; 32],
             collectors_k: 1,
             redundant_send_r: 1,
             da_enabled: true,
@@ -2454,6 +2457,7 @@ fn sample_lane_commitment_fixture() -> LaneBlockCommitment {
     LaneBlockCommitment {
         block_height: 8_642,
         lane_id: LaneId::new(1),
+        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id: DataSpaceId::new(7),
         tx_count: 1,
         total_local_micro: receipt.local_amount_micro,
@@ -2477,6 +2481,7 @@ fn sample_lane_commitment_fixture_without_metadata() -> LaneBlockCommitment {
     LaneBlockCommitment {
         block_height: 8_643,
         lane_id: LaneId::new(2),
+        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id: DataSpaceId::new(9),
         tx_count: 0,
         total_local_micro: 0,

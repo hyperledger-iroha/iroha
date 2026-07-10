@@ -21,7 +21,7 @@ use iroha_core::{
     smartcontracts::Execute,
     state::{State, World, WorldReadOnly},
 };
-use iroha_crypto::{Algorithm, KeyPair, PrivateKey, PublicKey, Signature};
+use iroha_crypto::{Algorithm, BlsNormal, KeyGenOption, KeyPair, PrivateKey, PublicKey, Signature};
 use iroha_data_model::{
     account::AccountAddress,
     isi::sorafs::{
@@ -65,10 +65,10 @@ use sorafs_manifest::{
     CapabilityType, CouncilSignature, EndpointAdmissionV1, EndpointAttestationKind,
     EndpointAttestationV1, EndpointKind, GatewayAuthorizationRecord, GatewayAuthorizationVerifier,
     PathDiversityPolicy, ProviderAdmissionEnvelopeV1, ProviderAdmissionProposalV1,
-    ProviderAdvertBodyV1, ProviderAdvertV1, ProviderCapabilityRangeV1, QosHints,
-    REPLICATION_ORDER_VERSION_V1, RendezvousTopic, ReplicationAssignmentV1, ReplicationOrderSlaV1,
-    ReplicationOrderV1, SignatureAlgorithm, StakePointer, StreamBudgetV1, TransportHintV1,
-    TransportProtocol,
+    ProviderAdvertBodyV1, ProviderAdvertV1, ProviderCapabilityRangeV1, ProviderVrfPublicKeyV1,
+    QosHints, REPLICATION_ORDER_VERSION_V1, RendezvousTopic, ReplicationAssignmentV1,
+    ReplicationOrderSlaV1, ReplicationOrderV1, SignatureAlgorithm, StakePointer, StreamBudgetV1,
+    TransportHintV1, TransportProtocol,
     alias_cache::{AliasCachePolicy, AliasProofEvaluation, AliasProofState, decode_alias_proof},
     compute_advert_body_digest, compute_envelope_digest, compute_proposal_digest,
     deal::{MICRO_XOR_PER_XOR, XorAmount},
@@ -4716,6 +4716,18 @@ pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>>
     let provider_public =
         checked_ed25519_public_key_array(provider_pair.public_key(), "provider public key")?;
     let provider_public_vec = provider_public.to_vec();
+    let (vrf_public, vrf_private) =
+        BlsNormal::keypair(KeyGenOption::UseSeed(provider_seed.to_vec()))
+            .map_err(|err| format!("failed to derive provider VRF fixture key: {err}"))?;
+    let vrf_pair: KeyPair = (vrf_public, vrf_private).into();
+    let provider_vrf_key = ProviderVrfPublicKeyV1::BlsNormal(
+        vrf_pair
+            .public_key()
+            .to_bytes()
+            .1
+            .try_into()
+            .map_err(|_| "Normal BLS public key must be 48 bytes")?,
+    );
 
     let provider_id =
         decode_hex_array::<32>("11223344556677889900aabbccddeeff00112233445566778899aabbccddeeff")?;
@@ -4803,6 +4815,7 @@ pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>>
         capabilities: capabilities.clone(),
         endpoints: endpoints.clone(),
         advert_key: provider_public,
+        por_vrf_key: provider_vrf_key,
         jurisdiction_code: "JP".to_owned(),
         contact_uri: Some("https://alpha.example/ops".to_owned()),
         stream_budget: Some(StreamBudgetV1 {
@@ -4864,15 +4877,10 @@ pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>>
         .map_err(|err| format!("advert body validation failed: {err}"))?;
 
     let advert_body_bytes = to_bytes(&advert_body)?;
-    let advert_signature =
-        Signature::try_new(provider_pair.private_key(), advert_body_bytes.as_slice())
-            .map_err(|err| format!("failed to sign provider advert fixture: {err}"))?;
-    let advert_signature = advert_signature.payload().to_vec();
-
     let issued_at = 1_700_592_000;
     let expires_at = issued_at + 3_600;
 
-    let advert = ProviderAdvertV1 {
+    let mut advert = ProviderAdvertV1 {
         version: sorafs_manifest::PROVIDER_ADVERT_VERSION_V1,
         issued_at,
         expires_at,
@@ -4880,14 +4888,25 @@ pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>>
         signature: sorafs_manifest::AdvertSignature {
             algorithm: SignatureAlgorithm::Ed25519,
             public_key: provider_public_vec.clone(),
-            signature: advert_signature,
+            signature: vec![0; 64],
         },
         signature_strict: true,
         allow_unknown_capabilities: false,
     };
+    let advert_signature_payload = advert.signature_payload_bytes()?;
+    advert.signature.signature = Signature::try_new(
+        provider_pair.private_key(),
+        advert_signature_payload.as_slice(),
+    )
+    .map_err(|err| format!("failed to sign provider advert fixture: {err}"))?
+    .payload()
+    .to_vec();
     advert
         .validate_with_body(issued_at)
         .map_err(|err| format!("advert validation failed: {err}"))?;
+    advert
+        .verify_signature()
+        .map_err(|err| format!("advert signature validation failed: {err}"))?;
     let advert_bytes = to_bytes(&advert)?;
     let advert_body_digest = compute_advert_body_digest(&advert_body)?;
 
@@ -7865,10 +7884,12 @@ mod tests {
         let advert_public_key =
             PublicKey::from_bytes(Algorithm::Ed25519, &advert.signature.public_key)
                 .expect("decode advert signing public key");
-        let advert_body_bytes = to_bytes(&advert.body).expect("encode advert body");
+        let advert_signature_payload = advert
+            .signature_payload_bytes()
+            .expect("encode advert signature envelope");
         Signature::try_from_bytes(&advert.signature.signature)
             .expect("provider advert fixture signature is non-empty and nonzero")
-            .verify(&advert_public_key, &advert_body_bytes)
+            .verify(&advert_public_key, &advert_signature_payload)
             .expect("provider advert signature verifies");
 
         let envelope_bytes = fs::read(envelope_path).expect("read provider envelope");

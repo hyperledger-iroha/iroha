@@ -1,9 +1,25 @@
 //! Provider advert ingestion and validation for Torii's SoraFS discovery pipeline.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    fs::{self, OpenOptions},
+    io::{self, Read, Write},
+    num::NonZeroUsize,
+    path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
+
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 
 use blake3::hash as blake3_hash;
-use norito::to_bytes;
+use norito::{
+    derive::{NoritoDeserialize, NoritoSerialize},
+    to_bytes,
+};
 use sorafs_manifest::{
     AdvertSignatureError, AdvertValidationError, CapabilityType, ProviderAdvertV1,
     SignatureAlgorithm,
@@ -14,6 +30,35 @@ use super::admission::{AdmissionCheckError, AdmissionRegistry, verify_advert_aga
 
 /// Fingerprint size for stored adverts (BLAKE3-256).
 pub const FINGERPRINT_LEN: usize = 32;
+
+const REPLAY_CHECKPOINT_VERSION_V1: u8 = 1;
+const REPLAY_CHECKPOINT_HARD_MAX_ENTRIES: usize = 65_536;
+const REPLAY_CHECKPOINT_BASE_MAX_BYTES: u64 = 4 * 1024;
+const REPLAY_CHECKPOINT_MAX_BYTES_PER_ENTRY: u64 = 128;
+static REPLAY_CHECKPOINT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AdvertReplayHighWater {
+    issued_at: u64,
+    fingerprint: [u8; FINGERPRINT_LEN],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct ProviderAdvertReplayEntryV1 {
+    version: u8,
+    provider_id: [u8; 32],
+    issued_at: u64,
+    fingerprint: [u8; FINGERPRINT_LEN],
+}
+
+#[derive(Debug)]
+struct ReplayCheckpointStore {
+    path: PathBuf,
+    max_entries: usize,
+    // Retained for the full cache lifetime; dropping the cache releases the
+    // operating-system advisory lock.
+    _lock_file: fs::File,
+}
 
 /// Outcome of ingesting a provider advert into the cache.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,10 +89,6 @@ pub enum AdvertWarning {
     MissingStreamBudget,
     /// Provider advert omitted transport hints for range fetch.
     MissingTransportHints,
-    /// Provider advert disabled strict signature enforcement.
-    SignatureNotStrict,
-    /// Provider advert signature failed verification but enforcement was bypassed.
-    SignatureInvalid,
 }
 
 impl AdvertWarning {
@@ -58,8 +99,6 @@ impl AdvertWarning {
             AdvertWarning::MissingChunkRangeCapability => "missing_chunk_range",
             AdvertWarning::MissingStreamBudget => "missing_stream_budget",
             AdvertWarning::MissingTransportHints => "missing_transport_hints",
-            AdvertWarning::SignatureNotStrict => "signature_not_strict",
-            AdvertWarning::SignatureInvalid => "signature_invalid",
         }
     }
 
@@ -79,6 +118,105 @@ pub struct AdvertIngestResult {
     pub warnings: Vec<AdvertWarning>,
 }
 
+/// Errors raised while loading or atomically updating the durable provider
+/// advert replay checkpoint.
+#[derive(Debug, Error)]
+pub enum ReplayCheckpointError {
+    /// The admitted provider registry exceeds the configured checkpoint bound.
+    #[error(
+        "admission registry contains {admitted} providers, exceeding replay checkpoint limit {max_entries}"
+    )]
+    AdmissionRegistryTooLarge {
+        /// Number of providers in the admission registry.
+        admitted: usize,
+        /// Configured maximum checkpoint entries.
+        max_entries: usize,
+    },
+    /// The configured checkpoint limit exceeds the implementation's hard
+    /// allocation and file-size ceiling.
+    #[error("configured replay checkpoint limit {configured} exceeds hard maximum {hard_maximum}")]
+    ConfiguredLimitTooLarge {
+        /// Operator-configured entry limit.
+        configured: usize,
+        /// Hard first-release entry limit.
+        hard_maximum: usize,
+    },
+    /// A checkpoint read or write failed.
+    #[error("provider advert replay checkpoint I/O failed at {path:?}: {source}")]
+    Io {
+        /// Checkpoint path involved in the failed operation.
+        path: PathBuf,
+        /// Underlying filesystem error.
+        #[source]
+        source: io::Error,
+    },
+    /// The checkpoint rename completed but syncing its directory failed, so
+    /// further ingestion must remain disabled until restart and repair.
+    #[error("provider advert replay checkpoint durability is uncertain at {path:?}: {source}")]
+    DurabilityUncertain {
+        /// Checkpoint whose rename could not be durably confirmed.
+        path: PathBuf,
+        /// Underlying directory-sync error.
+        #[source]
+        source: io::Error,
+    },
+    /// A prior ambiguous durability failure poisoned this cache instance.
+    #[error("provider advert replay checkpoint is poisoned after an uncertain commit")]
+    Poisoned,
+    /// Another Torii process already owns the checkpoint lock.
+    #[error("provider advert replay checkpoint is already locked at {path:?}")]
+    LockHeld {
+        /// Lock file held by the competing process.
+        path: PathBuf,
+    },
+    /// Checkpoint bytes could not be encoded or decoded with Norito.
+    #[error("provider advert replay checkpoint codec failure: {0}")]
+    Codec(String),
+    /// The persisted checkpoint version is unsupported.
+    #[error("unsupported provider advert replay checkpoint version {version}")]
+    UnsupportedVersion {
+        /// Version found in the persisted checkpoint.
+        version: u8,
+    },
+    /// A persisted checkpoint must contain at least one provider high-water mark.
+    #[error("provider advert replay checkpoint is empty")]
+    Empty,
+    /// The checkpoint is larger than the configured size bound.
+    #[error("provider advert replay checkpoint is {actual} bytes; maximum is {maximum}")]
+    TooLarge {
+        /// Observed checkpoint length.
+        actual: u64,
+        /// Maximum permitted checkpoint length.
+        maximum: u64,
+    },
+    /// The checkpoint contains more entries than configured.
+    #[error("provider advert replay checkpoint has {actual} entries; maximum is {maximum}")]
+    TooManyEntries {
+        /// Observed number of entries.
+        actual: usize,
+        /// Maximum permitted number of entries.
+        maximum: usize,
+    },
+    /// The checkpoint does not use the canonical Norito encoding.
+    #[error("provider advert replay checkpoint is not canonically encoded")]
+    NonCanonicalEncoding,
+    /// Checkpoint provider identifiers are not strictly increasing.
+    #[error("provider advert replay checkpoint entries are not strictly sorted and unique")]
+    NonCanonicalOrder,
+    /// A checkpoint entry is no longer backed by the configured admission registry.
+    #[error("provider advert replay checkpoint contains unadmitted provider {provider_id:02x?}")]
+    ProviderNotAdmitted {
+        /// Provider identifier absent from the admission registry.
+        provider_id: [u8; 32],
+    },
+    /// A new admitted provider would exceed the configured high-water bound.
+    #[error("provider advert replay high-water limit {maximum} reached")]
+    CapacityExceeded {
+        /// Maximum permitted number of provider high-water entries.
+        maximum: usize,
+    },
+}
+
 /// Errors surfaced while processing provider adverts.
 #[derive(Debug, Error)]
 pub enum AdvertError {
@@ -91,9 +229,29 @@ pub enum AdvertError {
     /// The advert declared a signature algorithm Torii does not support.
     #[error("unsupported signature algorithm: {0:?}")]
     UnsupportedSignature(SignatureAlgorithm),
-    /// Signature verification failed while strict mode was enforced.
+    /// Mandatory signature verification failed.
     #[error("signature verification failed: {0}")]
     Signature(String),
+    /// Torii requires signature verification for all remotely supplied adverts.
+    #[error("provider advert disabled mandatory signature verification")]
+    SignaturePolicyDisabled,
+    /// A provider attempted to replace a newer advert with an older or
+    /// conflicting advert.
+    #[error(
+        "provider advert issued_at is not monotonic for {provider_id:02x?} (current={current_issued_at}, incoming={incoming_issued_at})"
+    )]
+    NonMonotonicIssuedAt {
+        /// Provider whose cached advert would have been replaced.
+        provider_id: [u8; 32],
+        /// Issuance timestamp already stored in the cache.
+        current_issued_at: u64,
+        /// Issuance timestamp supplied by the rejected advert.
+        incoming_issued_at: u64,
+    },
+    /// Persisting the provider's replay high-water mark failed. The cache is
+    /// left unchanged.
+    #[error("provider advert replay checkpoint rejected update: {0}")]
+    ReplayCheckpoint(#[from] ReplayCheckpointError),
     /// The advert referenced capability TLVs not present in the allow-list.
     #[error("unknown capabilities rejected: {capabilities:?}")]
     UnknownCapabilities {
@@ -115,6 +273,492 @@ pub enum AdvertError {
         error: AdmissionCheckError,
     },
 }
+
+impl ReplayCheckpointStore {
+    fn new(path: PathBuf, max_entries: NonZeroUsize) -> Result<Self, ReplayCheckpointError> {
+        let lock_file = acquire_checkpoint_lock(&path)?;
+        Ok(Self {
+            path,
+            max_entries: max_entries.get(),
+            _lock_file: lock_file,
+        })
+    }
+
+    fn maximum_bytes(&self) -> u64 {
+        u64::try_from(self.max_entries)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(REPLAY_CHECKPOINT_MAX_BYTES_PER_ENTRY)
+            .saturating_add(REPLAY_CHECKPOINT_BASE_MAX_BYTES)
+    }
+
+    fn load(
+        &self,
+        admission: &AdmissionRegistry,
+    ) -> Result<HashMap<[u8; 32], AdvertReplayHighWater>, ReplayCheckpointError> {
+        let Some(bytes) = read_checkpoint_bounded(&self.path, self.maximum_bytes())? else {
+            return Ok(HashMap::new());
+        };
+        // Preflight the top-level sequence length before generic decoding. This
+        // prevents a corrupt length prefix from requesting an attacker-chosen
+        // allocation even when the checkpoint file itself is bounded.
+        let view = norito::core::from_bytes_view(&bytes)
+            .map_err(|err| ReplayCheckpointError::Codec(err.to_string()))?;
+        let (declared_entries, _) = norito::core::read_seq_len_slice(view.as_bytes())
+            .map_err(|err| ReplayCheckpointError::Codec(err.to_string()))?;
+        if declared_entries > self.max_entries {
+            return Err(ReplayCheckpointError::TooManyEntries {
+                actual: declared_entries,
+                maximum: self.max_entries,
+            });
+        }
+        let entries: Vec<ProviderAdvertReplayEntryV1> = norito::decode_from_bytes(&bytes)
+            .map_err(|err| ReplayCheckpointError::Codec(err.to_string()))?;
+        if entries.is_empty() {
+            return Err(ReplayCheckpointError::Empty);
+        }
+        if let Some(entry) = entries
+            .iter()
+            .find(|entry| entry.version != REPLAY_CHECKPOINT_VERSION_V1)
+        {
+            return Err(ReplayCheckpointError::UnsupportedVersion {
+                version: entry.version,
+            });
+        }
+        if entries
+            .windows(2)
+            .any(|pair| pair[0].provider_id >= pair[1].provider_id)
+        {
+            return Err(ReplayCheckpointError::NonCanonicalOrder);
+        }
+        let canonical =
+            to_bytes(&entries).map_err(|err| ReplayCheckpointError::Codec(err.to_string()))?;
+        if canonical != bytes {
+            return Err(ReplayCheckpointError::NonCanonicalEncoding);
+        }
+
+        let mut high_water = HashMap::with_capacity(entries.len());
+        for entry in entries {
+            if admission.entry(&entry.provider_id).is_none() {
+                return Err(ReplayCheckpointError::ProviderNotAdmitted {
+                    provider_id: entry.provider_id,
+                });
+            }
+            high_water.insert(
+                entry.provider_id,
+                AdvertReplayHighWater {
+                    issued_at: entry.issued_at,
+                    fingerprint: entry.fingerprint,
+                },
+            );
+        }
+        Ok(high_water)
+    }
+
+    fn persist(
+        &self,
+        high_water: &HashMap<[u8; 32], AdvertReplayHighWater>,
+    ) -> Result<(), ReplayCheckpointError> {
+        if high_water.len() > self.max_entries {
+            return Err(ReplayCheckpointError::CapacityExceeded {
+                maximum: self.max_entries,
+            });
+        }
+        let mut entries = high_water
+            .iter()
+            .map(|(provider_id, high_water)| ProviderAdvertReplayEntryV1 {
+                version: REPLAY_CHECKPOINT_VERSION_V1,
+                provider_id: *provider_id,
+                issued_at: high_water.issued_at,
+                fingerprint: high_water.fingerprint,
+            })
+            .collect::<Vec<_>>();
+        entries.sort_unstable_by_key(|entry| entry.provider_id);
+        let bytes =
+            to_bytes(&entries).map_err(|err| ReplayCheckpointError::Codec(err.to_string()))?;
+        let actual = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        let maximum = self.maximum_bytes();
+        if actual > maximum {
+            return Err(ReplayCheckpointError::TooLarge { actual, maximum });
+        }
+        write_checkpoint_atomic(&self.path, &bytes)
+    }
+}
+
+fn acquire_checkpoint_lock(checkpoint_path: &Path) -> Result<fs::File, ReplayCheckpointError> {
+    validate_checkpoint_path(checkpoint_path)?;
+    let parent = checkpoint_parent(checkpoint_path);
+    fs::create_dir_all(parent).map_err(|source| ReplayCheckpointError::Io {
+        path: parent.to_path_buf(),
+        source,
+    })?;
+    validate_checkpoint_path(checkpoint_path)?;
+
+    let lock_path = checkpoint_path.with_added_extension("lock");
+    validate_checkpoint_path(&lock_path)?;
+    let before_open = match fs::symlink_metadata(&lock_path) {
+        Ok(metadata) => Some(metadata),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+        Err(source) => {
+            return Err(ReplayCheckpointError::Io {
+                path: lock_path,
+                source,
+            });
+        }
+    };
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true);
+    set_no_follow_flag(&mut options);
+    set_private_create_mode(&mut options);
+    let file = options
+        .open(&lock_path)
+        .map_err(|source| ReplayCheckpointError::Io {
+            path: lock_path.clone(),
+            source,
+        })?;
+    let opened_metadata = file
+        .metadata()
+        .map_err(|source| ReplayCheckpointError::Io {
+            path: lock_path.clone(),
+            source,
+        })?;
+    validate_lock_file_metadata(&lock_path, &opened_metadata)?;
+    if before_open
+        .as_ref()
+        .is_some_and(|metadata| !metadata_identifies_same_file(metadata, &opened_metadata))
+    {
+        return Err(checkpoint_io_error(
+            &lock_path,
+            "checkpoint lock changed between inspection and open",
+        ));
+    }
+    let after_open =
+        fs::symlink_metadata(&lock_path).map_err(|source| ReplayCheckpointError::Io {
+            path: lock_path.clone(),
+            source,
+        })?;
+    if !metadata_identifies_same_file(&opened_metadata, &after_open) {
+        return Err(checkpoint_io_error(
+            &lock_path,
+            "checkpoint lock path changed while opening",
+        ));
+    }
+    validate_checkpoint_path(&lock_path)?;
+
+    match file.try_lock() {
+        Ok(()) => {}
+        Err(fs::TryLockError::WouldBlock) => {
+            return Err(ReplayCheckpointError::LockHeld { path: lock_path });
+        }
+        Err(fs::TryLockError::Error(source)) => {
+            return Err(ReplayCheckpointError::Io {
+                path: lock_path,
+                source,
+            });
+        }
+    }
+    let locked_path_metadata =
+        fs::symlink_metadata(&lock_path).map_err(|source| ReplayCheckpointError::Io {
+            path: lock_path.clone(),
+            source,
+        })?;
+    if !metadata_identifies_same_file(&opened_metadata, &locked_path_metadata) {
+        return Err(checkpoint_io_error(
+            &lock_path,
+            "checkpoint lock path changed while acquiring ownership",
+        ));
+    }
+    validate_checkpoint_path(&lock_path)?;
+    Ok(file)
+}
+
+fn validate_lock_file_metadata(
+    path: &Path,
+    metadata: &fs::Metadata,
+) -> Result<(), ReplayCheckpointError> {
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(checkpoint_io_error(
+            path,
+            "checkpoint lock must be a regular file and must not be a symlink",
+        ));
+    }
+    #[cfg(unix)]
+    if metadata.permissions().mode() & 0o077 != 0 {
+        return Err(checkpoint_io_error(
+            path,
+            "checkpoint lock permissions must not grant group or other access",
+        ));
+    }
+    Ok(())
+}
+
+fn read_checkpoint_bounded(
+    path: &Path,
+    maximum_bytes: u64,
+) -> Result<Option<Vec<u8>>, ReplayCheckpointError> {
+    let path_metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => {
+            return Err(ReplayCheckpointError::Io {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
+    };
+    validate_checkpoint_file_metadata(path, &path_metadata, maximum_bytes)?;
+    validate_checkpoint_path(path)?;
+
+    let mut options = OpenOptions::new();
+    options.read(true);
+    set_no_follow_flag(&mut options);
+    let mut file = options
+        .open(path)
+        .map_err(|source| ReplayCheckpointError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    let opened_metadata = file
+        .metadata()
+        .map_err(|source| ReplayCheckpointError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    validate_checkpoint_file_metadata(path, &opened_metadata, maximum_bytes)?;
+    if !metadata_identifies_same_file(&path_metadata, &opened_metadata) {
+        return Err(checkpoint_io_error(
+            path,
+            "checkpoint changed between inspection and open",
+        ));
+    }
+
+    let capacity = usize::try_from(opened_metadata.len()).unwrap_or(usize::MAX);
+    let mut bytes = Vec::with_capacity(capacity.min(64 * 1024));
+    (&mut file)
+        .take(maximum_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|source| ReplayCheckpointError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    let actual = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    if actual > maximum_bytes {
+        return Err(ReplayCheckpointError::TooLarge {
+            actual,
+            maximum: maximum_bytes,
+        });
+    }
+    let final_opened_metadata = file
+        .metadata()
+        .map_err(|source| ReplayCheckpointError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    if opened_metadata.len() != final_opened_metadata.len()
+        || opened_metadata.len() != actual
+        || !metadata_identifies_same_file(&opened_metadata, &final_opened_metadata)
+    {
+        return Err(checkpoint_io_error(
+            path,
+            "checkpoint changed while reading",
+        ));
+    }
+    let final_path_metadata =
+        fs::symlink_metadata(path).map_err(|source| ReplayCheckpointError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    if !metadata_identifies_same_file(&opened_metadata, &final_path_metadata) {
+        return Err(checkpoint_io_error(
+            path,
+            "checkpoint path changed while reading",
+        ));
+    }
+    validate_checkpoint_path(path)?;
+    Ok(Some(bytes))
+}
+
+fn validate_checkpoint_file_metadata(
+    path: &Path,
+    metadata: &fs::Metadata,
+    maximum_bytes: u64,
+) -> Result<(), ReplayCheckpointError> {
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(checkpoint_io_error(
+            path,
+            "checkpoint must be a regular file and must not be a symlink",
+        ));
+    }
+    if metadata.len() > maximum_bytes {
+        return Err(ReplayCheckpointError::TooLarge {
+            actual: metadata.len(),
+            maximum: maximum_bytes,
+        });
+    }
+    #[cfg(unix)]
+    if metadata.permissions().mode() & 0o077 != 0 {
+        return Err(checkpoint_io_error(
+            path,
+            "checkpoint permissions must not grant group or other access",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+#[cfg(not(unix))]
+fn metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.len() == right.len()
+}
+
+fn write_checkpoint_atomic(path: &Path, bytes: &[u8]) -> Result<(), ReplayCheckpointError> {
+    validate_checkpoint_path(path)?;
+    let parent = checkpoint_parent(path);
+    fs::create_dir_all(parent).map_err(|source| ReplayCheckpointError::Io {
+        path: parent.to_path_buf(),
+        source,
+    })?;
+    validate_checkpoint_path(path)?;
+
+    let counter = REPLAY_CHECKPOINT_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let temp_path = path.with_added_extension(format!("tmp.{}.{}", std::process::id(), counter));
+    let mut renamed = false;
+    let write_result = (|| {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        set_no_follow_flag(&mut options);
+        set_private_create_mode(&mut options);
+        let mut file = options
+            .open(&temp_path)
+            .map_err(|source| ReplayCheckpointError::Io {
+                path: temp_path.clone(),
+                source,
+            })?;
+        let metadata = file
+            .metadata()
+            .map_err(|source| ReplayCheckpointError::Io {
+                path: temp_path.clone(),
+                source,
+            })?;
+        if !metadata.is_file() {
+            return Err(checkpoint_io_error(
+                &temp_path,
+                "atomic checkpoint temporary path is not a regular file",
+            ));
+        }
+        file.write_all(bytes)
+            .and_then(|()| file.sync_all())
+            .map_err(|source| ReplayCheckpointError::Io {
+                path: temp_path.clone(),
+                source,
+            })?;
+        drop(file);
+        validate_checkpoint_path(path)?;
+        fs::rename(&temp_path, path).map_err(|source| ReplayCheckpointError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        renamed = true;
+        sync_checkpoint_parent(parent).map_err(|source| {
+            ReplayCheckpointError::DurabilityUncertain {
+                path: path.to_path_buf(),
+                source,
+            }
+        })?;
+        Ok(())
+    })();
+    if write_result.is_err() && !renamed {
+        let _ = fs::remove_file(&temp_path);
+    }
+    write_result
+}
+
+fn checkpoint_parent(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
+#[cfg(unix)]
+fn sync_checkpoint_parent(parent: &Path) -> io::Result<()> {
+    fs::File::open(parent)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_checkpoint_parent(_parent: &Path) -> io::Result<()> {
+    Ok(())
+}
+
+fn validate_checkpoint_path(path: &Path) -> Result<(), ReplayCheckpointError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err(checkpoint_io_error(
+                    path,
+                    "checkpoint output must be a regular file and must not be a symlink",
+                ));
+            }
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(source) => {
+            return Err(ReplayCheckpointError::Io {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
+    }
+
+    let parent = checkpoint_parent(path);
+    for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
+        if ancestor.as_os_str().is_empty() {
+            continue;
+        }
+        match fs::symlink_metadata(ancestor) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                    return Err(checkpoint_io_error(
+                        ancestor,
+                        "checkpoint parent must be a real directory and must not be a symlink",
+                    ));
+                }
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(ReplayCheckpointError::Io {
+                    path: ancestor.to_path_buf(),
+                    source,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn checkpoint_io_error(path: &Path, message: &'static str) -> ReplayCheckpointError {
+    ReplayCheckpointError::Io {
+        path: path.to_path_buf(),
+        source: io::Error::other(message),
+    }
+}
+
+#[cfg(unix)]
+fn set_no_follow_flag(options: &mut OpenOptions) {
+    options.custom_flags(libc::O_NOFOLLOW);
+}
+
+#[cfg(not(unix))]
+fn set_no_follow_flag(_options: &mut OpenOptions) {}
+
+#[cfg(unix)]
+fn set_private_create_mode(options: &mut OpenOptions) {
+    options.mode(0o600);
+}
+
+#[cfg(not(unix))]
+fn set_private_create_mode(_options: &mut OpenOptions) {}
 
 /// Sanitised provider advert stored by the cache.
 #[derive(Debug, Clone)]
@@ -151,12 +795,20 @@ impl AdvertRecord {
     }
 }
 
-/// In-memory cache for provider adverts propagated through Torii.
+/// Provider advert cache propagated through Torii, with optional durable replay
+/// high-water storage.
 #[derive(Debug)]
 pub struct ProviderAdvertCache {
     known_capabilities: Vec<CapabilityType>,
     records: HashMap<[u8; FINGERPRINT_LEN], AdvertRecord>,
     by_provider: HashMap<[u8; 32], [u8; FINGERPRINT_LEN]>,
+    // Retained after record pruning so a shorter-lived replacement cannot be
+    // followed by replaying an older advert that remains within its own TTL.
+    // Entries are added only after governance admission succeeds, bounding
+    // cardinality to admitted provider identities.
+    replay_high_water: HashMap<[u8; 32], AdvertReplayHighWater>,
+    replay_checkpoint: Option<ReplayCheckpointStore>,
+    replay_checkpoint_poisoned: bool,
     admission: Arc<AdmissionRegistry>,
 }
 
@@ -171,8 +823,55 @@ impl ProviderAdvertCache {
             known_capabilities: known_capabilities.into_iter().collect(),
             records: HashMap::new(),
             by_provider: HashMap::new(),
+            replay_high_water: HashMap::new(),
+            replay_checkpoint: None,
+            replay_checkpoint_poisoned: false,
             admission,
         }
+    }
+
+    /// Construct a cache backed by an atomic, bounded Norito replay checkpoint.
+    ///
+    /// The constructor fails closed when the checkpoint is corrupt,
+    /// non-canonical, oversized, symlink-backed, or contains an identity absent
+    /// from the admission registry.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ReplayCheckpointError`] if the admission registry exceeds the
+    /// configured bound or the checkpoint cannot be loaded securely.
+    pub fn new_persistent<I>(
+        known_capabilities: I,
+        admission: Arc<AdmissionRegistry>,
+        checkpoint_path: PathBuf,
+        max_entries: NonZeroUsize,
+    ) -> Result<Self, ReplayCheckpointError>
+    where
+        I: IntoIterator<Item = CapabilityType>,
+    {
+        if max_entries.get() > REPLAY_CHECKPOINT_HARD_MAX_ENTRIES {
+            return Err(ReplayCheckpointError::ConfiguredLimitTooLarge {
+                configured: max_entries.get(),
+                hard_maximum: REPLAY_CHECKPOINT_HARD_MAX_ENTRIES,
+            });
+        }
+        if admission.len() > max_entries.get() {
+            return Err(ReplayCheckpointError::AdmissionRegistryTooLarge {
+                admitted: admission.len(),
+                max_entries: max_entries.get(),
+            });
+        }
+        let replay_checkpoint = ReplayCheckpointStore::new(checkpoint_path, max_entries)?;
+        let replay_high_water = replay_checkpoint.load(&admission)?;
+        Ok(Self {
+            known_capabilities: known_capabilities.into_iter().collect(),
+            records: HashMap::new(),
+            by_provider: HashMap::new(),
+            replay_high_water,
+            replay_checkpoint: Some(replay_checkpoint),
+            replay_checkpoint_poisoned: false,
+            admission,
+        })
     }
 
     /// Attempt to ingest a provider advert.
@@ -184,7 +883,8 @@ impl ProviderAdvertCache {
     ///
     /// # Errors
     ///
-    /// Returns an [`AdvertError`] if signature verification fails, the advert
+    /// Returns an [`AdvertError`] if mandatory signature verification fails,
+    /// the advert is not newer than the provider's cached advert, the advert
     /// requests unknown capabilities without opting in, or the associated
     /// admission record rejects the advert contents.
     pub fn ingest(
@@ -192,15 +892,16 @@ impl ProviderAdvertCache {
         advert: ProviderAdvertV1,
         now: u64,
     ) -> Result<AdvertIngestResult, AdvertError> {
+        if self.replay_checkpoint_poisoned {
+            return Err(ReplayCheckpointError::Poisoned.into());
+        }
         advert.validate_with_body(now)?;
         let provider_id = advert.body.provider_id;
-        let mut warnings = collect_warnings(&advert);
-        match verify_signature(&advert) {
-            Ok(()) => {}
-            Err(_err @ AdvertError::Signature(_)) if !advert.signature_strict => {
-                warnings.push(AdvertWarning::SignatureInvalid);
-            }
-            Err(err) => return Err(err),
+        let issued_at = advert.issued_at;
+        let warnings = collect_warnings(&advert);
+        verify_signature(&advert)?;
+        if !advert.signature_strict {
+            return Err(AdvertError::SignaturePolicyDisabled);
         }
 
         let unknown_caps: Vec<CapabilityType> = advert
@@ -245,6 +946,52 @@ impl ProviderAdvertCache {
                     warnings,
                 });
             }
+        }
+        let already_durable = match self.replay_high_water.get(&provider_id).copied() {
+            Some(current)
+                if issued_at < current.issued_at
+                    || (issued_at == current.issued_at && fingerprint != current.fingerprint) =>
+            {
+                return Err(AdvertError::NonMonotonicIssuedAt {
+                    provider_id,
+                    current_issued_at: current.issued_at,
+                    incoming_issued_at: issued_at,
+                });
+            }
+            Some(current) if issued_at == current.issued_at => true,
+            Some(_) | None => false,
+        };
+
+        if !already_durable {
+            let previous_high_water = self.replay_high_water.insert(
+                provider_id,
+                AdvertReplayHighWater {
+                    issued_at,
+                    fingerprint,
+                },
+            );
+            if let Some(checkpoint) = &self.replay_checkpoint
+                && let Err(err) = checkpoint.persist(&self.replay_high_water)
+            {
+                if matches!(&err, ReplayCheckpointError::DurabilityUncertain { .. }) {
+                    // Keep the candidate high-water and poison this cache. If
+                    // the rename committed, rolling back memory could let a
+                    // lower timestamp overwrite the newer checkpoint.
+                    self.replay_checkpoint_poisoned = true;
+                } else {
+                    match previous_high_water {
+                        Some(previous) => {
+                            self.replay_high_water.insert(provider_id, previous);
+                        }
+                        None => {
+                            self.replay_high_water.remove(&provider_id);
+                        }
+                    }
+                }
+                return Err(AdvertError::ReplayCheckpoint(err));
+            }
+        }
+        if let Some(prev_fp) = previous {
             self.records.remove(&prev_fp);
         }
 
@@ -291,6 +1038,9 @@ impl ProviderAdvertCache {
     }
 
     /// Revalidate cached adverts and drop entries that no longer pass admission checks.
+    ///
+    /// Provider issuance high-water marks are retained so pruning cannot reopen
+    /// a replay window for older adverts.
     pub fn prune_stale(&mut self, now: u64) -> usize {
         let mut to_remove = Vec::new();
         for (&fingerprint, record) in &self.records {
@@ -388,9 +1138,244 @@ fn collect_warnings(advert: &ProviderAdvertV1) -> Vec<AdvertWarning> {
             warnings.push(AdvertWarning::MissingTransportHints);
         }
     }
-    if !advert.signature_strict {
-        warnings.push(AdvertWarning::SignatureNotStrict);
+    warnings
+}
+
+#[cfg(test)]
+mod replay_checkpoint_tests {
+    use super::*;
+
+    fn max_entries(value: usize) -> NonZeroUsize {
+        NonZeroUsize::new(value).expect("test checkpoint capacity is non-zero")
     }
 
-    warnings
+    fn checkpoint_store(path: PathBuf, capacity: usize) -> ReplayCheckpointStore {
+        ReplayCheckpointStore::new(path, max_entries(capacity))
+            .expect("acquire test replay checkpoint lock")
+    }
+
+    fn entry(provider_byte: u8, issued_at: u64) -> ProviderAdvertReplayEntryV1 {
+        ProviderAdvertReplayEntryV1 {
+            version: REPLAY_CHECKPOINT_VERSION_V1,
+            provider_id: [provider_byte; 32],
+            issued_at,
+            fingerprint: [provider_byte.wrapping_add(1); FINGERPRINT_LEN],
+        }
+    }
+
+    fn write_private(path: &Path, bytes: &[u8]) {
+        fs::write(path, bytes).expect("write checkpoint fixture");
+        #[cfg(unix)]
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .expect("set private checkpoint fixture permissions");
+    }
+
+    #[test]
+    fn checkpoint_rejects_empty_payload() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("replay.to");
+        write_private(
+            &path,
+            &to_bytes(&Vec::<ProviderAdvertReplayEntryV1>::new()).unwrap(),
+        );
+        let store = checkpoint_store(path, 4);
+        assert!(matches!(
+            store.load(&AdmissionRegistry::empty()),
+            Err(ReplayCheckpointError::Empty)
+        ));
+    }
+
+    #[test]
+    fn persistent_cache_rejects_configured_limit_above_hard_bound() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let err = ProviderAdvertCache::new_persistent(
+            [],
+            Arc::new(AdmissionRegistry::empty()),
+            temp.path().join("replay.to"),
+            max_entries(REPLAY_CHECKPOINT_HARD_MAX_ENTRIES + 1),
+        )
+        .expect_err("configured limit must remain absolutely bounded");
+        assert!(matches!(
+            err,
+            ReplayCheckpointError::ConfiguredLimitTooLarge {
+                configured,
+                hard_maximum
+            } if configured == REPLAY_CHECKPOINT_HARD_MAX_ENTRIES + 1
+                && hard_maximum == REPLAY_CHECKPOINT_HARD_MAX_ENTRIES
+        ));
+    }
+
+    #[test]
+    fn checkpoint_lock_rejects_second_owner_until_first_drops() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("replay.to");
+        let first = checkpoint_store(path.clone(), 4);
+        assert!(matches!(
+            ReplayCheckpointStore::new(path.clone(), max_entries(4)),
+            Err(ReplayCheckpointError::LockHeld { path: lock_path })
+                if lock_path == path.with_added_extension("lock")
+        ));
+        drop(first);
+        ReplayCheckpointStore::new(path, max_entries(4))
+            .expect("dropping first cache releases replay checkpoint lock");
+    }
+
+    #[test]
+    fn checkpoint_preflights_declared_entry_count() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("replay.to");
+        write_private(&path, &to_bytes(&vec![entry(1, 10), entry(2, 20)]).unwrap());
+        let store = checkpoint_store(path, 1);
+        assert!(matches!(
+            store.load(&AdmissionRegistry::empty()),
+            Err(ReplayCheckpointError::TooManyEntries {
+                actual: 2,
+                maximum: 1
+            })
+        ));
+    }
+
+    #[test]
+    fn checkpoint_rejects_oversized_file_before_decode() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("replay.to");
+        let store = checkpoint_store(path.clone(), 1);
+        let oversized = vec![0u8; usize::try_from(store.maximum_bytes()).unwrap() + 1];
+        write_private(&path, &oversized);
+        assert!(matches!(
+            store.load(&AdmissionRegistry::empty()),
+            Err(ReplayCheckpointError::TooLarge { actual, maximum })
+                if actual == maximum + 1 && maximum == store.maximum_bytes()
+        ));
+    }
+
+    #[test]
+    fn checkpoint_rejects_unknown_version_before_admission_lookup() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("replay.to");
+        let mut unsupported = entry(1, 10);
+        unsupported.version = REPLAY_CHECKPOINT_VERSION_V1 + 1;
+        write_private(&path, &to_bytes(&vec![unsupported]).unwrap());
+        let store = checkpoint_store(path, 4);
+        assert!(matches!(
+            store.load(&AdmissionRegistry::empty()),
+            Err(ReplayCheckpointError::UnsupportedVersion { version: 2 })
+        ));
+    }
+
+    #[test]
+    fn checkpoint_rejects_unsorted_and_duplicate_provider_ids() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let store = checkpoint_store(temp.path().join("replay.to"), 4);
+        for entries in [
+            vec![entry(2, 10), entry(1, 20)],
+            vec![entry(1, 10), entry(1, 20)],
+        ] {
+            write_private(&store.path, &to_bytes(&entries).unwrap());
+            assert!(matches!(
+                store.load(&AdmissionRegistry::empty()),
+                Err(ReplayCheckpointError::NonCanonicalOrder)
+            ));
+        }
+    }
+
+    #[test]
+    fn checkpoint_rejects_decodable_noncanonical_layout() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("replay.to");
+        let entries = vec![entry(1, 10)];
+        let canonical = to_bytes(&entries).unwrap();
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::PACKED_SEQ;
+        let guard = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let alternate = to_bytes(&entries).unwrap();
+        drop(guard);
+        assert_ne!(
+            alternate, canonical,
+            "test requires a distinct valid layout"
+        );
+        write_private(&path, &alternate);
+        let store = checkpoint_store(path, 4);
+        assert!(matches!(
+            store.load(&AdmissionRegistry::empty()),
+            Err(ReplayCheckpointError::NonCanonicalEncoding)
+        ));
+    }
+
+    #[test]
+    fn checkpoint_rejects_unadmitted_identity() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("replay.to");
+        write_private(&path, &to_bytes(&vec![entry(3, 10)]).unwrap());
+        let store = checkpoint_store(path, 4);
+        assert!(matches!(
+            store.load(&AdmissionRegistry::empty()),
+            Err(ReplayCheckpointError::ProviderNotAdmitted {
+                provider_id
+            }) if provider_id == [3; 32]
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checkpoint_read_and_write_refuse_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let external = temp.path().join("external.to");
+        let checkpoint = temp.path().join("replay.to");
+        let sentinel = b"do not replace";
+        write_private(&external, sentinel);
+        let store = checkpoint_store(checkpoint.clone(), 4);
+        symlink(&external, &checkpoint).expect("create checkpoint symlink after locking");
+        assert!(matches!(
+            store.load(&AdmissionRegistry::empty()),
+            Err(ReplayCheckpointError::Io { .. })
+        ));
+        assert!(matches!(
+            store.persist(&HashMap::from([(
+                [1; 32],
+                AdvertReplayHighWater {
+                    issued_at: 10,
+                    fingerprint: [2; FINGERPRINT_LEN]
+                }
+            )])),
+            Err(ReplayCheckpointError::Io { .. })
+        ));
+        assert_eq!(fs::read(external).unwrap(), sentinel);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checkpoint_write_refuses_symlinked_parent() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let real_parent = temp.path().join("real-parent");
+        let linked_parent = temp.path().join("linked-parent");
+        fs::create_dir(&real_parent).expect("create real checkpoint parent");
+        symlink(&real_parent, &linked_parent).expect("create parent symlink");
+        assert!(matches!(
+            ReplayCheckpointStore::new(linked_parent.join("replay.to"), max_entries(4)),
+            Err(ReplayCheckpointError::Io { .. })
+        ));
+        assert!(
+            !real_parent.join("replay.to").exists(),
+            "symlinked parent must not receive checkpoint data"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checkpoint_rejects_permissive_file_mode() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let path = temp.path().join("replay.to");
+        fs::write(&path, to_bytes(&vec![entry(1, 10)]).unwrap()).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        let store = checkpoint_store(path, 4);
+        assert!(matches!(
+            store.load(&AdmissionRegistry::empty()),
+            Err(ReplayCheckpointError::Io { .. })
+        ));
+    }
 }

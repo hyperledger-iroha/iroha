@@ -16,6 +16,8 @@ use thiserror::Error;
 
 const DEFAULT_SESSION_BODY_BUCKET_MAX: usize = 256;
 
+use crate::queue::{RouteLeg, RouteLegRole, RoutingDecision, RoutingPlan};
+
 /// Native AMX session key scoped to one source transaction and routing plan.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode)]
 pub struct NativeAmxSessionKey {
@@ -45,6 +47,93 @@ pub struct NativeAmxVoteV1 {
     pub signer: PeerId,
     /// BLS signature over [`NativeAmxAttestationBodyV1::signature_preimage`].
     pub bls_signature: Vec<u8>,
+}
+
+/// Full-plan request presented to a native AMX participant committee.
+///
+/// The signed attestation body carries the stable plan digest and the exact
+/// participant leg. The complete canonical leg list is included so a signer
+/// can independently recompute that digest and reject omitted, extra,
+/// duplicated, or role-swapped routes before producing a vote.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct NativeAmxAttestationRequestV1 {
+    /// Participant attestation body that will be signed after validation.
+    pub body: NativeAmxAttestationBodyV1,
+    /// Complete plan in coordinator-first canonical order.
+    pub plan_legs: Vec<RouteLeg>,
+}
+
+/// Failure while validating a full-plan native AMX attestation request.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub enum NativeAmxRequestError {
+    /// Request omitted a coordinator or every participant.
+    #[error("native AMX request has an incomplete route plan")]
+    IncompletePlan,
+    /// Coordinator/participant roles or canonical ordering are invalid.
+    #[error("native AMX request route roles or ordering are invalid")]
+    InvalidRolesOrOrder,
+    /// The same lane/dataspace route occurs more than once.
+    #[error("native AMX request contains a duplicate route")]
+    DuplicateRoute,
+    /// The body names a coordinator or participant different from the plan.
+    #[error("native AMX request body route does not match the full plan")]
+    BodyRouteMismatch,
+    /// The advertised digest does not commit to the supplied full plan.
+    #[error("native AMX request plan digest mismatch")]
+    PlanDigestMismatch,
+}
+
+impl NativeAmxAttestationRequestV1 {
+    /// Validate complete plan membership, canonical roles/order, and digest.
+    ///
+    /// # Errors
+    /// Returns an error for malformed or replay-substituted plan evidence.
+    pub fn validate_plan_binding(&self) -> Result<(), NativeAmxRequestError> {
+        let Some(coordinator) = self.plan_legs.first().copied() else {
+            return Err(NativeAmxRequestError::IncompletePlan);
+        };
+        if coordinator.role != RouteLegRole::Coordinator || self.plan_legs.len() < 2 {
+            return Err(NativeAmxRequestError::IncompletePlan);
+        }
+        let participants = &self.plan_legs[1..];
+        let mut previous = None;
+        let mut seen = std::collections::BTreeSet::new();
+        if !seen.insert((coordinator.route.dataspace_id, coordinator.route.lane_id)) {
+            return Err(NativeAmxRequestError::DuplicateRoute);
+        }
+        for participant in participants {
+            if participant.role != RouteLegRole::Participant {
+                return Err(NativeAmxRequestError::InvalidRolesOrOrder);
+            }
+            let key = (participant.route.dataspace_id, participant.route.lane_id);
+            if previous.is_some_and(|previous| previous >= key) {
+                return Err(if previous == Some(key) {
+                    NativeAmxRequestError::DuplicateRoute
+                } else {
+                    NativeAmxRequestError::InvalidRolesOrOrder
+                });
+            }
+            if !seen.insert(key) {
+                return Err(NativeAmxRequestError::DuplicateRoute);
+            }
+            previous = Some(key);
+        }
+        let body = &self.body;
+        if coordinator.route
+            != RoutingDecision::new(body.coordinator_lane_id, body.coordinator_dataspace_id)
+            || !participants.iter().any(|participant| {
+                participant.route
+                    == RoutingDecision::new(body.participant_lane_id, body.participant_dataspace_id)
+            })
+        {
+            return Err(NativeAmxRequestError::BodyRouteMismatch);
+        }
+        let expected = RoutingPlan::native_amx(coordinator.route, participants.to_vec());
+        if expected.digest() != body.plan_digest {
+            return Err(NativeAmxRequestError::PlanDigestMismatch);
+        }
+        Ok(())
+    }
 }
 
 fn peer_uses_bls_normal(peer: &PeerId) -> bool {
@@ -93,11 +182,11 @@ impl NativeAmxVoteV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum NativeAmxMessage {
     /// Coordinator asks a participant dataspace committee to prepare a leg.
-    PrepareRequest(NativeAmxAttestationBodyV1),
+    PrepareRequest(NativeAmxAttestationRequestV1),
     /// Participant validator prepare vote.
     PrepareVote(NativeAmxVoteV1),
     /// Coordinator asks a participant dataspace committee to commit a prepared leg.
-    CommitRequest(NativeAmxAttestationBodyV1),
+    CommitRequest(NativeAmxAttestationRequestV1),
     /// Participant validator commit vote.
     CommitVote(NativeAmxVoteV1),
 }
@@ -133,6 +222,9 @@ pub enum NativeAmxSessionError {
     /// native AMX vote signer already exists in this session
     #[error("native AMX vote signer already exists in this session")]
     DuplicateSigner,
+    /// one source transaction attempted to occupy two live routing plans
+    #[error("native AMX source transaction attempted routing-plan equivocation")]
+    PlanEquivocation,
 }
 
 /// Failure while building a native AMX attestation QC from participant votes.
@@ -296,6 +388,9 @@ pub struct NativeAmxSessionCache {
     max_body_buckets_per_session: NonZeroUsize,
     order: VecDeque<NativeAmxSessionKey>,
     sessions: BTreeMap<NativeAmxSessionKey, NativeAmxSession>,
+    /// One live plan claim per source transaction, removed only when the
+    /// corresponding bounded session is evicted.
+    source_plan_claims: BTreeMap<[u8; iroha_crypto::Hash::LENGTH], Hash>,
 }
 
 impl NativeAmxSessionCache {
@@ -319,6 +414,7 @@ impl NativeAmxSessionCache {
             max_body_buckets_per_session,
             order: VecDeque::new(),
             sessions: BTreeMap::new(),
+            source_plan_claims: BTreeMap::new(),
         }
     }
 
@@ -330,14 +426,30 @@ impl NativeAmxSessionCache {
     /// Returns [`NativeAmxSessionError::DuplicateSigner`] when a signer votes twice for one body.
     pub fn insert_vote(&mut self, vote: NativeAmxVoteV1) -> Result<(), NativeAmxSessionError> {
         let key = NativeAmxSessionKey::from_body(&vote.body);
+        if self
+            .source_plan_claims
+            .get(&key.source_id)
+            .is_some_and(|claimed| *claimed != key.plan_digest)
+        {
+            return Err(NativeAmxSessionError::PlanEquivocation);
+        }
         if !self.sessions.contains_key(&key) {
             while self.sessions.len() >= self.max_sessions.get() {
                 let Some(oldest) = self.order.pop_front() else {
                     break;
                 };
                 self.sessions.remove(&oldest);
+                if !self
+                    .sessions
+                    .keys()
+                    .any(|candidate| candidate.source_id == oldest.source_id)
+                {
+                    self.source_plan_claims.remove(&oldest.source_id);
+                }
             }
             self.order.push_back(key);
+            self.source_plan_claims
+                .insert(key.source_id, key.plan_digest);
         }
         self.sessions
             .entry(key)
@@ -432,6 +544,7 @@ mod tests {
 
     fn body(phase: NativeAmxPhase) -> NativeAmxAttestationBodyV1 {
         NativeAmxAttestationBodyV1 {
+            chain_id_hash: Hash::new(b"native-amx-test-chain"),
             source_id: [0xAB; iroha_crypto::Hash::LENGTH],
             tx_entrypoint_hash:
                 iroha_crypto::HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
@@ -441,10 +554,107 @@ mod tests {
             phase,
             coordinator_lane_id: LaneId::new(1),
             coordinator_dataspace_id: DataSpaceId::new(7),
+            coordinator_lane_incarnation: Hash::new(b"native-amx-test-coordinator"),
             participant_lane_id: LaneId::new(2),
             participant_dataspace_id: DataSpaceId::new(8),
-            planned_coordinator_block_height: 42,
+            participant_lane_incarnation: Hash::new(b"native-amx-test-participant"),
+            authority_context_height: 42,
+            coordinator_lane_block_height: 9,
+            coordinator_lane_block_view: 3,
+            coordinator_proposal_hash: Hash::new(b"native-amx-test-proposal"),
         }
+    }
+
+    fn request(phase: NativeAmxPhase) -> NativeAmxAttestationRequestV1 {
+        let coordinator = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(7));
+        let participants = vec![
+            RouteLeg::new(
+                RoutingDecision::new(LaneId::new(2), DataSpaceId::new(8)),
+                RouteLegRole::Participant,
+            ),
+            RouteLeg::new(
+                RoutingDecision::new(LaneId::new(3), DataSpaceId::new(9)),
+                RouteLegRole::Participant,
+            ),
+        ];
+        let plan = RoutingPlan::native_amx(coordinator, participants);
+        let mut body = body(phase);
+        body.plan_digest = plan.digest();
+        NativeAmxAttestationRequestV1 {
+            body,
+            plan_legs: plan.legs(),
+        }
+    }
+
+    #[test]
+    fn attestation_request_binds_complete_canonical_plan_and_roles() {
+        request(NativeAmxPhase::Prepare)
+            .validate_plan_binding()
+            .expect("canonical request");
+    }
+
+    #[test]
+    fn attestation_request_rejects_omitted_extra_duplicate_and_role_swapped_legs() {
+        let canonical = request(NativeAmxPhase::Prepare);
+
+        let mut omitted = canonical.clone();
+        omitted.plan_legs.pop();
+        assert_eq!(
+            omitted.validate_plan_binding(),
+            Err(NativeAmxRequestError::PlanDigestMismatch)
+        );
+
+        let mut extra = canonical.clone();
+        extra.plan_legs.push(RouteLeg::new(
+            RoutingDecision::new(LaneId::new(4), DataSpaceId::new(10)),
+            RouteLegRole::Participant,
+        ));
+        assert_eq!(
+            extra.validate_plan_binding(),
+            Err(NativeAmxRequestError::PlanDigestMismatch)
+        );
+
+        let mut duplicate = canonical.clone();
+        duplicate
+            .plan_legs
+            .push(*duplicate.plan_legs.last().expect("participant"));
+        assert_eq!(
+            duplicate.validate_plan_binding(),
+            Err(NativeAmxRequestError::DuplicateRoute)
+        );
+
+        let mut role_swapped = canonical;
+        role_swapped.plan_legs[0].role = RouteLegRole::Participant;
+        role_swapped.plan_legs[1].role = RouteLegRole::Coordinator;
+        assert_eq!(
+            role_swapped.validate_plan_binding(),
+            Err(NativeAmxRequestError::IncompletePlan)
+        );
+    }
+
+    #[test]
+    fn attestation_request_rejects_wrong_participant_and_cross_plan_replay() {
+        let canonical = request(NativeAmxPhase::Commit);
+        let mut wrong_participant = canonical.clone();
+        wrong_participant.body.participant_dataspace_id = DataSpaceId::new(99);
+        assert_eq!(
+            wrong_participant.validate_plan_binding(),
+            Err(NativeAmxRequestError::BodyRouteMismatch)
+        );
+
+        let mut cross_plan = canonical;
+        let other_plan = RoutingPlan::native_amx(
+            RoutingDecision::new(LaneId::new(1), DataSpaceId::new(7)),
+            vec![RouteLeg::new(
+                RoutingDecision::new(LaneId::new(5), DataSpaceId::new(12)),
+                RouteLegRole::Participant,
+            )],
+        );
+        cross_plan.body.plan_digest = other_plan.digest();
+        assert_eq!(
+            cross_plan.validate_plan_binding(),
+            Err(NativeAmxRequestError::PlanDigestMismatch)
+        );
     }
 
     fn vote(phase: NativeAmxPhase) -> NativeAmxVoteV1 {
@@ -470,14 +680,50 @@ mod tests {
     }
 
     #[test]
+    fn session_cache_rejects_live_source_plan_equivocation() {
+        let mut cache = NativeAmxSessionCache::new(NonZeroUsize::new(4).expect("nonzero"));
+        let first = vote(NativeAmxPhase::Prepare);
+        let mut conflicting = first.clone();
+        conflicting.body.plan_digest = Hash::new(b"conflicting-native-amx-plan");
+
+        cache.insert_vote(first).expect("first source plan claim");
+        assert_eq!(
+            cache.insert_vote(conflicting),
+            Err(NativeAmxSessionError::PlanEquivocation),
+            "one live source must not collect votes under two routing plans"
+        );
+    }
+
+    #[test]
+    fn session_cache_plan_claim_lifetime_matches_session_eviction() {
+        let mut cache = NativeAmxSessionCache::new(NonZeroUsize::new(1).expect("nonzero"));
+        let first = vote(NativeAmxPhase::Prepare);
+        let mut replacement_source = first.clone();
+        replacement_source.body.source_id = [0xBC; iroha_crypto::Hash::LENGTH];
+        let mut recycled = first.clone();
+        recycled.body.plan_digest = Hash::new(b"recycled-source-new-plan");
+
+        cache.insert_vote(first).expect("initial claim");
+        cache
+            .insert_vote(replacement_source)
+            .expect("different source evicts initial claim");
+        // Rebuild a distinct body/signer so the assertion specifically proves
+        // source-plan claim eviction rather than duplicate-vote behavior.
+        recycled.signer = vote(NativeAmxPhase::Commit).signer;
+        cache
+            .insert_vote(recycled)
+            .expect("evicted source may later establish a new bounded claim");
+    }
+
+    #[test]
     fn session_cache_allows_same_signer_for_retried_body() {
         let mut cache = NativeAmxSessionCache::new(NonZeroUsize::new(4).expect("nonzero"));
         let vote = vote(NativeAmxPhase::Prepare);
         let key = NativeAmxSessionKey::from_body(&vote.body);
         let mut retried_vote = vote.clone();
-        retried_vote.body.planned_coordinator_block_height = retried_vote
+        retried_vote.body.coordinator_lane_block_view = retried_vote
             .body
-            .planned_coordinator_block_height
+            .coordinator_lane_block_view
             .saturating_add(1);
 
         cache.insert_vote(vote.clone()).expect("first body vote");
@@ -583,9 +829,9 @@ mod tests {
         let first = vote(NativeAmxPhase::Prepare);
         let key = NativeAmxSessionKey::from_body(&first.body);
         let mut second = first.clone();
-        second.body.planned_coordinator_block_height = 43;
+        second.body.coordinator_lane_block_view = 43;
         let mut third = first.clone();
-        third.body.planned_coordinator_block_height = 44;
+        third.body.coordinator_lane_block_view = 44;
 
         cache.insert_vote(first.clone()).expect("first vote");
         cache.insert_vote(second.clone()).expect("second vote");

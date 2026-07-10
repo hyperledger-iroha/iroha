@@ -69,7 +69,7 @@ cargo test -p sorafs_car --features cli fetch_command_respects_direct_transports
 ```bash
 ./scripts/sorafs_direct_mode_smoke.sh \
   --config docs/examples/sorafs_direct_mode_smoke.conf \
-  --provider name=gw-regulated,provider-id=001122...,base-url=https://gw.example/direct/,stream-token=BASE64
+  --provider name=gw-regulated,provider-id=001122...,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gw.example/,stream-token=BASE64
 ```- Скрипт уважает и CLI-флаги, и ключ=значение конфиг-файлов (см. `docs/examples/sorafs_direct_mode_smoke.conf`). Перед запуском заполните дайджест-манифест и записи рекламного провайдера с прод-значениями.
 - `--policy` по умолчанию имеет значение `docs/examples/sorafs_direct_mode_policy.json`, но можно передать любой JSON-оркестратор, сгенерированный `sorafs_orchestrator::bindings::config_to_json`. CLI использует политику через `--orchestrator-config=PATH`, обеспечивающую воспроизводимые запуски без ручной подгонки флагов.
 - Если `sorafs_cli` нет в `PATH`, помощник собирает его из крета `sorafs_orchestrator` (профиль выпуска), чтобы дым-прогоны проверяли поставляемую схему прямого режима.

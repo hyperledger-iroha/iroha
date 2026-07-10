@@ -15,6 +15,10 @@ assert SPEC and SPEC.loader  # pragma: no cover
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
+COUNCIL_KEY_1 = "ed01202152F8D19B791D24453242E15F2EAB6CB7CFFA7B6A5ED30097960E069881DB12"
+COUNCIL_KEY_2 = "ed012022FC297792F0B6FFC0BFCFDB7EDB0C0AA14E025A365EC0E342E86E3829CB74B6"
+COUNCIL_KEY_3 = "ed01206355691C178A8FF91007A7478AFB955EF7352C63E7B25703984CF78B26E21A56"
+
 
 BASE_CONFIG = """# baseline
 public_key = "peer-1-public"
@@ -54,6 +58,11 @@ private_key = "REPLACE_WITH_TAIRA_FAUCET_PRIVATE_KEY"
 [streaming]
 identity_public_key = "REPLACE_WITH_STREAMING_IDENTITY_PUBLIC_KEY"
 identity_private_key = "REPLACE_WITH_STREAMING_IDENTITY_PRIVATE_KEY"
+
+[sorafs.discovery.admission]
+envelopes_dir = "configs/soranexus/taira/sorafs_admission"
+trusted_council_keys = ["REPLACE_WITH_TAIRA_SORAFS_COUNCIL_PUBLIC_KEY"]
+signature_threshold = "REPLACE_WITH_TAIRA_SORAFS_COUNCIL_SIGNATURE_THRESHOLD"
 """
 
 
@@ -92,6 +101,8 @@ def _write_secrets(path: Path, validator_count: int = 4) -> None:
         'torii_faucet_private_key = "faucet-private-key"',
         'streaming_identity_public_key = "streaming-public-key"',
         'streaming_identity_private_key = "streaming-private-key"',
+        f'sorafs_council_public_keys = ["{COUNCIL_KEY_1}", "{COUNCIL_KEY_2}", "{COUNCIL_KEY_3}"]',
+        "sorafs_council_signature_threshold = 2",
         "",
     ]
     for index in range(1, validator_count + 1):
@@ -136,6 +147,11 @@ def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
     assert 'private_key = "faucet-private-key"' in config
     assert 'identity_public_key = "streaming-public-key"' in config
     assert 'identity_private_key = "streaming-private-key"' in config
+    assert (
+        f'trusted_council_keys = ["{COUNCIL_KEY_1}", "{COUNCIL_KEY_2}", "{COUNCIL_KEY_3}"]'
+        in config
+    )
+    assert "signature_threshold = 2" in config
     assert 'manifest_directory = "manifests"' in config
     assert 'cache_directory = "manifests"' in config
 
@@ -239,6 +255,60 @@ def test_render_bundle_rejects_unpopulated_template_placeholders(tmp_path: Path)
         assert "template placeholder values" in str(error)
     else:  # pragma: no cover - defensive assertion
         raise AssertionError("render_bundle accepted placeholder secrets without a secrets file")
+
+
+def test_secret_material_rejects_invalid_sorafs_council_quorum(tmp_path: Path) -> None:
+    secrets_path = tmp_path / "validator_secrets.toml"
+    secrets_path.write_text(
+        "\n".join(
+            [
+                "[shared]",
+                f'sorafs_council_public_keys = ["{COUNCIL_KEY_1}", "{COUNCIL_KEY_1}"]',
+                "sorafs_council_signature_threshold = 2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    try:
+        MODULE.load_secret_material(secrets_path)
+    except ValueError as error:
+        assert "must not contain duplicates" in str(error)
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("duplicate SoraFS council roots were accepted")
+
+    secrets_path.write_text(
+        "\n".join(
+            [
+                "[shared]",
+                f'sorafs_council_public_keys = ["{COUNCIL_KEY_1}"]',
+                "sorafs_council_signature_threshold = 2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    try:
+        MODULE.load_secret_material(secrets_path)
+    except ValueError as error:
+        assert "threshold exceeds" in str(error)
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("unsatisfiable SoraFS council quorum was accepted")
+
+    secrets_path.write_text(
+        "\n".join(
+            [
+                "[shared]",
+                'sorafs_council_public_keys = ["not-an-ed25519-key"]',
+                "sorafs_council_signature_threshold = 1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    try:
+        MODULE.load_secret_material(secrets_path)
+    except ValueError as error:
+        assert "canonical non-zero Ed25519" in str(error)
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("malformed SoraFS council root was accepted")
 
 
 def test_main_supports_single_validator_render(tmp_path: Path) -> None:

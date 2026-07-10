@@ -2452,9 +2452,23 @@ fn require_value<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&'a
 }
 
 fn parse_u64_flag(value: &str, flag: &str) -> Result<u64, CliError> {
+    require_canonical_unsigned_decimal(value, flag)?;
     value
         .parse::<u64>()
         .map_err(|err| CliError::Config(format!("{flag} must be an unsigned integer: {err}")))
+}
+
+fn require_canonical_unsigned_decimal(value: &str, flag: &str) -> Result<(), CliError> {
+    let bytes = value.as_bytes();
+    if bytes.is_empty()
+        || !bytes.iter().all(u8::is_ascii_digit)
+        || (bytes.len() > 1 && bytes[0] == b'0')
+    {
+        return Err(CliError::Config(format!(
+            "{flag} must be a canonical unsigned decimal integer"
+        )));
+    }
+    Ok(())
 }
 
 fn parse_cid_arg_bytes(value: &str) -> Result<Vec<u8>, CliError> {
@@ -2639,10 +2653,8 @@ fn read_signing_seed(args: &SignArgs) -> Result<[u8; 32], CliError> {
 }
 
 fn parse_ed25519_seed_hex(value: &str, flag: &str) -> Result<[u8; 32], CliError> {
-    let trimmed = value.trim();
-    let trimmed = trimmed.strip_prefix("ed25519:").unwrap_or(trimmed);
-    let trimmed = trimmed.strip_prefix("0x").unwrap_or(trimmed);
-    let bytes = hex::decode(trimmed).map_err(|err| {
+    require_canonical_seed_hex(value, flag)?;
+    let bytes = hex::decode(value).map_err(|err| {
         CliError::Config(format!(
             "{flag} must contain a 32-byte Ed25519 seed encoded as hex: {err}"
         ))
@@ -2661,20 +2673,38 @@ fn parse_ed25519_seed_hex(value: &str, flag: &str) -> Result<[u8; 32], CliError>
     Ok(seed)
 }
 
+fn require_canonical_seed_hex(value: &str, flag: &str) -> Result<(), CliError> {
+    let bytes = value.as_bytes();
+    if bytes.len() != 64
+        || bytes.iter().any(u8::is_ascii_whitespace)
+        || value.starts_with("0x")
+        || value.starts_with("0X")
+        || value.starts_with("ed25519:")
+        || !bytes
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+    {
+        return Err(CliError::Config(format!(
+            "{flag} must contain exactly 32 seed bytes as lowercase hex without prefixes or whitespace"
+        )));
+    }
+    Ok(())
+}
+
 fn sign_provider_advert(advert: &mut ProviderAdvertV1, seed: &[u8; 32]) -> Result<(), CliError> {
     let signing_key = SigningKey::from_bytes(seed);
-    let body_bytes = norito::to_bytes(&advert.body).map_err(|err| {
-        CliError::Internal(format!(
-            "failed to encode provider advert body for signing: {err}"
-        ))
-    })?;
-    let signature = signing_key.sign(&body_bytes);
     advert.signature = AdvertSignature {
         algorithm: SignatureAlgorithm::Ed25519,
         public_key: signing_key.verifying_key().to_bytes().to_vec(),
-        signature: signature.to_bytes().to_vec(),
+        signature: vec![0; 64],
     };
     advert.signature_strict = true;
+    let payload = advert.signature_payload_bytes().map_err(|err| {
+        CliError::Internal(format!(
+            "failed to encode provider advert envelope for signing: {err}"
+        ))
+    })?;
+    advert.signature.signature = signing_key.sign(&payload).to_bytes().to_vec();
     Ok(())
 }
 
@@ -3148,6 +3178,23 @@ mod tests {
     }
 
     #[test]
+    fn parse_u64_flag_rejects_noncanonical_values() {
+        assert_eq!(parse_u64_flag("0", "--now").expect("canonical zero"), 0);
+        assert_eq!(
+            parse_u64_flag("1700000000", "--generated-at").expect("canonical timestamp"),
+            1_700_000_000
+        );
+
+        for value in ["", " 1", "1 ", "+1", "-1", "01", "1_000", "0x10"] {
+            assert!(matches!(
+                parse_u64_flag(value, "--now"),
+                Err(CliError::Config(message))
+                    if message.contains("canonical unsigned decimal")
+            ));
+        }
+    }
+
+    #[test]
     fn advert_args_parse_reads_input_format_and_timestamps() {
         let args = [
             "--input=advert.to".to_owned(),
@@ -3353,8 +3400,7 @@ mod tests {
             "--payload-kind=order-request".to_owned(),
             "--input=advert.to".to_owned(),
             "--out=signed-advert.to".to_owned(),
-            "--key-hex=ed25519:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                .to_owned(),
+            "--key-hex=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
             "--format=json".to_owned(),
             "--telemetry-out=out.json".to_owned(),
             "--now=5".to_owned(),
@@ -3370,7 +3416,7 @@ mod tests {
         assert_eq!(parsed.out, Some(PathBuf::from("signed-advert.to")));
         assert_eq!(
             parsed.key_hex.as_deref(),
-            Some("ed25519:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
         );
         assert!(matches!(parsed.format, Some(OutputFormat::Json)));
         assert_eq!(parsed.telemetry_out, Some(PathBuf::from("out.json")));
@@ -3413,9 +3459,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_ed25519_seed_hex_accepts_prefixes() {
+    fn parse_ed25519_seed_hex_accepts_canonical_lowercase_hex() {
         let seed = parse_ed25519_seed_hex(
-            "ed25519:0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "--key-hex",
         )
         .expect("parse seed");
@@ -3426,21 +3472,36 @@ mod tests {
     fn parse_ed25519_seed_hex_rejects_wrong_length() {
         assert!(matches!(
             parse_ed25519_seed_hex("abcd", "--key-hex"),
-            Err(CliError::Config(message)) if message.contains("exactly 32 seed bytes")
+            Err(CliError::Config(message)) if message.contains("lowercase hex")
         ));
     }
 
     #[test]
-    fn parse_ed25519_seed_hex_rejects_all_zero_seed_material() {
+    fn parse_ed25519_seed_hex_rejects_noncanonical_text() {
         for value in [
-            "0000000000000000000000000000000000000000000000000000000000000000",
-            "ed25519:0x0000000000000000000000000000000000000000000000000000000000000000",
+            "ed25519:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaA",
+            " aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
         ] {
             assert!(matches!(
                 parse_ed25519_seed_hex(value, "--key-hex"),
-                Err(CliError::Config(message)) if message.contains("must not be all zero")
+                Err(CliError::Config(message)) if message.contains("lowercase hex")
             ));
         }
+    }
+
+    #[test]
+    fn parse_ed25519_seed_hex_rejects_all_zero_seed_material() {
+        assert!(matches!(
+            parse_ed25519_seed_hex(
+                "0000000000000000000000000000000000000000000000000000000000000000",
+                "--key-hex"
+            ),
+            Err(CliError::Config(message)) if message.contains("must not be all zero")
+        ));
     }
 
     #[test]

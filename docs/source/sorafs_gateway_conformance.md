@@ -230,12 +230,18 @@ For lightweight validation outside the full harness, operators can point the mul
 ```
 sorafs-fetch \
   --plan=fixtures/chunk_fetch_plan.json \
-  --gateway-provider=name=gw-a,provider-id=<hex>,base-url=https://gw-a.example/,stream-token=<base64> \
+  --gateway-provider=name=gw-a,provider-id=<hex>,gateway-key=<ed25519-public-key-hex>,base-url=https://gw-a.example/,stream-token=<base64> \
   --gateway-manifest-id=<manifest_id_hex> \
   --gateway-chunker-handle=sorafs.sf1@1.0.0 \
   --gateway-client-id=ops-orchestrator \
   --json-out=reports/gateway_smoke.json
 ```
+
+The gateway key is a mandatory pin, not metadata learned from the supplied
+token. The production client accepts only HTTPS on port 443 at the origin root,
+does not follow redirects, rejects credentials/queries/fragments and non-public
+literal addresses, and requires every DNS answer to be globally routable before
+pinning those addresses for the request client.
 
 The resulting report mirrors the conformance output (including `provider_reports[].metadata`) and can be attached to change tickets during blue/green rollouts.
 

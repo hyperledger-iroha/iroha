@@ -203,6 +203,8 @@ mod frame_tests {
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct ConsensusConfigCaps {
+    /// Canonical digest of deterministic, locally configured Nexus policy.
+    pub nexus_policy_digest: [u8; 32],
     /// Number of collectors (K).
     pub collectors_k: u16,
     /// Redundant send fanout (r).

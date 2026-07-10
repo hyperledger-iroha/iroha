@@ -6251,86 +6251,77 @@ impl MochiApp {
         lane_id: u32,
         handle: &Handle,
     ) -> Result<(), String> {
-        Self::reset_lane_with_lifecycle_inner(supervisor, lane_id, |supervisor, plan| {
-            let mut started_for_lifecycle = false;
-            if !supervisor.is_any_running() {
-                supervisor
-                    .start_all()
-                    .map_err(|err| format!("Failed to start peers for lane reset: {err}"))?;
-                started_for_lifecycle = true;
+        let plan = Self::lane_reset_lifecycle_plan(supervisor, lane_id);
+        let was_running = supervisor.is_any_running();
+        if !was_running {
+            supervisor
+                .start_all()
+                .map_err(|err| format!("Failed to start peers for lane reset: {err}"))?;
+        }
+        let peer_alias = supervisor
+            .peers()
+            .iter()
+            .find(|peer| matches!(peer.state(), PeerState::Running))
+            .or_else(|| supervisor.peers().first())
+            .map(|peer| peer.alias().to_owned())
+            .ok_or_else(|| "No peers available for lane reset.".to_owned())?;
+        let client = supervisor
+            .torii_client(&peer_alias)
+            .ok_or_else(|| format!("Missing Torii client for {peer_alias}"))?;
+        let signer = supervisor
+            .signers()
+            .iter()
+            .find(|signer| signer.allows_permission(InstructionPermission::SetParameters))
+            .cloned()
+            .ok_or_else(|| {
+                "No Supervisor signer is configured with CanSetParameters; update the signer vault"
+                    .to_owned()
+            })?;
+        let chain_id = supervisor.chain_id().to_owned();
+        let lifecycle_result = handle.block_on(async {
+            let options = ReadinessOptions::new(READINESS_TIMEOUT)
+                .with_poll_interval(READINESS_POLL_INTERVAL);
+            client
+                .wait_for_ready(options)
+                .await
+                .map_err(|err| format!("Torii readiness failed: {err}"))?;
+            client
+                .apply_lane_lifecycle(&chain_id, &signer, plan)
+                .await
+                .map_err(|err| format!("Signed lane lifecycle transaction failed: {err}"))?;
+            Ok::<(), String>(())
+        });
+        if let Err(error) = lifecycle_result {
+            if !was_running {
+                let _ = supervisor.stop_all();
             }
+            return Err(error);
+        }
 
-            let peer_alias = supervisor
-                .peers()
-                .iter()
-                .find(|peer| matches!(peer.state(), PeerState::Running))
-                .or_else(|| supervisor.peers().first())
-                .map(|peer| peer.alias().to_owned())
-                .ok_or_else(|| "No peers available for lane reset.".to_owned())?;
-            let client = supervisor
-                .torii_client(&peer_alias)
-                .ok_or_else(|| format!("Missing Torii client for {peer_alias}"))?;
-            let lifecycle_result = handle.block_on(async {
-                let options = ReadinessOptions::new(READINESS_TIMEOUT)
-                    .with_poll_interval(READINESS_POLL_INTERVAL);
-                client
-                    .wait_for_ready(options)
-                    .await
-                    .map_err(|err| format!("Torii readiness failed: {err}"))?;
-
-                let mut backoff = Duration::from_millis(200);
-                let attempts = 3;
-                for attempt in 0..attempts {
-                    match client.apply_lane_lifecycle(&plan).await {
-                        Ok(_) => return Ok(()),
-                        Err(_err) if attempt + 1 < attempts => {
-                            tokio::time::sleep(backoff).await;
-                            backoff = (backoff.saturating_mul(2)).min(Duration::from_secs(2));
-                        }
-                        Err(err) => {
-                            return Err(format!("Lane lifecycle apply failed: {err}"));
-                        }
-                    }
-                }
-                Err("Lane lifecycle apply failed.".to_owned())
-            });
-
-            let stop_result = if started_for_lifecycle {
-                supervisor
-                    .stop_all()
-                    .map_err(|err| format!("Failed to stop peers after lane reset: {err}"))
-            } else {
-                Ok(())
-            };
-
-            match (lifecycle_result, stop_result) {
-                (Ok(()), Ok(())) => Ok(()),
-                (Ok(()), Err(err)) => Err(err),
-                (Err(err), Ok(())) => Err(err),
-                (Err(err), Err(stop_err)) => Err(format!("{err} ({stop_err})")),
-            }
-        })
-    }
-
-    fn reset_lane_with_lifecycle_inner<F>(
-        supervisor: &mut Supervisor,
-        lane_id: u32,
-        mut apply: F,
-    ) -> Result<(), String>
-    where
-        F: FnMut(&mut Supervisor, LaneLifecyclePlan) -> Result<(), String>,
-    {
+        // The replacement is now final. Stop every process before deleting its
+        // lane files so no live Kura handle can race the reset.
+        supervisor
+            .stop_all()
+            .map_err(|err| format!("Failed to stop peers after lifecycle finality: {err}"))?;
         supervisor
             .reset_lane_storage(lane_id)
-            .map_err(|err| err.to_string())?;
-        let plan = LaneLifecyclePlan {
+            .map_err(|err| format!("Failed to reset finalized lane storage: {err}"))?;
+        if was_running {
+            supervisor
+                .start_all()
+                .map_err(|err| format!("Failed to restart peers after lane reset: {err}"))?;
+        }
+        Ok(())
+    }
+
+    fn lane_reset_lifecycle_plan(supervisor: &Supervisor, lane_id: u32) -> LaneLifecyclePlan {
+        LaneLifecyclePlan {
             additions: vec![Self::lane_metadata_for_id(
                 supervisor.nexus_config_overrides(),
                 lane_id,
             )],
             retire: vec![LaneId::new(lane_id)],
-        };
-        apply(supervisor, plan)
+        }
     }
 
     fn render_view_tabs(&mut self, ui: &mut egui::Ui) {
@@ -13958,41 +13949,9 @@ mod tests {
     }
 
     #[test]
-    fn reset_lane_with_lifecycle_hits_torii() {
+    fn reset_lane_lifecycle_plan_builds_consensus_replacement() {
         if !super::socket_bind_available() {
-            eprintln!("Skipping lane reset test due to socket restrictions");
-            return;
-        }
-        let _lock = env_lock().lock().expect("env lock");
-        let port = reserve_free_port();
-        let port_str = port.to_string();
-
-        let temp = tempfile::tempdir().expect("temp dir");
-        let kagami_stub = install_kagami_stub(temp.path());
-        let irohad_stub = install_noop_stub(temp.path(), "irohad_lane_reset_stub.sh");
-        let _kagami_guard = TestEnvGuard::set("MOCHI_KAGAMI", &kagami_stub);
-        let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
-        let _torii_guard = TestEnvGuard::set_str("MOCHI_TORII_START", &port_str);
-        let data_root = temp.path().join("lane-reset-data");
-        let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
-        reset_cli_overrides_for_tests();
-
-        let mut app = MochiApp::default();
-        let mut supervisor = app.supervisor.take().expect("supervisor ready");
-        let server_handle = spawn_mock_torii_server(port);
-        let handle = app.runtime.handle().clone();
-        let result = MochiApp::reset_lane_with_lifecycle(&mut supervisor, 0, &handle);
-        assert!(
-            result.is_ok(),
-            "lane reset should succeed against mock Torii: {result:?}"
-        );
-        let _ = server_handle.join();
-    }
-
-    #[test]
-    fn reset_lane_with_lifecycle_inner_builds_retire_plan() {
-        if !super::socket_bind_available() {
-            eprintln!("Skipping lane reset inner test due to socket restrictions");
+            eprintln!("Skipping lane reset plan test due to socket restrictions");
             return;
         }
         let _lock = env_lock().lock().expect("env lock");
@@ -14005,15 +13964,9 @@ mod tests {
         let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
         reset_cli_overrides_for_tests();
 
-        let mut app = MochiApp::default();
-        let mut supervisor = app.supervisor.take().expect("supervisor ready");
-        let mut captured = None;
-        let result = MochiApp::reset_lane_with_lifecycle_inner(&mut supervisor, 0, |_, plan| {
-            captured = Some(plan);
-            Ok(())
-        });
-        assert!(result.is_ok(), "lane reset inner should succeed");
-        let plan = captured.expect("plan captured");
+        let app = MochiApp::default();
+        let supervisor = app.supervisor.as_ref().expect("supervisor ready");
+        let plan = MochiApp::lane_reset_lifecycle_plan(supervisor, 0);
         assert_eq!(plan.additions.len(), 1);
         assert_eq!(plan.additions[0].id, LaneId::new(0));
         assert_eq!(plan.retire, vec![LaneId::new(0)]);
@@ -15477,6 +15430,7 @@ mod tests {
         let settlement = iroha_data_model::block::consensus::LaneBlockCommitment {
             block_height: 9,
             lane_id: LaneId::new(0),
+            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::new(0),
             tx_count: 1,
             total_local_micro: 0,
@@ -16446,57 +16400,6 @@ mod tests {
     fn reserve_free_port() -> u16 {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind free port");
         listener.local_addr().expect("listener addr").port()
-    }
-
-    fn spawn_mock_torii_server(port: u16) -> std::thread::JoinHandle<()> {
-        let listener = TcpListener::bind(("127.0.0.1", port)).expect("bind mock torii");
-        std::thread::spawn(move || {
-            for stream in listener.incoming().take(2) {
-                let mut stream = match stream {
-                    Ok(stream) => stream,
-                    Err(_) => break,
-                };
-                let mut buffer = [0u8; 4096];
-                let read = match stream.read(&mut buffer) {
-                    Ok(read) => read,
-                    Err(_) => continue,
-                };
-                if read == 0 {
-                    continue;
-                }
-                let request = String::from_utf8_lossy(&buffer[..read]);
-                let path = request
-                    .lines()
-                    .next()
-                    .and_then(|line| line.split_whitespace().nth(1))
-                    .unwrap_or("/");
-                match path {
-                    "/status" => {
-                        let status = TelemetryStatus::default();
-                        let body = norito::to_bytes(&status).expect("encode status");
-                        let header = format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: application/norito\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                            body.len()
-                        );
-                        let _ = stream.write_all(header.as_bytes());
-                        let _ = stream.write_all(&body);
-                    }
-                    "/v1/nexus/lifecycle" => {
-                        let body = b"{}";
-                        let header = format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                            body.len()
-                        );
-                        let _ = stream.write_all(header.as_bytes());
-                        let _ = stream.write_all(body);
-                    }
-                    _ => {
-                        let header = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-                        let _ = stream.write_all(header.as_bytes());
-                    }
-                }
-            }
-        })
     }
 
     fn genesis_invocation_count(path: &Path) -> usize {

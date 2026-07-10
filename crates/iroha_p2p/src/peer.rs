@@ -6797,10 +6797,17 @@ mod state {
         Ok(())
     }
 
-    fn consensus_config_mismatch(
+    pub(super) fn consensus_config_mismatch(
         expected: &ConsensusConfigCaps,
         got: &ConsensusConfigCaps,
     ) -> Option<String> {
+        if expected.nexus_policy_digest != got.nexus_policy_digest {
+            return Some(format!(
+                "nexus_policy_digest mismatch (expected 0x{}, got 0x{})",
+                hex_bytes(&expected.nexus_policy_digest),
+                hex_bytes(&got.nexus_policy_digest),
+            ));
+        }
         macro_rules! check {
             ($field:ident) => {
                 if expected.$field != got.$field {
@@ -6818,6 +6825,14 @@ mod state {
         check!(redundant_send_r);
         check!(da_enabled);
         check!(rbc_chunk_max_bytes);
+        if expected.rbc_encoding != got.rbc_encoding {
+            return Some(format!(
+                "rbc_encoding mismatch (expected {:?}, got {:?})",
+                expected.rbc_encoding, got.rbc_encoding,
+            ));
+        }
+        check!(rbc_rs16_data_shards);
+        check!(rbc_rs16_parity_shards);
         check!(rbc_session_ttl_ms);
         check!(rbc_store_max_sessions);
         check!(rbc_store_soft_sessions);
@@ -8434,7 +8449,36 @@ mod tests {
     use tokio::io::AsyncWrite;
 
     use super::{Connection, SoranetHandshakeConfig, cryptographer::Cryptographer, state::*};
-    use crate::{ConfidentialHandshakeCaps, RelayRole};
+    use crate::{ConfidentialHandshakeCaps, ConsensusConfigCaps, RelayRole};
+
+    fn sample_consensus_config_caps() -> ConsensusConfigCaps {
+        ConsensusConfigCaps {
+            nexus_policy_digest: [0xA5; 32],
+            collectors_k: 1,
+            redundant_send_r: 1,
+            da_enabled: true,
+            rbc_chunk_max_bytes: 65_536,
+            rbc_encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+            rbc_rs16_data_shards: 0,
+            rbc_rs16_parity_shards: 0,
+            rbc_session_ttl_ms: 120_000,
+            rbc_store_max_sessions: 1_024,
+            rbc_store_soft_sessions: 768,
+            rbc_store_max_bytes: 536_870_912,
+            rbc_store_soft_bytes: 402_653_184,
+        }
+    }
+
+    #[test]
+    fn consensus_config_mismatch_rejects_nexus_policy_digest_drift() {
+        let expected = sample_consensus_config_caps();
+        let mut got = expected;
+        got.nexus_policy_digest[0] ^= 1;
+
+        let reason = consensus_config_mismatch(&expected, &got)
+            .expect("one-bit Nexus policy drift must fail the handshake");
+        assert!(reason.starts_with("nexus_policy_digest mismatch"));
+    }
 
     struct TrackingWrite {
         buffer: Vec<u8>,

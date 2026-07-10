@@ -70,8 +70,9 @@ use iroha_data_model::{
     taikai::TaikaiAvailabilityClass,
 };
 use iroha_primitives::{addr::SocketAddr, numeric::Numeric, unique_vec::UniqueVec};
-use norito::streaming::EntropyMode;
+use norito::{codec::Encode, streaming::EntropyMode};
 use rust_decimal::Decimal;
+use thiserror::Error;
 use url::Url;
 pub use user::{DevTelemetry, Logger, Snapshot};
 
@@ -3068,6 +3069,11 @@ pub struct Nexus {
     pub lane_relay_emergency: LaneRelayEmergency,
     /// Validated lane catalog.
     pub lane_catalog: LaneCatalog,
+    /// Immutable lane catalog loaded from configuration before runtime lifecycle replay.
+    ///
+    /// Runtime lane additions/removals mutate [`Self::lane_catalog`] but must never
+    /// mutate this baseline, which is bound into the static consensus-policy digest.
+    pub configured_lane_catalog: LaneCatalog,
     /// Derived storage/configuration geometry for lanes.
     pub lane_config: LaneConfig,
     /// Validated data-space catalog.
@@ -3109,6 +3115,7 @@ impl Default for Nexus {
             axt: NexusAxt::default(),
             lane_relay_emergency: LaneRelayEmergency::default(),
             lane_catalog: LaneCatalog::default(),
+            configured_lane_catalog: LaneCatalog::default(),
             lane_config: LaneConfig::default(),
             dataspace_catalog: DataSpaceCatalog::default(),
             dataspace_fee_sponsors: BTreeMap::new(),
@@ -3152,6 +3159,536 @@ impl Nexus {
             || !self.dataspace_fee_sponsor_policies.is_empty()
             || self.routing_policy != LaneRoutingPolicy::default()
     }
+}
+
+/// Error returned when a Nexus consensus-policy digest cannot be constructed safely.
+#[derive(Debug, Clone, Copy, PartialEq, Error)]
+pub enum NexusConsensusPolicyDigestError {
+    /// A floating-point policy input was not a finite, positive number.
+    #[error(
+        "Nexus consensus-policy field `{field}` must be finite and greater than zero, got {value}"
+    )]
+    InvalidRatio {
+        /// Configuration field containing the invalid value.
+        field: &'static str,
+        /// Invalid floating-point value.
+        value: f64,
+    },
+    /// A floating-point policy input was not finite.
+    #[error("Nexus consensus-policy field `{field}` must be finite, got {value}")]
+    NonFinite {
+        /// Configuration field containing the invalid value.
+        field: &'static str,
+        /// Invalid floating-point value.
+        value: f64,
+    },
+    /// A floating-point policy input was outside the inclusive unit interval.
+    #[error("Nexus consensus-policy field `{field}` must be within [0, 1], got {value}")]
+    InvalidUnitRatio {
+        /// Configuration field containing the invalid value.
+        field: &'static str,
+        /// Invalid floating-point value.
+        value: f64,
+    },
+    /// Compliance enforcement was enabled without binding the loaded policy set.
+    #[error("Nexus compliance is enabled but no loaded policy-set digest was supplied")]
+    MissingCompliancePolicyDigest,
+}
+
+#[derive(Encode)]
+struct NexusConsensusPolicyPreimageV1 {
+    version: u8,
+    enabled: bool,
+    configured_lane_catalog_hash: [u8; 32],
+    dataspaces: Vec<NexusConsensusDataspaceV1>,
+    dataspace_fee_sponsors: Vec<(u64, String)>,
+    dataspace_fee_sponsor_policies: Vec<(u64, String)>,
+    routing: NexusConsensusRoutingV1,
+    staking: NexusConsensusStakingV1,
+    fees: NexusConsensusFeesV1,
+    hf_shared_leases: NexusConsensusHfSharedLeasesV1,
+    uploaded_models: NexusConsensusUploadedModelsV1,
+    endorsement: NexusConsensusEndorsementV1,
+    axt: NexusConsensusAxtV1,
+    lane_relay_emergency: NexusConsensusLaneRelayEmergencyV1,
+    governance: NexusConsensusGovernanceV1,
+    compliance_enabled: bool,
+    compliance_audit_only: bool,
+    compliance_policy_digest: Option<[u8; 32]>,
+    lane_manifest_policy_digest: Option<[u8; 32]>,
+    fusion: NexusConsensusFusionV1,
+    autoscale: NexusConsensusAutoscaleV1,
+    commit_window_slots: u16,
+    da: NexusConsensusDaV1,
+}
+
+#[derive(Encode)]
+struct NexusConsensusDataspaceV1 {
+    id: u64,
+    alias: String,
+    fault_tolerance: u32,
+}
+
+#[derive(Encode)]
+struct NexusConsensusRoutingV1 {
+    default_lane: u32,
+    default_dataspace: u64,
+    rules: Vec<NexusConsensusRoutingRuleV1>,
+}
+
+#[derive(Encode)]
+struct NexusConsensusRoutingRuleV1 {
+    lane: u32,
+    dataspace: Option<u64>,
+    account: Option<String>,
+    instruction: Option<String>,
+}
+
+#[derive(Encode)]
+struct NexusConsensusDurationV1 {
+    seconds: u64,
+    nanoseconds: u32,
+}
+
+#[derive(Encode)]
+struct NexusConsensusStakingV1 {
+    public_validator_mode: u8,
+    restricted_validator_mode: u8,
+    min_validator_stake: u64,
+    max_validators: u32,
+    unbonding_delay: NexusConsensusDurationV1,
+    withdraw_grace: NexusConsensusDurationV1,
+    max_slash_bps: u16,
+    reward_dust_threshold: u64,
+    stake_asset_id: String,
+    stake_escrow_account_id: String,
+    slash_sink_account_id: String,
+}
+
+#[derive(Encode)]
+struct NexusConsensusFeesV1 {
+    fee_asset_id: String,
+    fee_sink_account_id: String,
+    base_fee: Numeric,
+    per_byte_fee: Numeric,
+    per_instruction_fee: Numeric,
+    per_gas_unit_fee: Numeric,
+    sponsorship_enabled: bool,
+    sponsor_max_fee: Numeric,
+    sponsor_verified_balance_safety_floor: Numeric,
+    canonical_sponsor_account_id: Option<String>,
+    fee_receipts_activation_height: u64,
+    external_settlement_enabled: bool,
+    burn_from_unix_timestamp_ms: u64,
+    settlement_mode: u8,
+    successful_claim_fee_exempt_authorities: Vec<String>,
+}
+
+#[derive(Encode)]
+struct NexusConsensusHfSharedLeasesV1 {
+    drain_grace: NexusConsensusDurationV1,
+    warmup_no_show_slash_bps: u16,
+    assigned_heartbeat_miss_slash_bps: u16,
+    assigned_heartbeat_miss_strike_threshold: u32,
+    advert_contradiction_slash_bps: u16,
+}
+
+#[derive(Encode)]
+struct NexusConsensusUploadedModelsV1 {
+    chunk_plaintext_bytes: u64,
+    max_plaintext_bytes_per_model: u64,
+    max_chunk_count_per_model: u32,
+    max_active_private_sessions_per_apartment: u32,
+    max_session_token_budget: u32,
+    max_session_image_budget: u16,
+}
+
+#[derive(Encode)]
+struct NexusConsensusEndorsementV1 {
+    committee_keys: Vec<String>,
+    quorum: u16,
+}
+
+#[derive(Encode)]
+struct NexusConsensusAxtV1 {
+    slot_length_ms: u64,
+    max_clock_skew_ms: u64,
+    proof_cache_ttl_slots: u64,
+    replay_retention_slots: u64,
+}
+
+#[derive(Encode)]
+struct NexusConsensusLaneRelayEmergencyV1 {
+    enabled: bool,
+    multisig_threshold: u16,
+    multisig_members: u16,
+    max_ttl_blocks: u32,
+}
+
+#[derive(Encode)]
+struct NexusConsensusGovernanceV1 {
+    default_module: Option<String>,
+    modules: Vec<NexusConsensusGovernanceModuleV1>,
+}
+
+#[derive(Encode)]
+struct NexusConsensusGovernanceModuleV1 {
+    name: String,
+    module_type: Option<String>,
+    params: Vec<(String, String)>,
+}
+
+#[derive(Encode)]
+struct NexusConsensusFusionV1 {
+    floor_teu: u32,
+    exit_teu: u32,
+    observation_slots: u16,
+    max_window_slots: u16,
+}
+
+#[derive(Encode)]
+struct NexusConsensusAutoscaleV1 {
+    enabled: bool,
+    min_lanes: u32,
+    max_lanes: u32,
+    target_block_ms: u64,
+    scale_out_latency_ratio_bits: u64,
+    scale_in_latency_ratio_bits: u64,
+    scale_out_utilization_ratio_bits: u64,
+    scale_in_utilization_ratio_bits: u64,
+    scale_out_window_blocks: u16,
+    scale_in_window_blocks: u16,
+    cooldown_blocks: u16,
+    per_lane_target_tps: u32,
+}
+
+#[derive(Encode)]
+struct NexusConsensusDaV1 {
+    q_in_slot_total: u32,
+    q_in_slot_per_ds_min: u16,
+    sample_size_base: u16,
+    sample_size_max: u16,
+    threshold_base: u16,
+    per_attester_shards: u16,
+    audit_sample_size: u16,
+    audit_window_count: u16,
+    audit_interval: NexusConsensusDurationV1,
+    recovery_request_timeout: NexusConsensusDurationV1,
+    rotation_max_hits_per_window: u16,
+    rotation_window_slots: u16,
+    rotation_seed_tag: String,
+    rotation_latency_decay_bits: u64,
+}
+
+impl From<Duration> for NexusConsensusDurationV1 {
+    fn from(value: Duration) -> Self {
+        Self {
+            seconds: value.as_secs(),
+            nanoseconds: value.subsec_nanos(),
+        }
+    }
+}
+
+const fn lane_validator_mode_tag(mode: LaneValidatorMode) -> u8 {
+    match mode {
+        LaneValidatorMode::StakeElected => 0,
+        LaneValidatorMode::AdminManaged => 1,
+    }
+}
+
+const fn nexus_fee_settlement_mode_tag(mode: NexusFeeSettlementMode) -> u8 {
+    match mode {
+        NexusFeeSettlementMode::Direct => 0,
+        NexusFeeSettlementMode::LaneRelayBurn => 1,
+    }
+}
+
+fn nexus_consensus_ratio_bits(
+    field: &'static str,
+    value: f64,
+) -> core::result::Result<u64, NexusConsensusPolicyDigestError> {
+    if !value.is_finite() || value <= 0.0 {
+        return Err(NexusConsensusPolicyDigestError::InvalidRatio { field, value });
+    }
+    Ok(value.to_bits())
+}
+
+fn nexus_consensus_finite_bits(
+    field: &'static str,
+    value: f64,
+) -> core::result::Result<u64, NexusConsensusPolicyDigestError> {
+    if !value.is_finite() {
+        return Err(NexusConsensusPolicyDigestError::NonFinite { field, value });
+    }
+    Ok(value.to_bits())
+}
+
+fn nexus_consensus_unit_ratio_bits(
+    field: &'static str,
+    value: f64,
+) -> core::result::Result<u64, NexusConsensusPolicyDigestError> {
+    let bits = nexus_consensus_finite_bits(field, value)?;
+    if !(0.0..=1.0).contains(&value) {
+        return Err(NexusConsensusPolicyDigestError::InvalidUnitRatio { field, value });
+    }
+    Ok(bits)
+}
+
+/// Compute the canonical digest of deterministic, locally configured Nexus policy.
+///
+/// The preimage is Norito-encoded, explicitly versioned, and domain-separated. Floating-point
+/// autoscale inputs are admitted only when finite and positive, then committed by their exact IEEE
+/// 754 bit patterns. The consensus-replayed lane catalog and
+/// [`Autoscale::last_transition_height`] are deliberately excluded: peers at different committed
+/// heights must be able to connect and synchronize those dynamic values. The immutable configured
+/// lane-catalog baseline is committed separately from that runtime topology. The statically
+/// configured dataspace catalog (including committee fault tolerance), routing, staking, fees, AXT,
+/// governance, fusion, autoscale, commit-window, and DA policy remain committed. Local storage
+/// budgets, relay-worker scheduling, manifest filesystem paths, and compliance filesystem
+/// locations are intentionally excluded because path placement is not a protocol input; loaded
+/// compliance and lane-manifest policy-set digests are bound separately.
+pub fn nexus_consensus_policy_digest(
+    nexus: &Nexus,
+) -> core::result::Result<[u8; 32], NexusConsensusPolicyDigestError> {
+    nexus_consensus_policy_digest_with_compliance(nexus, None)
+}
+
+/// Compute the canonical Nexus policy digest while binding the loaded compliance policy set.
+///
+/// `compliance_policy_digest` is required whenever [`LaneCompliance::enabled`] is true so two
+/// validators cannot execute the same transaction against different filesystem policy bundles.
+pub fn nexus_consensus_policy_digest_with_compliance(
+    nexus: &Nexus,
+    compliance_policy_digest: Option<[u8; 32]>,
+) -> core::result::Result<[u8; 32], NexusConsensusPolicyDigestError> {
+    nexus_consensus_policy_digest_with_runtime_policies(nexus, compliance_policy_digest, None)
+}
+
+/// Compute the canonical Nexus digest with loaded compliance and lane-manifest policy sets.
+///
+/// Passing `None` for a policy set commits that absence, so it cannot match a validator that loaded
+/// a concrete registry digest. Runtime callers should always pass the installed lane-manifest
+/// digest, including for an empty registry.
+pub fn nexus_consensus_policy_digest_with_runtime_policies(
+    nexus: &Nexus,
+    compliance_policy_digest: Option<[u8; 32]>,
+    lane_manifest_policy_digest: Option<[u8; 32]>,
+) -> core::result::Result<[u8; 32], NexusConsensusPolicyDigestError> {
+    const DOMAIN: &[u8] = b"iroha:nexus:consensus-policy:v1\0";
+    const CONFIGURED_LANE_CATALOG_DOMAIN: &[u8] = b"iroha:nexus:configured-lane-catalog:v1\0";
+    const VERSION: u8 = 1;
+
+    if nexus.compliance.enabled && compliance_policy_digest.is_none() {
+        return Err(NexusConsensusPolicyDigestError::MissingCompliancePolicyDigest);
+    }
+
+    let rules = nexus
+        .routing_policy
+        .rules
+        .iter()
+        .map(|rule| NexusConsensusRoutingRuleV1 {
+            lane: rule.lane.as_u32(),
+            dataspace: rule.dataspace.map(DataSpaceId::as_u64),
+            account: rule.matcher.account.clone(),
+            instruction: rule.matcher.instruction.clone(),
+        })
+        .collect();
+    let mut dataspaces = nexus
+        .dataspace_catalog
+        .entries()
+        .iter()
+        .map(|entry| NexusConsensusDataspaceV1 {
+            id: entry.id.as_u64(),
+            alias: entry.alias.clone(),
+            fault_tolerance: entry.fault_tolerance,
+        })
+        .collect::<Vec<_>>();
+    dataspaces.sort_unstable_by_key(|entry| entry.id);
+    let dataspace_fee_sponsors = nexus
+        .dataspace_fee_sponsors
+        .iter()
+        .map(|(id, sponsor)| (id.as_u64(), sponsor.clone()))
+        .collect();
+    let dataspace_fee_sponsor_policies = nexus
+        .dataspace_fee_sponsor_policies
+        .iter()
+        .map(|(id, policy)| (id.as_u64(), policy.as_ref().to_owned()))
+        .collect();
+    let mut successful_claim_fee_exempt_authorities =
+        nexus.fees.successful_claim_fee_exempt_authorities.clone();
+    successful_claim_fee_exempt_authorities.sort_unstable();
+    successful_claim_fee_exempt_authorities.dedup();
+    let governance_modules = nexus
+        .governance
+        .modules
+        .iter()
+        .map(|(name, module)| NexusConsensusGovernanceModuleV1 {
+            name: name.clone(),
+            module_type: module.module_type.clone(),
+            params: module
+                .params
+                .iter()
+                .map(|(name, value)| (name.clone(), value.clone()))
+                .collect(),
+        })
+        .collect();
+    let autoscale = &nexus.autoscale;
+    let configured_lane_catalog = (
+        nexus.configured_lane_catalog.lane_count().get(),
+        nexus.configured_lane_catalog.lanes().to_vec(),
+    )
+        .encode();
+    let preimage = NexusConsensusPolicyPreimageV1 {
+        version: VERSION,
+        enabled: nexus.enabled,
+        configured_lane_catalog_hash: Hash::new_from_chunks(&[
+            CONFIGURED_LANE_CATALOG_DOMAIN,
+            configured_lane_catalog.as_slice(),
+        ])
+        .into(),
+        dataspaces,
+        dataspace_fee_sponsors,
+        dataspace_fee_sponsor_policies,
+        routing: NexusConsensusRoutingV1 {
+            default_lane: nexus.routing_policy.default_lane.as_u32(),
+            default_dataspace: nexus.routing_policy.default_dataspace.as_u64(),
+            rules,
+        },
+        staking: NexusConsensusStakingV1 {
+            public_validator_mode: lane_validator_mode_tag(nexus.staking.public_validator_mode),
+            restricted_validator_mode: lane_validator_mode_tag(
+                nexus.staking.restricted_validator_mode,
+            ),
+            min_validator_stake: nexus.staking.min_validator_stake,
+            max_validators: nexus.staking.max_validators.get(),
+            unbonding_delay: nexus.staking.unbonding_delay.into(),
+            withdraw_grace: nexus.staking.withdraw_grace.into(),
+            max_slash_bps: nexus.staking.max_slash_bps,
+            reward_dust_threshold: nexus.staking.reward_dust_threshold,
+            stake_asset_id: nexus.staking.stake_asset_id.clone(),
+            stake_escrow_account_id: nexus.staking.stake_escrow_account_id.clone(),
+            slash_sink_account_id: nexus.staking.slash_sink_account_id.clone(),
+        },
+        fees: NexusConsensusFeesV1 {
+            fee_asset_id: nexus.fees.fee_asset_id.clone(),
+            fee_sink_account_id: nexus.fees.fee_sink_account_id.clone(),
+            base_fee: nexus.fees.base_fee.clone(),
+            per_byte_fee: nexus.fees.per_byte_fee.clone(),
+            per_instruction_fee: nexus.fees.per_instruction_fee.clone(),
+            per_gas_unit_fee: nexus.fees.per_gas_unit_fee.clone(),
+            sponsorship_enabled: nexus.fees.sponsorship_enabled,
+            sponsor_max_fee: nexus.fees.sponsor_max_fee.clone(),
+            sponsor_verified_balance_safety_floor: nexus
+                .fees
+                .sponsor_verified_balance_safety_floor
+                .clone(),
+            canonical_sponsor_account_id: nexus.fees.canonical_sponsor_account_id.clone(),
+            fee_receipts_activation_height: nexus.fees.fee_receipts_activation_height,
+            external_settlement_enabled: nexus.fees.external_settlement_enabled,
+            burn_from_unix_timestamp_ms: nexus.fees.burn_from_unix_timestamp_ms,
+            settlement_mode: nexus_fee_settlement_mode_tag(nexus.fees.settlement_mode),
+            successful_claim_fee_exempt_authorities,
+        },
+        hf_shared_leases: NexusConsensusHfSharedLeasesV1 {
+            drain_grace: nexus.hf_shared_leases.drain_grace.into(),
+            warmup_no_show_slash_bps: nexus.hf_shared_leases.warmup_no_show_slash_bps,
+            assigned_heartbeat_miss_slash_bps: nexus
+                .hf_shared_leases
+                .assigned_heartbeat_miss_slash_bps,
+            assigned_heartbeat_miss_strike_threshold: nexus
+                .hf_shared_leases
+                .assigned_heartbeat_miss_strike_threshold,
+            advert_contradiction_slash_bps: nexus.hf_shared_leases.advert_contradiction_slash_bps,
+        },
+        uploaded_models: NexusConsensusUploadedModelsV1 {
+            chunk_plaintext_bytes: nexus.uploaded_models.chunk_plaintext_bytes,
+            max_plaintext_bytes_per_model: nexus.uploaded_models.max_plaintext_bytes_per_model,
+            max_chunk_count_per_model: nexus.uploaded_models.max_chunk_count_per_model,
+            max_active_private_sessions_per_apartment: nexus
+                .uploaded_models
+                .max_active_private_sessions_per_apartment,
+            max_session_token_budget: nexus.uploaded_models.max_session_token_budget,
+            max_session_image_budget: nexus.uploaded_models.max_session_image_budget,
+        },
+        endorsement: NexusConsensusEndorsementV1 {
+            committee_keys: nexus.endorsement.committee_keys.clone(),
+            quorum: nexus.endorsement.quorum,
+        },
+        axt: NexusConsensusAxtV1 {
+            slot_length_ms: nexus.axt.slot_length_ms.get(),
+            max_clock_skew_ms: nexus.axt.max_clock_skew_ms,
+            proof_cache_ttl_slots: nexus.axt.proof_cache_ttl_slots.get(),
+            replay_retention_slots: nexus.axt.replay_retention_slots.get(),
+        },
+        lane_relay_emergency: NexusConsensusLaneRelayEmergencyV1 {
+            enabled: nexus.lane_relay_emergency.enabled,
+            multisig_threshold: nexus.lane_relay_emergency.multisig_threshold.get(),
+            multisig_members: nexus.lane_relay_emergency.multisig_members.get(),
+            max_ttl_blocks: nexus.lane_relay_emergency.max_ttl_blocks.get(),
+        },
+        governance: NexusConsensusGovernanceV1 {
+            default_module: nexus.governance.default_module.clone(),
+            modules: governance_modules,
+        },
+        compliance_enabled: nexus.compliance.enabled,
+        compliance_audit_only: nexus.compliance.audit_only,
+        compliance_policy_digest,
+        lane_manifest_policy_digest,
+        fusion: NexusConsensusFusionV1 {
+            floor_teu: nexus.fusion.floor_teu,
+            exit_teu: nexus.fusion.exit_teu,
+            observation_slots: nexus.fusion.observation_slots.get(),
+            max_window_slots: nexus.fusion.max_window_slots.get(),
+        },
+        autoscale: NexusConsensusAutoscaleV1 {
+            enabled: autoscale.enabled,
+            min_lanes: autoscale.min_lanes.get(),
+            max_lanes: autoscale.max_lanes.get(),
+            target_block_ms: autoscale.target_block_ms.get(),
+            scale_out_latency_ratio_bits: nexus_consensus_ratio_bits(
+                "nexus.autoscale.scale_out_latency_ratio",
+                autoscale.scale_out_latency_ratio,
+            )?,
+            scale_in_latency_ratio_bits: nexus_consensus_ratio_bits(
+                "nexus.autoscale.scale_in_latency_ratio",
+                autoscale.scale_in_latency_ratio,
+            )?,
+            scale_out_utilization_ratio_bits: nexus_consensus_ratio_bits(
+                "nexus.autoscale.scale_out_utilization_ratio",
+                autoscale.scale_out_utilization_ratio,
+            )?,
+            scale_in_utilization_ratio_bits: nexus_consensus_ratio_bits(
+                "nexus.autoscale.scale_in_utilization_ratio",
+                autoscale.scale_in_utilization_ratio,
+            )?,
+            scale_out_window_blocks: autoscale.scale_out_window_blocks.get(),
+            scale_in_window_blocks: autoscale.scale_in_window_blocks.get(),
+            cooldown_blocks: autoscale.cooldown_blocks.get(),
+            per_lane_target_tps: autoscale.per_lane_target_tps.get(),
+        },
+        commit_window_slots: nexus.commit.window_slots.get(),
+        da: NexusConsensusDaV1 {
+            q_in_slot_total: nexus.da.q_in_slot_total.get(),
+            q_in_slot_per_ds_min: nexus.da.q_in_slot_per_ds_min.get(),
+            sample_size_base: nexus.da.sample_size_base.get(),
+            sample_size_max: nexus.da.sample_size_max.get(),
+            threshold_base: nexus.da.threshold_base.get(),
+            per_attester_shards: nexus.da.per_attester_shards.get(),
+            audit_sample_size: nexus.da.audit.sample_size.get(),
+            audit_window_count: nexus.da.audit.window_count.get(),
+            audit_interval: nexus.da.audit.interval.into(),
+            recovery_request_timeout: nexus.da.recovery.request_timeout.into(),
+            rotation_max_hits_per_window: nexus.da.rotation.max_hits_per_window.get(),
+            rotation_window_slots: nexus.da.rotation.window_slots.get(),
+            rotation_seed_tag: nexus.da.rotation.seed_tag.clone(),
+            rotation_latency_decay_bits: nexus_consensus_unit_ratio_bits(
+                "nexus.da.rotation.latency_decay",
+                nexus.da.rotation.latency_decay,
+            )?,
+        },
+    };
+    let encoded = preimage.encode();
+    Ok(Hash::new_from_chunks(&[DOMAIN, encoded.as_slice()]).into())
 }
 
 /// Lane manifest registry configuration.
@@ -3629,9 +4166,13 @@ impl Default for Fusion {
 pub struct Autoscale {
     /// Whether consensus-driven lane autoscaling is enabled.
     pub enabled: bool,
-    /// Minimum active lane count.
+    /// Inclusive lower lane-id bound reserved for autoscale-managed elastic lanes.
+    ///
+    /// Despite the legacy field name, this is not an active-lane count.
     pub min_lanes: NonZeroU32,
-    /// Maximum active lane count.
+    /// Exclusive upper lane-id bound reserved for autoscale-managed elastic lanes.
+    ///
+    /// Despite the legacy field name, this is not an active-lane count.
     pub max_lanes: NonZeroU32,
     /// Target block interval used by the autoscaler (milliseconds).
     pub target_block_ms: NonZeroU64,
@@ -3653,6 +4194,19 @@ pub struct Autoscale {
     pub per_lane_target_tps: NonZeroU32,
     /// Last block height where a scale transition was applied.
     pub last_transition_height: u64,
+}
+
+impl Autoscale {
+    /// Return whether `lane` is inside the autoscaler-owned elastic lane-id range.
+    ///
+    /// The range is half-open: `min_lanes <= lane < max_lanes`. Callers that may
+    /// receive programmatically constructed runtime state must validate that
+    /// `min_lanes < max_lanes` separately.
+    #[must_use]
+    pub fn contains_elastic_lane_id(&self, lane: LaneId) -> bool {
+        let lane = lane.as_u32();
+        lane >= self.min_lanes.get() && lane < self.max_lanes.get()
+    }
 }
 
 impl Default for Autoscale {
@@ -6742,6 +7296,10 @@ pub struct SorafsDiscovery {
     pub discovery_enabled: bool,
     /// Capability names recognised by the cache.
     pub known_capabilities: Vec<String>,
+    /// Durable checkpoint containing provider advert replay high-water marks.
+    pub replay_checkpoint_path: PathBuf,
+    /// Maximum admitted-provider high-water marks accepted in the checkpoint.
+    pub replay_checkpoint_max_entries: NonZeroUsize,
     /// Optional admission registry configuration.
     pub admission: Option<SorafsAdmission>,
     /// Optional publish peer discovery hints served to SoraFS deploy clients.
@@ -6753,6 +7311,10 @@ impl Default for SorafsDiscovery {
         Self {
             discovery_enabled: super::defaults::torii::SORAFS_DISCOVERY_ENABLED,
             known_capabilities: super::defaults::torii::sorafs_known_capabilities(),
+            replay_checkpoint_path: super::defaults::torii::sorafs_discovery_replay_checkpoint_path(
+            ),
+            replay_checkpoint_max_entries:
+                super::defaults::torii::SORAFS_DISCOVERY_REPLAY_MAX_ENTRIES,
             admission: None,
             publish: SorafsPublishDiscovery::default(),
         }
@@ -6764,6 +7326,10 @@ impl Default for SorafsDiscovery {
 pub struct SorafsAdmission {
     /// Directory containing governance-signed provider admission envelopes.
     pub envelopes_dir: PathBuf,
+    /// Canonical Ed25519 council keys trusted to authorise admission changes.
+    pub trusted_council_keys: Vec<PublicKey>,
+    /// Minimum number of distinct trusted council signatures required.
+    pub signature_threshold: NonZeroUsize,
 }
 
 /// Config-backed SoraFS publish peer hints exposed by Torii.
@@ -6854,7 +7420,7 @@ impl Default for SorafsGc {
 /// Proof-of-Retrievability coordinator configuration.
 #[derive(Debug, Clone)]
 pub struct SorafsPor {
-    /// Enable the coordinator runtime.
+    /// Enable the verified coordinator runtime.
     pub enabled: bool,
     /// Duration of a PoR epoch (seconds).
     pub epoch_interval_secs: u64,
@@ -6862,8 +7428,20 @@ pub struct SorafsPor {
     pub response_window_secs: u64,
     /// Filesystem directory used to persist governance DAG payloads.
     pub governance_dag_dir: PathBuf,
-    /// Optional deterministic randomness seed (32 bytes).
-    pub randomness_seed: Option<[u8; 32]>,
+    /// Pinned drand trust and transport configuration.
+    pub drand: SorafsPorDrand,
+    /// Durable authenticated provider VRF state path.
+    pub vrf_state_path: PathBuf,
+    /// Deadline from epoch start before missing VRFs enter the forced path.
+    pub vrf_submission_deadline_secs: u64,
+    /// Maximum durable provider VRF entries.
+    pub vrf_max_entries: usize,
+    /// Number of epochs retained in provider VRF state.
+    pub vrf_retention_epochs: u64,
+    /// Maximum accepted clock skew for signed provider VRF submissions.
+    pub vrf_max_clock_skew_secs: u64,
+    /// Minimum trusted-auditor signature count required on verdicts.
+    pub auditor_signature_threshold: NonZeroU16,
 }
 
 impl Default for SorafsPor {
@@ -6873,9 +7451,75 @@ impl Default for SorafsPor {
             epoch_interval_secs: super::defaults::sorafs::por::EPOCH_INTERVAL_SECS,
             response_window_secs: super::defaults::sorafs::por::RESPONSE_WINDOW_SECS,
             governance_dag_dir: super::defaults::sorafs::por::governance_dir(),
-            randomness_seed: super::defaults::sorafs::por::randomness_seed_hex()
-                .and_then(|hex| hex::decode(hex).ok())
-                .and_then(|bytes| bytes.try_into().ok()),
+            drand: SorafsPorDrand::default(),
+            vrf_state_path: super::defaults::sorafs::por::vrf_state_path(),
+            vrf_submission_deadline_secs:
+                super::defaults::sorafs::por::VRF_SUBMISSION_DEADLINE_SECS,
+            vrf_max_entries: super::defaults::sorafs::por::VRF_MAX_ENTRIES,
+            vrf_retention_epochs: super::defaults::sorafs::por::VRF_RETENTION_EPOCHS,
+            vrf_max_clock_skew_secs: super::defaults::sorafs::por::VRF_MAX_CLOCK_SKEW_SECS,
+            auditor_signature_threshold: NonZeroU16::new(
+                super::defaults::sorafs::por::AUDITOR_SIGNATURE_THRESHOLD,
+            )
+            .expect("default PoR auditor signature threshold must be non-zero"),
+        }
+    }
+}
+
+/// Pinned drand chain and hardened HTTP client configuration for SoraFS PoR.
+#[derive(Debug, Clone)]
+pub struct SorafsPorDrand {
+    /// Exact supported drand scheme identifier.
+    pub scheme: String,
+    /// Pinned chain hash.
+    pub chain_hash: [u8; 32],
+    /// Pinned compressed G2 public key.
+    pub public_key: [u8; 96],
+    /// Pinned chain genesis timestamp.
+    pub genesis_time: u64,
+    /// Pinned beacon period in seconds.
+    pub period_secs: u64,
+    /// Independent HTTPS chain-root endpoints.
+    pub endpoints: Vec<String>,
+    /// Required endpoint agreement count.
+    pub quorum: u16,
+    /// Maximum endpoint count accepted from configuration.
+    pub max_endpoints: usize,
+    /// TCP/TLS connection timeout.
+    pub connect_timeout: Duration,
+    /// Complete request timeout.
+    pub request_timeout: Duration,
+    /// Maximum response bytes.
+    pub max_body_bytes: usize,
+    /// Maximum age of a beacon relative to pinned chain timing.
+    pub max_beacon_age_secs: u64,
+    /// Maximum tolerated future clock skew.
+    pub max_future_skew_secs: u64,
+    /// Durable verified high-water path.
+    pub state_path: PathBuf,
+}
+
+impl Default for SorafsPorDrand {
+    fn default() -> Self {
+        Self {
+            scheme: String::new(),
+            chain_hash: [0; 32],
+            public_key: [0; 96],
+            genesis_time: 0,
+            period_secs: 0,
+            endpoints: Vec::new(),
+            quorum: super::defaults::sorafs::por::DRAND_QUORUM,
+            max_endpoints: super::defaults::sorafs::por::DRAND_MAX_ENDPOINTS,
+            connect_timeout: Duration::from_millis(
+                super::defaults::sorafs::por::DRAND_CONNECT_TIMEOUT_MS,
+            ),
+            request_timeout: Duration::from_millis(
+                super::defaults::sorafs::por::DRAND_REQUEST_TIMEOUT_MS,
+            ),
+            max_body_bytes: super::defaults::sorafs::por::DRAND_MAX_BODY_BYTES,
+            max_beacon_age_secs: super::defaults::sorafs::por::DRAND_MAX_BEACON_AGE_SECS,
+            max_future_skew_secs: super::defaults::sorafs::por::DRAND_MAX_FUTURE_SKEW_SECS,
+            state_path: super::defaults::sorafs::por::drand_state_path(),
         }
     }
 }
@@ -6906,6 +7550,8 @@ pub struct SorafsStorage {
     pub max_pins: usize,
     /// Periodic Proof-of-Retrievability sampling cadence (seconds).
     pub por_sample_interval_secs: u64,
+    /// Retention and checkpoint bounds for auxiliary embedded runtime state.
+    pub runtime: SorafsRuntimeRetention,
     /// Optional human-friendly alias advertised in telemetry.
     pub alias: Option<String>,
     /// Optional overrides applied when producing provider adverts.
@@ -6930,6 +7576,17 @@ pub struct SorafsStorage {
     pub governance_dag_signing_key_path: Option<PathBuf>,
     /// Authentication and rate limits for manifest pin submissions.
     pub pin: SorafsStoragePin,
+}
+
+/// Retention and checkpoint bounds for auxiliary embedded SoraFS runtime state.
+#[derive(Debug, Clone, Copy)]
+pub struct SorafsRuntimeRetention {
+    /// Maximum replay events retained for each local event stream.
+    pub event_history_limit: usize,
+    /// Maximum entries retained in each auxiliary state index.
+    pub state_entry_limit: usize,
+    /// Maximum encoded size accepted for one auxiliary runtime checkpoint.
+    pub checkpoint_max_bytes: Bytes<u64>,
 }
 
 /// SoraFS local orderbook admission policy.
@@ -6998,6 +7655,7 @@ impl Default for SorafsStorage {
             max_parallel_fetches: defaults::sorafs::storage::MAX_PARALLEL_FETCHES,
             max_pins: defaults::sorafs::storage::MAX_PINS,
             por_sample_interval_secs: defaults::sorafs::storage::POR_SAMPLE_INTERVAL_SECS,
+            runtime: SorafsRuntimeRetention::default(),
             alias: defaults::sorafs::storage::alias(),
             adverts: SorafsAdvertOverrides::default(),
             metering_smoothing: SorafsMeteringSmoothing::default(),
@@ -7011,6 +7669,16 @@ impl Default for SorafsStorage {
                 defaults::sorafs::storage::governance_publisher_peer_id(),
             governance_dag_signing_key_path,
             pin: SorafsStoragePin::default(),
+        }
+    }
+}
+
+impl Default for SorafsRuntimeRetention {
+    fn default() -> Self {
+        Self {
+            event_history_limit: defaults::sorafs::storage::RUNTIME_EVENT_HISTORY_LIMIT,
+            state_entry_limit: defaults::sorafs::storage::RUNTIME_STATE_ENTRY_LIMIT,
+            checkpoint_max_bytes: defaults::sorafs::storage::RUNTIME_CHECKPOINT_MAX_BYTES,
         }
     }
 }
@@ -9955,6 +10623,256 @@ impl Default for FraudMonitoring {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nexus_consensus_policy_digest_is_stable_across_replayed_topology_progress() {
+        let baseline = Nexus::default();
+        let expected = nexus_consensus_policy_digest(&baseline).expect("valid default policy");
+
+        let mut progressed = baseline.clone();
+        progressed.autoscale.last_transition_height = 42;
+        progressed.lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(2).expect("nonzero lane bound"),
+            vec![
+                LaneConfigMetadata::default(),
+                LaneConfigMetadata {
+                    id: LaneId::new(1),
+                    alias: "elastic-lane-1".to_owned(),
+                    ..LaneConfigMetadata::default()
+                },
+            ],
+        )
+        .expect("valid progressed lane catalog");
+        progressed.lane_config = LaneConfig::from_catalog(&progressed.lane_catalog);
+
+        assert_eq!(
+            nexus_consensus_policy_digest(&progressed).expect("valid progressed policy"),
+            expected,
+            "height-local topology progress must not lock a lagging peer out of block sync"
+        );
+    }
+
+    #[test]
+    fn nexus_consensus_policy_digest_binds_configured_lane_catalog() {
+        let baseline = Nexus::default();
+        let expected = nexus_consensus_policy_digest(&baseline).expect("valid default policy");
+
+        let mut different_genesis = baseline;
+        different_genesis.configured_lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(2).expect("nonzero lane bound"),
+            vec![
+                LaneConfigMetadata::default(),
+                LaneConfigMetadata {
+                    id: LaneId::new(1),
+                    alias: "configured-lane-1".to_owned(),
+                    ..LaneConfigMetadata::default()
+                },
+            ],
+        )
+        .expect("valid configured lane catalog");
+
+        assert_ne!(
+            nexus_consensus_policy_digest(&different_genesis)
+                .expect("valid different configured policy"),
+            expected,
+            "validators configured with different genesis lane catalogs must not share a policy digest"
+        );
+    }
+
+    #[test]
+    fn nexus_consensus_policy_digest_excludes_operational_paths_and_worker_timing() {
+        let baseline = Nexus::default();
+        let expected = nexus_consensus_policy_digest(&baseline).expect("valid default policy");
+        let mut operational_drift = baseline;
+        operational_drift.registry.manifest_directory = Some(PathBuf::from("/srv/lane-manifests"));
+        operational_drift.registry.cache_directory = Some(PathBuf::from("/var/cache/lanes"));
+        operational_drift.registry.poll_interval = Duration::from_secs(17);
+        operational_drift.relay_worker.retry_backoff = Duration::from_secs(9);
+        operational_drift.compliance.policy_dir = Some(PathBuf::from("/srv/lane-policies"));
+
+        assert_eq!(
+            nexus_consensus_policy_digest(&operational_drift).expect("valid operational drift"),
+            expected,
+            "filesystem placement and local worker cadence must not partition validators"
+        );
+    }
+
+    #[test]
+    fn nexus_consensus_policy_digest_changes_for_each_decision_policy_family() {
+        let baseline = Nexus::default();
+        let expected = nexus_consensus_policy_digest(&baseline).expect("valid default policy");
+
+        let mut threshold_drift = baseline.clone();
+        threshold_drift.autoscale.scale_out_latency_ratio = f64::from_bits(
+            threshold_drift
+                .autoscale
+                .scale_out_latency_ratio
+                .to_bits()
+                .saturating_add(1),
+        );
+        assert_ne!(
+            nexus_consensus_policy_digest(&threshold_drift).expect("valid threshold drift"),
+            expected,
+            "exact f64 policy bits must be committed"
+        );
+
+        let mut routing_drift = baseline.clone();
+        routing_drift.routing_policy.rules.push(LaneRoutingRule {
+            lane: LaneId::SINGLE,
+            dataspace: Some(DataSpaceId::UNIVERSAL),
+            matcher: LaneRoutingMatcher {
+                instruction: Some("transfer".to_owned()),
+                ..LaneRoutingMatcher::default()
+            },
+        });
+        assert_ne!(
+            nexus_consensus_policy_digest(&routing_drift).expect("valid routing drift"),
+            expected
+        );
+
+        let mut staking_drift = baseline.clone();
+        staking_drift.staking.min_validator_stake =
+            staking_drift.staking.min_validator_stake.saturating_add(1);
+        assert_ne!(
+            nexus_consensus_policy_digest(&staking_drift).expect("valid staking drift"),
+            expected
+        );
+
+        let mut committee_drift = baseline;
+        committee_drift.endorsement.quorum = committee_drift.endorsement.quorum.saturating_add(1);
+        assert_ne!(
+            nexus_consensus_policy_digest(&committee_drift).expect("valid committee drift"),
+            expected
+        );
+    }
+
+    #[test]
+    fn nexus_consensus_policy_digest_changes_for_execution_and_da_policy_drift() {
+        let baseline = Nexus::default();
+        let expected = nexus_consensus_policy_digest(&baseline).expect("valid default policy");
+
+        let mut dataspace_drift = baseline.clone();
+        dataspace_drift.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+            fault_tolerance: 2,
+            ..DataSpaceMetadata::default()
+        }])
+        .expect("valid dataspace committee drift");
+        assert_ne!(
+            nexus_consensus_policy_digest(&dataspace_drift).expect("valid dataspace drift"),
+            expected,
+            "dataspace fault tolerance changes the 3f+1 lane committee"
+        );
+
+        let mut dataspace_id_drift = baseline.clone();
+        dataspace_id_drift.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+            id: DataSpaceId::new(7),
+            ..DataSpaceMetadata::default()
+        }])
+        .expect("valid dataspace identifier catalog");
+        assert_ne!(
+            nexus_consensus_policy_digest(&dataspace_id_drift)
+                .expect("digest does not perform cross-catalog validation"),
+            expected,
+            "dataspace identities used for committee lookup must be committed"
+        );
+
+        let mut fee_drift = baseline.clone();
+        fee_drift.fees.per_byte_fee = Numeric::from(123_456_u32);
+        assert_ne!(
+            nexus_consensus_policy_digest(&fee_drift).expect("valid fee drift"),
+            expected
+        );
+
+        let mut axt_drift = baseline.clone();
+        axt_drift.axt.max_clock_skew_ms = axt_drift.axt.max_clock_skew_ms.saturating_add(1);
+        assert_ne!(
+            nexus_consensus_policy_digest(&axt_drift).expect("valid AXT drift"),
+            expected
+        );
+
+        let mut commit_drift = baseline.clone();
+        commit_drift.commit.window_slots =
+            NonZeroU16::new(commit_drift.commit.window_slots.get().saturating_add(1))
+                .expect("nonzero commit window");
+        assert_ne!(
+            nexus_consensus_policy_digest(&commit_drift).expect("valid commit drift"),
+            expected
+        );
+
+        let mut da_drift = baseline;
+        da_drift.da.sample_size_max =
+            NonZeroU16::new(da_drift.da.sample_size_max.get().saturating_add(1))
+                .expect("nonzero DA sample size");
+        assert_ne!(
+            nexus_consensus_policy_digest(&da_drift).expect("valid DA drift"),
+            expected
+        );
+    }
+
+    #[test]
+    fn nexus_consensus_policy_digest_canonicalizes_dataspace_catalog_order() {
+        let universal = DataSpaceMetadata::default();
+        let settlement = DataSpaceMetadata {
+            id: DataSpaceId::new(7),
+            alias: "settlement".to_owned(),
+            description: None,
+            fault_tolerance: 2,
+        };
+        let mut left = Nexus::default();
+        left.dataspace_catalog = DataSpaceCatalog::new(vec![universal.clone(), settlement.clone()])
+            .expect("valid dataspace catalog");
+        let mut right = left.clone();
+        right.dataspace_catalog = DataSpaceCatalog::new(vec![settlement, universal])
+            .expect("valid reordered dataspace catalog");
+
+        assert_eq!(
+            nexus_consensus_policy_digest(&left).expect("valid left policy"),
+            nexus_consensus_policy_digest(&right).expect("valid right policy"),
+            "catalog iteration order is not a committee policy input"
+        );
+    }
+
+    #[test]
+    fn nexus_consensus_policy_digest_rejects_non_finite_autoscale_ratio() {
+        let mut nexus = Nexus::default();
+        nexus.autoscale.scale_in_utilization_ratio = f64::NAN;
+
+        assert!(matches!(
+            nexus_consensus_policy_digest(&nexus),
+            Err(NexusConsensusPolicyDigestError::InvalidRatio {
+                field: "nexus.autoscale.scale_in_utilization_ratio",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn nexus_consensus_policy_digest_requires_and_binds_loaded_compliance_policy_set() {
+        let mut nexus = Nexus::default();
+        nexus.compliance.enabled = true;
+
+        assert_eq!(
+            nexus_consensus_policy_digest(&nexus),
+            Err(NexusConsensusPolicyDigestError::MissingCompliancePolicyDigest)
+        );
+        let left = nexus_consensus_policy_digest_with_compliance(&nexus, Some([0x11; 32]))
+            .expect("bound compliance policy set");
+        let right = nexus_consensus_policy_digest_with_compliance(&nexus, Some([0x12; 32]))
+            .expect("bound compliance policy set");
+        assert_ne!(left, right);
+    }
+
+    #[test]
+    fn nexus_consensus_policy_digest_binds_loaded_lane_manifest_policy_set() {
+        let nexus = Nexus::default();
+        let left =
+            nexus_consensus_policy_digest_with_runtime_policies(&nexus, None, Some([0x21; 32]))
+                .expect("bound lane manifest policy set");
+        let right =
+            nexus_consensus_policy_digest_with_runtime_policies(&nexus, None, Some([0x22; 32]))
+                .expect("bound lane manifest policy set");
+        assert_ne!(left, right);
+    }
 
     #[test]
     fn offline_defaults_keep_kagemusha_enabled() {

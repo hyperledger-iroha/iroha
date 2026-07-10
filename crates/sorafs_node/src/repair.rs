@@ -8,7 +8,7 @@ use std::{
     cmp::Reverse,
     collections::{BTreeMap, HashMap, VecDeque},
     fs, io,
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
     sync::{
         Arc, RwLock,
@@ -47,6 +47,8 @@ const MAX_GOVERNANCE_REASON_BYTES: usize = 256;
 const DEFAULT_IDEMPOTENCY_CACHE_SIZE: usize = 64;
 const MAX_REPAIR_STORE_RETRIES: usize = 3;
 const DEFAULT_REPAIR_EVENT_HISTORY_LIMIT: usize = 64;
+const DEFAULT_REPAIR_STORE_ENTRY_LIMIT: usize = 65_536;
+const DEFAULT_REPAIR_STORE_MAX_BYTES: u64 = 64 * 1024 * 1024;
 const REPAIR_STORE_VERSION_V1: u8 = 1;
 const REPAIR_STORE_FILE_NAME: &str = "repair_state.to";
 const REPAIR_STORE_TMP_EXT: &str = "tmp";
@@ -163,22 +165,53 @@ impl RepairStoreSnapshot {
         }
     }
 
-    fn into_state(self) -> Result<RepairStoreState, RepairStoreError> {
+    fn into_state(self, entry_limit: usize) -> Result<RepairStoreState, RepairStoreError> {
         if self.version != REPAIR_STORE_VERSION_V1 {
             return Err(RepairStoreError::Other(format!(
                 "unsupported repair store version {} (expected {})",
                 self.version, REPAIR_STORE_VERSION_V1
             )));
         }
+        if self.tasks.len() > entry_limit
+            || self.por_history.len() > entry_limit
+            || self.auditor_nonces.len() > entry_limit
+        {
+            return Err(RepairStoreError::Other(format!(
+                "repair store checkpoint exceeds entry limit {entry_limit}"
+            )));
+        }
         let mut tasks = BTreeMap::new();
         for task in self.tasks {
             let internal = task.into_internal();
+            if internal.events.len() > entry_limit {
+                return Err(RepairStoreError::Other(format!(
+                    "repair task event history exceeds entry limit {entry_limit}"
+                )));
+            }
             let key = internal.report.ticket_id.0.clone();
-            tasks.insert(key, internal);
+            if tasks.insert(key.clone(), internal).is_some() {
+                return Err(RepairStoreError::Other(format!(
+                    "duplicate repair task `{key}` in checkpoint"
+                )));
+            }
         }
         let mut por_history = BTreeMap::new();
         for entry in self.por_history {
-            por_history.insert(entry.id, entry);
+            if por_history.insert(entry.id, entry).is_some() {
+                return Err(RepairStoreError::Other(
+                    "duplicate PoR history id in repair checkpoint".to_owned(),
+                ));
+            }
+        }
+        if self.next_por_history_id == 0
+            || por_history
+                .last_key_value()
+                .is_some_and(|(id, _)| self.next_por_history_id <= *id)
+            || self.next_audit_sequence == 0
+        {
+            return Err(RepairStoreError::Other(
+                "repair store sequence high-water marks are invalid".to_owned(),
+            ));
         }
         let mut auditor_nonces = BTreeMap::new();
         for nonce in self.auditor_nonces {
@@ -317,25 +350,32 @@ impl RepairStoreState {
 struct FileRepairStore {
     path: PathBuf,
     state: RwLock<RepairStoreState>,
+    entry_limit: usize,
+    max_bytes: u64,
 }
 
 impl FileRepairStore {
-    fn load_or_new(path: PathBuf) -> Result<Self, RepairStoreError> {
-        let state = if path.exists() {
-            let bytes = fs::read(&path).map_err(|err| {
-                RepairStoreError::Other(format!("failed to read repair store: {err}"))
-            })?;
+    fn load_or_new(
+        path: PathBuf,
+        entry_limit: usize,
+        max_bytes: u64,
+    ) -> Result<Self, RepairStoreError> {
+        let entry_limit = entry_limit.max(1);
+        let max_bytes = max_bytes.max(1);
+        let state = if let Some(bytes) = read_repair_store_bounded(&path, max_bytes)? {
             let snapshot: RepairStoreSnapshot =
                 norito::decode_from_bytes(&bytes).map_err(|err| {
                     RepairStoreError::Other(format!("failed to decode repair store: {err}"))
                 })?;
-            snapshot.into_state()?
+            snapshot.into_state(entry_limit)?
         } else {
             RepairStoreState::new()
         };
         Ok(Self {
             path,
             state: RwLock::new(state),
+            entry_limit,
+            max_bytes,
         })
     }
 
@@ -344,10 +384,69 @@ impl FileRepairStore {
         let bytes = norito::to_bytes(&snapshot).map_err(|err| {
             RepairStoreError::Other(format!("failed to encode repair store: {err}"))
         })?;
+        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > self.max_bytes {
+            return Err(RepairStoreError::Other(format!(
+                "encoded repair store is {} bytes, exceeding limit {}",
+                bytes.len(),
+                self.max_bytes
+            )));
+        }
         write_atomic(&self.path, &bytes).map_err(|err| {
             RepairStoreError::Other(format!("failed to persist repair store: {err}"))
         })
     }
+}
+
+fn read_repair_store_bounded(
+    path: &Path,
+    max_bytes: u64,
+) -> Result<Option<Vec<u8>>, RepairStoreError> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(RepairStoreError::Other(format!(
+                "failed to inspect repair store: {err}"
+            )));
+        }
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(RepairStoreError::Other(
+            "repair store must be a regular file".to_owned(),
+        ));
+    }
+    if metadata.len() > max_bytes {
+        return Err(RepairStoreError::Other(format!(
+            "repair store is {} bytes, exceeding limit {max_bytes}",
+            metadata.len()
+        )));
+    }
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    set_no_follow_flag(&mut options);
+    let file = options
+        .open(path)
+        .map_err(|err| RepairStoreError::Other(format!("failed to open repair store: {err}")))?;
+    let opened = file.metadata().map_err(|err| {
+        RepairStoreError::Other(format!("failed to inspect opened repair store: {err}"))
+    })?;
+    if !opened.is_file() || opened.len() > max_bytes {
+        return Err(RepairStoreError::Other(
+            "repair store changed identity or size while opening".to_owned(),
+        ));
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(opened.len()).map_err(|_| {
+        RepairStoreError::Other("repair store length does not fit usize".to_owned())
+    })?);
+    file.take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|err| RepairStoreError::Other(format!("failed to read repair store: {err}")))?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_bytes {
+        return Err(RepairStoreError::Other(
+            "repair store grew beyond its size limit while reading".to_owned(),
+        ));
+    }
+    Ok(Some(bytes))
 }
 
 fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
@@ -375,6 +474,18 @@ fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
         drop(file);
         validate_atomic_output_path(path)?;
         fs::rename(&tmp_path, path)?;
+        let directory = fs::File::open(parent).unwrap_or_else(|err| {
+            panic!(
+                "repair store rename committed but parent directory `{}` could not be opened for sync: {err}",
+                parent.display()
+            )
+        });
+        directory.sync_all().unwrap_or_else(|err| {
+            panic!(
+                "repair store rename committed but parent directory `{}` could not be synced: {err}",
+                parent.display()
+            )
+        });
         Ok(())
     })();
 
@@ -382,18 +493,6 @@ fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
         let _ = fs::remove_file(&tmp_path);
     }
     write_result
-}
-
-fn archive_corrupt_store(path: &Path) -> Result<(), io::Error> {
-    if !path.exists() {
-        return Ok(());
-    }
-    let counter = REPAIR_STORE_TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let pid = std::process::id();
-    let suffix = format!("corrupt-{pid}-{counter}");
-    let archive_path = path.with_added_extension(&suffix);
-    fs::rename(path, archive_path)?;
-    Ok(())
 }
 
 fn temp_path_for_atomic(path: &Path, pid: u32, counter: u64) -> PathBuf {
@@ -544,9 +643,13 @@ impl RepairStore for FileRepairStore {
     fn next_por_history_id(&self) -> u64 {
         let mut guard = self.state.write().expect("repair store poisoned");
         let id = guard.next_por_history_id;
-        guard.next_por_history_id = guard.next_por_history_id.saturating_add(1);
+        guard.next_por_history_id = guard
+            .next_por_history_id
+            .checked_add(1)
+            .expect("repair PoR history sequence exhausted");
         if let Err(err) = self.persist(&guard) {
-            warn!(?err, "failed to persist repair store after por history id");
+            guard.next_por_history_id = id;
+            panic!("failed to persist repair store after PoR history sequence reservation: {err}");
         }
         id
     }
@@ -554,9 +657,13 @@ impl RepairStore for FileRepairStore {
     fn next_audit_sequence(&self) -> u64 {
         let mut guard = self.state.write().expect("repair store poisoned");
         let sequence = guard.next_audit_sequence;
-        guard.next_audit_sequence = guard.next_audit_sequence.saturating_add(1);
+        guard.next_audit_sequence = guard
+            .next_audit_sequence
+            .checked_add(1)
+            .expect("repair audit sequence exhausted");
         if let Err(err) = self.persist(&guard) {
-            warn!(?err, "failed to persist repair store after audit sequence");
+            guard.next_audit_sequence = sequence;
+            panic!("failed to persist repair store after audit sequence reservation: {err}");
         }
         sequence
     }
@@ -569,8 +676,19 @@ impl RepairStore for FileRepairStore {
                 entry.id
             )));
         }
-        guard.por_history.insert(entry.id, entry);
-        self.persist(&guard)
+        if guard.por_history.len() >= self.entry_limit {
+            return Err(RepairStoreError::Other(format!(
+                "repair PoR history retention exhausted (limit {})",
+                self.entry_limit
+            )));
+        }
+        let id = entry.id;
+        guard.por_history.insert(id, entry);
+        if let Err(err) = self.persist(&guard) {
+            guard.por_history.remove(&id);
+            return Err(err);
+        }
+        Ok(())
     }
 
     fn por_history_entry(
@@ -590,8 +708,17 @@ impl RepairStore for FileRepairStore {
         if let Some(existing) = guard.tasks.get(&key) {
             return Ok(RepairStoreInsertResult::Existing(existing.clone()));
         }
+        if guard.tasks.len() >= self.entry_limit {
+            return Err(RepairStoreError::Other(format!(
+                "repair task retention exhausted (limit {})",
+                self.entry_limit
+            )));
+        }
         guard.tasks.insert(key, task.clone());
-        self.persist(&guard)?;
+        if let Err(err) = self.persist(&guard) {
+            guard.tasks.remove(&task.report.ticket_id.0);
+            return Err(err);
+        }
         Ok(RepairStoreInsertResult::Inserted(task))
     }
 
@@ -621,8 +748,15 @@ impl RepairStore for FileRepairStore {
                 ticket_id: ticket_id.to_string(),
             });
         }
-        guard.tasks.insert(ticket_id.0.clone(), task);
-        self.persist(&guard)
+        let previous = guard
+            .tasks
+            .insert(ticket_id.0.clone(), task)
+            .expect("validated repair task must exist");
+        if let Err(err) = self.persist(&guard) {
+            guard.tasks.insert(ticket_id.0.clone(), previous);
+            return Err(err);
+        }
+        Ok(())
     }
 
     fn list_tasks(&self) -> Result<Vec<RepairTaskInternal>, RepairStoreError> {
@@ -658,10 +792,28 @@ impl RepairStore for FileRepairStore {
                 highest_nonce,
             });
         }
+        if !guard.auditor_nonces.contains_key(auditor_account)
+            && guard.auditor_nonces.len() >= self.entry_limit
+        {
+            return Err(RepairStoreError::Other(format!(
+                "repair auditor nonce retention exhausted (limit {})",
+                self.entry_limit
+            )));
+        }
         guard
             .auditor_nonces
             .insert(auditor_account.to_owned(), nonce);
-        self.persist(&guard)
+        if let Err(err) = self.persist(&guard) {
+            if highest_nonce == 0 {
+                guard.auditor_nonces.remove(auditor_account);
+            } else {
+                guard
+                    .auditor_nonces
+                    .insert(auditor_account.to_owned(), highest_nonce);
+            }
+            return Err(err);
+        }
+        Ok(())
     }
 }
 
@@ -863,7 +1015,11 @@ impl RepairTaskFilters {
     }
 }
 
-fn build_repair_store(config: &RepairConfig) -> Arc<dyn RepairStore> {
+fn build_repair_store(
+    config: &RepairConfig,
+    entry_limit: usize,
+    max_bytes: u64,
+) -> Arc<dyn RepairStore> {
     let state_dir = match config.state_dir() {
         Some(dir) => dir.clone(),
         None => {
@@ -876,29 +1032,9 @@ fn build_repair_store(config: &RepairConfig) -> Arc<dyn RepairStore> {
         }
     };
     let path = state_dir.join(REPAIR_STORE_FILE_NAME);
-    match FileRepairStore::load_or_new(path.clone()) {
+    match FileRepairStore::load_or_new(path.clone(), entry_limit, max_bytes) {
         Ok(store) => Arc::new(store),
-        Err(err) => {
-            error!(?err, path = ?path, "failed to load repair store");
-            if let Err(archive_err) = archive_corrupt_store(&path) {
-                warn!(
-                    ?archive_err,
-                    path = ?path,
-                    "failed to archive corrupt repair store"
-                );
-            }
-            match FileRepairStore::load_or_new(path) {
-                Ok(store) => Arc::new(store),
-                Err(err) => {
-                    error!(?err, "failed to reinitialise repair store after archive");
-                    let fallback = default_repair_state_dir().join(REPAIR_STORE_FILE_NAME);
-                    Arc::new(
-                        FileRepairStore::load_or_new(fallback)
-                            .expect("repair store fallback should initialise"),
-                    )
-                }
-            }
-        }
+        Err(err) => panic!("failed to load repair store `{}`: {err}", path.display()),
     }
 }
 
@@ -921,7 +1057,24 @@ impl RepairManager {
     /// Construct a new repair manager using the provided configuration.
     #[must_use]
     pub fn new_with_config(config: RepairConfig) -> Self {
-        let store = build_repair_store(&config);
+        Self::new_with_config_policy_and_limits(
+            config.clone(),
+            *config.escalation_policy(),
+            DEFAULT_REPAIR_STORE_ENTRY_LIMIT,
+            DEFAULT_REPAIR_STORE_MAX_BYTES,
+        )
+    }
+
+    /// Construct a repair manager with explicit durable-store safety ceilings.
+    #[must_use]
+    pub fn new_with_config_policy_and_limits(
+        config: RepairConfig,
+        escalation_policy: RepairEscalationPolicy,
+        entry_limit: usize,
+        max_bytes: u64,
+    ) -> Self {
+        let config = config.with_escalation_policy(escalation_policy);
+        let store = build_repair_store(&config, entry_limit, max_bytes);
         let escalation_policy = *config.escalation_policy();
         Self {
             store,
@@ -938,8 +1091,12 @@ impl RepairManager {
         config: RepairConfig,
         policy: RepairEscalationPolicy,
     ) -> Self {
-        let config = config.with_escalation_policy(policy);
-        Self::new_with_config(config)
+        Self::new_with_config_policy_and_limits(
+            config,
+            policy,
+            DEFAULT_REPAIR_STORE_ENTRY_LIMIT,
+            DEFAULT_REPAIR_STORE_MAX_BYTES,
+        )
     }
 
     /// Reserve the next audit sequence number for governance events.
@@ -4804,7 +4961,12 @@ mod tests {
         let path = canonical_temp_path(&dir)
             .join("repair")
             .join(REPAIR_STORE_FILE_NAME);
-        let store = FileRepairStore::load_or_new(path).expect("store");
+        let store = FileRepairStore::load_or_new(
+            path,
+            DEFAULT_REPAIR_STORE_ENTRY_LIMIT,
+            DEFAULT_REPAIR_STORE_MAX_BYTES,
+        )
+        .expect("store");
         let report = report("REP-900", [0x10; 32], [0x20; 32], 1_700_000_000);
         let task = task_internal(report.clone());
         match store.insert_task(task).expect("insert task") {
@@ -4843,7 +5005,12 @@ mod tests {
         let path = canonical_temp_path(&dir)
             .join("repair")
             .join(REPAIR_STORE_FILE_NAME);
-        let store = FileRepairStore::load_or_new(path).expect("store");
+        let store = FileRepairStore::load_or_new(
+            path,
+            DEFAULT_REPAIR_STORE_ENTRY_LIMIT,
+            DEFAULT_REPAIR_STORE_MAX_BYTES,
+        )
+        .expect("store");
         let first = store.next_audit_sequence();
         let second = store.next_audit_sequence();
         assert_eq!(first, 1);
@@ -4856,7 +5023,12 @@ mod tests {
         let path = canonical_temp_path(&dir)
             .join("repair")
             .join(REPAIR_STORE_FILE_NAME);
-        let store = FileRepairStore::load_or_new(path.clone()).expect("store");
+        let store = FileRepairStore::load_or_new(
+            path.clone(),
+            DEFAULT_REPAIR_STORE_ENTRY_LIMIT,
+            DEFAULT_REPAIR_STORE_MAX_BYTES,
+        )
+        .expect("store");
 
         let report = report("REP-950", [0x44; 32], [0x55; 32], 1_700_111_000);
         let task = task_internal(report.clone());
@@ -4879,7 +5051,12 @@ mod tests {
         assert_eq!(sequence, 1);
         drop(store);
 
-        let reloaded = FileRepairStore::load_or_new(path).expect("reload store");
+        let reloaded = FileRepairStore::load_or_new(
+            path,
+            DEFAULT_REPAIR_STORE_ENTRY_LIMIT,
+            DEFAULT_REPAIR_STORE_MAX_BYTES,
+        )
+        .expect("reload store");
         let loaded_task = reloaded
             .task(&report.ticket_id)
             .expect("load task")
@@ -4960,7 +5137,7 @@ mod tests {
     }
 
     #[test]
-    fn archive_corrupt_store_moves_file_aside() {
+    fn corrupt_repair_store_fails_closed_without_replacement() {
         let dir = tempdir().expect("tempdir");
         let path = canonical_temp_path(&dir)
             .join("repair")
@@ -4968,21 +5145,78 @@ mod tests {
         fs::create_dir_all(path.parent().expect("parent")).expect("create dir");
         fs::write(&path, b"corrupt").expect("write corrupt store");
 
-        archive_corrupt_store(&path).expect("archive");
-        assert!(!path.exists());
+        let error = FileRepairStore::load_or_new(
+            path.clone(),
+            DEFAULT_REPAIR_STORE_ENTRY_LIMIT,
+            DEFAULT_REPAIR_STORE_MAX_BYTES,
+        )
+        .expect_err("corrupt store must fail");
+        assert!(error.to_string().contains("decode repair store"));
+        assert_eq!(fs::read(path).unwrap(), b"corrupt");
+    }
 
-        let entries = fs::read_dir(path.parent().expect("parent"))
-            .expect("read dir")
-            .map(|entry| entry.expect("entry").path())
-            .collect::<Vec<_>>();
+    #[test]
+    fn repair_store_refuses_entry_and_byte_limit_exhaustion() {
+        let dir = tempdir().expect("tempdir");
+        let path = canonical_temp_path(&dir)
+            .join("repair")
+            .join(REPAIR_STORE_FILE_NAME);
+        let store =
+            FileRepairStore::load_or_new(path, 1, DEFAULT_REPAIR_STORE_MAX_BYTES).expect("store");
+        store
+            .insert_task(task_internal(report(
+                "REP-LIMIT-1",
+                [0x10; 32],
+                [0x20; 32],
+                1_700_000_000,
+            )))
+            .unwrap();
+        let error = store
+            .insert_task(task_internal(report(
+                "REP-LIMIT-2",
+                [0x11; 32],
+                [0x21; 32],
+                1_700_000_001,
+            )))
+            .expect_err("second task exceeds retention");
+        assert!(error.to_string().contains("retention exhausted"));
+
+        let path = canonical_temp_path(&dir)
+            .join("small")
+            .join(REPAIR_STORE_FILE_NAME);
+        let store = FileRepairStore::load_or_new(path, 8, 8).expect("small store");
+        let error = store
+            .insert_task(task_internal(report(
+                "REP-BYTES",
+                [0x12; 32],
+                [0x22; 32],
+                1_700_000_002,
+            )))
+            .expect_err("encoded checkpoint exceeds byte limit");
+        assert!(error.to_string().contains("exceeding limit"));
         assert!(
-            entries.iter().any(|entry| {
-                entry
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| name.contains("corrupt-"))
-            }),
-            "expected archived repair store"
+            store
+                .task(&RepairTicketId("REP-BYTES".to_owned()))
+                .unwrap()
+                .is_none()
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repair_store_load_rejects_symlink_and_oversize_files() {
+        let dir = tempdir().expect("tempdir");
+        let root = canonical_temp_path(&dir);
+        let victim = root.join("victim.to");
+        fs::write(&victim, b"victim").unwrap();
+        let linked = root.join("linked.to");
+        std::os::unix::fs::symlink(&victim, &linked).unwrap();
+        assert!(FileRepairStore::load_or_new(linked, 8, 128).is_err());
+
+        let oversized = root.join("oversized.to");
+        fs::write(&oversized, vec![0_u8; 129]).unwrap();
+        let error =
+            FileRepairStore::load_or_new(oversized, 8, 128).expect_err("oversize store rejected");
+        assert!(error.to_string().contains("exceeding limit"));
     }
 }

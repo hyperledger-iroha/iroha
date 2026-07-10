@@ -228,26 +228,41 @@ fn build_shared_sorafs_provider_cache(
     }
 
     let Some(admission_cfg) = discovery.admission.as_ref() else {
-        if config.torii.sorafs_gateway.enforce_admission {
-            iroha_logger::warn!(
-                "torii.sorafs.admission_envelopes_dir not configured; shared SoraFS discovery cache disabled"
-            );
-        }
-        return None;
+        panic!(
+            "SoraFS discovery requires sorafs.discovery.admission.envelopes_dir, trusted_council_keys, and signature_threshold"
+        );
     };
 
-    let admission =
-        match iroha_torii::sorafs::AdmissionRegistry::load_from_dir(&admission_cfg.envelopes_dir) {
-            Ok(registry) => Arc::new(registry),
-            Err(err) => {
-                iroha_logger::error!(
-                    ?err,
-                    dir = ?admission_cfg.envelopes_dir,
-                    "failed to load shared SoraFS provider admission registry"
-                );
-                return None;
-            }
-        };
+    let trusted_council_keys = admission_cfg
+        .trusted_council_keys
+        .iter()
+        .map(|key| {
+            let (algorithm, payload) = key
+                .try_to_bytes()
+                .unwrap_or_else(|err| panic!("invalid SoraFS admission council key: {err}"));
+            assert_eq!(
+                algorithm,
+                iroha_crypto::Algorithm::Ed25519,
+                "SoraFS admission council keys must use Ed25519"
+            );
+            <[u8; 32]>::try_from(payload)
+                .unwrap_or_else(|_| panic!("SoraFS admission council keys must be 32 bytes"))
+        })
+        .collect::<Vec<_>>();
+    let policy = sorafs_manifest::ProviderAdmissionCouncilPolicy::new(
+        trusted_council_keys,
+        admission_cfg.signature_threshold.get(),
+    )
+    .unwrap_or_else(|err| panic!("invalid SoraFS admission council policy: {err}"));
+    let admission = Arc::new(
+        iroha_torii::sorafs::AdmissionRegistry::load_from_dir(&admission_cfg.envelopes_dir, policy)
+            .unwrap_or_else(|err| {
+                panic!(
+                    "failed to load shared SoraFS provider admission registry {}: {err}",
+                    admission_cfg.envelopes_dir.display()
+                )
+            }),
+    );
 
     let mut capabilities = Vec::new();
     for name in &discovery.known_capabilities {
@@ -2840,6 +2855,7 @@ mod network_relay_tests {
         let mut descriptor = LaneBlockDescriptorV1 {
             lane_id: LaneId::SINGLE,
             dataspace_id: DataSpaceId::UNIVERSAL,
+            lane_incarnation: Hash::new(b"irohad-lane-fixture-incarnation"),
             proposal_height: 5,
             previous_lane_block_height: 4,
             previous_lane_block_descriptor_hash: Some(Hash::prehashed([0x50; 32])),
@@ -2868,9 +2884,7 @@ mod network_relay_tests {
         proposal
     }
 
-    fn sample_lane_block_vote(
-        phase: Phase,
-    ) -> iroha_core::lane_consensus::LaneBlockVoteV1 {
+    fn sample_lane_block_vote(phase: Phase) -> iroha_core::lane_consensus::LaneBlockVoteV1 {
         let proposal = sample_lane_block_proposal();
         iroha_core::lane_consensus::LaneBlockVoteV1 {
             body: proposal.vote_body(phase),
@@ -2892,9 +2906,7 @@ mod network_relay_tests {
     }
 
     fn lane_block_proposal_msg() -> iroha_core::NetworkMessage {
-        sumeragi_msg(BlockMessage::LaneBlockProposal(
-            sample_lane_block_proposal(),
-        ))
+        sumeragi_msg(BlockMessage::LaneBlockProposal(sample_lane_block_proposal()))
     }
 
     fn lane_block_vote_msg(phase: Phase) -> iroha_core::NetworkMessage {
@@ -3871,10 +3883,51 @@ fn apply_state_config_before_kura_replay(
     state.set_pipeline(config.pipeline.clone());
     state.set_zk(config.zk.clone());
     state.set_sumeragi_pacing_governor(config.sumeragi.pacing_governor);
+    let restored_runtime = state
+        .nexus_runtime_restored_from_snapshot()
+        .then(|| state.nexus_snapshot());
+    let nexus = nexus_config_for_startup_replay(config.nexus.clone(), restored_runtime.as_ref());
     state
-        .set_nexus(config.nexus.clone())
+        .set_nexus_from_config(nexus)
         .map_err(|err| Report::new(err).change_context(StartError::InitKura))
-        .map_err(|report| report.attach("failed to apply Nexus lane catalog/lifecycle at startup"))
+        .map_err(|report| {
+            report.attach("failed to apply Nexus lane catalog/lifecycle at startup")
+        })?;
+    if restored_runtime.is_some() {
+        state
+            .restore_kura_lane_segments_from_nexus()
+            .map_err(|err| Report::new(err).change_context(StartError::InitKura))
+            .map_err(|report| {
+                report.attach("failed to restore snapshot Nexus lane storage at startup")
+            })?;
+    }
+    Ok(())
+}
+
+fn nexus_config_for_startup_replay(
+    mut configured: iroha_config::parameters::actual::Nexus,
+    restored: Option<&iroha_config::parameters::actual::Nexus>,
+) -> iroha_config::parameters::actual::Nexus {
+    let Some(restored) = restored else {
+        return configured;
+    };
+    // A snapshot is a committed WSV checkpoint. Preserve its effective lane
+    // topology and autoscale cooldown while refreshing all static policy knobs
+    // from local configuration. Silently replacing either stateful value here
+    // can recreate a retired lane or permit an immediate duplicate transition.
+    configured.lane_catalog = restored.lane_catalog.clone();
+    configured.lane_config = restored.lane_config.clone();
+    configured.autoscale.last_transition_height = restored.autoscale.last_transition_height;
+    configured
+}
+
+/// Return the effective post-replay Nexus configuration used by runtime
+/// admission, routing, and manifest surfaces.
+///
+/// Replay can commit manual or autoscale lane lifecycle transitions, so the
+/// process configuration is no longer authoritative at this boundary.
+fn nexus_for_runtime_surfaces(state: &State) -> iroha_config::parameters::actual::Nexus {
+    state.nexus_snapshot()
 }
 
 fn checkpointed_snapshot_catchup_prune_height(
@@ -4076,6 +4129,114 @@ mod snapshot_read_error_tests {
         assert_eq!(
             checkpointed_snapshot_catchup_prune_height(2_594, 2_594, Some(2_594)),
             None
+        );
+    }
+
+    #[test]
+    fn startup_nexus_merge_preserves_snapshot_topology_and_cooldown_only() {
+        use std::num::{NonZeroU32, NonZeroU64};
+
+        use iroha_config::parameters::actual::LaneConfig as RuntimeLaneConfig;
+        use iroha_data_model::nexus::{LaneCatalog, LaneConfig, LaneId};
+
+        let catalog = LaneCatalog::new(
+            NonZeroU32::new(2).expect("nonzero lane namespace"),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "snapshot-lane".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("snapshot catalog");
+        let mut restored = iroha_config::parameters::actual::Nexus::default();
+        restored.lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+        restored.lane_catalog = catalog.clone();
+        restored.configured_lane_catalog = catalog.clone();
+        restored.autoscale.last_transition_height = 17;
+        restored.autoscale.target_block_ms = NonZeroU64::new(777).expect("nonzero target");
+
+        let mut configured = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            ..Default::default()
+        };
+        configured.autoscale.target_block_ms = NonZeroU64::new(321).expect("nonzero target");
+        let merged = nexus_config_for_startup_replay(configured, Some(&restored));
+
+        assert!(merged.enabled);
+        assert_eq!(merged.lane_catalog, catalog);
+        assert_eq!(merged.lane_config.entries().len(), 2);
+        assert_eq!(merged.autoscale.last_transition_height, 17);
+        assert_eq!(merged.autoscale.target_block_ms.get(), 321);
+        assert_eq!(
+            merged.configured_lane_catalog,
+            iroha_data_model::nexus::LaneCatalog::default(),
+            "snapshot topology must not replace the process-configured baseline"
+        );
+    }
+
+    #[test]
+    fn startup_nexus_merge_uses_config_for_legacy_snapshot() {
+        let mut configured = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            ..Default::default()
+        };
+        configured.autoscale.last_transition_height = 9;
+
+        let merged = nexus_config_for_startup_replay(configured, None);
+
+        assert!(merged.enabled);
+        assert_eq!(
+            merged.lane_catalog,
+            iroha_data_model::nexus::LaneCatalog::default()
+        );
+        assert_eq!(merged.autoscale.last_transition_height, 9);
+    }
+
+    #[test]
+    fn runtime_surfaces_use_post_replay_lane_catalog() {
+        use std::num::NonZeroU32;
+
+        use iroha_data_model::nexus::{LaneCatalog, LaneConfig, LaneId};
+
+        let configured = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            ..Default::default()
+        };
+        let mut replayed = configured.clone();
+        replayed.lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(2).expect("non-zero lane count"),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "replayed-runtime-lane".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("valid replayed lane catalog");
+
+        let mut state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        state
+            .set_nexus(replayed)
+            .expect("install replayed Nexus topology");
+
+        let runtime = nexus_for_runtime_surfaces(&state);
+        assert_ne!(runtime.lane_catalog, configured.lane_catalog);
+        assert!(
+            runtime
+                .lane_catalog
+                .lanes()
+                .iter()
+                .any(|lane| lane.id == LaneId::new(1)),
+            "runtime queue and manifest setup must see the replayed lane"
         );
     }
 }
@@ -4320,9 +4481,10 @@ impl Iroha {
 
         if loaded_state_from_snapshot && block_count.0 > state.committed_height() {
             let latest_checkpoint_height = kura
-                .latest_wsv_checkpoint_height_at_or_before(u64::try_from(block_count.0).map_err(
-                    |err| Report::new(StartError::InitKura).attach(err),
-                )?)
+                .latest_wsv_checkpoint_height_at_or_before(
+                    u64::try_from(block_count.0)
+                        .map_err(|err| Report::new(StartError::InitKura).attach(err))?,
+                )
                 .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
             if let Some(prune_height) = checkpointed_snapshot_catchup_prune_height(
                 state.committed_height(),
@@ -4384,28 +4546,42 @@ impl Iroha {
         let (events_sender, _) = broadcast::channel(config.torii.events_buffer_capacity.get());
         // Register pipeline events sender for ZK lane reporting
         iroha_core::pipeline::zk_lane::register_events_sender(events_sender.clone());
-        let router: Arc<dyn LaneRouter> = if should_use_config_router(&config.nexus) {
+        // Kura replay can advance consensus-owned Nexus topology beyond the
+        // process configuration (manual lifecycle transactions and autoscale
+        // transitions both do so). Seed every admission/manifest surface from
+        // the effective replayed state, otherwise a restarted node briefly
+        // routes with the stale startup catalog and never installs state-side
+        // manifest bindings for restored lanes.
+        let runtime_nexus = nexus_for_runtime_surfaces(&state);
+        let router: Arc<dyn LaneRouter> = if should_use_config_router(&runtime_nexus) {
             Arc::new(ConfigLaneRouter::new(
-                config.nexus.routing_policy.clone(),
-                config.nexus.dataspace_catalog.clone(),
-                config.nexus.lane_catalog.clone(),
+                runtime_nexus.routing_policy.clone(),
+                runtime_nexus.dataspace_catalog.clone(),
+                runtime_nexus.lane_catalog.clone(),
             ))
         } else {
             Arc::new(SingleLaneRouter::new())
         };
-        let queue_limits = iroha_core::queue::QueueLimits::from_nexus(&config.nexus);
-        let lane_catalog = Arc::new(config.nexus.lane_catalog.clone());
-        let dataspace_catalog = Arc::new(config.nexus.dataspace_catalog.clone());
-        let governance_catalog = Arc::new(config.nexus.governance.clone());
-        let registry_cfg = config.nexus.registry.clone();
-        let lane_compliance = if config.nexus.compliance.enabled {
-            let dir = config.nexus.compliance.policy_dir.as_ref().ok_or_else(|| {
-                Report::new(StartError::InitKura)
-                    .attach("lane compliance enabled but no policy_dir configured")
-            })?;
+        let queue_limits = iroha_core::queue::QueueLimits::from_nexus(&runtime_nexus);
+        let lane_catalog = Arc::new(runtime_nexus.lane_catalog.clone());
+        let dataspace_catalog = Arc::new(runtime_nexus.dataspace_catalog.clone());
+        let governance_catalog = Arc::new(runtime_nexus.governance.clone());
+        let registry_cfg = runtime_nexus.registry.clone();
+        let lane_compliance = if runtime_nexus.compliance.enabled {
+            let dir = runtime_nexus
+                .compliance
+                .policy_dir
+                .as_ref()
+                .ok_or_else(|| {
+                    Report::new(StartError::InitKura)
+                        .attach("lane compliance enabled but no policy_dir configured")
+                })?;
             let engine =
-                LaneComplianceEngine::from_directory(dir, config.nexus.compliance.audit_only)
+                LaneComplianceEngine::from_directory(dir, runtime_nexus.compliance.audit_only)
                     .map_err(|err| Report::new(err).change_context(StartError::InitKura))?;
+            engine
+                .validate_active_catalog(lane_catalog.as_ref())
+                .map_err(|err| Report::new(err).change_context(StartError::InitKura))?;
             Some(Arc::new(engine))
         } else {
             None
@@ -4424,14 +4600,16 @@ impl Iroha {
         let mut lane_manifest_task = None;
         #[cfg(not(feature = "telemetry"))]
         let mut lane_manifest_task = None;
-        if config.nexus.enabled {
+        if runtime_nexus.enabled {
             let lane_manifests = Arc::new(LaneManifestRegistry::from_config(
                 lane_catalog.as_ref(),
                 governance_catalog.as_ref(),
                 &registry_cfg,
             ));
-            queue.install_lane_manifests(&lane_manifests);
-            state.install_lane_manifests(&lane_manifests);
+            lane_manifests
+                .validate_active_coverage()
+                .map_err(|err| Report::new(err).change_context(StartError::InitKura))?;
+            queue.install_lane_manifests_with_state(&lane_manifests, &state);
             state
                 .telemetry
                 .set_lane_manifest_registry(Arc::clone(&lane_manifests));
@@ -4462,13 +4640,43 @@ impl Iroha {
                 lane_manifest_task = Some((queue_task, governance_task, registry_cfg_task));
             }
         } else {
-            let empty_registry = Arc::new(LaneManifestRegistry::empty());
-            queue.install_lane_manifests(&empty_registry);
-            state.install_lane_manifests(&empty_registry);
+            let empty_registry = Arc::new(
+                LaneManifestRegistry::empty()
+                    .rebind(lane_catalog.as_ref(), governance_catalog.as_ref()),
+            );
+            queue.install_lane_manifests_with_state(&empty_registry, &state);
             state
                 .telemetry
                 .set_lane_manifest_registry(Arc::clone(&empty_registry));
         }
+        // Independent lane producers transfer FIFO ownership before they
+        // publish any payload bytes. Install and replay that durable ownership
+        // journal before the ordinary queue-plan journal can reinsert pending
+        // transactions, regardless of whether plan journaling is enabled.
+        let lane_reservation_journal_path = config
+            .kura
+            .store_dir
+            .resolve_relative_path()
+            .join("lane_queue_reservations.norito");
+        let lane_reservation_replay = queue
+            .install_lane_reservation_journal(
+                &lane_reservation_journal_path,
+                config.queue.plan_journal_max_bytes,
+            )
+            .map_err(|err| {
+                Report::new(StartError::InitKura).attach(format!(
+                    "failed to open lane queue reservation journal {}: {err}",
+                    lane_reservation_journal_path.display()
+                ))
+            })?;
+        iroha_logger::info!(
+            path = %lane_reservation_journal_path.display(),
+            restored = lane_reservation_replay.restored,
+            awaiting_transaction_replay = lane_reservation_replay.awaiting_transaction_replay,
+            commit_barriers = lane_reservation_replay.commit_barriers,
+            "lane queue reservation journal installed"
+        );
+
         if config.queue.plan_journal_enabled {
             let journal_path = config
                 .kura
@@ -4507,9 +4715,28 @@ impl Iroha {
                 rejected = replay_summary.rejected,
                 "queue plan journal installed"
             );
+        } else {
+            queue
+                .finalize_plan_journal_startup_disabled()
+                .map_err(|err| {
+                    Report::new(StartError::InitKura).attach(format!(
+                        "failed to finalize disabled queue plan journal startup: {err}"
+                    ))
+                })?;
         }
 
-        let config_caps = build_consensus_config_caps(&config.sumeragi)?;
+        let compliance_policy_digest = state
+            .lane_compliance_engine()
+            .map(|engine| engine.consensus_policy_digest());
+        let lane_manifest_policy_digest =
+            Some(state.lane_manifests.read().consensus_policy_digest());
+        let config_caps = build_consensus_config_caps(
+            &config.sumeragi,
+            &state.nexus_snapshot(),
+            compliance_policy_digest,
+            lane_manifest_policy_digest,
+        )?;
+        iroha_core::sumeragi::status::set_consensus_caps(&config_caps);
         let consensus_caps_override =
             stored_genesis_block
                 .as_ref()
@@ -5018,7 +5245,12 @@ impl Iroha {
         let oracle_cfg = config.oracle.clone();
         let streaming_cfg = config.streaming.clone();
         let merge_cache_capacity = config.kura.merge_ledger_cache_capacity;
-        state.set_tiered_backend(&tiered_state_cfg);
+        state
+            .set_tiered_backend(&tiered_state_cfg)
+            .map_err(|err| Report::new(err).change_context(StartError::InitKura))
+            .map_err(|report| {
+                report.attach("failed to restore effective Nexus tiered lane geometry")
+            })?;
         state.set_pipeline(pipeline_cfg);
         state.set_sumeragi_parameters(&sumeragi_cfg);
         state.set_sumeragi_pacing_governor(sumeragi_cfg.pacing_governor);
@@ -8746,6 +8978,9 @@ fn parse_confidential_registry_hash(payload: &Json) -> ReportResult<Option<[u8; 
 
 fn build_consensus_config_caps(
     sumeragi: &iroha_config::parameters::actual::Sumeragi,
+    nexus: &iroha_config::parameters::actual::Nexus,
+    compliance_policy_digest: Option<[u8; 32]>,
+    lane_manifest_policy_digest: Option<[u8; 32]>,
 ) -> ReportResult<iroha_p2p::ConsensusConfigCaps, StartError> {
     let collectors_k = u16::try_from(sumeragi.collectors.k).map_err(|_| {
         Report::new(StartError::StartP2p)
@@ -8784,8 +9019,20 @@ fn build_consensus_config_caps(
     })?;
     let rbc_data_shards = sumeragi.rbc.effective_data_shards();
     let rbc_parity_shards = sumeragi.rbc.effective_parity_shards();
+    let nexus_policy_digest =
+        iroha_config::parameters::actual::nexus_consensus_policy_digest_with_runtime_policies(
+            nexus,
+            compliance_policy_digest,
+            lane_manifest_policy_digest,
+        )
+        .map_err(|err| {
+            Report::new(StartError::StartP2p).attach(format!(
+                "failed to construct Nexus consensus-policy digest: {err}"
+            ))
+        })?;
 
     Ok(iroha_p2p::ConsensusConfigCaps {
+        nexus_policy_digest,
         collectors_k,
         redundant_send_r: sumeragi.collectors.redundant_send_r,
         da_enabled: sumeragi.da.enabled,
@@ -10089,8 +10336,9 @@ mod tests {
             assert_eq!(fp_bytes.len(), 32, "fingerprint must be 32 bytes");
             let mut consensus_fingerprint = [0u8; 32];
             consensus_fingerprint.copy_from_slice(&fp_bytes);
-            let config_caps = build_consensus_config_caps(&config.sumeragi)
-                .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
+            let config_caps =
+                build_consensus_config_caps(&config.sumeragi, &config.nexus, None, None)
+                    .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
             let consensus_caps = iroha_p2p::ConsensusHandshakeCaps {
                 mode_tag: mode_tag.clone(),
                 proto_version: proto,
@@ -10227,7 +10475,8 @@ mod tests {
             let world = state.world_view();
             let height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
             let config_caps =
-                build_consensus_config_caps(&config.sumeragi).expect("config caps should build");
+                build_consensus_config_caps(&config.sumeragi, &config.nexus, None, None)
+                    .expect("config caps should build");
             let (mode_tag_perm, bls_perm, caps_perm) =
                 compute_consensus_handshake_caps(&world, height, &config, &config_caps, None);
             assert_eq!(
@@ -10267,8 +10516,8 @@ mod tests {
             config.sumeragi.rbc.data_shards = 4;
             config.sumeragi.rbc.parity_shards = 2;
 
-            let caps =
-                build_consensus_config_caps(&config.sumeragi).expect("config caps should build");
+            let caps = build_consensus_config_caps(&config.sumeragi, &config.nexus, None, None)
+                .expect("config caps should build");
             assert_eq!(
                 caps.rbc_encoding,
                 iroha_data_model::block::consensus::RbcEncoding::Plain
@@ -10295,8 +10544,9 @@ mod tests {
                 .with_consensus_meta();
             let genesis_block = manifest.build_and_sign(&genesis_keys)?;
 
-            let config_caps = build_consensus_config_caps(&config.sumeragi)
-                .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
+            let config_caps =
+                build_consensus_config_caps(&config.sumeragi, &config.nexus, None, None)
+                    .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
             let state = State::new_for_testing(World::new(), kura, query);
@@ -10355,8 +10605,9 @@ mod tests {
                 norito::json::value::from_value(manifest_value).expect("decode tampered manifest");
             let genesis_block = tampered.build_and_sign(&genesis_keys)?;
 
-            let config_caps = build_consensus_config_caps(&config.sumeragi)
-                .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
+            let config_caps =
+                build_consensus_config_caps(&config.sumeragi, &config.nexus, None, None)
+                    .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
             let state = State::new_for_testing(World::new(), kura, query);

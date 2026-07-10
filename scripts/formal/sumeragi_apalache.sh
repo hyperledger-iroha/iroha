@@ -1306,7 +1306,12 @@ case "$mode" in
   autoscale-transition-fast)
     spec_file="$spec_dir/SumeragiAutoscaleTransitionGate.tla"
     cfg_file="$spec_dir/SumeragiAutoscaleTransitionGate_fast.cfg"
-    apalache_length=1
+    apalache_length=10
+    ;;
+  merge-execution-order-fast)
+    spec_file="$spec_dir/SumeragiMergeExecutionOrder.tla"
+    cfg_file="$spec_dir/SumeragiMergeExecutionOrder_fast.cfg"
+    apalache_length=8
     ;;
   commit-quorum-signers-fast)
     spec_file="$spec_dir/SumeragiCommitQuorumSignersGate.tla"
@@ -5110,12 +5115,27 @@ case "$mode" in
     apalache_length=1
     expect_failure=1
     ;;
+  autoscale-transition-bug-reuse-incarnation)
+    spec_file="$spec_dir/SumeragiAutoscaleTransitionGate.tla"
+    cfg_file="$spec_dir/SumeragiAutoscaleTransitionGate_bug_reuse_incarnation.cfg"
+    # Reuse is observable only after create -> retire -> recreate completes.
+    apalache_length=15
+    expect_failure=1
+    ;;
   autoscale-transition-bug-*)
     bug_name="${mode#autoscale-transition-bug-}"
     cfg_bug_name="${bug_name//-/_}"
     spec_file="$spec_dir/SumeragiAutoscaleTransitionGate.tla"
     cfg_file="$spec_dir/SumeragiAutoscaleTransitionGate_bug_${cfg_bug_name}.cfg"
-    apalache_length=1
+    apalache_length=10
+    expect_failure=1
+    ;;
+  merge-execution-order-bug-*)
+    bug_name="${mode#merge-execution-order-bug-}"
+    cfg_bug_name="${bug_name//-/_}"
+    spec_file="$spec_dir/SumeragiMergeExecutionOrder.tla"
+    cfg_file="$spec_dir/SumeragiMergeExecutionOrder_bug_${cfg_bug_name}.cfg"
+    apalache_length=8
     expect_failure=1
     ;;
   commit-quorum-signers-bug-*)

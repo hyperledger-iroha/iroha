@@ -35,6 +35,9 @@ fn por_proof_fixture_decodes_and_validates() {
     let proof: PorProofV1 = norito::decode_from_bytes(&bytes).expect("proof fixture should decode");
     let digest = proof.proof_digest();
     proof.validate().expect("proof must validate");
+    proof
+        .verify_signature()
+        .expect("provider proof signature must verify");
     assert!(!digest.iter().all(|&b| b == 0), "digest must be non-zero");
 }
 
@@ -44,6 +47,9 @@ fn audit_verdict_fixture_decodes_and_validates() {
     let verdict: AuditVerdictV1 =
         norito::decode_from_bytes(&bytes).expect("verdict fixture should decode");
     verdict.validate().expect("verdict must validate");
+    verdict
+        .verify_signatures()
+        .expect("auditor verdict signature must verify");
     assert_eq!(verdict.outcome, AuditOutcomeV1::Success);
 }
 
@@ -80,6 +86,9 @@ fn governance_node_fixture_wraps_por_proof() {
     match node.payload {
         GovernanceLogPayloadV1::PorProof(ref proof) => {
             proof.validate().expect("embedded proof must validate");
+            proof
+                .verify_signature()
+                .expect("embedded proof signature must verify");
         }
         other => panic!("expected PorProof payload, got {other:?}"),
     }

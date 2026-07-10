@@ -325,6 +325,8 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                 | BlockMessage::ProposalHint(_)
                 | BlockMessage::Proposal(_)
                 | BlockMessage::LaneBlockProposal(_)
+                | BlockMessage::LaneBlockNewViewVote(_)
+                | BlockMessage::LaneBlockNewViewCertificate(_)
                 | BlockMessage::Qc(_)
                 | BlockMessage::QcVote(_)
                 | BlockMessage::LaneBlockVote(_)
@@ -337,6 +339,8 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                 | BlockMessage::CertifiedBlockFetch(CertifiedBlockFetch::Response(_))
                 | BlockMessage::CertifiedBlockFetch(CertifiedBlockFetch::Proof(_))
                 | BlockMessage::CertifiedBlockFetch(CertifiedBlockFetch::Body(_))
+                | BlockMessage::LaneExecutablePayload(_)
+                | BlockMessage::LaneExecutablePayloadHandoff(_)
                 | BlockMessage::RbcInit(_) => T::ConsensusPayload,
                 BlockMessage::RbcReady(_)
                 | BlockMessage::RbcDeliver(_)

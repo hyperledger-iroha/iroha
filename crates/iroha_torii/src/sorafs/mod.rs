@@ -20,7 +20,9 @@ pub mod repair;
 pub mod site;
 pub mod token;
 
-pub use admission::{AdmissionCheckError, AdmissionRegistry, AdmissionRegistryError};
+pub use admission::{
+    AdmissionCheckError, AdmissionRegistry, AdmissionRegistryError, AdmissionRegistryUpdateError,
+};
 #[cfg(feature = "app_api")]
 pub(crate) use alias_cache::evaluate_cache_decision;
 pub use alias_cache::{
@@ -34,7 +36,9 @@ pub use blinded::{
     SaltScheduleError,
 };
 pub(crate) use concurrency::{StreamTokenConcurrencyPermit, StreamTokenConcurrencyTracker};
-pub use discovery::{ProviderAdvertCache, capability_name, parse_capability_name};
+pub use discovery::{
+    ProviderAdvertCache, ReplayCheckpointError, capability_name, parse_capability_name,
+};
 #[cfg(feature = "app_api")]
 pub use gc::GcSweeperRuntime;
 pub use hosts::{HostMappingInput, HostMappingSummary};
@@ -44,12 +48,11 @@ pub use limits::{
 pub use pin::{PinAuthError, PinPolicyError, PinSubmissionPolicy};
 #[cfg(feature = "app_api")]
 pub use por::{
-    DeterministicRandomnessProvider, EmptyVrfProvider, FilesystemGovernancePublisher,
-    GovernancePublisher, PorAutomationError, PorCoordinatorRuntime, PorStorage, RandomnessProvider,
-    VrfProvider,
+    FilesystemGovernancePublisher, GovernancePublisher, PorAutomationError, PorCoordinatorRuntime,
+    PorStorage, RandomnessProvider, VrfProvider,
 };
 pub use por::{PorCoordinator, PorCoordinatorError, PorStatusExportV1, PorStatusFilter};
-pub(crate) use quota::{StreamTokenQuotaExceeded, StreamTokenQuotaTracker};
+pub(crate) use quota::{StreamTokenQuotaError, StreamTokenQuotaTracker};
 #[cfg(feature = "app_api")]
 pub(crate) use registry::{
     CapacitySnapshot, RegistryDeclaration, RegistryError, RegistryFeeLedgerEntry, collect_snapshot,
@@ -59,6 +62,9 @@ pub use repair::RepairWorkerRuntime;
 pub use sorafs_manifest::{
     pin_registry::ReplicationOrderV1,
     provider_advert::{EndpointKind, TransportProtocol},
+};
+pub(crate) use token::{
+    MAX_CLIENT_ID_BYTES, MAX_NONCE_BYTES, MAX_STREAM_TOKEN_BASE64_BYTES, MAX_TOKEN_FUTURE_SKEW_SECS,
 };
 pub use token::{
     StreamTokenHeaderError, StreamTokenIssuer, StreamTokenIssuerError, TokenOverrides,

@@ -70,7 +70,7 @@ cargo test -p sorafs_car --features cli fetch_command_respects_direct_transports
 ```bash
 ./scripts/sorafs_direct_mode_smoke.sh \
   --config docs/examples/sorafs_direct_mode_smoke.conf \
-  --provider name=gw-regulated,provider-id=001122...,base-url=https://gw.example/direct/,stream-token=BASE64
+  --provider name=gw-regulated,provider-id=001122...,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gw.example/,stream-token=BASE64
 ```- Сценарий соответствует флагам CLI и файлам конфигурации ключ=значение (voir `docs/examples/sorafs_direct_mode_smoke.conf`). Соберите дайджест манифеста и рекламные объявления поставщиков с ценностями производства перед исполнением.
 - `--policy` указывает по умолчанию на версию `docs/examples/sorafs_direct_mode_policy.json`, но больше всего подходит JSON для оркестрового продукта по `sorafs_orchestrator::bindings::config_to_json`, возможно, это еще не все. CLI принимает политику через `--orchestrator-config=PATH`, разрешая воспроизводимые запуски без настройки основных флагов.
 - Если `sorafs_cli` не существует в `PATH`, помощник поможет сконструировать ящик `sorafs_orchestrator` (выпуск профиля) до того, как вы курите, работая в режиме прямого отопления.

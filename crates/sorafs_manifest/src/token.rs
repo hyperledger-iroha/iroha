@@ -5,6 +5,15 @@ use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
 
+/// Domain separator for SoraFS v1 stream-token signatures.
+pub const STREAM_TOKEN_SIGNATURE_DOMAIN_V1: &[u8] = b"sorafs.stream-token.signature.v1\0";
+/// Maximum lifetime of a first-release stream token, in seconds.
+pub const STREAM_TOKEN_MAX_TTL_SECS_V1: u64 = 3_600;
+/// Maximum decoded wire size of a first-release stream token.
+pub const STREAM_TOKEN_MAX_WIRE_BYTES_V1: usize = 2 * 1_024;
+/// Maximum canonical Base64 header size of a first-release stream token.
+pub const STREAM_TOKEN_MAX_BASE64_BYTES_V1: usize = 4 * 1_024;
+
 /// Canonical body for stream tokens issued by gateways.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct StreamTokenBodyV1 {
@@ -25,6 +34,14 @@ impl StreamTokenBodyV1 {
     pub fn to_canonical_bytes(&self) -> Result<Vec<u8>, norito::Error> {
         norito::to_bytes(self)
     }
+
+    fn signature_message(&self) -> Result<Vec<u8>, norito::Error> {
+        let body = self.to_canonical_bytes()?;
+        let mut message = Vec::with_capacity(STREAM_TOKEN_SIGNATURE_DOMAIN_V1.len() + body.len());
+        message.extend_from_slice(STREAM_TOKEN_SIGNATURE_DOMAIN_V1);
+        message.extend_from_slice(&body);
+        Ok(message)
+    }
 }
 
 /// Signed stream token payload.
@@ -37,12 +54,26 @@ pub struct StreamTokenV1 {
 impl StreamTokenV1 {
     /// Sign the provided body with the Ed25519 signing key.
     pub fn sign(body: StreamTokenBodyV1, secret: &SigningKey) -> Result<Self, StreamTokenError> {
-        let message = body.to_canonical_bytes()?;
+        let message = body.signature_message()?;
         let signature = secret.sign(&message);
         Ok(Self {
             body,
             signature: signature.to_bytes().to_vec(),
         })
+    }
+
+    /// Sign with a raw Ed25519 seed after rejecting the reserved all-zero key.
+    ///
+    /// This keeps SDK/FFI callers on the same checked signing boundary without
+    /// requiring them to depend directly on the Dalek implementation type.
+    pub fn sign_with_seed(
+        body: StreamTokenBodyV1,
+        secret_seed: [u8; 32],
+    ) -> Result<Self, StreamTokenError> {
+        if secret_seed.iter().all(|byte| *byte == 0) {
+            return Err(StreamTokenError::InvalidSigningKey);
+        }
+        Self::sign(body, &SigningKey::from_bytes(&secret_seed))
     }
 
     /// Verify the token signature using the supplied verifying key.
@@ -57,7 +88,7 @@ impl StreamTokenV1 {
             .map_err(|_| StreamTokenError::InvalidSignatureFormat)?;
         let sig = crate::checked_ed25519_signature_from_bytes(&signature_bytes)
             .map_err(|_| StreamTokenError::InvalidSignatureFormat)?;
-        let message = self.body.to_canonical_bytes()?;
+        let message = self.body.signature_message()?;
         verifier
             .verify_strict(&message, &sig)
             .map_err(StreamTokenError::SignatureInvalid)
@@ -76,6 +107,9 @@ pub enum StreamTokenError {
     /// Failed to serialise or deserialise the Norito payload.
     #[error("norito serialisation error: {0}")]
     Norito(#[from] norito::Error),
+    /// The supplied signing seed is the reserved all-zero value.
+    #[error("invalid stream-token signing key")]
+    InvalidSigningKey,
     /// Signature bytes were malformed.
     #[error("invalid signature encoding")]
     InvalidSignatureFormat,
@@ -129,6 +163,21 @@ mod tests {
     }
 
     #[test]
+    fn checked_seed_signing_rejects_all_zero_key() {
+        assert!(matches!(
+            StreamTokenV1::sign_with_seed(sample_body(), [0; 32]),
+            Err(StreamTokenError::InvalidSigningKey)
+        ));
+    }
+
+    #[test]
+    fn wire_limit_expands_within_base64_header_limit() {
+        let maximum_canonical_base64_len = STREAM_TOKEN_MAX_WIRE_BYTES_V1.div_ceil(3) * 4;
+        assert!(maximum_canonical_base64_len <= STREAM_TOKEN_MAX_BASE64_BYTES_V1);
+        assert_eq!(maximum_canonical_base64_len, 2_732);
+    }
+
+    #[test]
     fn verify_rejects_modified_body() {
         let signing = SigningKey::from_bytes(&[0x24; 32]);
         let verifying = signing.verifying_key();
@@ -137,6 +186,25 @@ mod tests {
         tampered.body.max_streams = 8;
         let err = tampered.verify(&verifying).expect_err("should fail");
         assert!(matches!(err, StreamTokenError::SignatureInvalid(_)));
+    }
+
+    #[test]
+    fn verify_rejects_signature_without_stream_token_domain() {
+        let signing = SigningKey::from_bytes(&[0x25; 32]);
+        let body = sample_body();
+        let legacy_signature = signing
+            .sign(&body.to_canonical_bytes().expect("canonical body"))
+            .to_bytes()
+            .to_vec();
+        let token = StreamTokenV1 {
+            body,
+            signature: legacy_signature,
+        };
+
+        assert!(matches!(
+            token.verify(&signing.verifying_key()),
+            Err(StreamTokenError::SignatureInvalid(_))
+        ));
     }
 
     #[test]

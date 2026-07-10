@@ -15934,7 +15934,10 @@ pub struct Nexus {
     /// Storage budget controls for Nexus-enabled nodes.
     #[config(nested)]
     pub storage: NexusStorage,
-    /// Total number of lanes configured for the runtime.
+    /// Exclusive lane-id bound for the initial catalog.
+    ///
+    /// Sparse catalogs may contain fewer active entries, and lifecycle updates may
+    /// expand this namespace when a new lane is created.
     #[config(default = "defaults::nexus::LANE_COUNT")]
     pub lane_count: NonZeroU32,
     /// Optional explicit lane catalog entries.
@@ -17086,10 +17089,14 @@ pub struct Autoscale {
     /// Whether consensus-driven lane autoscaling is enabled.
     #[config(default = "defaults::nexus::autoscale::ENABLED")]
     pub enabled: bool,
-    /// Minimum active lane count.
+    /// Inclusive lower lane-id bound reserved for autoscale-managed elastic lanes.
+    ///
+    /// Despite the legacy field name, this is not an active-lane count.
     #[config(default = "defaults::nexus::autoscale::MIN_LANES")]
     pub min_lanes: u32,
-    /// Maximum active lane count.
+    /// Exclusive upper lane-id bound reserved for autoscale-managed elastic lanes.
+    ///
+    /// Despite the legacy field name, this is not an active-lane count.
     #[config(default = "defaults::nexus::autoscale::MAX_LANES")]
     pub max_lanes: u32,
     /// Target block interval used by the autoscaler (milliseconds).
@@ -17369,7 +17376,7 @@ impl Autoscale {
             invalid = true;
             emitter.emit(
                 Report::new(ParseError::InvalidNexusConfig)
-                    .attach("nexus.autoscale.min_lanes must be > 0"),
+                    .attach("nexus.autoscale.min_lanes lane-id lower bound must be > 0"),
             );
             None
         });
@@ -17377,7 +17384,7 @@ impl Autoscale {
             invalid = true;
             emitter.emit(
                 Report::new(ParseError::InvalidNexusConfig)
-                    .attach("nexus.autoscale.max_lanes must be > 0"),
+                    .attach("nexus.autoscale.max_lanes lane-id upper bound must be > 0"),
             );
             None
         });
@@ -17455,14 +17462,14 @@ impl Autoscale {
                 invalid = true;
                 emitter.emit(
                     Report::new(ParseError::InvalidNexusConfig)
-                        .attach("nexus.autoscale.min_lanes must be < max_lanes"),
+                        .attach("nexus.autoscale.min_lanes must be < max_lanes so the elastic lane-id range is non-empty"),
                 );
             }
             if max.get() > defaults::nexus::autoscale::MAX_LANES {
                 invalid = true;
                 emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                    "nexus.autoscale.max_lanes must be <= {}",
-                    defaults::nexus::autoscale::MAX_LANES
+                    "nexus.autoscale.max_lanes must be <= {} because it is an exclusive lane-id bound",
+                    defaults::nexus::autoscale::MAX_LANES,
                 )));
             }
         }
@@ -18213,8 +18220,7 @@ impl Nexus {
                 )));
             }
             for lane in lane_catalog.lanes() {
-                let lane_id = lane.id.as_u32();
-                if lane_id >= min_lanes && lane_id < max_lanes && !lane.claims_autoscale_managed() {
+                if autoscale.contains_elastic_lane_id(lane.id) && !lane.claims_autoscale_managed() {
                     reserved_range_error = true;
                     emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
                         "nexus.lane_catalog lane {} is inside reserved autoscale elastic lane id range [{min_lanes}, {max_lanes}); move manual lanes outside the autoscale range",
@@ -18236,6 +18242,7 @@ impl Nexus {
             hf_shared_leases,
             uploaded_models,
             endorsement,
+            configured_lane_catalog: lane_catalog.clone(),
             lane_catalog,
             lane_config,
             dataspace_catalog,
@@ -23485,6 +23492,9 @@ pub struct SorafsStorage {
     /// Interval between Proof-of-Retrievability sampling rounds (seconds).
     #[config(default = "defaults::sorafs::storage::POR_SAMPLE_INTERVAL_SECS")]
     pub por_sample_interval_secs: u64,
+    /// Retention and checkpoint bounds for auxiliary embedded runtime state.
+    #[config(nested)]
+    pub runtime: SorafsRuntimeRetentionConfig,
     /// Optional alias advertised in telemetry for this storage worker.
     pub alias: Option<String>,
     /// Overrides applied when advertising provider capabilities.
@@ -23530,6 +23540,7 @@ impl Default for SorafsStorage {
             max_parallel_fetches: defaults::sorafs::storage::MAX_PARALLEL_FETCHES,
             max_pins: defaults::sorafs::storage::MAX_PINS,
             por_sample_interval_secs: defaults::sorafs::storage::POR_SAMPLE_INTERVAL_SECS,
+            runtime: SorafsRuntimeRetentionConfig::default(),
             alias: defaults::sorafs::storage::alias(),
             adverts: SorafsAdvertOverrides::default(),
             metering_smoothing: SorafsMeteringSmoothing::default(),
@@ -23556,6 +23567,7 @@ impl SorafsStorage {
             max_parallel_fetches: self.max_parallel_fetches,
             max_pins: self.max_pins,
             por_sample_interval_secs: self.por_sample_interval_secs,
+            runtime: self.runtime.parse(),
             alias: self.alias.or_else(super::defaults::sorafs::storage::alias),
             adverts: self.adverts.parse(),
             metering_smoothing: self.metering_smoothing.parse(),
@@ -23568,6 +23580,40 @@ impl SorafsStorage {
             governance_dag_dir: self.governance_dag_dir,
             governance_dag_publisher_peer_id: self.governance_dag_publisher_peer_id,
             governance_dag_signing_key_path: self.governance_dag_signing_key_path,
+        }
+    }
+}
+
+/// Retention and checkpoint bounds for auxiliary embedded SoraFS runtime state.
+#[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
+pub struct SorafsRuntimeRetentionConfig {
+    /// Maximum replay events retained for each local event stream.
+    #[config(default = "defaults::sorafs::storage::RUNTIME_EVENT_HISTORY_LIMIT")]
+    pub event_history_limit: usize,
+    /// Maximum entries retained in each auxiliary state index.
+    #[config(default = "defaults::sorafs::storage::RUNTIME_STATE_ENTRY_LIMIT")]
+    pub state_entry_limit: usize,
+    /// Maximum encoded size accepted for one auxiliary runtime checkpoint.
+    #[config(default = "defaults::sorafs::storage::RUNTIME_CHECKPOINT_MAX_BYTES")]
+    pub checkpoint_max_bytes: Bytes<u64>,
+}
+
+impl Default for SorafsRuntimeRetentionConfig {
+    fn default() -> Self {
+        Self {
+            event_history_limit: defaults::sorafs::storage::RUNTIME_EVENT_HISTORY_LIMIT,
+            state_entry_limit: defaults::sorafs::storage::RUNTIME_STATE_ENTRY_LIMIT,
+            checkpoint_max_bytes: defaults::sorafs::storage::RUNTIME_CHECKPOINT_MAX_BYTES,
+        }
+    }
+}
+
+impl SorafsRuntimeRetentionConfig {
+    fn parse(self) -> actual::SorafsRuntimeRetention {
+        actual::SorafsRuntimeRetention {
+            event_history_limit: self.event_history_limit.max(1),
+            state_entry_limit: self.state_entry_limit.max(1),
+            checkpoint_max_bytes: Bytes(self.checkpoint_max_bytes.0.max(1)),
         }
     }
 }
@@ -23985,28 +24031,39 @@ mod sorafs_repair_gc_tests {
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct SorafsPor {
     /// Enable the PoR coordinator runtime.
-    #[config(env = "SORAFS_POR_ENABLED", default = "defaults::sorafs::por::ENABLED")]
+    ///
+    #[config(default = "defaults::sorafs::por::ENABLED")]
     pub enabled: bool,
     /// Epoch interval (seconds) controlling challenge generation cadence.
-    #[config(
-        env = "SORAFS_POR_EPOCH_INTERVAL_SECS",
-        default = "defaults::sorafs::por::EPOCH_INTERVAL_SECS"
-    )]
+    #[config(default = "defaults::sorafs::por::EPOCH_INTERVAL_SECS")]
     pub epoch_interval_secs: u64,
     /// Response window (seconds) granted to providers for PoR proofs.
-    #[config(
-        env = "SORAFS_POR_RESPONSE_WINDOW_SECS",
-        default = "defaults::sorafs::por::RESPONSE_WINDOW_SECS"
-    )]
+    #[config(default = "defaults::sorafs::por::RESPONSE_WINDOW_SECS")]
     pub response_window_secs: u64,
     /// Filesystem directory used for governance DAG outputs.
-    #[config(
-        env = "SORAFS_POR_GOVERNANCE_DIR",
-        default = "defaults::sorafs::por::governance_dir()"
-    )]
+    #[config(default = "defaults::sorafs::por::governance_dir()")]
     pub governance_dir: PathBuf,
-    /// Optional deterministic randomness seed represented as hex-encoded bytes.
-    pub randomness_seed_hex: Option<String>,
+    /// Pinned drand trust and hardened transport configuration.
+    #[config(nested)]
+    pub drand: SorafsPorDrand,
+    /// Durable provider VRF state path.
+    #[config(default = "defaults::sorafs::por::vrf_state_path()")]
+    pub vrf_state_path: PathBuf,
+    /// Deadline from epoch start before the forced-challenge path is allowed.
+    #[config(default = "defaults::sorafs::por::VRF_SUBMISSION_DEADLINE_SECS")]
+    pub vrf_submission_deadline_secs: u64,
+    /// Maximum durable provider VRF entry count.
+    #[config(default = "defaults::sorafs::por::VRF_MAX_ENTRIES")]
+    pub vrf_max_entries: usize,
+    /// Number of provider VRF epochs retained.
+    #[config(default = "defaults::sorafs::por::VRF_RETENTION_EPOCHS")]
+    pub vrf_retention_epochs: u64,
+    /// Maximum clock skew for provider-signed submissions.
+    #[config(default = "defaults::sorafs::por::VRF_MAX_CLOCK_SKEW_SECS")]
+    pub vrf_max_clock_skew_secs: u64,
+    /// Minimum trusted operator/auditor signatures required on each verdict.
+    #[config(default = "defaults::sorafs::por::AUDITOR_SIGNATURE_THRESHOLD")]
+    pub auditor_signature_threshold: u16,
 }
 
 impl Default for SorafsPor {
@@ -24016,29 +24073,183 @@ impl Default for SorafsPor {
             epoch_interval_secs: defaults::sorafs::por::EPOCH_INTERVAL_SECS,
             response_window_secs: defaults::sorafs::por::RESPONSE_WINDOW_SECS,
             governance_dir: defaults::sorafs::por::governance_dir(),
-            randomness_seed_hex: defaults::sorafs::por::randomness_seed_hex(),
+            drand: SorafsPorDrand::default(),
+            vrf_state_path: defaults::sorafs::por::vrf_state_path(),
+            vrf_submission_deadline_secs: defaults::sorafs::por::VRF_SUBMISSION_DEADLINE_SECS,
+            vrf_max_entries: defaults::sorafs::por::VRF_MAX_ENTRIES,
+            vrf_retention_epochs: defaults::sorafs::por::VRF_RETENTION_EPOCHS,
+            vrf_max_clock_skew_secs: defaults::sorafs::por::VRF_MAX_CLOCK_SKEW_SECS,
+            auditor_signature_threshold: defaults::sorafs::por::AUDITOR_SIGNATURE_THRESHOLD,
         }
     }
 }
 
 impl SorafsPor {
     fn parse(self) -> actual::SorafsPor {
-        let randomness_seed = self.randomness_seed_hex.as_ref().map(|hex| {
-            let bytes =
-                hex::decode(hex).expect("failed to decode SORAFS_POR_RANDOMNESS_SEED hex value");
-            let array: [u8; 32] = bytes
-                .try_into()
-                .expect("SORAFS_POR randomness seed must be 32 bytes");
-            array
-        });
         actual::SorafsPor {
             enabled: self.enabled,
             epoch_interval_secs: self.epoch_interval_secs,
             response_window_secs: self.response_window_secs,
             governance_dag_dir: self.governance_dir,
-            randomness_seed,
+            drand: self.drand.parse(),
+            vrf_state_path: self.vrf_state_path,
+            vrf_submission_deadline_secs: self.vrf_submission_deadline_secs,
+            vrf_max_entries: self.vrf_max_entries,
+            vrf_retention_epochs: self.vrf_retention_epochs,
+            vrf_max_clock_skew_secs: self.vrf_max_clock_skew_secs,
+            auditor_signature_threshold: NonZeroU16::new(self.auditor_signature_threshold)
+                .expect("torii.sorafs_por.auditor_signature_threshold must be non-zero"),
         }
     }
+}
+
+/// User-level pinned drand chain and HTTP policy.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct SorafsPorDrand {
+    /// Exact first-release scheme identifier.
+    #[config(default = "String::new()")]
+    pub scheme: String,
+    /// Canonical lowercase 32-byte chain hash.
+    #[config(default = "String::new()")]
+    pub chain_hash_hex: String,
+    /// Canonical lowercase 96-byte compressed G2 public key.
+    #[config(default = "String::new()")]
+    pub public_key_hex: String,
+    /// Pinned Unix genesis timestamp.
+    #[config(default = "0")]
+    pub genesis_time: u64,
+    /// Pinned beacon period in seconds.
+    #[config(default = "0")]
+    pub period_secs: u64,
+    /// Independent HTTPS chain-root endpoints.
+    #[config(default)]
+    pub endpoints: Vec<String>,
+    /// Strict-majority endpoint agreement threshold.
+    #[config(default = "defaults::sorafs::por::DRAND_QUORUM")]
+    pub quorum: u16,
+    /// Maximum configured endpoint count.
+    #[config(default = "defaults::sorafs::por::DRAND_MAX_ENDPOINTS")]
+    pub max_endpoints: usize,
+    /// Connection timeout in milliseconds.
+    #[config(default = "defaults::sorafs::por::DRAND_CONNECT_TIMEOUT_MS")]
+    pub connect_timeout_ms: u64,
+    /// Complete request timeout in milliseconds.
+    #[config(default = "defaults::sorafs::por::DRAND_REQUEST_TIMEOUT_MS")]
+    pub request_timeout_ms: u64,
+    /// Maximum accepted response bytes.
+    #[config(default = "defaults::sorafs::por::DRAND_MAX_BODY_BYTES")]
+    pub max_body_bytes: usize,
+    /// Maximum accepted beacon age.
+    #[config(default = "defaults::sorafs::por::DRAND_MAX_BEACON_AGE_SECS")]
+    pub max_beacon_age_secs: u64,
+    /// Maximum tolerated future clock skew.
+    #[config(default = "defaults::sorafs::por::DRAND_MAX_FUTURE_SKEW_SECS")]
+    pub max_future_skew_secs: u64,
+    /// Durable high-water state path.
+    #[config(default = "defaults::sorafs::por::drand_state_path()")]
+    pub state_path: PathBuf,
+}
+
+impl Default for SorafsPorDrand {
+    fn default() -> Self {
+        Self {
+            scheme: String::new(),
+            chain_hash_hex: String::new(),
+            public_key_hex: String::new(),
+            genesis_time: 0,
+            period_secs: 0,
+            endpoints: Vec::new(),
+            quorum: defaults::sorafs::por::DRAND_QUORUM,
+            max_endpoints: defaults::sorafs::por::DRAND_MAX_ENDPOINTS,
+            connect_timeout_ms: defaults::sorafs::por::DRAND_CONNECT_TIMEOUT_MS,
+            request_timeout_ms: defaults::sorafs::por::DRAND_REQUEST_TIMEOUT_MS,
+            max_body_bytes: defaults::sorafs::por::DRAND_MAX_BODY_BYTES,
+            max_beacon_age_secs: defaults::sorafs::por::DRAND_MAX_BEACON_AGE_SECS,
+            max_future_skew_secs: defaults::sorafs::por::DRAND_MAX_FUTURE_SKEW_SECS,
+            state_path: defaults::sorafs::por::drand_state_path(),
+        }
+    }
+}
+
+impl SorafsPorDrand {
+    fn parse(self) -> actual::SorafsPorDrand {
+        fn decode_fixed<const N: usize>(value: &str, field: &str) -> [u8; N] {
+            if value.is_empty() {
+                return [0; N];
+            }
+            let bytes = hex::decode(value).unwrap_or_else(|err| {
+                panic!("torii.sorafs.por.drand.{field} is invalid hex: {err}")
+            });
+            assert_eq!(
+                hex::encode(&bytes),
+                value,
+                "torii.sorafs.por.drand.{field} must be canonical lowercase hex"
+            );
+            bytes.try_into().unwrap_or_else(|bytes: Vec<u8>| {
+                panic!(
+                    "torii.sorafs.por.drand.{field} must be {N} bytes, found {}",
+                    bytes.len()
+                )
+            })
+        }
+
+        actual::SorafsPorDrand {
+            scheme: self.scheme,
+            chain_hash: decode_fixed(&self.chain_hash_hex, "chain_hash_hex"),
+            public_key: decode_fixed(&self.public_key_hex, "public_key_hex"),
+            genesis_time: self.genesis_time,
+            period_secs: self.period_secs,
+            endpoints: self.endpoints,
+            quorum: self.quorum,
+            max_endpoints: self.max_endpoints,
+            connect_timeout: std::time::Duration::from_millis(self.connect_timeout_ms),
+            request_timeout: std::time::Duration::from_millis(self.request_timeout_ms),
+            max_body_bytes: self.max_body_bytes,
+            max_beacon_age_secs: self.max_beacon_age_secs,
+            max_future_skew_secs: self.max_future_skew_secs,
+            state_path: self.state_path,
+        }
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn sorafs_por_rejects_zero_auditor_signature_threshold() {
+    let mut config = SorafsPor::default();
+    config.auditor_signature_threshold = 0;
+    assert!(
+        std::panic::catch_unwind(|| config.parse()).is_err(),
+        "zero auditor threshold must fail closed during config parsing"
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn sorafs_por_parses_file_configured_verified_feed_fields_without_env_fallbacks() {
+    let disabled = SorafsPor::default().parse();
+    assert!(!disabled.enabled);
+    assert!(disabled.drand.endpoints.is_empty());
+
+    let mut config = SorafsPor {
+        enabled: true,
+        ..Default::default()
+    };
+    config.drand.scheme = "bls-unchained-g1-rfc9380".to_owned();
+    config.drand.chain_hash_hex = "11".repeat(32);
+    config.drand.public_key_hex = "22".repeat(96);
+    config.drand.genesis_time = 1_692_803_367;
+    config.drand.period_secs = 3;
+    config.drand.endpoints = vec![
+        "https://one.example/v2/chains/11".to_owned(),
+        "https://two.example/v2/chains/11".to_owned(),
+        "https://three.example/v2/chains/11".to_owned(),
+    ];
+    let parsed = config.parse();
+    assert!(parsed.enabled);
+    assert_eq!(parsed.drand.scheme, "bls-unchained-g1-rfc9380");
+    assert_eq!(parsed.drand.chain_hash, [0x11; 32]);
+    assert_eq!(parsed.drand.public_key, [0x22; 96]);
+    assert_eq!(parsed.drand.endpoints.len(), 3);
 }
 
 /// User-level configuration for stream-token issuance.
@@ -24748,6 +24959,12 @@ pub struct SorafsDiscovery {
     /// Capability names accepted when validating provider adverts.
     #[config(default = "defaults::torii::sorafs_known_capabilities()")]
     pub known_capabilities: Vec<String>,
+    /// Durable checkpoint containing provider advert replay high-water marks.
+    #[config(default = "defaults::torii::sorafs_discovery_replay_checkpoint_path()")]
+    pub replay_checkpoint_path: PathBuf,
+    /// Maximum admitted-provider high-water marks accepted in the checkpoint.
+    #[config(default = "defaults::torii::SORAFS_DISCOVERY_REPLAY_MAX_ENTRIES")]
+    pub replay_checkpoint_max_entries: NonZeroUsize,
     /// Optional governance admission configuration.
     #[config(nested)]
     pub admission: SorafsAdmissionConfig,
@@ -24761,6 +24978,10 @@ impl Default for SorafsDiscovery {
         Self {
             discovery_enabled: super::defaults::torii::SORAFS_DISCOVERY_ENABLED,
             known_capabilities: super::defaults::torii::sorafs_known_capabilities(),
+            replay_checkpoint_path: super::defaults::torii::sorafs_discovery_replay_checkpoint_path(
+            ),
+            replay_checkpoint_max_entries:
+                super::defaults::torii::SORAFS_DISCOVERY_REPLAY_MAX_ENTRIES,
             admission: SorafsAdmissionConfig::default(),
             publish: SorafsPublishDiscoveryConfig::default(),
         }
@@ -24769,10 +24990,17 @@ impl Default for SorafsDiscovery {
 
 impl SorafsDiscovery {
     fn parse(self) -> actual::SorafsDiscovery {
+        let admission = self.admission.into_actual();
+        assert!(
+            !self.discovery_enabled || admission.is_some(),
+            "sorafs.discovery.discovery_enabled requires a configured admission trust policy"
+        );
         actual::SorafsDiscovery {
             discovery_enabled: self.discovery_enabled,
             known_capabilities: self.known_capabilities,
-            admission: self.admission.into_actual(),
+            replay_checkpoint_path: self.replay_checkpoint_path,
+            replay_checkpoint_max_entries: self.replay_checkpoint_max_entries,
+            admission,
             publish: self.publish.parse(),
         }
     }
@@ -24812,15 +25040,130 @@ pub struct SorafsAdmissionConfig {
     /// Directory containing governance envelopes for approved providers.
     #[config(env = "TORII_SORAFS_ADMISSION_DIR")]
     pub envelopes_dir: Option<PathBuf>,
+    /// Canonical Ed25519 council keys trusted to authorise provider admission changes.
+    #[config(default)]
+    pub trusted_council_keys: Vec<PublicKey>,
+    /// Minimum number of distinct trusted council signatures required.
+    #[config(default)]
+    pub signature_threshold: usize,
 }
 
 impl SorafsAdmissionConfig {
     fn into_actual(self) -> Option<actual::SorafsAdmission> {
-        self.envelopes_dir.map(|path| actual::SorafsAdmission {
-            envelopes_dir: path,
+        let Some(envelopes_dir) = self.envelopes_dir else {
+            assert!(
+                self.trusted_council_keys.is_empty() && self.signature_threshold == 0,
+                "sorafs.discovery.admission trust policy requires envelopes_dir"
+            );
+            return None;
+        };
+        assert!(
+            !self.trusted_council_keys.is_empty(),
+            "sorafs.discovery.admission.trusted_council_keys must not be empty"
+        );
+        let unique_keys = self
+            .trusted_council_keys
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            unique_keys.len(),
+            self.trusted_council_keys.len(),
+            "sorafs.discovery.admission.trusted_council_keys must not contain duplicates"
+        );
+        for key in &self.trusted_council_keys {
+            assert_eq!(
+                key.try_algorithm()
+                    .expect("provider admission council key must be well formed"),
+                Algorithm::Ed25519,
+                "sorafs.discovery.admission.trusted_council_keys must contain only Ed25519 keys"
+            );
+        }
+        let signature_threshold = NonZeroUsize::new(self.signature_threshold)
+            .expect("sorafs.discovery.admission.signature_threshold must be non-zero");
+        assert!(
+            signature_threshold.get() <= unique_keys.len(),
+            "sorafs.discovery.admission.signature_threshold exceeds trusted_council_keys"
+        );
+        Some(actual::SorafsAdmission {
+            envelopes_dir,
+            trusted_council_keys: self.trusted_council_keys,
+            signature_threshold,
         })
     }
 }
+
+#[cfg(test)]
+mod sorafs_admission_config_tests {
+    use super::*;
+
+    fn council_key() -> PublicKey {
+        PublicKey::from_str(
+            "ed01206355691C178A8FF91007A7478AFB955EF7352C63E7B25703984CF78B26E21A56",
+        )
+        .expect("valid fixture council key")
+    }
+
+    fn valid_config() -> SorafsAdmissionConfig {
+        SorafsAdmissionConfig {
+            envelopes_dir: Some(PathBuf::from("admission")),
+            trusted_council_keys: vec![council_key()],
+            signature_threshold: 1,
+        }
+    }
+
+    #[test]
+    fn conversion_accepts_explicit_ed25519_quorum() {
+        let actual = valid_config().into_actual().expect("admission config");
+        assert_eq!(actual.trusted_council_keys, vec![council_key()]);
+        assert_eq!(actual.signature_threshold.get(), 1);
+    }
+
+    #[test]
+    fn conversion_rejects_missing_trust_roots_or_threshold() {
+        let mut missing_keys = valid_config();
+        missing_keys.trusted_council_keys.clear();
+        assert!(std::panic::catch_unwind(|| missing_keys.into_actual()).is_err());
+
+        let mut zero_threshold = valid_config();
+        zero_threshold.signature_threshold = 0;
+        assert!(std::panic::catch_unwind(|| zero_threshold.into_actual()).is_err());
+
+        let mut excessive_threshold = valid_config();
+        excessive_threshold.signature_threshold = 2;
+        assert!(std::panic::catch_unwind(|| excessive_threshold.into_actual()).is_err());
+    }
+
+    #[test]
+    fn conversion_rejects_duplicates_non_ed25519_and_policy_without_directory() {
+        let mut duplicate = valid_config();
+        duplicate.trusted_council_keys.push(council_key());
+        assert!(std::panic::catch_unwind(|| duplicate.into_actual()).is_err());
+
+        let secp = KeyPair::try_from_seed(vec![0x31; 32], Algorithm::Secp256k1)
+            .expect("derive secp256k1 test key")
+            .public_key()
+            .clone();
+        let mut wrong_algorithm = valid_config();
+        wrong_algorithm.trusted_council_keys = vec![secp];
+        assert!(std::panic::catch_unwind(|| wrong_algorithm.into_actual()).is_err());
+
+        let without_directory = SorafsAdmissionConfig {
+            envelopes_dir: None,
+            trusted_council_keys: vec![council_key()],
+            signature_threshold: 1,
+        };
+        assert!(std::panic::catch_unwind(|| without_directory.into_actual()).is_err());
+    }
+
+    #[test]
+    fn discovery_enabled_requires_admission_policy() {
+        let mut discovery = SorafsDiscovery::default();
+        discovery.discovery_enabled = true;
+        assert!(std::panic::catch_unwind(|| discovery.parse()).is_err());
+    }
+}
+
 impl IsoBridge {
     fn parse(self) -> actual::IsoBridge {
         actual::IsoBridge {

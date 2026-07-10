@@ -14,6 +14,7 @@ MANIFEST_ID = "a" * 64
 PROVIDER_SPEC = (
     "name=provider-a,"
     f"provider-id={'b' * 64},"
+    "gateway-key=2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12,"
     "base-url=https://provider-a.example,"
     "stream-token=dGVzdA=="
 )
@@ -175,6 +176,74 @@ def test_direct_mode_smoke_rejects_ungated_adoption_skip(
     ) in result.stderr
     assert not (tmp_path / "payload.bin").exists()
     assert not (tmp_path / "summary.json").exists()
+
+
+def test_direct_mode_smoke_rejects_missing_gateway_key(
+    tmp_path: Path,
+) -> None:
+    plan_path, policy_path = write_inputs(tmp_path)
+    missing_key = (
+        "name=provider-a,"
+        f"provider-id={'b' * 64},"
+        "base-url=https://provider-a.example,"
+        "stream-token=dGVzdA=="
+    )
+
+    result = run_wrapper(
+        tmp_path,
+        plan_path,
+        policy_path,
+        "--provider",
+        missing_key,
+        "--skip-adoption-check",
+    )
+
+    assert result.returncode == 1
+    assert "requires gateway-key=<32-byte Ed25519 public key hex>" in result.stderr
+
+
+def test_direct_mode_smoke_rejects_plaintext_gateway_url(
+    tmp_path: Path,
+) -> None:
+    plan_path, policy_path = write_inputs(tmp_path)
+    plaintext = PROVIDER_SPEC.replace(
+        "base-url=https://provider-a.example",
+        "base-url=http://127.0.0.1:8080",
+    )
+
+    result = run_wrapper(
+        tmp_path,
+        plan_path,
+        policy_path,
+        "--provider",
+        plaintext,
+        "--skip-adoption-check",
+    )
+
+    assert result.returncode == 1
+    assert "base-url must use https://" in result.stderr
+
+
+def test_direct_mode_smoke_rejects_gateway_subpath(
+    tmp_path: Path,
+) -> None:
+    plan_path, policy_path = write_inputs(tmp_path)
+    subpath = PROVIDER_SPEC.replace(
+        "base-url=https://provider-a.example",
+        "base-url=https://provider-a.example/direct/",
+    )
+
+    result = run_wrapper(
+        tmp_path,
+        plan_path,
+        policy_path,
+        "--provider",
+        subpath,
+        "--skip-adoption-check",
+    )
+
+    assert result.returncode == 1
+    assert "base-url must use the root path" in result.stderr
 
 
 def test_direct_mode_smoke_rejects_relaxing_adoption_flags_without_override_id(

@@ -54,9 +54,10 @@ config rather than wrapper-local defaults:
   only and intentionally does not carry runtime-only private keys.
 - `validator_roster.example.toml`: copy-me roster template for all validator
   public addresses, public keys, and PoPs. Keep the populated file user-local.
-- `validator_secrets.example.toml`: copy-me secret template for per-validator
-  private keys plus the shared onboarding/faucet authority and streaming
-  identity key material. Keep the populated file user-local.
+- `validator_secrets.example.toml`: copy-me runtime template for per-validator
+  private keys, shared onboarding/faucet authority and streaming identity key
+  material, plus the public SoraFS admission-council roots and quorum. Keep the
+  populated file user-local.
 - `genesis.json`: NPoS genesis with DA enabled.
 - `dns_records.json`: DNS targets for the convenience host, explorer host, and
   direct per-validator Torii hostnames.
@@ -138,8 +139,11 @@ Do not hand-edit `config.toml` into multiple validator copies. Instead:
 3. Fill in every validator's real `public_key`, `pop_hex`, and
    `public_address` plus its own direct `torii_public_address` in the public
    roster, then put the matching validator `private_key` values and the shared
-   `torii_onboarding_*`, `torii_faucet_*`, and `streaming_identity_*` values
-   in the secrets file.
+   `torii_onboarding_*`, `torii_faucet_*`, `streaming_identity_*`,
+   `sorafs_council_public_keys`, and `sorafs_council_signature_threshold`
+   values in the runtime file. SoraFS council roots must be canonical Ed25519
+   governance keys; never substitute validator, node identity, or provider
+   advert keys.
 3. Render the per-validator bundle:
    - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir dist/taira-validators`
 4. Point each validator host at its own generated
@@ -147,7 +151,9 @@ Do not hand-edit `config.toml` into multiple validator copies. Instead:
 
 The renderer rewrites the checked-in peer-1 baseline with the full
 `trusted_peers` / `trusted_peers_pop` roster so every validator starts from the
-same bootstrap source of truth. It now requires explicit per-validator
+same bootstrap source of truth. It refuses to emit a config while the SoraFS
+council placeholder remains or the configured quorum is zero, duplicated, or
+larger than the trusted set. It also requires explicit per-validator
 `torii_public_address` values so direct public Torii hostnames are part of the
 checked operator input instead of a hard-coded shared edge default.
 
@@ -833,8 +839,9 @@ away from the shipped MCP-enabled config:
    - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir dist/taira-validators`
    - `validator_secrets.local.toml` must include both the validator private
      keys and the shared `torii_onboarding_*`, `torii_faucet_*`, and
-     `streaming_identity_*` fields because the checked-in template intentionally
-     leaves those runtime-only values blank
+     `streaming_identity_*`, `sorafs_council_public_keys`, and
+     `sorafs_council_signature_threshold` fields because the checked-in template
+     intentionally leaves those deployment values as fail-closed placeholders
    - `sudo install -d -o iroha -g iroha /etc/iroha/taira-validator-1`
    - `sudo cp dist/taira-validators/taira-validator-1/config.toml /etc/iroha/taira-validator-1/config.toml`
 4. Install the newly built binaries plus the sample systemd unit from

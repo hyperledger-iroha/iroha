@@ -5,7 +5,9 @@ package org.hyperledger.iroha.sdk.sorafs
  *
  * The builder exposes the subset of orchestrator configuration that Android clients commonly
  * tweak (telemetry labels, provider limits, retry budgets, transport/anonymity policy). The helper
- * serialises to a map matching the Norito JSON structure consumed by the Rust orchestrator.
+ * serialises to a map matching the Norito JSON structure consumed by the Rust orchestrator. Use
+ * `null` to omit an optional string; present strings must already be canonical and are never trimmed
+ * or case-folded.
  */
 class GatewayFetchOptions(
     manifestEnvelopeBase64: String? = null,
@@ -19,17 +21,19 @@ class GatewayFetchOptions(
     val anonymityPolicy: AnonymityPolicy = AnonymityPolicy.ANON_GUARD_PQ,
     val writeModeHint: WriteModeHint = WriteModeHint.READ_ONLY,
 ) {
-    val manifestEnvelopeBase64: String? = manifestEnvelopeBase64?.trim()
-        ?.takeIf { it.isNotEmpty() }
-        ?.let { SorafsInputValidator.normalizeBase64MaybeUrl(it, "manifestEnvelopeBase64") }
+    val manifestEnvelopeBase64: String? = manifestEnvelopeBase64?.let {
+        SorafsInputValidator.requireCanonicalBase64(it, "manifestEnvelopeBase64")
+    }
 
-    val manifestCidHex: String? = manifestCidHex?.trim()
-        ?.takeIf { it.isNotEmpty() }
-        ?.let { SorafsInputValidator.normalizeHex(it, "manifestCidHex") }
+    val manifestCidHex: String? = manifestCidHex?.let {
+        SorafsInputValidator.requireCanonicalHexBytes(it, "manifestCidHex", 32)
+    }
 
-    val clientId: String? = emptyToNull(clientId)
-    val telemetryRegion: String? = emptyToNull(telemetryRegion)
-    val rolloutPhase: String? = emptyToNull(rolloutPhase)
+    val clientId: String? = exactOptional(clientId, "clientId")
+    val telemetryRegion: String? = exactOptional(telemetryRegion, "telemetryRegion")
+    val rolloutPhase: String? = rolloutPhase?.let {
+        SorafsInputValidator.requireCanonicalRolloutPhase(it, "rolloutPhase")
+    }
 
     val maxPeers: Int? = maxPeers?.also {
         require(it >= 1) { "maxPeers must be greater than zero" }
@@ -59,8 +63,5 @@ class GatewayFetchOptions(
     }
 }
 
-private fun emptyToNull(value: String?): String? {
-    if (value == null) return null
-    val trimmed = value.trim()
-    return trimmed.ifEmpty { null }
-}
+private fun exactOptional(value: String?, field: String): String? =
+    value?.let { SorafsInputValidator.requireExactNonEmpty(it, field) }

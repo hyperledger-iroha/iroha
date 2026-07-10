@@ -70,6 +70,32 @@ fn write_u64_le(bytes: &mut [u8], offset: usize, value: u64) {
     bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
 }
 
+fn decode_uleb(bytes: &[u8]) -> (u64, usize) {
+    let mut value = 0u64;
+    for (index, byte) in bytes.iter().copied().enumerate() {
+        value |= u64::from(byte & 0x7f) << (index * 7);
+        if byte & 0x80 == 0 {
+            return (value, index + 1);
+        }
+    }
+    panic!("test fixture contains a truncated ULEB128 value")
+}
+
+fn encode_uleb(mut value: u64) -> Vec<u8> {
+    let mut encoded = Vec::new();
+    loop {
+        let mut byte = (value & 0x7f) as u8;
+        value >>= 7;
+        if value != 0 {
+            byte |= 0x80;
+        }
+        encoded.push(byte);
+        if value == 0 {
+            return encoded;
+        }
+    }
+}
+
 fn refresh_manifest_archive_fields(manifest: &mut ManifestV1, car_bytes: &[u8]) {
     manifest.car_size = car_bytes.len() as u64;
     manifest
@@ -119,6 +145,21 @@ fn streaming_verifier_consumes_index_when_boundary_splits_update() {
         car_bytes.len() - split
     );
     verifier.finalize().expect("finalize");
+}
+
+#[test]
+fn streaming_verifier_leaves_bytes_after_exact_archive_unconsumed() {
+    let (mut car_bytes, manifest) = build_valid_car();
+    let car_len = car_bytes.len();
+    car_bytes.extend_from_slice(b"next-protocol-frame");
+
+    let mut verifier = StreamingCarVerifier::new(manifest, StreamingVerifierConfig::default());
+    assert_eq!(
+        verifier.update(&car_bytes).expect("verify exact archive"),
+        car_len,
+        "stream verifier must not absorb bytes belonging to the next frame"
+    );
+    verifier.finalize().expect("finalize exact archive");
 }
 
 #[test]
@@ -244,6 +285,84 @@ fn streaming_verifier_enforces_chunk_size_limit() {
     assert!(matches!(
         result,
         Err(CarVerifyError::ChunkSizeExceeded { .. })
+    ));
+}
+
+#[test]
+fn streaming_verifier_enforces_manifest_chunk_ceiling() {
+    let (car_bytes, mut manifest) = build_valid_car();
+    manifest.chunking.max_size = 1;
+
+    let mut verifier = StreamingCarVerifier::new(
+        manifest,
+        StreamingVerifierConfig {
+            max_chunk_size: usize::MAX,
+        },
+    );
+    assert!(matches!(
+        verifier.update(&car_bytes),
+        Err(CarVerifyError::ChunkSizeExceeded { max: 1, .. })
+    ));
+}
+
+#[test]
+fn streaming_verifier_bounds_incomplete_cid_buffer() {
+    let (car_bytes, mut manifest) = build_valid_car();
+    let data_offset = read_u64_le(&car_bytes, DATA_OFFSET_FIELD) as usize;
+    let (header_len, header_len_bytes) = decode_uleb(&car_bytes[data_offset..]);
+    let first_section = data_offset + header_len_bytes + header_len as usize;
+    let declared_section_len = 10_000u64;
+    let section_len = encode_uleb(declared_section_len);
+    let declared_data_size = u64::try_from(first_section - data_offset)
+        .expect("header span fits u64")
+        .checked_add(section_len.len() as u64)
+        .and_then(|value| value.checked_add(declared_section_len))
+        .expect("declared data size");
+
+    let mut forged = car_bytes[..first_section].to_vec();
+    write_u64_le(&mut forged, DATA_SIZE_FIELD, declared_data_size);
+    write_u64_le(
+        &mut forged,
+        INDEX_OFFSET_FIELD,
+        (data_offset as u64) + declared_data_size,
+    );
+    forged.extend_from_slice(&section_len);
+    forged.extend(std::iter::repeat_n(0x80, 128));
+    manifest.car_size = (data_offset as u64) + declared_data_size;
+
+    let mut verifier = StreamingCarVerifier::new(manifest, StreamingVerifierConfig::default());
+    assert!(matches!(
+        verifier.update(&forged),
+        Err(CarVerifyError::TruncatedCid { section_index: 0 })
+    ));
+}
+
+#[test]
+fn streaming_verifier_bounds_dag_section_buffering() {
+    let payload = [0x5a];
+    let profile = ChunkProfile {
+        min_size: 1,
+        target_size: 1,
+        max_size: 1,
+        break_mask: 1,
+    };
+    let plan = CarBuildPlan::single_file_with_profile(&payload, profile).expect("plan");
+    let mut car_bytes = Vec::new();
+    let stats = sorafs_car::CarWriter::new(&plan, &payload)
+        .expect("writer")
+        .write_to(&mut car_bytes)
+        .expect("write car");
+    let manifest = build_manifest(&plan, &stats);
+
+    let config = StreamingVerifierConfig { max_chunk_size: 1 };
+    let mut verifier = StreamingCarVerifier::new(manifest, config);
+    let result = verifier.update(&car_bytes);
+    assert!(matches!(
+        result,
+        Err(CarVerifyError::ChunkSizeExceeded {
+            section_index: 1,
+            ..
+        })
     ));
 }
 

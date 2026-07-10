@@ -6,20 +6,19 @@ use iroha_data_model::{
     block::consensus::{
         NativeAmxAttestationBodyV1, NativeAmxAttestationQcV1, NativeAmxLegRecord, NativeAmxPhase,
         NativeAmxReceipt, SumeragiBlockSyncRosterStatus, SumeragiCommitInflightStatus,
-        SumeragiCommitPipelineStatus, SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus,
-        SumeragiCommittedLaneBlock, SumeragiConsensusMessageHandlingEntry,
+        SumeragiCommitPipelineStatus, SumeragiCommitQuorumStatus, SumeragiCommittedLaneBlock,
+        SumeragiConsensusCapsStatus, SumeragiConsensusMessageHandlingEntry,
         SumeragiConsensusMessageHandlingStatus, SumeragiDataspaceCommitment,
         SumeragiLaneCommitment, SumeragiLaneGovernance, SumeragiMembershipMismatchStatus,
-        SumeragiMembershipStatus,
-        SumeragiNposRepairCoverageStatus, SumeragiNposTimeoutsStatus, SumeragiPeerKeyPolicyStatus,
-        SumeragiPendingRbcEntry, SumeragiPendingRbcStatus, SumeragiProposalGateStatus,
-        SumeragiQcEntry, SumeragiQcStatus, SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus,
-        SumeragiRoundGapStatus, SumeragiRuntimeUpgradeHook, SumeragiStatusWire,
-        SumeragiV1StatusWire, SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
-        SumeragiVoteValidationDropEntry, SumeragiVoteValidationDropPeerEntry,
-        SumeragiVoteValidationDropReasonCount, SumeragiVoteValidationDropStatus,
-        SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths, SumeragiWorkerQueueDiagnostics,
-        SumeragiWorkerQueueTotals,
+        SumeragiMembershipStatus, SumeragiNposRepairCoverageStatus, SumeragiNposTimeoutsStatus,
+        SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcEntry, SumeragiPendingRbcStatus,
+        SumeragiProposalGateStatus, SumeragiQcEntry, SumeragiQcStatus, SumeragiRbcMismatchEntry,
+        SumeragiRbcMismatchStatus, SumeragiRoundGapStatus, SumeragiRuntimeUpgradeHook,
+        SumeragiStatusWire, SumeragiV1StatusWire, SumeragiValidationRejectStatus,
+        SumeragiViewChangeCauseStatus, SumeragiVoteValidationDropEntry,
+        SumeragiVoteValidationDropPeerEntry, SumeragiVoteValidationDropReasonCount,
+        SumeragiVoteValidationDropStatus, SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
+        SumeragiWorkerQueueDiagnostics, SumeragiWorkerQueueTotals,
     },
     nexus::{DataSpaceId, LaneId},
 };
@@ -1876,6 +1875,7 @@ fn native_amx_phase_label(phase: NativeAmxPhase) -> &'static str {
 
 fn native_amx_attestation_body_json(body: &NativeAmxAttestationBodyV1) -> Value {
     json_object(vec![
+        json_entry("chain_id_hash", hash_with_prefix(body.chain_id_hash)),
         json_entry("source_id", hex::encode(body.source_id)),
         json_entry(
             "tx_entrypoint_hash",
@@ -1885,11 +1885,28 @@ fn native_amx_attestation_body_json(body: &NativeAmxAttestationBodyV1) -> Value 
         json_entry("phase", native_amx_phase_label(body.phase)),
         json_entry("coordinator_lane_id", body.coordinator_lane_id),
         json_entry("coordinator_dataspace_id", body.coordinator_dataspace_id),
+        json_entry(
+            "coordinator_lane_incarnation",
+            hash_with_prefix(body.coordinator_lane_incarnation),
+        ),
         json_entry("participant_lane_id", body.participant_lane_id),
         json_entry("participant_dataspace_id", body.participant_dataspace_id),
         json_entry(
-            "planned_coordinator_block_height",
-            body.planned_coordinator_block_height,
+            "participant_lane_incarnation",
+            hash_with_prefix(body.participant_lane_incarnation),
+        ),
+        json_entry("authority_context_height", body.authority_context_height),
+        json_entry(
+            "coordinator_lane_block_height",
+            body.coordinator_lane_block_height,
+        ),
+        json_entry(
+            "coordinator_lane_block_view",
+            body.coordinator_lane_block_view,
+        ),
+        json_entry(
+            "coordinator_proposal_hash",
+            hash_with_prefix(body.coordinator_proposal_hash),
         ),
     ])
 }
@@ -1923,16 +1940,13 @@ fn native_amx_attestation_qc_json(qc: &NativeAmxAttestationQcV1) -> Value {
 }
 
 fn lane_block_qc_signer_count(qc: &iroha_data_model::block::consensus::LaneBlockQcV1) -> u32 {
-    qc
-        .signers_bitmap
+    qc.signers_bitmap
         .iter()
         .map(|byte| byte.count_ones())
         .sum::<u32>()
 }
 
-fn lane_block_qc_summary_json(
-    qc: &iroha_data_model::block::consensus::LaneBlockQcV1,
-) -> Value {
+fn lane_block_qc_summary_json(qc: &iroha_data_model::block::consensus::LaneBlockQcV1) -> Value {
     let signer_count = lane_block_qc_signer_count(qc);
     json_object(vec![
         json_entry("phase", format!("{:?}", qc.body.phase).to_ascii_lowercase()),
@@ -1953,6 +1967,7 @@ fn committed_lane_block_wire(
     SumeragiCommittedLaneBlock {
         lane_id: entry.lane_id,
         dataspace_id: entry.dataspace_id,
+        lane_incarnation: entry.proposal.descriptor.lane_incarnation,
         lane_block_height: entry.lane_block_height,
         lane_block_view: entry.lane_block_view,
         descriptor_hash: entry.descriptor_hash,
@@ -1974,6 +1989,10 @@ fn committed_lane_block_json(entry: &sumeragi::status::CommittedLaneBlockSnapsho
     json_object(vec![
         json_entry("lane_id", Value::from(u64::from(entry.lane_id.as_u32()))),
         json_entry("dataspace_id", Value::from(entry.dataspace_id.as_u64())),
+        json_entry(
+            "lane_incarnation",
+            hash_with_prefix(entry.proposal.descriptor.lane_incarnation),
+        ),
         json_entry("lane_block_height", entry.lane_block_height),
         json_entry("lane_block_view", entry.lane_block_view),
         json_entry("descriptor_hash", hash_with_prefix(entry.descriptor_hash)),
@@ -2006,6 +2025,10 @@ fn native_amx_leg_json(leg: &NativeAmxLegRecord) -> Value {
         json_entry("lane_id", leg.lane_id),
         json_entry("dataspace_id", leg.dataspace_id),
         json_entry(
+            "lane_incarnation",
+            hash_with_prefix(leg.lane_incarnation),
+        ),
+        json_entry(
             "prepare_qc",
             native_amx_attestation_qc_json(&leg.prepare_qc),
         ),
@@ -2017,10 +2040,21 @@ fn native_amx_receipt_json(receipt: &NativeAmxReceipt) -> Value {
     json_object(vec![
         json_entry("version", receipt.version),
         json_entry("source_id", hex::encode(receipt.source_id)),
+        json_entry("chain_id_hash", hash_with_prefix(receipt.chain_id_hash)),
         json_entry("plan_digest", hash_with_prefix(receipt.plan_digest)),
         json_entry("lane_id", receipt.lane_id),
         json_entry("dataspace_id", receipt.dataspace_id),
-        json_entry("block_height", receipt.block_height),
+        json_entry(
+            "lane_incarnation",
+            hash_with_prefix(receipt.lane_incarnation),
+        ),
+        json_entry("authority_context_height", receipt.authority_context_height),
+        json_entry("lane_block_height", receipt.lane_block_height),
+        json_entry("lane_block_view", receipt.lane_block_view),
+        json_entry(
+            "coordinator_proposal_hash",
+            hash_with_prefix(receipt.coordinator_proposal_hash),
+        ),
         json_entry(
             "legs",
             Value::Array(receipt.legs.iter().map(native_amx_leg_json).collect()),
@@ -2142,9 +2176,10 @@ fn sumeragi_v1_payload_status(snap: &sumeragi::StatusSnapshot) -> &'static str {
         .saturating_add(snap.qc_deferred_expired_total);
     if snap.qc_deferred_missing_payload_total > settled
         || matches!(
-        snap.da_gate.reason,
-        sumeragi::status::DaGateReasonSnapshot::MissingLocalData
-    ) {
+            snap.da_gate.reason,
+            sumeragi::status::DaGateReasonSnapshot::MissingLocalData
+        )
+    {
         "missing_local_payload"
     } else {
         "available"
@@ -4004,6 +4039,7 @@ mod status_tests {
         let mut descriptor = LaneBlockDescriptorV1 {
             lane_id: LaneId::new(7),
             dataspace_id: DataSpaceId::new(11),
+            lane_incarnation: Hash::new(b"torii-consensus-lane-incarnation"),
             proposal_height: 13,
             previous_lane_block_height: 12,
             previous_lane_block_descriptor_hash: Some(Hash::prehashed([0x61; Hash::LENGTH])),
@@ -4326,6 +4362,7 @@ mod status_tests {
         let commitment = LaneBlockCommitment {
             block_height: 42,
             lane_id: LaneId::new(3),
+            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::new(9),
             tx_count: 2,
             total_local_micro: 1_500u128,
@@ -4615,10 +4652,22 @@ mod status_tests {
             .get("commit_qc")
             .and_then(Value::as_object)
             .expect("commit QC summary");
-        assert_eq!(prepare_qc.get("phase").and_then(Value::as_str), Some("prepare"));
-        assert_eq!(commit_qc.get("phase").and_then(Value::as_str), Some("commit"));
-        assert_eq!(prepare_qc.get("signer_count").and_then(Value::as_u64), Some(1));
-        assert_eq!(commit_qc.get("signer_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            prepare_qc.get("phase").and_then(Value::as_str),
+            Some("prepare")
+        );
+        assert_eq!(
+            commit_qc.get("phase").and_then(Value::as_str),
+            Some("commit")
+        );
+        assert_eq!(
+            prepare_qc.get("signer_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            commit_qc.get("signer_count").and_then(Value::as_u64),
+            Some(1)
+        );
     }
 
     #[test]
@@ -4632,6 +4681,13 @@ mod status_tests {
         let coordinator_dataspace_id = DataSpaceId::new(11);
         let participant_lane_id = LaneId::new(5);
         let participant_dataspace_id = DataSpaceId::new(12);
+        let chain_id_hash = Hash::new(b"consensus-status-native-amx-chain");
+        let coordinator_lane_incarnation =
+            Hash::new(b"consensus-status-native-amx-coordinator-incarnation");
+        let participant_lane_incarnation =
+            Hash::new(b"consensus-status-native-amx-participant-incarnation");
+        let coordinator_proposal_hash =
+            Hash::new(b"consensus-status-native-amx-coordinator-proposal");
         let validators = vec![
             checked_status_peer(0xA1, "derive native AMX status fixture peer key 1"),
             checked_status_peer(0xA2, "derive native AMX status fixture peer key 2"),
@@ -4639,15 +4695,21 @@ mod status_tests {
         let validator_set_hash = HashOf::new(&validators);
         let native_amx_qc = |phase: NativeAmxPhase| NativeAmxAttestationQcV1 {
             body: NativeAmxAttestationBodyV1 {
+                chain_id_hash,
                 source_id,
                 tx_entrypoint_hash,
                 plan_digest,
                 phase,
                 coordinator_lane_id,
                 coordinator_dataspace_id,
+                coordinator_lane_incarnation,
                 participant_lane_id,
                 participant_dataspace_id,
-                planned_coordinator_block_height: 77,
+                participant_lane_incarnation,
+                authority_context_height: 70,
+                coordinator_lane_block_height: 77,
+                coordinator_lane_block_view: 3,
+                coordinator_proposal_hash,
             },
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set_hash,
@@ -4658,13 +4720,19 @@ mod status_tests {
         let receipt = NativeAmxReceipt {
             version: 1,
             source_id,
+            chain_id_hash,
             plan_digest,
             lane_id: coordinator_lane_id,
             dataspace_id: coordinator_dataspace_id,
-            block_height: 77,
+            lane_incarnation: coordinator_lane_incarnation,
+            authority_context_height: 70,
+            lane_block_height: 77,
+            lane_block_view: 3,
+            coordinator_proposal_hash,
             legs: vec![NativeAmxLegRecord {
                 lane_id: participant_lane_id,
                 dataspace_id: participant_dataspace_id,
+                lane_incarnation: participant_lane_incarnation,
                 prepare_qc: native_amx_qc(NativeAmxPhase::Prepare),
                 commit_qc: native_amx_qc(NativeAmxPhase::Commit),
             }],
@@ -4672,6 +4740,7 @@ mod status_tests {
         let commitment = LaneBlockCommitment {
             block_height: 77,
             lane_id: coordinator_lane_id,
+            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: coordinator_dataspace_id,
             tx_count: 1,
             total_local_micro: 0,
@@ -5456,7 +5525,12 @@ mod status_tests {
             canonical.get("payload_status").and_then(Value::as_str),
             Some("missing_local_payload")
         );
-        assert!(canonical.get("pending_finality").and_then(Value::as_str).is_none());
+        assert!(
+            canonical
+                .get("pending_finality")
+                .and_then(Value::as_str)
+                .is_none()
+        );
         let quorum = canonical
             .get("quorum_policy")
             .and_then(Value::as_object)
@@ -5472,7 +5546,8 @@ mod status_tests {
     fn status_snapshot_json_uses_next_height_commit_quorum_for_missing_payload_pending_finality() {
         let committed_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAD; 32]));
-        let quorum_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAE; 32]));
+        let quorum_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAE; 32]));
         let snap = sumeragi::StatusSnapshot {
             membership_height: 13,
             membership_view: 5,
@@ -5892,10 +5967,8 @@ pub async fn handle_v1_sumeragi_status(
     accept: Option<axum::http::HeaderValue>,
     nexus_enabled: bool,
 ) -> Result<Response> {
-    let mut snap = reconcile_sumeragi_status_snapshot_with_world(
-        sumeragi::status_snapshot(),
-        state.as_ref(),
-    );
+    let mut snap =
+        reconcile_sumeragi_status_snapshot_with_world(sumeragi::status_snapshot(), state.as_ref());
     if !nexus_enabled {
         snap = snap.strip_lane_details();
     }
@@ -5922,6 +5995,7 @@ pub async fn handle_v1_sumeragi_status(
                 .consensus_caps
                 .as_ref()
                 .map(|caps| SumeragiConsensusCapsStatus {
+                    nexus_policy_digest: caps.nexus_policy_digest,
                     collectors_k: caps.collectors_k,
                     redundant_send_r: caps.redundant_send_r,
                     da_enabled: caps.da_enabled,

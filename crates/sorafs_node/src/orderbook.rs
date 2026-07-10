@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 
 use blake3::Hasher;
+use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use sorafs_manifest::{
     OrderBookEntryV1, OrderCancelReasonV1, OrderCancelV1, OrderFillOutcomeV1, OrderRequestV1,
     OrderSideV1, OrderbookRuntimeSnapshotV1, OrderbookValidationError, SettlementChannelV1,
@@ -110,6 +111,17 @@ pub enum OrderbookRuntimeError {
     /// The local orderbook lock was poisoned.
     #[error("orderbook state lock poisoned")]
     StateLockPoisoned,
+    /// A configured authoritative-state ceiling was reached.
+    #[error("orderbook resource `{resource}` exhausted (limit {limit})")]
+    ResourceExhausted {
+        /// Bounded resource label.
+        resource: &'static str,
+        /// Configured entry ceiling.
+        limit: usize,
+    },
+    /// A durable orderbook snapshot contained duplicate or inconsistent indexes.
+    #[error("invalid orderbook runtime snapshot: {0}")]
+    InvalidSnapshot(String),
 }
 
 /// Result of accepting an order into the local orderbook mirror.
@@ -195,7 +207,7 @@ pub struct OrderbookSettlementLedger {
 }
 
 /// Event kind emitted by the local orderbook mirror.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum OrderbookEventKind {
     /// An order was accepted by the local mirror.
     OrderAccepted,
@@ -206,7 +218,7 @@ pub enum OrderbookEventKind {
 }
 
 /// Sequenced event emitted by the local orderbook mirror.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct OrderbookEvent {
     /// Monotonic local event sequence.
     pub sequence: u64,
@@ -253,7 +265,7 @@ pub struct OrderbookSnapshot {
     pub expired_order_ids: Vec<[u8; 32]>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone)]
 pub(crate) struct OrderbookRuntime {
     next_sequence: u64,
     open_orders: BTreeMap<[u8; 32], OrderBookEntryV1>,
@@ -261,10 +273,41 @@ pub(crate) struct OrderbookRuntime {
     settlement_channels: BTreeMap<[u8; 32], SettlementChannelV1>,
     settlement_receipts: BTreeMap<[u8; 32], SettlementReceiptV1>,
     expired_order_ids: Vec<[u8; 32]>,
+    entry_limit: usize,
+}
+
+impl Default for OrderbookRuntime {
+    fn default() -> Self {
+        Self::with_entry_limit(65_536)
+    }
 }
 
 impl OrderbookRuntime {
+    pub(crate) fn with_entry_limit(entry_limit: usize) -> Self {
+        Self {
+            next_sequence: 0,
+            open_orders: BTreeMap::new(),
+            trades: Vec::new(),
+            settlement_channels: BTreeMap::new(),
+            settlement_receipts: BTreeMap::new(),
+            expired_order_ids: Vec::new(),
+            entry_limit: entry_limit.max(1),
+        }
+    }
+
     pub(crate) fn submit_order(
+        &mut self,
+        order: OrderRequestV1,
+        now_unix: u64,
+    ) -> Result<OrderbookSubmitOutcome, OrderbookRuntimeError> {
+        let mut candidate = self.clone();
+        let outcome = candidate.submit_order_inner(order, now_unix)?;
+        candidate.ensure_collection_limits()?;
+        *self = candidate;
+        Ok(outcome)
+    }
+
+    fn submit_order_inner(
         &mut self,
         order: OrderRequestV1,
         now_unix: u64,
@@ -275,7 +318,6 @@ impl OrderbookRuntime {
                 order_id_hex: hex::encode(order.order_id),
             });
         }
-
         let sequence = self.next_sequence;
         self.next_sequence = self
             .next_sequence
@@ -333,6 +375,12 @@ impl OrderbookRuntime {
         if self.settlement_receipts.contains_key(&receipt.receipt_id) {
             return Err(OrderbookRuntimeError::DuplicateReceiptId {
                 receipt_id_hex: hex::encode(receipt.receipt_id),
+            });
+        }
+        if self.settlement_receipts.len() >= self.entry_limit {
+            return Err(OrderbookRuntimeError::ResourceExhausted {
+                resource: "settlement_receipts",
+                limit: self.entry_limit,
             });
         }
         let channel = self
@@ -417,25 +465,74 @@ impl OrderbookRuntime {
         }
     }
 
+    fn ensure_collection_limits(&self) -> Result<(), OrderbookRuntimeError> {
+        for (resource, count) in [
+            ("open_orders", self.open_orders.len()),
+            ("trades", self.trades.len()),
+            ("settlement_channels", self.settlement_channels.len()),
+            ("settlement_receipts", self.settlement_receipts.len()),
+            ("expired_order_ids", self.expired_order_ids.len()),
+        ] {
+            if count > self.entry_limit {
+                return Err(OrderbookRuntimeError::ResourceExhausted {
+                    resource,
+                    limit: self.entry_limit,
+                });
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn restore_runtime_snapshot(
         &mut self,
         snapshot: OrderbookRuntimeSnapshotV1,
     ) -> Result<(), OrderbookRuntimeError> {
         snapshot.validate()?;
+        for (resource, count) in [
+            ("open_orders", snapshot.open_orders.len()),
+            ("trades", snapshot.trades.len()),
+            ("settlement_channels", snapshot.settlement_channels.len()),
+            ("settlement_receipts", snapshot.settlement_receipts.len()),
+            ("expired_order_ids", snapshot.expired_order_ids.len()),
+        ] {
+            if count > self.entry_limit {
+                return Err(OrderbookRuntimeError::ResourceExhausted {
+                    resource,
+                    limit: self.entry_limit,
+                });
+            }
+        }
         let mut open_orders = BTreeMap::new();
         for entry in snapshot.open_orders {
-            open_orders.insert(entry.order.order_id, entry);
+            let order_id = entry.order.order_id;
+            if open_orders.insert(order_id, entry).is_some() {
+                return Err(OrderbookRuntimeError::InvalidSnapshot(format!(
+                    "duplicate order id {}",
+                    hex::encode(order_id)
+                )));
+            }
         }
-        let settlement_channels = snapshot
-            .settlement_channels
-            .into_iter()
-            .map(|channel| (channel.channel_id, channel))
-            .collect::<BTreeMap<_, _>>();
-        let settlement_receipts = snapshot
-            .settlement_receipts
-            .into_iter()
-            .map(|receipt| (receipt.receipt_id, receipt))
-            .collect::<BTreeMap<_, _>>();
+        let mut settlement_channels = BTreeMap::new();
+        for channel in snapshot.settlement_channels {
+            let channel_id = channel.channel_id;
+            if settlement_channels.insert(channel_id, channel).is_some() {
+                return Err(OrderbookRuntimeError::InvalidSnapshot(format!(
+                    "duplicate settlement channel id {}",
+                    hex::encode(channel_id)
+                )));
+            }
+        }
+        let mut settlement_receipts = BTreeMap::new();
+        for receipt in snapshot.settlement_receipts {
+            let receipt_id = receipt.receipt_id;
+            if settlement_receipts.insert(receipt_id, receipt).is_some() {
+                return Err(OrderbookRuntimeError::InvalidSnapshot(format!(
+                    "duplicate settlement receipt id {}",
+                    hex::encode(receipt_id)
+                )));
+            }
+        }
+        let entry_limit = self.entry_limit;
         *self = Self {
             next_sequence: snapshot.next_sequence,
             open_orders,
@@ -443,6 +540,7 @@ impl OrderbookRuntime {
             settlement_channels,
             settlement_receipts,
             expired_order_ids: snapshot.expired_order_ids,
+            entry_limit,
         };
         Ok(())
     }
@@ -946,5 +1044,82 @@ mod tests {
             },
             id.saturating_add(0x40),
         )
+    }
+
+    #[test]
+    fn configured_limits_refuse_growth_without_partial_orderbook_mutation() {
+        let mut runtime = OrderbookRuntime::with_entry_limit(1);
+        runtime
+            .submit_order(
+                order(1, OrderSideV1::Ask, 1_500_000, b"provider-a"),
+                1_800_000_000,
+            )
+            .expect("accept first ask");
+        assert!(matches!(
+            runtime
+                .submit_order(
+                    order(9, OrderSideV1::Ask, 1_500_000, b"provider-extra"),
+                    1_800_000_000,
+                )
+                .expect_err("second open order must be refused"),
+            OrderbookRuntimeError::ResourceExhausted {
+                resource: "open_orders",
+                limit: 1
+            }
+        ));
+        assert_eq!(runtime.snapshot(1_800_000_000).next_sequence, 1);
+        runtime
+            .submit_order(
+                order(2, OrderSideV1::Bid, 1_600_000, b"buyer-a"),
+                1_800_000_000,
+            )
+            .expect("open first channel");
+        runtime
+            .submit_order(
+                order(3, OrderSideV1::Ask, 1_500_000, b"provider-b"),
+                1_800_000_000,
+            )
+            .expect("accept next ask");
+
+        assert!(matches!(
+            runtime
+                .submit_order(
+                    order(4, OrderSideV1::Bid, 1_600_000, b"buyer-b"),
+                    1_800_000_000,
+                )
+                .expect_err("second trade history entry must be refused"),
+            OrderbookRuntimeError::ResourceExhausted {
+                resource: "trades",
+                limit: 1
+            }
+        ));
+        let snapshot = runtime.snapshot(1_800_000_000);
+        assert_eq!(snapshot.next_sequence, 3);
+        assert_eq!(snapshot.open_orders.len(), 1);
+        assert_eq!(snapshot.open_orders[0].order.order_id, [3; 32]);
+        assert_eq!(snapshot.trades.len(), 1);
+        assert_eq!(snapshot.settlement_channels.len(), 1);
+
+        let channel = snapshot.settlement_channels[0].clone();
+        runtime
+            .submit_receipt(receipt(7, &channel, 0, BYTES_PER_GIB, 1_800_000_010, 100))
+            .expect("accept first receipt");
+        assert!(matches!(
+            runtime
+                .submit_receipt(receipt(
+                    8,
+                    &channel,
+                    BYTES_PER_GIB,
+                    2 * BYTES_PER_GIB,
+                    1_800_000_011,
+                    100,
+                ))
+                .expect_err("second receipt history entry must be refused"),
+            OrderbookRuntimeError::ResourceExhausted {
+                resource: "settlement_receipts",
+                limit: 1
+            }
+        ));
+        assert_eq!(runtime.snapshot(1_800_000_020).settlement_receipts.len(), 1);
     }
 }

@@ -1967,6 +1967,7 @@ impl From<CarVerifyError> for GatewayError {
             | CarVerifyError::ManifestMultihashMismatch(_)
             | CarVerifyError::ChunkProfileMismatch => GatewayError::Manifest,
             CarVerifyError::ExpectedRangeMismatch { .. }
+            | CarVerifyError::ExpectedRangeNotChunkAligned { .. }
             | CarVerifyError::RangeExceedsContentLength { .. } => GatewayError::RangeNotSatisfiable,
             CarVerifyError::ChunkLengthMismatch { .. }
             | CarVerifyError::ChunkDigestMismatch { .. }
@@ -1974,8 +1975,10 @@ impl From<CarVerifyError> for GatewayError {
             | CarVerifyError::ChunkSizeExceeded { .. }
             | CarVerifyError::PlanChunkCountMismatch { .. }
             | CarVerifyError::PlanContentLengthMismatch { .. }
+            | CarVerifyError::InvalidPlanChunkLength { .. }
             | CarVerifyError::UnknownChunkDigest { .. }
             | CarVerifyError::NonContiguousChunkRange { .. }
+            | CarVerifyError::UnexpectedChunkOrder
             | CarVerifyError::EmptyRange
             | CarVerifyError::PlanChunkIndexOutOfRange { .. }
             | CarVerifyError::Plan(_)
@@ -1990,8 +1993,13 @@ impl From<CarVerifyError> for GatewayError {
             | CarVerifyError::InvalidHeader
             | CarVerifyError::InvalidCarv1Header(_)
             | CarVerifyError::VarintOverflow
+            | CarVerifyError::NonCanonicalVarint
             | CarVerifyError::HeaderTruncated
             | CarVerifyError::NodeDigestMismatch { .. }
+            | CarVerifyError::BlockRootMismatch
+            | CarVerifyError::NonCanonicalCar
+            | CarVerifyError::CanonicalCar(_)
+            | CarVerifyError::ChunkStore(_)
             | CarVerifyError::InternalInvariant(_) => GatewayError::RangePayloadMismatch,
         }
     }
@@ -2764,7 +2772,7 @@ fn verify_aligned_range<C: GatewayHttpClient>(
         &bundle.manifest,
         &bundle.plan,
         &car_bytes,
-        Some(expected_inclusive),
+        expected_inclusive,
     )?;
     if report.payload_bytes != range.len() {
         return Err(GatewayError::RangeLengthMismatch {
@@ -2818,12 +2826,8 @@ fn verify_multi_range<C: GatewayHttpClient>(client: &C) -> Result<(), GatewayErr
             return Err(GatewayError::RangePayloadMismatch);
         }
         let inclusive = expected_range.start..=expected_range.end.saturating_sub(1);
-        let report = CarVerifier::verify_block_car(
-            &bundle.manifest,
-            &bundle.plan,
-            segment,
-            Some(inclusive),
-        )?;
+        let report =
+            CarVerifier::verify_block_car(&bundle.manifest, &bundle.plan, segment, inclusive)?;
         if report.payload_bytes != expected_range.len() {
             return Err(GatewayError::RangeLengthMismatch {
                 _expected: expected_range.len(),

@@ -9,6 +9,7 @@ use std::{
 use eyre::{Result, WrapErr, ensure, eyre};
 use futures_util::StreamExt;
 use integration_tests::sandbox;
+use iroha::nexus;
 use iroha::{
     client::Client,
     crypto::{Hash, HashOf},
@@ -18,7 +19,7 @@ use iroha::{
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
         block::{
             ExternalExecutionRouteLeg, ExternalExecutionRouteRole, Header, SignedBlock,
-            consensus::{NativeAmxPhase, NativeAmxReceipt},
+            consensus::{LaneBlockCommitment, NativeAmxPhase, NativeAmxReceipt},
         },
         da::commitment::DaProofPolicyBundle,
         domain::{Domain, DomainId},
@@ -31,7 +32,10 @@ use iroha::{
             staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
         },
         metadata::Metadata,
-        nexus::{DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneVisibility},
+        nexus::{
+            DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneRelayEnvelope,
+            LaneVisibility, compute_settlement_hash,
+        },
         peer::PeerId,
         prelude::Numeric,
         query::block::prelude::FindBlocks,
@@ -579,8 +583,10 @@ fn assert_native_amx_execution_context(
 
 async fn wait_for_all_peers_to_observe_block(
     network: &sandbox::SerializedNetwork,
+    transaction: &SignedTransaction,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
     expected_block_hash: HashOf<Header>,
+    expected_receipt: &NativeAmxReceipt,
 ) -> Result<()> {
     for (index, peer) in network.peers().iter().enumerate() {
         let peer_block = wait_for_block_with_entrypoint(
@@ -593,8 +599,281 @@ async fn wait_for_all_peers_to_observe_block(
             peer_block.hash() == expected_block_hash,
             "peer {index} committed a different block for native AMX tx"
         );
+        let peer_receipt = assert_native_amx_execution_context(&peer_block, transaction)?;
+        ensure!(
+            peer_receipt == *expected_receipt,
+            "peer {index} committed different native AMX receipt identity/QCs/legs"
+        );
     }
     Ok(())
+}
+
+fn audit_native_amx_relay(
+    relay: &LaneRelayEnvelope,
+    expected_commitment: &LaneBlockCommitment,
+    expected_receipt: &NativeAmxReceipt,
+) -> Result<()> {
+    relay
+        .verify()
+        .wrap_err("downstream lane relay verification rejected envelope")?;
+    nexus::verify_lane_relay_envelopes(std::slice::from_ref(relay))
+        .wrap_err("downstream lane relay audit rejected envelope")?;
+    ensure!(
+        relay.settlement_commitment == *expected_commitment,
+        "relay settlement commitment differs from the finalized lane commitment"
+    );
+    ensure!(
+        relay
+            .settlement_commitment
+            .native_amx_receipts
+            .iter()
+            .filter(|receipt| receipt.source_id == expected_receipt.source_id)
+            .count()
+            == 1,
+        "relay must contain exactly one receipt for the finalized native AMX source"
+    );
+    ensure!(
+        relay
+            .settlement_commitment
+            .native_amx_receipts
+            .iter()
+            .any(|receipt| receipt == expected_receipt),
+        "relay changed native AMX receipt identity, phases, QCs, legs, bitmap, or signature"
+    );
+    Ok(())
+}
+
+fn assert_native_amx_relay_tamper_rejected<F>(
+    label: &str,
+    baseline: &LaneRelayEnvelope,
+    expected_commitment: &LaneBlockCommitment,
+    expected_receipt: &NativeAmxReceipt,
+    mutate: F,
+) -> Result<()>
+where
+    F: FnOnce(&mut NativeAmxReceipt),
+{
+    let mut tampered = baseline.clone();
+    let receipt = tampered
+        .settlement_commitment
+        .native_amx_receipts
+        .iter_mut()
+        .find(|receipt| receipt.source_id == expected_receipt.source_id)
+        .ok_or_else(|| eyre!("{label}: baseline relay omitted expected receipt"))?;
+    mutate(receipt);
+    tampered.settlement_hash = compute_settlement_hash(&tampered.settlement_commitment)?;
+    ensure!(
+        audit_native_amx_relay(&tampered, expected_commitment, expected_receipt).is_err(),
+        "{label}: downstream audit accepted a recomputed tampered relay"
+    );
+    Ok(())
+}
+
+fn assert_native_amx_relay_tamper_matrix(
+    relay: &LaneRelayEnvelope,
+    expected_receipt: &NativeAmxReceipt,
+) -> Result<()> {
+    ensure!(
+        expected_receipt.legs.first().is_some_and(|leg| {
+            !leg.prepare_qc.signers_bitmap.is_empty()
+                && !leg.prepare_qc.bls_aggregate_signature.is_empty()
+        }),
+        "tamper matrix requires a receipt with non-empty QC bitmap and signature evidence"
+    );
+    let expected_commitment = &relay.settlement_commitment;
+    assert_native_amx_relay_tamper_rejected(
+        "source identity tamper",
+        relay,
+        expected_commitment,
+        expected_receipt,
+        |receipt| receipt.source_id[0] ^= 0x01,
+    )?;
+    assert_native_amx_relay_tamper_rejected(
+        "plan digest tamper",
+        relay,
+        expected_commitment,
+        expected_receipt,
+        |receipt| receipt.plan_digest = Hash::new(b"tampered native AMX plan"),
+    )?;
+    assert_native_amx_relay_tamper_rejected(
+        "block height tamper",
+        relay,
+        expected_commitment,
+        expected_receipt,
+        |receipt| receipt.block_height = receipt.block_height.saturating_add(1),
+    )?;
+    assert_native_amx_relay_tamper_rejected(
+        "coordinator lane tamper",
+        relay,
+        expected_commitment,
+        expected_receipt,
+        |receipt| receipt.lane_id = LaneId::new(receipt.lane_id.as_u32().saturating_add(1)),
+    )?;
+    assert_native_amx_relay_tamper_rejected(
+        "coordinator dataspace tamper",
+        relay,
+        expected_commitment,
+        expected_receipt,
+        |receipt| {
+            receipt.dataspace_id =
+                DataSpaceId::new(receipt.dataspace_id.as_u64().saturating_add(1));
+        },
+    )?;
+    assert_native_amx_relay_tamper_rejected(
+        "participant leg tamper",
+        relay,
+        expected_commitment,
+        expected_receipt,
+        |receipt| {
+            receipt.legs[0].lane_id =
+                LaneId::new(receipt.legs[0].lane_id.as_u32().saturating_add(1));
+        },
+    )?;
+    assert_native_amx_relay_tamper_rejected(
+        "QC phase tamper",
+        relay,
+        expected_commitment,
+        expected_receipt,
+        |receipt| receipt.legs[0].prepare_qc.body.phase = NativeAmxPhase::Commit,
+    )?;
+    assert_native_amx_relay_tamper_rejected(
+        "QC plan digest tamper",
+        relay,
+        expected_commitment,
+        expected_receipt,
+        |receipt| {
+            receipt.legs[0].prepare_qc.body.plan_digest = Hash::new(b"tampered native AMX QC plan");
+        },
+    )?;
+    assert_native_amx_relay_tamper_rejected(
+        "QC entrypoint hash tamper",
+        relay,
+        expected_commitment,
+        expected_receipt,
+        |receipt| {
+            receipt.legs[0].prepare_qc.body.tx_entrypoint_hash =
+                HashOf::from_untyped_unchecked(Hash::new(b"tampered native AMX entrypoint"));
+        },
+    )?;
+    assert_native_amx_relay_tamper_rejected(
+        "QC validator-set digest tamper",
+        relay,
+        expected_commitment,
+        expected_receipt,
+        |receipt| {
+            receipt.legs[0].prepare_qc.validator_set_hash =
+                HashOf::from_untyped_unchecked(Hash::new(b"tampered native AMX validators"));
+        },
+    )?;
+    assert_native_amx_relay_tamper_rejected(
+        "QC bitmap tamper",
+        relay,
+        expected_commitment,
+        expected_receipt,
+        |receipt| receipt.legs[0].prepare_qc.signers_bitmap[0] ^= 0x01,
+    )?;
+    assert_native_amx_relay_tamper_rejected(
+        "QC signature tamper",
+        relay,
+        expected_commitment,
+        expected_receipt,
+        |receipt| receipt.legs[0].prepare_qc.bls_aggregate_signature[0] ^= 0x01,
+    )?;
+    Ok(())
+}
+
+async fn wait_for_status_native_amx_evidence(
+    client: &Client,
+    receipt: &NativeAmxReceipt,
+    context: &str,
+) -> Result<(LaneBlockCommitment, LaneRelayEnvelope)> {
+    let started = Instant::now();
+    let mut last_error: Option<String> = None;
+    while started.elapsed() <= STATUS_WAIT_TIMEOUT {
+        let client = client.clone();
+        match spawn_blocking(move || client.get_sumeragi_status_wire()).await {
+            Ok(Ok(status)) => {
+                let commitment = status
+                    .lane_settlement_commitments
+                    .iter()
+                    .find(|commitment| {
+                        commitment
+                            .native_amx_receipts
+                            .iter()
+                            .any(|candidate| candidate == receipt)
+                    })
+                    .cloned();
+                let relay = status
+                    .lane_relay_envelopes
+                    .iter()
+                    .find(|relay| {
+                        relay
+                            .settlement_commitment
+                            .native_amx_receipts
+                            .iter()
+                            .any(|candidate| candidate == receipt)
+                    })
+                    .cloned();
+                if let (Some(commitment), Some(relay)) = (commitment, relay) {
+                    audit_native_amx_relay(&relay, &commitment, receipt)?;
+                    return Ok((commitment, relay));
+                }
+                last_error =
+                    Some("typed status omitted the exact commitment or relay receipt".to_owned());
+            }
+            Ok(Err(err)) => last_error = Some(err.to_string()),
+            Err(err) => last_error = Some(format!("status task join error: {err}")),
+        }
+        sleep(STATUS_POLL_INTERVAL).await;
+    }
+    let suffix = last_error
+        .map(|err| format!("; last status error: {err}"))
+        .unwrap_or_default();
+    Err(eyre!(
+        "{context}: timed out waiting for exact native AMX commitment and relay evidence{suffix}"
+    ))
+}
+
+async fn wait_for_all_peers_to_observe_native_amx_evidence(
+    network: &sandbox::SerializedNetwork,
+    transaction: &SignedTransaction,
+    expected_block_hash: HashOf<Header>,
+    expected_receipt: &NativeAmxReceipt,
+    context: &str,
+) -> Result<LaneRelayEnvelope> {
+    wait_for_all_peers_to_observe_block(
+        network,
+        transaction,
+        transaction.hash_as_entrypoint(),
+        expected_block_hash,
+        expected_receipt,
+    )
+    .await?;
+
+    let mut canonical: Option<(LaneBlockCommitment, LaneRelayEnvelope)> = None;
+    for (index, peer) in network.peers().iter().enumerate() {
+        let observed = wait_for_status_native_amx_evidence(
+            &peer.client(),
+            expected_receipt,
+            &format!("{context}: peer {index} status"),
+        )
+        .await?;
+        if let Some((canonical_commitment, canonical_relay)) = canonical.as_ref() {
+            ensure!(
+                observed.0 == *canonical_commitment,
+                "peer {index} exposed a different settlement commitment or native AMX QCs"
+            );
+            ensure!(
+                observed.1.settlement_commitment == canonical_relay.settlement_commitment,
+                "peer {index} relay changed the exact native AMX settlement evidence"
+            );
+        } else {
+            canonical = Some(observed);
+        }
+    }
+    canonical
+        .map(|(_, relay)| relay)
+        .ok_or_else(|| eyre!("{context}: four-peer network returned no native AMX relay"))
 }
 
 async fn fetch_sumeragi_status_json(client: &Client) -> Result<JsonValue> {
@@ -830,8 +1109,15 @@ async fn mixed_dataspace_native_amx_routes_and_commits_with_receipts() -> Result
         let committed_block =
             wait_for_block_with_entrypoint(&submitter, entrypoint_hash, context).await?;
         let receipt = assert_native_amx_execution_context(&committed_block, &transaction)?;
-        wait_for_all_peers_to_observe_block(&network, entrypoint_hash, committed_block.hash())
-            .await?;
+        let relay = wait_for_all_peers_to_observe_native_amx_evidence(
+            &network,
+            &transaction,
+            committed_block.hash(),
+            &receipt,
+            context,
+        )
+        .await?;
+        assert_native_amx_relay_tamper_matrix(&relay, &receipt)?;
         wait_for_status_native_amx_receipt(&submitter, &receipt, context).await?;
 
         submitter.submit::<InstructionBox>(
@@ -900,7 +1186,7 @@ async fn native_amx_queue_journal_replays_plan_after_restart() -> Result<()> {
 
         let restarted_client =
             admitting_peer.client_for(&ALICE_ID, PrivateKey::clone(ALICE_KEYPAIR.private_key()));
-        let maybe_block = timeout(
+        let block = timeout(
             STATUS_WAIT_TIMEOUT,
             wait_for_block_with_entrypoint(
                 &restarted_client,
@@ -908,24 +1194,21 @@ async fn native_amx_queue_journal_replays_plan_after_restart() -> Result<()> {
                 "journal replay after restart",
             ),
         )
-        .await;
-
-        match maybe_block {
-            Ok(Ok(block)) => {
-                let _receipt = assert_native_amx_execution_context(&block, &transaction)?;
-                wait_for_all_peers_to_observe_block(&network, entrypoint_hash, block.hash())
-                    .await?;
-            }
-            Ok(Err(_)) | Err(_) => {
-                let blocks = restarted_client.query(FindBlocks).execute_all()?;
-                ensure!(
-                    !blocks.iter().any(|block| block
-                        .entrypoint_hashes()
-                        .any(|hash| hash == entrypoint_hash)),
-                    "stale native AMX transaction appeared after journal replay timeout"
-                );
-            }
-        }
+        .await
+        .map_err(|_| {
+            eyre!("timed out waiting for journaled native AMX transaction after restart")
+        })??;
+        let receipt = assert_native_amx_execution_context(&block, &transaction)?;
+        let relay = wait_for_all_peers_to_observe_native_amx_evidence(
+            &network,
+            &transaction,
+            block.hash(),
+            &receipt,
+            context,
+        )
+        .await?;
+        assert_native_amx_relay_tamper_matrix(&relay, &receipt)?;
+        wait_for_status_native_amx_receipt(&restarted_client, &receipt, context).await?;
 
         Ok(())
     }

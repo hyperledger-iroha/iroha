@@ -47,6 +47,42 @@ or length verification before runtime construction; and gateway fetch always
 retrieves the manifest and verifies the assembled payload against it. The
 orchestrator tuning docs, plan docs, signed gateway-fetch fixtures, and rollout
 contract pin the fail-closed fetch path.
+`sorafs_fetch` operator numerics are also canonical at the first-release
+boundary: provider spec `#concurrency` and `@weight` fields plus
+`--max-parallel`, `--max-peers`, retry-budget aliases, provider-failure
+threshold, expected payload length, review-clock, and boost-delta flags reject
+zero where nonzero is required, padded decimals, signs, whitespace, duplicate
+boost entries, and overflow before scheduling starts. Telemetry JSON used by
+the fetch scoreboard rejects noncanonical unsigned string fields and
+non-finite metric strings before they can influence provider selection.
+SoraFS capacity transaction-stdin generation now follows the same first-release
+operator-input contract: `sorafs_tx_stdin_builder` rejects duplicate flags,
+noncanonical epoch decimals, uppercase/prefixed/mis-sized order ids, and
+all-zero completion order ids before emitting ledger transaction JSON.
+`sorafs_manifest_stub capacity` now keeps the capacity marketplace staging
+surface on that same fail-closed boundary: declaration epoch overrides, numeric
+string fields across declaration/telemetry/replication/dispute specs, fixed and
+variable public hex fields, completion order IDs, and dispute-kind labels reject
+noncanonical forms before Norito, base64, summary, or Torii request outputs are
+written.
+SoraFS chunk-store ingestion CLIs now follow that same boundary:
+`sorafs_chunk_store` and `sorafs_manifest_chunk_store` reject noncanonical
+profile ids, whitespace-padded profile handles, zero or padded PoR sample
+counts, uppercase/padded sample seeds, and noncanonical shared
+`--por-proof=chunk:segment:leaf` indices before building chunk metadata,
+persisting chunks, or emitting PoR proof artifacts.
+`sorafs_manifest_stub` top-level manifest generation now mirrors that
+first-release operator-input contract as well: externally supplied DAG codec,
+expected CAR size, chunker profile id, replica count, retention epoch, PoR
+sample count/seed, and shared PoR proof indices reject padded, signed,
+whitespace-bearing, uppercase-hex, or overflowed forms before manifest, CAR, or
+PoR artifacts are emitted, and chunker profile handles are no longer silently
+trimmed.
+`sorafs_manifest_stub provider-admission proposal` now applies the same strict
+boundary to provider onboarding inputs: chunker profile handles, uppercase
+jurisdiction codes, capability payloads, stream budgets, and transport hints
+reject whitespace-padded, empty, padded numeric, uppercase-hex, and malformed
+SoraNet-level forms before proposal bytes are emitted.
 
 SoraFS governance node CID binding is mandatory on public reference-validator
 paths. The C FFI no longer treats `expected_cid_len = 0` as a request to skip
@@ -124,6 +160,53 @@ The Android SoraFS codegen replay fixture now derives its `generated_at`
 metadata from the reviewed fixture `now_unix_secs` instead of process wall
 clock time, so replayed tracked SDK fixture examples are deterministic across
 operator hosts.
+The Rust SoraFS orchestrator CLI now uses canonical numeric parsing for shared
+integer and decimal flags, rejecting padded, plus-prefixed, leading-zero, and
+otherwise noncanonical operator values before command execution.
+SoraFS chunker operator CLIs now mirror that fail-closed boundary:
+`sorafs-chunk-dump` rejects noncanonical size and break-mask tokens, and
+`sorafs_chunk_digest` returns operator-visible errors for empty or mismatched
+digest replay inputs instead of panicking.
+The chunker fixture exporter also keeps the signed fixture path fail-closed:
+`export_vectors` rejects noncanonical signing keys and expected signer keys
+instead of trimming, prefix-stripping, or lowercasing operator input, and
+existing `manifest_signatures.json` files must carry lowercase fixed-width
+nonzero signer and signature hex before verification.
+SoraFS provider advertisement construction now uses the same canonical numeric
+boundary for top-level advert flags and embedded range/stream/transport
+capability fields, rejecting padded, whitespace-bearing, uppercase-hex, and
+empty comma-entry operator inputs before signed advert emission.
+Provider advert byte material now applies the same exact first-release boundary:
+fixed provider and stake-pool identifiers must be exactly 32 lowercase hex bytes
+instead of being left-padded, and capability payloads, endpoint metadata,
+signing keys, public keys, and signatures must be lowercase even-length
+prefix-free hex before any advert/report/key output is opened.
+`sorafs_cli manifest sign` now shares that fail-closed boundary for
+`--issued-at`, rejects pre-epoch host clocks as operator-visible errors, and
+returns a normal missing-digest diagnostic if required chunk digest resolution
+regresses before bundle or signature generation.
+The DA reconstruction harness now keeps fixture replay inputs fail-closed too:
+text manifest files must be canonical lowercase, even-length, prefix-free,
+whitespace-free hex before Norito decoding, and `--chunk-template` renders are
+preflighted as bounded single-component filenames under `--chunks-dir` before
+any output descriptor is opened.
+`taikai_car` now applies the same first-release metadata boundary to Taikai
+segment bundling: bitrate, segment sequence, timestamps, duration,
+ingest-latency, live-edge drift, and summary-entry values reject noncanonical
+decimal encodings before CAR/envelope generation, manifest hashes and storage
+tickets require lowercase fixed-width nonzero hex, and summary-seed
+`ingest_latency_ms` overflow fails instead of truncating into sealed metadata.
+`sorafs_cli taikai bundle` now enforces that same boundary before invoking the
+bundler: Taikai numeric flags reject padded, signed-where-unsigned,
+plus-prefixed, whitespace-bearing, non-decimal, and overflowed forms, bitrate
+and segment duration must be positive, manifest hashes and storage tickets must
+be lowercase fixed-width nonzero hex, and track-kind labels must be canonical
+lowercase before any CAR/envelope/index/ingest/summary artifact is written.
+`soranet_trustless_verifier --validation-outcome` now keeps reviewed replay
+timestamps canonical: `--generated-at` must be a positive non-padded decimal
+token, overflow and whitespace/sign-prefixed values fail before outcome JSON is
+written, and the flag is rejected in summary mode instead of being silently
+ignored.
 
 SoraFS aggregate production-readiness metadata checks now keep their
 adversarial anchor matrices tied to the configured owner-kind maps. Every

@@ -78,7 +78,7 @@ locally generated council-signed envelope for smoke runs.
 ```bash
 sorafs-fetch \
   --plan=fixtures/chunk_fetch_specs.json \
-  --gateway-provider=name=staging,provider-id=<hex>,base-url=https://gw-stage.example/,stream-token=<base64> \
+  --gateway-provider=name=staging,provider-id=<hex>,gateway-key=<ed25519-public-key-hex>,base-url=https://gw-stage.example/,stream-token=<base64> \
   --gateway-manifest-id=<manifest_id_hex> \
   --gateway-chunker-handle=sorafs.sf1@1.0.0 \
   --json-out=reports/staging_gateway.json

@@ -98,6 +98,30 @@ use nonzero_ext::nonzero;
 use norito::to_bytes;
 use sha2::{Digest as _, Sha256};
 
+fn native_amx_request_for_test(
+    body: iroha_data_model::block::consensus::NativeAmxAttestationBodyV1,
+) -> crate::native_amx::NativeAmxAttestationRequestV1 {
+    crate::native_amx::NativeAmxAttestationRequestV1 {
+        plan_legs: vec![
+            crate::queue::RouteLeg::new(
+                crate::queue::RoutingDecision::new(
+                    body.coordinator_lane_id,
+                    body.coordinator_dataspace_id,
+                ),
+                crate::queue::RouteLegRole::Coordinator,
+            ),
+            crate::queue::RouteLeg::new(
+                crate::queue::RoutingDecision::new(
+                    body.participant_lane_id,
+                    body.participant_dataspace_id,
+                ),
+                crate::queue::RouteLegRole::Participant,
+            ),
+        ],
+        body,
+    }
+}
+
 use super::propose::ProposalBackpressure;
 use super::{
     super::rbc_store::{SessionKey, SoftwareManifest},
@@ -1442,6 +1466,7 @@ fn sample_lane_relay_envelope_with_bitmap(
     let settlement = LaneBlockCommitment {
         block_height: height,
         lane_id,
+        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id: DataSpaceId::UNIVERSAL,
         tx_count: 1,
         total_local_micro: 1,
@@ -1593,6 +1618,14 @@ fn sample_lane_payload_ownership_status(
         proposal_view: 3,
         lane_id,
         dataspace_id,
+        lane_incarnation: Hash::new(
+            format!(
+                "main-loop-status-incarnation:{}:{}",
+                lane_id.as_u32(),
+                dataspace_id.as_u64()
+            )
+            .as_bytes(),
+        ),
         lane_block_height: 777,
         lane_block_view: 2,
         subject_hash: Hash::prehashed([0x51; Hash::LENGTH]),
@@ -1760,6 +1793,7 @@ fn block_with_lane_payload_transactions(
         proposal_view,
         lane_id,
         dataspace_id,
+        lane_incarnation: Hash::new(format!("{preimage}:incarnation").as_bytes()),
         lane_block_height,
         lane_block_view: proposal_view,
         subject_hash: Hash::new(preimage.as_bytes()),
@@ -4115,6 +4149,7 @@ fn handshake_fingerprint_uses_wsv_params_for_npos() {
     let state = State::new_for_testing(world, Arc::clone(&kura), LiveQueryStore::start_test());
     let view = state.view();
     let config_caps = ConsensusConfigCaps {
+        nexus_policy_digest: [0u8; 32],
         collectors_k: 0,
         redundant_send_r: 0,
         da_enabled: false,
@@ -4274,6 +4309,7 @@ fn handshake_fingerprint_uses_chain_seed_without_npos_params() {
     let state = State::new_for_testing(world, Arc::clone(&kura), LiveQueryStore::start_test());
     let view = state.view();
     let config_caps = ConsensusConfigCaps {
+        nexus_policy_digest: [0u8; 32],
         collectors_k: 0,
         redundant_send_r: 0,
         da_enabled: false,
@@ -4486,6 +4522,81 @@ async fn real_network_opt_in_is_ignored_on_current_thread() {
         !real_network_allowed_for_tests(true),
         "current-thread runtime should not attempt real networking in tests"
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn recompute_consensus_caps_reads_live_nexus_policy() {
+    let baseline = test_actor_harness(4).await;
+    let before = baseline
+        .actor
+        .recompute_consensus_caps()
+        .expect("default Nexus policy digest");
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let updated = test_actor_harness_with_config_and_height_and_kura_and_state_setup(
+        4,
+        consensus_cfg,
+        None,
+        0,
+        Kura::blank_kura_for_testing(),
+        |state, _| {
+            let mut nexus = state.nexus_snapshot();
+            nexus.autoscale.target_block_ms =
+                NonZeroU64::new(nexus.autoscale.target_block_ms.get().saturating_add(1))
+                    .expect("nonzero autoscale target");
+            state
+                .set_nexus(nexus)
+                .expect("install updated Nexus policy");
+        },
+    )
+    .await;
+    let after = updated
+        .actor
+        .recompute_consensus_caps()
+        .expect("updated Nexus policy digest");
+    assert_ne!(before.nexus_policy_digest, after.nexus_policy_digest);
+
+    baseline.shutdown.send();
+    updated.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn recompute_consensus_caps_binds_compliance_engine_stably() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let harness = test_actor_harness_with_config_and_height_and_kura_and_state_setup(
+        4,
+        consensus_cfg,
+        None,
+        0,
+        Kura::blank_kura_for_testing(),
+        |state, _| {
+            let mut nexus = state.nexus_snapshot();
+            nexus.compliance.enabled = true;
+            nexus.compliance.audit_only = false;
+            state
+                .set_nexus(nexus)
+                .expect("install compliance-enabled Nexus policy");
+            let engine = crate::compliance::LaneComplianceEngine::from_policies(Vec::new(), false)
+                .expect("empty deterministic compliance fixture");
+            state.install_lane_compliance_engine(Some(Arc::new(engine)));
+        },
+    )
+    .await;
+
+    let first = harness
+        .actor
+        .recompute_consensus_caps()
+        .expect("compliance-enabled policy digest");
+    let second = harness
+        .actor
+        .recompute_consensus_caps()
+        .expect("stable compliance-enabled policy digest");
+    assert_eq!(first.nexus_policy_digest, second.nexus_policy_digest);
+
+    harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -7819,7 +7930,12 @@ async fn merge_committee_signatures_commit_merge_entry() {
     assert!(!entry.merge_qc.aggregate_signature.is_empty());
 
     let candidate = crate::merge::MergeLedgerCandidate::from(entry.as_ref());
-    let expected = crate::merge::merge_qc_message_digest(&actor.chain_id, &candidate);
+    let expected = crate::merge::merge_qc_message_digest(
+        &actor.chain_id,
+        &candidate,
+        entry.merge_qc.validator_set_hash_version,
+        entry.merge_qc.validator_set_hash,
+    );
     assert_eq!(entry.merge_qc.message_digest, expected);
     harness.shutdown.send();
 }
@@ -7907,7 +8023,19 @@ async fn merge_committee_accepts_remote_signature() {
     let candidates = actor.state.merge_entry_candidates_from_lane_relays();
     assert_eq!(candidates.len(), 1);
     let candidate = &candidates[0];
-    let message_digest = crate::merge::merge_qc_message_digest(&actor.chain_id, candidate);
+    let validator_set = actor
+        .state
+        .commit_topology
+        .view()
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    let message_digest = crate::merge::merge_qc_message_digest(
+        &actor.chain_id,
+        candidate,
+        iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+        HashOf::new(&validator_set),
+    );
     let inert_merge_signature = MergeCommitteeSignature {
         epoch_id: candidate.epoch_id,
         view: 0,
@@ -109275,6 +109403,7 @@ fn message_projection_helpers_match_formal_gate() {
 
     let native_amx_body = |phase: NativeAmxPhase| {
         iroha_data_model::block::consensus::NativeAmxAttestationBodyV1 {
+            chain_id_hash: Hash::new(b"native-amx-message-test-chain"),
             source_id: [0x77; iroha_crypto::Hash::LENGTH],
             tx_entrypoint_hash:
                 HashOf::<iroha_data_model::transaction::TransactionEntrypoint>::from_untyped_unchecked(
@@ -109284,9 +109413,14 @@ fn message_projection_helpers_match_formal_gate() {
             phase,
             coordinator_lane_id: LaneId::new(1),
             coordinator_dataspace_id: DataSpaceId::new(7),
+            coordinator_lane_incarnation: Hash::new(b"native-amx-message-coordinator"),
             participant_lane_id: LaneId::new(2),
             participant_dataspace_id: DataSpaceId::new(8),
-            planned_coordinator_block_height: 42,
+            participant_lane_incarnation: Hash::new(b"native-amx-message-participant"),
+            authority_context_height: 42,
+            coordinator_lane_block_height: 9,
+            coordinator_lane_block_view: 3,
+            coordinator_proposal_hash: Hash::new(b"native-amx-message-proposal"),
         }
     };
     let native_amx_vote = |phase: NativeAmxPhase| crate::native_amx::NativeAmxVoteV1 {
@@ -109296,8 +109430,8 @@ fn message_projection_helpers_match_formal_gate() {
     };
     let native_amx_cases = [
         (
-            crate::native_amx::NativeAmxMessage::PrepareRequest(native_amx_body(
-                NativeAmxPhase::Prepare,
+            crate::native_amx::NativeAmxMessage::PrepareRequest(native_amx_request_for_test(
+                native_amx_body(NativeAmxPhase::Prepare),
             )),
             "NativeAmxPrepareRequest",
         ),
@@ -109308,8 +109442,8 @@ fn message_projection_helpers_match_formal_gate() {
             "NativeAmxPrepareVote",
         ),
         (
-            crate::native_amx::NativeAmxMessage::CommitRequest(native_amx_body(
-                NativeAmxPhase::Commit,
+            crate::native_amx::NativeAmxMessage::CommitRequest(native_amx_request_for_test(
+                native_amx_body(NativeAmxPhase::Commit),
             )),
             "NativeAmxCommitRequest",
         ),
@@ -144508,7 +144642,10 @@ async fn proposal_multilane_records_lane_payload_ownership_status() {
         ownership.lane_block_height, 1,
         "without a prior lane-local tip, the first lane block should start at height 1"
     );
-    assert_eq!(ownership.lane_block_view, view);
+    assert_eq!(
+        ownership.lane_block_view, 0,
+        "new lane-local blocks use a stable initial lane view independent of global proposal retries"
+    );
     assert_eq!(ownership.accepted_candidate_indices, vec![0]);
     assert_ne!(
         ownership.payload_ownership_hash, ownership.rbc_instance_hash,
@@ -145082,8 +145219,8 @@ async fn assemble_proposal_emits_two_independent_lane_block_artifacts_without_id
                     && entry.msg_kind == Some("LaneBlockPrepareVote")
             )
             .count(),
-        2,
-        "final assembly should broadcast the local prepare vote for each active lane"
+        0,
+        "prepare votes must wait until the assembled global block is canonical in Kura"
     );
 
     super::status::clear_lane_payload_ownerships();
@@ -145092,7 +145229,7 @@ async fn assemble_proposal_emits_two_independent_lane_block_artifacts_without_id
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn assemble_proposal_defers_lane_work_when_local_leader_is_not_lane_slot_author() {
+async fn assemble_proposal_includes_lane_work_when_local_leader_is_not_lane_validator() {
     use iroha_config::parameters::actual::{
         LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule,
     };
@@ -145321,20 +145458,20 @@ async fn assemble_proposal_defers_lane_work_when_local_leader_is_not_lane_slot_a
     assert!(assembled, "proposal assembly should produce a block");
     assert_eq!(
         actor.queue.queued_len(),
-        1,
-        "assembled proposal should requeue lane work assigned to another lane-slot author"
+        0,
+        "assembled proposal should consume all lane work with authoritative committees"
     );
     assert_eq!(
         actor.subsystems.lane_blocks.len(),
-        1,
-        "final assembly should cache only the locally authorable lane-block proposal"
+        2,
+        "final assembly should cache one lane-block proposal per active lane"
     );
 
     let ownerships = super::status::lane_payload_ownerships_snapshot();
     assert_eq!(
         ownerships.len(),
-        1,
-        "final status should expose only the locally authorable lane-block handoff"
+        2,
+        "final status should expose every lane-block handoff included in the proposal"
     );
     let ownerships_by_lane = ownerships
         .iter()
@@ -145343,15 +145480,20 @@ async fn assemble_proposal_defers_lane_work_when_local_leader_is_not_lane_slot_a
     let lane1_ownership = ownerships_by_lane
         .get(&lane1.lane_id)
         .expect("lane1 ownership");
-    assert!(
-        ownerships_by_lane.get(&lane2.lane_id).is_none(),
-        "lane2 ownership must not be published when the local leader is not the lane-slot author"
-    );
+    let lane2_ownership = ownerships_by_lane
+        .get(&lane2.lane_id)
+        .expect("lane2 ownership");
     assert!(
         lane1_ownership
             .lane_block_descriptor_validator_set
             .contains(&local_peer_id),
         "lane1 descriptor should bind a committee containing the local peer"
+    );
+    assert!(
+        !lane2_ownership
+            .lane_block_descriptor_validator_set
+            .contains(&local_peer_id),
+        "lane2 descriptor should bind its lane committee without adding the global proposer"
     );
     for ownership in ownerships {
         ownership
@@ -145368,8 +145510,8 @@ async fn assemble_proposal_defers_lane_work_when_local_leader_is_not_lane_slot_a
                     && entry.msg_kind == Some("LaneBlockProposal")
             )
             .count(),
-        1,
-        "final assembly should broadcast only the locally authorable lane-block proposal"
+        2,
+        "final assembly should broadcast a lane-block proposal for each active lane"
     );
     assert_eq!(
         entries
@@ -145380,7 +145522,7 @@ async fn assemble_proposal_defers_lane_work_when_local_leader_is_not_lane_slot_a
             )
             .count(),
         1,
-        "final assembly must broadcast the local prepare vote for the authorable lane"
+        "final assembly must only broadcast prepare votes signed by a lane committee member"
     );
 
     super::status::clear_lane_payload_ownerships();
@@ -145648,7 +145790,10 @@ async fn proposal_multilane_uses_lane_relay_tip_for_payload_ownership_status() {
         ownership.lane_block_height, height,
         "a lane with relay history must not fall back to the global compatibility height"
     );
-    assert_eq!(ownership.lane_block_view, view);
+    assert_eq!(
+        ownership.lane_block_view, 0,
+        "new lane-local blocks use a stable initial lane view independent of global proposal retries"
+    );
     assert_eq!(
         ownership.previous_lane_block_descriptor_hash,
         Some(relay_descriptor_hash),
@@ -146299,7 +146444,10 @@ async fn proposal_multilane_uses_lane_artifact_tip_for_payload_ownership_status(
         ownership.lane_block_height, height,
         "a lane with artifact history must not fall back to the global compatibility height"
     );
-    assert_eq!(ownership.lane_block_view, view);
+    assert_eq!(
+        ownership.lane_block_view, 0,
+        "new lane-local blocks use a stable initial lane view independent of global proposal retries"
+    );
     assert_eq!(
         ownership.previous_lane_block_descriptor_hash, artifact_descriptor_hash,
         "artifact tip metadata must bind the new lane block to the previous descriptor"
@@ -146455,7 +146603,7 @@ async fn proposal_multilane_floors_lane_payload_ownership_status_at_reset_waterm
         .state
         .da_shard_cursors
         .write()
-        .mark_lanes_reset(&BTreeSet::from([lane1.lane_id]), reset_height);
+        .mark_lanes_canonically_reset(&BTreeSet::from([lane1.lane_id]), reset_height);
     assert!(
         actor
             .state
@@ -146550,7 +146698,10 @@ async fn proposal_multilane_floors_lane_payload_ownership_status_at_reset_waterm
         ownership.lane_block_height, height,
         "reset-aware lane-local ownership should not fall back to the global compatibility height"
     );
-    assert_eq!(ownership.lane_block_view, view);
+    assert_eq!(
+        ownership.lane_block_view, 0,
+        "new lane-local blocks use a stable initial lane view independent of global proposal retries"
+    );
     assert_eq!(
         ownership.previous_lane_block_descriptor_hash, None,
         "reset-floored proposal tips must not carry stale old-incarnation artifact descriptor hashes"
@@ -146564,7 +146715,7 @@ async fn proposal_multilane_floors_lane_payload_ownership_status_at_reset_waterm
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn proposal_multilane_defers_lane_work_when_local_leader_is_not_lane_slot_author() {
+async fn proposal_multilane_keeps_lane_work_when_local_leader_is_not_lane_validator() {
     use iroha_config::parameters::actual::{
         LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule,
     };
@@ -146768,39 +146919,61 @@ async fn proposal_multilane_defers_lane_work_when_local_leader_is_not_lane_slot_
 
     assert_eq!(
         tx_guards.len(),
-        1,
-        "proposal selection should keep locally authorable lane work"
+        2,
+        "proposal selection should keep work for every lane with an authoritative committee"
     );
-    assert_eq!(tx_guards[0].as_accepted().hash(), lane1_hash);
-    assert_eq!(tx_guards[0].routing(), lane1);
-    assert_eq!(
-        deferred.len(),
-        1,
-        "proposal selection should defer only the lane assigned to another lane-slot author"
+    let accepted_by_hash = tx_guards
+        .iter()
+        .map(|guard| (guard.as_accepted().hash(), guard.routing()))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(accepted_by_hash.get(&lane1_hash), Some(&lane1));
+    assert_eq!(accepted_by_hash.get(&lane2_hash), Some(&lane2));
+    assert!(
+        deferred.is_empty(),
+        "lane work should not be requeued merely because the global proposer is outside that lane committee"
     );
-    assert_eq!(deferred[0].0.hash(), lane2_hash);
-    assert_eq!(deferred[0].1.coordinator_route(), lane2);
 
     let ownerships = super::status::lane_payload_ownerships_snapshot();
     assert_eq!(
         ownerships.len(),
-        1,
-        "planned ownership status should describe only accepted local-author lane work"
+        2,
+        "planned ownership status should describe both accepted lane handoffs"
     );
-    let ownership = &ownerships[0];
-    assert_eq!(ownership.proposal_height, height);
-    assert_eq!(ownership.proposal_view, view);
-    assert_eq!(ownership.lane_id, lane1.lane_id);
-    assert_eq!(ownership.dataspace_id, lane1.dataspace_id);
+    let ownerships_by_lane = ownerships
+        .iter()
+        .map(|ownership| (ownership.lane_id, ownership))
+        .collect::<BTreeMap<_, _>>();
+    let lane1_ownership = ownerships_by_lane
+        .get(&lane1.lane_id)
+        .expect("lane1 ownership");
+    let lane2_ownership = ownerships_by_lane
+        .get(&lane2.lane_id)
+        .expect("lane2 ownership");
+    for ownership in [lane1_ownership, lane2_ownership] {
+        assert_eq!(ownership.proposal_height, height);
+        assert_eq!(ownership.proposal_view, view);
+    }
+    assert_eq!(lane1_ownership.dataspace_id, lane1.dataspace_id);
+    assert_eq!(lane2_ownership.dataspace_id, lane2.dataspace_id);
     assert_eq!(
-        ownership.accepted_transaction_hashes,
+        lane1_ownership.accepted_transaction_hashes,
         vec![Hash::from(lane1_hash)]
     );
+    assert_eq!(
+        lane2_ownership.accepted_transaction_hashes,
+        vec![Hash::from(lane2_hash)]
+    );
     assert!(
-        ownership
+        lane1_ownership
             .lane_block_descriptor_validator_set
             .contains(&local_peer_id),
-        "lane ownership descriptor must include the local author"
+        "lane1 descriptor should bind a committee containing the local signer"
+    );
+    assert!(
+        !lane2_ownership
+            .lane_block_descriptor_validator_set
+            .contains(&local_peer_id),
+        "lane2 descriptor should bind its lane committee without adding the global proposer"
     );
 
     drop(tx_guards);
@@ -191428,20 +191601,29 @@ fn background_dispatch_formal_gate_matrix() {
 
     fn native_amx_message() -> crate::native_amx::NativeAmxMessage {
         crate::native_amx::NativeAmxMessage::PrepareRequest(
-            iroha_data_model::block::consensus::NativeAmxAttestationBodyV1 {
-                source_id: [0x63; iroha_crypto::Hash::LENGTH],
-                tx_entrypoint_hash:
-                    HashOf::<iroha_data_model::transaction::TransactionEntrypoint>::from_untyped_unchecked(
-                        Hash::prehashed([0x64; Hash::LENGTH]),
+            native_amx_request_for_test(
+                iroha_data_model::block::consensus::NativeAmxAttestationBodyV1 {
+                    chain_id_hash: Hash::new(b"native-amx-message-test-chain"),
+                    source_id: [0x63; iroha_crypto::Hash::LENGTH],
+                    tx_entrypoint_hash: HashOf::<
+                        iroha_data_model::transaction::TransactionEntrypoint,
+                    >::from_untyped_unchecked(
+                        Hash::prehashed([0x64; Hash::LENGTH])
                     ),
-                plan_digest: Hash::new(b"background-dispatch-formal-gate"),
-                phase: iroha_data_model::block::consensus::NativeAmxPhase::Prepare,
-                coordinator_lane_id: LaneId::new(1),
-                coordinator_dataspace_id: DataSpaceId::new(7),
-                participant_lane_id: LaneId::new(2),
-                participant_dataspace_id: DataSpaceId::new(8),
-                planned_coordinator_block_height: 42,
-            },
+                    plan_digest: Hash::new(b"background-dispatch-formal-gate"),
+                    phase: iroha_data_model::block::consensus::NativeAmxPhase::Prepare,
+                    coordinator_lane_id: LaneId::new(1),
+                    coordinator_dataspace_id: DataSpaceId::new(7),
+                    coordinator_lane_incarnation: Hash::new(b"native-amx-message-coordinator"),
+                    participant_lane_id: LaneId::new(2),
+                    participant_dataspace_id: DataSpaceId::new(8),
+                    participant_lane_incarnation: Hash::new(b"native-amx-message-participant"),
+                    authority_context_height: 42,
+                    coordinator_lane_block_height: 9,
+                    coordinator_lane_block_view: 3,
+                    coordinator_proposal_hash: Hash::new(b"native-amx-message-proposal"),
+                },
+            ),
         )
     }
 
@@ -191705,20 +191887,29 @@ fn background_bypass_formal_gate_matrix() {
 
     fn native_amx_message() -> crate::native_amx::NativeAmxMessage {
         crate::native_amx::NativeAmxMessage::PrepareRequest(
-            iroha_data_model::block::consensus::NativeAmxAttestationBodyV1 {
-                source_id: [0x73; iroha_crypto::Hash::LENGTH],
-                tx_entrypoint_hash:
-                    HashOf::<iroha_data_model::transaction::TransactionEntrypoint>::from_untyped_unchecked(
-                        Hash::prehashed([0x74; Hash::LENGTH]),
+            native_amx_request_for_test(
+                iroha_data_model::block::consensus::NativeAmxAttestationBodyV1 {
+                    chain_id_hash: Hash::new(b"native-amx-message-test-chain"),
+                    source_id: [0x73; iroha_crypto::Hash::LENGTH],
+                    tx_entrypoint_hash: HashOf::<
+                        iroha_data_model::transaction::TransactionEntrypoint,
+                    >::from_untyped_unchecked(
+                        Hash::prehashed([0x74; Hash::LENGTH])
                     ),
-                plan_digest: Hash::new(b"background-bypass-formal-gate"),
-                phase: iroha_data_model::block::consensus::NativeAmxPhase::Prepare,
-                coordinator_lane_id: LaneId::new(1),
-                coordinator_dataspace_id: DataSpaceId::new(7),
-                participant_lane_id: LaneId::new(2),
-                participant_dataspace_id: DataSpaceId::new(8),
-                planned_coordinator_block_height: 42,
-            },
+                    plan_digest: Hash::new(b"background-bypass-formal-gate"),
+                    phase: iroha_data_model::block::consensus::NativeAmxPhase::Prepare,
+                    coordinator_lane_id: LaneId::new(1),
+                    coordinator_dataspace_id: DataSpaceId::new(7),
+                    coordinator_lane_incarnation: Hash::new(b"native-amx-message-coordinator"),
+                    participant_lane_id: LaneId::new(2),
+                    participant_dataspace_id: DataSpaceId::new(8),
+                    participant_lane_incarnation: Hash::new(b"native-amx-message-participant"),
+                    authority_context_height: 42,
+                    coordinator_lane_block_height: 9,
+                    coordinator_lane_block_view: 3,
+                    coordinator_proposal_hash: Hash::new(b"native-amx-message-proposal"),
+                },
+            ),
         )
     }
 
@@ -192142,20 +192333,29 @@ fn background_fallback_formal_gate_matrix() {
 
     fn native_amx_message() -> crate::native_amx::NativeAmxMessage {
         crate::native_amx::NativeAmxMessage::PrepareRequest(
-            iroha_data_model::block::consensus::NativeAmxAttestationBodyV1 {
-                source_id: [0x83; iroha_crypto::Hash::LENGTH],
-                tx_entrypoint_hash:
-                    HashOf::<iroha_data_model::transaction::TransactionEntrypoint>::from_untyped_unchecked(
-                        Hash::prehashed([0x84; Hash::LENGTH]),
+            native_amx_request_for_test(
+                iroha_data_model::block::consensus::NativeAmxAttestationBodyV1 {
+                    chain_id_hash: Hash::new(b"native-amx-message-test-chain"),
+                    source_id: [0x83; iroha_crypto::Hash::LENGTH],
+                    tx_entrypoint_hash: HashOf::<
+                        iroha_data_model::transaction::TransactionEntrypoint,
+                    >::from_untyped_unchecked(
+                        Hash::prehashed([0x84; Hash::LENGTH])
                     ),
-                plan_digest: Hash::new(b"background-fallback-formal-gate"),
-                phase: iroha_data_model::block::consensus::NativeAmxPhase::Prepare,
-                coordinator_lane_id: LaneId::new(1),
-                coordinator_dataspace_id: DataSpaceId::new(7),
-                participant_lane_id: LaneId::new(2),
-                participant_dataspace_id: DataSpaceId::new(8),
-                planned_coordinator_block_height: 42,
-            },
+                    plan_digest: Hash::new(b"background-fallback-formal-gate"),
+                    phase: iroha_data_model::block::consensus::NativeAmxPhase::Prepare,
+                    coordinator_lane_id: LaneId::new(1),
+                    coordinator_dataspace_id: DataSpaceId::new(7),
+                    coordinator_lane_incarnation: Hash::new(b"native-amx-message-coordinator"),
+                    participant_lane_id: LaneId::new(2),
+                    participant_dataspace_id: DataSpaceId::new(8),
+                    participant_lane_incarnation: Hash::new(b"native-amx-message-participant"),
+                    authority_context_height: 42,
+                    coordinator_lane_block_height: 9,
+                    coordinator_lane_block_view: 3,
+                    coordinator_proposal_hash: Hash::new(b"native-amx-message-proposal"),
+                },
+            ),
         )
     }
 
@@ -208416,6 +208616,7 @@ fn sample_lane_block_messages() -> (
     let mut descriptor = crate::sumeragi::consensus::LaneBlockDescriptorV1 {
         lane_id: LaneId::SINGLE,
         dataspace_id: DataSpaceId::UNIVERSAL,
+        lane_incarnation: Hash::new(b"main-loop-lane-block-fixture-incarnation"),
         proposal_height: 1,
         previous_lane_block_height: 12,
         previous_lane_block_descriptor_hash: Some(Hash::prehashed([0xA0; Hash::LENGTH])),
@@ -208475,6 +208676,7 @@ fn sample_lane_block_proposal_for_validators_with_min_quorum(
     let mut descriptor = crate::sumeragi::consensus::LaneBlockDescriptorV1 {
         lane_id: LaneId::SINGLE,
         dataspace_id: DataSpaceId::UNIVERSAL,
+        lane_incarnation: Hash::new(b"main-loop-lane-block-fixture-incarnation"),
         proposal_height: 1,
         previous_lane_block_height: 12,
         previous_lane_block_descriptor_hash: Some(Hash::prehashed([0xA0; Hash::LENGTH])),
@@ -208536,6 +208738,7 @@ fn sample_lane_block_prepare_vote_plan(
                 phase: crate::sumeragi::consensus::Phase::Prepare,
                 lane_id: proposal.descriptor.lane_id,
                 dataspace_id: proposal.descriptor.dataspace_id,
+                lane_incarnation: proposal.descriptor.lane_incarnation,
                 lane_block_height: proposal.descriptor.lane_block_height,
                 lane_block_view: proposal.descriptor.lane_block_view,
                 proposal_hash: proposal.proposal_hash,
@@ -208660,6 +208863,14 @@ fn sample_lane_block_commit_messages_for_route_at(
     let mut descriptor = crate::sumeragi::consensus::LaneBlockDescriptorV1 {
         lane_id,
         dataspace_id,
+        lane_incarnation: Hash::new(
+            format!(
+                "main-loop-lane-block-fixture-incarnation:{}:{}",
+                lane_id.as_u32(),
+                dataspace_id.as_u64()
+            )
+            .as_bytes(),
+        ),
         proposal_height: 1,
         previous_lane_block_height,
         previous_lane_block_descriptor_hash,
@@ -208739,6 +208950,7 @@ fn lane_block_proposal_from_lane_payload_ownership(
     let descriptor = crate::sumeragi::consensus::LaneBlockDescriptorV1 {
         lane_id: ownership.lane_id,
         dataspace_id: ownership.dataspace_id,
+        lane_incarnation: ownership.lane_incarnation,
         proposal_height: ownership.proposal_height,
         previous_lane_block_height: ownership.previous_lane_block_height,
         previous_lane_block_descriptor_hash: ownership.previous_lane_block_descriptor_hash,
@@ -208770,6 +208982,42 @@ fn lane_block_proposal_from_lane_payload_ownership(
         payload_block_hint: None,
     };
     proposal.proposal_hash = proposal.computed_proposal_hash();
+    proposal
+}
+
+fn store_canonical_lane_block_proposal_for_actor(
+    actor: &Actor,
+    proposal_height: u64,
+    proposal_view: u64,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_block_height: u64,
+    validator_set: Vec<PeerId>,
+    min_quorum: u32,
+) -> crate::sumeragi::consensus::LaneBlockProposalV1 {
+    let mut block = sample_block_with_lane_payload_artifact(
+        proposal_height,
+        proposal_view,
+        lane_id,
+        dataspace_id,
+        lane_block_height,
+    );
+    let ownership =
+        rebind_lane_payload_artifact_validator_set(&mut block, validator_set, min_quorum);
+    let proposal = lane_block_proposal_from_lane_payload_ownership(&ownership);
+    actor
+        .state
+        .kura()
+        .store_block(Arc::new(block))
+        .expect("store canonical lane payload fixture block");
+    assert!(
+        actor
+            .state
+            .kura()
+            .lane_block_payload_availability(&proposal)
+            .is_available(),
+        "stored canonical block must make its lane payload available"
+    );
     proposal
 }
 
@@ -209176,7 +209424,7 @@ async fn queue_committed_lane_block_sessions_prunes_reset_watermark_lane_session
         .state
         .da_shard_cursors
         .write()
-        .mark_lanes_reset(&BTreeSet::from([lane_id]), reset_height);
+        .mark_lanes_canonically_reset(&BTreeSet::from([lane_id]), reset_height);
 
     let (
         stale_proposal,
@@ -209318,7 +209566,7 @@ async fn known_lane_block_tips_ignore_reset_watermark_committed_queue_before_pru
         .state
         .da_shard_cursors
         .write()
-        .mark_lanes_reset(&BTreeSet::from([lane_id]), reset_height);
+        .mark_lanes_canonically_reset(&BTreeSet::from([lane_id]), reset_height);
 
     let (
         stale_proposal,
@@ -209403,15 +209651,19 @@ async fn known_lane_block_tips_ignore_reset_watermark_committed_queue_before_pru
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn proposal_blocked_lanes_ignore_live_uncertified_lane_sessions() {
+async fn proposal_blocked_lanes_include_live_uncertified_lane_sessions() {
     super::status::set_committed_lane_blocks(Vec::new());
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     install_active_single_lane_nexus(&actor.state);
     let validators = shared_lane_block_ingress_committee_for_test(actor);
     let min_quorum = lane_block_commit_quorum_for_test(validators.len());
-    let proposal =
+    let proposal_height = next_proposal_height_for_state(actor.state.as_ref());
+    let mut proposal =
         sample_anchor_lane_block_proposal_for_validators_with_min_quorum(validators, min_quorum);
+    proposal.descriptor.proposal_height = proposal_height;
+    proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
+    proposal.proposal_hash = proposal.computed_proposal_hash();
     let lane_id = proposal.descriptor.lane_id;
 
     assert_eq!(
@@ -209422,13 +209674,45 @@ async fn proposal_blocked_lanes_ignore_live_uncertified_lane_sessions() {
         Ok(crate::lane_consensus::LaneBlockSessionInsertOutcome::Inserted)
     );
 
+    let blocked =
+        actor.unapplied_lane_block_lanes_for_proposal(actor.state.as_ref(), proposal_height);
+    assert!(
+        blocked.contains(&lane_id),
+        "proposal planning should not mint competing lane payloads while lane-block consensus is in flight"
+    );
+
+    super::status::set_committed_lane_blocks(Vec::new());
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_blocked_lanes_ignore_stale_proposal_only_lane_sessions() {
+    super::status::set_committed_lane_blocks(Vec::new());
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    install_active_single_lane_nexus(&actor.state);
+    let validators = shared_lane_block_ingress_committee_for_test(actor);
+    let min_quorum = lane_block_commit_quorum_for_test(validators.len());
+    let proposal_height = next_proposal_height_for_state(actor.state.as_ref());
+    let mut proposal =
+        sample_anchor_lane_block_proposal_for_validators_with_min_quorum(validators, min_quorum);
+    proposal.descriptor.proposal_height = proposal_height;
+    proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
+    proposal.proposal_hash = proposal.computed_proposal_hash();
+    let lane_id = proposal.descriptor.lane_id;
+
+    assert_eq!(
+        actor.subsystems.lane_blocks.insert_proposal(proposal),
+        Ok(crate::lane_consensus::LaneBlockSessionInsertOutcome::Inserted)
+    );
+
     let blocked = actor.unapplied_lane_block_lanes_for_proposal(
         actor.state.as_ref(),
-        next_proposal_height_for_state(actor.state.as_ref()),
+        proposal_height.saturating_add(1),
     );
     assert!(
         !blocked.contains(&lane_id),
-        "proposal planning should allow a lane with only an uncertified live lane-block session to retry"
+        "proposal-only lane-block sessions from older global heights should not pin later proposal retries"
     );
 
     super::status::set_committed_lane_blocks(Vec::new());
@@ -209458,7 +209742,16 @@ async fn lane_block_ingress_accepts_authoritative_nexus_lane_committee() {
         "fixture must expose the local peer as the live lane authority"
     );
 
-    let proposal = sample_lane_block_proposal_for_validators(vec![local_peer.clone()]);
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        1,
+        vec![local_peer.clone()],
+        1,
+    );
     actor
         .handle_lane_block_proposal(proposal)
         .expect("authoritative lane-block proposal handled");
@@ -209545,8 +209838,8 @@ async fn lane_block_ingress_accepts_lane_created_at_proposal_height() {
         !actor.lane_block_artifact_targets_active_route(
             lane_id,
             dataspace_id,
+            proposal.descriptor.lane_incarnation,
             committed_height,
-            proposal.descriptor.lane_block_height,
         ),
         "the old committed-height ingress check would reject the first active lane block"
     );
@@ -209556,11 +209849,12 @@ async fn lane_block_ingress_accepts_lane_created_at_proposal_height() {
     );
 
     actor
-        .handle_incoming_lane_block_proposal(proposal.clone())
+        .handle_incoming_lane_block_proposal(proposal.clone(), Some(&local_peer))
         .expect("proposal-height active lane-block proposal handled");
     let session_key = crate::lane_consensus::LaneBlockSessionKey {
         lane_id,
         dataspace_id,
+        lane_incarnation: proposal.descriptor.lane_incarnation,
         lane_block_height: proposal.descriptor.lane_block_height,
         lane_block_view: proposal.descriptor.lane_block_view,
         proposal_hash: proposal.proposal_hash,
@@ -209604,7 +209898,7 @@ async fn lane_block_ingress_rejects_reset_watermark_artifacts_before_side_effect
         .state
         .da_shard_cursors
         .write()
-        .mark_lanes_reset(&BTreeSet::from([LaneId::SINGLE]), reset_height);
+        .mark_lanes_canonically_reset(&BTreeSet::from([LaneId::SINGLE]), reset_height);
 
     let proposal = sample_lane_block_proposal_for_validators(vec![local_peer.clone()]);
     assert_eq!(
@@ -209677,7 +209971,7 @@ async fn lane_block_ingress_rejects_reset_watermark_artifacts_before_side_effect
         super::status::ConsensusMessageKind::LaneBlockVote,
         super::status::ConsensusMessageOutcome::Dropped,
         super::status::ConsensusMessageReason::InvalidPayload,
-        0,
+        1,
     );
     assert_consensus_message_handling_total(
         super::status::ConsensusMessageKind::LaneBlockQc,
@@ -209969,7 +210263,7 @@ async fn lane_block_ingress_rejects_quorum_downgraded_shared_committee_before_si
         super::status::ConsensusMessageKind::LaneBlockVote,
         super::status::ConsensusMessageOutcome::Dropped,
         super::status::ConsensusMessageReason::InvalidPayload,
-        0,
+        1,
     );
     assert_consensus_message_handling_total(
         super::status::ConsensusMessageKind::LaneBlockQc,
@@ -210092,8 +210386,16 @@ async fn lane_block_ingress_rejects_shared_vote_signer_outside_spoofed_committee
 
     let validators = shared_lane_block_ingress_committee_for_test(actor);
     let min_quorum = lane_block_commit_quorum_for_test(validators.len());
-    let proposal =
-        sample_lane_block_proposal_for_validators_with_min_quorum(validators.clone(), min_quorum);
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        1,
+        validators.clone(),
+        min_quorum,
+    );
     let forged_keypair = checked_bls_keypair();
     let forged_signer = PeerId::new(forged_keypair.public_key().clone());
     assert!(
@@ -210138,7 +210440,7 @@ async fn lane_block_ingress_rejects_shared_vote_signer_outside_spoofed_committee
         super::status::ConsensusMessageKind::LaneBlockVote,
         super::status::ConsensusMessageOutcome::Dropped,
         super::status::ConsensusMessageReason::InvalidPayload,
-        0,
+        1,
     );
 
     super::status::reset_message_handling_for_tests();
@@ -210311,7 +210613,7 @@ async fn lane_block_ingress_rejects_lookahead_vote_signer_outside_spoofed_commit
         super::status::ConsensusMessageKind::LaneBlockVote,
         super::status::ConsensusMessageOutcome::Dropped,
         super::status::ConsensusMessageReason::InvalidPayload,
-        0,
+        1,
     );
 
     super::status::reset_message_handling_for_tests();
@@ -211416,16 +211718,48 @@ fn committed_lane_block_queue_preflights_recovered_inputs_from_isolated_state_ba
     kura.store_block(Arc::new(block_b))
         .expect("store lane B payload block");
 
+    let before_recovery_state_hash = state.lane_execution_state_hash();
     let mut queue = super::CommittedLaneBlockQueue::new(2);
     assert_eq!(
-        queue.hydrate_from_certified_sessions(vec![session_a, session_b]),
+        queue.hydrate_from_certified_sessions(vec![session_a.clone(), session_b.clone()]),
         2,
         "both lane payload sessions should queue for preflight"
     );
     assert_eq!(
-        queue.recover_available_payloads_into_kura(kura.as_ref()),
+        queue.recover_certified_inputs_awaiting_merge(&state),
         2,
         "both lane payloads should recover into durable execution inputs"
+    );
+    assert_eq!(
+        state.lane_execution_state_hash(),
+        before_recovery_state_hash,
+        "lane QC arrival order must not mutate shared WSV before merge certification"
+    );
+    assert!(
+        state
+            .view()
+            .world()
+            .domains()
+            .get(&dependent_domain)
+            .is_none(),
+        "recovering lane A first must not execute its domain registration"
+    );
+
+    let mut reverse_arrival_queue = super::CommittedLaneBlockQueue::new(2);
+    assert_eq!(
+        reverse_arrival_queue.hydrate_from_certified_sessions(vec![session_b, session_a]),
+        2,
+        "opposite QC arrival order should queue the same two sessions"
+    );
+    assert_eq!(
+        reverse_arrival_queue.recover_certified_inputs_awaiting_merge(&state),
+        0,
+        "opposite arrival reuses the immutable recovered inputs"
+    );
+    assert_eq!(
+        state.lane_execution_state_hash(),
+        before_recovery_state_hash,
+        "opposite lane QC arrival order must also leave shared WSV untouched"
     );
     assert_eq!(
         queue.preflight_recovered_execution_inputs_into_kura(&state),
@@ -213307,7 +213641,7 @@ async fn lane_block_ingress_broadcasts_locally_sealed_qc_once() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn lane_block_broadcast_sends_proposal_and_local_prepare_vote() {
+async fn lane_block_broadcast_sends_proposal_and_local_prepare_vote_with_canonical_payload() {
     let _message_guard = super::status::message_handling_test_guard();
     super::status::reset_message_handling_for_tests();
     let mut harness = test_actor_harness(4).await;
@@ -213322,12 +213656,20 @@ async fn lane_block_broadcast_sends_proposal_and_local_prepare_vote() {
         "shared lane-block committee fixture should include the local peer"
     );
     let min_quorum = lane_block_commit_quorum_for_test(validators.len());
-    let proposal =
-        sample_anchor_lane_block_proposal_for_validators_with_min_quorum(validators, min_quorum);
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        1,
+        validators,
+        min_quorum,
+    );
     let prepare_plan = sample_lane_block_prepare_vote_plan(&proposal, vec![local_peer.clone()]);
 
     let signed_vote = actor
-        .local_lane_block_prepare_vote(&prepare_plan)
+        .local_lane_block_prepare_vote(&prepare_plan, &proposal)
         .expect("local lane-block prepare vote should be signable");
     Signature::try_from_bytes(&signed_vote.bls_signature)
         .expect("local lane-block prepare vote signature should decode")
@@ -213347,6 +213689,7 @@ async fn lane_block_broadcast_sends_proposal_and_local_prepare_vote() {
     let session_key = crate::lane_consensus::LaneBlockSessionKey {
         lane_id: proposal.descriptor.lane_id,
         dataspace_id: proposal.descriptor.dataspace_id,
+        lane_incarnation: proposal.descriptor.lane_incarnation,
         lane_block_height: proposal.descriptor.lane_block_height,
         lane_block_view: proposal.descriptor.lane_block_view,
         proposal_hash: proposal.proposal_hash,
@@ -213424,6 +213767,95 @@ async fn lane_block_broadcast_sends_proposal_and_local_prepare_vote() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn inbound_prepare_vote_wakes_missing_local_lane_block_prepare_vote() {
+    let _message_guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    disable_nexus_for_lane_block_stateless_fixture(&actor.state);
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
+    let local_peer = actor.common_config.peer.id().clone();
+    let remote_keypair = checked_bls_keypair();
+    let remote_peer = PeerId::new(remote_keypair.public_key().clone());
+    let mut validators = vec![local_peer.clone(), remote_peer.clone()];
+    validators.sort();
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        13,
+        validators.clone(),
+        2,
+    );
+    let remote_vote =
+        signed_lane_block_vote_with_keypair(&proposal, Phase::Prepare, &remote_keypair);
+
+    actor
+        .handle_lane_block_proposal(proposal.clone())
+        .expect("proposal cached");
+    let _ = take_background_log(&background_log);
+    actor
+        .handle_lane_block_vote(remote_vote.clone(), Some(&remote_peer))
+        .expect("remote prepare vote cached");
+
+    let session_key = crate::lane_consensus::LaneBlockSessionKey {
+        lane_id: proposal.descriptor.lane_id,
+        dataspace_id: proposal.descriptor.dataspace_id,
+        lane_incarnation: proposal.descriptor.lane_incarnation,
+        lane_block_height: proposal.descriptor.lane_block_height,
+        lane_block_view: proposal.descriptor.lane_block_view,
+        proposal_hash: proposal.proposal_hash,
+    };
+    let session = actor
+        .subsystems
+        .lane_blocks
+        .get(&session_key)
+        .expect("proposal session should remain cached");
+    assert!(
+        session.prepare_votes.contains_key(&remote_peer),
+        "remote prepare vote should be cached"
+    );
+    assert!(
+        session.prepare_votes.contains_key(&local_peer),
+        "remote prepare vote ingress should wake local prepare signing"
+    );
+
+    let entries = take_background_log(&background_log);
+    let prepare_vote_posts = entries
+        .iter()
+        .filter(|entry| {
+            entry.kind == super::BackgroundRequestLogKind::Post
+                && entry.msg_kind == Some("LaneBlockPrepareVote")
+        })
+        .count();
+    assert_eq!(
+        prepare_vote_posts,
+        validators
+            .iter()
+            .filter(|peer| *peer != &local_peer)
+            .count(),
+        "local prepare vote should be posted to every remote lane validator"
+    );
+    let prepare_vote_broadcasts = entries
+        .iter()
+        .filter(|entry| {
+            entry.kind == super::BackgroundRequestLogKind::Broadcast
+                && entry.msg_kind == Some("LaneBlockPrepareVote")
+        })
+        .count();
+    assert_eq!(
+        prepare_vote_broadcasts, 1,
+        "local prepare vote should be broadcast for wider convergence"
+    );
+
+    super::status::reset_message_handling_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn tick_rebroadcasts_cached_lane_block_proposal_until_commit_qc() {
     let _message_guard = super::status::message_handling_test_guard();
     super::status::reset_message_handling_for_tests();
@@ -213439,8 +213871,16 @@ async fn tick_rebroadcasts_cached_lane_block_proposal_until_commit_qc() {
         "shared lane-block committee fixture should include the local peer"
     );
     let min_quorum = lane_block_commit_quorum_for_test(validators.len());
-    let proposal =
-        sample_lane_block_proposal_for_validators_with_min_quorum(validators.clone(), min_quorum);
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        1,
+        validators.clone(),
+        min_quorum,
+    );
 
     assert_eq!(
         actor
@@ -213479,8 +213919,173 @@ async fn tick_rebroadcasts_cached_lane_block_proposal_until_commit_qc() {
         "tick retry should post the cached lane-block proposal to every remote lane validator"
     );
     assert_eq!(
-        proposal_broadcasts, 0,
-        "tick proposal retry should use lane-committee posts instead of global broadcast"
+        proposal_broadcasts, 1,
+        "tick proposal retry should also broadcast once for wider convergence"
+    );
+    assert!(
+        !actor.broadcast_ready_local_lane_block_votes(),
+        "an immediate second tick must be suppressed by the lane-artifact cooldown"
+    );
+    assert!(
+        take_background_log(&background_log).is_empty(),
+        "cooldown-suppressed lane artifacts must not reach background transport"
+    );
+
+    super::status::reset_message_handling_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn committed_lane_artifact_certifies_without_global_leader_proposal_broadcast() {
+    let _message_guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
+    super::status::set_committed_lane_blocks(Vec::new());
+    let mut harness = test_actor_harness(4).await;
+    let key_pairs = harness.key_pairs.clone();
+    let actor = &mut harness.actor;
+    install_active_single_lane_nexus(&actor.state);
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
+    let local_peer = actor.common_config.peer.id().clone();
+    let validators = shared_lane_block_ingress_committee_for_test(actor);
+    let min_quorum = lane_block_commit_quorum_for_test(validators.len());
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        1,
+        validators.clone(),
+        min_quorum,
+    );
+    for keypair in &key_pairs {
+        let pop =
+            iroha_crypto::bls_normal_pop_prove(keypair.private_key()).expect("fixture PoP proves");
+        actor
+            .roster_validation_cache
+            .pops
+            .insert(keypair.public_key().clone(), pop);
+    }
+    assert!(
+        actor.subsystems.lane_blocks.is_empty(),
+        "fixture must model loss of the global leader's early lane-artifact broadcast"
+    );
+
+    assert!(
+        actor.broadcast_ready_local_lane_block_votes(),
+        "a committee member should reconstruct and fan out the committed lane artifact"
+    );
+    let session_key = crate::lane_consensus::LaneBlockSessionKey {
+        lane_id: proposal.descriptor.lane_id,
+        dataspace_id: proposal.descriptor.dataspace_id,
+        lane_incarnation: proposal.descriptor.lane_incarnation,
+        lane_block_height: proposal.descriptor.lane_block_height,
+        lane_block_view: proposal.descriptor.lane_block_view,
+        proposal_hash: proposal.proposal_hash,
+    };
+    let recovered_session = actor
+        .subsystems
+        .lane_blocks
+        .get(&session_key)
+        .expect("committed artifact should reconstruct a live lane session");
+    assert_eq!(recovered_session.proposal.as_ref(), Some(&proposal));
+    assert!(recovered_session.prepare_votes.contains_key(&local_peer));
+    let recovery_messages = take_background_log(&background_log);
+    assert!(
+        recovery_messages
+            .iter()
+            .any(|entry| entry.msg_kind == Some("LaneBlockProposal")),
+        "recovery should fan the reconstructed proposal back out to the lane committee"
+    );
+    assert!(
+        recovery_messages
+            .iter()
+            .any(|entry| entry.msg_kind == Some("LaneBlockPrepareVote")),
+        "the recovering committee member should sign the canonical payload"
+    );
+
+    for validator in validators
+        .iter()
+        .filter(|validator| *validator != &local_peer)
+    {
+        let prepare_vote = signed_lane_block_vote_with_keypair(
+            &proposal,
+            Phase::Prepare,
+            keypair_for_peer(&key_pairs, validator),
+        );
+        actor
+            .handle_lane_block_vote(prepare_vote, Some(validator))
+            .expect("recovered-session prepare vote handled");
+    }
+    for validator in validators
+        .iter()
+        .filter(|validator| *validator != &local_peer)
+    {
+        let commit_vote = signed_lane_block_vote_with_keypair(
+            &proposal,
+            Phase::Commit,
+            keypair_for_peer(&key_pairs, validator),
+        );
+        actor
+            .handle_lane_block_vote(commit_vote, Some(validator))
+            .expect("recovered-session commit vote handled");
+    }
+
+    let certified = actor
+        .state
+        .kura()
+        .read_certified_lane_block_artifact(
+            proposal.descriptor.lane_id,
+            proposal.descriptor.lane_block_height,
+        )
+        .expect("recovered lane session should persist a certified artifact");
+    assert_eq!(certified.proposal, proposal);
+    assert_eq!(certified.prepare_qc.body.phase, Phase::Prepare);
+    assert_eq!(certified.commit_qc.body.phase, Phase::Commit);
+
+    super::status::reset_message_handling_for_tests();
+    super::status::set_committed_lane_blocks(Vec::new());
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn tick_does_not_amplify_lane_block_proposal_without_canonical_payload() {
+    let _message_guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    install_active_single_lane_nexus(&actor.state);
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
+    let validators = shared_lane_block_ingress_committee_for_test(actor);
+    let min_quorum = lane_block_commit_quorum_for_test(validators.len());
+    let proposal =
+        sample_anchor_lane_block_proposal_for_validators_with_min_quorum(validators, min_quorum);
+
+    assert_eq!(
+        actor
+            .subsystems
+            .lane_blocks
+            .insert_proposal(proposal.clone()),
+        Ok(crate::lane_consensus::LaneBlockSessionInsertOutcome::Inserted)
+    );
+    assert!(
+        !actor.lane_block_payload_available_for_vote(&proposal, "test"),
+        "fixture must not have a canonical payload"
+    );
+    assert!(
+        !actor.broadcast_ready_local_lane_block_votes(),
+        "unavailable proposals must not count as rebroadcast or vote progress"
+    );
+    assert!(
+        take_background_log(&background_log)
+            .into_iter()
+            .all(|entry| {
+                entry.msg_kind != Some("LaneBlockProposal")
+                    && entry.msg_kind != Some("LaneBlockPrepareVote")
+            }),
+        "an authenticated but unavailable proposal must not be amplified by honest peers"
     );
 
     super::status::reset_message_handling_for_tests();
@@ -213503,11 +214108,19 @@ async fn tick_rebroadcasts_cached_local_lane_block_vote_until_qc() {
         "shared lane-block committee fixture should include the local peer"
     );
     let min_quorum = lane_block_commit_quorum_for_test(validators.len());
-    let proposal =
-        sample_anchor_lane_block_proposal_for_validators_with_min_quorum(validators, min_quorum);
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        1,
+        validators,
+        min_quorum,
+    );
     let prepare_plan = sample_lane_block_prepare_vote_plan(&proposal, vec![local_peer.clone()]);
     let vote = actor
-        .local_lane_block_prepare_vote(&prepare_plan)
+        .local_lane_block_prepare_vote(&prepare_plan, &proposal)
         .expect("local prepare vote should be signable");
 
     actor
@@ -213539,7 +214152,18 @@ async fn tick_rebroadcasts_cached_local_lane_block_vote_until_qc() {
             .iter()
             .filter(|peer| *peer != &local_peer)
             .count(),
-        "tick retry should post the cached proposal before rebroadcasting the local vote"
+        "tick retry should post the cached proposal once before rebroadcasting the local vote"
+    );
+    let proposal_broadcasts = entries
+        .iter()
+        .filter(|entry| {
+            entry.kind == super::BackgroundRequestLogKind::Broadcast
+                && entry.msg_kind == Some("LaneBlockProposal")
+        })
+        .count();
+    assert_eq!(
+        proposal_broadcasts, 1,
+        "tick retry should broadcast the cached proposal once for wider convergence"
     );
     let prepare_vote_posts = entries
         .iter()
@@ -213661,7 +214285,7 @@ async fn tick_rebroadcasts_cached_lane_block_qc_until_committed_session_drains()
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn incoming_lane_block_proposal_broadcasts_local_prepare_vote_for_committee_member() {
+async fn incoming_lane_block_proposal_defers_prepare_vote_without_canonical_payload() {
     let _message_guard = super::status::message_handling_test_guard();
     super::status::reset_message_handling_for_tests();
     let mut harness = test_actor_harness(4).await;
@@ -213680,12 +214304,13 @@ async fn incoming_lane_block_proposal_broadcasts_local_prepare_vote_for_committe
         sample_anchor_lane_block_proposal_for_validators_with_min_quorum(validators, min_quorum);
 
     actor
-        .handle_incoming_lane_block_proposal(proposal.clone())
+        .handle_incoming_lane_block_proposal(proposal.clone(), Some(&local_peer))
         .expect("inbound active-route lane-block proposal handled");
 
     let session_key = crate::lane_consensus::LaneBlockSessionKey {
         lane_id: proposal.descriptor.lane_id,
         dataspace_id: proposal.descriptor.dataspace_id,
+        lane_incarnation: proposal.descriptor.lane_incarnation,
         lane_block_height: proposal.descriptor.lane_block_height,
         lane_block_view: proposal.descriptor.lane_block_view,
         proposal_hash: proposal.proposal_hash,
@@ -213696,14 +214321,11 @@ async fn incoming_lane_block_proposal_broadcasts_local_prepare_vote_for_committe
         .get(&session_key)
         .expect("inbound lane-block proposal should be cached");
     assert_eq!(session.proposal.as_ref(), Some(&proposal));
-    assert!(
-        session.prepare_votes.contains_key(&local_peer),
-        "committee member must sign a local prepare vote for a valid inbound proposal"
-    );
+    assert!(session.prepare_votes.is_empty());
     assert_eq!(
         actor.subsystems.committed_lane_blocks.len(),
         0,
-        "one local prepare vote must not queue committed lane-block execution before quorum"
+        "an unverified proposal payload must not queue committed lane-block execution"
     );
 
     let entries = take_background_log(&background_log);
@@ -213714,16 +214336,7 @@ async fn incoming_lane_block_proposal_broadcasts_local_prepare_vote_for_committe
                 && entry.msg_kind == Some("LaneBlockPrepareVote")
         })
         .count();
-    assert_eq!(
-        prepare_vote_posts,
-        proposal
-            .descriptor
-            .validator_set
-            .iter()
-            .filter(|peer| *peer != &local_peer)
-            .count(),
-        "valid inbound proposal should post the local prepare vote to every remote lane validator"
-    );
+    assert_eq!(prepare_vote_posts, 0);
     let prepare_vote_broadcasts = entries
         .iter()
         .filter(|entry| {
@@ -213731,19 +214344,178 @@ async fn incoming_lane_block_proposal_broadcasts_local_prepare_vote_for_committe
                 && entry.msg_kind == Some("LaneBlockPrepareVote")
         })
         .count();
-    assert_eq!(
-        prepare_vote_broadcasts, 1,
-        "valid inbound proposal should broadcast the local prepare vote for wider convergence"
-    );
+    assert_eq!(prepare_vote_broadcasts, 0);
 
     actor
-        .handle_incoming_lane_block_proposal(proposal)
+        .handle_incoming_lane_block_proposal(proposal, Some(&local_peer))
         .expect("duplicate inbound lane-block proposal handled");
     assert!(
         take_background_log(&background_log)
             .into_iter()
             .all(|entry| entry.msg_kind != Some("LaneBlockPrepareVote")),
-        "duplicate inbound proposals must not rebroadcast local prepare votes"
+        "a duplicate proposal without canonical payload evidence must not create a local signature"
+    );
+
+    super::status::reset_message_handling_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn incoming_lane_block_proposal_rejects_unauthenticated_or_unknown_sender() {
+    let _message_guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    install_active_single_lane_nexus(&actor.state);
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
+    let validators = shared_lane_block_ingress_committee_for_test(actor);
+    let min_quorum = lane_block_commit_quorum_for_test(validators.len());
+    let proposal =
+        sample_anchor_lane_block_proposal_for_validators_with_min_quorum(validators, min_quorum);
+    let unknown_sender = PeerId::from(
+        deterministic_keypair(b"unknown-lane-proposal-sender", Algorithm::Ed25519)
+            .public_key()
+            .clone(),
+    );
+
+    actor
+        .handle_incoming_lane_block_proposal(proposal.clone(), None)
+        .expect("senderless proposal handled as a drop");
+    actor
+        .handle_incoming_lane_block_proposal(proposal, Some(&unknown_sender))
+        .expect("unknown-sender proposal handled as a drop");
+
+    assert!(
+        actor.subsystems.lane_blocks.is_empty(),
+        "unauthenticated proposal transport must not consume lane-session capacity"
+    );
+    assert!(
+        take_background_log(&background_log).is_empty(),
+        "unauthenticated proposals must fail before vote or repair transport"
+    );
+    assert_consensus_message_handling_total(
+        super::status::ConsensusMessageKind::LaneBlockProposal,
+        super::status::ConsensusMessageOutcome::Dropped,
+        super::status::ConsensusMessageReason::InvalidSignature,
+        2,
+    );
+
+    super::status::reset_message_handling_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn incoming_lane_block_proposal_rejects_future_global_height_before_cache_or_vote() {
+    let _message_guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    install_active_single_lane_nexus(&actor.state);
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
+    let local_peer = actor.common_config.peer.id().clone();
+    let validators = shared_lane_block_ingress_committee_for_test(actor);
+    let min_quorum = lane_block_commit_quorum_for_test(validators.len());
+    let mut proposal =
+        sample_anchor_lane_block_proposal_for_validators_with_min_quorum(validators, min_quorum);
+    proposal.descriptor.proposal_height = u64::try_from(actor.state.committed_height())
+        .expect("committed height fits u64")
+        .saturating_add(2);
+    proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
+    proposal.proposal_hash = proposal.computed_proposal_hash();
+
+    actor
+        .handle_incoming_lane_block_proposal(proposal, Some(&local_peer))
+        .expect("future-height proposal handled as a drop");
+
+    assert!(actor.subsystems.lane_blocks.is_empty());
+    assert!(take_background_log(&background_log).is_empty());
+    assert_consensus_message_handling_total(
+        super::status::ConsensusMessageKind::LaneBlockProposal,
+        super::status::ConsensusMessageOutcome::Dropped,
+        super::status::ConsensusMessageReason::InvalidPayload,
+        1,
+    );
+
+    super::status::reset_message_handling_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn incoming_lane_block_successor_prepares_with_canonical_payload_before_predecessor_receipt()
+{
+    let _message_guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    install_active_single_lane_nexus(&actor.state);
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
+    let local_peer = actor.common_config.peer.id().clone();
+    let validators = shared_lane_block_ingress_committee_for_test(actor);
+    assert!(
+        validators.contains(&local_peer),
+        "shared lane-block committee fixture should include the local peer"
+    );
+    let min_quorum = lane_block_commit_quorum_for_test(validators.len());
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        13,
+        validators,
+        min_quorum,
+    );
+    assert!(
+        !actor
+            .state
+            .kura()
+            .lane_block_predecessor_application_receipt_available(&proposal),
+        "fixture must not have the predecessor receipt locally"
+    );
+
+    actor
+        .handle_incoming_lane_block_proposal(proposal.clone(), Some(&local_peer))
+        .expect("inbound successor lane-block proposal handled");
+
+    let session_key = crate::lane_consensus::LaneBlockSessionKey {
+        lane_id: proposal.descriptor.lane_id,
+        dataspace_id: proposal.descriptor.dataspace_id,
+        lane_incarnation: proposal.descriptor.lane_incarnation,
+        lane_block_height: proposal.descriptor.lane_block_height,
+        lane_block_view: proposal.descriptor.lane_block_view,
+        proposal_hash: proposal.proposal_hash,
+    };
+    let session = actor
+        .subsystems
+        .lane_blocks
+        .get(&session_key)
+        .expect("successor lane-block proposal should be cached");
+    assert!(
+        session.prepare_votes.contains_key(&local_peer),
+        "canonical current payload should permit certification before predecessor application"
+    );
+
+    let entries = take_background_log(&background_log);
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| {
+                entry.kind == super::BackgroundRequestLogKind::Broadcast
+                    && entry.msg_kind == Some("LaneBlockPrepareVote")
+            })
+            .count(),
+        1,
+        "successor proposal should broadcast a local prepare vote"
+    );
+    assert!(
+        entries
+            .iter()
+            .all(|entry| entry.msg_kind != Some("LaneBlockVote")),
+        "prepare vote handling must not broadcast a commit vote before prepare QC"
     );
 
     super::status::reset_message_handling_for_tests();
@@ -213766,8 +214538,16 @@ async fn duplicate_incoming_lane_block_proposal_retries_missing_local_prepare_vo
         "shared lane-block committee fixture should include the local peer"
     );
     let min_quorum = lane_block_commit_quorum_for_test(validators.len());
-    let proposal =
-        sample_anchor_lane_block_proposal_for_validators_with_min_quorum(validators, min_quorum);
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        1,
+        validators,
+        min_quorum,
+    );
 
     actor
         .handle_lane_block_proposal(proposal.clone())
@@ -213780,12 +214560,13 @@ async fn duplicate_incoming_lane_block_proposal_retries_missing_local_prepare_vo
     );
 
     actor
-        .handle_incoming_lane_block_proposal(proposal.clone())
+        .handle_incoming_lane_block_proposal(proposal.clone(), Some(&local_peer))
         .expect("duplicate inbound proposal handled");
 
     let session_key = crate::lane_consensus::LaneBlockSessionKey {
         lane_id: proposal.descriptor.lane_id,
         dataspace_id: proposal.descriptor.dataspace_id,
+        lane_incarnation: proposal.descriptor.lane_incarnation,
         lane_block_height: proposal.descriptor.lane_block_height,
         lane_block_view: proposal.descriptor.lane_block_view,
         proposal_hash: proposal.proposal_hash,
@@ -213850,15 +214631,16 @@ async fn incoming_lane_block_proposal_skips_prepare_vote_for_nonmember() {
         actor.common_config.peer.id(),
         "fixture must use a nonlocal lane-block validator"
     );
-    let proposal = sample_lane_block_proposal_for_validators(vec![other_peer]);
+    let proposal = sample_lane_block_proposal_for_validators(vec![other_peer.clone()]);
 
     actor
-        .handle_incoming_lane_block_proposal(proposal.clone())
+        .handle_incoming_lane_block_proposal(proposal.clone(), Some(&other_peer))
         .expect("nonlocal inbound lane-block proposal handled");
 
     let session_key = crate::lane_consensus::LaneBlockSessionKey {
         lane_id: proposal.descriptor.lane_id,
         dataspace_id: proposal.descriptor.dataspace_id,
+        lane_incarnation: proposal.descriptor.lane_incarnation,
         lane_block_height: proposal.descriptor.lane_block_height,
         lane_block_view: proposal.descriptor.lane_block_view,
         proposal_hash: proposal.proposal_hash,
@@ -213907,7 +214689,7 @@ async fn incoming_lane_block_proposal_rejects_spoofed_active_route_before_prepar
     );
 
     actor
-        .handle_incoming_lane_block_proposal(proposal)
+        .handle_incoming_lane_block_proposal(proposal, Some(&local_peer))
         .expect("spoofed inbound lane-block proposal handled as a drop");
 
     assert_eq!(
@@ -213941,6 +214723,17 @@ async fn nexus_multivalidator_lane_block_ingress_seals_and_queues_committed_sess
             key_pairs.iter().map(account_id_for_keypair).collect(),
         )],
     );
+    let lane_entry = actor
+        .state
+        .nexus_snapshot()
+        .lane_config
+        .entry(LaneId::new(1))
+        .expect("runtime storage entry for the sidecar lane");
+    actor
+        .state
+        .kura()
+        .reconcile_lane_segments(&[lane_entry], &[], &[])
+        .expect("provision sidecar lane storage");
     for keypair in &key_pairs {
         let pop =
             iroha_crypto::bls_normal_pop_prove(keypair.private_key()).expect("fixture PoP proves");
@@ -213962,27 +214755,25 @@ async fn nexus_multivalidator_lane_block_ingress_seals_and_queues_committed_sess
         "local peer should participate in the lane committee"
     );
     let min_quorum = lane_block_commit_quorum_for_test(validators.len());
-    let mut proposal = sample_anchor_lane_block_proposal_for_validators_with_min_quorum(
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::new(1),
+        DataSpaceId::UNIVERSAL,
+        1,
         validators.clone(),
         min_quorum,
     );
-    proposal.descriptor.lane_id = LaneId::new(1);
-    proposal.descriptor.dataspace_id = DataSpaceId::UNIVERSAL;
-    proposal.descriptor.qc_mode_tag = format!(
-        "permissioned:lane:{}:dataspace:{}",
-        proposal.descriptor.lane_id.as_u32(),
-        proposal.descriptor.dataspace_id.as_u64()
-    );
-    proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
-    proposal.proposal_hash = proposal.computed_proposal_hash();
 
     actor
-        .handle_incoming_lane_block_proposal(proposal.clone())
+        .handle_incoming_lane_block_proposal(proposal.clone(), Some(&local_peer))
         .expect("active Nexus lane-block proposal handled");
 
     let session_key = crate::lane_consensus::LaneBlockSessionKey {
         lane_id: proposal.descriptor.lane_id,
         dataspace_id: proposal.descriptor.dataspace_id,
+        lane_incarnation: proposal.descriptor.lane_incarnation,
         lane_block_height: proposal.descriptor.lane_block_height,
         lane_block_view: proposal.descriptor.lane_block_view,
         proposal_hash: proposal.proposal_hash,
@@ -214046,8 +214837,15 @@ async fn nexus_multivalidator_lane_block_ingress_seals_and_queues_committed_sess
 
     assert_eq!(
         actor.subsystems.committed_lane_blocks.len(),
-        1,
-        "commit quorum should queue the committed standalone lane block"
+        0,
+        "an immediately recoverable committed lane block should leave no pending execution work"
+    );
+    assert!(
+        actor
+            .state
+            .kura()
+            .lane_block_application_receipt_available(&proposal),
+        "commit quorum should durably record canonical lane application"
     );
     let status = super::status::committed_lane_blocks_snapshot();
     assert_eq!(status.len(), 1);
@@ -214099,12 +214897,22 @@ async fn lane_block_broadcast_skips_nonlocal_prepare_vote() {
         .cloned()
         .expect("four-peer shared committee should include a nonlocal peer");
     let min_quorum = lane_block_commit_quorum_for_test(validators.len());
-    let proposal =
-        sample_anchor_lane_block_proposal_for_validators_with_min_quorum(validators, min_quorum);
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        1,
+        validators,
+        min_quorum,
+    );
     let prepare_plan = sample_lane_block_prepare_vote_plan(&proposal, vec![other_peer]);
 
     assert!(
-        actor.local_lane_block_prepare_vote(&prepare_plan).is_none(),
+        actor
+            .local_lane_block_prepare_vote(&prepare_plan, &proposal)
+            .is_none(),
         "node must not sign a lane-block prepare vote planned for another validator"
     );
     let scheduled = actor.broadcast_lane_block_plan_artifacts(
@@ -214117,6 +214925,7 @@ async fn lane_block_broadcast_skips_nonlocal_prepare_vote() {
     let session_key = crate::lane_consensus::LaneBlockSessionKey {
         lane_id: proposal.descriptor.lane_id,
         dataspace_id: proposal.descriptor.dataspace_id,
+        lane_incarnation: proposal.descriptor.lane_incarnation,
         lane_block_height: proposal.descriptor.lane_block_height,
         lane_block_view: proposal.descriptor.lane_block_view,
         proposal_hash: proposal.proposal_hash,
@@ -214166,13 +214975,23 @@ async fn lane_block_broadcast_skips_tampered_prepare_vote_hash() {
         "shared lane-block committee fixture should include the local peer"
     );
     let min_quorum = lane_block_commit_quorum_for_test(validators.len());
-    let proposal =
-        sample_anchor_lane_block_proposal_for_validators_with_min_quorum(validators, min_quorum);
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        1,
+        validators,
+        min_quorum,
+    );
     let mut prepare_plan = sample_lane_block_prepare_vote_plan(&proposal, vec![local_peer]);
     prepare_plan.votes[0].signing_hash = Hash::prehashed([0xEF; Hash::LENGTH]);
 
     assert!(
-        actor.local_lane_block_prepare_vote(&prepare_plan).is_none(),
+        actor
+            .local_lane_block_prepare_vote(&prepare_plan, &proposal)
+            .is_none(),
         "node must not sign a lane-block prepare vote whose signing hash was tampered"
     );
     let scheduled = actor.broadcast_lane_block_plan_artifacts(
@@ -214185,6 +215004,7 @@ async fn lane_block_broadcast_skips_tampered_prepare_vote_hash() {
     let session_key = crate::lane_consensus::LaneBlockSessionKey {
         lane_id: proposal.descriptor.lane_id,
         dataspace_id: proposal.descriptor.dataspace_id,
+        lane_incarnation: proposal.descriptor.lane_incarnation,
         lane_block_height: proposal.descriptor.lane_block_height,
         lane_block_view: proposal.descriptor.lane_block_view,
         proposal_hash: proposal.proposal_hash,
@@ -214233,7 +215053,16 @@ async fn lane_block_broadcast_skips_spoofed_prepare_vote_plan_before_signing() {
         shared_committee.len() > 1 && shared_committee.contains(&local_peer),
         "fixture must exercise a shared active route whose live committee is larger than the local peer"
     );
-    let proposal = sample_lane_block_proposal_for_validators(vec![local_peer.clone()]);
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        1,
+        vec![local_peer.clone()],
+        1,
+    );
     assert_ne!(
         proposal.descriptor.validator_set_hash,
         HashOf::new(&shared_committee),
@@ -214242,7 +215071,9 @@ async fn lane_block_broadcast_skips_spoofed_prepare_vote_plan_before_signing() {
     let prepare_plan = sample_lane_block_prepare_vote_plan(&proposal, vec![local_peer]);
 
     assert!(
-        actor.local_lane_block_prepare_vote(&prepare_plan).is_none(),
+        actor
+            .local_lane_block_prepare_vote(&prepare_plan, &proposal)
+            .is_none(),
         "node must not sign a lane-block prepare vote planned for a spoofed active-route committee"
     );
     let scheduled =
@@ -214283,11 +215114,21 @@ async fn lane_block_broadcast_skips_quorum_downgraded_prepare_vote_plan_before_s
     let background_log = attach_background_log(actor);
     let _ = take_background_log(&background_log);
     let local_peer = actor.common_config.peer.id().clone();
-    let (validators, downgraded_quorum, proposal) =
+    let (validators, downgraded_quorum, _proposal) =
         quorum_downgraded_shared_lane_block_proposal_for_test(actor);
     assert!(
         validators.contains(&local_peer),
         "shared lane-block committee fixture should include the local peer"
+    );
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        1,
+        validators,
+        downgraded_quorum,
     );
     let prepare_plan = sample_lane_block_prepare_vote_plan(&proposal, vec![local_peer]);
     assert_eq!(
@@ -214296,7 +215137,9 @@ async fn lane_block_broadcast_skips_quorum_downgraded_prepare_vote_plan_before_s
     );
 
     assert!(
-        actor.local_lane_block_prepare_vote(&prepare_plan).is_none(),
+        actor
+            .local_lane_block_prepare_vote(&prepare_plan, &proposal)
+            .is_none(),
         "node must not sign a lane-block prepare vote planned with a downgraded active-route quorum"
     );
     let scheduled =
@@ -214374,6 +215217,7 @@ async fn lane_block_broadcast_skips_conflicting_cached_proposal_before_transport
     let session_key = crate::lane_consensus::LaneBlockSessionKey {
         lane_id: proposal.descriptor.lane_id,
         dataspace_id: proposal.descriptor.dataspace_id,
+        lane_incarnation: proposal.descriptor.lane_incarnation,
         lane_block_height: proposal.descriptor.lane_block_height,
         lane_block_view: proposal.descriptor.lane_block_view,
         proposal_hash: proposal.proposal_hash,
@@ -214396,7 +215240,7 @@ async fn lane_block_broadcast_skips_conflicting_cached_proposal_before_transport
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn lane_block_broadcast_skips_conflicting_cached_prepare_vote_before_transport() {
+async fn lane_block_broadcast_ignores_malformed_cached_prepare_vote_before_transport() {
     let _message_guard = super::status::message_handling_test_guard();
     super::status::reset_message_handling_for_tests();
     let mut harness = test_actor_harness(4).await;
@@ -214411,9 +215255,20 @@ async fn lane_block_broadcast_skips_conflicting_cached_prepare_vote_before_trans
         "shared lane-block committee fixture should include the local peer"
     );
     let min_quorum = lane_block_commit_quorum_for_test(validators.len());
-    let proposal =
-        sample_lane_block_proposal_for_validators_with_min_quorum(validators, min_quorum);
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        1,
+        validators,
+        min_quorum,
+    );
     let prepare_plan = sample_lane_block_prepare_vote_plan(&proposal, vec![local_peer.clone()]);
+    let expected_vote = actor
+        .local_lane_block_prepare_vote(&prepare_plan, &proposal)
+        .expect("canonical local prepare vote should be signable");
 
     let mut drift_body = proposal.vote_body(crate::sumeragi::consensus::Phase::Prepare);
     drift_body.descriptor_hash = Hash::prehashed([0xE5; Hash::LENGTH]);
@@ -214428,27 +215283,36 @@ async fn lane_block_broadcast_skips_conflicting_cached_prepare_vote_before_trans
         bls_signature: drift_signature.payload().to_vec(),
     };
     actor
+        .handle_lane_block_proposal(proposal.clone())
+        .expect("lane-block proposal handled");
+    actor
         .handle_lane_block_vote(drift_vote.clone(), Some(&local_peer))
         .expect("drift orphan lane-block vote handled");
     let _ = take_background_log(&background_log);
     super::status::reset_message_handling_for_tests();
 
-    let scheduled =
-        actor.broadcast_lane_block_plan_artifacts(&[], std::slice::from_ref(&prepare_plan), None);
-    assert_eq!(
-        scheduled, 0,
-        "same-signer conflicting local prepare vote must not be scheduled for transport"
+    let scheduled = actor.broadcast_lane_block_plan_artifacts(
+        std::slice::from_ref(&proposal),
+        std::slice::from_ref(&prepare_plan),
+        None,
     );
-    assert!(
+    assert_eq!(
+        scheduled, 1,
+        "a malformed cached vote must not poison the canonical local prepare vote"
+    );
+    assert_eq!(
         take_background_log(&background_log)
             .into_iter()
-            .all(|entry| entry.msg_kind != Some("LaneBlockPrepareVote")),
-        "conflicting local prepare vote must fail before background broadcast"
+            .filter(|entry| entry.msg_kind == Some("LaneBlockPrepareVote"))
+            .count(),
+        1,
+        "the canonical local prepare vote should be broadcast exactly once"
     );
 
     let session_key = crate::lane_consensus::LaneBlockSessionKey {
         lane_id: proposal.descriptor.lane_id,
         dataspace_id: proposal.descriptor.dataspace_id,
+        lane_incarnation: proposal.descriptor.lane_incarnation,
         lane_block_height: proposal.descriptor.lane_block_height,
         lane_block_view: proposal.descriptor.lane_block_view,
         proposal_hash: proposal.proposal_hash,
@@ -214460,14 +215324,8 @@ async fn lane_block_broadcast_skips_conflicting_cached_prepare_vote_before_trans
         .expect("orphan vote session remains cached");
     assert_eq!(
         session.prepare_votes.get(&local_peer),
-        Some(&drift_vote),
-        "failed local preflight must not overwrite the conflicting cached vote"
-    );
-    assert_consensus_message_handling_total(
-        super::status::ConsensusMessageKind::LaneBlockVote,
-        super::status::ConsensusMessageOutcome::Dropped,
-        super::status::ConsensusMessageReason::ConflictingVote,
-        1,
+        Some(&expected_vote),
+        "the malformed same-signer vote must not displace canonical evidence"
     );
 
     super::status::reset_message_handling_for_tests();
@@ -214533,21 +215391,35 @@ async fn lane_block_broadcast_skips_duplicate_cached_prepare_vote_before_transpo
         "shared lane-block committee fixture should include the local peer"
     );
     let min_quorum = lane_block_commit_quorum_for_test(validators.len());
-    let proposal =
-        sample_lane_block_proposal_for_validators_with_min_quorum(validators, min_quorum);
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        1,
+        validators,
+        min_quorum,
+    );
     let prepare_plan = sample_lane_block_prepare_vote_plan(&proposal, vec![local_peer.clone()]);
     let vote = actor
-        .local_lane_block_prepare_vote(&prepare_plan)
+        .local_lane_block_prepare_vote(&prepare_plan, &proposal)
         .expect("local prepare vote should be signable");
 
     actor
+        .handle_lane_block_proposal(proposal.clone())
+        .expect("original proposal handled");
+    actor
         .handle_lane_block_vote(vote.clone(), Some(&local_peer))
-        .expect("original orphan prepare vote handled");
+        .expect("original prepare vote handled");
     let _ = take_background_log(&background_log);
     super::status::reset_message_handling_for_tests();
 
-    let scheduled =
-        actor.broadcast_lane_block_plan_artifacts(&[], std::slice::from_ref(&prepare_plan), None);
+    let scheduled = actor.broadcast_lane_block_plan_artifacts(
+        std::slice::from_ref(&proposal),
+        std::slice::from_ref(&prepare_plan),
+        None,
+    );
     assert_eq!(
         scheduled, 0,
         "duplicate locally produced prepare votes must not be scheduled for transport"
@@ -214577,7 +215449,13 @@ async fn lane_block_prepare_vote_seal_broadcasts_local_commit_vote_once() {
     let background_log = attach_background_log(actor);
     let _ = take_background_log(&background_log);
     let local_peer = actor.common_config.peer.id().clone();
-    let proposal = sample_anchor_lane_block_proposal_for_validators_with_min_quorum(
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        1,
         vec![local_peer.clone()],
         1,
     );
@@ -214631,8 +215509,15 @@ async fn lane_block_prepare_vote_seal_broadcasts_local_commit_vote_once() {
     );
     assert_eq!(
         actor.subsystems.committed_lane_blocks.len(),
-        1,
-        "single-validator prepare and commit QCs should queue the committed lane block"
+        0,
+        "an immediately recoverable single-validator lane block should not remain queued"
+    );
+    assert!(
+        actor
+            .state
+            .kura()
+            .lane_block_application_receipt_available(&proposal),
+        "single-validator prepare and commit QCs should durably record application"
     );
 
     actor
@@ -214657,7 +215542,23 @@ async fn lane_block_inbound_prepare_qc_broadcasts_local_commit_vote_without_echo
     let background_log = attach_background_log(actor);
     let _ = take_background_log(&background_log);
     let local_peer = actor.common_config.peer.id().clone();
-    let proposal = sample_lane_block_proposal_for_validators(vec![local_peer.clone()]);
+    let proposal = store_canonical_lane_block_proposal_for_actor(
+        actor,
+        1,
+        0,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        13,
+        vec![local_peer.clone()],
+        1,
+    );
+    assert!(
+        !actor
+            .state
+            .kura()
+            .lane_block_predecessor_application_receipt_available(&proposal),
+        "fixture must not have the predecessor receipt locally"
+    );
     let prepare_vote = signed_lane_block_vote_with_keypair(
         &proposal,
         crate::sumeragi::consensus::Phase::Prepare,

@@ -12,7 +12,9 @@ import java.util.Objects;
  * request.
  *
  * <p>Call {@link #toJson()} to obtain the structure expected by the Rust orchestrator (the same
- * layout produced by the CLI `sorafs_cli fetch` command).
+ * layout produced by the CLI `sorafs_cli fetch` command). Manifest identifiers must be exact
+ * lowercase 32-byte hex and optional chunker handles use {@code
+ * namespace.name@major.minor.patch}.
  */
 public final class GatewayFetchRequest {
   private final String manifestIdHex;
@@ -79,12 +81,17 @@ public final class GatewayFetchRequest {
     private final List<GatewayProvider> providers = new ArrayList<>();
 
     public Builder setManifestIdHex(final String manifestIdHex) {
-      this.manifestIdHex = SorafsInputValidator.normalizeHexBytes(manifestIdHex, "manifestIdHex", 32);
+      this.manifestIdHex =
+          SorafsInputValidator.requireCanonicalHexBytes(manifestIdHex, "manifestIdHex", 32);
       return this;
     }
 
     public Builder setChunkerHandle(final String chunkerHandle) {
-      this.chunkerHandle = chunkerHandle == null ? null : chunkerHandle.trim();
+      this.chunkerHandle =
+          chunkerHandle == null
+              ? null
+              : SorafsInputValidator.requireCanonicalChunkerHandle(
+                  chunkerHandle, "chunkerHandle");
       return this;
     }
 
@@ -94,6 +101,9 @@ public final class GatewayFetchRequest {
     }
 
     public Builder addProvider(final GatewayProvider provider) {
+      if (providers.size() >= 256) {
+        throw new IllegalStateException("at most 256 providers may be configured");
+      }
       providers.add(Objects.requireNonNull(provider, "provider"));
       return this;
     }

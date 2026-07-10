@@ -39,9 +39,13 @@ query_store_capacity_per_user = 128
 [torii.sorafs.discovery]
 discovery_enabled = true
 known_capabilities = ["torii_gateway", "chunk_range_fetch", "vendor_reserved"]
+replay_checkpoint_path = "sorafs_discovery/test-provider-advert-replay.to"
+replay_checkpoint_max_entries = 4096
 
 [torii.sorafs.discovery.admission]
 envelopes_dir = "tests/fixtures/sorafs_admission"
+trusted_council_keys = ["ed01206355691C178A8FF91007A7478AFB955EF7352C63E7B25703984CF78B26E21A56"]
+signature_threshold = 1
 
 [torii.sorafs.storage]
 enabled = true
@@ -61,9 +65,13 @@ topics = ["sorafs.sf1.primary:global", "sorafs.sf1.backup:eu"]
 [sorafs.discovery]
 discovery_enabled = true
 known_capabilities = ["torii_gateway", "chunk_range_fetch", "vendor_reserved"]
+replay_checkpoint_path = "sorafs_discovery/test-provider-advert-replay.to"
+replay_checkpoint_max_entries = 4096
 
 [sorafs.discovery.admission]
 envelopes_dir = "tests/fixtures/sorafs_admission"
+trusted_council_keys = ["ed01206355691C178A8FF91007A7478AFB955EF7352C63E7B25703984CF78B26E21A56"]
+signature_threshold = 1
 
 [sorafs.storage]
 enabled = true

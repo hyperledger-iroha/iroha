@@ -73,7 +73,7 @@ Ejemplo de uso:
 ```bash
 ./scripts/sorafs_direct_mode_smoke.sh \
   --config docs/examples/sorafs_direct_mode_smoke.conf \
-  --provider name=gw-regulated,provider-id=001122...,base-url=https://gw.example/direct/,stream-token=BASE64
+  --provider name=gw-regulated,provider-id=001122...,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gw.example/,stream-token=BASE64
 ```
 
 - El script respeta tanto flags de CLI como archivos de configuración key=value (consulta `docs/examples/sorafs_direct_mode_smoke.conf`). Rellena el digest del manifest y las entradas de adverts de proveedor con valores de producción antes de ejecutar.

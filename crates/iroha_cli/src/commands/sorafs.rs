@@ -5226,6 +5226,7 @@ impl Run for FetchArgs {
             provider_inputs.push(GatewayProviderInput {
                 name: parsed.name,
                 provider_id_hex: parsed.provider_id_hex,
+                gateway_public_key_hex: parsed.gateway_public_key_hex,
                 base_url: parsed.base_url,
                 stream_token_b64: parsed.stream_token_b64,
                 privacy_events_url: parsed.privacy_events_url,
@@ -5585,6 +5586,7 @@ impl Run for FetchArgs {
 struct ParsedGatewayProvider {
     name: String,
     provider_id_hex: String,
+    gateway_public_key_hex: String,
     base_url: String,
     stream_token_b64: String,
     privacy_events_url: Option<String>,
@@ -5593,6 +5595,7 @@ struct ParsedGatewayProvider {
 fn parse_gateway_provider_spec(value: &str) -> Result<ParsedGatewayProvider> {
     let mut name: Option<String> = None;
     let mut provider_id: Option<String> = None;
+    let mut gateway_public_key: Option<String> = None;
     let mut base_url: Option<String> = None;
     let mut stream_token: Option<String> = None;
     let mut privacy_events_url: Option<String> = None;
@@ -5617,6 +5620,10 @@ fn parse_gateway_provider_spec(value: &str) -> Result<ParsedGatewayProvider> {
                 let normalised = validate_hex_digest(val, "--gateway-provider provider-id")?;
                 provider_id = Some(normalised);
             }
+            "gateway-key" | "gateway_key" | "gateway-public-key" | "gateway_public_key" => {
+                let normalised = validate_hex_digest(val, "--gateway-provider gateway-key")?;
+                gateway_public_key = Some(normalised);
+            }
             "base-url" | "base_url" => {
                 if val.is_empty() {
                     return Err(eyre!("--gateway-provider base-url must not be empty"));
@@ -5637,7 +5644,7 @@ fn parse_gateway_provider_spec(value: &str) -> Result<ParsedGatewayProvider> {
             }
             other => {
                 return Err(eyre!(
-                    "unknown --gateway-provider key `{other}`; expected name, provider-id, base-url, stream-token, privacy-url"
+                    "unknown --gateway-provider key `{other}`; expected name, provider-id, gateway-key, base-url, stream-token, privacy-url"
                 ));
             }
         }
@@ -5646,6 +5653,8 @@ fn parse_gateway_provider_spec(value: &str) -> Result<ParsedGatewayProvider> {
     let name = name.ok_or_else(|| eyre!("--gateway-provider requires name=<alias>"))?;
     let provider_id_hex =
         provider_id.ok_or_else(|| eyre!("--gateway-provider requires provider-id=<hex>"))?;
+    let gateway_public_key_hex =
+        gateway_public_key.ok_or_else(|| eyre!("--gateway-provider requires gateway-key=<hex>"))?;
     let base_url =
         base_url.ok_or_else(|| eyre!("--gateway-provider requires base-url=<https://...>"))?;
     let stream_token_b64 =
@@ -5654,6 +5663,7 @@ fn parse_gateway_provider_spec(value: &str) -> Result<ParsedGatewayProvider> {
     Ok(ParsedGatewayProvider {
         name,
         provider_id_hex,
+        gateway_public_key_hex,
         base_url,
         stream_token_b64,
         privacy_events_url,
@@ -22687,12 +22697,14 @@ mod tests {
     #[test]
     fn gateway_provider_spec_parses_expected_keys() {
         let id_hex = "11".repeat(32);
+        let key_hex = "22".repeat(32);
         let spec = format!(
-            "name=alpha, provider-id={id_hex}, base-url=https://example.com, stream-token=YWJj"
+            "name=alpha, provider-id={id_hex}, gateway-key={key_hex}, base-url=https://example.com, stream-token=YWJj"
         );
         let parsed = parse_gateway_provider_spec(&spec).expect("parse spec");
         assert_eq!(parsed.name, "alpha");
         assert_eq!(parsed.provider_id_hex, id_hex);
+        assert_eq!(parsed.gateway_public_key_hex, key_hex);
         assert_eq!(parsed.base_url, "https://example.com");
         assert_eq!(parsed.stream_token_b64, "YWJj");
     }

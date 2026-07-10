@@ -18,9 +18,10 @@ use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
     CapabilityTlv, CapabilityType, CouncilSignature, ProviderAdvertV1, ProviderCapabilityRangeV1,
     SignatureAlgorithm, TransportHintV1, TransportProtocol, compute_advert_body_digest,
-    compute_proposal_digest,
+    compute_envelope_authorization_digest, compute_proposal_digest,
     provider_admission::{
-        AdmissionRecord, ProviderAdmissionEnvelopeV1, ProviderAdmissionProposalV1,
+        AdmissionRecord, ProviderAdmissionCouncilPolicy, ProviderAdmissionEnvelopeV1,
+        ProviderAdmissionProposalV1,
     },
 };
 use tempfile::TempDir;
@@ -116,11 +117,13 @@ fn resign_advert(advert: &mut ProviderAdvertV1) {
 
 fn resign_advert_unvalidated(advert: &mut ProviderAdvertV1) {
     let signing_key = SigningKey::from_bytes(&PROVIDER_SIGNING_KEY_BYTES);
-    let body_bytes = to_bytes(&advert.body).expect("encode advert body");
-    let signature = signing_key.sign(&body_bytes);
     advert.signature.algorithm = SignatureAlgorithm::Ed25519;
     advert.signature.public_key = signing_key.verifying_key().as_bytes().to_vec();
-    advert.signature.signature = signature.to_bytes().to_vec();
+    advert.signature.signature = vec![0; 64];
+    let payload = advert
+        .signature_payload_bytes()
+        .expect("encode advert signature envelope");
+    advert.signature.signature = signing_key.sign(&payload).to_bytes().to_vec();
 }
 
 fn write_advert(tempdir: &TempDir, file_name: &str, advert: &ProviderAdvertV1) -> PathBuf {
@@ -1018,6 +1021,40 @@ fn fetch_cli_rejects_integrity_verification_bypass_flags() {
 }
 
 #[test]
+fn fetch_cli_rejects_noncanonical_operator_numeric_flags() {
+    for (flag, expected) in [
+        ("--expect-payload-len=01", "--expect-payload-len"),
+        ("--assume-now=+1", "--assume-now"),
+        ("--boost-provider=alpha:+1", "boost delta"),
+        ("--boost-provider=alpha:-0", "boost delta"),
+        ("--boost-provider=:1", "--boost-provider name"),
+    ] {
+        let assert = sorafs_fetch_cmd().arg(flag).assert().failure();
+
+        let stderr = String::from_utf8(assert.get_output().stderr.clone()).expect("utf8 stderr");
+        assert!(
+            stderr.contains(expected),
+            "stderr should contain {expected:?} for {flag}, got: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn fetch_cli_rejects_duplicate_boost_provider() {
+    let assert = sorafs_fetch_cmd()
+        .arg("--boost-provider=alpha:1")
+        .arg("--boost-provider=alpha:2")
+        .assert()
+        .failure();
+
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).expect("utf8 stderr");
+    assert!(
+        stderr.contains("duplicate --boost-provider"),
+        "stderr should mention duplicate boost provider, got: {stderr}"
+    );
+}
+
+#[test]
 fn fetch_cli_accepts_fixture_advert_with_admission() {
     let tempdir = tempdir().expect("tempdir");
     let payload_path = tempdir.path().join("payload.bin");
@@ -1051,8 +1088,7 @@ fn fetch_cli_accepts_fixture_advert_with_admission() {
     let advert_body = fixture_advert.body.clone();
     let advert_body_digest =
         compute_advert_body_digest(&advert_body).expect("compute advert body digest");
-    let council_signature = council_key.sign(&proposal_digest);
-    let new_envelope = ProviderAdmissionEnvelopeV1 {
+    let mut new_envelope = ProviderAdmissionEnvelopeV1 {
         version: envelope_template.version,
         proposal,
         proposal_digest,
@@ -1060,13 +1096,21 @@ fn fetch_cli_accepts_fixture_advert_with_admission() {
         advert_body_digest,
         issued_at: envelope_template.issued_at,
         retention_epoch: envelope_template.retention_epoch,
-        council_signatures: vec![CouncilSignature {
-            signer: *council_key.verifying_key().as_bytes(),
-            signature: council_signature.to_bytes().to_vec(),
-        }],
+        council_signatures: Vec::new(),
         notes: envelope_template.notes.clone(),
     };
-    AdmissionRecord::new(new_envelope.clone()).expect("updated admission envelope must be valid");
+    let authorization_digest = compute_envelope_authorization_digest(&new_envelope)
+        .expect("compute envelope authorization digest");
+    let council_signature = council_key.sign(&authorization_digest);
+    new_envelope.council_signatures.push(CouncilSignature {
+        signer: *council_key.verifying_key().as_bytes(),
+        signature: council_signature.to_bytes().to_vec(),
+    });
+    let council_policy =
+        ProviderAdmissionCouncilPolicy::new([*council_key.verifying_key().as_bytes()], 1)
+            .expect("valid council policy");
+    AdmissionRecord::new(new_envelope.clone(), &council_policy)
+        .expect("updated admission envelope must be valid");
 
     let admission_dir = tempdir.path().join("admission");
     fs::create_dir(&admission_dir).expect("create admission dir");
@@ -1079,6 +1123,11 @@ fn fetch_cli_accepts_fixture_advert_with_admission() {
         .arg(format!("--provider=alpha={}", payload_path.display()))
         .arg(format!("--provider-advert=alpha={}", advert_path.display()))
         .arg(format!("--admission-dir={}", admission_dir.display()))
+        .arg(format!(
+            "--admission-trusted-council-key={}",
+            to_hex(council_key.verifying_key().as_bytes())
+        ))
+        .arg("--admission-signature-threshold=1")
         .arg("--assume-now=300")
         .assert()
         .success();
@@ -1146,6 +1195,7 @@ fn fetch_cli_rejects_fixture_advert_without_admission() {
     let admission_dir = tempdir.path().join("admission");
     fs::create_dir(&admission_dir).expect("create admission dir");
     let fixture_advert = load_fixture_advert("advert_v1.to");
+    let council_key = SigningKey::from_bytes(&[0x45; 32]);
     let plan_path = write_plan_for_payload_with_profile(
         &tempdir,
         &payload,
@@ -1157,6 +1207,11 @@ fn fetch_cli_rejects_fixture_advert_without_admission() {
         .arg(format!("--provider=alpha={}", payload_path.display()))
         .arg(format!("--provider-advert=alpha={}", advert_path.display()))
         .arg(format!("--admission-dir={}", admission_dir.display()))
+        .arg(format!(
+            "--admission-trusted-council-key={}",
+            to_hex(council_key.verifying_key().as_bytes())
+        ))
+        .arg("--admission-signature-threshold=1")
         .arg("--assume-now=300")
         .assert()
         .failure();

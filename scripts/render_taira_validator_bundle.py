@@ -49,6 +49,8 @@ class SharedSecrets:
     torii_faucet_private_key: str | None = None
     streaming_identity_public_key: str | None = None
     streaming_identity_private_key: str | None = None
+    sorafs_council_public_keys: tuple[str, ...] = ()
+    sorafs_council_signature_threshold: int | None = None
 
 
 @dataclass(frozen=True)
@@ -151,6 +153,41 @@ def _optional_string(payload: dict[str, Any], key: str, context: str) -> str | N
     return value.strip()
 
 
+def _optional_string_list(
+    payload: dict[str, Any], key: str, context: str
+) -> tuple[str, ...]:
+    value = payload.get(key)
+    if value is None:
+        return ()
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"{context} field `{key}` must be a non-empty array")
+    normalized: list[str] = []
+    for index, entry in enumerate(value, start=1):
+        if not isinstance(entry, str) or not entry.strip():
+            raise ValueError(
+                f"{context} field `{key}` entry #{index} must be a non-empty string"
+            )
+        normalized.append(entry.strip())
+    if len(set(normalized)) != len(normalized):
+        raise ValueError(f"{context} field `{key}` must not contain duplicates")
+    return tuple(normalized)
+
+
+def _validate_ed25519_public_key(value: str, context: str) -> None:
+    prefix = "ed0120"
+    payload = value[len(prefix) :] if value.startswith(prefix) else ""
+    if (
+        len(payload) != 64
+        or payload != payload.upper()
+        or any(character not in "0123456789ABCDEF" for character in payload)
+        or set(payload) == {"0"}
+    ):
+        raise ValueError(
+            f"{context} must be a canonical non-zero Ed25519 multihash key "
+            f"(`{prefix}` plus 64 uppercase hex characters)"
+        )
+
+
 def load_secret_material(path: Path) -> SecretMaterial:
     """Load per-validator private keys plus shared runtime-only secret material."""
 
@@ -166,6 +203,43 @@ def load_secret_material(path: Path) -> SecretMaterial:
     shared_raw = payload.get("shared", {})
     if not isinstance(shared_raw, dict):
         raise ValueError(f"secrets file `{path}` field `shared` must be a TOML table")
+    sorafs_council_public_keys = _optional_string_list(
+        shared_raw,
+        "sorafs_council_public_keys",
+        f"secrets file `{path}`",
+    )
+    for index, key in enumerate(sorafs_council_public_keys, start=1):
+        _validate_ed25519_public_key(
+            key,
+            f"secrets file `{path}` SoraFS council key #{index}",
+        )
+    sorafs_council_signature_threshold = shared_raw.get(
+        "sorafs_council_signature_threshold"
+    )
+    if sorafs_council_signature_threshold is not None and (
+        isinstance(sorafs_council_signature_threshold, bool)
+        or not isinstance(sorafs_council_signature_threshold, int)
+        or sorafs_council_signature_threshold <= 0
+    ):
+        raise ValueError(
+            f"secrets file `{path}` field `sorafs_council_signature_threshold` "
+            "must be a positive integer"
+        )
+    if bool(sorafs_council_public_keys) != (
+        sorafs_council_signature_threshold is not None
+    ):
+        raise ValueError(
+            f"secrets file `{path}` must configure both sorafs_council_public_keys "
+            "and sorafs_council_signature_threshold"
+        )
+    if (
+        sorafs_council_signature_threshold is not None
+        and sorafs_council_signature_threshold > len(sorafs_council_public_keys)
+    ):
+        raise ValueError(
+            f"secrets file `{path}` SoraFS council threshold exceeds the trusted key count"
+        )
+
     return SecretMaterial(
         validators=secrets,
         shared=SharedSecrets(
@@ -187,6 +261,8 @@ def load_secret_material(path: Path) -> SecretMaterial:
             streaming_identity_private_key=_optional_string(
                 shared_raw, "streaming_identity_private_key", f"secrets file `{path}`"
             ),
+            sorafs_council_public_keys=sorafs_council_public_keys,
+            sorafs_council_signature_threshold=sorafs_council_signature_threshold,
         ),
     )
 
@@ -441,6 +517,26 @@ def render_validator_config(
         ):
             rendered.append(
                 f'identity_public_key = {_quote_toml(shared.streaming_identity_public_key)}'
+            )
+            continue
+        if (
+            current_section == "[sorafs.discovery.admission]"
+            and stripped.startswith("trusted_council_keys = ")
+            and shared.sorafs_council_public_keys
+        ):
+            rendered_keys = ", ".join(
+                _quote_toml(key) for key in shared.sorafs_council_public_keys
+            )
+            rendered.append(f"trusted_council_keys = [{rendered_keys}]")
+            continue
+        if (
+            current_section == "[sorafs.discovery.admission]"
+            and stripped.startswith("signature_threshold = ")
+            and shared.sorafs_council_signature_threshold is not None
+        ):
+            rendered.append(
+                "signature_threshold = "
+                f"{shared.sorafs_council_signature_threshold}"
             )
             continue
         if (

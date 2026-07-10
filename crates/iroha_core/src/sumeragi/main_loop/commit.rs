@@ -338,15 +338,6 @@ fn commit_pipeline_sample_from_timings(
     }
 }
 
-fn autoscale_transition_committed_at(
-    nexus: &iroha_config::parameters::actual::Nexus,
-    committed_height: u64,
-) -> bool {
-    nexus.enabled
-        && nexus.autoscale.enabled
-        && nexus.autoscale.last_transition_height == committed_height
-}
-
 #[derive(Debug)]
 pub(super) enum CommitOutcome {
     Rejected {
@@ -2161,17 +2152,16 @@ impl Actor {
                 self.queue
                     .remove_committed_hashes(committed_tx_hashes, None);
                 let committed_nexus = self.state.nexus_snapshot();
-                if autoscale_transition_committed_at(&committed_nexus, pending_height) {
-                    let lane_compliance = self.queue.lane_compliance_engine();
-                    self.queue.reconfigure_nexus_with_state(
-                        &committed_nexus,
-                        self.state.as_ref(),
-                        lane_compliance,
-                    );
+                let lane_compliance = self.queue.lane_compliance_engine();
+                if self.queue.reconfigure_nexus_with_state_if_needed(
+                    &committed_nexus,
+                    self.state.as_ref(),
+                    lane_compliance,
+                ) {
                     debug!(
                         height = pending_height,
                         lanes = committed_nexus.lane_catalog.lane_count().get(),
-                        "reconfigured queue after deterministic Nexus autoscale transition"
+                        "reconfigured queue after committed Nexus topology transition"
                     );
                 }
                 crate::sumeragi::status::record_kura_stage(
@@ -9460,6 +9450,7 @@ impl Actor {
         let _ = self.maybe_release_committed_edge_conflict_owner("committed_height_advanced");
         self.prune_missing_block_recovery_state(now);
         self.refresh_p2p_topology();
+        self.refresh_consensus_handshake_caps(false)?;
         if let Some(baseline_roster) = self.recovery_pending_baseline_restore.remove(&height) {
             if let Err(err) = self.install_elected_roster(&baseline_roster) {
                 warn!(
@@ -10854,24 +10845,6 @@ mod tests {
             slow_stage,
             Duration::from_secs(5)
         ));
-    }
-
-    #[test]
-    fn autoscale_transition_committed_at_requires_enabled_matching_height() {
-        let mut nexus = iroha_config::parameters::actual::Nexus::default();
-        nexus.enabled = true;
-        nexus.autoscale.enabled = true;
-        nexus.autoscale.last_transition_height = 42;
-
-        assert!(autoscale_transition_committed_at(&nexus, 42));
-        assert!(!autoscale_transition_committed_at(&nexus, 41));
-
-        nexus.autoscale.enabled = false;
-        assert!(!autoscale_transition_committed_at(&nexus, 42));
-
-        nexus.autoscale.enabled = true;
-        nexus.enabled = false;
-        assert!(!autoscale_transition_committed_at(&nexus, 42));
     }
 
     struct CommitFixture {

@@ -2093,6 +2093,7 @@ pub fn lane_relay_envelope_sample() -> napi::Result<JsLaneRelaySample> {
     let settlement = LaneBlockCommitment {
         block_height: 1,
         lane_id,
+        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id,
         tx_count: 1,
         total_local_micro: 10,
@@ -5107,6 +5108,8 @@ pub struct JsGatewayProviderSpec {
     pub name: String,
     /// Provider identifier rendered as 32-byte hexadecimal.
     pub provider_id_hex: String,
+    /// Ed25519 key that verifies the provider's stream token, as 32-byte hex.
+    pub gateway_public_key_hex: String,
     /// Base URL for the Torii gateway.
     pub base_url: String,
     /// Stream token presented when fetching chunks.
@@ -5745,6 +5748,16 @@ fn build_gateway_provider_input(
             "provider '{name}' has invalid providerIdHex; expected 32-byte hex"
         )));
     }
+    let gateway_public_key = spec.gateway_public_key_hex.trim().to_ascii_lowercase();
+    if gateway_public_key.len() != 64
+        || !gateway_public_key
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        return Err(invalid_arg(format!(
+            "provider '{name}' has invalid gatewayPublicKeyHex; expected 32-byte hex"
+        )));
+    }
     let base_url = spec.base_url.trim();
     if base_url.is_empty() {
         return Err(invalid_arg(format!(
@@ -5766,6 +5779,7 @@ fn build_gateway_provider_input(
     Ok(GatewayProviderInput {
         name,
         provider_id_hex: provider_id,
+        gateway_public_key_hex: gateway_public_key,
         base_url: base_url.to_string(),
         stream_token_b64: stream_token.to_string(),
         privacy_events_url: privacy_url,
@@ -22785,8 +22799,8 @@ mod tests {
         let mut provider_id = [0u8; 32];
         provider_id
             .copy_from_slice(&hex::decode(provider_id_hex).expect("decode provider identifier"));
-        let token = StreamTokenV1 {
-            body: StreamTokenBodyV1 {
+        let token = StreamTokenV1::sign_with_seed(
+            StreamTokenBodyV1 {
                 token_id: "01TESTTOKEN0000000000000000".to_string(),
                 manifest_cid: hex::decode(manifest_id_hex).expect("decode manifest id"),
                 provider_id,
@@ -22798,8 +22812,9 @@ mod tests {
                 requests_per_minute: 120,
                 token_pk_version: 1,
             },
-            signature: vec![0; 64],
-        };
+            [0x42; 32],
+        )
+        .expect("sign stream token");
         let bytes = norito::to_bytes(&token).expect("encode stream token");
         BASE64.encode(bytes)
     }
@@ -23537,6 +23552,8 @@ mod tests {
             vec![JsGatewayProviderSpec {
                 name: "alpha".to_string(),
                 provider_id_hex: provider_id_hex.clone(),
+                gateway_public_key_hex:
+                    "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12".to_owned(),
                 base_url: "https://stub".into(),
                 stream_token_b64,
                 privacy_events_url: None,

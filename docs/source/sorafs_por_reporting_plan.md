@@ -41,7 +41,7 @@ human-friendly Markdown. Both are generated from the same dataset and stored und
       "provider_id": "prov_8d3a…",
       "manifest_count": 14,
       "challenges": 96,
-      "success_rate": 0.989,
+      "success_rate_bps": 9890,
       "failures": 1,
       "first_failure_at": "2025-03-22T11:05:12Z",
       "last_success_latency_ms_p95": 1800,
@@ -52,7 +52,7 @@ human-friendly Markdown. Both are generated from the same dataset and stored und
   "aggregate": {
     "total_challenges": 1536,
     "total_failures": 12,
-    "success_rate": 0.992,
+    "success_rate_bps": 9920,
     "mean_latency_ms": 720,
     "p95_latency_ms": 2100
   },
@@ -67,6 +67,9 @@ human-friendly Markdown. Both are generated from the same dataset and stored und
 ```
 
 - `cycle_id` matches the transparency ledger cycle identifier.
+- `success_rate_bps` is an integer in `0..=10_000`; latency fields are unsigned
+  integer milliseconds. Floating-point metrics are not part of the v1 report
+  wire format.
 - `providers[]` entries align with governance IDs and include repair linkage (`repair_dispatched`,
   ticket references) so operations can correlate with the repair plan.
 - `anomalies` array captures reasons defined in `sorafs_repair_plan.md` (e.g., `missed_repair_sla`,

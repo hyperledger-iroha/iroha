@@ -63,7 +63,7 @@ cumplimiento que los operadores deben mantener.
    ```bash
    sorafs-fetch \
      --plan=plan.json \
-     --gateway-provider=name=stage-gw,provider-id=<hex>,base-url=https://stage-gw.example/,stream-token=<base64> \
+     --gateway-provider=name=stage-gw,provider-id=<hex>,gateway-key=<ed25519-public-key-hex>,base-url=https://stage-gw.example/,stream-token=<base64> \
      --gateway-manifest-id=<manifest_id_hex> \
      --gateway-chunker-handle=sorafs.sf1@1.0.0 \
      --gateway-client-id=stage-orchestrator \
@@ -97,7 +97,7 @@ y las entradas de stream-token antes de correr):
 ```bash
 ./scripts/sorafs_direct_mode_smoke.sh \
   --config docs/examples/sorafs_direct_mode_smoke.conf \
-  --provider name=green-1,provider-id=<hex>,base-url=https://gw-green.example/direct/,stream-token=<base64>
+  --provider name=green-1,provider-id=<hex>,gateway-key=<ed25519-public-key-hex>,base-url=https://gw-green.example/,stream-token=<base64>
 ```
 
 El wrapper persiste el scoreboard declarado en
@@ -163,8 +163,8 @@ Los rollouts del gateway deben incluir el pack WAF/rate compartido emitido en `c
 ```
 sorafs-fetch \
   --plan=chunk_fetch_plan.json \
-  --gateway-provider=name=gw-a,provider-id=e1ab...,base-url=https://gw-a.example/,stream-token=<b64> \
-  --gateway-provider=name=gw-b,provider-id=f2cd...,base-url=https://gw-b.example/,stream-token=<b64> \
+  --gateway-provider=name=gw-a,provider-id=e1ab...,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gw-a.example/,stream-token=<b64> \
+  --gateway-provider=name=gw-b,provider-id=f2cd...,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gw-b.example/,stream-token=<b64> \
   --gateway-manifest-id=<manifest_id_hex> \
   --gateway-chunker-handle=sorafs.sf1@1.0.0 \
   --gateway-client-id=stage-orchestrator \

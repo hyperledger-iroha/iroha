@@ -39,6 +39,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for Dummy {
 
 fn sample_consensus_config_caps() -> ConsensusConfigCaps {
     ConsensusConfigCaps {
+        nexus_policy_digest: [0xA5; 32],
         collectors_k: 1,
         redundant_send_r: iroha_config::parameters::defaults::sumeragi::COLLECTORS_REDUNDANT_SEND_R,
         da_enabled: true,
@@ -52,6 +53,21 @@ fn sample_consensus_config_caps() -> ConsensusConfigCaps {
         rbc_store_max_bytes: 536_870_912,
         rbc_store_soft_bytes: 402_653_184,
     }
+}
+
+#[test]
+fn consensus_config_caps_wire_roundtrip_preserves_nexus_policy_digest() {
+    let expected = sample_consensus_config_caps();
+    let encoded = expected.encode();
+    let mut cursor = encoded.as_slice();
+    let decoded = ConsensusConfigCaps::decode(&mut cursor).expect("decode consensus config caps");
+
+    assert!(
+        cursor.is_empty(),
+        "decoder must consume the complete caps wire payload"
+    );
+    assert_eq!(decoded, expected);
+    assert_eq!(decoded.nexus_policy_digest, [0xA5; 32]);
 }
 
 fn cfg(addr: iroha_primitives::addr::SocketAddr) -> Config {
@@ -312,7 +328,7 @@ async fn consensus_config_caps_mismatch_rejected() {
 
     let config_caps = sample_consensus_config_caps();
     let mut mismatched = config_caps.clone();
-    mismatched.collectors_k = 2;
+    mismatched.nexus_policy_digest[31] ^= 1;
 
     let caps_ok = ConsensusHandshakeCaps {
         mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_string(),

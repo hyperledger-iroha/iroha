@@ -9,7 +9,8 @@ use crate::state::WorldReadOnly;
 use crate::state::{StateBlock, StateReadOnly};
 use core::num::{NonZeroU64, NonZeroUsize};
 use iroha_data_model::block::{
-    BlockExecutionContextBundle, consensus::SumeragiLanePayloadOwnership,
+    BlockExecutionContextBundle,
+    consensus::{LaneBlockProposalPayloadHintV1, SumeragiLanePayloadOwnership},
 };
 use iroha_data_model::consensus::{
     CommitStakeSnapshot as ModelCommitStakeSnapshot,
@@ -329,7 +330,6 @@ fn known_lane_block_tips_for_proposal(
     proposal_height: u64,
 ) -> Vec<super::lane_scheduler::LaneBlockTip> {
     let nexus = state.nexus_snapshot();
-    let reset_heights = state.da_shard_reset_heights_snapshot_cached();
     let mut tips = state
         .lane_block_artifact_tips_snapshot_cached()
         .into_iter()
@@ -337,12 +337,14 @@ fn known_lane_block_tips_for_proposal(
             |(
                 lane_id,
                 dataspace_id,
+                lane_incarnation,
                 latest_lane_block_height,
                 latest_lane_block_descriptor_hash,
             )| {
                 super::lane_scheduler::LaneBlockTip {
                     lane_id,
                     dataspace_id,
+                    lane_incarnation,
                     latest_lane_block_height,
                     latest_lane_block_descriptor_hash,
                 }
@@ -362,13 +364,13 @@ fn known_lane_block_tips_for_proposal(
                             &nexus,
                             proposal_height,
                         ) == Some(relay.dataspace_id)))
-                    && reset_heights
-                        .get(&relay.lane_id)
-                        .is_none_or(|reset_height| relay.block_height > *reset_height)
+                    && state.lane_incarnation_at_height(relay.lane_id, proposal_height)
+                        == Some(relay.lane_incarnation)
             })
             .map(|relay| super::lane_scheduler::LaneBlockTip {
                 lane_id: relay.lane_id,
                 dataspace_id: relay.dataspace_id,
+                lane_incarnation: relay.lane_incarnation,
                 latest_lane_block_height: relay.block_height,
                 latest_lane_block_descriptor_hash: relay_tip_descriptor_hash_for_proposal(&relay),
             }),
@@ -378,10 +380,17 @@ fn known_lane_block_tips_for_proposal(
             .certified_lane_block_tips_snapshot_cached()
             .into_iter()
             .map(
-                |(lane_id, dataspace_id, latest_lane_block_height, descriptor_hash)| {
+                |(
+                    lane_id,
+                    dataspace_id,
+                    lane_incarnation,
+                    latest_lane_block_height,
+                    descriptor_hash,
+                )| {
                     super::lane_scheduler::LaneBlockTip {
                         lane_id,
                         dataspace_id,
+                        lane_incarnation,
                         latest_lane_block_height,
                         latest_lane_block_descriptor_hash: descriptor_hash,
                     }
@@ -1061,39 +1070,55 @@ fn da_payload_budget(
 }
 
 impl Actor {
+    #[allow(clippy::too_many_arguments)]
     fn native_amx_attestation_body(
+        &self,
         tx: &AcceptedTransaction<'_>,
         plan_digest: Hash,
         coordinator: RoutingDecision,
         participant: crate::queue::RouteLeg,
         phase: NativeAmxPhase,
-        block_height: u64,
-    ) -> NativeAmxAttestationBodyV1 {
+        authority_context_height: u64,
+        coordinator_lane_block_height: u64,
+        coordinator_lane_block_view: u64,
+        coordinator_proposal_hash: Hash,
+    ) -> Result<NativeAmxAttestationBodyV1, &'static str> {
         let mut source_id = [0u8; iroha_crypto::Hash::LENGTH];
         source_id.copy_from_slice(tx.hash().as_ref());
-        NativeAmxAttestationBodyV1 {
+        let coordinator_lane_incarnation = self
+            .state
+            .lane_incarnation_at_height(coordinator.lane_id, authority_context_height)
+            .ok_or("native AMX coordinator lane incarnation is unavailable")?;
+        let participant_lane_incarnation = self
+            .state
+            .lane_incarnation_at_height(participant.route.lane_id, authority_context_height)
+            .ok_or("native AMX participant lane incarnation is unavailable")?;
+        Ok(NativeAmxAttestationBodyV1 {
+            chain_id_hash: self.chain_hash,
             source_id,
             tx_entrypoint_hash: tx.hash_as_entrypoint(),
             plan_digest,
             phase,
             coordinator_lane_id: coordinator.lane_id,
             coordinator_dataspace_id: coordinator.dataspace_id,
+            coordinator_lane_incarnation,
             participant_lane_id: participant.route.lane_id,
             participant_dataspace_id: participant.route.dataspace_id,
-            planned_coordinator_block_height: block_height,
-        }
+            participant_lane_incarnation,
+            authority_context_height,
+            coordinator_lane_block_height,
+            coordinator_lane_block_view,
+            coordinator_proposal_hash,
+        })
     }
 
-    fn native_amx_vote_roster(&self) -> Vec<PeerId> {
-        let mut roster = self.trusted_topology();
-        if roster.is_empty() {
-            roster = self.effective_commit_topology();
-        }
+    fn native_amx_vote_roster(&self, participant_lane: LaneId, block_height: u64) -> Vec<PeerId> {
+        let mut roster = self
+            .state
+            .authoritative_lane_peer_ids_at_height(participant_lane, block_height);
         roster.retain(roster_member_allowed_bls);
-        if roster.is_empty() {
-            roster = self.effective_commit_topology();
-            roster.retain(roster_member_allowed_bls);
-        }
+        roster.sort();
+        roster.dedup();
         roster
     }
 
@@ -1106,13 +1131,14 @@ impl Actor {
         let crate::queue::RoutingPlan::NativeAmx(native_plan) = plan else {
             return Ok(None);
         };
-        let validator_set = self.native_amx_vote_roster();
-        if validator_set.is_empty() {
-            return Err("native AMX participant attestation roster is empty");
-        }
-        let min_signers =
-            crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()).max(1);
         let coordinator = native_plan.coordinator.route;
+        let coordinator_proposal_hash = Hash::new_from_chunks(&[
+            b"iroha:native-amx:legacy-global-session:v1\0",
+            tx.hash_as_entrypoint().as_ref(),
+            native_plan.plan_digest.as_ref(),
+            &block_height.to_be_bytes(),
+        ]);
+        let plan_legs = plan.legs();
         let key = {
             let mut source_id = [0u8; iroha_crypto::Hash::LENGTH];
             source_id.copy_from_slice(tx.hash().as_ref());
@@ -1125,22 +1151,36 @@ impl Actor {
         let mut pending = false;
         let mut legs = Vec::with_capacity(native_plan.participants.len());
         for participant in &native_plan.participants {
-            let prepare_body = Self::native_amx_attestation_body(
+            let validator_set =
+                self.native_amx_vote_roster(participant.route.lane_id, block_height);
+            if validator_set.is_empty() {
+                return Err("native AMX participant lane attestation roster is empty");
+            }
+            let min_signers =
+                crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len())
+                    .max(1);
+            let prepare_body = self.native_amx_attestation_body(
                 tx,
                 native_plan.plan_digest,
                 coordinator,
                 *participant,
                 NativeAmxPhase::Prepare,
                 block_height,
-            );
-            let commit_body = Self::native_amx_attestation_body(
+                block_height,
+                0,
+                coordinator_proposal_hash,
+            )?;
+            let commit_body = self.native_amx_attestation_body(
                 tx,
                 native_plan.plan_digest,
                 coordinator,
                 *participant,
                 NativeAmxPhase::Commit,
                 block_height,
-            );
+                block_height,
+                0,
+                coordinator_proposal_hash,
+            )?;
 
             let prepare_votes = self.native_amx_sessions.sorted_votes_for_body_from(
                 key,
@@ -1154,12 +1194,24 @@ impl Actor {
             );
             if prepare_votes.len() < min_signers {
                 pending = true;
-                self.request_native_amx_attestation_votes(&validator_set, prepare_body);
+                self.request_native_amx_attestation_votes(
+                    &validator_set,
+                    NativeAmxAttestationRequestV1 {
+                        body: prepare_body,
+                        plan_legs: plan_legs.clone(),
+                    },
+                );
                 continue;
             }
             if commit_votes.len() < min_signers {
                 pending = true;
-                self.request_native_amx_attestation_votes(&validator_set, commit_body);
+                self.request_native_amx_attestation_votes(
+                    &validator_set,
+                    NativeAmxAttestationRequestV1 {
+                        body: commit_body,
+                        plan_legs: plan_legs.clone(),
+                    },
+                );
                 continue;
             }
 
@@ -1180,6 +1232,7 @@ impl Actor {
             legs.push(NativeAmxLegRecord {
                 lane_id: participant.route.lane_id,
                 dataspace_id: participant.route.dataspace_id,
+                lane_incarnation: prepare_body.participant_lane_incarnation,
                 prepare_qc,
                 commit_qc,
             });
@@ -1194,10 +1247,18 @@ impl Actor {
         Ok(Some(NativeAmxReceipt {
             version: 1,
             source_id,
+            chain_id_hash: self.chain_hash,
             plan_digest: native_plan.plan_digest,
             lane_id: coordinator.lane_id,
             dataspace_id: coordinator.dataspace_id,
-            block_height,
+            lane_incarnation: self
+                .state
+                .lane_incarnation_at_height(coordinator.lane_id, block_height)
+                .ok_or("native AMX coordinator lane incarnation is unavailable")?,
+            authority_context_height: block_height,
+            lane_block_height: block_height,
+            lane_block_view: 0,
+            coordinator_proposal_hash,
             legs,
         }))
     }
@@ -1674,6 +1735,18 @@ impl Actor {
         let mut ivm_transactions_deferred = 0usize;
         let scan_budget = scan_budget.max(1);
         let committed_nexus = state.nexus_snapshot();
+        if committed_nexus.enabled && self.queue.lane_reservation_journal_installed() {
+            // In Nexus mode each active lane owns FIFO selection through its
+            // crash-safe reservation journal. Letting the global proposer pop
+            // the same queue concurrently would reintroduce cross-node double
+            // execution; global blocks carry certified merge batches instead.
+            debug!(
+                height,
+                view,
+                "skipping global FIFO selection while independent lane producers own the queue"
+            );
+            return Vec::new();
+        }
         let (lane_domain_consensus_mode, lane_domain_mode_tag, _) =
             self.consensus_context_for_height(height);
         let mut planned_lane_payload_ownerships = Vec::new();
@@ -1696,7 +1769,7 @@ impl Actor {
         }
         let known_lane_block_tips = self.known_lane_block_tips_for_proposal(height);
         let blocked_lane_ids = self.unapplied_lane_block_lanes_for_proposal(state, height);
-        let lane_reset_heights = state.da_shard_reset_heights_snapshot_cached();
+        let lane_reset_heights = BTreeMap::new();
 
         loop {
             let remaining_budget = scan_budget.saturating_sub(fetched_total);
@@ -1793,7 +1866,7 @@ impl Actor {
             }
             let lane_consensus_deferral = !use_shared_lane_domain_committee;
             let mut defer_accepted_due_to_lane_consensus = false;
-            for planning_attempt in 0..2 {
+            'lane_payload_planning: {
                 let lane_domain_committees =
                     super::lane_scheduler::plan_lane_consensus_committees_with_authority(
                         &fetched_routing,
@@ -1829,78 +1902,60 @@ impl Actor {
                         if lane_consensus_deferral {
                             defer_accepted_due_to_lane_consensus = true;
                         }
-                        break;
+                        break 'lane_payload_planning;
                     }
                 };
                 if domains.is_empty() {
-                    break;
+                    break 'lane_payload_planning;
                 }
-
-                let lane_payload_plan = match super::lane_scheduler::plan_lane_payload(
-                    &domains,
-                    &known_lane_block_tips,
-                    &fetched_hashes,
-                    height.saturating_sub(1),
-                    &lane_reset_heights,
-                    height,
-                    view,
-                ) {
-                    Ok(lane_payload_plan) => lane_payload_plan,
-                    Err(error) => {
-                        warn!(
-                            height,
-                            view,
-                            ?error,
-                            lane_consensus_deferral,
-                            "failed to plan lane-local payload for proposal batch"
-                        );
-                        if lane_consensus_deferral {
-                            defer_accepted_due_to_lane_consensus = true;
-                        }
-                        break;
-                    }
-                };
-
-                let non_authoritative_lanes = if lane_consensus_deferral {
-                    self.lane_payload_lanes_not_authored_by_local_proposer(&lane_payload_plan)
-                } else {
-                    BTreeSet::new()
-                };
-                if !non_authoritative_lanes.is_empty() && planning_attempt == 0 {
-                    debug!(
-                        height,
-                        view,
-                        lane_ids = ?non_authoritative_lanes
-                            .iter()
-                            .map(|lane_id| lane_id.as_u32())
-                            .collect::<Vec<_>>(),
-                        "deferring lane-routed proposal work outside the local lane-slot author"
-                    );
-                    schedule = super::lane_scheduler::defer_accepted_proposal_actions_for_lanes(
-                        &schedule,
-                        &fetched_routing,
-                        &candidates,
-                        &non_authoritative_lanes,
-                        super::lane_scheduler::ProposalDeferralReason::LaneConsensus,
-                    );
-                    continue;
-                }
-                if !non_authoritative_lanes.is_empty() {
+                let lane_incarnations = domains
+                    .iter()
+                    .map(|domain| {
+                        state
+                            .lane_incarnation_at_height(domain.lane_id, height)
+                            .filter(|incarnation| {
+                                !incarnation.as_ref().iter().all(|byte| *byte == 0)
+                            })
+                            .map(|incarnation| (domain.lane_id, incarnation))
+                    })
+                    .collect::<Option<BTreeMap<_, _>>>();
+                let Some(lane_incarnations) = lane_incarnations else {
                     warn!(
                         height,
-                        view,
-                        lane_ids = ?non_authoritative_lanes
-                            .iter()
-                            .map(|lane_id| lane_id.as_u32())
-                            .collect::<Vec<_>>(),
-                        lane_consensus_deferral,
-                        "failed to remove lane-routed proposal work outside the local lane-slot author"
+                        view, "failed to plan lane payload: active lane incarnation is missing"
                     );
                     if lane_consensus_deferral {
                         defer_accepted_due_to_lane_consensus = true;
                     }
-                    break;
-                }
+                    break 'lane_payload_planning;
+                };
+
+                let lane_payload_plan =
+                    match super::lane_scheduler::plan_lane_payload_with_incarnations(
+                        &domains,
+                        &known_lane_block_tips,
+                        &fetched_hashes,
+                        height.saturating_sub(1),
+                        &lane_reset_heights,
+                        &lane_incarnations,
+                        height,
+                        Self::planned_lane_block_view_for_global_proposal(height, view),
+                    ) {
+                        Ok(lane_payload_plan) => lane_payload_plan,
+                        Err(error) => {
+                            warn!(
+                                height,
+                                view,
+                                ?error,
+                                lane_consensus_deferral,
+                                "failed to plan lane-local payload for proposal batch"
+                            );
+                            if lane_consensus_deferral {
+                                defer_accepted_due_to_lane_consensus = true;
+                            }
+                            break 'lane_payload_planning;
+                        }
+                    };
 
                 planned_lane_payload_ownerships.extend(
                     lane_payload_plan
@@ -1973,7 +2028,6 @@ impl Actor {
                         .map_or("", |domain| domain.qc_mode_tag.as_str()),
                     "planned lane-local consensus domains for proposal batch"
                 );
-                break;
             }
             if defer_accepted_due_to_lane_consensus {
                 schedule = super::lane_scheduler::defer_accepted_proposal_actions(
@@ -2065,6 +2119,7 @@ impl Actor {
             proposal_view,
             lane_id: ownership.lane_id,
             dataspace_id: ownership.dataspace_id,
+            lane_incarnation: ownership.lane_incarnation,
             lane_block_height: ownership.lane_block_height,
             lane_block_view: ownership.lane_block_view,
             subject_hash: ownership.subject_hash,
@@ -2090,33 +2145,16 @@ impl Actor {
         }
     }
 
-    fn lane_payload_lanes_not_authored_by_local_proposer(
-        &self,
-        lane_payload_plan: &super::lane_scheduler::LanePayloadPlan,
-    ) -> BTreeSet<LaneId> {
-        let local_peer = self.common_config.peer.id();
-        lane_payload_plan
-            .entries
-            .iter()
-            .filter(|entry| {
-                Self::lane_payload_author(entry).is_none_or(|author| author != local_peer)
-            })
-            .map(|entry| entry.domain.lane_id)
-            .collect()
-    }
-
-    fn lane_payload_author(
-        entry: &super::lane_scheduler::LanePayloadPlanEntry,
-    ) -> Option<&iroha_data_model::peer::PeerId> {
-        let validator_count = u64::try_from(entry.domain.validator_set.len()).ok()?;
-        if validator_count == 0 {
-            return None;
-        }
-        let author_index = entry.slot.lane_block_height.saturating_sub(1) % validator_count;
-        entry
-            .domain
-            .validator_set
-            .get(usize::try_from(author_index).ok()?)
+    fn planned_lane_block_view_for_global_proposal(
+        _proposal_height: u64,
+        _proposal_view: u64,
+    ) -> u64 {
+        // The current standalone lane-block path does not run an independent
+        // lane-local view-change protocol. Binding lane-local view to the
+        // global Sumeragi view fragments votes when several global leaders
+        // retry the same lane height, so newly planned lane blocks use a stable
+        // initial lane view.
+        0
     }
 
     fn plan_final_lane_payload(
@@ -2182,34 +2220,35 @@ impl Actor {
         }
 
         let known_lane_block_tips = self.known_lane_block_tips_for_proposal(height);
-        let lane_reset_heights = state.da_shard_reset_heights_snapshot_cached();
-        let lane_payload_plan = super::lane_scheduler::plan_lane_payload(
+        let lane_reset_heights = BTreeMap::new();
+        let lane_incarnations = lane_domains
+            .iter()
+            .map(|domain| {
+                state
+                    .lane_incarnation_at_height(domain.lane_id, height)
+                    .filter(|incarnation| !incarnation.as_ref().iter().all(|byte| *byte == 0))
+                    .map(|incarnation| (domain.lane_id, incarnation))
+                    .ok_or_else(|| {
+                        eyre!(
+                            "missing active incarnation for lane {} at proposal height {height}",
+                            domain.lane_id.as_u32()
+                        )
+                    })
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        let lane_payload_plan = super::lane_scheduler::plan_lane_payload_with_incarnations(
             &lane_domains,
             &known_lane_block_tips,
             candidate_hashes,
             height.saturating_sub(1),
             &lane_reset_heights,
+            &lane_incarnations,
             height,
-            view,
+            Self::planned_lane_block_view_for_global_proposal(height, view),
         )
         .map_err(|error| {
             eyre!("failed to plan lane-local payload for final proposal batch: {error:?}")
         })?;
-        let non_authoritative_lanes = if use_shared_lane_domain_committee {
-            BTreeSet::new()
-        } else {
-            self.lane_payload_lanes_not_authored_by_local_proposer(&lane_payload_plan)
-        };
-        if !non_authoritative_lanes.is_empty() {
-            return Err(eyre!(
-                "local proposer cannot author lane-local payloads for lanes assigned to another lane-slot author: {:?}",
-                non_authoritative_lanes
-                    .iter()
-                    .map(|lane_id| lane_id.as_u32())
-                    .collect::<Vec<_>>()
-            ));
-        }
-
         let ownerships = lane_payload_plan
             .entries
             .iter()
@@ -2232,12 +2271,12 @@ impl Actor {
             self.subsystems
                 .committed_lane_blocks
                 .lane_block_tips_snapshot_for_admissible_lanes(
-                    |lane_id, dataspace_id, lane_block_height| {
+                    |lane_id, dataspace_id, lane_incarnation, _lane_block_height| {
                         self.lane_block_artifact_targets_active_route(
                             lane_id,
                             dataspace_id,
+                            lane_incarnation,
                             proposal_height,
-                            lane_block_height,
                         )
                     },
                 ),
@@ -2258,12 +2297,14 @@ impl Actor {
                     .unapplied_certified_lane_block_heights_snapshot_cached()
                     .into_iter(),
             )
-            .filter_map(|((lane_id, dataspace_id), lane_block_height)| {
+            .filter_map(|((lane_id, dataspace_id), _lane_block_height)| {
+                let lane_incarnation =
+                    state.lane_incarnation_at_height(lane_id, proposal_height)?;
                 self.lane_block_artifact_targets_active_route(
                     lane_id,
                     dataspace_id,
+                    lane_incarnation,
                     proposal_height,
-                    lane_block_height,
                 )
                 .then_some(lane_id)
             })
@@ -2273,12 +2314,16 @@ impl Actor {
                 .committed_lane_blocks
                 .unapplied_lane_ids_for_admissible_lanes(
                     state.kura(),
-                    |lane_id, dataspace_id, lane_block_height, artifact_proposal_height| {
+                    |lane_id,
+                     dataspace_id,
+                     lane_incarnation,
+                     _lane_block_height,
+                     artifact_proposal_height| {
                         self.lane_block_artifact_targets_active_route(
                             lane_id,
                             dataspace_id,
+                            lane_incarnation,
                             artifact_proposal_height,
-                            lane_block_height,
                         )
                     },
                 ),
@@ -2286,14 +2331,19 @@ impl Actor {
         blocked_lanes.extend(
             self.subsystems
                 .lane_blocks
-                .pending_lane_ids_for_admissible_lanes(
-                    |lane_id, dataspace_id, lane_block_height, artifact_proposal_height| {
+                .inflight_lane_ids_for_admissible_lanes(
+                    |lane_id,
+                     dataspace_id,
+                     lane_incarnation,
+                     _lane_block_height,
+                     artifact_proposal_height,
+                     has_consensus_evidence| {
                         self.lane_block_artifact_targets_active_route(
                             lane_id,
                             dataspace_id,
+                            lane_incarnation,
                             artifact_proposal_height,
-                            lane_block_height,
-                        )
+                        ) && (has_consensus_evidence || artifact_proposal_height == proposal_height)
                     },
                 ),
         );
@@ -2303,8 +2353,14 @@ impl Actor {
     pub(super) fn local_lane_block_prepare_vote(
         &self,
         plan: &super::lane_scheduler::LaneBlockVotePlan,
+        proposal: &crate::sumeragi::consensus::LaneBlockProposalV1,
     ) -> Option<crate::lane_consensus::LaneBlockVoteV1> {
         if plan.phase != crate::sumeragi::consensus::Phase::Prepare {
+            return None;
+        }
+        if proposal.proposal_hash != plan.proposal_hash
+            || !self.lane_block_payload_available_for_vote(proposal, "prepare")
+        {
             return None;
         }
 
@@ -2432,7 +2488,12 @@ impl Actor {
 
         let local_prepare_votes = prepare_vote_plans
             .iter()
-            .filter_map(|plan| self.local_lane_block_prepare_vote(plan))
+            .filter_map(|plan| {
+                let proposal = proposals
+                    .iter()
+                    .find(|proposal| proposal.proposal_hash == plan.proposal_hash)?;
+                self.local_lane_block_prepare_vote(plan, proposal)
+            })
             .collect::<Vec<_>>();
         let local_peer = self.common_config.peer.id().clone();
         for vote in local_prepare_votes {
@@ -2462,6 +2523,125 @@ impl Actor {
             );
         }
 
+        scheduled
+    }
+
+    /// Persist or securely hand off canonical lane-owned executable payloads
+    /// before lane voting.
+    ///
+    /// When the global proposer is in the independently selected lane
+    /// committee it signs and disseminates the canonical payload directly.
+    /// Otherwise it signs a non-executable handoff so active committee members
+    /// can verify the exact bytes and re-sign them under committee authority.
+    fn persist_lane_executable_payloads(
+        &mut self,
+        proposals: &[crate::sumeragi::consensus::LaneBlockProposalV1],
+        transactions: &[crate::tx::AcceptedTransaction<'_>],
+        epoch: u64,
+        global_proposal_hint: LaneBlockProposalPayloadHintV1,
+    ) -> usize {
+        let local_peer = self.common_config.peer.id().clone();
+        let mut scheduled = 0_usize;
+        for proposal in proposals {
+            if proposal.descriptor.lane_block_view != 0 {
+                continue;
+            }
+            let mut anchored_proposal = proposal.clone();
+            anchored_proposal.payload_block_hint = Some(global_proposal_hint);
+            let mut entrypoints =
+                Vec::with_capacity(proposal.descriptor.accepted_candidate_indices.len());
+            let mut complete = true;
+            for raw_index in &proposal.descriptor.accepted_candidate_indices {
+                let Some(entrypoint) = usize::try_from(*raw_index)
+                    .ok()
+                    .and_then(|index| transactions.get(index))
+                    .map(|transaction| transaction.entrypoint().clone())
+                else {
+                    complete = false;
+                    break;
+                };
+                entrypoints.push(entrypoint);
+            }
+            if !complete {
+                warn!(
+                    lane_id = proposal.descriptor.lane_id.as_u32(),
+                    lane_block_height = proposal.descriptor.lane_block_height,
+                    "skipping autonomous lane payload with out-of-range entrypoint index"
+                );
+                continue;
+            }
+            if super::lane_scheduler::lane_block_redrive_leader(&anchored_proposal, 0)
+                == Some(&local_peer)
+            {
+                let payload = match crate::lane_consensus::LaneExecutablePayloadV1::new_signed(
+                    self.chain_hash,
+                    epoch,
+                    anchored_proposal,
+                    entrypoints,
+                    local_peer.clone(),
+                    self.common_config.key_pair.private_key(),
+                ) {
+                    Ok(payload) => payload,
+                    Err(err) => {
+                        warn!(
+                            ?err,
+                            lane_id = proposal.descriptor.lane_id.as_u32(),
+                            lane_block_height = proposal.descriptor.lane_block_height,
+                            "failed to authenticate autonomous lane payload"
+                        );
+                        continue;
+                    }
+                };
+                if let Err(err) = self.handle_lane_executable_payload(payload, Some(&local_peer)) {
+                    warn!(
+                        ?err,
+                        lane_id = proposal.descriptor.lane_id.as_u32(),
+                        lane_block_height = proposal.descriptor.lane_block_height,
+                        "failed to persist or disseminate autonomous lane payload"
+                    );
+                    continue;
+                }
+                scheduled = scheduled.saturating_add(1);
+                continue;
+            }
+
+            let handoff = match crate::lane_consensus::LaneExecutablePayloadHandoffV1::new_signed(
+                self.chain_hash,
+                epoch,
+                anchored_proposal,
+                entrypoints,
+                local_peer.clone(),
+                self.common_config.key_pair.private_key(),
+            ) {
+                Ok(handoff) => handoff,
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        lane_id = proposal.descriptor.lane_id.as_u32(),
+                        lane_block_height = proposal.descriptor.lane_block_height,
+                        "failed to authenticate autonomous lane payload handoff"
+                    );
+                    continue;
+                }
+            };
+            let message = BlockMessage::LaneExecutablePayloadHandoff(handoff);
+            let wire_len = consensus_block_wire_len(&local_peer, &message);
+            if wire_len > self.consensus_payload_frame_cap {
+                warn!(
+                    lane_id = proposal.descriptor.lane_id.as_u32(),
+                    lane_block_height = proposal.descriptor.lane_block_height,
+                    wire_len,
+                    cap = self.consensus_payload_frame_cap,
+                    "lane payload handoff exceeds configured consensus payload frame cap"
+                );
+                continue;
+            }
+            self.schedule_lane_block_message_to_validator_set(
+                message.clone(),
+                proposal.descriptor.validator_set.as_slice(),
+            );
+            scheduled = scheduled.saturating_add(1);
+        }
         scheduled
     }
 
@@ -5208,6 +5388,12 @@ impl Actor {
                     proposal_view: view,
                     proposal_block_hash: block_hash,
                 };
+            self.persist_lane_executable_payloads(
+                &final_lane_payload_plan.lane_block_proposal_artifacts,
+                &tx_batch,
+                proposal_epoch,
+                lane_block_payload_hint,
+            );
             self.broadcast_lane_block_plan_artifacts(
                 &final_lane_payload_plan.lane_block_proposal_artifacts,
                 &final_lane_payload_plan.lane_block_prepare_vote_plans,
@@ -9012,6 +9198,7 @@ mod tests {
         LaneBlockCommitment {
             block_height: height,
             lane_id: LaneId::SINGLE,
+            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::UNIVERSAL,
             tx_count: 0,
             total_local_micro: 0,

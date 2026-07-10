@@ -38,6 +38,8 @@ pub const LANE_RELAY_FASTPQ_EFFECT_TYPE: &str = "lane_relay_block";
 pub struct LaneRelayEnvelope {
     /// Numeric lane identifier.
     pub lane_id: LaneId,
+    /// Active incarnation commitment for the lane-local height namespace.
+    pub lane_incarnation: Hash,
     /// Numeric dataspace identifier.
     pub dataspace_id: DataSpaceId,
     /// Block height associated with the settlement commitment.
@@ -202,6 +204,7 @@ pub struct LaneFastpqProofMaterial {
 struct LaneRelayFastpqClaim {
     version: u8,
     lane_id: LaneId,
+    lane_incarnation: Hash,
     dataspace_id: DataSpaceId,
     block_height: u64,
     block_header: BlockHeader,
@@ -217,6 +220,7 @@ struct LaneRelayFastpqClaim {
 struct LaneRelayMergeHint {
     version: u8,
     lane_id: LaneId,
+    lane_incarnation: Hash,
     dataspace_id: DataSpaceId,
     block_height: u64,
     tip_hash: HashOf<BlockHeader>,
@@ -244,8 +248,9 @@ pub fn lane_relay_fastpq_claim_digest(
         .manifest_root
         .ok_or(LaneRelayError::InvalidFastpqProof)?;
     let claim = LaneRelayFastpqClaim {
-        version: 1,
+        version: 2,
         lane_id: envelope.lane_id,
+        lane_incarnation: envelope.lane_incarnation,
         dataspace_id: envelope.dataspace_id,
         block_height: envelope.block_height,
         block_header: envelope.block_header,
@@ -399,6 +404,14 @@ impl LaneRelayEnvelope {
         if settlement_commitment.block_height != block_height {
             return Err(LaneRelayError::SettlementBlockHeightMismatch);
         }
+        if settlement_commitment
+            .lane_incarnation
+            .as_ref()
+            .iter()
+            .all(|byte| *byte == 0)
+        {
+            return Err(LaneRelayError::ZeroLaneIncarnation);
+        }
 
         if let Some(qc) = qc.as_ref()
             && qc.subject_block_hash != block_header.hash()
@@ -417,6 +430,7 @@ impl LaneRelayEnvelope {
 
         Ok(Self {
             lane_id: settlement_commitment.lane_id,
+            lane_incarnation: settlement_commitment.lane_incarnation,
             dataspace_id: settlement_commitment.dataspace_id,
             block_height,
             block_header,
@@ -460,6 +474,12 @@ impl LaneRelayEnvelope {
         }
         if self.settlement_commitment.lane_id != self.lane_id {
             return Err(LaneRelayError::SettlementLaneMismatch);
+        }
+        if self.lane_incarnation.as_ref().iter().all(|byte| *byte == 0) {
+            return Err(LaneRelayError::ZeroLaneIncarnation);
+        }
+        if self.settlement_commitment.lane_incarnation != self.lane_incarnation {
+            return Err(LaneRelayError::SettlementLaneIncarnationMismatch);
         }
         if self.settlement_commitment.dataspace_id != self.dataspace_id {
             return Err(LaneRelayError::SettlementDataspaceMismatch);
@@ -506,8 +526,9 @@ impl LaneRelayEnvelope {
     pub fn merge_hint_root(&self) -> Result<Hash, LaneRelayError> {
         let qc = self.qc.as_ref().ok_or(LaneRelayError::MissingQc)?;
         let hint = LaneRelayMergeHint {
-            version: 1,
+            version: 2,
             lane_id: self.lane_id,
+            lane_incarnation: self.lane_incarnation,
             dataspace_id: self.dataspace_id,
             block_height: self.block_height,
             tip_hash: self.block_header.hash(),
@@ -851,6 +872,16 @@ pub enum LaneRelayError {
         /// Height carried by the stale relay.
         relay_height: u64,
     },
+    /// Relay carries a non-current lane incarnation commitment.
+    #[error("stale lane relay for {lane}: expected incarnation {expected:?}, received {actual:?}")]
+    LaneIncarnationMismatch {
+        /// Lane identifier associated with the relay.
+        lane: LaneId,
+        /// Current active incarnation commitment.
+        expected: Hash,
+        /// Incarnation carried by the relay.
+        actual: Hash,
+    },
     /// Conflicting relay detected for the same lane/height with a different payload.
     #[error("conflicting lane relay for {lane} at height {height}")]
     ConflictingRelay {
@@ -883,6 +914,12 @@ pub enum LaneRelayError {
     /// Settlement commitment lane identifier differs from the envelope lane id.
     #[error("settlement commitment lane id does not match envelope lane id")]
     SettlementLaneMismatch,
+    /// Settlement commitment incarnation differs from the envelope incarnation.
+    #[error("settlement commitment lane incarnation does not match envelope")]
+    SettlementLaneIncarnationMismatch,
+    /// Lane incarnation is the reserved all-zero value.
+    #[error("lane relay incarnation commitment must be non-zero")]
+    ZeroLaneIncarnation,
     /// Settlement commitment dataspace identifier differs from the envelope dataspace id.
     #[error("settlement commitment dataspace id does not match envelope dataspace id")]
     SettlementDataspaceMismatch,
@@ -957,6 +994,8 @@ impl PartialEq for LaneRelayError {
             | (SettlementBlockHeightMismatch, SettlementBlockHeightMismatch)
             | (BlockHeightMismatch, BlockHeightMismatch)
             | (SettlementLaneMismatch, SettlementLaneMismatch)
+            | (SettlementLaneIncarnationMismatch, SettlementLaneIncarnationMismatch)
+            | (ZeroLaneIncarnation, ZeroLaneIncarnation)
             | (SettlementDataspaceMismatch, SettlementDataspaceMismatch)
             | (QcSubjectMismatch, QcSubjectMismatch)
             | (QcHeightMismatch, QcHeightMismatch)
@@ -1054,6 +1093,18 @@ impl PartialEq for LaneRelayError {
                     relay_height: b_relay,
                 },
             ) => a_lane == b_lane && a_reset == b_reset && a_relay == b_relay,
+            (
+                LaneIncarnationMismatch {
+                    lane: a_lane,
+                    expected: a_expected,
+                    actual: a_actual,
+                },
+                LaneIncarnationMismatch {
+                    lane: b_lane,
+                    expected: b_expected,
+                    actual: b_actual,
+                },
+            ) => a_lane == b_lane && a_expected == b_expected && a_actual == b_actual,
             _ => false,
         }
     }
@@ -1072,6 +1123,7 @@ impl LaneRelayError {
             LaneRelayError::DataspaceMismatch { .. } => "dataspace_mismatch",
             LaneRelayError::StaleRelay { .. } => "stale_height",
             LaneRelayError::StaleLaneIncarnation { .. } => "stale_lane_incarnation",
+            LaneRelayError::LaneIncarnationMismatch { .. } => "lane_incarnation_mismatch",
             LaneRelayError::ConflictingRelay { .. } => "conflicting_relay",
             LaneRelayError::SettlementHashMismatch => "settlement_hash_mismatch",
             LaneRelayError::SettlementTotalsMismatch => "settlement_totals_mismatch",
@@ -1083,6 +1135,10 @@ impl LaneRelayError {
             LaneRelayError::SettlementBlockHeightMismatch => "settlement_block_height_mismatch",
             LaneRelayError::BlockHeightMismatch => "block_height_mismatch",
             LaneRelayError::SettlementLaneMismatch => "settlement_lane_mismatch",
+            LaneRelayError::SettlementLaneIncarnationMismatch => {
+                "settlement_lane_incarnation_mismatch"
+            }
+            LaneRelayError::ZeroLaneIncarnation => "zero_lane_incarnation",
             LaneRelayError::SettlementDataspaceMismatch => "settlement_dataspace_mismatch",
             LaneRelayError::QcSubjectMismatch => "qc_subject_mismatch",
             LaneRelayError::QcHeightMismatch => "qc_height_mismatch",
@@ -1120,6 +1176,7 @@ mod tests {
         LaneBlockCommitment {
             block_height: height,
             lane_id: LaneId::new(lane_id),
+            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::new(dataspace_id),
             tx_count: 1,
             total_local_micro: 10,

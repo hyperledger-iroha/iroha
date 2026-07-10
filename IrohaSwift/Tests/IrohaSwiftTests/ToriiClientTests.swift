@@ -30,6 +30,151 @@ private final class StubURLProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
+private func nativeAmxTestCrc16(_ bytes: [UInt8]) -> UInt16 {
+    var crc = UInt16.max
+    for byte in bytes {
+        crc ^= UInt16(byte) << 8
+        for _ in 0..<8 {
+            crc = (crc & 0x8000) != 0 ? (crc &<< 1) ^ 0x1021 : crc &<< 1
+        }
+    }
+    return crc
+}
+
+private func nativeAmxTestHash(_ seed: UInt8) -> String {
+    var bytes = [UInt8](repeating: seed, count: 32)
+    bytes[31] |= 1
+    let body = bytes.map { String(format: "%02X", $0) }.joined()
+    let checksum = nativeAmxTestCrc16(Array("hash:\(body)".utf8))
+    return "hash:\(body)#\(String(format: "%04X", checksum))"
+}
+
+private func nativeAmxStatusPayload(
+    preparePhase: String = "prepare",
+    signature: String = String(repeating: "9a", count: 96),
+    duplicateLeg: Bool = false,
+    secondEntrypointHash: String? = nil,
+    authorityContextHeight: Int = 40,
+    receiptLaneIncarnation: String? = nil,
+    receiptProposalHash: String? = nil
+) throws -> Data {
+    let source = String(repeating: "ab", count: 32)
+    let planDigest = nativeAmxTestHash(0x23)
+    let entrypoint = nativeAmxTestHash(0x67)
+    let validatorHash = nativeAmxTestHash(0x45)
+    let chainIdHash = nativeAmxTestHash(0x11)
+    let coordinatorIncarnation = nativeAmxTestHash(0x89)
+    let coordinatorProposalHash = nativeAmxTestHash(0x55)
+    let validators = ["validator-0", "validator-1", "validator-2", "validator-3"]
+    func qc(_ phase: String, lane: Int, dataspace: Int, entrypointHash: String) -> [String: Any] {
+        let participantIncarnation = lane == 7
+            ? coordinatorIncarnation
+            : nativeAmxTestHash(0xB1)
+        return [
+            "body": [
+                "chain_id_hash": chainIdHash,
+                "source_id": source,
+                "tx_entrypoint_hash": entrypointHash,
+                "plan_digest": planDigest,
+                "phase": phase,
+                "coordinator_lane_id": 7,
+                "coordinator_dataspace_id": 11,
+                "coordinator_lane_incarnation": coordinatorIncarnation,
+                "participant_lane_id": lane,
+                "participant_dataspace_id": dataspace,
+                "participant_lane_incarnation": participantIncarnation,
+                "authority_context_height": authorityContextHeight,
+                "coordinator_lane_block_height": 42,
+                "coordinator_lane_block_view": 6,
+                "coordinator_proposal_hash": coordinatorProposalHash,
+            ],
+            "validator_set_hash_version": 1,
+            "validator_set_hash": validatorHash,
+            "validator_set": validators,
+            "signers_bitmap": [7],
+            "bls_aggregate_signature": signature,
+        ]
+    }
+    func leg(_ lane: Int, _ dataspace: Int, _ entrypointHash: String) -> [String: Any] {
+        [
+            "lane_id": lane,
+            "dataspace_id": dataspace,
+            "lane_incarnation": lane == 7
+                ? coordinatorIncarnation
+                : nativeAmxTestHash(0xB1),
+            "prepare_qc": qc(preparePhase, lane: lane, dataspace: dataspace, entrypointHash: entrypointHash),
+            "commit_qc": qc("commit", lane: lane, dataspace: dataspace, entrypointHash: entrypointHash),
+        ]
+    }
+    let firstLeg = leg(7, 11, entrypoint)
+    let secondLeg = duplicateLeg
+        ? firstLeg
+        : leg(8, 12, secondEntrypointHash ?? entrypoint)
+    let nativeReceipt: [String: Any] = [
+        "version": 1,
+        "source_id": source,
+        "chain_id_hash": chainIdHash,
+        "plan_digest": planDigest,
+        "lane_id": 7,
+        "dataspace_id": 11,
+        "lane_incarnation": receiptLaneIncarnation ?? coordinatorIncarnation,
+        "authority_context_height": authorityContextHeight,
+        "lane_block_height": 42,
+        "lane_block_view": 6,
+        "coordinator_proposal_hash": receiptProposalHash ?? coordinatorProposalHash,
+        "legs": [firstLeg, secondLeg],
+    ]
+    let commitment: [String: Any] = [
+        "block_height": 42,
+        "lane_id": 7,
+        "lane_incarnation": nativeAmxTestHash(0x89),
+        "dataspace_id": 11,
+        "tx_count": 2,
+        "total_local_micro": "170141183460469231731687303715884105851",
+        "total_xor_due_micro": "100",
+        "total_xor_after_haircut_micro": "90",
+        "total_xor_variance_micro": "10",
+        "swap_metadata": NSNull(),
+        "receipts": [],
+        "nexus_fee_receipts": [[
+            "version": 1,
+            "source_id": String(repeating: "cd", count: 32),
+            "dataspace_id": 11,
+            "lane_id": 7,
+            "block_height": 42,
+            "payer_account_id": "payer",
+            "fee_asset_id": "xor#universal",
+            "fee_amount": "123.4500",
+            "schedule": [
+                "tx_bytes_len": 1024,
+                "instruction_count": 2,
+                "gas_used": 99,
+                "base_fee": "1.25",
+                "per_byte_fee": "0.01",
+                "per_instruction_fee": "2",
+                "per_gas_unit_fee": "0.125",
+            ],
+        ]],
+        "native_amx_receipts": [nativeReceipt],
+    ]
+    let relay: [String: Any] = [
+        "lane_id": 7,
+        "lane_incarnation": nativeAmxTestHash(0x89),
+        "dataspace_id": 11,
+        "block_height": 42,
+        "block_hash": nativeAmxTestHash(0x91),
+        "commit_qc": NSNull(),
+        "da_commitment_hash": NSNull(),
+        "settlement_commitment": commitment,
+        "settlement_hash": nativeAmxTestHash(0x95),
+        "rbc_bytes_total": 2048,
+    ]
+    return try JSONSerialization.data(withJSONObject: [
+        "lane_settlement_commitments": [commitment],
+        "lane_relay_envelopes": [relay],
+    ])
+}
+
 #if os(macOS)
 private final class ToriiMockProcess {
     private let process: Process
@@ -6566,11 +6711,78 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testSorafsGatewayProviderEncodesAndValidatesTrustInputs() throws {
+        let provider = try SorafsGatewayProvider(
+            name: "alpha",
+            providerIdHex: String(repeating: "01", count: 32),
+            gatewayPublicKeyHex: String(repeating: "ab", count: 32),
+            baseURL: URL(string: "https://gateway.test/")!,
+            streamTokenB64: Data("token".utf8).base64EncodedString(),
+            privacyEventsURL: URL(string: "https://gateway.test/privacy/events")!
+        )
+        let encoded = try JSONEncoder().encode(provider)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: String]
+        )
+        XCTAssertEqual(object["gateway_public_key_hex"], String(repeating: "ab", count: 32))
+
+        for key in [
+            String(repeating: "0", count: 64),
+            String(repeating: "AB", count: 32),
+            "0x" + String(repeating: "ab", count: 32),
+            String(repeating: "ab", count: 31)
+        ] {
+            XCTAssertThrowsError(try SorafsGatewayProvider(
+                name: "alpha",
+                providerIdHex: String(repeating: "01", count: 32),
+                gatewayPublicKeyHex: key,
+                baseURL: URL(string: "https://gateway.test/")!,
+                streamTokenB64: Data("token".utf8).base64EncodedString()
+            ))
+        }
+        for rawURL in [
+            "http://gateway.test/",
+            "https://user@gateway.test/",
+            "https://gateway.test:443/",
+            "https://gateway.test/path",
+            "https://gateway.test/?query=1",
+            "https://localhost/",
+            "https://127.0.0.1/",
+            "https://10.0.0.1/",
+            "https://169.254.169.254/",
+            "https://192.0.2.1/",
+            "https://198.51.100.1/",
+            "https://203.0.113.1/",
+            "https://[::1]/",
+            "https://[fc00::1]/",
+            "https://[fe80::1]/",
+            "https://[2001:db8::1]/",
+            "https://[::ffff:127.0.0.1]/"
+        ] {
+            XCTAssertThrowsError(try SorafsGatewayProvider(
+                name: "alpha",
+                providerIdHex: String(repeating: "01", count: 32),
+                gatewayPublicKeyHex: String(repeating: "ab", count: 32),
+                baseURL: URL(string: rawURL)!,
+                streamTokenB64: Data("token".utf8).base64EncodedString()
+            ))
+        }
+        XCTAssertThrowsError(try SorafsGatewayProvider(
+            name: "alpha",
+            providerIdHex: String(repeating: "01", count: 32),
+            gatewayPublicKeyHex: String(repeating: "ab", count: 32),
+            baseURL: URL(string: "https://gateway.test/")!,
+            streamTokenB64: String(repeating: "A", count: 90 * 1_024 + 1)
+        ))
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testFetchDaPayloadViaGatewayUsesProvidedManifest() async throws {
         let bundle = try tcMakeSampleManifestBundle()
         let provider = try SorafsGatewayProvider(
             name: "alpha",
             providerIdHex: String(repeating: "01", count: 32),
+            gatewayPublicKeyHex: String(repeating: "ab", count: 32),
             baseURL: URL(string: "https://gateway.test")!,
             streamTokenB64: Data("token".utf8).base64EncodedString()
         )
@@ -6602,6 +6814,7 @@ final class ToriiClientTests: XCTestCase {
         let provider = try SorafsGatewayProvider(
             name: "beta",
             providerIdHex: String(repeating: "02", count: 32),
+            gatewayPublicKeyHex: String(repeating: "ab", count: 32),
             baseURL: URL(string: "https://gateway.test")!,
             streamTokenB64: Data("stream".utf8).base64EncodedString()
         )
@@ -6621,6 +6834,7 @@ final class ToriiClientTests: XCTestCase {
         let provider = try SorafsGatewayProvider(
             name: "gamma",
             providerIdHex: String(repeating: "03", count: 32),
+            gatewayPublicKeyHex: String(repeating: "ab", count: 32),
             baseURL: URL(string: "https://gateway.test")!,
             streamTokenB64: Data("stream".utf8).base64EncodedString()
         )
@@ -6672,6 +6886,7 @@ final class ToriiClientTests: XCTestCase {
         let provider = try SorafsGatewayProvider(
             name: "delta",
             providerIdHex: String(repeating: "04", count: 32),
+            gatewayPublicKeyHex: String(repeating: "ab", count: 32),
             baseURL: URL(string: "https://gateway.test")!,
             streamTokenB64: Data("token".utf8).base64EncodedString()
         )
@@ -13178,6 +13393,92 @@ id: 88
         XCTAssertEqual(governanceRaw.count, 1)
     }
 
+    func testSumeragiStatusPreservesNativeAmxAndNexusFeeReceipts() throws {
+        let snapshot = try JSONDecoder().decode(
+            ToriiSumeragiStatusSnapshot.self,
+            from: nativeAmxStatusPayload()
+        )
+
+        let commitment = try XCTUnwrap(snapshot.laneSettlementCommitments.first)
+        XCTAssertEqual(commitment.totalLocalMicro, "170141183460469231731687303715884105851")
+        XCTAssertEqual(commitment.nexusFeeReceipts.first?.feeAmount, "123.4500")
+        XCTAssertEqual(commitment.nativeAmxReceipts.first?.legs.count, 2)
+        XCTAssertEqual(commitment.nativeAmxReceipts.first?.chainIdHash, nativeAmxTestHash(0x11))
+        XCTAssertEqual(commitment.nativeAmxReceipts.first?.laneIncarnation, nativeAmxTestHash(0x89))
+        XCTAssertEqual(commitment.nativeAmxReceipts.first?.authorityContextHeight, 40)
+        XCTAssertEqual(commitment.nativeAmxReceipts.first?.laneBlockHeight, 42)
+        XCTAssertEqual(commitment.nativeAmxReceipts.first?.laneBlockView, 6)
+        XCTAssertEqual(
+            commitment.nativeAmxReceipts.first?.coordinatorProposalHash,
+            nativeAmxTestHash(0x55)
+        )
+        XCTAssertEqual(commitment.nativeAmxReceipts.first?.legs.first?.prepareQc.body.phase, .prepare)
+        XCTAssertEqual(commitment.nativeAmxReceipts.first?.legs.first?.commitQc.body.phase, .commit)
+        XCTAssertEqual(commitment.nativeAmxReceipts.first?.legs.first?.prepareQc.signersBitmap, [7])
+        XCTAssertEqual(
+            snapshot.laneRelayEnvelopes.first?.settlementCommitment.nativeAmxReceipts,
+            commitment.nativeAmxReceipts
+        )
+    }
+
+    func testSumeragiStatusRejectsWrongNativeAmxPhase() throws {
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiSumeragiStatusSnapshot.self,
+                from: nativeAmxStatusPayload(preparePhase: "commit")
+            )
+        )
+    }
+
+    func testSumeragiStatusRejectsDuplicateNativeAmxLegs() throws {
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiSumeragiStatusSnapshot.self,
+                from: nativeAmxStatusPayload(duplicateLeg: true)
+            )
+        )
+    }
+
+    func testSumeragiStatusRejectsMalformedNativeAmxSignatureAndEntrypointDrift() throws {
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiSumeragiStatusSnapshot.self,
+                from: nativeAmxStatusPayload(signature: String(repeating: "00", count: 96))
+            )
+        )
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiSumeragiStatusSnapshot.self,
+                from: nativeAmxStatusPayload(secondEntrypointHash: nativeAmxTestHash(0x33))
+            )
+        )
+    }
+
+    func testSumeragiStatusRejectsNativeAmxAbaAndSessionTampering() throws {
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiSumeragiStatusSnapshot.self,
+                from: nativeAmxStatusPayload(
+                    receiptLaneIncarnation: nativeAmxTestHash(0x99)
+                )
+            )
+        )
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiSumeragiStatusSnapshot.self,
+                from: nativeAmxStatusPayload(authorityContextHeight: 0)
+            )
+        )
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiSumeragiStatusSnapshot.self,
+                from: nativeAmxStatusPayload(
+                    receiptProposalHash: nativeAmxTestHash(0x57)
+                )
+            )
+        )
+    }
+
     @available(iOS 15.0, macOS 12.0, *)
     func testGetSumeragiCommitQcParsesRecordAsync() async throws {
         let blockHash = String(repeating: "a", count: 64)
@@ -16170,6 +16471,7 @@ final class ToriiClientIntegrationTests: XCTestCase {
         let provider = try SorafsGatewayProvider(
             name: "demo",
             providerIdHex: String(repeating: "f", count: 64),
+            gatewayPublicKeyHex: String(repeating: "ab", count: 32),
             baseURL: URL(string: "https://gateway.test")!,
             streamTokenB64: Data("token".utf8).base64EncodedString()
         )

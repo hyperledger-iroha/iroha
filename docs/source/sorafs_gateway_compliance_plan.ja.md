@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_gateway_compliance_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 8ba24dd8287ebe3f992227f751304ef7f464ffdf35ce84186536b272c8bf258e
+source_hash: d03869cf83c31306757ad89e195ce2459386a4e66cf7cf3a5ff9123e5b3dc802
 source_last_modified: "2026-07-06T19:08:48.772896+00:00"
 translation_last_reviewed: 2026-07-06
 source_mtime: 2026-07-06T19:08:48.772896+00:00
@@ -189,7 +189,7 @@ cargo run --locked -p sorafs_orchestrator --bin sorafs_cli -- \
   moderation honey-audit \
   --manifest-id=<hex32> \
   --honey=<digest_hex> \
-  --provider name=<alias>,provider-id=<hex32>,base-url=<url>,stream-token=<base64> \
+  --provider name=<alias>,provider-id=<hex32>,gateway-key=<ed25519-public-key-hex>,base-url=https://gateway.example/,stream-token=<base64> \
   --json-out artifacts/sorafs_gateway/honey_audit.json \
   --markdown-out artifacts/sorafs_gateway/honey_audit.md
 ```

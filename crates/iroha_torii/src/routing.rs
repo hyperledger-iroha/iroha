@@ -91,13 +91,14 @@ use iroha_data_model::{
         BlockHeader, SignedBlock,
         consensus::{
             EvidenceRecord, NativeAmxAttestationBodyV1, NativeAmxAttestationQcV1,
-            NativeAmxLegRecord, NativeAmxPhase, NativeAmxReceipt,
+            NativeAmxLegRecord, NativeAmxPhase, NativeAmxReceipt, NexusFeeReceipt,
+            NexusFeeScheduleInputs,
         },
     },
     consensus::{ConsensusKeyRecord, ValidatorSetCheckpoint},
     nexus::{
         Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, DataSpaceCatalog,
-        DataSpaceId, LaneConfig, LaneId, LaneLifecyclePlan, LaneRelayEnvelope, ManifestEffect,
+        DataSpaceId, LaneConfig, LaneId, LaneLifecycleStatusV1, LaneRelayEnvelope, ManifestEffect,
         ManifestEntry, ManifestVersion, PublicLaneRewardRecord, PublicLaneRewardRole,
         PublicLaneRewardShare, PublicLaneStakeShare, PublicLaneUnbonding,
         PublicLaneValidatorRecord, PublicLaneValidatorStatus, UniversalAccountId,
@@ -37729,24 +37730,35 @@ pub async fn handle_post_sorafs_record_uptime_observation(
 }
 
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
-pub async fn handle_post_sorafs_record_por_challenge(
+#[cfg(all(feature = "app_api", test))]
+pub(crate) async fn handle_post_sorafs_record_por_challenge(
     _telemetry: MaybeTelemetry,
     sorafs_node: sorafs_node::NodeHandle,
     sorafs_limits: Arc<SorafsQuotaEnforcer>,
     por_coordinator: Arc<sorafs::PorCoordinator>,
-    NoritoJson(req): NoritoJson<RecordPorChallengeDto>,
+    challenge: PorChallengeV1,
 ) -> Result<impl IntoResponse> {
-    let challenge = decode_por_payload::<PorChallengeV1>(&req.challenge_b64, "challenge")?;
+    let _pipeline = por_coordinator.lock_pipeline().await;
     if let Err(err) = sorafs_limits.enforce(SorafsAction::PorSubmission, &challenge.provider_id) {
         return Err(quota_limit_error(err));
     }
-    sorafs_node
-        .record_por_challenge(&challenge)
-        .map_err(por_tracker_error)?;
     por_coordinator
         .record_challenge(&challenge)
         .map_err(por_coordinator_error)?;
+    if let Err(node_error) = sorafs_node.record_por_challenge(&challenge) {
+        if let Err(rollback_error) = por_coordinator.rollback_challenge(&challenge) {
+            iroha_logger::error!(
+                ?node_error,
+                ?rollback_error,
+                challenge_id = %hex::encode(challenge.challenge_id),
+                "failed to compensate SoraFS PoR challenge node commit"
+            );
+            return Err(conversion_error(format!(
+                "PoR challenge node commit failed ({node_error}); coordinator rollback also failed ({rollback_error})"
+            )));
+        }
+        return Err(por_tracker_error(node_error));
+    }
 
     iroha_logger::info!(
         provider_id = %hex::encode(challenge.provider_id),
@@ -37772,23 +37784,37 @@ pub async fn handle_post_sorafs_record_por_challenge(
 
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-pub async fn handle_post_sorafs_record_por_proof(
+pub(crate) async fn handle_post_sorafs_record_por_proof(
     _telemetry: MaybeTelemetry,
     sorafs_node: sorafs_node::NodeHandle,
     sorafs_limits: Arc<SorafsQuotaEnforcer>,
     por_coordinator: Arc<sorafs::PorCoordinator>,
-    NoritoJson(req): NoritoJson<RecordPorProofDto>,
+    proof: PorProofV1,
+    authenticated_signer: PublicKey,
+    admitted_provider_key: Vec<u8>,
 ) -> Result<impl IntoResponse> {
-    let proof = decode_por_payload::<PorProofV1>(&req.proof_b64, "proof")?;
+    let _pipeline = por_coordinator.lock_pipeline().await;
+    verify_authenticated_por_proof(&proof, &authenticated_signer, &admitted_provider_key)?;
     if let Err(err) = sorafs_limits.enforce(SorafsAction::PorSubmission, &proof.provider_id) {
         return Err(quota_limit_error(err));
     }
-    sorafs_node
-        .record_por_proof(&proof)
-        .map_err(por_tracker_error)?;
     por_coordinator
-        .record_proof(&proof)
+        .record_proof(&proof, &admitted_provider_key)
         .map_err(por_coordinator_error)?;
+    if let Err(node_error) = sorafs_node.record_por_proof(&proof, &admitted_provider_key) {
+        if let Err(rollback_error) = por_coordinator.rollback_proof(&proof) {
+            iroha_logger::error!(
+                ?node_error,
+                ?rollback_error,
+                challenge_id = %hex::encode(proof.challenge_id),
+                "failed to compensate SoraFS PoR proof node commit"
+            );
+            return Err(conversion_error(format!(
+                "PoR proof node commit failed ({node_error}); coordinator rollback also failed ({rollback_error})"
+            )));
+        }
+        return Err(por_tracker_error(node_error));
+    }
 
     iroha_logger::info!(
         provider_id = %hex::encode(proof.provider_id),
@@ -37813,23 +37839,70 @@ pub async fn handle_post_sorafs_record_por_proof(
 
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-pub async fn handle_post_sorafs_record_por_verdict(
+pub(crate) async fn handle_post_sorafs_record_por_verdict(
     telemetry: MaybeTelemetry,
     sorafs_node: sorafs_node::NodeHandle,
     sorafs_limits: Arc<SorafsQuotaEnforcer>,
     por_coordinator: Arc<sorafs::PorCoordinator>,
-    NoritoJson(req): NoritoJson<RecordPorVerdictDto>,
+    verdict: AuditVerdictV1,
+    authenticated_signer: PublicKey,
+    trusted_auditor_keys: Vec<Vec<u8>>,
+    auditor_threshold: usize,
 ) -> Result<impl IntoResponse> {
-    let verdict = decode_por_payload::<AuditVerdictV1>(&req.verdict_b64, "verdict")?;
+    let _pipeline = por_coordinator.lock_pipeline().await;
+    verify_authenticated_por_verdict(
+        &verdict,
+        &authenticated_signer,
+        &trusted_auditor_keys,
+        auditor_threshold,
+    )?;
     if let Err(err) = sorafs_limits.enforce(SorafsAction::PorSubmission, &verdict.provider_id) {
         return Err(quota_limit_error(err));
     }
-    let outcome = sorafs_node
-        .record_por_verdict(&verdict)
-        .map_err(por_tracker_error)?;
     por_coordinator
-        .record_verdict(&verdict, outcome)
+        .record_verdict(
+            &verdict,
+            &trusted_auditor_keys,
+            auditor_threshold,
+            sorafs_node::PorVerdictOutcome {
+                stats: sorafs_node::PorVerdictStats {
+                    success_samples: 0,
+                    failed_samples: 0,
+                },
+                repair_history_id: None,
+                consecutive_failures: 0,
+                slash: None,
+            },
+        )
         .map_err(por_coordinator_error)?;
+    let outcome = match sorafs_node.record_por_verdict(
+        &verdict,
+        &trusted_auditor_keys,
+        auditor_threshold,
+    ) {
+        Ok(outcome) => outcome,
+        Err(node_error) => {
+            if let Err(rollback_error) = por_coordinator.rollback_verdict(&verdict) {
+                iroha_logger::error!(
+                    ?node_error,
+                    ?rollback_error,
+                    challenge_id = %hex::encode(verdict.challenge_id),
+                    "failed to compensate SoraFS PoR verdict node commit"
+                );
+                return Err(conversion_error(format!(
+                    "PoR verdict node commit failed ({node_error}); coordinator rollback also failed ({rollback_error})"
+                )));
+            }
+            return Err(por_tracker_error(node_error));
+        }
+    };
+    if let Err(error) = por_coordinator.update_verdict_outcome(verdict.challenge_id, &outcome) {
+        iroha_logger::error!(
+            ?error,
+            challenge_id = %hex::encode(verdict.challenge_id),
+            "failed to persist SoraFS PoR repair-history link after terminal commit"
+        );
+    }
     observe_sorafs_metering(&telemetry, &sorafs_node);
 
     iroha_logger::info!(
@@ -37913,8 +37986,8 @@ pub fn handle_get_sorafs_por_report(
 }
 
 #[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
-pub async fn handle_post_sorafs_record_por_observation(
+#[cfg(all(feature = "app_api", test))]
+pub(crate) async fn handle_post_sorafs_record_por_observation(
     telemetry: MaybeTelemetry,
     sorafs_node: sorafs_node::NodeHandle,
     NoritoJson(req): NoritoJson<RecordPorObservationDto>,
@@ -38668,7 +38741,7 @@ fn replication_schedule_error(err: sorafs_node::capacity::CapacityError) -> Erro
     conversion_error(message)
 }
 
-fn decode_por_payload<T>(payload_b64: &str, kind: &str) -> Result<T, Error>
+pub(crate) fn decode_por_payload<T>(payload_b64: &str, kind: &str) -> Result<T, Error>
 where
     T: for<'de> norito::NoritoDeserialize<'de>,
 {
@@ -38677,6 +38750,90 @@ where
         .map_err(|err| conversion_error(format!("invalid base64 in {kind}_b64: {err}")))?;
     norito::decode_from_bytes(&bytes)
         .map_err(|err| conversion_error(format!("invalid {kind} payload: {err}")))
+}
+
+#[cfg(feature = "app_api")]
+fn por_submission_forbidden(code: &'static str, message: impl Into<String>) -> Error {
+    Error::AppForbidden {
+        code,
+        message: message.into(),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn authenticated_ed25519_payload(signer: &PublicKey, role: &'static str) -> Result<&[u8], Error> {
+    let (algorithm, payload) = signer.try_to_bytes().map_err(|error| {
+        por_submission_forbidden(
+            "sorafs_por_request_signer_invalid",
+            format!("invalid authenticated {role} signer: {error}"),
+        )
+    })?;
+    if algorithm != Algorithm::Ed25519 {
+        return Err(por_submission_forbidden(
+            "sorafs_por_request_signer_algorithm",
+            format!("authenticated {role} signer must use Ed25519"),
+        ));
+    }
+    Ok(payload)
+}
+
+#[cfg(feature = "app_api")]
+fn verify_authenticated_por_proof(
+    proof: &PorProofV1,
+    authenticated_signer: &PublicKey,
+    admitted_provider_key: &[u8],
+) -> Result<(), Error> {
+    proof
+        .validate()
+        .map_err(|error| conversion_error(format!("invalid authenticated PoR proof: {error}")))?;
+    proof.verify_signature().map_err(|error| {
+        por_submission_forbidden(
+            "sorafs_por_proof_signature_invalid",
+            format!("PoR provider signature verification failed: {error}"),
+        )
+    })?;
+    let request_key = authenticated_ed25519_payload(authenticated_signer, "provider")?;
+    if request_key != proof.signature.public_key.as_slice() {
+        return Err(por_submission_forbidden(
+            "sorafs_por_proof_request_signer_mismatch",
+            "authenticated request signer does not match the PoR proof signer",
+        ));
+    }
+    if admitted_provider_key != proof.signature.public_key.as_slice() {
+        return Err(por_submission_forbidden(
+            "sorafs_por_proof_provider_key_mismatch",
+            "PoR proof signer does not match the provider's admitted advert key",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
+fn verify_authenticated_por_verdict(
+    verdict: &AuditVerdictV1,
+    authenticated_signer: &PublicKey,
+    trusted_auditor_keys: &[Vec<u8>],
+    auditor_threshold: usize,
+) -> Result<(), Error> {
+    verdict
+        .validate()
+        .map_err(|error| conversion_error(format!("invalid authenticated PoR verdict: {error}")))?;
+    verdict
+        .verify_signatures_with_policy(trusted_auditor_keys, auditor_threshold)
+        .map_err(|error| {
+            por_submission_forbidden(
+                "sorafs_por_verdict_signature_invalid",
+                format!("PoR auditor signature policy failed: {error}"),
+            )
+        })?;
+    let request_key = authenticated_ed25519_payload(authenticated_signer, "auditor")?;
+    if !verdict.has_signer(request_key) {
+        return Err(por_submission_forbidden(
+            "sorafs_por_verdict_request_signer_mismatch",
+            "authenticated request signer is not an auditor signer on the verdict",
+        ));
+    }
+    Ok(())
 }
 
 fn por_tracker_error(err: sorafs_node::PorTrackerError) -> Error {
@@ -40799,6 +40956,8 @@ mod sorafs_capacity_tests {
     }
 
     fn sample_por_artifacts() -> (PorChallengeV1, PorProofV1, AuditVerdictV1) {
+        use ed25519_dalek::{Signer as _, SigningKey};
+
         let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
         let chunker_handle = format!(
             "{}.{}@{}",
@@ -40827,9 +40986,9 @@ mod sorafs_capacity_tests {
             epoch_id,
             drand_round,
             drand_randomness,
-            drand_signature: vec![0xF1; 96],
+            drand_signature: [0xF1; 48],
             vrf_output: Some(vrf_output),
-            vrf_proof: Some(vec![0xF2; 80]),
+            vrf_proof: Some(iroha_crypto::vrf::VrfProof::SigInG1([0xF2; 48])),
             forced: false,
             chunking_profile: chunker_handle,
             seed,
@@ -40840,7 +40999,8 @@ mod sorafs_capacity_tests {
             deadline_at: 1_700_000_600,
         };
 
-        let proof = PorProofV1 {
+        let provider_key = SigningKey::from_bytes(&[0x44; 32]);
+        let mut proof = PorProofV1 {
             version: POR_PROOF_VERSION_V1,
             challenge_id: challenge.challenge_id,
             manifest_digest: challenge.manifest_digest,
@@ -40855,13 +41015,18 @@ mod sorafs_capacity_tests {
             auth_path: vec![[0x33; 32]],
             signature: sorafs_manifest::provider_advert::AdvertSignature {
                 algorithm: sorafs_manifest::provider_advert::SignatureAlgorithm::Ed25519,
-                public_key: vec![0x44; 32],
-                signature: vec![0x55; 64],
+                public_key: provider_key.verifying_key().to_bytes().to_vec(),
+                signature: vec![0; 64],
             },
             submitted_at: 1_700_000_100,
         };
+        let proof_payload = proof
+            .signature_payload_bytes()
+            .expect("encode PoR proof signing payload");
+        proof.signature.signature = provider_key.sign(&proof_payload).to_bytes().to_vec();
 
-        let verdict = AuditVerdictV1 {
+        let auditor_key = SigningKey::from_bytes(&[0x66; 32]);
+        let mut verdict = AuditVerdictV1 {
             version: AUDIT_VERDICT_VERSION_V1,
             manifest_digest: challenge.manifest_digest,
             provider_id: challenge.provider_id,
@@ -40872,11 +41037,16 @@ mod sorafs_capacity_tests {
             decided_at: 1_700_000_200,
             auditor_signatures: vec![sorafs_manifest::provider_advert::AdvertSignature {
                 algorithm: sorafs_manifest::provider_advert::SignatureAlgorithm::Ed25519,
-                public_key: vec![0x66; 32],
-                signature: vec![0x77; 64],
+                public_key: auditor_key.verifying_key().to_bytes().to_vec(),
+                signature: vec![0; 64],
             }],
             metadata: Vec::new(),
         };
+        let verdict_payload = verdict
+            .signature_payload_bytes()
+            .expect("encode PoR verdict signing payload");
+        verdict.auditor_signatures[0].signature =
+            auditor_key.sign(&verdict_payload).to_bytes().to_vec();
 
         (challenge, proof, verdict)
     }
@@ -40912,9 +41082,11 @@ mod sorafs_capacity_tests {
             epoch_id,
             drand_round,
             drand_randomness,
-            drand_signature: vec![salt.wrapping_add(3); 96],
+            drand_signature: [salt.wrapping_add(3); 48],
             vrf_output: Some(vrf_output),
-            vrf_proof: Some(vec![salt.wrapping_add(4); 80]),
+            vrf_proof: Some(iroha_crypto::vrf::VrfProof::SigInG1(
+                [salt.wrapping_add(4); 48],
+            )),
             forced: false,
             chunking_profile: chunker_handle,
             seed,
@@ -40978,8 +41150,10 @@ mod sorafs_capacity_tests {
     fn seed_sample_deal(node: &sorafs_node::NodeHandle) -> (DealId, u64) {
         let provider = ProviderId::new([0xAA; 32]);
         let client = ClientId::new([0xBB; 32]);
-        node.deposit_provider_bond(provider, 5_000_000_000);
-        node.deposit_client_credit(client, 3_000_000_000);
+        node.deposit_provider_bond(provider, 5_000_000_000)
+            .expect("deposit provider bond");
+        node.deposit_client_credit(client, 3_000_000_000)
+            .expect("deposit client credit");
 
         let activation_epoch = 1_700_000_000;
         let proposal = DealProposal {
@@ -41761,43 +41935,51 @@ mod sorafs_capacity_tests {
         seed_capacity_declaration(&node);
         let (challenge, proof, verdict) = sample_por_artifacts();
         let quotas = Arc::new(SorafsQuotaEnforcer::unlimited());
+        let provider_signer =
+            PublicKey::from_bytes(Algorithm::Ed25519, proof.signature.public_key.as_slice())
+                .expect("provider signer public key");
+        let auditor_signer = PublicKey::from_bytes(
+            Algorithm::Ed25519,
+            verdict.auditor_signatures[0].public_key.as_slice(),
+        )
+        .expect("auditor signer public key");
+        let trusted_auditor_keys = vec![verdict.auditor_signatures[0].public_key.clone()];
 
-        let challenge_b64 = base64::engine::general_purpose::STANDARD
-            .encode(norito::to_bytes(&challenge).expect("encode challenge"));
         let challenge_resp = handle_post_sorafs_record_por_challenge(
             telemetry.clone(),
             node.clone(),
             quotas.clone(),
             por_coordinator.clone(),
-            NoritoJson(RecordPorChallengeDto { challenge_b64 }),
+            challenge,
         )
         .await
         .expect("challenge handler ok")
         .into_response();
         assert_eq!(challenge_resp.status(), axum::http::StatusCode::OK);
 
-        let proof_b64 = base64::engine::general_purpose::STANDARD
-            .encode(norito::to_bytes(&proof).expect("encode proof"));
         let proof_resp = handle_post_sorafs_record_por_proof(
             telemetry.clone(),
             node.clone(),
             quotas.clone(),
             por_coordinator.clone(),
-            NoritoJson(RecordPorProofDto { proof_b64 }),
+            proof.clone(),
+            provider_signer,
+            proof.signature.public_key.clone(),
         )
         .await
         .expect("proof handler ok")
         .into_response();
         assert_eq!(proof_resp.status(), axum::http::StatusCode::OK);
 
-        let verdict_b64 = base64::engine::general_purpose::STANDARD
-            .encode(norito::to_bytes(&verdict).expect("encode verdict"));
         let verdict_resp = handle_post_sorafs_record_por_verdict(
             telemetry,
             node.clone(),
             quotas.clone(),
             por_coordinator.clone(),
-            NoritoJson(RecordPorVerdictDto { verdict_b64 }),
+            verdict,
+            auditor_signer,
+            trusted_auditor_keys,
+            1,
         )
         .await
         .expect("verdict handler ok")
@@ -41818,31 +42000,139 @@ mod sorafs_capacity_tests {
         assert_eq!(snapshot.por_samples_total, 1);
     }
 
+    fn expect_por_forbidden_code(error: Error, expected: &str) {
+        match error {
+            Error::AppForbidden { code, .. } => assert_eq!(code, expected),
+            other => panic!("expected PoR forbidden error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "app_api")]
+    fn por_proof_authentication_rejects_forged_and_cross_provider_signers() {
+        let (_, proof, _) = sample_por_artifacts();
+        let provider_signer =
+            PublicKey::from_bytes(Algorithm::Ed25519, proof.signature.public_key.as_slice())
+                .expect("provider signer");
+        verify_authenticated_por_proof(&proof, &provider_signer, &proof.signature.public_key)
+            .expect("valid provider proof authentication");
+
+        let other_key = iroha_crypto::KeyPair::try_from_seed(
+            b"sorafs-por-other-provider".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("other provider key");
+        expect_por_forbidden_code(
+            verify_authenticated_por_proof(
+                &proof,
+                other_key.public_key(),
+                &proof.signature.public_key,
+            )
+            .expect_err("cross-provider request signer must fail"),
+            "sorafs_por_proof_request_signer_mismatch",
+        );
+
+        let (_, other_admitted_key) = other_key
+            .public_key()
+            .try_to_bytes()
+            .expect("other admitted key");
+        expect_por_forbidden_code(
+            verify_authenticated_por_proof(&proof, &provider_signer, other_admitted_key)
+                .expect_err("proof key must match admitted provider key"),
+            "sorafs_por_proof_provider_key_mismatch",
+        );
+
+        let mut tampered = proof.clone();
+        tampered.submitted_at += 1;
+        expect_por_forbidden_code(
+            verify_authenticated_por_proof(
+                &tampered,
+                &provider_signer,
+                &tampered.signature.public_key,
+            )
+            .expect_err("tampered signed proof must fail"),
+            "sorafs_por_proof_signature_invalid",
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "app_api")]
+    fn por_verdict_authentication_rejects_forgery_replay_padding_and_signer_mismatch() {
+        let (_, _, verdict) = sample_por_artifacts();
+        let auditor_signer = PublicKey::from_bytes(
+            Algorithm::Ed25519,
+            verdict.auditor_signatures[0].public_key.as_slice(),
+        )
+        .expect("auditor signer");
+        let trusted = vec![verdict.auditor_signatures[0].public_key.clone()];
+        verify_authenticated_por_verdict(&verdict, &auditor_signer, &trusted, 1)
+            .expect("valid auditor verdict authentication");
+
+        let other_key = iroha_crypto::KeyPair::try_from_seed(
+            b"sorafs-por-other-auditor".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("other auditor key");
+        expect_por_forbidden_code(
+            verify_authenticated_por_verdict(&verdict, other_key.public_key(), &trusted, 1)
+                .expect_err("request signer absent from verdict must fail"),
+            "sorafs_por_verdict_request_signer_mismatch",
+        );
+
+        let mut tampered = verdict.clone();
+        tampered.decided_at += 1;
+        expect_por_forbidden_code(
+            verify_authenticated_por_verdict(&tampered, &auditor_signer, &trusted, 1)
+                .expect_err("tampered verdict must fail"),
+            "sorafs_por_verdict_signature_invalid",
+        );
+
+        let mut untrusted_padding = verdict.clone();
+        let attacker = ed25519_dalek::SigningKey::from_bytes(&[0x77; 32]);
+        let payload = untrusted_padding
+            .signature_payload_bytes()
+            .expect("encode verdict signing payload");
+        use ed25519_dalek::Signer as _;
+        untrusted_padding.auditor_signatures.push(
+            sorafs_manifest::provider_advert::AdvertSignature {
+                algorithm: sorafs_manifest::provider_advert::SignatureAlgorithm::Ed25519,
+                public_key: attacker.verifying_key().to_bytes().to_vec(),
+                signature: attacker.sign(&payload).to_bytes().to_vec(),
+            },
+        );
+        expect_por_forbidden_code(
+            verify_authenticated_por_verdict(&untrusted_padding, &auditor_signer, &trusted, 1)
+                .expect_err("valid self-signed but untrusted auditor padding must fail"),
+            "sorafs_por_verdict_signature_invalid",
+        );
+
+        let second_trusted = ed25519_dalek::SigningKey::from_bytes(&[0x78; 32]);
+        let threshold_policy = vec![
+            trusted[0].clone(),
+            second_trusted.verifying_key().to_bytes().to_vec(),
+        ];
+        expect_por_forbidden_code(
+            verify_authenticated_por_verdict(&verdict, &auditor_signer, &threshold_policy, 2)
+                .expect_err("one trusted signature must not satisfy a two-auditor threshold"),
+            "sorafs_por_verdict_signature_invalid",
+        );
+
+        let mut padded = verdict;
+        padded
+            .auditor_signatures
+            .push(padded.auditor_signatures[0].clone());
+        expect_por_forbidden_code(
+            verify_authenticated_por_verdict(&padded, &auditor_signer, &trusted, 1)
+                .expect_err("duplicate auditor signer padding must fail"),
+            "sorafs_por_verdict_signature_invalid",
+        );
+    }
+
     #[tokio::test]
     #[cfg(feature = "app_api")]
-    async fn por_challenge_handler_rejects_invalid_base64() {
-        let (_state, _queue, _chain_id, telemetry) = test_state_components();
-        let (node, _dir) = sorafs_node_with_temp_storage();
-        let quotas = Arc::new(SorafsQuotaEnforcer::unlimited());
-        let por_coordinator = Arc::new(sorafs::PorCoordinator::new());
-
-        let result = handle_post_sorafs_record_por_challenge(
-            telemetry,
-            node,
-            quotas,
-            por_coordinator,
-            NoritoJson(RecordPorChallengeDto {
-                challenge_b64: "not-base64%%".to_owned(),
-            }),
-        )
-        .await;
-        let err = match result {
-            Err(err) => err,
-            Ok(resp) => {
-                let status = resp.into_response().status();
-                panic!("expected error, got status {status}");
-            }
-        };
+    async fn por_challenge_payload_decoder_rejects_invalid_base64() {
+        let err = decode_por_payload::<PorChallengeV1>("not-base64%%", "challenge")
+            .expect_err("invalid base64 must fail");
 
         match err {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -56230,9 +56520,7 @@ mod app_api_integration_tests {
             }]),
         };
         body.validate().expect("fixture body must validate");
-        let body_bytes = norito::to_bytes(&body).expect("serialize advert body");
-        let advert_signature = signing_key.sign(&body_bytes);
-        let advert = sorafs_manifest::ProviderAdvertV1 {
+        let mut advert = sorafs_manifest::ProviderAdvertV1 {
             version: sorafs_manifest::PROVIDER_ADVERT_VERSION_V1,
             issued_at,
             expires_at,
@@ -56240,11 +56528,20 @@ mod app_api_integration_tests {
             signature: sorafs_manifest::AdvertSignature {
                 algorithm: sorafs_manifest::SignatureAlgorithm::Ed25519,
                 public_key: signing_key.verifying_key().to_bytes().to_vec(),
-                signature: advert_signature.to_bytes().to_vec(),
+                signature: vec![0; 64],
             },
             signature_strict: true,
             allow_unknown_capabilities: false,
         };
+        let signature_payload = advert
+            .signature_payload_bytes()
+            .expect("serialize advert signature envelope");
+        advert.signature.signature = signing_key.sign(&signature_payload).to_bytes().to_vec();
+        let (vrf_public, vrf_private) = iroha_crypto::BlsNormal::keypair(
+            iroha_crypto::KeyGenOption::UseSeed(provider_id.to_vec()),
+        )
+        .expect("derive provider VRF fixture key");
+        let vrf_pair: iroha_crypto::KeyPair = (vrf_public, vrf_private).into();
         let proposal = sorafs_manifest::ProviderAdmissionProposalV1 {
             version: sorafs_manifest::PROVIDER_ADMISSION_PROPOSAL_VERSION_V1,
             provider_id,
@@ -56266,6 +56563,14 @@ mod app_api_integration_tests {
                 },
             }],
             advert_key: signing_key.verifying_key().to_bytes(),
+            por_vrf_key: sorafs_manifest::ProviderVrfPublicKeyV1::BlsNormal(
+                vrf_pair
+                    .public_key()
+                    .to_bytes()
+                    .1
+                    .try_into()
+                    .expect("Normal BLS public key is 48 bytes"),
+            ),
             jurisdiction_code: "US".to_owned(),
             contact_uri: Some("mailto:ops@example.test".to_owned()),
             stream_budget: Some(sorafs_manifest::StreamBudgetV1 {
@@ -56283,8 +56588,7 @@ mod app_api_integration_tests {
         let advert_body_digest =
             sorafs_manifest::compute_advert_body_digest(&body).expect("advert body digest");
         let council_key = SigningKey::from_bytes(&[0x42; 32]);
-        let council_signature = council_key.sign(&proposal_digest);
-        let envelope = sorafs_manifest::ProviderAdmissionEnvelopeV1 {
+        let mut envelope = sorafs_manifest::ProviderAdmissionEnvelopeV1 {
             version: sorafs_manifest::PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
             proposal,
             proposal_digest,
@@ -56292,12 +56596,19 @@ mod app_api_integration_tests {
             advert_body_digest,
             issued_at,
             retention_epoch: expires_at + 600,
-            council_signatures: vec![sorafs_manifest::CouncilSignature {
-                signer: council_key.verifying_key().to_bytes(),
-                signature: council_signature.to_bytes().to_vec(),
-            }],
+            council_signatures: Vec::new(),
             notes: None,
         };
+        let authorization_digest =
+            sorafs_manifest::compute_envelope_authorization_digest(&envelope)
+                .expect("envelope authorization digest");
+        let council_signature = council_key.sign(&authorization_digest);
+        envelope
+            .council_signatures
+            .push(sorafs_manifest::CouncilSignature {
+                signer: council_key.verifying_key().to_bytes(),
+                signature: council_signature.to_bytes().to_vec(),
+            });
 
         ProjectionProviderFixture { advert, envelope }
     }
@@ -56305,8 +56616,17 @@ mod app_api_integration_tests {
     fn app_state_with_projection_provider_fixture(
         fixture: &ProjectionProviderFixture,
     ) -> (crate::SharedAppState, tempfile::TempDir) {
+        let policy = sorafs_manifest::ProviderAdmissionCouncilPolicy::new(
+            fixture
+                .envelope
+                .council_signatures
+                .iter()
+                .map(|signature| signature.signer),
+            1,
+        )
+        .expect("fixture council policy");
         let admission =
-            crate::sorafs::AdmissionRegistry::from_envelopes([fixture.envelope.clone()])
+            crate::sorafs::AdmissionRegistry::from_envelopes(policy, [fixture.envelope.clone()])
                 .expect("fixture envelope must validate");
         let mut cache = crate::sorafs::ProviderAdvertCache::new(
             vec![
@@ -58840,6 +59160,7 @@ fn native_amx_phase_label(phase: NativeAmxPhase) -> &'static str {
 
 fn native_amx_attestation_body_json(body: &NativeAmxAttestationBodyV1) -> Value {
     json_object(vec![
+        json_entry("chain_id_hash", hash_with_prefix(body.chain_id_hash)),
         json_entry("source_id", hex::encode(body.source_id)),
         json_entry(
             "tx_entrypoint_hash",
@@ -58849,11 +59170,28 @@ fn native_amx_attestation_body_json(body: &NativeAmxAttestationBodyV1) -> Value 
         json_entry("phase", native_amx_phase_label(body.phase)),
         json_entry("coordinator_lane_id", body.coordinator_lane_id),
         json_entry("coordinator_dataspace_id", body.coordinator_dataspace_id),
+        json_entry(
+            "coordinator_lane_incarnation",
+            hash_with_prefix(body.coordinator_lane_incarnation),
+        ),
         json_entry("participant_lane_id", body.participant_lane_id),
         json_entry("participant_dataspace_id", body.participant_dataspace_id),
         json_entry(
-            "planned_coordinator_block_height",
-            body.planned_coordinator_block_height,
+            "participant_lane_incarnation",
+            hash_with_prefix(body.participant_lane_incarnation),
+        ),
+        json_entry("authority_context_height", body.authority_context_height),
+        json_entry(
+            "coordinator_lane_block_height",
+            body.coordinator_lane_block_height,
+        ),
+        json_entry(
+            "coordinator_lane_block_view",
+            body.coordinator_lane_block_view,
+        ),
+        json_entry(
+            "coordinator_proposal_hash",
+            hash_with_prefix(body.coordinator_proposal_hash),
         ),
     ])
 }
@@ -58914,6 +59252,7 @@ fn committed_lane_block_wire(
     SumeragiCommittedLaneBlock {
         lane_id: entry.lane_id,
         dataspace_id: entry.dataspace_id,
+        lane_incarnation: entry.proposal.descriptor.lane_incarnation,
         lane_block_height: entry.lane_block_height,
         lane_block_view: entry.lane_block_view,
         descriptor_hash: entry.descriptor_hash,
@@ -58935,6 +59274,10 @@ fn committed_lane_block_json(entry: &sumeragi::status::CommittedLaneBlockSnapsho
     json_object(vec![
         json_entry("lane_id", Value::from(u64::from(entry.lane_id.as_u32()))),
         json_entry("dataspace_id", Value::from(entry.dataspace_id.as_u64())),
+        json_entry(
+            "lane_incarnation",
+            hash_with_prefix(entry.proposal.descriptor.lane_incarnation),
+        ),
         json_entry("lane_block_height", entry.lane_block_height),
         json_entry("lane_block_view", entry.lane_block_view),
         json_entry("descriptor_hash", hash_with_prefix(entry.descriptor_hash)),
@@ -58966,6 +59309,7 @@ fn native_amx_leg_json(leg: &NativeAmxLegRecord) -> Value {
     json_object(vec![
         json_entry("lane_id", leg.lane_id),
         json_entry("dataspace_id", leg.dataspace_id),
+        json_entry("lane_incarnation", hash_with_prefix(leg.lane_incarnation)),
         json_entry(
             "prepare_qc",
             native_amx_attestation_qc_json(&leg.prepare_qc),
@@ -58978,14 +59322,130 @@ fn native_amx_receipt_json(receipt: &NativeAmxReceipt) -> Value {
     json_object(vec![
         json_entry("version", receipt.version),
         json_entry("source_id", hex::encode(receipt.source_id)),
+        json_entry("chain_id_hash", hash_with_prefix(receipt.chain_id_hash)),
         json_entry("plan_digest", hash_with_prefix(receipt.plan_digest)),
         json_entry("lane_id", receipt.lane_id),
         json_entry("dataspace_id", receipt.dataspace_id),
-        json_entry("block_height", receipt.block_height),
+        json_entry(
+            "lane_incarnation",
+            hash_with_prefix(receipt.lane_incarnation),
+        ),
+        json_entry("authority_context_height", receipt.authority_context_height),
+        json_entry("lane_block_height", receipt.lane_block_height),
+        json_entry("lane_block_view", receipt.lane_block_view),
+        json_entry(
+            "coordinator_proposal_hash",
+            hash_with_prefix(receipt.coordinator_proposal_hash),
+        ),
         json_entry(
             "legs",
             Value::Array(receipt.legs.iter().map(native_amx_leg_json).collect()),
         ),
+    ])
+}
+
+fn nexus_fee_schedule_json(schedule: &NexusFeeScheduleInputs) -> Value {
+    json_object(vec![
+        json_entry("tx_bytes_len", schedule.tx_bytes_len),
+        json_entry("instruction_count", schedule.instruction_count),
+        json_entry("gas_used", schedule.gas_used),
+        json_entry("base_fee", schedule.base_fee.to_string()),
+        json_entry("per_byte_fee", schedule.per_byte_fee.to_string()),
+        json_entry(
+            "per_instruction_fee",
+            schedule.per_instruction_fee.to_string(),
+        ),
+        json_entry("per_gas_unit_fee", schedule.per_gas_unit_fee.to_string()),
+    ])
+}
+
+fn nexus_fee_receipt_json(receipt: &NexusFeeReceipt) -> Value {
+    json_object(vec![
+        json_entry("version", receipt.version),
+        json_entry("source_id", hex::encode(receipt.source_id)),
+        json_entry("dataspace_id", receipt.dataspace_id),
+        json_entry("lane_id", receipt.lane_id),
+        json_entry("block_height", receipt.block_height),
+        json_entry("payer_account_id", receipt.payer_account_id.to_string()),
+        json_entry("fee_asset_id", receipt.fee_asset_id.clone()),
+        json_entry("fee_amount", receipt.fee_amount.to_string()),
+        json_entry("schedule", nexus_fee_schedule_json(&receipt.schedule)),
+    ])
+}
+
+fn lane_settlement_commitment_json(entry: &LaneBlockCommitment) -> Value {
+    let receipts = Value::Array(
+        entry
+            .receipts
+            .iter()
+            .map(|receipt| {
+                json_object(vec![
+                    json_entry("source_id", hex::encode(receipt.source_id)),
+                    json_entry("local_amount_micro", receipt.local_amount_micro.to_string()),
+                    json_entry("xor_due_micro", receipt.xor_due_micro.to_string()),
+                    json_entry(
+                        "xor_after_haircut_micro",
+                        receipt.xor_after_haircut_micro.to_string(),
+                    ),
+                    json_entry("xor_variance_micro", receipt.xor_variance_micro.to_string()),
+                    json_entry("timestamp_ms", receipt.timestamp_ms),
+                ])
+            })
+            .collect(),
+    );
+    let native_amx_receipts = Value::Array(
+        entry
+            .native_amx_receipts
+            .iter()
+            .map(native_amx_receipt_json)
+            .collect(),
+    );
+    let nexus_fee_receipts = Value::Array(
+        entry
+            .nexus_fee_receipts
+            .iter()
+            .map(nexus_fee_receipt_json)
+            .collect(),
+    );
+    let swap_metadata = entry
+        .swap_metadata
+        .as_ref()
+        .map(|meta| {
+            json_object(vec![
+                json_entry("epsilon_bps", meta.epsilon_bps),
+                json_entry("twap_window_seconds", meta.twap_window_seconds),
+                json_entry(
+                    "liquidity_profile",
+                    Value::from(format!("{:?}", meta.liquidity_profile)),
+                ),
+                json_entry("twap_local_per_xor", meta.twap_local_per_xor.clone()),
+                json_entry(
+                    "volatility_class",
+                    Value::from(format!("{:?}", meta.volatility_class)),
+                ),
+            ])
+        })
+        .unwrap_or(Value::Null);
+    json_object(vec![
+        json_entry("block_height", entry.block_height),
+        json_entry("lane_id", entry.lane_id),
+        json_entry("lane_incarnation", hash_with_prefix(entry.lane_incarnation)),
+        json_entry("dataspace_id", entry.dataspace_id),
+        json_entry("tx_count", entry.tx_count),
+        json_entry("total_local_micro", entry.total_local_micro.to_string()),
+        json_entry("total_xor_due_micro", entry.total_xor_due_micro.to_string()),
+        json_entry(
+            "total_xor_after_haircut_micro",
+            entry.total_xor_after_haircut_micro.to_string(),
+        ),
+        json_entry(
+            "total_xor_variance_micro",
+            entry.total_xor_variance_micro.to_string(),
+        ),
+        json_entry("swap_metadata", swap_metadata),
+        json_entry("receipts", receipts),
+        json_entry("nexus_fee_receipts", nexus_fee_receipts),
+        json_entry("native_amx_receipts", native_amx_receipts),
     ])
 }
 
@@ -59981,79 +60441,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
     let lane_settlement_commitments = Value::Array(
         snap.lane_settlement_commitments
             .iter()
-            .map(|entry| {
-                let receipts = Value::Array(
-                    entry
-                        .receipts
-                        .iter()
-                        .map(|receipt| {
-                            json_object(vec![
-                                json_entry("source_id", hex::encode(receipt.source_id)),
-                                json_entry(
-                                    "local_amount_micro",
-                                    receipt.local_amount_micro.to_string(),
-                                ),
-                                json_entry("xor_due_micro", receipt.xor_due_micro.to_string()),
-                                json_entry(
-                                    "xor_after_haircut_micro",
-                                    receipt.xor_after_haircut_micro.to_string(),
-                                ),
-                                json_entry(
-                                    "xor_variance_micro",
-                                    receipt.xor_variance_micro.to_string(),
-                                ),
-                                json_entry("timestamp_ms", receipt.timestamp_ms),
-                            ])
-                        })
-                        .collect(),
-                );
-                let native_amx_receipts = Value::Array(
-                    entry
-                        .native_amx_receipts
-                        .iter()
-                        .map(native_amx_receipt_json)
-                        .collect(),
-                );
-                let swap_metadata = entry
-                    .swap_metadata
-                    .as_ref()
-                    .map(|meta| {
-                        json_object(vec![
-                            json_entry("epsilon_bps", meta.epsilon_bps),
-                            json_entry("twap_window_seconds", meta.twap_window_seconds),
-                            json_entry(
-                                "liquidity_profile",
-                                Value::from(format!("{:?}", meta.liquidity_profile)),
-                            ),
-                            json_entry("twap_local_per_xor", meta.twap_local_per_xor.clone()),
-                            json_entry(
-                                "volatility_class",
-                                Value::from(format!("{:?}", meta.volatility_class)),
-                            ),
-                        ])
-                    })
-                    .unwrap_or(Value::Null);
-                json_object(vec![
-                    json_entry("block_height", entry.block_height),
-                    json_entry("lane_id", entry.lane_id),
-                    json_entry("dataspace_id", entry.dataspace_id),
-                    json_entry("tx_count", entry.tx_count),
-                    json_entry("total_local_micro", entry.total_local_micro.to_string()),
-                    json_entry("total_xor_due_micro", entry.total_xor_due_micro.to_string()),
-                    json_entry(
-                        "total_xor_after_haircut_micro",
-                        entry.total_xor_after_haircut_micro.to_string(),
-                    ),
-                    json_entry(
-                        "total_xor_variance_micro",
-                        entry.total_xor_variance_micro.to_string(),
-                    ),
-                    json_entry("swap_metadata", swap_metadata),
-                    json_entry("receipts", receipts),
-                    json_entry("nexus_fee_receipts", json_value(&entry.nexus_fee_receipts)),
-                    json_entry("native_amx_receipts", native_amx_receipts),
-                ])
-            })
+            .map(lane_settlement_commitment_json)
             .collect(),
     );
     let lane_relay_envelopes = Value::Array(
@@ -60094,6 +60482,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
                     .unwrap_or(Value::Null);
                 json_object(vec![
                     json_entry("lane_id", entry.lane_id),
+                    json_entry("lane_incarnation", hash_with_prefix(entry.lane_incarnation)),
                     json_entry("dataspace_id", entry.dataspace_id),
                     json_entry("block_height", entry.block_height),
                     json_entry("block_hash", hash_with_prefix(entry.block_header.hash())),
@@ -60107,8 +60496,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
                     json_entry("commit_qc", commit_qc),
                     json_entry(
                         "settlement_commitment",
-                        json::to_value(&entry.settlement_commitment)
-                            .expect("serialize settlement commitment for status"),
+                        lane_settlement_commitment_json(&entry.settlement_commitment),
                     ),
                     json_entry("settlement_hash", hash_with_prefix(entry.settlement_hash)),
                     json_entry("rbc_bytes_total", entry.rbc_bytes_total),
@@ -60625,10 +61013,14 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         .as_ref()
         .map(|caps| {
             json_object(vec![
+                json_entry("nexus_policy_digest", hex::encode(caps.nexus_policy_digest)),
                 json_entry("collectors_k", caps.collectors_k),
                 json_entry("redundant_send_r", caps.redundant_send_r),
                 json_entry("da_enabled", caps.da_enabled),
                 json_entry("rbc_chunk_max_bytes", caps.rbc_chunk_max_bytes),
+                json_entry("rbc_encoding", caps.rbc_encoding.as_str()),
+                json_entry("rbc_rs16_data_shards", caps.rbc_rs16_data_shards),
+                json_entry("rbc_rs16_parity_shards", caps.rbc_rs16_parity_shards),
                 json_entry("rbc_session_ttl_ms", caps.rbc_session_ttl_ms),
                 json_entry("rbc_store_max_sessions", caps.rbc_store_max_sessions),
                 json_entry("rbc_store_soft_sessions", caps.rbc_store_soft_sessions),
@@ -61013,6 +61405,7 @@ mod status_tests {
         let mut descriptor = LaneBlockDescriptorV1 {
             lane_id: LaneId::new(7),
             dataspace_id: DataSpaceId::new(11),
+            lane_incarnation: Hash::new(b"torii-routing-lane-incarnation"),
             proposal_height: 13,
             previous_lane_block_height: 12,
             previous_lane_block_descriptor_hash: Some(Hash::prehashed([0x61; Hash::LENGTH])),
@@ -61612,6 +62005,7 @@ mod status_tests {
             lane_settlement_commitments: vec![LaneBlockCommitment {
                 block_height: 1,
                 lane_id: LaneId::SINGLE,
+                lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
                 dataspace_id: DataSpaceId::UNIVERSAL,
                 tx_count: 1,
                 total_local_micro: 1u128,
@@ -61627,6 +62021,7 @@ mod status_tests {
                 let settlement = LaneBlockCommitment {
                     block_height: 1,
                     lane_id: LaneId::SINGLE,
+                    lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
                     dataspace_id: DataSpaceId::UNIVERSAL,
                     tx_count: 1,
                     total_local_micro: 1,
@@ -61649,6 +62044,7 @@ mod status_tests {
                 proposal_view: 1,
                 lane_id: LaneId::new(1),
                 dataspace_id: DataSpaceId::new(2),
+                lane_incarnation: Hash::new(b"torii-routing-status-lane-incarnation"),
                 lane_block_height: 1,
                 lane_block_view: 0,
                 subject_hash: Hash::prehashed([0x12; Hash::LENGTH]),
@@ -61784,6 +62180,7 @@ mod status_tests {
         let snap = sumeragi::StatusSnapshot {
             mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_owned(),
             consensus_caps: Some(ConsensusConfigCaps {
+                nexus_policy_digest: [0xA5; 32],
                 collectors_k: 4,
                 redundant_send_r: 2,
                 da_enabled: true,
@@ -61823,6 +62220,10 @@ mod status_tests {
             .get("consensus_caps")
             .and_then(Value::as_object)
             .expect("consensus caps object");
+        assert_eq!(
+            caps.get("nexus_policy_digest").and_then(Value::as_str),
+            Some("a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+        );
         assert_eq!(caps.get("collectors_k").and_then(Value::as_u64), Some(4));
         assert_eq!(
             caps.get("redundant_send_r").and_then(Value::as_u64),
@@ -61950,6 +62351,7 @@ mod status_tests {
         let commitment = LaneBlockCommitment {
             block_height: 42,
             lane_id: LaneId::new(lane_id_raw as u32),
+            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::new(dataspace_id_raw),
             tx_count: 2,
             total_local_micro: 1_500u128,
@@ -62041,6 +62443,10 @@ mod status_tests {
             lane_id_raw
         );
         assert_eq!(
+            entry.get("lane_incarnation").and_then(Value::as_str),
+            Some(hash_with_prefix(commitment.lane_incarnation).as_str())
+        );
+        assert_eq!(
             entry
                 .get("dataspace_id")
                 .and_then(Value::as_u64)
@@ -62127,6 +62533,130 @@ mod status_tests {
     }
 
     #[test]
+    fn status_snapshot_json_serializes_nexus_fee_receipts_with_public_wire_shape() {
+        let payer_keypair = checked_routing_fixture_keypair(
+            0xB4,
+            Algorithm::Ed25519,
+            "derive Nexus fee status fixture payer key",
+        );
+        let payer_account_id = AccountId::new(payer_keypair.public_key().clone());
+        let receipt = NexusFeeReceipt {
+            version: 1,
+            source_id: [0xA7; 32],
+            dataspace_id: DataSpaceId::new(19),
+            lane_id: LaneId::new(6),
+            block_height: 81,
+            payer_account_id: payer_account_id.clone(),
+            fee_asset_id: "xor#universal".to_owned(),
+            fee_amount: iroha_primitives::numeric::Numeric::new(125, 2),
+            schedule: NexusFeeScheduleInputs {
+                tx_bytes_len: 1_024,
+                instruction_count: 3,
+                gas_used: 99,
+                base_fee: iroha_primitives::numeric::Numeric::new(25, 2),
+                per_byte_fee: iroha_primitives::numeric::Numeric::new(1, 3),
+                per_instruction_fee: iroha_primitives::numeric::Numeric::new(2, 1),
+                per_gas_unit_fee: iroha_primitives::numeric::Numeric::zero(),
+            },
+        };
+        let commitment = LaneBlockCommitment {
+            block_height: receipt.block_height,
+            lane_id: receipt.lane_id,
+            lane_incarnation: Hash::new(b"nexus-fee-status-lane-incarnation"),
+            dataspace_id: receipt.dataspace_id,
+            tx_count: 1,
+            total_local_micro: 0,
+            total_xor_due_micro: 0,
+            total_xor_after_haircut_micro: 0,
+            total_xor_variance_micro: 0,
+            swap_metadata: None,
+            receipts: Vec::new(),
+            nexus_fee_receipts: vec![receipt.clone()],
+            native_amx_receipts: Vec::new(),
+        };
+        let payload = status_snapshot_json(&sumeragi::StatusSnapshot {
+            lane_settlement_commitments: vec![commitment],
+            ..Default::default()
+        });
+
+        let public_receipt = payload
+            .get("lane_settlement_commitments")
+            .and_then(Value::as_array)
+            .and_then(|entries| entries.first())
+            .and_then(|entry| entry.get("nexus_fee_receipts"))
+            .and_then(Value::as_array)
+            .and_then(|receipts| receipts.first())
+            .and_then(Value::as_object)
+            .expect("public Nexus fee receipt object");
+        assert_eq!(public_receipt.len(), 9, "wire object has no hidden fields");
+        assert_eq!(
+            public_receipt.get("version").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            public_receipt.get("source_id").and_then(Value::as_str),
+            Some(hex::encode(receipt.source_id).as_str())
+        );
+        assert_eq!(
+            public_receipt.get("dataspace_id").and_then(Value::as_u64),
+            Some(receipt.dataspace_id.as_u64())
+        );
+        assert_eq!(
+            public_receipt.get("lane_id").and_then(Value::as_u64),
+            Some(u64::from(receipt.lane_id))
+        );
+        assert_eq!(
+            public_receipt.get("block_height").and_then(Value::as_u64),
+            Some(receipt.block_height)
+        );
+        assert_eq!(
+            public_receipt
+                .get("payer_account_id")
+                .and_then(Value::as_str),
+            Some(payer_account_id.to_string().as_str())
+        );
+        assert_eq!(
+            public_receipt.get("fee_asset_id").and_then(Value::as_str),
+            Some("xor#universal")
+        );
+        assert_eq!(
+            public_receipt.get("fee_amount").and_then(Value::as_str),
+            Some("1.25")
+        );
+
+        let schedule = public_receipt
+            .get("schedule")
+            .and_then(Value::as_object)
+            .expect("public Nexus fee schedule object");
+        assert_eq!(schedule.len(), 7, "wire schedule has no hidden fields");
+        assert_eq!(
+            schedule.get("tx_bytes_len").and_then(Value::as_u64),
+            Some(1_024)
+        );
+        assert_eq!(
+            schedule.get("instruction_count").and_then(Value::as_u64),
+            Some(3)
+        );
+        assert_eq!(schedule.get("gas_used").and_then(Value::as_u64), Some(99));
+        assert_eq!(
+            schedule.get("base_fee").and_then(Value::as_str),
+            Some("0.25")
+        );
+        assert_eq!(
+            schedule.get("per_byte_fee").and_then(Value::as_str),
+            Some("0.001")
+        );
+        assert_eq!(
+            schedule.get("per_instruction_fee").and_then(Value::as_str),
+            Some("0.2")
+        );
+        assert_eq!(
+            schedule.get("per_gas_unit_fee").and_then(Value::as_str),
+            Some("0")
+        );
+    }
+
+    #[test]
     fn status_snapshot_json_serializes_native_amx_receipts_in_lane_settlement_commitments() {
         let source_id = [0xCE; 32];
         let plan_digest = Hash::new(b"torii-status-native-amx-plan");
@@ -62137,6 +62667,12 @@ mod status_tests {
         let coordinator_dataspace_id = DataSpaceId::new(11);
         let participant_lane_id = LaneId::new(5);
         let participant_dataspace_id = DataSpaceId::new(12);
+        let chain_id_hash = Hash::new(b"torii-status-native-amx-chain");
+        let coordinator_lane_incarnation =
+            Hash::new(b"torii-status-native-amx-coordinator-incarnation");
+        let participant_lane_incarnation =
+            Hash::new(b"torii-status-native-amx-participant-incarnation");
+        let coordinator_proposal_hash = Hash::new(b"torii-status-native-amx-coordinator-proposal");
         let validators = vec![
             checked_status_peer(0xA1, "derive native AMX status fixture peer key 1"),
             checked_status_peer(0xA2, "derive native AMX status fixture peer key 2"),
@@ -62144,15 +62680,21 @@ mod status_tests {
         let validator_set_hash = HashOf::new(&validators);
         let native_amx_qc = |phase: NativeAmxPhase| NativeAmxAttestationQcV1 {
             body: NativeAmxAttestationBodyV1 {
+                chain_id_hash,
                 source_id,
                 tx_entrypoint_hash,
                 plan_digest,
                 phase,
                 coordinator_lane_id,
                 coordinator_dataspace_id,
+                coordinator_lane_incarnation,
                 participant_lane_id,
                 participant_dataspace_id,
-                planned_coordinator_block_height: 77,
+                participant_lane_incarnation,
+                authority_context_height: 70,
+                coordinator_lane_block_height: 77,
+                coordinator_lane_block_view: 3,
+                coordinator_proposal_hash,
             },
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set_hash,
@@ -62163,13 +62705,19 @@ mod status_tests {
         let receipt = NativeAmxReceipt {
             version: 1,
             source_id,
+            chain_id_hash,
             plan_digest,
             lane_id: coordinator_lane_id,
             dataspace_id: coordinator_dataspace_id,
-            block_height: 77,
+            lane_incarnation: coordinator_lane_incarnation,
+            authority_context_height: 70,
+            lane_block_height: 77,
+            lane_block_view: 3,
+            coordinator_proposal_hash,
             legs: vec![NativeAmxLegRecord {
                 lane_id: participant_lane_id,
                 dataspace_id: participant_dataspace_id,
+                lane_incarnation: participant_lane_incarnation,
                 prepare_qc: native_amx_qc(NativeAmxPhase::Prepare),
                 commit_qc: native_amx_qc(NativeAmxPhase::Commit),
             }],
@@ -62177,6 +62725,7 @@ mod status_tests {
         let commitment = LaneBlockCommitment {
             block_height: 77,
             lane_id: coordinator_lane_id,
+            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: coordinator_dataspace_id,
             tx_count: 1,
             total_local_micro: 0,
@@ -62221,12 +62770,25 @@ mod status_tests {
         let plan_digest_json = hash_with_prefix(plan_digest);
         let tx_entrypoint_hash_json = hash_with_prefix(tx_entrypoint_hash);
         let validator_set_hash_json = hash_with_prefix(validator_set_hash);
+        let chain_id_hash_json = hash_with_prefix(chain_id_hash);
+        let coordinator_lane_incarnation_json = hash_with_prefix(coordinator_lane_incarnation);
+        let participant_lane_incarnation_json = hash_with_prefix(participant_lane_incarnation);
+        let coordinator_proposal_hash_json = hash_with_prefix(coordinator_proposal_hash);
         let first_validator = validators[0].to_string();
         let aggregate_signature_hex = hex::encode(vec![0xA5; 96]);
+        assert_eq!(
+            native.len(),
+            12,
+            "native AMX receipt has an exact wire shape"
+        );
         assert_eq!(native.get("version").and_then(Value::as_u64), Some(1));
         assert_eq!(
             native.get("source_id").and_then(Value::as_str),
             Some(source_id_hex.as_str())
+        );
+        assert_eq!(
+            native.get("chain_id_hash").and_then(Value::as_str),
+            Some(chain_id_hash_json.as_str())
         );
         assert_eq!(
             native.get("plan_digest").and_then(Value::as_str),
@@ -62240,7 +62802,30 @@ mod status_tests {
             native.get("dataspace_id").and_then(Value::as_u64),
             Some(u64::from(coordinator_dataspace_id))
         );
-        assert_eq!(native.get("block_height").and_then(Value::as_u64), Some(77));
+        assert_eq!(
+            native.get("lane_incarnation").and_then(Value::as_str),
+            Some(coordinator_lane_incarnation_json.as_str())
+        );
+        assert_eq!(
+            native
+                .get("authority_context_height")
+                .and_then(Value::as_u64),
+            Some(70)
+        );
+        assert_eq!(
+            native.get("lane_block_height").and_then(Value::as_u64),
+            Some(77)
+        );
+        assert_eq!(
+            native.get("lane_block_view").and_then(Value::as_u64),
+            Some(3)
+        );
+        assert_eq!(
+            native
+                .get("coordinator_proposal_hash")
+                .and_then(Value::as_str),
+            Some(coordinator_proposal_hash_json.as_str())
+        );
 
         let legs = native
             .get("legs")
@@ -62248,6 +62833,7 @@ mod status_tests {
             .expect("native AMX legs array");
         assert_eq!(legs.len(), 1);
         let leg = legs[0].as_object().expect("native AMX leg object");
+        assert_eq!(leg.len(), 5, "native AMX leg has an exact wire shape");
         assert_eq!(
             leg.get("lane_id").and_then(Value::as_u64),
             Some(u64::from(participant_lane_id))
@@ -62255,6 +62841,10 @@ mod status_tests {
         assert_eq!(
             leg.get("dataspace_id").and_then(Value::as_u64),
             Some(u64::from(participant_dataspace_id))
+        );
+        assert_eq!(
+            leg.get("lane_incarnation").and_then(Value::as_str),
+            Some(participant_lane_incarnation_json.as_str())
         );
 
         let prepare_qc = leg
@@ -62265,6 +62855,15 @@ mod status_tests {
             .get("body")
             .and_then(Value::as_object)
             .expect("prepare body object");
+        assert_eq!(
+            prepare_body.len(),
+            15,
+            "native AMX body has an exact wire shape"
+        );
+        assert_eq!(
+            prepare_body.get("chain_id_hash").and_then(Value::as_str),
+            Some(chain_id_hash_json.as_str())
+        );
         assert_eq!(
             prepare_body.get("source_id").and_then(Value::as_str),
             Some(source_id_hex.as_str())
@@ -62293,9 +62892,33 @@ mod status_tests {
         );
         assert_eq!(
             prepare_body
-                .get("planned_coordinator_block_height")
+                .get("coordinator_lane_incarnation")
+                .and_then(Value::as_str),
+            Some(coordinator_lane_incarnation_json.as_str())
+        );
+        assert_eq!(
+            prepare_body
+                .get("participant_lane_incarnation")
+                .and_then(Value::as_str),
+            Some(participant_lane_incarnation_json.as_str())
+        );
+        assert_eq!(
+            prepare_body
+                .get("authority_context_height")
+                .and_then(Value::as_u64),
+            Some(70)
+        );
+        assert_eq!(
+            prepare_body
+                .get("coordinator_lane_block_height")
                 .and_then(Value::as_u64),
             Some(77)
+        );
+        assert_eq!(
+            prepare_body
+                .get("coordinator_lane_block_view")
+                .and_then(Value::as_u64),
+            Some(3)
         );
         assert_eq!(
             prepare_qc
@@ -62357,6 +62980,7 @@ mod status_tests {
         let settlement = LaneBlockCommitment {
             block_height: header.height().get(),
             lane_id: LaneId::new(2),
+            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::new(7),
             tx_count: 1,
             total_local_micro: 10_000,
@@ -62438,6 +63062,10 @@ mod status_tests {
                 .expect("settlement hash field"),
             hash_with_prefix(envelope.settlement_hash)
         );
+        assert_eq!(
+            relay.get("lane_incarnation").and_then(Value::as_str),
+            Some(hash_with_prefix(envelope.lane_incarnation).as_str())
+        );
         let settlement_json = relay
             .get("settlement_commitment")
             .and_then(Value::as_object)
@@ -62448,6 +63076,12 @@ mod status_tests {
                 .and_then(Value::as_u64)
                 .expect("lane id"),
             u64::from(envelope.settlement_commitment.lane_id)
+        );
+        assert_eq!(
+            settlement_json
+                .get("lane_incarnation")
+                .and_then(Value::as_str),
+            Some(hash_with_prefix(envelope.lane_incarnation).as_str())
         );
         let commit_qc_json = relay
             .get("commit_qc")
@@ -62469,6 +63103,7 @@ mod status_tests {
             proposal_view: 3,
             lane_id: LaneId::new(7),
             dataspace_id: DataSpaceId::new(42),
+            lane_incarnation: Hash::new(b"torii-routing-status-lane-incarnation"),
             lane_block_height: 2,
             lane_block_view: 1,
             subject_hash: Hash::prehashed([0x51; Hash::LENGTH]),
@@ -63464,6 +64099,7 @@ pub async fn handle_v1_sumeragi_status(
                 .consensus_caps
                 .as_ref()
                 .map(|caps| SumeragiConsensusCapsStatus {
+                    nexus_policy_digest: caps.nexus_policy_digest,
                     collectors_k: caps.collectors_k,
                     redundant_send_r: caps.redundant_send_r,
                     da_enabled: caps.da_enabled,
@@ -91336,141 +91972,43 @@ pub async fn handle_post_configuration(
     Ok((StatusCode::ACCEPTED, ()))
 }
 
-/// Request payload for applying a Nexus lane lifecycle plan.
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-pub struct LaneLifecyclePlanDto {
-    /// Lane metadata to add or replace.
-    #[norito(default)]
-    pub additions: Vec<LaneConfig>,
-    /// Lane identifiers to retire.
-    #[norito(default)]
-    pub retire: Vec<LaneId>,
+/// Return the exact current lane catalog and optimistic concurrency commitment.
+pub fn handle_get_nexus_lane_lifecycle(state: &CoreState) -> Result<LaneLifecycleStatusV1> {
+    // `State::view` retries across the state generation barrier, so catalog and
+    // active incarnations cannot be mixed across a concurrent lifecycle commit.
+    let view = state.view();
+    LaneLifecycleStatusV1::new(
+        view.nexus.enabled,
+        &view.nexus.lane_catalog,
+        &view.lane_incarnations,
+    )
+    .map_err(|err| conversion_error(format!("invalid committed lane lifecycle status: {err}")))
 }
 
-impl LaneLifecyclePlanDto {
-    #[must_use]
-    pub fn into_plan(self) -> LaneLifecyclePlan {
-        LaneLifecyclePlan {
-            additions: self.additions,
-            retire: self.retire,
-        }
-    }
-}
-
-fn nexus_lifecycle_active_lane_ids_for_response(
-    state: &CoreState,
-    nexus: &iroha_config::parameters::actual::Nexus,
-) -> Vec<u32> {
-    let mut lane_ids = nexus
-        .lane_catalog
-        .lanes()
-        .iter()
-        .filter(|lane| state.is_lane_active_for_authority(lane.id))
-        .map(|lane| lane.id.as_u32())
-        .collect::<Vec<_>>();
-    lane_ids.sort_unstable();
-    lane_ids.dedup();
-    lane_ids
-}
-
-fn nexus_lifecycle_autoscale_capacity_lane_ids_for_response(
-    state: &CoreState,
-    nexus: &iroha_config::parameters::actual::Nexus,
-) -> Vec<u32> {
-    if !nexus.autoscale.enabled {
-        return Vec::new();
-    }
-    let mut lane_ids = nexus
-        .lane_catalog
-        .lanes()
-        .iter()
-        .filter(|lane| lane.is_autoscale_managed_elastic())
-        .filter(|lane| state.is_lane_active_for_authority(lane.id))
-        .map(|lane| lane.id.as_u32())
-        .collect::<Vec<_>>();
-    lane_ids.sort_unstable();
-    lane_ids.dedup();
-    lane_ids
-}
-
-/// Apply a Nexus lane lifecycle plan and refresh queue routing/telemetry.
+/// Reject the retired node-local Nexus lane lifecycle mutation path.
+///
+/// Lane lifecycle changes must be submitted as signed transactions carrying a
+/// `SetParameter(nexus_lane_lifecycle_v1)` instruction. That path is permission
+/// checked, consensus replicated, and replay durable; mutating one Torii node
+/// directly would fork runtime topology from its peers.
 pub async fn handle_post_nexus_lane_lifecycle(
-    state: Arc<CoreState>,
-    queue: Arc<Queue>,
-    plan: LaneLifecyclePlanDto,
-) -> Result<impl IntoResponse> {
-    let nexus_before = state.nexus_snapshot();
-    if let Err(err) = crate::ensure_nexus_lanes_enabled(
-        nexus_before.enabled,
-        iroha_torii_shared::uri::NEXUS_LANE_LIFECYCLE,
-    ) {
-        #[cfg(feature = "telemetry")]
-        {
-            state.telemetry.record_lane_lifecycle_outcome("disabled");
-        }
-        return Err(err);
-    }
-
-    let plan = plan.into_plan();
-    state
-        .apply_lane_lifecycle_shared(&plan)
-        .map_err(|err| Error::LaneLifecycle {
-            reason: err.to_string(),
-        })?;
-
-    let nexus = state.nexus_snapshot();
-    let lane_compliance = queue.lane_compliance_engine();
-    queue.reconfigure_nexus_with_state(&nexus, state.as_ref(), lane_compliance);
-
-    let configured_lane_count = u64::from(nexus.lane_catalog.lane_count().get());
-    let active_lane_ids = nexus_lifecycle_active_lane_ids_for_response(state.as_ref(), &nexus);
-    let active_lane_count = u64::try_from(active_lane_ids.len()).unwrap_or(u64::MAX);
-    let autoscale_capacity_lane_ids =
-        nexus_lifecycle_autoscale_capacity_lane_ids_for_response(state.as_ref(), &nexus);
-    let autoscale_capacity_lane_count =
-        u64::try_from(autoscale_capacity_lane_ids.len()).unwrap_or(u64::MAX);
-
-    let mut payload = norito::json::Map::new();
-    payload.insert("ok".into(), norito::json::Value::from(true));
-    payload.insert(
-        "configured_lane_count".into(),
-        norito::json::Value::from(configured_lane_count),
-    );
-    payload.insert(
-        "lane_count".into(),
-        norito::json::Value::from(configured_lane_count),
-    );
-    payload.insert(
-        "active_lane_count".into(),
-        norito::json::Value::from(active_lane_count),
-    );
-    payload.insert("active_lane_ids".into(), json_value(&active_lane_ids));
-    payload.insert(
-        "autoscale_capacity_lane_count".into(),
-        norito::json::Value::from(autoscale_capacity_lane_count),
-    );
-    payload.insert(
-        "autoscale_capacity_lane_ids".into(),
-        json_value(&autoscale_capacity_lane_ids),
-    );
-    Ok(utils::respond_json_document_with_status_and_format(
-        StatusCode::ACCEPTED,
-        norito::json::Value::Object(payload),
-        utils::current_response_format(),
-    ))
+    _state: Arc<CoreState>,
+    _queue: Arc<Queue>,
+) -> Result<Response> {
+    Err(Error::AppForbidden {
+        code: "local_lane_lifecycle_disabled",
+        message: concat!(
+            "node-local lane lifecycle mutation is disabled; submit a signed transaction with ",
+            "SetParameter custom id `nexus_lane_lifecycle_v1` from an account holding ",
+            "CanSetParameters"
+        )
+        .to_owned(),
+    })
 }
 
 #[cfg(test)]
 mod nexus_lane_lifecycle_tests {
     use super::*;
-    use core::num::{NonZeroU32, NonZeroU64};
 
     fn enabled_state_for_lifecycle_test() -> Arc<CoreState> {
         let mut state = CoreState::new_for_testing(
@@ -91487,14 +92025,6 @@ mod nexus_lane_lifecycle_tests {
         Arc::new(state)
     }
 
-    fn disabled_state_for_lifecycle_test() -> Arc<CoreState> {
-        Arc::new(CoreState::new_for_testing(
-            iroha_core::state::World::default(),
-            Kura::blank_kura_for_testing(),
-            iroha_core::query::store::LiveQueryStore::start_test(),
-        ))
-    }
-
     fn queue_for_lifecycle_test() -> Arc<Queue> {
         let (events_sender, _) = tokio::sync::broadcast::channel(8);
         Arc::new(Queue::from_config(
@@ -91503,653 +92033,51 @@ mod nexus_lane_lifecycle_tests {
         ))
     }
 
-    fn lane_with_teu_capacity(id: LaneId, alias: &str, teu_capacity: u64) -> LaneConfig {
-        let mut lane = LaneConfig {
-            id,
-            alias: alias.to_owned(),
-            ..Default::default()
-        };
-        lane.metadata.insert(
-            "scheduler.teu_capacity".to_owned(),
-            teu_capacity.to_string(),
-        );
-        lane
-    }
+    #[tokio::test]
+    async fn direct_lane_lifecycle_endpoint_fails_closed_without_mutation() {
+        let state = enabled_state_for_lifecycle_test();
+        let queue = queue_for_lifecycle_test();
+        let lane_id = LaneId::new(1);
+        let before_nexus = state.nexus_snapshot();
+        let before_limits = queue.queue_limits().for_lane(lane_id);
+        let err =
+            match handle_post_nexus_lane_lifecycle(Arc::clone(&state), Arc::clone(&queue)).await {
+                Ok(_) => panic!("node-local lifecycle mutation must remain disabled"),
+                Err(err) => err,
+            };
 
-    async fn response_body_json(response: Response) -> norito::json::Value {
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect response body");
-        norito::json::from_slice(&body).expect("decode JSON response")
-    }
-
-    fn future_autoscale_lane_for_lifecycle_test(
-        lane_id: LaneId,
-        created_height: u64,
-    ) -> LaneConfig {
-        let mut lane = LaneConfig {
-            id: lane_id,
-            alias: format!("elastic-lane-{}", lane_id.as_u32()),
-            visibility: iroha_data_model::nexus::LaneVisibility::Public,
-            ..Default::default()
-        };
-        lane.metadata.insert(
-            iroha_data_model::nexus::AUTOSCALE_META_MANAGED.to_owned(),
-            "true".to_owned(),
-        );
-        lane.metadata.insert(
-            iroha_data_model::nexus::AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
-            created_height.to_string(),
-        );
-        lane
-    }
-
-    fn install_future_autoscale_catalog_for_lifecycle_test(
-        state: &CoreState,
-        lane: LaneConfig,
-        authority_height: u64,
-    ) {
-        let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
-            NonZeroU32::new(lane.id.as_u32().saturating_add(1)).expect("nonzero lane count"),
-            vec![LaneConfig::default(), lane],
-        )
-        .expect("future autoscale lane catalog");
-        let mut nexus = iroha_config::parameters::actual::Nexus {
-            enabled: true,
-            lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog),
-            lane_catalog,
-            ..Default::default()
-        };
-        nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
-        nexus.autoscale.max_lanes = NonZeroU32::new(2).expect("nonzero max lanes");
-        {
-            let mut current = state.nexus.write();
-            *current = nexus;
-        }
-        state.update_latest_block_header_cache_for_tests(BlockHeader::new(
-            NonZeroU64::new(authority_height).expect("nonzero authority height"),
-            None,
-            None,
-            None,
-            0,
-            0,
+        assert!(matches!(
+            err,
+            Error::AppForbidden {
+                code: "local_lane_lifecycle_disabled",
+                message,
+            } if message.contains("nexus_lane_lifecycle_v1")
+                && message.contains("CanSetParameters")
         ));
+        assert_eq!(
+            state.nexus_snapshot().lane_catalog,
+            before_nexus.lane_catalog
+        );
+        assert_eq!(queue.queue_limits().for_lane(lane_id), before_limits);
     }
 
     #[test]
-    fn nexus_lifecycle_response_lane_ids_filter_inactive_autoscale_capacity() {
+    fn lane_lifecycle_status_binds_exact_current_catalog() {
         let state = enabled_state_for_lifecycle_test();
-        let future_lane = LaneId::new(1);
-        install_future_autoscale_catalog_for_lifecycle_test(
-            state.as_ref(),
-            future_autoscale_lane_for_lifecycle_test(future_lane, 7),
-            1,
-        );
-
-        let nexus = state.nexus_snapshot();
+        let status = handle_get_nexus_lane_lifecycle(&state).expect("lifecycle status");
+        assert!(status.nexus_enabled);
+        let view = state.view();
         assert_eq!(
-            nexus_lifecycle_active_lane_ids_for_response(state.as_ref(), &nexus),
-            vec![0],
-            "future-created autoscale lanes must not count as active before creation height"
+            status.validate().expect("validate lifecycle status"),
+            view.nexus.lane_catalog
         );
-        assert_eq!(
-            nexus_lifecycle_autoscale_capacity_lane_ids_for_response(state.as_ref(), &nexus),
-            Vec::<u32>::new(),
-            "future-created autoscale lanes must not count as live capacity"
-        );
-
-        state.update_latest_block_header_cache_for_tests(BlockHeader::new(
-            NonZeroU64::new(7).expect("nonzero authority height"),
-            None,
-            None,
-            None,
-            0,
-            0,
-        ));
-        assert_eq!(
-            nexus_lifecycle_active_lane_ids_for_response(state.as_ref(), &nexus),
-            vec![0, 1]
-        );
-        assert_eq!(
-            nexus_lifecycle_autoscale_capacity_lane_ids_for_response(state.as_ref(), &nexus),
-            vec![1]
-        );
-    }
-
-    #[tokio::test]
-    async fn nexus_lane_lifecycle_rejects_autoscale_spoof_without_queue_refresh() {
-        let state = enabled_state_for_lifecycle_test();
-        let queue = queue_for_lifecycle_test();
-        let spoofed_lane_id = LaneId::new(1);
-        let before_limits = queue.queue_limits().for_lane(spoofed_lane_id);
-
-        let mut spoofed_lane =
-            lane_with_teu_capacity(spoofed_lane_id, "spoofed-elastic", 987_654_321);
-        spoofed_lane.metadata.insert(
-            iroha_data_model::nexus::AUTOSCALE_META_MANAGED.to_owned(),
-            "true".to_owned(),
-        );
-        let plan = LaneLifecyclePlanDto {
-            additions: vec![spoofed_lane],
-            retire: Vec::new(),
-        };
-
-        let err =
-            match handle_post_nexus_lane_lifecycle(Arc::clone(&state), Arc::clone(&queue), plan)
-                .await
-            {
-                Ok(_) => panic!("autoscale-spoofed lane lifecycle plan must be rejected"),
-                Err(err) => err,
-            };
-        assert!(matches!(
-            err,
-            Error::LaneLifecycle { reason }
-                if reason == "lane 1 uses reserved autoscale metadata"
-        ));
-
-        let nexus = state.nexus_snapshot();
-        assert!(
-            nexus
-                .lane_catalog
-                .lanes()
-                .iter()
-                .all(|lane| lane.id != spoofed_lane_id),
-            "rejected lifecycle plan must not mutate the committed lane catalog"
-        );
-        assert_eq!(
-            queue.queue_limits().for_lane(spoofed_lane_id),
-            before_limits,
-            "rejected lifecycle plan must not refresh queue limits from spoofed metadata"
-        );
-    }
-
-    #[tokio::test]
-    async fn nexus_lane_lifecycle_rejects_when_nexus_disabled_without_queue_refresh() {
-        let state = disabled_state_for_lifecycle_test();
-        let queue = queue_for_lifecycle_test();
-        let added_lane_id = LaneId::new(1);
-        let before_limits = queue.queue_limits().for_lane(added_lane_id);
-        let plan = LaneLifecyclePlanDto {
-            additions: vec![lane_with_teu_capacity(
-                added_lane_id,
-                "disabled-nexus-lane",
-                777_777,
-            )],
-            retire: Vec::new(),
-        };
-
-        let err =
-            match handle_post_nexus_lane_lifecycle(Arc::clone(&state), Arc::clone(&queue), plan)
-                .await
-            {
-                Ok(_) => panic!("disabled Nexus lifecycle request must be rejected"),
-                Err(err) => err,
-            };
-        match err {
-            Error::AppQueryValidation { code, message } => {
-                assert_eq!(code, "nexus_disabled");
-                assert!(
-                    message.contains("nexus.enabled=true"),
-                    "message should explain required flag: {message}"
-                );
-            }
-            other => panic!("expected nexus disabled validation error, got {other:?}"),
-        }
-        assert_eq!(
-            queue.queue_limits().for_lane(added_lane_id),
-            before_limits,
-            "disabled Nexus lifecycle request must not refresh queue limits"
-        );
-    }
-
-    #[tokio::test]
-    async fn nexus_lane_lifecycle_rejects_default_lane_retire_without_queue_refresh() {
-        let state = enabled_state_for_lifecycle_test();
-        let queue = queue_for_lifecycle_test();
-        let before_nexus = state.nexus_snapshot();
-        let before_limits = queue.queue_limits().for_lane(LaneId::SINGLE);
-        let plan = LaneLifecyclePlanDto {
-            additions: Vec::new(),
-            retire: vec![LaneId::SINGLE],
-        };
-
-        let err =
-            match handle_post_nexus_lane_lifecycle(Arc::clone(&state), Arc::clone(&queue), plan)
-                .await
-            {
-                Ok(_) => panic!("default-lane retirement must be rejected"),
-                Err(err) => err,
-            };
-        assert!(matches!(
-            err,
-            Error::LaneLifecycle { reason }
-                if reason.contains("lane catalog cannot be empty")
-        ));
-
-        let nexus = state.nexus_snapshot();
-        assert_eq!(
-            nexus.lane_catalog, before_nexus.lane_catalog,
-            "rejected default-lane retire plan must not mutate the committed lane catalog"
-        );
-        assert_eq!(
-            queue.queue_limits().for_lane(LaneId::SINGLE),
-            before_limits,
-            "rejected default-lane retire plan must not refresh queue limits"
-        );
-    }
-
-    #[tokio::test]
-    async fn nexus_lane_lifecycle_rejects_same_plan_default_lane_replacement_without_queue_refresh()
-    {
-        let state = enabled_state_for_lifecycle_test();
-        let queue = queue_for_lifecycle_test();
-        let before_nexus = state.nexus_snapshot();
-        let before_limits = queue.queue_limits().for_lane(LaneId::SINGLE);
-        let plan = LaneLifecyclePlanDto {
-            additions: vec![lane_with_teu_capacity(
-                LaneId::SINGLE,
-                "fresh-default-route",
-                987_654,
-            )],
-            retire: vec![LaneId::SINGLE],
-        };
-
-        let err =
-            match handle_post_nexus_lane_lifecycle(Arc::clone(&state), Arc::clone(&queue), plan)
-                .await
-            {
-                Ok(_) => panic!("same-plan default-lane replacement must be rejected"),
-                Err(err) => err,
-            };
-        assert!(matches!(
-            err,
-            Error::LaneLifecycle { reason }
-                if reason.contains("lane lifecycle plan cannot replace routing default lane 0")
-        ));
-
-        let nexus = state.nexus_snapshot();
-        assert_eq!(
-            nexus.lane_catalog, before_nexus.lane_catalog,
-            "rejected default-lane replacement plan must not mutate the committed lane catalog"
-        );
-        assert_eq!(
-            queue.queue_limits().for_lane(LaneId::SINGLE),
-            before_limits,
-            "rejected default-lane replacement plan must not refresh queue limits"
-        );
-    }
-
-    #[tokio::test]
-    async fn nexus_lane_lifecycle_rejects_duplicate_additions_without_queue_refresh() {
-        let state = enabled_state_for_lifecycle_test();
-        let queue = queue_for_lifecycle_test();
-        let duplicate_lane_id = LaneId::new(1);
-        let before_nexus = state.nexus_snapshot();
-        let before_limits = queue.queue_limits().for_lane(duplicate_lane_id);
-        let plan = LaneLifecyclePlanDto {
-            additions: vec![
-                lane_with_teu_capacity(duplicate_lane_id, "duplicate-addition-a", 111_111),
-                lane_with_teu_capacity(duplicate_lane_id, "duplicate-addition-b", 222_222),
-            ],
-            retire: Vec::new(),
-        };
-
-        let err =
-            match handle_post_nexus_lane_lifecycle(Arc::clone(&state), Arc::clone(&queue), plan)
-                .await
-            {
-                Ok(_) => panic!("duplicate lifecycle additions must be rejected"),
-                Err(err) => err,
-            };
-        assert!(matches!(
-            err,
-            Error::LaneLifecycle { reason }
-                if reason.contains("duplicate lane id 1")
-        ));
-
-        let nexus = state.nexus_snapshot();
-        assert_eq!(
-            nexus.lane_catalog, before_nexus.lane_catalog,
-            "rejected duplicate-addition plan must not mutate the committed lane catalog"
-        );
-        assert_eq!(
-            queue.queue_limits().for_lane(duplicate_lane_id),
-            before_limits,
-            "rejected duplicate-addition plan must not refresh queue limits"
-        );
-    }
-
-    #[tokio::test]
-    async fn nexus_lane_lifecycle_rejects_duplicate_aliases_without_queue_refresh() {
-        let state = enabled_state_for_lifecycle_test();
-        let queue = queue_for_lifecycle_test();
-        let first_lane_id = LaneId::new(1);
-        let second_lane_id = LaneId::new(2);
-        let before_nexus = state.nexus_snapshot();
-        let before_first_limits = queue.queue_limits().for_lane(first_lane_id);
-        let before_second_limits = queue.queue_limits().for_lane(second_lane_id);
-        let duplicate_alias = "duplicate-alias";
-        let plan = LaneLifecyclePlanDto {
-            additions: vec![
-                lane_with_teu_capacity(first_lane_id, duplicate_alias, 111_111),
-                lane_with_teu_capacity(second_lane_id, duplicate_alias, 222_222),
-            ],
-            retire: Vec::new(),
-        };
-
-        let err =
-            match handle_post_nexus_lane_lifecycle(Arc::clone(&state), Arc::clone(&queue), plan)
-                .await
-            {
-                Ok(_) => panic!("duplicate lifecycle aliases must be rejected"),
-                Err(err) => err,
-            };
-        assert!(matches!(
-            err,
-            Error::LaneLifecycle { reason }
-                if reason.contains("duplicate lane alias duplicate-alias")
-        ));
-
-        let nexus = state.nexus_snapshot();
-        assert_eq!(
-            nexus.lane_catalog, before_nexus.lane_catalog,
-            "rejected duplicate-alias plan must not mutate the committed lane catalog"
-        );
-        assert_eq!(
-            queue.queue_limits().for_lane(first_lane_id),
-            before_first_limits,
-            "rejected duplicate-alias plan must not refresh first lane limits"
-        );
-        assert_eq!(
-            queue.queue_limits().for_lane(second_lane_id),
-            before_second_limits,
-            "rejected duplicate-alias plan must not refresh second lane limits"
-        );
-    }
-
-    #[tokio::test]
-    async fn nexus_lane_lifecycle_rejects_duplicate_retires_without_queue_refresh() {
-        let state = enabled_state_for_lifecycle_test();
-        let queue = queue_for_lifecycle_test();
-        let retired_lane_id = LaneId::new(1);
-        let retired_teu_capacity = 333_333;
-        let add_plan = LaneLifecyclePlanDto {
-            additions: vec![lane_with_teu_capacity(
-                retired_lane_id,
-                "duplicate-retire-target",
-                retired_teu_capacity,
-            )],
-            retire: Vec::new(),
-        };
-        handle_post_nexus_lane_lifecycle(Arc::clone(&state), Arc::clone(&queue), add_plan)
-            .await
-            .expect("manual lifecycle addition should be accepted");
-        let before_nexus = state.nexus_snapshot();
-        let before_limits = queue.queue_limits().for_lane(retired_lane_id);
-        assert_eq!(
-            before_limits.teu_capacity, retired_teu_capacity,
-            "setup must install lane-specific queue limits before duplicate retire"
-        );
-        let duplicate_retire_plan = LaneLifecyclePlanDto {
-            additions: Vec::new(),
-            retire: vec![retired_lane_id, retired_lane_id],
-        };
-
-        let err = match handle_post_nexus_lane_lifecycle(
-            Arc::clone(&state),
-            Arc::clone(&queue),
-            duplicate_retire_plan,
-        )
-        .await
-        {
-            Ok(_) => panic!("duplicate lifecycle retire ids must be rejected"),
-            Err(err) => err,
-        };
-        assert!(matches!(
-            err,
-            Error::LaneLifecycle { reason }
-                if reason.contains("duplicate retire lane 1")
-        ));
-
-        let nexus = state.nexus_snapshot();
-        assert_eq!(
-            nexus.lane_catalog, before_nexus.lane_catalog,
-            "rejected duplicate-retire plan must not mutate the committed lane catalog"
-        );
-        assert_eq!(
-            queue.queue_limits().for_lane(retired_lane_id),
-            before_limits,
-            "rejected duplicate-retire plan must not refresh queue limits"
-        );
-    }
-
-    #[tokio::test]
-    async fn nexus_lane_lifecycle_rejects_unknown_retire_without_queue_refresh() {
-        let state = enabled_state_for_lifecycle_test();
-        let queue = queue_for_lifecycle_test();
-        let unknown_lane_id = LaneId::new(9);
-        let before_nexus = state.nexus_snapshot();
-        let before_limits = queue.queue_limits().for_lane(unknown_lane_id);
-        let plan = LaneLifecyclePlanDto {
-            additions: Vec::new(),
-            retire: vec![unknown_lane_id],
-        };
-
-        let err =
-            match handle_post_nexus_lane_lifecycle(Arc::clone(&state), Arc::clone(&queue), plan)
-                .await
-            {
-                Ok(_) => panic!("unknown lifecycle retire lane must be rejected"),
-                Err(err) => err,
-            };
-        assert!(matches!(
-            err,
-            Error::LaneLifecycle { reason }
-                if reason.contains("cannot retire unknown lane 9")
-        ));
-
-        let nexus = state.nexus_snapshot();
-        assert_eq!(
-            nexus.lane_catalog, before_nexus.lane_catalog,
-            "rejected unknown-retire plan must not mutate the committed lane catalog"
-        );
-        assert_eq!(
-            queue.queue_limits().for_lane(unknown_lane_id),
-            before_limits,
-            "rejected unknown-retire plan must not refresh queue limits"
-        );
-    }
-
-    #[tokio::test]
-    async fn nexus_lane_lifecycle_rejects_unknown_dataspace_without_queue_refresh() {
-        let state = enabled_state_for_lifecycle_test();
-        let queue = queue_for_lifecycle_test();
-        let added_lane_id = LaneId::new(1);
-        let before_nexus = state.nexus_snapshot();
-        let before_limits = queue.queue_limits().for_lane(added_lane_id);
-        let mut unknown_dataspace_lane =
-            lane_with_teu_capacity(added_lane_id, "unknown-dataspace", 444_444);
-        unknown_dataspace_lane.dataspace_id = DataSpaceId::new(42);
-        let plan = LaneLifecyclePlanDto {
-            additions: vec![unknown_dataspace_lane],
-            retire: Vec::new(),
-        };
-
-        let err =
-            match handle_post_nexus_lane_lifecycle(Arc::clone(&state), Arc::clone(&queue), plan)
-                .await
-            {
-                Ok(_) => panic!("unknown lifecycle dataspace must be rejected"),
-                Err(err) => err,
-            };
-        assert!(matches!(
-            err,
-            Error::LaneLifecycle { reason }
-                if reason.contains("lane lifecycle plan references unknown dataspace 42")
-        ));
-
-        let nexus = state.nexus_snapshot();
-        assert_eq!(
-            nexus.lane_catalog, before_nexus.lane_catalog,
-            "rejected unknown-dataspace plan must not mutate the committed lane catalog"
-        );
-        assert_eq!(
-            queue.queue_limits().for_lane(added_lane_id),
-            before_limits,
-            "rejected unknown-dataspace plan must not refresh queue limits"
-        );
-    }
-
-    #[tokio::test]
-    async fn nexus_lane_lifecycle_applies_manual_lane_and_refreshes_queue_limits() {
-        let state = enabled_state_for_lifecycle_test();
-        let queue = queue_for_lifecycle_test();
-        let added_lane_id = LaneId::new(1);
-        let added_teu_capacity = 654_321;
-        let fallback_limits = queue.queue_limits().for_lane(added_lane_id);
-        assert_ne!(
-            fallback_limits.teu_capacity, added_teu_capacity,
-            "test must use a lane-specific capacity distinct from the fallback"
-        );
-        let plan = LaneLifecyclePlanDto {
-            additions: vec![lane_with_teu_capacity(
-                added_lane_id,
-                "manual-through-torii",
-                added_teu_capacity,
-            )],
-            retire: Vec::new(),
-        };
-
-        let response =
-            utils::with_current_response_format(crate::utils::ResponseFormat::Json, async {
-                handle_post_nexus_lane_lifecycle(Arc::clone(&state), Arc::clone(&queue), plan)
-                    .await
-                    .expect("manual lifecycle plan should be accepted")
-                    .into_response()
-            })
-            .await;
-        assert_eq!(response.status(), StatusCode::ACCEPTED);
-        let payload = response_body_json(response).await;
-        assert_eq!(
-            payload.get("ok").and_then(norito::json::Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            payload
-                .get("configured_lane_count")
-                .and_then(norito::json::Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            payload
-                .get("lane_count")
-                .and_then(norito::json::Value::as_u64),
-            Some(2),
-            "legacy lane_count remains the configured lane count"
-        );
-        assert_eq!(
-            payload
-                .get("active_lane_count")
-                .and_then(norito::json::Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            payload
-                .get("active_lane_ids")
-                .and_then(norito::json::Value::as_array)
-                .map(|values| {
-                    values
-                        .iter()
-                        .filter_map(norito::json::Value::as_u64)
-                        .collect::<Vec<_>>()
-                }),
-            Some(vec![0, 1])
-        );
-        assert_eq!(
-            payload
-                .get("autoscale_capacity_lane_count")
-                .and_then(norito::json::Value::as_u64),
-            Some(0)
-        );
-        assert!(
-            payload
-                .get("autoscale_capacity_lane_ids")
-                .and_then(norito::json::Value::as_array)
-                .is_some_and(Vec::is_empty)
-        );
-
-        let nexus = state.nexus_snapshot();
-        assert!(
-            nexus
-                .lane_catalog
-                .lanes()
-                .iter()
-                .any(|lane| lane.id == added_lane_id && lane.alias == "manual-through-torii"),
-            "accepted lifecycle plan must update the committed lane catalog"
-        );
-        assert_eq!(nexus.lane_catalog.lane_count().get(), 2);
-        assert_eq!(
-            queue.queue_limits().for_lane(added_lane_id).teu_capacity,
-            added_teu_capacity,
-            "accepted lifecycle plan must refresh queue limits from committed Nexus metadata"
-        );
-    }
-
-    #[tokio::test]
-    async fn nexus_lane_lifecycle_retires_manual_lane_and_clears_queue_limits() {
-        let state = enabled_state_for_lifecycle_test();
-        let queue = queue_for_lifecycle_test();
-        let retired_lane_id = LaneId::new(1);
-        let retired_teu_capacity = 987_654_321;
-        let fallback_limits = queue.queue_limits().for_lane(retired_lane_id);
-        assert_ne!(
-            fallback_limits.teu_capacity, retired_teu_capacity,
-            "test must use a lane-specific capacity distinct from fallback"
-        );
-
-        let add_plan = LaneLifecyclePlanDto {
-            additions: vec![lane_with_teu_capacity(
-                retired_lane_id,
-                "manual-retire-through-torii",
-                retired_teu_capacity,
-            )],
-            retire: Vec::new(),
-        };
-        handle_post_nexus_lane_lifecycle(Arc::clone(&state), Arc::clone(&queue), add_plan)
-            .await
-            .expect("manual lifecycle addition should be accepted");
-        assert_eq!(
-            queue.queue_limits().for_lane(retired_lane_id).teu_capacity,
-            retired_teu_capacity,
-            "setup must install lane-specific queue limits before retirement"
-        );
-
-        let retire_plan = LaneLifecyclePlanDto {
-            additions: Vec::new(),
-            retire: vec![retired_lane_id],
-        };
-        let response =
-            handle_post_nexus_lane_lifecycle(Arc::clone(&state), Arc::clone(&queue), retire_plan)
-                .await
-                .expect("manual lifecycle retirement should be accepted")
-                .into_response();
-        assert_eq!(response.status(), StatusCode::ACCEPTED);
-
-        let nexus = state.nexus_snapshot();
-        assert!(
-            nexus
-                .lane_catalog
-                .lanes()
-                .iter()
-                .all(|lane| lane.id != retired_lane_id),
-            "accepted retire plan must remove the lane from the committed catalog"
-        );
-        assert_eq!(
-            queue.queue_limits().for_lane(retired_lane_id),
-            fallback_limits,
-            "accepted retire plan must clear stale lane-specific queue limits"
-        );
+        let expected_incarnations =
+            iroha_data_model::nexus::LaneLifecycleParameterV1::canonical_incarnations(
+                &view.nexus.lane_catalog,
+                &view.lane_incarnations,
+            )
+            .expect("canonical committed incarnations");
+        assert_eq!(status.incarnations, expected_incarnations);
     }
 }
 

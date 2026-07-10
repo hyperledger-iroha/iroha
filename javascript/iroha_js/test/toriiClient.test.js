@@ -5634,12 +5634,14 @@ test("fetchDaPayloadViaGateway fetches manifest bundle and invokes gateway", asy
     {
       name: "alpha",
       providerIdHex: "bb".repeat(32),
+      gatewayPublicKeyHex: "dd".repeat(32),
       baseUrl: "https://gateway.test/",
       streamTokenB64: "dG9rZW4=",
     },
     {
       name: "beta",
       providerIdHex: "cc".repeat(32),
+      gatewayPublicKeyHex: "dd".repeat(32),
       baseUrl: "https://gateway-two.test/",
       streamTokenB64: "dG9rZW4y",
     },
@@ -5661,6 +5663,7 @@ test("fetchDaPayloadViaGateway fetches manifest bundle and invokes gateway", asy
   assert.equal(handleArg, chunkerHandle);
   assert.ok(planJsonArg.includes('"chunk_index":0'));
   assert.equal(providerArg.length, 2);
+  assert.equal(providerArg[0].gatewayPublicKeyHex, "dd".repeat(32));
 });
 
 test("fetchDaPayloadViaGateway validates signal option", async () => {
@@ -5687,14 +5690,16 @@ test("fetchDaPayloadViaGateway validates signal option", async () => {
     {
       name: "alpha",
       providerIdHex: "11".repeat(32),
+      gatewayPublicKeyHex: "dd".repeat(32),
       baseUrl: "https://gateway.test",
-      streamTokenB64: bufferToBase64Url(Buffer.from("token")),
+      streamTokenB64: Buffer.from("token").toString("base64"),
     },
     {
       name: "beta",
       providerIdHex: "22".repeat(32),
+      gatewayPublicKeyHex: "dd".repeat(32),
       baseUrl: "https://gateway-two.test",
-      streamTokenB64: bufferToBase64Url(Buffer.from("token-2")),
+      streamTokenB64: Buffer.from("token-2").toString("base64"),
     },
   ];
   const client = new ToriiClient(BASE_URL, {
@@ -5754,12 +5759,14 @@ test("fetchDaPayloadViaGateway rejects invalid stream tokens", async () => {
           {
             name: "alpha",
             providerIdHex: "11".repeat(32),
+            gatewayPublicKeyHex: "dd".repeat(32),
             baseUrl: "https://gateway.one",
             streamTokenB64: "not-base64!!",
           },
           {
             name: "beta",
             providerIdHex: "22".repeat(32),
+            gatewayPublicKeyHex: "dd".repeat(32),
             baseUrl: "https://gateway.two",
             streamTokenB64: "dG9rZW4y",
           },
@@ -5786,9 +5793,10 @@ test("fetchDaPayloadViaGateway uses custom hooks", async (t) => {
   const providers = [
     {
       name: "alpha",
-      providerIdHex: `0x${"ee".repeat(32)}`,
+      providerIdHex: "ee".repeat(32),
+      gatewayPublicKeyHex: "dd".repeat(32),
       baseUrl: "https://gateway.test",
-      streamTokenB64: bufferToBase64Url(Buffer.from("token")),
+      streamTokenB64: Buffer.from("token").toString("base64"),
     },
   ];
   const gatewayMock = t.mock.fn(() => ({
@@ -5897,12 +5905,14 @@ test("fetchDaPayloadViaGateway reuses provided manifest bundle", async (t) => {
       {
         name: "beta",
         providerIdHex: "22".repeat(32),
+        gatewayPublicKeyHex: "dd".repeat(32),
         baseUrl: "https://gateway.example/",
         streamTokenB64: "c3R1Yg==",
       },
       {
         name: "gamma",
         providerIdHex: "33".repeat(32),
+        gatewayPublicKeyHex: "dd".repeat(32),
         baseUrl: "https://gateway-two.example/",
         streamTokenB64: "c3R1Yi0y",
       },
@@ -5934,12 +5944,14 @@ test("fetchDaPayloadViaGateway accepts providers alias", async (t) => {
     {
       name: "gamma",
       providerIdHex: "98".repeat(32),
+      gatewayPublicKeyHex: "dd".repeat(32),
       baseUrl: "https://gateway.test",
       streamTokenB64: Buffer.from("token").toString("base64"),
     },
     {
       name: "delta",
       providerIdHex: "97".repeat(32),
+      gatewayPublicKeyHex: "dd".repeat(32),
       baseUrl: "https://gateway-two.test",
       streamTokenB64: Buffer.from("token-2").toString("base64"),
     },
@@ -6065,12 +6077,14 @@ test("fetchDaPayloadViaGateway attaches proof summary when requested", async (t)
       {
         name: "alpha",
         providerIdHex: "bb".repeat(32),
+        gatewayPublicKeyHex: "dd".repeat(32),
         baseUrl: "https://gateway.test/",
         streamTokenB64: "dG9rZW4=",
       },
       {
         name: "beta",
         providerIdHex: "bc".repeat(32),
+        gatewayPublicKeyHex: "dd".repeat(32),
         baseUrl: "https://gateway-two.test/",
         streamTokenB64: "dG9rZW4y",
       },
@@ -6112,6 +6126,7 @@ test("fetchDaPayloadViaGateway rejects invalid manifest_b64 for proof summary", 
           {
             name: "alpha",
             providerIdHex: "bb".repeat(32),
+            gatewayPublicKeyHex: "dd".repeat(32),
             baseUrl: "https://gateway.test/",
             streamTokenB64: "dG9rZW4=",
           },
@@ -6413,12 +6428,14 @@ test("proveDaAvailabilityToDir persists CLI artefacts", async () => {
         {
           name: "alpha",
           providerIdHex: "bb".repeat(32),
+          gatewayPublicKeyHex: "dd".repeat(32),
           baseUrl: "https://gateway.test/",
           streamTokenB64: Buffer.from("token").toString("base64"),
         },
         {
           name: "beta",
           providerIdHex: "bc".repeat(32),
+          gatewayPublicKeyHex: "dd".repeat(32),
           baseUrl: "https://gateway-two.test/",
           streamTokenB64: Buffer.from("token-2").toString("base64"),
         },

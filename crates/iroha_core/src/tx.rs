@@ -3810,6 +3810,17 @@ impl StateBlock<'_> {
             .zip(artifact.entrypoints.iter())
         {
             let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Borrowed(entrypoint));
+            let plan = evaluate_policy_plan_with_nexus_and_world_at_block_height(
+                &self.nexus,
+                &accepted,
+                &self.world,
+                u64::try_from(self._curr_block.creation_time().as_millis()).unwrap_or(u64::MAX),
+                descriptor.proposal_height,
+            )
+            .map_err(|_| "execution input routing cannot be resolved")?;
+            if plan.coordinator_route() != routing {
+                return Err("execution input route does not match recomputed coordinator route");
+            }
             let (entrypoint_hash, result) = self
                 .validate_transaction_at_entrypoint_index_and_routing(
                     accepted,
@@ -5308,7 +5319,14 @@ fn enforce_lane_policies(
         };
         let evaluation = engine.evaluate(&ctx);
         match evaluation {
-            LaneComplianceEvaluation::NotConfigured => {}
+            LaneComplianceEvaluation::NotConfigured => {
+                if !engine.audit_only() {
+                    return Err(reject_lane_policy(
+                        &lane_alias,
+                        "no exact lane compliance policy is configured".to_string(),
+                    ));
+                }
+            }
             LaneComplianceEvaluation::Allowed(record) => {
                 record.log(engine.audit_only());
             }
@@ -12082,9 +12100,11 @@ pub mod tests {
             .map(|entrypoint| Hash::from(entrypoint.hash()))
             .collect::<Vec<_>>();
         let validator_set = vec![validator];
+        let lane_incarnation = Hash::new(b"tx-test-lane-incarnation");
         let subject_hash = SumeragiLanePayloadOwnership::compute_replay_subject_hash(
             lane_id,
             dataspace_id,
+            lane_incarnation,
             1,
             0,
             &candidate_indices,
@@ -12096,6 +12116,7 @@ pub mod tests {
             SumeragiLanePayloadOwnership::compute_replay_payload_ownership_hash(
                 lane_id,
                 dataspace_id,
+                lane_incarnation,
                 1,
                 0,
                 subject_hash,
@@ -12107,6 +12128,7 @@ pub mod tests {
         let rbc_instance_hash = SumeragiLanePayloadOwnership::compute_replay_rbc_instance_hash(
             lane_id,
             dataspace_id,
+            lane_incarnation,
             1,
             0,
             subject_hash,
@@ -12117,6 +12139,7 @@ pub mod tests {
         let mut descriptor = LaneBlockDescriptorV1 {
             lane_id,
             dataspace_id,
+            lane_incarnation,
             proposal_height: 1,
             previous_lane_block_height: 0,
             previous_lane_block_descriptor_hash: None,
@@ -12142,6 +12165,7 @@ pub mod tests {
             proposal_view: 0,
             lane_id,
             dataspace_id,
+            lane_incarnation,
             lane_block_height: 1,
             lane_block_view: 0,
             subject_hash,
@@ -12171,6 +12195,9 @@ pub mod tests {
                 )),
                 ownership,
             ),
+            autonomous_chain_id_hash: None,
+            autonomous_epoch: None,
+            autonomous_payload_hash: None,
             entrypoints,
         })
     }

@@ -182,7 +182,7 @@ cargo run --locked -p sorafs_orchestrator --bin sorafs_cli -- \
   moderation honey-audit \
   --manifest-id=<hex32> \
   --honey=<digest_hex> \
-  --provider name=<alias>,provider-id=<hex32>,base-url=<url>,stream-token=<base64> \
+  --provider name=<alias>,provider-id=<hex32>,gateway-key=<ed25519-public-key-hex>,base-url=https://gateway.example/,stream-token=<base64> \
   --json-out artifacts/sorafs_gateway/honey_audit.json \
   --markdown-out artifacts/sorafs_gateway/honey_audit.md
 ```

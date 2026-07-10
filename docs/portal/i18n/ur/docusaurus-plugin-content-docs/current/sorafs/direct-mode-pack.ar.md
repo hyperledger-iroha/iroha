@@ -70,7 +70,7 @@ cargo test -p sorafs_car --features cli fetch_command_respects_direct_transports
 ```bash
 ./scripts/sorafs_direct_mode_smoke.sh \
   --config docs/examples/sorafs_direct_mode_smoke.conf \
-  --provider name=gw-regulated,provider-id=001122...,base-url=https://gw.example/direct/,stream-token=BASE64
+  --provider name=gw-regulated,provider-id=001122...,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gw.example/,stream-token=BASE64
 ```
 
 - اسکرپٹ CLI جھنڈوں اور کلیدی = ویلیو کنفیگریشن فائلوں دونوں کا احترام کرتا ہے (`docs/examples/sorafs_direct_mode_smoke.conf` دیکھیں)۔ مینی فیسٹ ڈائجسٹ کو پُر کریں اور فراہم کنندہ کے اشتہارات کو چلانے سے پہلے پیداواری اقدار کے ساتھ اندراجات کریں۔

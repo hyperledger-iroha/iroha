@@ -6,6 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use ed25519_dalek::{Signer as _, SigningKey};
 use hex::encode;
 use norito::{
     core::NoritoSerialize,
@@ -61,9 +62,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         epoch_id,
         drand_round,
         drand_randomness,
-        drand_signature: vec![0x24; 96],
+        drand_signature: [0x24; 48],
         vrf_output: Some(vrf_output),
-        vrf_proof: Some(vec![0x25; 80]),
+        vrf_proof: Some(iroha_crypto::vrf::VrfProof::SigInG1([0x25; 48])),
         forced: false,
         chunking_profile: "sorafs.sf1@1.0.0".to_string(),
         seed,
@@ -99,7 +100,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         },
     ];
 
-    let proof = PorProofV1 {
+    let provider_signing_key = SigningKey::from_bytes(&[0x31; 32]);
+    let mut proof = PorProofV1 {
         version: POR_PROOF_VERSION_V1,
         challenge_id: challenge.challenge_id,
         manifest_digest: challenge.manifest_digest,
@@ -108,15 +110,22 @@ fn main() -> Result<(), Box<dyn Error>> {
         auth_path: vec![[0x11; 32], [0x22; 32], [0x33; 32]],
         signature: AdvertSignature {
             algorithm: SignatureAlgorithm::Ed25519,
-            public_key: vec![0x01; 32],
-            signature: vec![0x02; 64],
+            public_key: provider_signing_key.verifying_key().to_bytes().to_vec(),
+            signature: vec![0; 64],
         },
         submitted_at: 1_700_000_540,
     };
+    let proof_payload = proof.signature_payload_bytes()?;
+    proof.signature.signature = provider_signing_key
+        .sign(&proof_payload)
+        .to_bytes()
+        .to_vec();
     proof.validate()?;
+    proof.verify_signature()?;
     let proof_digest = proof.proof_digest();
 
-    let verdict = AuditVerdictV1 {
+    let auditor_signing_key = SigningKey::from_bytes(&[0x32; 32]);
+    let mut verdict = AuditVerdictV1 {
         version: AUDIT_VERDICT_VERSION_V1,
         manifest_digest: challenge.manifest_digest,
         provider_id: challenge.provider_id,
@@ -127,15 +136,21 @@ fn main() -> Result<(), Box<dyn Error>> {
         decided_at: 1_700_000_600,
         auditor_signatures: vec![AdvertSignature {
             algorithm: SignatureAlgorithm::Ed25519,
-            public_key: vec![0x03; 32],
-            signature: vec![0x04; 64],
+            public_key: auditor_signing_key.verifying_key().to_bytes().to_vec(),
+            signature: vec![0; 64],
         }],
         metadata: vec![CapacityMetadataEntry {
             key: "auditor.note".to_string(),
             value: "PoR verified successfully".to_string(),
         }],
     };
+    let verdict_payload = verdict.signature_payload_bytes()?;
+    verdict.auditor_signatures[0].signature = auditor_signing_key
+        .sign(&verdict_payload)
+        .to_bytes()
+        .to_vec();
     verdict.validate()?;
+    verdict.verify_signatures()?;
 
     write_norito_pair(
         &por_dir.join("challenge_v1"),
@@ -310,7 +325,8 @@ fn challenge_json(challenge: &PorChallengeV1) -> Value {
     map.insert(
         "vrf_proof_hex".into(),
         match &challenge.vrf_proof {
-            Some(proof) => Value::from(encode(proof)),
+            Some(iroha_crypto::vrf::VrfProof::SigInG1(proof)) => Value::from(encode(proof)),
+            Some(iroha_crypto::vrf::VrfProof::SigInG2(proof)) => Value::from(encode(proof)),
             None => Value::Null,
         },
     );

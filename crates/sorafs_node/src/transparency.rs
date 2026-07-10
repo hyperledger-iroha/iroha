@@ -25,6 +25,7 @@ use iroha_data_model::sorafs::{
     },
 };
 use norito::codec::Encode as NoritoEncode;
+use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use sorafs_manifest::{
     SoraFsAppealFinanceReportV1, SoraFsAppealFinanceSettlementReceiptV1,
     SoraFsModerationBallotGovernanceEventV1,
@@ -49,7 +50,7 @@ const RESERVE_PRIVATE_FIELD_DIGEST_DOMAIN_V1: &[u8] =
     b"sorafs.node.transparency.reserve.private_field.v1";
 
 /// One privacy-safe source entry admitted into the local transparency ledger worker.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct TransparencyLedgerSourceEntry {
     /// Stable source event id used for duplicate suppression.
     pub event_id: String,
@@ -1111,7 +1112,7 @@ pub fn reserve_lifecycle_policy_source_entry(
 }
 
 /// One source metric observed for a privacy aggregate event.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct PrivacyAggregateSourceMetric {
     /// Stable metric key.
     pub key: String,
@@ -1122,7 +1123,7 @@ pub struct PrivacyAggregateSourceMetric {
 }
 
 /// One source event admitted into the local SFM-4c aggregate worker.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct PrivacyAggregateSourceEvent {
     /// Stable event id used for duplicate suppression.
     pub event_id: String,

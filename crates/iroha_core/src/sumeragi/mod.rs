@@ -842,6 +842,7 @@ mod tests {
         let mut descriptor = LaneBlockDescriptorV1 {
             lane_id: LaneId::SINGLE,
             dataspace_id: DataSpaceId::UNIVERSAL,
+            lane_incarnation: Hash::new(b"sumeragi-lane-fixture-incarnation"),
             proposal_height: 12,
             previous_lane_block_height: 11,
             previous_lane_block_descriptor_hash: Some(Hash::prehashed([0xA1; Hash::LENGTH])),
@@ -3210,6 +3211,7 @@ mod tests {
         let commitment = LaneBlockCommitment {
             block_height: 1,
             lane_id: LaneId::new(0),
+            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::UNIVERSAL,
             tx_count: 0,
             total_local_micro: 0,
@@ -11102,6 +11104,7 @@ mod tests {
         let commitment = LaneBlockCommitment {
             block_height: 1,
             lane_id: LaneId::new(0),
+            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::UNIVERSAL,
             tx_count: 0,
             total_local_micro: 0,
@@ -13706,6 +13709,10 @@ impl SumeragiHandle {
                 })
                 | BlockMessage::Proposal(_)
                 | BlockMessage::LaneBlockProposal(_)
+                | BlockMessage::LaneExecutablePayload(_)
+                | BlockMessage::LaneExecutablePayloadHandoff(_)
+                | BlockMessage::LaneBlockNewViewVote(_)
+                | BlockMessage::LaneBlockNewViewCertificate(_)
                 | BlockMessage::LaneBlockVote(_)
                 | BlockMessage::LaneBlockQc(_)
                 | BlockMessage::QcVote(_)
@@ -13746,6 +13753,10 @@ impl SumeragiHandle {
                 })
                 | BlockMessage::Proposal(_)
                 | BlockMessage::LaneBlockProposal(_)
+                | BlockMessage::LaneExecutablePayload(_)
+                | BlockMessage::LaneExecutablePayloadHandoff(_)
+                | BlockMessage::LaneBlockNewViewVote(_)
+                | BlockMessage::LaneBlockNewViewCertificate(_)
                 | BlockMessage::LaneBlockVote(_)
                 | BlockMessage::LaneBlockQc(_)
                 | BlockMessage::QcVote(_)
@@ -13993,6 +14004,40 @@ impl SumeragiHandle {
                 InboundBlockMessage::new(BlockMessage::LaneBlockVote(vote), sender),
                 "LaneBlockVote",
                 status::WorkerQueueKind::Votes,
+                mode,
+            ),
+            BlockMessage::LaneBlockNewViewVote(vote) => enqueue_with_mode(
+                &self.votes,
+                InboundBlockMessage::new(BlockMessage::LaneBlockNewViewVote(vote), sender),
+                "LaneBlockNewViewVote",
+                status::WorkerQueueKind::Votes,
+                mode,
+            ),
+            BlockMessage::LaneExecutablePayload(payload) => enqueue_with_mode(
+                &self.block_payload,
+                InboundBlockMessage::new(BlockMessage::LaneExecutablePayload(payload), sender),
+                "LaneExecutablePayload",
+                status::WorkerQueueKind::BlockPayload,
+                mode,
+            ),
+            BlockMessage::LaneExecutablePayloadHandoff(handoff) => enqueue_with_mode(
+                &self.block_payload,
+                InboundBlockMessage::new(
+                    BlockMessage::LaneExecutablePayloadHandoff(handoff),
+                    sender,
+                ),
+                "LaneExecutablePayloadHandoff",
+                status::WorkerQueueKind::BlockPayload,
+                mode,
+            ),
+            BlockMessage::LaneBlockNewViewCertificate(certificate) => enqueue_with_mode(
+                &self.block_payload,
+                InboundBlockMessage::new(
+                    BlockMessage::LaneBlockNewViewCertificate(certificate),
+                    sender,
+                ),
+                "LaneBlockNewViewCertificate",
+                status::WorkerQueueKind::BlockPayload,
                 mode,
             ),
             BlockMessage::Qc(cert) => {

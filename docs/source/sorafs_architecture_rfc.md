@@ -158,10 +158,17 @@ Provider discovery is handled by signed Norito adverts propagated via the
 discovery mesh. The canonical layout, TTL constraints (24 h max, refresh at
 `min(TTL/2, 12 h)`), and path-diversity policy are defined in
 [`sorafs_node_client_protocol.md`](sorafs_node_client_protocol.md). Governance-
-registered keys must sign the advert body; Torii and gateways reject adverts
-from unregistered providers before they reach clients. Adverts include a
-`signature_strict` flag so tooling can distinguish governance-signed payloads
-(`true`) from diagnostic fixtures (`false`).
+registered keys must sign the domain-separated canonical advert envelope,
+including timestamps and policy fields; Torii and gateways reject adverts from
+unregistered providers before they reach clients. Torii requires
+`signature_strict=true`, rejects future issuance and non-monotonic provider
+updates, and never lets a remote advert bypass signature verification. Each
+accepted provider high-water timestamp and advert fingerprint is committed to a
+bounded canonical Norito checkpoint before the live cache changes. Atomic writes,
+private file mode, no-follow path checks, and fail-closed startup validation keep
+restart, corruption, and symlink attacks from reopening the replay window. A
+lifetime OS lock on the adjacent checkpoint lock file rejects multiple Torii
+owners of one replay store and prevents cross-process last-writer-wins rollback.
 
 The Norito payload is realised by
 [`ProviderAdvertV1`](../../crates/sorafs_manifest/src/provider_advert.rs) and

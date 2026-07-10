@@ -93,6 +93,33 @@ fn storage_backed_dataset_matches_manifest_fixture() {
     assert_eq!(dataset.manifest().root_cid, manifest.root_cid);
 }
 
+#[test]
+fn gateway_startup_requires_exact_canonical_operator_approval() {
+    let dataset = gateway_dataset_from_fixtures();
+    let approved = manifest_envelope_header(&dataset);
+    let tampered = manifest_envelope_with_manifest_digest(
+        &dataset,
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    );
+    assert!(GatewayState::new(dataset, tampered).is_err());
+
+    let dataset = gateway_dataset_from_fixtures();
+    assert!(GatewayState::new(dataset, format!(" {approved}")).is_err());
+
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(&approved)
+        .expect("decode approval");
+    let mut value: Value = json::from_slice(&decoded).expect("approval JSON");
+    value
+        .as_object_mut()
+        .expect("approval object")
+        .insert("unknown".into(), Value::from(true));
+    let unknown_field_approval = base64::engine::general_purpose::STANDARD
+        .encode(json::to_vec(&value).expect("approval JSON"));
+    let dataset = gateway_dataset_from_fixtures();
+    assert!(GatewayState::new(dataset, unknown_field_approval).is_err());
+}
+
 #[derive(Clone)]
 struct CapabilityScenario {
     status: u16,
@@ -226,6 +253,10 @@ async fn issue_stream_token(
         "manifest_envelope".into(),
         Value::from(manifest_envelope.to_string()),
     );
+    map.insert(
+        "capabilities".into(),
+        Value::Array(vec![Value::from("sorafs.chunk-range.block")]),
+    );
     let body_bytes = json::to_vec(&Value::Object(map)).map_err(|err| err.to_string())?;
     let request = Request::builder()
         .method("POST")
@@ -257,6 +288,152 @@ async fn issue_stream_token(
 }
 
 #[tokio::test]
+async fn token_response_contains_real_signed_envelope_and_public_key() {
+    let dataset = gateway_dataset_from_fixtures();
+    let approved = manifest_envelope_header(&dataset);
+    let state = GatewayState::new(dataset, approved.clone()).expect("gateway state");
+    let app = gateway::router(state);
+
+    let request_body = Value::Object(json::Map::from_iter([
+        ("manifest_envelope".into(), Value::from(approved)),
+        (
+            "capabilities".into(),
+            Value::Array(vec![Value::from("sorafs.chunk-range.block")]),
+        ),
+    ]));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/token")
+                .header("content-type", "application/json")
+                .header("X-SoraFS-Client", "client-alpha")
+                .body(axum::body::Body::from(
+                    json::to_vec(&request_body).expect("token body"),
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let header_token = response
+        .headers()
+        .get("x-sorafs-stream-token")
+        .and_then(|value| value.to_str().ok())
+        .expect("signed token header")
+        .to_owned();
+    let response_bytes = body::to_bytes(response.into_body(), 32 * 1024)
+        .await
+        .expect("response body");
+    let response_value: Value = json::from_slice(&response_bytes).expect("response JSON");
+    let response_map = response_value.as_object().expect("response object");
+    assert_eq!(
+        response_map.get("token").and_then(Value::as_str),
+        Some(header_token.as_str())
+    );
+    let signature = response_map
+        .get("signature")
+        .and_then(Value::as_str)
+        .expect("signature");
+    let public_key = response_map
+        .get("public_key")
+        .and_then(Value::as_str)
+        .expect("public key");
+    assert_eq!(signature.len(), 128);
+    assert_ne!(signature, "00".repeat(64));
+    assert_eq!(public_key.len(), 64);
+    assert_ne!(public_key, "00".repeat(32));
+
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(header_token)
+        .expect("decode signed envelope");
+    let envelope: Value = json::from_slice(&decoded).expect("signed envelope JSON");
+    assert_eq!(
+        envelope["signature_hex"].as_str(),
+        Some(signature),
+        "response signature must be the actual envelope signature"
+    );
+    assert_eq!(envelope["public_key_hex"].as_str(), Some(public_key));
+}
+
+#[tokio::test]
+async fn token_endpoint_rejects_unknown_fields_invalid_clients_and_oversize_bodies() {
+    let dataset = gateway_dataset_from_fixtures();
+    let approved = manifest_envelope_header(&dataset);
+    let state = GatewayState::new(dataset, approved.clone()).expect("gateway state");
+    let app = gateway::router(state);
+
+    let mut request_map = json::Map::from_iter([
+        ("manifest_envelope".into(), Value::from(approved.clone())),
+        (
+            "capabilities".into(),
+            Value::Array(vec![Value::from("sorafs.chunk-range.block")]),
+        ),
+    ]);
+    request_map.insert("unknown".into(), Value::from(true));
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/token")
+                .header("content-type", "application/json")
+                .header("X-SoraFS-Client", "client-alpha")
+                .body(axum::body::Body::from(
+                    json::to_vec(&Value::Object(request_map)).expect("body"),
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+
+    let valid_body = Value::Object(json::Map::from_iter([
+        ("manifest_envelope".into(), Value::from(approved)),
+        (
+            "capabilities".into(),
+            Value::Array(vec![Value::from("sorafs.chunk-range.block")]),
+        ),
+    ]));
+    for client in ["Client-Uppercase", "client space", "client/control"] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/token")
+                    .header("content-type", "application/json")
+                    .header("X-SoraFS-Client", client)
+                    .body(axum::body::Body::from(
+                        json::to_vec(&valid_body).expect("body"),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "client={client}"
+        );
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/token")
+                .header("content-type", "application/json")
+                .header("X-SoraFS-Client", "client-alpha")
+                .body(axum::body::Body::from(vec![b'x'; 24 * 1024 + 1]))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+#[tokio::test]
 async fn car_endpoint_serves_canonical_fixture() {
     let dataset = gateway_dataset_from_fixtures();
     let manifest_id = dataset.manifest_id_hex().to_string();
@@ -270,7 +447,7 @@ async fn car_endpoint_serves_canonical_fixture() {
     let expected_len = expected_car.len();
 
     let manifest_envelope = manifest_envelope_header(&dataset);
-    let state = GatewayState::new(dataset);
+    let state = GatewayState::new(dataset, manifest_envelope.clone()).expect("gateway state");
     let app = gateway::router(state);
 
     let nonce = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -340,7 +517,8 @@ async fn missing_manifest_envelope_is_rejected() {
     let dataset = gateway_dataset_from_fixtures();
     let manifest_id = dataset.manifest_id_hex().to_string();
     let profile_version = dataset.profile_version().to_string();
-    let state = GatewayState::new(dataset);
+    let manifest_envelope = manifest_envelope_header(&dataset);
+    let state = GatewayState::new(dataset, manifest_envelope).expect("gateway state");
     let app = gateway::router(state);
 
     let request = Request::builder()
@@ -368,7 +546,8 @@ async fn head_manifest_envelope_is_required() {
     let dataset = gateway_dataset_from_fixtures();
     let manifest_id = dataset.manifest_id_hex().to_string();
     let profile_version = dataset.profile_version().to_string();
-    let state = GatewayState::new(dataset);
+    let manifest_envelope = manifest_envelope_header(&dataset);
+    let state = GatewayState::new(dataset, manifest_envelope).expect("gateway state");
     let app = gateway::router(state);
 
     let request = Request::builder()
@@ -394,14 +573,14 @@ async fn head_manifest_envelope_is_required() {
 async fn invalid_manifest_envelope_is_rejected() {
     let dataset = gateway_dataset_from_fixtures();
     let manifest_id = dataset.manifest_id_hex().to_string();
-    let expected_manifest_digest = manifest_id.clone();
     let profile_version = dataset.profile_version().to_string();
     let tampered = manifest_envelope_with_manifest_digest(
         &dataset,
         "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
     );
 
-    let state = GatewayState::new(dataset);
+    let approved = manifest_envelope_header(&dataset);
+    let state = GatewayState::new(dataset, approved).expect("gateway state");
     let app = gateway::router(state);
 
     let request = Request::builder()
@@ -434,19 +613,9 @@ async fn invalid_manifest_envelope_is_rejected() {
     );
     assert_eq!(
         obj.get("message").and_then(Value::as_str),
-        Some("manifest digest is not covered by the admission envelope")
+        Some("manifest envelope does not exactly match the operator-approved startup envelope")
     );
-    let details = obj
-        .get("details")
-        .and_then(Value::as_object)
-        .expect("refusal must include details");
-    assert_eq!(
-        details
-            .get("manifest_digest")
-            .and_then(Value::as_str)
-            .map(|s| s.to_string()),
-        Some(expected_manifest_digest)
-    );
+    assert!(obj.get("details").is_none());
 }
 
 #[tokio::test]
@@ -471,7 +640,7 @@ async fn car_range_serves_partial_chunk() {
         .and_then(|value| value.checked_sub(1))
         .expect("valid chunk range");
 
-    let state = GatewayState::new(dataset);
+    let state = GatewayState::new(dataset, manifest_envelope.clone()).expect("gateway state");
     let app = gateway::router(state);
     let token_response = issue_stream_token(&app, &manifest_envelope)
         .await
@@ -546,6 +715,81 @@ async fn car_range_serves_partial_chunk() {
 }
 
 #[tokio::test]
+async fn range_request_rejects_token_tampering_and_wrong_client_binding() {
+    let dataset = gateway_dataset_from_fixtures();
+    let manifest_id = dataset.manifest_id_hex().to_owned();
+    let profile_version = dataset.profile_version().to_owned();
+    let chunker_alias = dataset.chunker_alias().to_owned();
+    let manifest_envelope = manifest_envelope_header(&dataset);
+    let chunk = dataset.plan().chunks.first().expect("chunk").clone();
+    let range_end = chunk.offset + u64::from(chunk.length) - 1;
+    let state = GatewayState::new(dataset, manifest_envelope.clone()).expect("gateway state");
+    let app = gateway::router(state);
+    let token = issue_stream_token(&app, &manifest_envelope)
+        .await
+        .expect("issue token")
+        .token;
+
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(&token)
+        .expect("decode token");
+    let mut token_value: Value = json::from_slice(&decoded).expect("parse token");
+    token_value
+        .as_object_mut()
+        .and_then(|map| map.get_mut("payload"))
+        .and_then(Value::as_object_mut)
+        .expect("token payload")
+        .insert("client_id".into(), Value::from("client-evil"));
+    let tampered = base64::engine::general_purpose::STANDARD
+        .encode(json::to_vec(&token_value).expect("encode tampered token"));
+
+    let request = |stream_token: &str, client_id: &str, nonce: &str| {
+        Request::builder()
+            .method("GET")
+            .uri(format!("/car/{manifest_id}"))
+            .header("X-SoraFS-Version", &profile_version)
+            .header("X-SoraFS-Nonce", nonce)
+            .header("X-SoraFS-Manifest-Envelope", &manifest_envelope)
+            .header("X-SoraFS-Chunker", &chunker_alias)
+            .header("Accept", "application/vnd.ipld.car; dag-scope=block")
+            .header("Range", format!("bytes={}-{}", chunk.offset, range_end))
+            .header("X-SoraFS-Stream-Token", stream_token)
+            .header("X-SoraFS-Client", client_id)
+            .body(axum::body::Body::empty())
+            .expect("request")
+    };
+
+    let tampered_response = app
+        .clone()
+        .oneshot(request(
+            &tampered,
+            "client-evil",
+            "8888888888888888888888888888888888888888888888888888888888888888",
+        ))
+        .await
+        .expect("tampered response");
+    assert_eq!(tampered_response.status(), StatusCode::PRECONDITION_FAILED);
+
+    let wrong_client_response = app
+        .oneshot(request(
+            &token,
+            "client-evil",
+            "9999999999999999999999999999999999999999999999999999999999999999",
+        ))
+        .await
+        .expect("wrong-client response");
+    assert_eq!(
+        wrong_client_response.status(),
+        StatusCode::PRECONDITION_FAILED
+    );
+    let response_bytes = body::to_bytes(wrong_client_response.into_body(), 8 * 1024)
+        .await
+        .expect("error body");
+    let response_value: Value = json::from_slice(&response_bytes).expect("error JSON");
+    assert_eq!(response_value["error"].as_str(), Some("client_mismatch"));
+}
+
+#[tokio::test]
 async fn stream_token_concurrency_is_enforced() {
     let dataset = gateway_dataset_from_fixtures();
     let manifest_id = dataset.manifest_id_hex().to_string();
@@ -569,7 +813,8 @@ async fn stream_token_concurrency_is_enforced() {
         max_streams: 1,
         ..TokenPolicy::default()
     };
-    let state = GatewayState::with_token_policy(dataset, policy);
+    let state = GatewayState::with_token_policy(dataset, manifest_envelope.clone(), policy)
+        .expect("gateway state");
     let app = gateway::router(state);
     let token_response = issue_stream_token(&app, &manifest_envelope)
         .await
@@ -642,7 +887,7 @@ async fn car_range_rejects_misaligned_offsets() {
         .and_then(|value| value.checked_sub(1))
         .expect("valid chunk range");
 
-    let state = GatewayState::new(dataset);
+    let state = GatewayState::new(dataset, manifest_envelope.clone()).expect("gateway state");
     let app = gateway::router(state);
     let token_response = issue_stream_token(&app, &manifest_envelope)
         .await
@@ -685,7 +930,7 @@ async fn proof_endpoint_emits_json_payload() {
     dataset
         .verify_proof_for_testing()
         .expect("proof should validate");
-    let state = GatewayState::new(dataset);
+    let state = GatewayState::new(dataset, manifest_envelope.clone()).expect("gateway state");
     let app = gateway::router(state);
 
     let request = Request::builder()
@@ -727,7 +972,8 @@ async fn proof_request_requires_manifest_envelope() {
     let dataset = gateway_dataset_from_fixtures();
     let manifest_id = dataset.manifest_id_hex().to_string();
     let profile_version = dataset.profile_version().to_string();
-    let state = GatewayState::new(dataset);
+    let manifest_envelope = manifest_envelope_header(&dataset);
+    let state = GatewayState::new(dataset, manifest_envelope).expect("gateway state");
     let app = gateway::router(state);
 
     let request = Request::builder()
@@ -757,13 +1003,18 @@ async fn token_issuance_respects_quota_limit() {
         requests_per_minute: Some(1),
         ..TokenPolicy::default()
     };
-    let state = GatewayState::with_token_policy(dataset, policy);
+    let state = GatewayState::with_token_policy(dataset, manifest_envelope.clone(), policy)
+        .expect("gateway state");
     let app = gateway::router(state);
 
     let mut body_map = json::Map::new();
     body_map.insert(
         "manifest_envelope".into(),
         Value::from(manifest_envelope.clone()),
+    );
+    body_map.insert(
+        "capabilities".into(),
+        Value::Array(vec![Value::from("sorafs.chunk-range.block")]),
     );
     let body_bytes = json::to_vec(&Value::Object(body_map)).expect("serialize request body");
 
@@ -833,7 +1084,8 @@ async fn range_request_rejects_rate_limit_overflow() {
         rate_limit_bytes: u64::from(chunk.length.saturating_sub(1)),
         ..TokenPolicy::default()
     };
-    let state = GatewayState::with_token_policy(dataset, policy);
+    let state = GatewayState::with_token_policy(dataset, manifest_envelope.clone(), policy)
+        .expect("gateway state");
     let app = gateway::router(state);
     let token_response = issue_stream_token(&app, &manifest_envelope)
         .await
@@ -884,7 +1136,7 @@ async fn range_request_without_client_header_is_rejected() {
         .and_then(|value| value.checked_sub(1))
         .expect("valid chunk range");
 
-    let state = GatewayState::new(dataset);
+    let state = GatewayState::new(dataset, manifest_envelope.clone()).expect("gateway state");
     let app = gateway::router(state);
     let token_response = issue_stream_token(&app, &manifest_envelope)
         .await
@@ -934,7 +1186,7 @@ async fn range_request_without_stream_token_is_rejected() {
         .and_then(|value| value.checked_sub(1))
         .expect("valid chunk range");
 
-    let state = GatewayState::new(dataset);
+    let state = GatewayState::new(dataset, manifest_envelope.clone()).expect("gateway state");
     let app = gateway::router(state);
 
     let request = Request::builder()
@@ -977,7 +1229,7 @@ async fn capability_refusal_unsupported_chunker_matches_fixture() {
     let profile_version = dataset.profile_version().to_string();
     let manifest_envelope = manifest_envelope_header(&dataset);
 
-    let state = GatewayState::new(dataset);
+    let state = GatewayState::new(dataset, manifest_envelope.clone()).expect("gateway state");
     let app = gateway::router(state);
     let token_response = issue_stream_token(&app, &manifest_envelope)
         .await
@@ -1070,7 +1322,7 @@ async fn range_request_alias_mismatch_matches_fixture() {
         .and_then(|value| value.checked_sub(1))
         .expect("valid chunk range");
 
-    let state = GatewayState::new(dataset);
+    let state = GatewayState::new(dataset, manifest_envelope.clone()).expect("gateway state");
     let app = gateway::router(state);
     let token_response = issue_stream_token(&app, &manifest_envelope)
         .await
@@ -1133,7 +1385,7 @@ async fn token_issuance_rejects_unsupported_capability() {
     let scenario = capability_scenario("C4").clone();
     let dataset = gateway_dataset_from_fixtures();
     let manifest_envelope = manifest_envelope_header(&dataset);
-    let state = GatewayState::new(dataset);
+    let state = GatewayState::new(dataset, manifest_envelope.clone()).expect("gateway state");
     let app = gateway::router(state);
 
     let mut body_map = json::Map::new();
@@ -1196,7 +1448,7 @@ async fn range_request_missing_dag_scope_header_matches_fixture() {
     let profile_version = dataset.profile_version().to_string();
     let chunker_alias = dataset.chunker_alias().to_string();
     let manifest_envelope = manifest_envelope_header(&dataset);
-    let state = GatewayState::new(dataset);
+    let state = GatewayState::new(dataset, manifest_envelope.clone()).expect("gateway state");
     let app = gateway::router(state);
     let token_response = issue_stream_token(&app, &manifest_envelope)
         .await
@@ -1259,7 +1511,7 @@ async fn range_request_rejects_gzip_compression_matches_fixture() {
     let profile_version = dataset.profile_version().to_string();
     let chunker_alias = dataset.chunker_alias().to_string();
     let manifest_envelope = manifest_envelope_header(&dataset);
-    let state = GatewayState::new(dataset);
+    let state = GatewayState::new(dataset, manifest_envelope.clone()).expect("gateway state");
     let app = gateway::router(state);
     let token_response = issue_stream_token(&app, &manifest_envelope)
         .await
@@ -1331,7 +1583,7 @@ async fn proof_endpoint_rejects_tampered_chunk_digest() {
     );
     proof.samples[0].chunk_digest = tampered_digest;
 
-    let state = GatewayState::new(dataset);
+    let state = GatewayState::new(dataset, manifest_envelope.clone()).expect("gateway state");
     let app = gateway::router(state);
 
     let request = Request::builder()

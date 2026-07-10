@@ -6980,12 +6980,20 @@ redistributable schemas, and official trust/revocation bundles.
 
 ## Cross-dataspace AMX follow-ups
 
-- Add a multi-peer integration corridor that proves native AMX receipts emitted
-  by the universal coordinator survive block relay, Sumeragi status export, and
-  downstream audit consumption.
-- Extend SDK/OpenAPI convenience models for lane settlement commitments so
-  native AMX receipt legs are first-class in client responses instead of only
-  available through generic commitment decoding.
+- Completed 2026-07-10: the four-peer native AMX routing and restart corridors
+  now require every peer to converge on the exact receipt identity, phases,
+  participant legs, validator sets, signer bitmaps, and BLS signatures in the
+  committed block, typed Sumeragi status, and verified lane relay. The
+  downstream relay audit recomputes settlement hashes and rejects adversarial
+  source, route, height, leg, digest, phase, bitmap, and signature mutations.
+- Completed 2026-07-10: Python and Swift now expose strict first-class Nexus fee
+  and native AMX phase/body/QC/leg/receipt models for lane commitments and relay
+  envelopes. Their parsers fail closed on malformed or internally inconsistent
+  evidence, while Torii uses one canonical JSON shape for status and relays and
+  OpenAPI declares exact required fields, versions, enums, array constraints,
+  hash literals, bitmaps, and 96-byte BLS signatures. The Rust client already
+  preserves these fields through its typed Norito status model; Kotlin, Java,
+  and Mochi currently expose no Sumeragi settlement DTO surface to mirror.
 - If future coordinator execution supports partial prepare failure inside a
   batch, extend `NativeAmxReceipt` with explicit abort evidence. Finalized
   receipts currently represent only successfully committed native AMX batches.

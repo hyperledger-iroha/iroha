@@ -1639,14 +1639,17 @@ fn build_dispute_request_value(
 }
 
 fn parse_dispute_kind(kind: &str) -> Result<CapacityDisputeKind, String> {
-    match kind.to_ascii_lowercase().as_str() {
+    match kind {
         "replication_shortfall" => Ok(CapacityDisputeKind::ReplicationShortfall),
         "uptime_breach" => Ok(CapacityDisputeKind::UptimeBreach),
         "proof_failure" => Ok(CapacityDisputeKind::ProofFailure),
         "fee_dispute" => Ok(CapacityDisputeKind::FeeDispute),
         "other" => Ok(CapacityDisputeKind::Other),
-        other => Err(format!(
+        other if other.to_ascii_lowercase() == other => Err(format!(
             "unknown dispute kind `{other}` (expected replication_shortfall|uptime_breach|proof_failure|fee_dispute|other)"
+        )),
+        other => Err(format!(
+            "dispute kind `{other}` must be canonical lowercase (expected replication_shortfall|uptime_breach|proof_failure|fee_dispute|other)"
         )),
     }
 }
@@ -1681,6 +1684,7 @@ fn capability_label(cap: &CapabilityType) -> &'static str {
 }
 
 fn parse_u64(value: &str, context: &str) -> Result<u64, String> {
+    require_canonical_unsigned_decimal(context, value)?;
     value
         .parse::<u64>()
         .map_err(|err| format!("invalid {context}: {err}"))
@@ -1692,6 +1696,7 @@ fn parse_u64_value(value: Option<&Value>, context: &str) -> Result<u64, String> 
         return Ok(num);
     }
     if let Some(text) = val.as_str() {
+        require_canonical_unsigned_decimal(context, text)?;
         return text
             .parse::<u64>()
             .map_err(|err| format!("invalid `{context}`: {err}"));
@@ -1705,6 +1710,7 @@ fn parse_u32_value(value: &Value, context: &str) -> Result<u32, String> {
             .map_err(|_| format!("`{context}` does not fit into u32 (value: {num})"));
     }
     if let Some(text) = value.as_str() {
+        require_canonical_unsigned_decimal(context, text)?;
         let parsed: u64 = text
             .parse()
             .map_err(|err| format!("invalid `{context}`: {err}"))?;
@@ -1719,6 +1725,7 @@ fn parse_u128_value(value: &Value, context: &str) -> Result<u128, String> {
         return Ok(num as u128);
     }
     if let Some(text) = value.as_str() {
+        require_canonical_unsigned_decimal(context, text)?;
         return text
             .parse::<u128>()
             .map_err(|err| format!("invalid `{context}`: {err}"));
@@ -1732,6 +1739,7 @@ fn parse_u16_value(value: &Value, context: &str) -> Result<u16, String> {
             .map_err(|_| format!("`{context}` does not fit into u16 (value: {num})"));
     }
     if let Some(text) = value.as_str() {
+        require_canonical_unsigned_decimal(context, text)?;
         let parsed: u64 = text
             .parse()
             .map_err(|err| format!("invalid `{context}`: {err}"))?;
@@ -1741,12 +1749,40 @@ fn parse_u16_value(value: &Value, context: &str) -> Result<u16, String> {
     Err(format!("`{context}` must be a number or string"))
 }
 
+fn require_canonical_unsigned_decimal(context: &str, value: &str) -> Result<(), String> {
+    if value.is_empty() {
+        return Err(format!("`{context}` must not be empty"));
+    }
+    if value.as_bytes().iter().any(u8::is_ascii_whitespace) {
+        return Err(format!("`{context}` must not contain ASCII whitespace"));
+    }
+    if value.starts_with('+') || value.starts_with('-') {
+        return Err(format!(
+            "`{context}` must be a canonical unsigned decimal token"
+        ));
+    }
+    if !value.chars().all(|c| c.is_ascii_digit()) {
+        return Err(format!("`{context}` must contain only decimal digits"));
+    }
+    if value.len() > 1 && value.starts_with('0') {
+        return Err(format!(
+            "`{context}` must use canonical decimal without leading zeros"
+        ));
+    }
+    Ok(())
+}
+
 fn require_value<'a>(map: &'a Map, key: &str) -> Result<&'a Value, String> {
     map.get(key).ok_or_else(|| format!("missing `{key}` field"))
 }
 
 fn parse_vec_hex(value: &str, context: &str) -> Result<Vec<u8>, String> {
-    Vec::from_hex(value.trim()).map_err(|err| format!("invalid hex in `{context}`: {err}"))
+    require_canonical_hex(context, value, None)?;
+    let bytes = Vec::from_hex(value).map_err(|err| format!("invalid hex in `{context}`: {err}"))?;
+    if bytes.iter().all(|&byte| byte == 0) {
+        return Err(format!("`{context}` must not be all zero"));
+    }
+    Ok(bytes)
 }
 
 fn require_string<'a>(map: &'a Map, key: &str) -> Result<&'a str, String> {
@@ -1782,18 +1818,57 @@ fn parse_string_array(value: &Value, context: &str) -> Result<Vec<String>, Strin
 }
 
 fn parse_fixed_hex<const N: usize>(value: &str, context: &str) -> Result<[u8; N], String> {
-    let value_trimmed = value.trim();
-    let bytes =
-        Vec::from_hex(value_trimmed).map_err(|err| format!("invalid hex in `{context}`: {err}"))?;
+    require_canonical_hex(context, value, Some(N * 2))?;
+    let bytes = Vec::from_hex(value).map_err(|err| format!("invalid hex in `{context}`: {err}"))?;
     if bytes.len() != N {
         return Err(format!(
             "`{context}` must decode to {N} bytes, got {} bytes",
             bytes.len()
         ));
     }
+    if bytes.iter().all(|&byte| byte == 0) {
+        return Err(format!("`{context}` must not be all zero"));
+    }
     let mut out = [0u8; N];
     out.copy_from_slice(&bytes);
     Ok(out)
+}
+
+fn require_canonical_hex(
+    context: &str,
+    value: &str,
+    expected_chars: Option<usize>,
+) -> Result<(), String> {
+    if value.is_empty() {
+        return Err(format!("`{context}` must not be empty"));
+    }
+    if value.as_bytes().iter().any(u8::is_ascii_whitespace) {
+        return Err(format!("`{context}` must not contain ASCII whitespace"));
+    }
+    if value.starts_with("0x") || value.starts_with("0X") {
+        return Err(format!("`{context}` must not use a hex prefix"));
+    }
+    if !value.len().is_multiple_of(2) {
+        return Err(format!(
+            "`{context}` must contain an even number of hex characters"
+        ));
+    }
+    if let Some(expected) = expected_chars
+        && value.len() != expected
+    {
+        return Err(format!(
+            "`{context}` must contain exactly {expected} lowercase hex characters"
+        ));
+    }
+    if !value
+        .chars()
+        .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+    {
+        return Err(format!(
+            "`{context}` must contain only lowercase hex characters"
+        ));
+    }
+    Ok(())
 }
 
 fn resolve_private_key(
@@ -1884,6 +1959,115 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         let path = temp.path().canonicalize().expect("canonical tempdir");
         (temp, path)
+    }
+
+    #[test]
+    fn numeric_string_parsers_reject_noncanonical_tokens() {
+        assert_eq!(parse_u64("0", "--registered-epoch").expect("zero"), 0);
+        assert_eq!(parse_u64("42", "--registered-epoch").expect("u64"), 42);
+        assert_eq!(
+            parse_u64_value(Some(&Value::String("42".into())), "valid_from").expect("string u64"),
+            42
+        );
+        assert_eq!(
+            parse_u32_value(&Value::String("42".into()), "target_replicas").expect("string u32"),
+            42
+        );
+        assert_eq!(
+            parse_u16_value(&Value::String("42".into()), "target_replicas").expect("string u16"),
+            42
+        );
+        assert_eq!(
+            parse_u128_value(&Value::String("5000".into()), "stake.stake_amount")
+                .expect("string u128"),
+            5_000
+        );
+
+        for value in ["", "01", "+1", "-1", "1 ", "1_000", "18446744073709551616"] {
+            let err =
+                parse_u64(value, "--registered-epoch").expect_err("noncanonical decimal must fail");
+            assert!(
+                err.contains("--registered-epoch"),
+                "error should name context for {value:?}: {err}"
+            );
+        }
+
+        let err = parse_u16_value(&Value::String("65536".into()), "target_replicas")
+            .expect_err("u16 overflow must fail");
+        assert!(err.contains("target_replicas"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn hex_parsers_reject_noncanonical_tokens() {
+        let fixed = "11".repeat(32);
+        assert_eq!(
+            parse_fixed_hex::<32>(&fixed, "provider_id_hex").expect("fixed hex"),
+            [0x11; 32]
+        );
+        assert_eq!(
+            parse_vec_hex("aabbccdd", "manifest_cid_hex").expect("vec hex"),
+            vec![0xaa, 0xbb, 0xcc, 0xdd]
+        );
+
+        for (value, expected) in [
+            ("", "must not be empty"),
+            ("11", "exactly 64"),
+            (
+                "0x1111111111111111111111111111111111111111111111111111111111111111",
+                "prefix",
+            ),
+            (
+                "111111111111111111111111111111111111111111111111111111111111111A",
+                "lowercase",
+            ),
+            (
+                "111111111111111111111111111111111111111111111111111111111111111 ",
+                "whitespace",
+            ),
+            ("111", "even number"),
+            (
+                "0000000000000000000000000000000000000000000000000000000000000000",
+                "all zero",
+            ),
+        ] {
+            let err = parse_fixed_hex::<32>(value, "provider_id_hex")
+                .expect_err("noncanonical fixed hex must fail");
+            assert!(
+                err.contains(expected),
+                "error for {value:?} should contain {expected:?}, got: {err}"
+            );
+        }
+
+        for (value, expected) in [
+            ("AABB", "lowercase"),
+            ("aabb ", "whitespace"),
+            ("0xaabb", "prefix"),
+            ("aaa", "even number"),
+            ("0000", "all zero"),
+        ] {
+            let err = parse_vec_hex(value, "manifest_cid_hex")
+                .expect_err("noncanonical vec hex must fail");
+            assert!(
+                err.contains(expected),
+                "error for {value:?} should contain {expected:?}, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn dispute_kind_requires_canonical_lowercase() {
+        assert_eq!(
+            parse_dispute_kind("replication_shortfall").expect("kind"),
+            CapacityDisputeKind::ReplicationShortfall
+        );
+
+        for value in ["Replication_Shortfall", "proof-failure", " proof_failure"] {
+            let err = parse_dispute_kind(value).expect_err("noncanonical kind must fail");
+            assert!(
+                err.contains("dispute kind") || err.contains("unknown dispute kind"),
+                "unexpected error for {value:?}: {err}"
+            );
+        }
     }
 
     #[test]

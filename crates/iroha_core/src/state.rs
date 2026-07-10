@@ -41,14 +41,16 @@ use iroha_data_model::{
     },
     block::{
         BlockHeader, SignedBlock,
-        consensus::{EvidenceRecord, NexusFeeReceipt},
+        consensus::{
+            EvidenceRecord, LaneBlockCommitment, NexusFeeReceipt, SumeragiLanePayloadOwnership,
+        },
         proofs::{BlockProofs, BlockReceiptProof, ExecutionReceiptProof},
     },
     bridge::{SccpOutboundMessageKey, SccpOutboundMessageRecord},
     confidential::ConfidentialFeatureDigest,
     consensus::{
         ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus, Qc,
-        ValidatorSetCheckpoint,
+        VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint,
     },
     content::{ContentBundleId, ContentBundleRecord, ContentChunk},
     da::{
@@ -76,7 +78,10 @@ use iroha_data_model::{
         error::{InstructionExecutionError as Error, InvalidParameterError, MathError},
         settlement::{SettlementId, SettlementLedger},
     },
-    merge::{MergeLaneSnapshot, MergeLedgerEntry},
+    merge::{
+        MergeExecutionBatch, MergeLaneBinding, MergeLaneExecution, MergeLaneSignerProof,
+        MergeLaneSnapshot, MergeLedgerEntry,
+    },
     metadata::Metadata,
     name::Name,
     nexus::{
@@ -135,7 +140,7 @@ use iroha_data_model::{
         pricing::{PricingScheduleRecord, ProviderCreditRecord},
     },
     soranet::vpn::VpnLeaseRecordV1,
-    transaction::signed::{SignedTransaction, TransactionEntrypoint},
+    transaction::signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
 };
 use iroha_executor_data_model::permission::{
     nft::{CanModifyNftMetadata, CanTransferNft},
@@ -176,6 +181,59 @@ pub use storage_transactions::TransactionsReadOnly;
 use thiserror::Error as ThisError;
 
 const VERIFIED_LANE_RELAY_CONTRACT_MAP_STATE_PREFIX: &str = "VerifiedLaneRelays/";
+const MERGE_EXECUTION_BATCH_MARKER_PREFIX: &str = "merge_execution_batch_applied_";
+const MERGE_EXECUTION_LANE_MARKER_PREFIX: &str = "merge_execution_lane_applied_";
+const MERGE_EXECUTION_WRITE_SET_DOMAIN: &[u8] = b"iroha:merge:execution-write-set:v1\0";
+const MAX_MERGE_EXECUTION_LANES: usize = 1_024;
+const MAX_MERGE_EXECUTION_ENTRYPOINTS: usize = 4_096;
+const MAX_MERGE_EXECUTION_RESULTS: usize = MAX_MERGE_EXECUTION_ENTRYPOINTS;
+const MAX_MERGE_EXECUTION_SIGNER_PROOFS: usize = 4_096;
+const MAX_MERGE_EXECUTION_VALIDATORS: usize = 4_096;
+const MAX_MERGE_EXECUTION_BATCH_BYTES: usize = 16 * 1024 * 1024;
+const MAX_MERGE_QC_BYTES: usize = 4 * 1024 * 1024;
+
+fn append_merge_write_set_component(out: &mut Vec<u8>, bytes: &[u8]) {
+    let len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    out.extend_from_slice(&len.to_le_bytes());
+    out.extend_from_slice(bytes);
+}
+
+fn append_merge_storage_delta<K, V>(
+    out: &mut Vec<u8>,
+    name: &'static str,
+    storage: &StorageBlock<'_, K, V>,
+) where
+    K: MvKey + Encode,
+    V: MvValue + Encode,
+{
+    if !storage.is_dirty() {
+        return;
+    }
+    append_merge_write_set_component(out, name.as_bytes());
+    let count = u64::try_from(storage.revert_map().len()).unwrap_or(u64::MAX);
+    out.extend_from_slice(&count.to_le_bytes());
+    for key in storage.revert_map().keys() {
+        append_merge_write_set_component(out, &key.encode());
+        match storage.get(key) {
+            Some(value) => {
+                out.push(1);
+                append_merge_write_set_component(out, &value.encode());
+            }
+            None => out.push(0),
+        }
+    }
+}
+
+fn append_merge_cell_delta<V>(out: &mut Vec<u8>, name: &'static str, cell: &CellBlock<'_, V>)
+where
+    V: MvValue + Encode,
+{
+    if !cell.is_dirty() {
+        return;
+    }
+    append_merge_write_set_component(out, name.as_bytes());
+    append_merge_write_set_component(out, &cell.get().encode());
+}
 
 use crate::{
     block::BlockValidationError,
@@ -928,6 +986,10 @@ impl<'a> BlockHashesBlock<'a> {
         &self.visible
     }
 
+    fn has_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
     /// Begin a transaction-scoped view nested under this block.
     pub(crate) fn transaction(&mut self) -> BlockHashesTransaction<'_> {
         let base = self.visible.as_slice();
@@ -1401,8 +1463,7 @@ impl LaneRelayStore {
     #[must_use]
     pub fn next_merge_admissible_relays(
         &self,
-        previous_snapshots: &BTreeMap<(LaneId, DataSpaceId), MergeLaneSnapshot>,
-        reset_heights: &BTreeMap<LaneId, u64>,
+        previous_snapshots: &BTreeMap<(LaneId, DataSpaceId, Hash), MergeLaneSnapshot>,
     ) -> Vec<&LaneRelayEnvelope> {
         let mut next = BTreeMap::new();
         for envelope in self.entries.values() {
@@ -1412,9 +1473,9 @@ impl LaneRelayStore {
             let key = (envelope.lane_id, envelope.dataspace_id);
             let Some(expected_height) = expected_next_merge_lane_height(
                 previous_snapshots,
-                reset_heights,
                 envelope.lane_id,
                 envelope.dataspace_id,
+                envelope.lane_incarnation,
             ) else {
                 continue;
             };
@@ -1439,16 +1500,15 @@ impl LaneRelayStore {
 }
 
 fn expected_next_merge_lane_height(
-    previous_snapshots: &BTreeMap<(LaneId, DataSpaceId), MergeLaneSnapshot>,
-    reset_heights: &BTreeMap<LaneId, u64>,
+    previous_snapshots: &BTreeMap<(LaneId, DataSpaceId, Hash), MergeLaneSnapshot>,
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
 ) -> Option<u64> {
     let committed_height = previous_snapshots
-        .get(&(lane_id, dataspace_id))
+        .get(&(lane_id, dataspace_id, lane_incarnation))
         .map_or(0, |snapshot| snapshot.lane_block_height);
-    let reset_height = reset_heights.get(&lane_id).copied().unwrap_or(0);
-    committed_height.max(reset_height).checked_add(1)
+    committed_height.checked_add(1)
 }
 
 const LANE_RELAY_SEED_DOMAIN: &[u8] = b"iroha:lane-relay:committee-seed:v1";
@@ -1555,8 +1615,48 @@ impl MergeLedgerStore {
 
 struct NexusFeeSettlementPlan {
     receipts: Vec<NexusFeeReceipt>,
+    aggregate_burns: BTreeMap<AssetId, Numeric>,
     settlement_markers: Vec<Name>,
     receipt_markers: Vec<([u8; 32], Name)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+struct AppliedMergeExecutionBatchMarker {
+    version: u8,
+    epoch_id: u64,
+    entry_hash: Hash,
+    batch_hash: Hash,
+    base_state_hash: HashOf<BlockHeader>,
+    expected_post_state_hash: HashOf<BlockHeader>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+struct AppliedMergeLaneExecutionMarker {
+    version: u8,
+    epoch_id: u64,
+    entry_hash: Hash,
+    batch_hash: Hash,
+    lane_execution_hash: Hash,
+}
+
+#[derive(Clone)]
+struct MergeExecutionSource {
+    bundle_hash: Hash,
+    certified: crate::kura::CertifiedLaneBlockArtifact,
+    input: crate::kura::LaneBlockExecutionInputArtifact,
+}
+
+fn merge_execution_source_bundle_hash(
+    certified: &crate::kura::CertifiedLaneBlockArtifact,
+    input: &crate::kura::LaneBlockExecutionInputArtifact,
+) -> Hash {
+    let certified = certified.encode();
+    let input = input.encode();
+    Hash::new_from_chunks(&[
+        b"iroha:merge:autonomous-source-bundle:v1\0",
+        certified.as_slice(),
+        input.as_slice(),
+    ])
 }
 
 /// Errors surfaced when committing merge-ledger entries into state.
@@ -1565,9 +1665,35 @@ pub enum MergeLedgerCommitError {
     /// Merge entries can only be committed while Nexus is enabled.
     #[error("merge ledger commits require nexus.enabled=true")]
     NexusDisabled,
-    /// The merge entry must reference at least one lane.
-    #[error("merge ledger entry must include at least one lane")]
+    /// The merge entry must contain settlement snapshots or an execution batch.
+    #[error("merge ledger entry must include a lane snapshot or execution batch")]
     EmptyEntry,
+    /// Merge execution batch failed structural or cryptographic validation.
+    #[error("merge execution batch is invalid: {0}")]
+    ExecutionBatchInvalid(String),
+    /// Merge execution batch was certified for a different WSV base.
+    #[error(
+        "merge execution base mismatch: expected height={expected_height} hash={expected_hash}, actual height={actual_height} hash={actual_hash}"
+    )]
+    ExecutionBaseMismatch {
+        /// Height sealed into the batch.
+        expected_height: u64,
+        /// WSV identity sealed into the batch.
+        expected_hash: HashOf<BlockHeader>,
+        /// Current committed WSV height.
+        actual_height: u64,
+        /// Current committed WSV identity.
+        actual_hash: HashOf<BlockHeader>,
+    },
+    /// Durable merge execution marker set is partial or conflicts with the entry.
+    #[error("merge execution marker conflict: {0}")]
+    ExecutionMarkerConflict(String),
+    /// Deterministic re-execution diverged from the committee-certified transcript.
+    #[error("merge execution diverged: {0}")]
+    ExecutionDivergence(String),
+    /// Certified execution was appended but could not be published to WSV.
+    #[error("merge execution state publication failed: {0}")]
+    ExecutionStatePublication(String),
     /// Merge entry referenced a lane absent from the active catalog.
     #[error("merge settlement references unknown lane {lane_id}")]
     UnknownLane {
@@ -1585,6 +1711,18 @@ pub enum MergeLedgerCommitError {
         expected: DataSpaceId,
         /// Dataspace carried by the merge snapshot.
         actual: DataSpaceId,
+    },
+    /// Merge entry carried a non-current lane incarnation commitment.
+    #[error(
+        "merge settlement incarnation mismatch for lane={lane_id}: expected={expected:?}, actual={actual:?}"
+    )]
+    LaneIncarnationMismatch {
+        /// Lane identifier being merged.
+        lane_id: LaneId,
+        /// Current active incarnation commitment.
+        expected: Hash,
+        /// Incarnation carried by the merge snapshot or relay.
+        actual: Hash,
     },
     /// Merge entry referenced a dataspace absent from the active catalog.
     #[error("merge settlement references unknown dataspace {dataspace_id}")]
@@ -1622,6 +1760,23 @@ pub enum MergeLedgerCommitError {
         /// Digest supplied by the merge QC.
         actual: iroha_crypto::Hash,
     },
+    /// Merge QC was produced for a different chain.
+    #[error("merge ledger qc chain id digest mismatch: expected={expected}, actual={actual}")]
+    MergeQCChainIdMismatch {
+        /// Digest derived from the local chain identifier.
+        expected: Hash,
+        /// Digest embedded in the historical QC.
+        actual: Hash,
+    },
+    /// Merge QC uses an unsupported validator-set hash version.
+    #[error("merge ledger qc validator-set hash version {0} is unsupported")]
+    MergeQCValidatorSetHashVersion(u16),
+    /// Merge QC validator-set hash does not match its embedded roster.
+    #[error("merge ledger qc validator-set hash mismatch")]
+    MergeQCValidatorSetHashMismatch,
+    /// Merge QC embedded the same validator more than once.
+    #[error("merge ledger qc validator set contains duplicate peer {0}")]
+    MergeQCDuplicateValidator(PeerId),
     /// Merge QC signer bitmap length does not match the roster length.
     #[error("merge ledger qc signer bitmap length mismatch: expected={expected}, actual={actual}")]
     MergeQCBitmapLengthMismatch {
@@ -1637,6 +1792,27 @@ pub enum MergeLedgerCommitError {
         signer: usize,
         /// Length of the merge committee roster.
         roster_len: usize,
+    },
+    /// Unused high bits in the final signer bitmap byte were set.
+    #[error("merge ledger qc signer bitmap has non-zero padding bits")]
+    MergeQCBitmapPadding,
+    /// Merge QC signer PoPs do not exactly match the signer bitmap.
+    #[error(
+        "merge ledger qc signer PoP mismatch at position {position}: expected={expected:?}, actual={actual:?}"
+    )]
+    MergeQCSignerProofMismatch {
+        /// Position within the canonical signer sequence.
+        position: usize,
+        /// Signer required by the bitmap, if any.
+        expected: Option<u32>,
+        /// Signer carried by the proof vector, if any.
+        actual: Option<u32>,
+    },
+    /// A signer proof of possession was invalid.
+    #[error("merge ledger qc signer {signer} has an invalid BLS proof of possession")]
+    MergeQCSignerPopInvalid {
+        /// Signer index whose PoP failed.
+        signer: u32,
     },
     /// Merge QC does not meet the quorum threshold.
     #[error("merge ledger qc quorum not met: observed={observed}, required={required}")]
@@ -1655,14 +1831,38 @@ pub enum MergeLedgerCommitError {
     /// Merge QC requires a non-empty merge committee roster.
     #[error("merge ledger qc requires a non-empty commit topology roster")]
     MergeQCEmptyRoster,
-    /// Merge entry epoch must advance monotonically.
-    #[error("merge ledger epoch must advance: latest={latest}, attempted={attempted}")]
+    /// Merge entry epoch must advance by exactly one.
+    #[error("merge ledger epoch must be contiguous: expected={expected}, attempted={attempted}")]
     NonMonotonicEpoch {
-        /// Latest committed merge epoch.
-        latest: u64,
+        /// Exact next merge epoch.
+        expected: u64,
         /// Epoch carried by the attempted entry.
         attempted: u64,
     },
+    /// Historical merge entry catalog differs from the active admission catalog.
+    #[error("merge ledger entry catalog does not match the active lane catalog")]
+    CatalogMismatch,
+    /// Historical snapshot was proposed before its incarnation became active.
+    #[error(
+        "merge lane snapshot proposal height {proposal_height} is not after activation height {activation_height} for lane {lane_id}"
+    )]
+    LaneIncarnationNotActive {
+        /// Lane referenced by the snapshot.
+        lane_id: LaneId,
+        /// Proposal height sealed into the snapshot.
+        proposal_height: u64,
+        /// Activation boundary sealed into the snapshot.
+        activation_height: u64,
+    },
+    /// Embedded settlement commitment or hash does not match the lane snapshot.
+    #[error("merge lane snapshot embeds an invalid settlement commitment for lane {lane_id}")]
+    SettlementCommitmentMismatch {
+        /// Lane whose settlement commitment was malformed.
+        lane_id: LaneId,
+    },
+    /// Embedded catalog/incarnation/activation history is malformed.
+    #[error("merge ledger incarnation context is invalid: {0}")]
+    IncarnationContext(String),
     /// Merge entry tried to replay or regress a lane snapshot already merged.
     #[error(
         "merge ledger lane snapshot must advance for lane={lane_id} dataspace={dataspace_id}: latest_height={latest_height}, attempted_height={attempted_height}"
@@ -1745,7 +1945,6 @@ fn validate_merge_snapshot_against_nexus(
     nexus: &iroha_config::parameters::actual::Nexus,
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
-    block_height: u64,
 ) -> Result<(), MergeLedgerCommitError> {
     if !nexus.enabled {
         return Err(MergeLedgerCommitError::NexusDisabled);
@@ -1763,8 +1962,180 @@ fn validate_merge_snapshot_against_nexus(
     if nexus.dataspace_catalog.by_id(dataspace_id).is_none() {
         return Err(MergeLedgerCommitError::UnknownDataspace { dataspace_id });
     }
-    if nexus_active_lane_dataspace_at_height(lane_id, nexus, block_height) != Some(dataspace_id) {
-        return Err(MergeLedgerCommitError::UnknownLane { lane_id });
+    Ok(())
+}
+
+fn validate_merge_entry_incarnation_context(
+    entry: &MergeLedgerEntry,
+) -> Result<(), MergeLedgerCommitError> {
+    if entry
+        .lane_catalog_hash
+        .as_ref()
+        .iter()
+        .all(|byte| *byte == 0)
+    {
+        return Err(MergeLedgerCommitError::IncarnationContext(
+            "lane catalog hash must be non-zero".to_owned(),
+        ));
+    }
+    if entry.active_lanes.is_empty()
+        || entry
+            .active_lanes
+            .windows(2)
+            .any(|pair| pair[0].lane_id >= pair[1].lane_id)
+    {
+        return Err(MergeLedgerCommitError::IncarnationContext(
+            "active lane bindings must be non-empty, unique, and ordered by lane id".to_owned(),
+        ));
+    }
+    let mut unique_incarnations = BTreeSet::new();
+    for binding in &entry.active_lanes {
+        if binding.incarnation.as_ref().iter().all(|byte| *byte == 0)
+            || binding
+                .lane_config_hash
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+            || !unique_incarnations.insert(binding.incarnation)
+        {
+            return Err(MergeLedgerCommitError::IncarnationContext(format!(
+                "lane {} has a zero or duplicate configuration/incarnation commitment",
+                binding.lane_id
+            )));
+        }
+    }
+    let lifecycle_incarnations = entry
+        .active_lanes
+        .iter()
+        .map(
+            |incarnation| iroha_data_model::nexus::LaneLifecycleIncarnationEntry {
+                lane_id: incarnation.lane_id,
+                incarnation: incarnation.incarnation,
+            },
+        )
+        .collect::<Vec<_>>();
+    let expected_incarnation_root =
+        iroha_data_model::nexus::LaneLifecycleParameterV1::incarnation_root(
+            &lifecycle_incarnations,
+        );
+    if entry.incarnation_root != expected_incarnation_root {
+        return Err(MergeLedgerCommitError::IncarnationContext(
+            "incarnation root does not match the canonical active set".to_owned(),
+        ));
+    }
+    if entry.activation_root != crate::merge::merge_activation_root(&entry.active_lanes) {
+        return Err(MergeLedgerCommitError::IncarnationContext(
+            "activation root does not match the canonical active set".to_owned(),
+        ));
+    }
+    for snapshot in &entry.lane_snapshots {
+        let binding = entry
+            .active_lanes
+            .iter()
+            .find(|binding| binding.lane_id == snapshot.lane_id)
+            .ok_or(MergeLedgerCommitError::UnknownLane {
+                lane_id: snapshot.lane_id,
+            })?;
+        if binding.dataspace_id != snapshot.dataspace_id {
+            return Err(MergeLedgerCommitError::DataspaceMismatch {
+                lane_id: snapshot.lane_id,
+                expected: binding.dataspace_id,
+                actual: snapshot.dataspace_id,
+            });
+        }
+        if binding.incarnation != snapshot.lane_incarnation {
+            return Err(MergeLedgerCommitError::LaneIncarnationMismatch {
+                lane_id: snapshot.lane_id,
+                expected: binding.incarnation,
+                actual: snapshot.lane_incarnation,
+            });
+        }
+        if binding.activation_height != snapshot.incarnation_activation_height {
+            return Err(MergeLedgerCommitError::IncarnationContext(format!(
+                "lane {} snapshot activation height {} does not match active context {}",
+                snapshot.lane_id, snapshot.incarnation_activation_height, binding.activation_height
+            )));
+        }
+        if snapshot.proposal_height < binding.activation_height {
+            return Err(MergeLedgerCommitError::LaneIncarnationNotActive {
+                lane_id: snapshot.lane_id,
+                proposal_height: snapshot.proposal_height,
+                activation_height: binding.activation_height,
+            });
+        }
+        let settlement = &snapshot.settlement_commitment;
+        if settlement.lane_id != snapshot.lane_id
+            || settlement.lane_incarnation != snapshot.lane_incarnation
+            || settlement.dataspace_id != snapshot.dataspace_id
+            || settlement.block_height != snapshot.lane_block_height
+            || HashOf::new(settlement) != snapshot.settlement_hash
+        {
+            return Err(MergeLedgerCommitError::SettlementCommitmentMismatch {
+                lane_id: snapshot.lane_id,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_merge_entry_snapshot_order(
+    entry: &MergeLedgerEntry,
+) -> Result<(), MergeLedgerCommitError> {
+    let mut previous = None;
+    for snapshot in &entry.lane_snapshots {
+        let current = (snapshot.lane_id, snapshot.dataspace_id);
+        if let Some(previous) = previous
+            && current <= previous
+        {
+            return Err(MergeLedgerCommitError::LaneSnapshotOrderViolation {
+                previous_lane: previous.0,
+                previous_dataspace: previous.1,
+                current_lane: current.0,
+                current_dataspace: current.1,
+            });
+        }
+        previous = Some(current);
+    }
+    Ok(())
+}
+
+fn validate_merge_binding_transition(
+    previous: &MergeLedgerEntry,
+    current: &MergeLedgerEntry,
+) -> Result<(), MergeLedgerCommitError> {
+    if previous.lane_catalog_hash == current.lane_catalog_hash {
+        if previous.active_lanes != current.active_lanes {
+            return Err(MergeLedgerCommitError::IncarnationContext(
+                "unchanged catalog hash changed its active lane bindings".to_owned(),
+            ));
+        }
+        return Ok(());
+    }
+
+    let previous_by_lane = previous
+        .active_lanes
+        .iter()
+        .map(|binding| (binding.lane_id, binding))
+        .collect::<BTreeMap<_, _>>();
+    for binding in &current.active_lanes {
+        let Some(previous_binding) = previous_by_lane.get(&binding.lane_id) else {
+            continue;
+        };
+        if previous_binding.lane_config_hash == binding.lane_config_hash {
+            if *previous_binding != binding {
+                return Err(MergeLedgerCommitError::IncarnationContext(format!(
+                    "unchanged lane {} changed its dataspace, incarnation, or activation binding",
+                    binding.lane_id
+                )));
+            }
+        } else if previous_binding.incarnation == binding.incarnation
+            || binding.activation_height <= previous_binding.activation_height
+        {
+            return Err(MergeLedgerCommitError::IncarnationContext(format!(
+                "reconfigured lane {} must use a fresh incarnation and a later activation",
+                binding.lane_id
+            )));
+        }
     }
     Ok(())
 }
@@ -1778,6 +2149,37 @@ pub enum LaneLifecycleError {
     /// Lifecycle plans must add or retire at least one lane.
     #[error("lane lifecycle plan must add or retire at least one lane")]
     EmptyPlan,
+    /// A block may carry at most one lane lifecycle transition.
+    #[error("a lane lifecycle transition is already staged in this block")]
+    LifecycleAlreadyStaged,
+    /// The signed transition was prepared against a different lane catalog.
+    #[error(
+        "lane lifecycle expected catalog hash {expected} does not match current catalog hash {actual}"
+    )]
+    StaleCatalog {
+        /// Catalog commitment signed by the transaction authority.
+        expected: Hash,
+        /// Catalog commitment observed during deterministic execution.
+        actual: Hash,
+    },
+    /// A signed lifecycle transition targeted an older active-incarnation set.
+    #[error(
+        "lane lifecycle expected incarnation root {expected} does not match current root {actual}"
+    )]
+    StaleIncarnationRoot {
+        /// Incarnation root signed by the transaction authority.
+        expected: Hash,
+        /// Incarnation root observed during deterministic execution.
+        actual: Hash,
+    },
+    /// A lane with unapplied or unmerged progress cannot be retired or replaced.
+    #[error("lane {lane} cannot be retired while {reason}")]
+    UnsafeRetirement {
+        /// Lane whose lifecycle would end or reset.
+        lane: LaneId,
+        /// Pending-progress invariant that blocks retirement.
+        reason: &'static str,
+    },
     /// A dependent Nexus feature was enabled while Nexus itself is disabled.
     #[error("{0} requires nexus.enabled=true")]
     NexusDisabledFeature(&'static str),
@@ -1855,17 +2257,17 @@ pub enum LaneLifecycleError {
     /// Autoscale lane bounds are empty or inverted in runtime state.
     #[error("nexus.autoscale.min_lanes {min_lanes} must be < max_lanes {max_lanes}")]
     AutoscaleInvalidLaneBounds {
-        /// Configured autoscale minimum lane count/range lower bound.
+        /// Inclusive lower lane-id bound of the autoscale-owned range.
         min_lanes: u32,
-        /// Configured autoscale maximum lane count/range upper bound.
+        /// Exclusive upper lane-id bound of the autoscale-owned range.
         max_lanes: u32,
     },
-    /// Autoscale maximum lane count exceeds the compiled deterministic safety cap.
+    /// Autoscale exclusive upper lane-id bound exceeds the compiled deterministic safety cap.
     #[error("nexus.autoscale.max_lanes {max_lanes} exceeds compiled safety cap {cap}")]
     AutoscaleMaxLanesExceedsCap {
-        /// Configured autoscale maximum lane count/range upper bound.
+        /// Exclusive upper lane-id bound of the autoscale-owned range.
         max_lanes: u32,
-        /// Compiled maximum supported autoscale lane count.
+        /// Compiled maximum supported exclusive lane-id bound.
         cap: u32,
     },
     /// The default route must be a base lane below the autoscale-owned elastic id range.
@@ -1877,6 +2279,30 @@ pub enum LaneLifecycleError {
         lane: LaneId,
         /// Inclusive lower bound for autoscale elastic lane ids.
         min_lanes: u32,
+    },
+    /// The autoscale routing base depends on lane-specific policy that cannot be cloned safely.
+    #[error("nexus autoscale base lane {lane} is not self-contained: {reason}")]
+    AutoscaleBaseProfileUnsupported {
+        /// Routing default lane used as the elastic profile template.
+        lane: LaneId,
+        /// Static policy dependency that prevents deterministic autonomous cloning.
+        reason: &'static str,
+    },
+    /// Compliance is enabled but an added lane lacks an exact loaded policy.
+    #[error(
+        "lane {lane} cannot become active while compliance is enabled without an exact loaded policy"
+    )]
+    CompliancePolicyUnavailable {
+        /// Prospective lane missing a policy binding.
+        lane: LaneId,
+    },
+    /// The frozen manifest source set cannot enforce a prospective active lane.
+    #[error("lane {lane} cannot become active under the installed manifest policy: {reason}")]
+    ManifestPolicyUnavailable {
+        /// Prospective lane without an enforceable frozen manifest binding.
+        lane: LaneId,
+        /// Deterministic manifest coverage failure.
+        reason: String,
     },
     /// Autoscale-managed lane cannot be preserved or created while autoscale is disabled.
     #[error("autoscale-managed lane {0} requires nexus.autoscale.enabled=true")]
@@ -1915,6 +2341,36 @@ pub enum LaneLifecycleError {
         /// Static validation reason.
         reason: &'static str,
     },
+    /// The prospective autoscale lane has no valid exact `3f+1` committee size.
+    #[error(
+        "autoscale-managed lane {lane} in dataspace {dataspace} cannot derive an exact 3f+1 committee within the validator cap"
+    )]
+    AutoscaleCommitteeSizeInvalid {
+        /// Prospective autoscale-managed lane.
+        lane: LaneId,
+        /// Dataspace whose fault-tolerance policy determines committee size.
+        dataspace: DataSpaceId,
+    },
+    /// The prospective autoscale lane has too few distinct live authoritative peers.
+    #[error(
+        "autoscale-managed lane {lane} in dataspace {dataspace} requires {required} live authoritative peers, but resolved {actual}"
+    )]
+    AutoscaleCommitteeUnavailable {
+        /// Prospective autoscale-managed lane.
+        lane: LaneId,
+        /// Dataspace whose authority was resolved.
+        dataspace: DataSpaceId,
+        /// Exact `3f+1` committee size required by dataspace policy.
+        required: usize,
+        /// Number of distinct live authoritative peers selected by the resolver.
+        actual: usize,
+    },
+    /// The transition height has no representable following proposal height.
+    #[error("autoscale-managed lane {0} cannot be created at the maximum block height")]
+    AutoscaleProposalHeightOverflow(LaneId),
+    /// Active lane incarnation commitments are missing, stale, or malformed.
+    #[error("invalid lane incarnation state: {0}")]
+    LaneIncarnationState(String),
     /// Lifecycle plan attempted to destroy and recreate the active default route lane.
     #[error("lane lifecycle plan cannot replace routing default lane {0}")]
     DefaultLaneReplacement(LaneId),
@@ -1986,22 +2442,39 @@ pub enum BlockProofError {
 pub struct DirectLaneBlockApplicationKey {
     /// Lane that produced the directly applied block.
     pub lane_id: LaneId,
+    /// Incarnation that owns the lane-local height namespace.
+    pub lane_incarnation: Hash,
     /// Lane-local block height.
     pub lane_block_height: u64,
 }
 
 impl mv::json::JsonKeyCodec for DirectLaneBlockApplicationKey {
     fn encode_json_key(&self, out: &mut String) {
-        let key = format!("{}:{}", self.lane_id.as_u32(), self.lane_block_height);
+        let key = format!(
+            "{}:{}:{}",
+            self.lane_id.as_u32(),
+            hex::encode(self.lane_incarnation.as_ref()),
+            self.lane_block_height
+        );
         json::write_json_string(&key, out);
     }
 
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
-        let (lane_id, lane_block_height) = encoded.split_once(':').ok_or_else(|| {
-            json::Error::Message(
-                "expected direct lane application key to contain ':' separator".into(),
-            )
+        let mut parts = encoded.split(':');
+        let lane_id = parts.next().ok_or_else(|| {
+            json::Error::Message("expected direct lane application key lane id".into())
         })?;
+        let lane_incarnation = parts.next().ok_or_else(|| {
+            json::Error::Message("expected direct lane application key incarnation".into())
+        })?;
+        let lane_block_height = parts.next().ok_or_else(|| {
+            json::Error::Message("expected direct lane application key block height".into())
+        })?;
+        if parts.next().is_some() {
+            return Err(json::Error::Message(
+                "direct lane application key has trailing components".into(),
+            ));
+        }
         let lane_id = lane_id.parse::<u32>().map_err(|err| {
             json::Error::Message(format!("invalid direct lane application lane id: {err}"))
         })?;
@@ -2010,8 +2483,28 @@ impl mv::json::JsonKeyCodec for DirectLaneBlockApplicationKey {
                 "invalid direct lane application block height: {err}"
             ))
         })?;
+        let lane_incarnation = hex::decode(lane_incarnation).map_err(|err| {
+            json::Error::Message(format!(
+                "invalid direct lane application incarnation: {err}"
+            ))
+        })?;
+        let lane_incarnation: [u8; Hash::LENGTH] =
+            lane_incarnation.try_into().map_err(|bytes: Vec<u8>| {
+                json::Error::Message(format!(
+                    "invalid direct lane application incarnation length: expected {}, got {}",
+                    Hash::LENGTH,
+                    bytes.len()
+                ))
+            })?;
+        let lane_incarnation = Hash::prehashed(lane_incarnation);
+        if lane_incarnation_is_zero(lane_incarnation) {
+            return Err(json::Error::Message(
+                "direct lane application incarnation must be non-zero".into(),
+            ));
+        }
         Ok(Self {
             lane_id: LaneId::new(lane_id),
+            lane_incarnation,
             lane_block_height,
         })
     }
@@ -2024,6 +2517,10 @@ impl mv::json::JsonKeyCodec for DirectLaneBlockApplicationKey {
 pub struct DirectLaneBlockApplicationMarker {
     /// Lane that produced the directly applied block.
     pub lane_id: LaneId,
+    /// Incarnation that owns the lane-local height namespace.
+    pub lane_incarnation: Hash,
+    /// Global proposal height that planned this lane-local block.
+    pub proposal_height: u64,
     /// Dataspace routed by the directly applied block.
     pub dataspace_id: DataSpaceId,
     /// Lane-local block height.
@@ -2050,6 +2547,8 @@ impl DirectLaneBlockApplicationMarker {
         }
         Some(Self {
             lane_id: receipt.proposal.descriptor.lane_id,
+            lane_incarnation: receipt.proposal.descriptor.lane_incarnation,
+            proposal_height: receipt.proposal.descriptor.proposal_height,
             dataspace_id: receipt.proposal.descriptor.dataspace_id,
             lane_block_height: receipt.proposal.descriptor.lane_block_height,
             descriptor_hash: receipt.proposal.descriptor.descriptor_hash,
@@ -2063,6 +2562,7 @@ impl DirectLaneBlockApplicationMarker {
     pub(crate) fn key(&self) -> DirectLaneBlockApplicationKey {
         DirectLaneBlockApplicationKey {
             lane_id: self.lane_id,
+            lane_incarnation: self.lane_incarnation,
             lane_block_height: self.lane_block_height,
         }
     }
@@ -3149,6 +3649,210 @@ impl<'world> WorldBlock<'world> {
         );
 
         payload
+    }
+
+    /// Canonical encoding of every staged WSV key/value change.
+    ///
+    /// Field order is protocol-fixed below and keys are emitted in each MV
+    /// storage's canonical `BTreeMap` revert order. Both insert/update values and
+    /// deletions are represented. This intentionally covers derived indexes too:
+    /// divergence in an index is still a consensus-visible WSV divergence and
+    /// must prevent a merge committee from certifying the transition.
+    fn merge_execution_write_set_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        macro_rules! storage {
+            ($($field:ident),* $(,)?) => {
+                $(append_merge_storage_delta(&mut out, stringify!($field), &self.$field);)*
+            };
+        }
+        macro_rules! cell {
+            ($($field:ident),* $(,)?) => {
+                $(append_merge_cell_delta(&mut out, stringify!($field), &self.$field);)*
+            };
+        }
+
+        cell!(
+            parameters,
+            peers,
+            viral_reward_budget,
+            viral_campaign_budget,
+            executor,
+            executor_data_model,
+            sorafs_pricing,
+            soradns_directory_latest,
+            soradns_rotation_policy,
+            soradns_last_publish_ms,
+            soradns_history_len,
+            governance_last_unlock_sweep_height,
+            merge_hint_roots,
+            merge_global_state_root,
+        );
+        self.triggers.append_merge_execution_write_set(&mut out);
+        storage!(
+            consensus_keys,
+            consensus_keys_by_pk,
+            domain_committees,
+            domain_endorsement_policies,
+            domain_endorsements,
+            domain_endorsements_by_domain,
+            domains,
+            domains_by_owner,
+            domain_selectors,
+            accounts,
+            uaid_accounts,
+            account_aliases,
+            account_aliases_by_account,
+            account_scope_directory,
+            account_scope_accounts,
+            opaque_uaids,
+            ram_lfe_program_policies,
+            identifier_policies,
+            fee_sponsor_policies,
+            identifier_claims,
+            account_rekey_records,
+            account_recovery_policies,
+            account_recovery_requests,
+            asset_definitions,
+            asset_definition_aliases,
+            asset_definition_alias_bindings,
+            contract_aliases,
+            contract_alias_bindings,
+            domain_asset_definitions,
+            asset_definitions_by_owner,
+            asset_definition_holders,
+            asset_definition_assets,
+            asset_definition_nonzero_holders,
+            assets,
+            asset_metadata,
+            nfts,
+            nfts_by_owner,
+            rwas,
+            rwas_by_owner,
+            rwas_by_status,
+            rwas_by_frozen,
+            roles,
+            account_permissions,
+            account_roles,
+            oracle_feeds,
+            oracle_observations,
+            oracle_history,
+            oracle_provider_stats,
+            oracle_disputes,
+            oracle_changes,
+            defi_oracle_attestations,
+            twitter_bindings,
+            twitter_bindings_by_uaid,
+            viral_daily_counters,
+            viral_binding_claims,
+            viral_escrows,
+            viral_bonus_paid,
+            asset_escrows,
+            asset_escrows_by_seller,
+            asset_escrows_by_buyer,
+            asset_escrows_by_status,
+            anonymous_asset_escrows,
+            anonymous_asset_escrows_by_seller,
+            anonymous_asset_escrows_by_buyer,
+            anonymous_asset_escrows_by_status,
+            vpn_leases,
+            uaid_dataspaces,
+            space_directory_manifests,
+            axt_policies,
+            axt_replay_ledger,
+            sccp_outbound_messages,
+            tx_sequences,
+            verifying_keys,
+            verifying_keys_by_circuit,
+            pedersen_params,
+            poseidon_params,
+            runtime_upgrades,
+            proofs,
+            proofs_by_status,
+            proof_tags,
+            proofs_by_tag,
+            commit_qcs,
+            consensus_evidence,
+            contract_manifests,
+            contract_code,
+            contract_instances,
+            smart_contract_state,
+            soracloud_service_revisions,
+            soracloud_service_deployments,
+            soracloud_app_infra_states,
+            soracloud_service_runtime,
+            soracloud_inrou_replica_runtime,
+            soracloud_service_audit_events,
+            soracloud_app_infra_audit_events,
+            soracloud_service_state_entries,
+            soracloud_decryption_request_records,
+            soracloud_agent_apartments,
+            soracloud_agent_apartment_audit_events,
+            soracloud_training_jobs,
+            soracloud_training_job_audit_events,
+            soracloud_model_registries,
+            soracloud_model_weight_versions,
+            soracloud_model_weight_audit_events,
+            soracloud_model_artifacts,
+            soracloud_model_artifact_audit_events,
+            soracloud_uploaded_model_bundles,
+            soracloud_model_host_capabilities,
+            soracloud_inrou_host_capabilities,
+            soracloud_hf_sources,
+            soracloud_hf_shared_lease_pools,
+            soracloud_hf_shared_lease_members,
+            soracloud_hf_shared_lease_audit_events,
+            soracloud_model_host_violation_evidence,
+            soracloud_hf_placements,
+            soracloud_inrou_service_placements,
+            soracloud_mailbox_messages,
+            soracloud_runtime_receipts,
+            soracloud_private_uploaded_model_execution_receipts,
+            capacity_declarations,
+            capacity_fee_ledger,
+            capacity_disputes,
+            provider_credit_ledger,
+            provider_owners,
+            da_pin_intents_by_ticket,
+            da_pin_intents_by_alias,
+            da_pin_intents_by_manifest,
+            da_pin_intents_by_lane_epoch,
+            pin_manifests,
+            manifest_aliases,
+            replication_orders,
+            content_bundles,
+            content_chunks,
+            soradns_directory_records,
+            soradns_directory_pending,
+            soradns_directory_history,
+            soradns_directory_prev_of,
+            soradns_directory_revocations,
+            soradns_release_signers,
+            repo_agreements,
+            repo_agreements_by_initiator,
+            repo_agreements_by_counterparty,
+            repo_agreements_by_custodian,
+            settlement_ledgers,
+            offline_note_replay_keys,
+            direct_lane_block_application_markers,
+            public_lane_validators,
+            public_lane_stake_shares,
+            public_lane_rewards,
+            public_lane_reward_claims,
+            lane_relay_emergency_validators,
+            zk_assets,
+            elections,
+            citizens,
+            ministry_agenda_proposals,
+            governance_proposals,
+            governance_referenda,
+            governance_stage_approvals,
+            governance_locks,
+            governance_slashes,
+            council,
+            parliament_bodies,
+            vrf_epochs,
+        );
+        out
     }
 }
 
@@ -7797,9 +8501,9 @@ pub struct State {
     latest_block_header: parking_lot::RwLock<Option<BlockHeader>>,
     /// Merge-ledger cache retaining recent entries for queries/telemetry.
     pub merge_ledger: MergeLedgerStore,
-    /// Latest committed merge snapshot per `(lane_id, dataspace_id)`.
+    /// Latest committed merge snapshot per `(lane_id, dataspace_id, incarnation)`.
     merge_latest_lane_snapshots:
-        parking_lot::RwLock<BTreeMap<(LaneId, DataSpaceId), MergeLaneSnapshot>>,
+        parking_lot::RwLock<BTreeMap<(LaneId, DataSpaceId, Hash), MergeLaneSnapshot>>,
     /// Hashes of transactions mapped onto block height where they stored
     pub transactions: TransactionsStorage,
     /// Topology used to commit latest block
@@ -7871,6 +8575,12 @@ pub struct State {
     /// Stored behind a lock so Torii/app-side lifecycle handlers can update the lane catalog at
     /// runtime without requiring exclusive ownership of the whole `State`.
     pub nexus: parking_lot::RwLock<iroha_config::parameters::actual::Nexus>,
+    /// Active incarnation commitment for every lane in the effective catalog.
+    lane_incarnations: parking_lot::RwLock<BTreeMap<LaneId, Hash>>,
+    /// Global activation height for every active lane incarnation (`0` for static lanes).
+    lane_incarnation_activation_heights: parking_lot::RwLock<BTreeMap<LaneId, u64>>,
+    /// Whether the effective Nexus runtime catalog came from the loaded WSV snapshot.
+    nexus_runtime_restored_from_snapshot: bool,
     /// Last block height where Nexus storage budget enforcement ran.
     nexus_storage_budget_last_check_height: AtomicU64,
     /// Tiered state backend coordinating hot/cold snapshots.
@@ -7946,6 +8656,10 @@ pub struct StateBlock<'state> {
     pub crypto: Arc<iroha_config::parameters::actual::Crypto>,
     /// Nexus configuration snapshot for this block.
     pub nexus: iroha_config::parameters::actual::Nexus,
+    /// Active lane incarnation commitments for this block scope.
+    pub lane_incarnations: BTreeMap<LaneId, Hash>,
+    /// Global activation height for recreated lane incarnations.
+    pub lane_incarnation_activation_heights: BTreeMap<LaneId, u64>,
     /// Lane governance manifest registry snapshot for this block.
     pub lane_manifests: LaneManifestRegistryHandle,
     /// Lane privacy commitment registry snapshot for this block.
@@ -8436,6 +9150,22 @@ pub struct StateTransaction<'block, 'state> {
     pub crypto: Arc<iroha_config::parameters::actual::Crypto>,
     /// Nexus configuration snapshot for this transaction.
     pub nexus: iroha_config::parameters::actual::Nexus,
+    /// Active lane incarnation commitments for this transaction overlay.
+    pub lane_incarnations: BTreeMap<LaneId, Hash>,
+    /// Global activation height for recreated lane incarnations.
+    pub lane_incarnation_activation_heights: BTreeMap<LaneId, u64>,
+    /// Parent block incarnation activation map updated on transaction apply.
+    block_lane_incarnation_activation_heights: &'block mut BTreeMap<LaneId, u64>,
+    /// Parent block Nexus snapshot updated only when this transaction is applied.
+    block_nexus: &'block mut iroha_config::parameters::actual::Nexus,
+    /// Parent block incarnation map updated only when this transaction is applied.
+    block_lane_incarnations: &'block mut BTreeMap<LaneId, Hash>,
+    /// Parent block lifecycle staging slot updated only when this transaction is applied.
+    block_pending_lane_lifecycle: &'block mut Option<PendingAutoscaleLaneLifecycle>,
+    /// Whether an earlier accepted transaction already staged a lifecycle transition.
+    lane_lifecycle_already_staged_in_block: bool,
+    /// Lifecycle transition staged by this transaction until atomic apply.
+    pending_lane_lifecycle: Option<PendingAutoscaleLaneLifecycle>,
     /// Lane governance manifest registry snapshot for this transaction.
     pub lane_manifests: LaneManifestRegistryHandle,
     /// Lane privacy commitment registry snapshot for this transaction.
@@ -8847,6 +9577,10 @@ pub struct StateView<'state> {
     pub crypto: Arc<iroha_config::parameters::actual::Crypto>,
     /// Nexus configuration snapshot for this state view.
     pub nexus: iroha_config::parameters::actual::Nexus,
+    /// Active lane incarnation commitments for this state view.
+    pub lane_incarnations: BTreeMap<LaneId, Hash>,
+    /// Global activation height for recreated lane incarnations.
+    pub lane_incarnation_activation_heights: BTreeMap<LaneId, u64>,
     /// Lane governance manifest registry snapshot for this view.
     pub lane_manifests: LaneManifestRegistryHandle,
     /// Fraud monitoring configuration snapshot for this view.
@@ -8902,6 +9636,10 @@ pub struct StateQueryView<'state> {
     pub crypto: Arc<iroha_config::parameters::actual::Crypto>,
     /// Nexus configuration snapshot for this state view.
     pub nexus: iroha_config::parameters::actual::Nexus,
+    /// Active lane incarnation commitments for this state view.
+    pub lane_incarnations: BTreeMap<LaneId, Hash>,
+    /// Global activation height for recreated lane incarnations.
+    pub lane_incarnation_activation_heights: BTreeMap<LaneId, u64>,
     /// Lane governance manifest registry snapshot for this view.
     pub lane_manifests: LaneManifestRegistryHandle,
     /// Zero-knowledge verification configuration snapshot for this view.
@@ -14167,7 +14905,14 @@ impl DetachedStateTransactionDelta {
 
             // Apply parameter changes and emit configuration events (old/new)
             for param in self.param_updates {
-                if matches!(
+                let is_consensus_lane_lifecycle = matches!(
+                    &param,
+                    iroha_data_model::parameter::Parameter::Custom(custom)
+                        if custom.id
+                            == iroha_data_model::nexus::LaneLifecycleParameterV1::parameter_id()
+                );
+                if is_consensus_lane_lifecycle
+                    || matches!(
                     &param,
                     iroha_data_model::parameter::Parameter::Sumeragi(
                         iroha_data_model::parameter::SumeragiParameter::NextMode(_)
@@ -18007,6 +18752,9 @@ impl<'world> WorldBlock<'world> {
     pub fn commit(self) {
         // NOTE: intentionally destruct self not to forget commit some fields
         let Self {
+            // Runtime-only alias context; the canonical stores below carry all
+            // persisted effects.
+            dataspace_catalog: _,
             parameters,
             peers,
             domain_committees,
@@ -18186,7 +18934,6 @@ impl<'world> WorldBlock<'world> {
             merge_global_state_root,
             // Always drop at the block level.
             external_event_buf: _,
-            ..
         } = self;
         // IMPORTANT!!! Commit fields in reverse order, this way consistent results are insured
         executor_data_model.commit();
@@ -20300,6 +21047,90 @@ impl State {
         self.nexus.read().clone()
     }
 
+    /// Snapshot the active lane incarnation commitments.
+    #[must_use]
+    pub fn lane_incarnations_snapshot(&self) -> BTreeMap<LaneId, Hash> {
+        self.lane_incarnations.read().clone()
+    }
+
+    fn lane_incarnation_activation_heights_snapshot(&self) -> BTreeMap<LaneId, u64> {
+        self.lane_incarnation_activation_heights.read().clone()
+    }
+
+    /// Resolve the current non-zero incarnation for an active catalog lane.
+    #[must_use]
+    pub fn lane_incarnation(&self, lane_id: LaneId) -> Option<Hash> {
+        let nexus = self.nexus.read();
+        nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .any(|lane| lane.id == lane_id)
+            .then_some(())?;
+        self.lane_incarnations
+            .read()
+            .get(&lane_id)
+            .cloned()
+            .filter(|incarnation| !lane_incarnation_is_zero(*incarnation))
+    }
+
+    /// Resolve the active incarnation for `lane_id` at `proposal_height`.
+    ///
+    /// Missing, inactive, or malformed entries fail closed. Consumers must bind
+    /// this value into lane-local payloads so artifacts from a retired lane
+    /// incarnation cannot become valid after the same lane id is recreated.
+    #[must_use]
+    pub fn lane_incarnation_at_height(
+        &self,
+        lane_id: LaneId,
+        proposal_height: u64,
+    ) -> Option<Hash> {
+        let nexus = self.nexus.read();
+        nexus_active_lane_dataspace_at_height(lane_id, &nexus, proposal_height)?;
+        if self
+            .lane_incarnation_activation_heights
+            .read()
+            .get(&lane_id)
+            .copied()
+            .is_some_and(|activation_height| proposal_height <= activation_height)
+        {
+            return None;
+        }
+        self.lane_incarnations
+            .read()
+            .get(&lane_id)
+            .copied()
+            .filter(|incarnation| !lane_incarnation_is_zero(*incarnation))
+    }
+
+    /// Return whether this state decoded a versioned Nexus runtime snapshot.
+    ///
+    /// Legacy snapshots do not carry the effective lane catalog and therefore
+    /// must continue to use the configured startup catalog.
+    #[must_use]
+    pub fn nexus_runtime_restored_from_snapshot(&self) -> bool {
+        self.nexus_runtime_restored_from_snapshot
+    }
+
+    /// Rebind Kura's in-memory lane map to the effective catalog restored from WSV.
+    ///
+    /// # Errors
+    /// Returns a [`LaneLifecycleError`] when a restored lane path is incompatible
+    /// with the Kura instance opened from startup configuration.
+    pub fn restore_kura_lane_segments_from_nexus(&self) -> Result<(), LaneLifecycleError> {
+        let lane_config = self.nexus_snapshot().lane_config;
+        let lane_incarnations = self.lane_incarnations_snapshot();
+        let lane_incarnation_activation_heights =
+            self.lane_incarnation_activation_heights_snapshot();
+        self.kura
+            .restore_lane_segments_with_geometry(
+                &lane_config,
+                &lane_incarnations,
+                &lane_incarnation_activation_heights,
+            )
+            .map_err(|err| LaneLifecycleError::Storage(format!("kura snapshot restore: {err}")))
+    }
+
     /// Return the block storage backend used by state recovery and consensus sidecars.
     pub(crate) fn kura(&self) -> &Kura {
         &self.kura
@@ -20338,7 +21169,7 @@ impl State {
             DaShardCursorJournal::from_index(&lane_config, &cursors, &path)
         };
         if let Ok(existing) = DaShardCursorJournal::load(&lane_config, &path) {
-            snapshot.merge_reset_heights(existing.reset_heights());
+            snapshot.merge_canonical_reset_heights(existing.canonical_reset_heights());
         }
         if let Err(err) = snapshot.persist() {
             warn!(
@@ -20360,7 +21191,7 @@ impl State {
             DaShardCursorJournal::from_index(&lane_config, &cursors, &path)
         };
         if let Ok(existing) = DaShardCursorJournal::load(&lane_config, &path) {
-            snapshot.merge_reset_heights(existing.reset_heights());
+            snapshot.merge_canonical_reset_heights(existing.canonical_reset_heights());
         }
         self.da_shard_cursor_persistor.schedule(snapshot);
     }
@@ -20372,7 +21203,7 @@ impl State {
     ) -> Result<usize, DaShardCursorError> {
         let mut restored = 0_usize;
         let mut cursors = self.da_shard_cursors.write();
-        cursors.merge_reset_heights(journal.reset_heights());
+        cursors.merge_canonical_reset_heights(journal.canonical_reset_heights());
         let lane_config = self.nexus_snapshot().lane_config.clone();
         for entry in journal.entries() {
             if latest_height != 0 && entry.last_block_height > latest_height {
@@ -21222,18 +22053,8 @@ impl State {
     fn da_lane_visible_after_reset(&self, block_height: u64, lane_id: LaneId) -> bool {
         self.da_shard_cursors
             .read()
-            .reset_height_for_lane(lane_id)
+            .canonical_reset_height_for_lane(lane_id)
             .is_none_or(|reset_height| block_height > reset_height)
-    }
-
-    fn lane_block_height_visible_after_reset(
-        reset_heights: &BTreeMap<LaneId, u64>,
-        lane_id: LaneId,
-        lane_block_height: u64,
-    ) -> bool {
-        reset_heights
-            .get(&lane_id)
-            .is_none_or(|reset_height| lane_block_height > *reset_height)
     }
 
     fn active_reset_lanes(
@@ -21257,7 +22078,7 @@ impl State {
         }
         {
             let mut cursors = self.da_shard_cursors.write();
-            cursors.mark_lanes_reset(lanes_to_reset, reset_height);
+            cursors.mark_lanes_canonically_reset(lanes_to_reset, reset_height);
         }
         self.persist_da_shard_cursor_journal();
     }
@@ -21431,7 +22252,7 @@ impl State {
         if let Some(journal) = persisted_journal.as_ref() {
             self.da_shard_cursors
                 .write()
-                .merge_reset_heights(journal.reset_heights());
+                .merge_canonical_reset_heights(journal.canonical_reset_heights());
         }
         // Clone the hash list up front so we do not hold the block-hash lock while
         // loading blocks from Kura (avoids lock-order inversions with Kura writers).
@@ -21676,8 +22497,11 @@ impl State {
     /// Proposal assembly uses these watermarks to avoid assigning lane-local
     /// block heights from an earlier lane incarnation while holding the
     /// consensus actor lock.
-    pub(crate) fn da_shard_reset_heights_snapshot_cached(&self) -> BTreeMap<LaneId, u64> {
-        self.da_shard_cursors.read().reset_heights().clone()
+    pub(crate) fn da_shard_canonical_reset_heights_snapshot_cached(&self) -> BTreeMap<LaneId, u64> {
+        self.da_shard_cursors
+            .read()
+            .canonical_reset_heights()
+            .clone()
     }
 
     /// Check already-loaded DA commitments without forcing Kura hydration.
@@ -22107,6 +22931,13 @@ impl State {
         let settlement_engine = SettlementEngine::from_router_config(&settlement_cfg.router);
         let mut nexus = iroha_config::parameters::actual::Nexus::default();
         nexus.enabled = iroha_config::parameters::defaults::nexus::ENABLED;
+        let chain_id = iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000");
+        let lane_incarnations = derive_static_lane_incarnations(&chain_id, &nexus.lane_catalog);
+        let lane_incarnation_activation_heights = lane_incarnations
+            .keys()
+            .copied()
+            .map(|lane_id| (lane_id, 0))
+            .collect();
         let streaming = iroha_config::parameters::actual::Streaming {
             key_material: default_streaming_key_material(),
             session_store_dir: PathBuf::from(
@@ -22275,7 +23106,7 @@ impl State {
             lane_privacy_registry: parking_lot::RwLock::new(Arc::new(LanePrivacyRegistry::empty())),
             lane_compliance: parking_lot::RwLock::new(None),
             da_indexes_hydrated: parking_lot::RwLock::new(None),
-            chain_id: iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            chain_id,
             pipeline,
             pipeline_parallelism,
             soracloud_runtime: parking_lot::RwLock::new(None),
@@ -22292,6 +23123,11 @@ impl State {
                 iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER,
             streaming,
             nexus: parking_lot::RwLock::new(nexus),
+            lane_incarnations: parking_lot::RwLock::new(lane_incarnations),
+            lane_incarnation_activation_heights: parking_lot::RwLock::new(
+                lane_incarnation_activation_heights,
+            ),
+            nexus_runtime_restored_from_snapshot: false,
             nexus_storage_budget_last_check_height: AtomicU64::new(0),
             tiered_backend: Arc::clone(&tiered_backend),
             tiered_snapshot_worker,
@@ -22631,12 +23467,20 @@ impl State {
             max_decoded_ops: s.pipeline.ivm_cache_max_decoded_ops,
         });
         ivm::zk::set_prover_threads(s.pipeline.ivm_prover_threads);
-        let snapshot = s.kura.merge_ledger_snapshot();
-        s.rebuild_merge_latest_lane_snapshots(&snapshot);
-        s.merge_ledger.replace(snapshot);
-        s.refresh_merge_metadata_from_latest_entry();
         s.restore_commit_roster_history();
         s
+    }
+
+    fn reseed_static_lane_incarnations(&mut self) {
+        let incarnations =
+            derive_static_lane_incarnations(&self.chain_id, &self.nexus.get_mut().lane_catalog);
+        let activation_heights = incarnations
+            .keys()
+            .copied()
+            .map(|lane_id| (lane_id, 0))
+            .collect();
+        *self.lane_incarnations.get_mut() = incarnations;
+        *self.lane_incarnation_activation_heights.get_mut() = activation_heights;
     }
 
     /// Construct [`State`] with given [`World`].
@@ -22657,6 +23501,8 @@ impl State {
             telemetry,
         );
         s.chain_id = iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000");
+        s.reseed_static_lane_incarnations();
+        s.recover_merge_ledger_from_kura();
         s
     }
 
@@ -22679,6 +23525,8 @@ impl State {
             telemetry,
         );
         s.chain_id = chain_id;
+        s.reseed_static_lane_incarnations();
+        s.recover_merge_ledger_from_kura();
         s
     }
 
@@ -22728,6 +23576,8 @@ impl State {
             }
         }
         s.chain_id = iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000");
+        s.reseed_static_lane_incarnations();
+        s.recover_merge_ledger_from_kura();
         s.gov.citizenship_bond_amount = 0;
         s.disable_nexus_fees_for_testing();
         s
@@ -22751,6 +23601,8 @@ impl State {
             <_>::default(),
         );
         s.chain_id = chain_id;
+        s.reseed_static_lane_incarnations();
+        s.recover_merge_ledger_from_kura();
         s.gov.citizenship_bond_amount = 0;
         s.disable_nexus_fees_for_testing();
         s
@@ -22769,6 +23621,8 @@ impl State {
         #[cfg(feature = "telemetry")]
         {
             let mut state = Self::new_inner(world, kura, query_handle, telemetry);
+            state.reseed_static_lane_incarnations();
+            state.recover_merge_ledger_from_kura();
             state.disable_nexus_fees_for_testing();
             state
         }
@@ -22776,6 +23630,8 @@ impl State {
         {
             let _ = telemetry;
             let mut state = Self::new_inner(world, kura, query_handle);
+            state.reseed_static_lane_incarnations();
+            state.recover_merge_ledger_from_kura();
             state.disable_nexus_fees_for_testing();
             state
         }
@@ -22823,6 +23679,8 @@ impl State {
             <_>::default(),
         );
         s.chain_id = chain_id;
+        s.reseed_static_lane_incarnations();
+        s.recover_merge_ledger_from_kura();
         // Make pipeline settings conservative and single-threaded for tests to reduce
         // flakiness and avoid scheduler edge cases on highly parallel configs.
         s.pipeline.dynamic_prepass = true;
@@ -22906,6 +23764,9 @@ impl State {
             pacing_governor: self.pacing_governor,
             crypto: self.crypto(),
             nexus: self.nexus_snapshot(),
+            lane_incarnations: self.lane_incarnations_snapshot(),
+            lane_incarnation_activation_heights: self
+                .lane_incarnation_activation_heights_snapshot(),
             lane_manifests: self.lane_manifests.read().clone(),
             lane_privacy_registry: self.lane_privacy_registry.read().clone(),
             lane_compliance: self.lane_compliance.read().clone(),
@@ -23414,6 +24275,9 @@ impl State {
             pacing_governor: self.pacing_governor,
             crypto: self.crypto(),
             nexus: self.nexus_snapshot(),
+            lane_incarnations: self.lane_incarnations_snapshot(),
+            lane_incarnation_activation_heights: self
+                .lane_incarnation_activation_heights_snapshot(),
             lane_manifests: self.lane_manifests.read().clone(),
             lane_privacy_registry: self.lane_privacy_registry.read().clone(),
             lane_compliance: self.lane_compliance.read().clone(),
@@ -23503,6 +24367,9 @@ impl State {
             pacing_governor: self.pacing_governor,
             crypto: self.crypto(),
             nexus: self.nexus_snapshot(),
+            lane_incarnations: self.lane_incarnations_snapshot(),
+            lane_incarnation_activation_heights: self
+                .lane_incarnation_activation_heights_snapshot(),
             lane_manifests: self.lane_manifests.read().clone(),
             lane_privacy_registry: self.lane_privacy_registry.read().clone(),
             lane_compliance: self.lane_compliance.read().clone(),
@@ -23660,6 +24527,9 @@ impl State {
             oracle: self.oracle.clone(),
             crypto: self.crypto(),
             nexus: self.nexus_snapshot(),
+            lane_incarnations: self.lane_incarnations_snapshot(),
+            lane_incarnation_activation_heights: self
+                .lane_incarnation_activation_heights_snapshot(),
             lane_manifests: self.lane_manifests.read().clone(),
             zk: self.zk_snapshot(),
             content: self.content.clone(),
@@ -23911,6 +24781,8 @@ impl State {
     ) -> bool {
         let descriptor = &receipt.proposal.descriptor;
         self.lane_id_targets_active_dataspace(descriptor.lane_id, descriptor.dataspace_id)
+            && self.lane_incarnation_at_height(descriptor.lane_id, descriptor.proposal_height)
+                == Some(descriptor.lane_incarnation)
     }
 
     fn lane_id_targets_active_dataspace(&self, lane_id: LaneId, dataspace_id: DataSpaceId) -> bool {
@@ -24185,6 +25057,9 @@ impl State {
             let block_hashes_wait = block_hashes_start.elapsed();
             let nexus_start = Instant::now();
             let nexus = self.nexus_snapshot();
+            let lane_incarnations = self.lane_incarnations_snapshot();
+            let lane_incarnation_activation_heights =
+                self.lane_incarnation_activation_heights_snapshot();
             let nexus_wait = nexus_start.elapsed();
             let world_start = Instant::now();
             let mut world = self.world.view();
@@ -24270,6 +25145,8 @@ impl State {
                 oracle: self.oracle.clone(),
                 crypto: self.crypto(),
                 nexus,
+                lane_incarnations,
+                lane_incarnation_activation_heights,
                 lane_manifests: self.lane_manifests.read().clone(),
                 fraud_monitoring: self.fraud_monitoring.clone(),
                 zk: self.zk_snapshot(),
@@ -24300,19 +25177,23 @@ impl State {
 
     fn merge_latest_lane_snapshots_from_entries(
         entries: &[MergeLedgerEntry],
-    ) -> BTreeMap<(LaneId, DataSpaceId), MergeLaneSnapshot> {
+    ) -> BTreeMap<(LaneId, DataSpaceId, Hash), MergeLaneSnapshot> {
         let mut latest = BTreeMap::new();
         for entry in entries {
             for snapshot in &entry.lane_snapshots {
-                let key = (snapshot.lane_id, snapshot.dataspace_id);
+                let key = (
+                    snapshot.lane_id,
+                    snapshot.dataspace_id,
+                    snapshot.lane_incarnation,
+                );
                 latest
                     .entry(key)
                     .and_modify(|previous: &mut MergeLaneSnapshot| {
                         if snapshot.lane_block_height > previous.lane_block_height {
-                            *previous = *snapshot;
+                            *previous = snapshot.clone();
                         }
                     })
-                    .or_insert(*snapshot);
+                    .or_insert_with(|| snapshot.clone());
             }
         }
         latest
@@ -24326,13 +25207,248 @@ impl State {
     fn record_merge_latest_lane_snapshots(&self, entry: &MergeLedgerEntry) {
         let mut guard = self.merge_latest_lane_snapshots.write();
         for snapshot in &entry.lane_snapshots {
-            guard.insert((snapshot.lane_id, snapshot.dataspace_id), *snapshot);
+            guard.insert(
+                (
+                    snapshot.lane_id,
+                    snapshot.dataspace_id,
+                    snapshot.lane_incarnation,
+                ),
+                snapshot.clone(),
+            );
         }
+    }
+
+    fn recover_merge_ledger_from_kura(&self) {
+        let entries = self
+            .kura
+            .merge_ledger_all_entries()
+            .unwrap_or_else(|err| panic!("failed to decode durable merge-ledger history: {err}"));
+        let mut valid_entries = Vec::with_capacity(entries.len());
+        let mut previous_entry: Option<MergeLedgerEntry> = None;
+        let mut latest_snapshots = BTreeMap::new();
+        let mut latest_execution_heights = BTreeMap::new();
+        let mut historical_incarnations = BTreeSet::new();
+        let mut latest_activation_by_lane = BTreeMap::<LaneId, u64>::new();
+
+        for entry in &entries {
+            let expected_epoch = valid_entries
+                .last()
+                .map_or(1, |previous: &MergeLedgerEntry| {
+                    previous.epoch_id.saturating_add(1)
+                });
+            let validation = (|| {
+                if entry.epoch_id != expected_epoch {
+                    return Err(MergeLedgerCommitError::NonMonotonicEpoch {
+                        expected: expected_epoch,
+                        attempted: entry.epoch_id,
+                    });
+                }
+                if entry.lane_snapshots.is_empty() && entry.execution_batch.is_none() {
+                    return Err(MergeLedgerCommitError::EmptyEntry);
+                }
+                if entry.execution_batch.is_some() && !entry.lane_snapshots.is_empty() {
+                    return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                        "execution-batch entries must not mix independently settled relay snapshots"
+                            .to_owned(),
+                    ));
+                }
+                validate_merge_entry_snapshot_order(entry)?;
+                validate_merge_entry_incarnation_context(entry)?;
+                self.validate_merge_quorum_certificate(entry)?;
+                let expected_global =
+                    crate::merge::reduce_merge_hint_roots(&entry.merge_hint_roots());
+                if expected_global != entry.global_state_root {
+                    return Err(MergeLedgerCommitError::MergeQCDigestMismatch {
+                        expected: expected_global,
+                        actual: entry.global_state_root,
+                    });
+                }
+                if let Some(previous) = previous_entry.as_ref() {
+                    validate_merge_binding_transition(previous, entry)?;
+                }
+                for binding in &entry.active_lanes {
+                    let unchanged = previous_entry.as_ref().is_some_and(|previous| {
+                        previous.active_lanes.iter().any(|prior| prior == binding)
+                    });
+                    if unchanged {
+                        continue;
+                    }
+                    if historical_incarnations.contains(&binding.incarnation) {
+                        return Err(MergeLedgerCommitError::IncarnationContext(format!(
+                            "lane {} reuses a historical incarnation commitment",
+                            binding.lane_id
+                        )));
+                    }
+                    if latest_activation_by_lane
+                        .get(&binding.lane_id)
+                        .is_some_and(|activation| binding.activation_height <= *activation)
+                    {
+                        return Err(MergeLedgerCommitError::IncarnationContext(format!(
+                            "lane {} reactivation does not advance its historical activation height",
+                            binding.lane_id
+                        )));
+                    }
+                }
+                for snapshot in &entry.lane_snapshots {
+                    let expected_height = expected_next_merge_lane_height(
+                        &latest_snapshots,
+                        snapshot.lane_id,
+                        snapshot.dataspace_id,
+                        snapshot.lane_incarnation,
+                    )
+                    .ok_or(
+                        MergeLedgerCommitError::NonContiguousLaneSnapshot {
+                            lane_id: snapshot.lane_id,
+                            dataspace_id: snapshot.dataspace_id,
+                            expected_height: u64::MAX,
+                            attempted_height: snapshot.lane_block_height,
+                        },
+                    )?;
+                    if snapshot.lane_block_height != expected_height {
+                        return Err(MergeLedgerCommitError::NonContiguousLaneSnapshot {
+                            lane_id: snapshot.lane_id,
+                            dataspace_id: snapshot.dataspace_id,
+                            expected_height,
+                            attempted_height: snapshot.lane_block_height,
+                        });
+                    }
+                }
+                if let Some(batch) = entry.execution_batch.as_ref() {
+                    self.validate_merge_execution_batch(
+                        entry,
+                        batch,
+                        &latest_execution_heights,
+                        false,
+                    )?;
+                }
+                Ok(())
+            })();
+
+            if let Err(err) = validation {
+                if entry.execution_batch.is_some() {
+                    panic!(
+                        "invalid durable merge execution entry at epoch {}: {err}; refusing to truncate potentially applied state",
+                        entry.epoch_id
+                    );
+                }
+                iroha_logger::error!(
+                    ?err,
+                    valid_entries = valid_entries.len(),
+                    attempted_epoch = entry.epoch_id,
+                    "truncating unauthenticated merge-ledger suffix during restart"
+                );
+                self.kura
+                    .truncate_merge_log_to_len(valid_entries.len())
+                    .unwrap_or_else(|truncate_err| {
+                        panic!(
+                            "failed to truncate invalid merge-ledger suffix after {err}: {truncate_err}"
+                        )
+                    });
+                break;
+            }
+
+            for snapshot in &entry.lane_snapshots {
+                latest_snapshots.insert(
+                    (
+                        snapshot.lane_id,
+                        snapshot.dataspace_id,
+                        snapshot.lane_incarnation,
+                    ),
+                    snapshot.clone(),
+                );
+            }
+            if let Some(batch) = entry.execution_batch.as_ref() {
+                for execution in &batch.lanes {
+                    let descriptor = &execution.proposal.descriptor;
+                    latest_execution_heights.insert(
+                        (
+                            descriptor.lane_id,
+                            descriptor.dataspace_id,
+                            descriptor.lane_incarnation,
+                        ),
+                        descriptor.lane_block_height,
+                    );
+                }
+            }
+            for binding in &entry.active_lanes {
+                historical_incarnations.insert(binding.incarnation);
+                latest_activation_by_lane
+                    .entry(binding.lane_id)
+                    .and_modify(|activation| {
+                        *activation = (*activation).max(binding.activation_height);
+                    })
+                    .or_insert(binding.activation_height);
+            }
+            valid_entries.push(entry.clone());
+            previous_entry = Some(entry.clone());
+        }
+
+        self.rebuild_merge_latest_lane_snapshots(&valid_entries);
+        self.merge_ledger.replace(valid_entries);
+        self.refresh_merge_metadata_from_latest_entry();
+    }
+
+    fn replay_persisted_merge_settlements(&self) -> Result<(), MergeLedgerCommitError> {
+        let _state_commit_lock = self.state_commit_lock.lock();
+        self.settled_nexus_fee_receipts.write().clear();
+        for entry in self.kura.merge_ledger_all_entries()? {
+            if let Some(batch) = entry.execution_batch.as_ref() {
+                if !entry.lane_snapshots.is_empty() {
+                    return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                        "execution-batch entries must not mix independently settled relay snapshots"
+                            .to_owned(),
+                    ));
+                }
+                if self.merge_execution_already_applied(&entry, batch)? {
+                    // Transaction membership is stored outside `World`. Repair it
+                    // idempotently from the authenticated transcript in case a
+                    // process stopped after the atomic WSV publication but before
+                    // the auxiliary membership index update became observable.
+                    self.repair_merge_execution_transaction_membership(batch);
+                    self.record_merge_execution_fee_receipts(batch);
+                    continue;
+                }
+                let overlay = self
+                    .prepare_merge_execution_application(&entry)?
+                    .ok_or_else(|| {
+                        MergeLedgerCommitError::ExecutionStatePublication(
+                            "missing execution overlay for unapplied durable batch".to_owned(),
+                        )
+                    })?;
+                overlay.commit_merge_execution_overlay()?;
+                self.record_merge_execution_fee_receipts(batch);
+                continue;
+            }
+            if self.nexus_fee_settlement_already_applied(&entry)? {
+                continue;
+            }
+            let plan = self.prepare_nexus_fee_settlement_for_merge(&entry)?;
+            self.apply_nexus_fee_settlement_plan(plan)?;
+        }
+        Ok(())
+    }
+
+    fn repair_merge_execution_transaction_membership(&self, batch: &MergeExecutionBatch) {
+        let hashes = batch
+            .lanes
+            .iter()
+            .flat_map(|execution| {
+                StateBlock::merge_execution_transaction_hashes(&execution.entrypoints)
+            })
+            .collect::<Vec<_>>();
+        if hashes.is_empty() {
+            return;
+        }
+        let height = NonZeroUsize::new(
+            usize::try_from(batch.application_block_header.height().get()).unwrap_or(usize::MAX),
+        )
+        .expect("merge execution application height is non-zero");
+        self.record_direct_committed_transactions(hashes, height);
     }
 
     fn prune_merge_latest_lane_snapshots(&self, lanes_to_prune: &BTreeSet<LaneId>) {
         let mut guard = self.merge_latest_lane_snapshots.write();
-        guard.retain(|(lane_id, _), _| !lanes_to_prune.contains(lane_id));
+        guard.retain(|(lane_id, _, _), _| !lanes_to_prune.contains(lane_id));
     }
 
     fn is_verified_lane_relay_contract_state_key(key: &Name) -> bool {
@@ -24974,6 +26090,7 @@ impl State {
         let commit_topology = self.commit_topology_snapshot();
         Self::authoritative_lane_peer_ids_from_sources(
             &self.world.view(),
+            &self.chain_id,
             lane_id,
             validator_mode,
             manifest_registry.as_ref(),
@@ -25110,11 +26227,24 @@ impl State {
         block_height: u64,
     ) -> [u8; 32] {
         let world_view = self.world.view();
-        let epoch_seed = crate::sumeragi::npos_seed_for_height_from_world(
+        Self::lane_relay_committee_seed_from_sources(
             &world_view,
             &self.chain_id,
+            dataspace_id,
+            lane_id,
             block_height,
-        );
+        )
+    }
+
+    fn lane_relay_committee_seed_from_sources(
+        world: &impl WorldReadOnly,
+        chain_id: &iroha_data_model::ChainId,
+        dataspace_id: DataSpaceId,
+        lane_id: LaneId,
+        block_height: u64,
+    ) -> [u8; 32] {
+        let epoch_seed =
+            crate::sumeragi::npos_seed_for_height_from_world(world, chain_id, block_height);
         let mut buffer = Vec::with_capacity(LANE_RELAY_SEED_DOMAIN.len() + epoch_seed.len() + 12);
         buffer.extend_from_slice(LANE_RELAY_SEED_DOMAIN);
         buffer.extend_from_slice(&epoch_seed);
@@ -25179,7 +26309,6 @@ impl State {
         if !nexus_lane_active_for_authority(lane_id, dataspace_id, nexus, block_height) {
             return Vec::new();
         }
-
         let present_peers: BTreeSet<PeerId> = world.peers().iter().cloned().collect();
         if Self::manifest_registry_matches_lane_dataspace(lane_id, dataspace_id, manifest_registry)
             && let Some(rules) = manifest_registry.lane_rules(lane_id)
@@ -25258,6 +26387,7 @@ impl State {
 
     fn authoritative_lane_peer_ids_from_sources(
         world: &impl WorldReadOnly,
+        chain_id: &iroha_data_model::ChainId,
         lane_id: LaneId,
         validator_mode: iroha_config::parameters::actual::LaneValidatorMode,
         manifest_registry: &LaneManifestRegistry,
@@ -25271,6 +26401,12 @@ impl State {
         if !nexus_lane_active_for_authority(lane_id, dataspace_id, nexus, block_height) {
             return Vec::new();
         }
+        let uses_autoscale_placement = autoscale_managed_lane_inherits_commit_topology_authority(
+            lane_id,
+            dataspace_id,
+            nexus,
+            block_height,
+        );
 
         let present_peers: BTreeSet<PeerId> = world.peers().iter().cloned().collect();
         if Self::manifest_registry_matches_lane_dataspace(lane_id, dataspace_id, manifest_registry)
@@ -25283,17 +26419,30 @@ impl State {
                     &rules.validators,
                     block_height,
                 );
-                return bindings
+                let pool: Vec<_> = bindings
                     .into_iter()
                     .map(|binding| binding.peer_id)
                     .collect();
+                return if uses_autoscale_placement {
+                    Self::autoscale_lane_committee_from_pool(
+                        world,
+                        chain_id,
+                        lane_id,
+                        dataspace_id,
+                        nexus,
+                        &pool,
+                        block_height,
+                    )
+                } else {
+                    pool
+                };
             }
         }
 
         if Self::manifest_registry_matches_lane_dataspace(lane_id, dataspace_id, manifest_registry)
             && let Some(validators) = manifest_registry.lane_validators(lane_id)
         {
-            return Self::live_manifest_validator_account_peers_from_sources(
+            let pool: Vec<_> = Self::live_manifest_validator_account_peers_from_sources(
                 world,
                 validators,
                 block_height,
@@ -25301,15 +26450,31 @@ impl State {
             .into_iter()
             .map(|(_, peer)| peer)
             .collect();
+            return if uses_autoscale_placement {
+                Self::autoscale_lane_committee_from_pool(
+                    world,
+                    chain_id,
+                    lane_id,
+                    dataspace_id,
+                    nexus,
+                    &pool,
+                    block_height,
+                )
+            } else {
+                pool
+            };
         }
 
-        if autoscale_managed_lane_inherits_commit_topology_authority(
-            lane_id,
-            dataspace_id,
-            nexus,
-            block_height,
-        ) {
-            return Self::live_commit_topology_peers(world, commit_topology, block_height);
+        if uses_autoscale_placement {
+            return Self::autoscale_lane_committee_from_topology(
+                world,
+                chain_id,
+                lane_id,
+                dataspace_id,
+                nexus,
+                commit_topology,
+                block_height,
+            );
         }
 
         if !matches!(
@@ -25365,6 +26530,62 @@ impl State {
             .take(max)
             .map(|(_, peer_id, _)| peer_id)
             .collect()
+    }
+
+    fn autoscale_lane_committee_from_topology(
+        world: &impl WorldReadOnly,
+        chain_id: &iroha_data_model::ChainId,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        nexus: &iroha_config::parameters::actual::Nexus,
+        commit_topology: &[PeerId],
+        block_height: u64,
+    ) -> Vec<PeerId> {
+        let pool = Self::live_commit_topology_peers(world, commit_topology, block_height);
+        Self::autoscale_lane_committee_from_pool(
+            world,
+            chain_id,
+            lane_id,
+            dataspace_id,
+            nexus,
+            &pool,
+            block_height,
+        )
+    }
+
+    fn autoscale_lane_committee_from_pool(
+        world: &impl WorldReadOnly,
+        chain_id: &iroha_data_model::ChainId,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        nexus: &iroha_config::parameters::actual::Nexus,
+        pool: &[PeerId],
+        block_height: u64,
+    ) -> Vec<PeerId> {
+        let Some(committee_size) = nexus_lane_committee_size(nexus, dataspace_id) else {
+            return Vec::new();
+        };
+        if pool.len() < committee_size {
+            return Vec::new();
+        }
+        // Reuse the relay seed and member ranking so lane-block descriptors and
+        // later relay verification cannot derive different committee membership.
+        let seed = Self::lane_relay_committee_seed_from_sources(
+            world,
+            chain_id,
+            dataspace_id,
+            lane_id,
+            block_height,
+        );
+        let Ok(mut committee) = Self::lane_relay_committee_from_pool(&pool, committee_size, seed)
+        else {
+            return Vec::new();
+        };
+        if committee.len() != committee_size {
+            return Vec::new();
+        }
+        committee.sort();
+        committee
     }
 
     fn nexus_authoritative_lane_dataspace(
@@ -25688,7 +26909,10 @@ impl State {
                     hydrated += 1;
                 }
                 Ok(LaneRelayInsert::Duplicate) => {}
-                Err(LaneRelayError::StaleLaneIncarnation { .. }) => {
+                Err(
+                    LaneRelayError::StaleLaneIncarnation { .. }
+                    | LaneRelayError::LaneIncarnationMismatch { .. },
+                ) => {
                     self.prune_verified_lane_relay_contract_state_record(&record);
                 }
                 Err(LaneRelayError::StaleRelay { .. }) => {}
@@ -25732,28 +26956,25 @@ impl State {
                 actual: envelope.dataspace_id,
             });
         }
-        if nexus_active_lane_dataspace_at_height(envelope.lane_id, &nexus, envelope.block_height)
-            != Some(envelope.dataspace_id)
-        {
-            return Err(LaneRelayError::UnknownLane(envelope.lane_id));
-        }
-        if let Some(reset_height) = self
-            .da_shard_cursors
-            .read()
-            .reset_height_for_lane(envelope.lane_id)
-            && envelope.block_height <= reset_height
-        {
-            return Err(LaneRelayError::StaleLaneIncarnation {
+        let expected_incarnation = self
+            .lane_incarnation_at_height(envelope.lane_id, envelope.block_height)
+            .ok_or(LaneRelayError::UnknownLane(envelope.lane_id))?;
+        if envelope.lane_incarnation != expected_incarnation {
+            return Err(LaneRelayError::LaneIncarnationMismatch {
                 lane: envelope.lane_id,
-                reset_height,
-                relay_height: envelope.block_height,
+                expected: expected_incarnation,
+                actual: envelope.lane_incarnation,
             });
         }
         if let Some(previous) = self
             .merge_latest_lane_snapshots
             .read()
-            .get(&(envelope.lane_id, envelope.dataspace_id))
-            .copied()
+            .get(&(
+                envelope.lane_id,
+                envelope.dataspace_id,
+                envelope.lane_incarnation,
+            ))
+            .cloned()
             && envelope.block_height <= previous.lane_block_height
         {
             return Err(LaneRelayError::StaleRelay {
@@ -25790,6 +27011,7 @@ impl State {
         let world = self.world.view();
         let base_pool = Self::authoritative_lane_peer_ids_from_sources(
             &world,
+            &self.chain_id,
             envelope.lane_id,
             validator_mode,
             manifest_registry.as_ref(),
@@ -25922,7 +27144,415 @@ impl State {
         Ok(inserted)
     }
 
-    /// Synthesise merge-ledger entry candidates from stored lane relays.
+    fn latest_merge_execution_heights(
+        &self,
+    ) -> Result<BTreeMap<(LaneId, DataSpaceId, Hash), u64>, MergeLedgerCommitError> {
+        let mut heights = BTreeMap::new();
+        for entry in self.kura.merge_ledger_all_entries()? {
+            let Some(batch) = entry.execution_batch else {
+                continue;
+            };
+            for execution in batch.lanes {
+                let descriptor = execution.proposal.descriptor;
+                heights
+                    .entry((
+                        descriptor.lane_id,
+                        descriptor.dataspace_id,
+                        descriptor.lane_incarnation,
+                    ))
+                    .and_modify(|height| *height = (*height).max(descriptor.lane_block_height))
+                    .or_insert(descriptor.lane_block_height);
+            }
+        }
+        Ok(heights)
+    }
+
+    fn merge_execution_source_from_embedded(
+        execution: &MergeLaneExecution,
+    ) -> Result<MergeExecutionSource, MergeLedgerCommitError> {
+        let mut signer_pops = BTreeMap::new();
+        for proof in &execution.signer_proofs {
+            if signer_pops
+                .insert(proof.public_key.clone(), proof.proof_of_possession.clone())
+                .is_some()
+            {
+                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "duplicate embedded lane signer proof".to_owned(),
+                ));
+            }
+        }
+        let certified = crate::kura::CertifiedLaneBlockArtifact {
+            format: crate::kura::CertifiedLaneBlockArtifactFormat::Current,
+            proposal: execution.proposal.clone(),
+            prepare_qc: execution.prepare_qc.clone(),
+            commit_qc: execution.commit_qc.clone(),
+            signer_pops,
+        };
+        let descriptor = &execution.proposal.descriptor;
+        let (proposal_block_hash, proposal_view) =
+            crate::kura::Kura::autonomous_lane_execution_anchor(
+                &execution.proposal,
+                execution.autonomous_payload_hash,
+            );
+        let ownership = SumeragiLanePayloadOwnership {
+            proposal_height: descriptor.proposal_height,
+            proposal_view,
+            lane_id: descriptor.lane_id,
+            dataspace_id: descriptor.dataspace_id,
+            lane_incarnation: descriptor.lane_incarnation,
+            lane_block_height: descriptor.lane_block_height,
+            lane_block_view: descriptor.lane_block_view,
+            subject_hash: descriptor.subject_hash,
+            qc_mode_tag: descriptor.qc_mode_tag.clone(),
+            accepted_candidate_indices: descriptor.accepted_candidate_indices.clone(),
+            accepted_transaction_hashes: descriptor.accepted_transaction_hashes.clone(),
+            previous_lane_block_height: descriptor.previous_lane_block_height,
+            previous_lane_block_descriptor_hash: descriptor.previous_lane_block_descriptor_hash,
+            lane_block_descriptor_hash: Some(descriptor.descriptor_hash),
+            lane_block_descriptor_validator_set: descriptor.validator_set.clone(),
+            lane_block_descriptor_validator_count: descriptor.validator_count,
+            lane_block_descriptor_min_quorum: descriptor.min_quorum,
+            payload_ownership_hash: descriptor.payload_ownership_hash,
+            rbc_instance_hash: descriptor.rbc_instance_hash,
+        };
+        let input = crate::kura::LaneBlockExecutionInputArtifact::new(
+            crate::kura::RecoveredLaneBlockPayload {
+                proposal: execution.proposal.clone(),
+                artifact: crate::kura::LaneBlockArtifact::new(proposal_block_hash, ownership),
+                autonomous_chain_id_hash: Some(execution.autonomous_chain_id_hash),
+                autonomous_epoch: Some(execution.autonomous_epoch),
+                autonomous_payload_hash: Some(execution.autonomous_payload_hash),
+                entrypoints: execution.entrypoints.clone(),
+            },
+        );
+        let bundle_hash = merge_execution_source_bundle_hash(&certified, &input);
+        if bundle_hash != execution.source_bundle_hash {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "embedded autonomous source bundle hash mismatch".to_owned(),
+            ));
+        }
+        Ok(MergeExecutionSource {
+            bundle_hash,
+            certified,
+            input,
+        })
+    }
+
+    fn preexecute_merge_execution_sources<'state>(
+        &'state self,
+        application_block_header: BlockHeader,
+        sources: Vec<MergeExecutionSource>,
+    ) -> Result<(StateBlock<'state>, Vec<MergeLaneExecution>), MergeLedgerCommitError> {
+        let mut state_block = self.lane_application_block(application_block_header);
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let mut seen_entrypoints = BTreeSet::new();
+        let mut executions = Vec::with_capacity(sources.len());
+
+        for source in sources {
+            crate::kura::Kura::validate_certified_lane_block_artifact(&source.certified).map_err(
+                |message| MergeLedgerCommitError::ExecutionBatchInvalid(message.to_owned()),
+            )?;
+            crate::kura::Kura::validate_lane_block_execution_input_artifact(&source.input)
+                .map_err(|message| {
+                    MergeLedgerCommitError::ExecutionBatchInvalid(message.to_owned())
+                })?;
+            if source.certified.proposal != source.input.proposal {
+                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "certified lane proposal differs from execution input".to_owned(),
+                ));
+            }
+            for hash in &source.input.entrypoint_hashes {
+                if !seen_entrypoints.insert(*hash) {
+                    return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                        "duplicate entrypoint across merge execution lanes".to_owned(),
+                    ));
+                }
+            }
+            let descriptor = &source.input.proposal.descriptor;
+            for entrypoint in &source.input.entrypoints {
+                let accepted = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
+                    std::borrow::Cow::Borrowed(entrypoint),
+                );
+                let plan = crate::queue::evaluate_policy_plan_with_nexus_and_world_at_block_height(
+                    &state_block.nexus,
+                    &accepted,
+                    &state_block.world,
+                    u64::try_from(state_block._curr_block.creation_time().as_millis())
+                        .unwrap_or(u64::MAX),
+                    descriptor.proposal_height,
+                )
+                .map_err(|_| {
+                    MergeLedgerCommitError::ExecutionBatchInvalid(
+                        "merge execution route cannot be resolved".to_owned(),
+                    )
+                })?;
+                if matches!(plan, crate::queue::RoutingPlan::NativeAmx(_)) {
+                    return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                        "autonomous native-AMX execution requires a certified receipt source"
+                            .to_owned(),
+                    ));
+                }
+            }
+
+            let raw_results = state_block
+                .validate_lane_block_execution_input_with_routing_context(
+                    &source.input,
+                    &mut ivm_cache,
+                )
+                .map_err(|message| {
+                    MergeLedgerCommitError::ExecutionDivergence(message.to_owned())
+                })?;
+            let indices = raw_results
+                .iter()
+                .map(|(index, _, _)| *index)
+                .collect::<Vec<_>>();
+            let entrypoint_hashes = raw_results
+                .iter()
+                .map(|(_, hash, _)| Hash::from(*hash))
+                .collect::<Vec<_>>();
+            if indices != descriptor.accepted_candidate_indices
+                || entrypoint_hashes != source.input.entrypoint_hashes
+            {
+                return Err(MergeLedgerCommitError::ExecutionDivergence(
+                    "executor returned a different entrypoint order".to_owned(),
+                ));
+            }
+            let results = raw_results
+                .into_iter()
+                .map(|(_, _, result)| TransactionResult(result))
+                .collect::<Vec<_>>();
+            let result_hashes = results
+                .iter()
+                .map(|result| Hash::from(result.hash()))
+                .collect::<Vec<_>>();
+            state_block.stage_direct_committed_transactions(
+                StateBlock::merge_execution_transaction_hashes(&source.input.entrypoints),
+            );
+            let placeholder = LaneBlockCommitment {
+                block_height: descriptor.lane_block_height,
+                lane_id: descriptor.lane_id,
+                lane_incarnation: descriptor.lane_incarnation,
+                dataspace_id: descriptor.dataspace_id,
+                tx_count: 0,
+                total_local_micro: 0,
+                total_xor_due_micro: 0,
+                total_xor_after_haircut_micro: 0,
+                total_xor_variance_micro: 0,
+                swap_metadata: None,
+                receipts: Vec::new(),
+                nexus_fee_receipts: Vec::new(),
+                native_amx_receipts: Vec::new(),
+            };
+            let mut execution = MergeLaneExecution {
+                source_bundle_hash: source.bundle_hash,
+                proposal: source.certified.proposal,
+                prepare_qc: source.certified.prepare_qc,
+                commit_qc: source.certified.commit_qc,
+                signer_proofs: source
+                    .certified
+                    .signer_pops
+                    .into_iter()
+                    .map(|(public_key, proof_of_possession)| MergeLaneSignerProof {
+                        public_key,
+                        proof_of_possession,
+                    })
+                    .collect(),
+                autonomous_chain_id_hash: source
+                    .input
+                    .autonomous_chain_id_hash
+                    .expect("validated autonomous input has a chain binding"),
+                autonomous_epoch: source
+                    .input
+                    .autonomous_epoch
+                    .expect("validated autonomous input has an epoch binding"),
+                autonomous_payload_hash: source
+                    .input
+                    .autonomous_payload_hash
+                    .expect("validated autonomous input has a payload binding"),
+                entrypoint_hashes: source.input.entrypoint_hashes,
+                entrypoints: source.input.entrypoints,
+                result_hashes,
+                results,
+                settlement_hash: HashOf::new(&placeholder),
+                settlement_commitment: placeholder,
+            };
+            let commitment = state_block.drain_merge_lane_settlement_commitment(&execution)?;
+            execution.settlement_hash = HashOf::new(&commitment);
+            execution.settlement_commitment = commitment;
+            executions.push(execution);
+        }
+        state_block.stage_merge_execution_nexus_fee_settlement(&executions)?;
+        Ok((state_block, executions))
+    }
+
+    fn build_merge_execution_batch(&self) -> Option<MergeExecutionBatch> {
+        let nexus = self.nexus_snapshot();
+        if !nexus.enabled || nexus.lane_catalog.lanes().len() > MAX_MERGE_EXECUTION_LANES {
+            return None;
+        }
+        let latest_heights = match self.latest_merge_execution_heights() {
+            Ok(heights) => heights,
+            Err(err) => {
+                error!(?err, "cannot inspect durable merge execution history");
+                return None;
+            }
+        };
+        let incarnations = self.lane_incarnations_snapshot();
+        let activations = self.lane_incarnation_activation_heights_snapshot();
+        let chain_hash = Hash::new(self.chain_id.clone().into_inner().as_bytes());
+        let world = self.world.view();
+        let multi_lane = crate::queue::routable_lane_ids_for_nexus_at_height(
+            &nexus,
+            u64::try_from(self.committed_height())
+                .unwrap_or(u64::MAX)
+                .saturating_add(1),
+        )
+        .len()
+            > 1;
+        let mut sources = Vec::new();
+
+        for lane in nexus.lane_catalog.lanes() {
+            let incarnation = *incarnations.get(&lane.id)?;
+            let activation_height = activations.get(&lane.id)?.checked_add(1)?;
+            let expected_height = latest_heights
+                .get(&(lane.id, lane.dataspace_id, incarnation))
+                .copied()
+                .unwrap_or(0)
+                .checked_add(1)?;
+            let certified = self
+                .kura
+                .certified_lane_block_artifacts_for_dataspace(lane.id, lane.dataspace_id)
+                .into_iter()
+                .find(|artifact| {
+                    let descriptor = &artifact.proposal.descriptor;
+                    descriptor.lane_block_height == expected_height
+                        && descriptor.lane_incarnation == incarnation
+                        && descriptor.proposal_height >= activation_height
+                });
+            let Some(certified) = certified else {
+                continue;
+            };
+            let descriptor = &certified.proposal.descriptor;
+            let mut authoritative = if multi_lane {
+                self.authoritative_lane_peer_ids_at_height(lane.id, descriptor.proposal_height)
+            } else {
+                self.commit_topology_snapshot()
+            };
+            authoritative.sort();
+            authoritative.dedup();
+            if authoritative.is_empty() || descriptor.validator_set != authoritative {
+                warn!(
+                    lane = %lane.id.as_u32(),
+                    lane_block_height = expected_height,
+                    "certified lane block no longer matches authoritative activation-context committee"
+                );
+                continue;
+            }
+            let expected_epoch =
+                crate::sumeragi::epoch_for_height_from_world(&world, descriptor.proposal_height);
+            let input = self
+                .kura
+                .read_lane_block_execution_input(lane.id, expected_height)
+                .or_else(|| {
+                    let recovered = self
+                        .kura
+                        .recover_autonomous_lane_block_payload(
+                            &certified.proposal,
+                            chain_hash,
+                            expected_epoch,
+                        )
+                        .ok()?;
+                    self.kura
+                        .persist_lane_block_execution_input(&recovered)
+                        .ok()?;
+                    self.kura
+                        .read_lane_block_execution_input(lane.id, expected_height)
+                });
+            let Some(input) = input else {
+                continue;
+            };
+            if input.autonomous_chain_id_hash != Some(chain_hash)
+                || input.autonomous_epoch != Some(expected_epoch)
+                || input.autonomous_payload_hash.is_none()
+            {
+                continue;
+            }
+            let bundle_hash = merge_execution_source_bundle_hash(&certified, &input);
+            sources.push(MergeExecutionSource {
+                bundle_hash,
+                certified,
+                input,
+            });
+        }
+        if sources.is_empty() {
+            return None;
+        }
+        sources.sort_by_key(|source| {
+            let descriptor = &source.certified.proposal.descriptor;
+            (
+                descriptor.proposal_height,
+                descriptor.lane_block_height,
+                descriptor.lane_id,
+                descriptor.dataspace_id,
+                descriptor.lane_block_view,
+            )
+        });
+        let total_entrypoints = sources
+            .iter()
+            .map(|source| source.input.entrypoints.len())
+            .sum::<usize>();
+        if total_entrypoints > MAX_MERGE_EXECUTION_ENTRYPOINTS {
+            warn!(
+                total_entrypoints,
+                "deferring oversized merge execution backlog"
+            );
+            return None;
+        }
+
+        let base_state_height = u64::try_from(self.committed_height()).unwrap_or(u64::MAX);
+        let base_state_hash = self.lane_execution_state_hash();
+        let application_block_header = BlockHeader::new(
+            NonZeroU64::new(base_state_height.saturating_add(1).max(1))
+                .expect("merge execution height is non-zero"),
+            Some(base_state_hash),
+            None,
+            None,
+            0,
+            0,
+        );
+        let (state_block, lanes) = match self
+            .preexecute_merge_execution_sources(application_block_header.clone(), sources)
+        {
+            Ok(prepared) => prepared,
+            Err(err) => {
+                warn!(?err, "merge execution pre-execution failed");
+                return None;
+            }
+        };
+        let write_set_root = state_block.merge_execution_write_set_root();
+        drop(state_block);
+        let execution_root = crate::merge::merge_execution_root(&lanes);
+        let expected_post_state_hash = crate::merge::merge_expected_post_state_hash(
+            base_state_height,
+            base_state_hash,
+            write_set_root,
+        );
+        let mut batch = MergeExecutionBatch {
+            version: 1,
+            base_state_height,
+            base_state_hash,
+            application_block_header,
+            lanes,
+            execution_root,
+            write_set_root,
+            expected_post_state_hash,
+            batch_hash: Hash::prehashed([0; Hash::LENGTH]),
+        };
+        batch.batch_hash = crate::merge::merge_execution_batch_hash(&batch);
+        (batch.encode().len() <= MAX_MERGE_EXECUTION_BATCH_BYTES).then_some(batch)
+    }
+
+    /// Synthesise merge-ledger entry candidates from certified lane work or stored relays.
     pub(crate) fn merge_entry_candidates_from_lane_relays(
         &self,
     ) -> Vec<crate::merge::MergeLedgerCandidate> {
@@ -25941,27 +27571,97 @@ impl State {
             .as_ref()
             .map_or(0, |entry| entry.merge_qc.view);
         let previous_snapshots = self.merge_latest_lane_snapshots.read().clone();
-        let reset_heights = self.da_shard_cursors.read().reset_heights().clone();
+        let lane_incarnations = self.lane_incarnations_snapshot();
+        let lane_incarnation_activation_heights =
+            self.lane_incarnation_activation_heights_snapshot();
+        let Some(merge_lane_bindings) = nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .map(|lane| {
+                Some(MergeLaneBinding {
+                    lane_id: lane.id,
+                    dataspace_id: lane.dataspace_id,
+                    lane_config_hash: crate::merge::merge_lane_config_hash(lane),
+                    incarnation: *lane_incarnations.get(&lane.id)?,
+                    activation_height: lane_incarnation_activation_heights
+                        .get(&lane.id)?
+                        .checked_add(1)?,
+                })
+            })
+            .collect::<Option<Vec<_>>>()
+        else {
+            iroha_logger::error!(
+                "cannot synthesize merge entry from incomplete lane incarnation activation state"
+            );
+            return Vec::new();
+        };
+        let lifecycle_incarnations = merge_lane_bindings
+            .iter()
+            .map(
+                |entry| iroha_data_model::nexus::LaneLifecycleIncarnationEntry {
+                    lane_id: entry.lane_id,
+                    incarnation: entry.incarnation,
+                },
+            )
+            .collect::<Vec<_>>();
+        let incarnation_root = iroha_data_model::nexus::LaneLifecycleParameterV1::incarnation_root(
+            &lifecycle_incarnations,
+        );
+        let activation_root = crate::merge::merge_activation_root(&merge_lane_bindings);
+
+        // Autonomous execution is committed in a dedicated epoch. Its derived
+        // settlement/Nexus-fee evidence is staged in the same WSV overlay, so it
+        // must not be mixed with independently relayed settlement work whose
+        // replay markers have a different crash protocol.
+        if let Some(execution_batch) = self.build_merge_execution_batch() {
+            let view = execution_batch
+                .lanes
+                .iter()
+                .map(|execution| execution.proposal.descriptor.lane_block_view)
+                .max()
+                .unwrap_or(previous_view)
+                .max(previous_view);
+            return vec![crate::merge::MergeLedgerCandidate {
+                epoch_id: next_epoch,
+                view,
+                lane_catalog_hash: iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(
+                    &nexus.lane_catalog,
+                ),
+                active_lanes: merge_lane_bindings,
+                incarnation_root,
+                activation_root,
+                lane_snapshots: Vec::new(),
+                execution_batch: Some(execution_batch),
+                global_state_root: crate::merge::reduce_merge_hint_roots(&[]),
+            }];
+        }
 
         let mut lane_snapshots = Vec::new();
         let mut max_view = previous_view;
 
         {
             let relays = self.lane_relays.read();
-            for latest_admissible in
-                relays.next_merge_admissible_relays(&previous_snapshots, &reset_heights)
-            {
+            for latest_admissible in relays.next_merge_admissible_relays(&previous_snapshots) {
+                if lane_incarnations.get(&latest_admissible.lane_id)
+                    != Some(&latest_admissible.lane_incarnation)
+                {
+                    continue;
+                }
                 if validate_merge_snapshot_against_nexus(
                     &nexus,
                     latest_admissible.lane_id,
                     latest_admissible.dataspace_id,
-                    latest_admissible.block_height,
                 )
                 .is_err()
                 {
                     continue;
                 }
-                let key = (latest_admissible.lane_id, latest_admissible.dataspace_id);
+                let key = (
+                    latest_admissible.lane_id,
+                    latest_admissible.dataspace_id,
+                    latest_admissible.lane_incarnation,
+                );
                 if previous_snapshots.get(&key).is_some_and(|previous| {
                     previous.lane_block_height >= latest_admissible.block_height
                 }) {
@@ -25983,10 +27683,19 @@ impl State {
                 };
                 let selected_snapshot = MergeLaneSnapshot {
                     lane_id: latest_admissible.lane_id,
+                    lane_incarnation: latest_admissible.lane_incarnation,
+                    incarnation_activation_height: lane_incarnation_activation_heights
+                        .get(&latest_admissible.lane_id)
+                        .copied()
+                        .and_then(|height| height.checked_add(1))
+                        .unwrap_or(u64::MAX),
+                    proposal_height: latest_admissible.block_header.height().get(),
                     dataspace_id: latest_admissible.dataspace_id,
                     lane_block_height: latest_admissible.block_height,
                     tip_hash: latest_admissible.block_header.hash(),
                     merge_hint_root,
+                    settlement_commitment: latest_admissible.settlement_commitment.clone(),
+                    settlement_hash: latest_admissible.settlement_hash,
                 };
 
                 let snapshot_view = latest_admissible.block_header.view_change_index();
@@ -26009,7 +27718,14 @@ impl State {
         vec![crate::merge::MergeLedgerCandidate {
             epoch_id: next_epoch,
             view: max_view,
+            lane_catalog_hash: iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(
+                &nexus.lane_catalog,
+            ),
+            active_lanes: merge_lane_bindings,
+            incarnation_root,
+            activation_root,
             lane_snapshots,
+            execution_batch: None,
             global_state_root,
         }]
     }
@@ -26022,20 +27738,20 @@ impl State {
 
     /// Snapshot latest applied lane-local artifacts for active catalog lanes.
     ///
-    /// Each tuple is `(lane_id, dataspace_id, latest_lane_block_height, descriptor_hash)`.
+    /// Each tuple is `(lane_id, dataspace_id, incarnation, latest_lane_block_height, descriptor_hash)`.
     /// Artifacts whose persisted dataspace no longer matches the active lane
-    /// catalog, whose lane-local height is not above the lane reset watermark,
-    /// or whose application receipt is still missing are skipped so proposal
+    /// catalog or current incarnation, or whose application receipt is still missing are skipped so proposal
     /// planning cannot extend an uncertified lane-local predecessor.
     #[must_use]
     pub(crate) fn lane_block_artifact_tips_snapshot_cached(
         &self,
-    ) -> Vec<(LaneId, DataSpaceId, u64, Option<Hash>)> {
+    ) -> Vec<(LaneId, DataSpaceId, Hash, u64, Option<Hash>)> {
         let nexus = self.nexus_snapshot();
         if !nexus.enabled {
             return Vec::new();
         }
-        let reset_heights = self.da_shard_cursors.read().reset_heights().clone();
+        let lane_incarnations = self.lane_incarnations_snapshot();
+        let activation_heights = self.lane_incarnation_activation_heights_snapshot();
 
         nexus
             .lane_catalog
@@ -26046,10 +27762,12 @@ impl State {
                     .kura
                     .latest_lane_block_artifact_for_dataspace(lane.id, lane.dataspace_id)?;
                 let lane_block_height = artifact.ownership.lane_block_height;
-                if !Self::lane_block_height_visible_after_reset(
-                    &reset_heights,
+                if !lane_incarnation_matches_at_height(
+                    &lane_incarnations,
+                    &activation_heights,
                     lane.id,
-                    lane_block_height,
+                    artifact.ownership.proposal_height,
+                    artifact.ownership.lane_incarnation,
                 ) {
                     return None;
                 }
@@ -26059,6 +27777,7 @@ impl State {
                 Some((
                     lane.id,
                     lane.dataspace_id,
+                    artifact.ownership.lane_incarnation,
                     lane_block_height,
                     artifact.ownership.lane_block_descriptor_hash,
                 ))
@@ -26070,7 +27789,7 @@ impl State {
     /// artifacts that do not yet have matching application receipts.
     ///
     /// Each entry maps `(lane_id, dataspace_id)` to the latest known
-    /// lane-local artifact height above that lane's reset watermark. Proposal
+    /// lane-local artifact height for the current incarnation. Proposal
     /// planning treats these lanes as blocked so it cannot extend a raw
     /// ownership artifact before that artifact is certified and applied.
     #[must_use]
@@ -26081,7 +27800,8 @@ impl State {
         if !nexus.enabled {
             return BTreeMap::new();
         }
-        let reset_heights = self.da_shard_cursors.read().reset_heights().clone();
+        let lane_incarnations = self.lane_incarnations_snapshot();
+        let activation_heights = self.lane_incarnation_activation_heights_snapshot();
         let mut heights = BTreeMap::new();
 
         for lane in nexus.lane_catalog.lanes() {
@@ -26092,10 +27812,12 @@ impl State {
                 continue;
             };
             let lane_block_height = artifact.ownership.lane_block_height;
-            if !Self::lane_block_height_visible_after_reset(
-                &reset_heights,
+            if !lane_incarnation_matches_at_height(
+                &lane_incarnations,
+                &activation_heights,
                 lane.id,
-                lane_block_height,
+                artifact.ownership.proposal_height,
+                artifact.ownership.lane_incarnation,
             ) {
                 continue;
             }
@@ -26110,19 +27832,20 @@ impl State {
 
     /// Snapshot latest certified standalone lane-local blocks for active catalog lanes.
     ///
-    /// Each tuple is `(lane_id, dataspace_id, latest_lane_block_height, descriptor_hash)`.
+    /// Each tuple is `(lane_id, dataspace_id, incarnation, latest_lane_block_height, descriptor_hash)`.
     /// Certified blocks whose persisted dataspace no longer matches the active
-    /// lane catalog, or whose lane-local height is not above the lane reset
-    /// watermark, are skipped so proposal planning cannot cross lane incarnations.
+    /// lane catalog or current incarnation are skipped so proposal planning
+    /// cannot cross lane incarnations.
     #[must_use]
     pub(crate) fn certified_lane_block_tips_snapshot_cached(
         &self,
-    ) -> Vec<(LaneId, DataSpaceId, u64, Option<Hash>)> {
+    ) -> Vec<(LaneId, DataSpaceId, Hash, u64, Option<Hash>)> {
         let nexus = self.nexus_snapshot();
         if !nexus.enabled {
             return Vec::new();
         }
-        let reset_heights = self.da_shard_cursors.read().reset_heights().clone();
+        let lane_incarnations = self.lane_incarnations_snapshot();
+        let activation_heights = self.lane_incarnation_activation_heights_snapshot();
 
         nexus
             .lane_catalog
@@ -26136,16 +27859,19 @@ impl State {
                         lane.dataspace_id,
                     )?;
                 let lane_block_height = artifact.proposal.descriptor.lane_block_height;
-                if !Self::lane_block_height_visible_after_reset(
-                    &reset_heights,
+                if !lane_incarnation_matches_at_height(
+                    &lane_incarnations,
+                    &activation_heights,
                     lane.id,
-                    lane_block_height,
+                    artifact.proposal.descriptor.proposal_height,
+                    artifact.proposal.descriptor.lane_incarnation,
                 ) {
                     return None;
                 }
                 Some((
                     lane.id,
                     lane.dataspace_id,
+                    artifact.proposal.descriptor.lane_incarnation,
                     lane_block_height,
                     Some(artifact.proposal.descriptor.descriptor_hash),
                 ))
@@ -26156,8 +27882,8 @@ impl State {
     /// Snapshot certified standalone lane-local sessions for active catalog lanes.
     ///
     /// The result is bounded by the active lane catalog: only valid certified
-    /// blocks for each lane's current dataspace above the lane reset watermark
-    /// are returned. Sessions are sorted deterministically so restart hydration
+    /// blocks for each lane's current dataspace and incarnation are returned.
+    /// Sessions are sorted deterministically so restart hydration
     /// preserves lane-local height order for direct lane-state application.
     #[must_use]
     pub(crate) fn certified_lane_block_sessions_snapshot_cached(
@@ -26167,7 +27893,8 @@ impl State {
         if !nexus.enabled {
             return Vec::new();
         }
-        let reset_heights = self.da_shard_cursors.read().reset_heights().clone();
+        let lane_incarnations = self.lane_incarnations_snapshot();
+        let activation_heights = self.lane_incarnation_activation_heights_snapshot();
 
         let mut sessions = nexus
             .lane_catalog
@@ -26179,10 +27906,12 @@ impl State {
                     .into_iter()
                     .filter_map(|artifact| {
                         let descriptor = &artifact.proposal.descriptor;
-                        Self::lane_block_height_visible_after_reset(
-                            &reset_heights,
+                        lane_incarnation_matches_at_height(
+                            &lane_incarnations,
+                            &activation_heights,
                             descriptor.lane_id,
-                            descriptor.lane_block_height,
+                            descriptor.proposal_height,
+                            descriptor.lane_incarnation,
                         )
                         .then_some(
                             crate::lane_consensus::CommittedLaneBlockSession {
@@ -26220,6 +27949,7 @@ impl State {
         let descriptor = &receipt.proposal.descriptor;
         descriptor.lane_id == ownership.lane_id
             && descriptor.dataspace_id == ownership.dataspace_id
+            && descriptor.lane_incarnation == ownership.lane_incarnation
             && descriptor.lane_block_height == ownership.lane_block_height
             && Some(descriptor.descriptor_hash) == ownership.lane_block_descriptor_hash
     }
@@ -26228,7 +27958,7 @@ impl State {
     /// not yet have durable application receipts.
     ///
     /// Each entry maps `(lane_id, dataspace_id)` to the first unapplied
-    /// lane-local height above that lane's reset watermark. Proposal planning
+    /// lane-local height for the lane's current incarnation. Proposal planning
     /// uses this readiness view to avoid extending a lane before its previous
     /// certified block is visible in local state.
     #[must_use]
@@ -26239,7 +27969,8 @@ impl State {
         if !nexus.enabled {
             return BTreeMap::new();
         }
-        let reset_heights = self.da_shard_cursors.read().reset_heights().clone();
+        let lane_incarnations = self.lane_incarnations_snapshot();
+        let activation_heights = self.lane_incarnation_activation_heights_snapshot();
         let mut heights = BTreeMap::new();
 
         for lane in nexus.lane_catalog.lanes() {
@@ -26248,11 +27979,14 @@ impl State {
                 .certified_lane_block_artifacts_for_dataspace(lane.id, lane.dataspace_id)
                 .into_iter()
                 .find_map(|artifact| {
-                    let lane_block_height = artifact.proposal.descriptor.lane_block_height;
-                    if !Self::lane_block_height_visible_after_reset(
-                        &reset_heights,
+                    let descriptor = &artifact.proposal.descriptor;
+                    let lane_block_height = descriptor.lane_block_height;
+                    if !lane_incarnation_matches_at_height(
+                        &lane_incarnations,
+                        &activation_heights,
                         lane.id,
-                        lane_block_height,
+                        descriptor.proposal_height,
+                        descriptor.lane_incarnation,
                     ) {
                         return None;
                     }
@@ -26275,20 +28009,21 @@ impl State {
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
     ) -> Option<(u64, u64)> {
+        let lane_incarnation = self.lane_incarnation(lane_id)?;
         let expected_height = {
             let previous_snapshots = self.merge_latest_lane_snapshots.read();
-            let reset_heights = self.da_shard_cursors.read();
             expected_next_merge_lane_height(
                 &previous_snapshots,
-                reset_heights.reset_heights(),
                 lane_id,
                 dataspace_id,
+                lane_incarnation,
             )
         }?;
         let latest_unmerged_height = self
             .lane_relays
             .read()
             .latest_merge_admissible_for_lane_dataspace(lane_id, dataspace_id)
+            .filter(|relay| relay.lane_incarnation == lane_incarnation)
             .map(|relay| relay.block_height)
             .filter(|height| *height >= expected_height)?;
         Some((expected_height, latest_unmerged_height))
@@ -26299,17 +28034,15 @@ impl State {
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
     ) -> Option<u64> {
-        let reset_heights = self.da_shard_cursors.read().reset_heights().clone();
         self.kura
             .certified_lane_block_artifacts_for_dataspace(lane_id, dataspace_id)
             .into_iter()
             .find_map(|artifact| {
-                let lane_block_height = artifact.proposal.descriptor.lane_block_height;
-                if !Self::lane_block_height_visible_after_reset(
-                    &reset_heights,
-                    lane_id,
-                    lane_block_height,
-                ) {
+                let descriptor = &artifact.proposal.descriptor;
+                let lane_block_height = descriptor.lane_block_height;
+                if self.lane_incarnation_at_height(lane_id, descriptor.proposal_height)
+                    != Some(descriptor.lane_incarnation)
+                {
                     return None;
                 }
                 (!self
@@ -26333,35 +28066,49 @@ impl State {
             .is_some_and(|receipt_marker| receipt_marker == marker.clone())
     }
 
-    fn direct_lane_application_marker_height_visible_for_lane_after_reset(
-        reset_heights: &BTreeMap<LaneId, u64>,
+    fn direct_lane_application_marker_height_for_incarnation(
         lane_id: LaneId,
+        lane_incarnation: Hash,
+        activation_height: u64,
         key: DirectLaneBlockApplicationKey,
         marker: &DirectLaneBlockApplicationMarker,
     ) -> Option<u64> {
-        let reset_height = reset_heights.get(&lane_id).copied();
-        [(key.lane_id == lane_id).then_some(key.lane_block_height)]
-            .into_iter()
-            .chain([(marker.lane_id == lane_id).then_some(marker.lane_block_height)])
-            .flatten()
-            .filter(|height| reset_height.is_none_or(|reset_height| *height > reset_height))
-            .min()
+        if marker.proposal_height <= activation_height {
+            return None;
+        }
+        [
+            (key.lane_id == lane_id && key.lane_incarnation == lane_incarnation)
+                .then_some(key.lane_block_height),
+        ]
+        .into_iter()
+        .chain([
+            (marker.lane_id == lane_id && marker.lane_incarnation == lane_incarnation)
+                .then_some(marker.lane_block_height),
+        ])
+        .flatten()
+        .min()
     }
 
     pub(crate) fn unrepaired_direct_lane_application_marker_height(
         &self,
         lane_id: LaneId,
     ) -> Option<u64> {
-        let reset_heights = self.da_shard_cursors.read().reset_heights().clone();
+        let lane_incarnation = self.lane_incarnation(lane_id)?;
+        let activation_height = self
+            .lane_incarnation_activation_heights
+            .read()
+            .get(&lane_id)
+            .copied()?;
         self.world
             .view()
             .direct_lane_block_application_markers
             .iter()
             .filter_map(|(key, marker)| {
                 let lane_block_height =
-                    Self::direct_lane_application_marker_height_visible_for_lane_after_reset(
-                        &reset_heights,
+                    Self::direct_lane_application_marker_height_for_incarnation(
                         lane_id,
+                        lane_incarnation,
+                        activation_height,
                         *key,
                         marker,
                     )?;
@@ -26384,6 +28131,126 @@ impl State {
                 "invalid settled receipt marker key".to_owned(),
             )
         })
+    }
+
+    fn merge_execution_batch_marker_key(
+        batch_hash: Hash,
+    ) -> Result<Name, MergeLedgerCommitError> {
+        format!(
+            "{MERGE_EXECUTION_BATCH_MARKER_PREFIX}{}",
+            hex::encode(batch_hash.as_ref())
+        )
+        .parse()
+        .map_err(|_| {
+            MergeLedgerCommitError::ExecutionBatchInvalid(
+                "invalid merge execution batch marker key".to_owned(),
+            )
+        })
+    }
+
+    fn merge_execution_lane_marker_key(
+        execution: &MergeLaneExecution,
+    ) -> Result<Name, MergeLedgerCommitError> {
+        let descriptor = &execution.proposal.descriptor;
+        format!(
+            "{MERGE_EXECUTION_LANE_MARKER_PREFIX}{}_{}_{}_{}",
+            descriptor.lane_id.as_u32(),
+            descriptor.dataspace_id.as_u64(),
+            descriptor.lane_block_height,
+            hex::encode(descriptor.lane_incarnation.as_ref())
+        )
+        .parse()
+        .map_err(|_| {
+            MergeLedgerCommitError::ExecutionBatchInvalid(
+                "invalid merge lane execution marker key".to_owned(),
+            )
+        })
+    }
+
+    fn merge_execution_marker_payloads(
+        entry: &MergeLedgerEntry,
+        batch: &MergeExecutionBatch,
+    ) -> Result<Vec<(Name, Vec<u8>)>, MergeLedgerCommitError> {
+        let entry_hash = Hash::new(entry.encode());
+        let batch_marker = AppliedMergeExecutionBatchMarker {
+            version: 1,
+            epoch_id: entry.epoch_id,
+            entry_hash,
+            batch_hash: batch.batch_hash,
+            base_state_hash: batch.base_state_hash,
+            expected_post_state_hash: batch.expected_post_state_hash,
+        };
+        let mut markers = vec![(
+            Self::merge_execution_batch_marker_key(batch.batch_hash)?,
+            norito::to_bytes(&batch_marker).map_err(|err| {
+                MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                    "failed to encode merge batch marker: {err}"
+                ))
+            })?,
+        )];
+        for execution in &batch.lanes {
+            let marker = AppliedMergeLaneExecutionMarker {
+                version: 1,
+                epoch_id: entry.epoch_id,
+                entry_hash,
+                batch_hash: batch.batch_hash,
+                lane_execution_hash: crate::merge::merge_lane_execution_hash(execution),
+            };
+            markers.push((
+                Self::merge_execution_lane_marker_key(execution)?,
+                norito::to_bytes(&marker).map_err(|err| {
+                    MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                        "failed to encode merge lane marker: {err}"
+                    ))
+                })?,
+            ));
+        }
+        Ok(markers)
+    }
+
+    fn merge_execution_already_applied(
+        &self,
+        entry: &MergeLedgerEntry,
+        batch: &MergeExecutionBatch,
+    ) -> Result<bool, MergeLedgerCommitError> {
+        let expected = Self::merge_execution_marker_payloads(entry, batch)?;
+        let world = self.world.view();
+        let mut present = 0usize;
+        for (key, payload) in &expected {
+            let Some(actual) = world.smart_contract_state().get(key) else {
+                continue;
+            };
+            present = present.saturating_add(1);
+            if actual != payload {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "marker `{key}` does not bind the durable merge entry"
+                )));
+            }
+        }
+        if present == 0 {
+            return Ok(false);
+        }
+        if present != expected.len() {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "persisted merge entry has a partial execution marker set".to_owned(),
+            ));
+        }
+        Ok(true)
+    }
+
+    fn record_merge_execution_fee_receipts(&self, batch: &MergeExecutionBatch) {
+        self.settled_nexus_fee_receipts.write().extend(
+            batch
+                .lanes
+                .iter()
+                .flat_map(|execution| {
+                    execution
+                        .settlement_commitment
+                        .nexus_fee_receipts
+                        .iter()
+                })
+                .map(|receipt| receipt.source_id),
+        );
     }
 
     fn nexus_fee_settlement_marker_key(
@@ -26492,7 +28359,6 @@ impl State {
         fee_asset_id: &str,
         fee_receipts_activation_height: u64,
     ) -> Result<NexusFeeSettlementPlan, MergeLedgerCommitError> {
-        let relays = self.lane_relays.read();
         let world = self.world.view();
         let mut receipts = Vec::new();
         let mut settlement_markers = Vec::new();
@@ -26501,32 +28367,7 @@ impl State {
         let mut seen_sources = BTreeSet::new();
         let settled_sources = self.settled_nexus_fee_receipts.read();
         for snapshot in &entry.lane_snapshots {
-            let envelope = relays
-                .get(
-                    snapshot.lane_id,
-                    snapshot.dataspace_id,
-                    snapshot.lane_block_height,
-                )
-                .ok_or(MergeLedgerCommitError::MissingSettlementRelay {
-                    lane_id: snapshot.lane_id,
-                    dataspace_id: snapshot.dataspace_id,
-                    block_height: snapshot.lane_block_height,
-                })?;
-            let merge_hint_root = envelope.merge_hint_root().map_err(|_| {
-                MergeLedgerCommitError::SettlementHashMismatch {
-                    lane_id: snapshot.lane_id,
-                    dataspace_id: snapshot.dataspace_id,
-                    block_height: snapshot.lane_block_height,
-                }
-            })?;
-            if merge_hint_root != snapshot.merge_hint_root {
-                return Err(MergeLedgerCommitError::SettlementHashMismatch {
-                    lane_id: snapshot.lane_id,
-                    dataspace_id: snapshot.dataspace_id,
-                    block_height: snapshot.lane_block_height,
-                });
-            }
-            if envelope.settlement_commitment.nexus_fee_receipts.is_empty() {
+            if snapshot.settlement_commitment.nexus_fee_receipts.is_empty() {
                 continue;
             }
             if snapshot.lane_block_height < fee_receipts_activation_height {
@@ -26535,7 +28376,7 @@ impl State {
                     snapshot.lane_block_height
                 )));
             }
-            let settlement_root = *envelope.settlement_hash;
+            let settlement_root = *snapshot.settlement_hash;
             let settlement_key = Self::nexus_fee_settlement_marker_key(
                 snapshot.dataspace_id,
                 snapshot.lane_id,
@@ -26562,7 +28403,7 @@ impl State {
                 )));
             }
             settlement_markers.push(settlement_key);
-            for receipt in &envelope.settlement_commitment.nexus_fee_receipts {
+            for receipt in &snapshot.settlement_commitment.nexus_fee_receipts {
                 Self::validate_nexus_fee_receipt(
                     receipt,
                     snapshot.lane_id,
@@ -26585,31 +28426,32 @@ impl State {
         }
         Ok(NexusFeeSettlementPlan {
             receipts,
+            aggregate_burns: BTreeMap::new(),
             settlement_markers,
             receipt_markers,
         })
     }
 
-    fn settle_nexus_fee_receipts_for_merge(
+    fn prepare_nexus_fee_settlement_for_merge(
         &self,
         entry: &MergeLedgerEntry,
-    ) -> Result<(), MergeLedgerCommitError> {
+    ) -> Result<NexusFeeSettlementPlan, MergeLedgerCommitError> {
         let nexus = self.nexus_snapshot();
         if nexus.fees.settlement_mode != NexusFeeSettlementMode::LaneRelayBurn {
-            return Ok(());
+            return Ok(NexusFeeSettlementPlan {
+                receipts: Vec::new(),
+                aggregate_burns: BTreeMap::new(),
+                settlement_markers: Vec::new(),
+                receipt_markers: Vec::new(),
+            });
         }
-        let plan = self.collect_nexus_fee_receipts_for_merge(
+        let mut plan = self.collect_nexus_fee_receipts_for_merge(
             entry,
             nexus.fees.fee_asset_id.as_str(),
             nexus.fees.fee_receipts_activation_height,
         )?;
-        let NexusFeeSettlementPlan {
-            receipts,
-            settlement_markers,
-            receipt_markers,
-        } = plan;
-        if receipts.is_empty() {
-            return Ok(());
+        if plan.receipts.is_empty() {
+            return Ok(plan);
         }
 
         let mut aggregate = BTreeMap::<AssetId, Numeric>::new();
@@ -26626,7 +28468,7 @@ impl State {
                         .to_owned(),
                 )
             })?;
-            for receipt in &receipts {
+            for receipt in &plan.receipts {
                 let asset_id = AssetId::new(asset_def.clone(), receipt.payer_account_id.clone());
                 let current = aggregate.remove(&asset_id).unwrap_or_else(Numeric::zero);
                 let next = current
@@ -26653,6 +28495,65 @@ impl State {
                 }
             }
         }
+        plan.aggregate_burns = aggregate;
+        Ok(plan)
+    }
+
+    fn nexus_fee_settlement_already_applied(
+        &self,
+        entry: &MergeLedgerEntry,
+    ) -> Result<bool, MergeLedgerCommitError> {
+        let world = self.world.view();
+        let mut marker_states = Vec::new();
+        let mut source_ids = Vec::new();
+        for snapshot in &entry.lane_snapshots {
+            if snapshot.settlement_commitment.nexus_fee_receipts.is_empty() {
+                continue;
+            }
+            let settlement_root = *snapshot.settlement_hash;
+            let settlement_key = Self::nexus_fee_settlement_marker_key(
+                snapshot.dataspace_id,
+                snapshot.lane_id,
+                snapshot.lane_block_height,
+                &settlement_root,
+            )?;
+            marker_states.push(world.smart_contract_state().get(&settlement_key).is_some());
+            for receipt in &snapshot.settlement_commitment.nexus_fee_receipts {
+                let receipt_key = Self::nexus_fee_receipt_marker_key(&receipt.source_id)?;
+                marker_states.push(world.smart_contract_state().get(&receipt_key).is_some());
+                source_ids.push(receipt.source_id);
+            }
+        }
+        if marker_states.is_empty() {
+            return Ok(true);
+        }
+        let marked = marker_states.iter().filter(|marked| **marked).count();
+        if marked == 0 {
+            return Ok(false);
+        }
+        if marked != marker_states.len() {
+            return Err(MergeLedgerCommitError::NexusFeeSettlement(
+                "persisted merge entry has a partial fee-settlement marker set".to_owned(),
+            ));
+        }
+        self.settled_nexus_fee_receipts.write().extend(source_ids);
+        Ok(true)
+    }
+
+    fn apply_nexus_fee_settlement_plan(
+        &self,
+        plan: NexusFeeSettlementPlan,
+    ) -> Result<(), MergeLedgerCommitError> {
+        let NexusFeeSettlementPlan {
+            receipts,
+            aggregate_burns,
+            settlement_markers,
+            receipt_markers,
+        } = plan;
+        if receipts.is_empty() {
+            return Ok(());
+        }
+        let nexus = self.nexus_snapshot();
 
         let mut world_block = self.world.block();
         world_block.dataspace_catalog = nexus.dataspace_catalog.clone();
@@ -26673,7 +28574,7 @@ impl State {
                 axt_lane_map,
             );
             tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-            for (asset_id, amount) in &aggregate {
+            for (asset_id, amount) in &aggregate_burns {
                 tx.withdraw_numeric_asset(asset_id, amount)
                     .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
                 tx.decrease_asset_total_amount(asset_id.definition(), amount)
@@ -26709,14 +28610,88 @@ impl State {
         entry: &MergeLedgerEntry,
     ) -> Result<(), MergeLedgerCommitError> {
         let nexus = self.nexus_snapshot();
+        let expected_catalog_hash =
+            iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(&nexus.lane_catalog);
+        if entry.lane_catalog_hash != expected_catalog_hash {
+            return Err(MergeLedgerCommitError::CatalogMismatch);
+        }
+        let activation_heights = self.lane_incarnation_activation_heights_snapshot();
+        let incarnations = self.lane_incarnations_snapshot();
+        let expected_bindings = nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .map(|lane| {
+                let incarnation = incarnations
+                    .get(&lane.id)
+                    .copied()
+                    .ok_or(MergeLedgerCommitError::UnknownLane { lane_id: lane.id })?;
+                let activation_height = activation_heights
+                    .get(&lane.id)
+                    .copied()
+                    .and_then(|height| height.checked_add(1))
+                    .ok_or(MergeLedgerCommitError::UnknownLane { lane_id: lane.id })?;
+                Ok(MergeLaneBinding {
+                    lane_id: lane.id,
+                    dataspace_id: lane.dataspace_id,
+                    lane_config_hash: crate::merge::merge_lane_config_hash(lane),
+                    incarnation,
+                    activation_height,
+                })
+            })
+            .collect::<Result<Vec<_>, MergeLedgerCommitError>>()?;
+        if entry.active_lanes != expected_bindings {
+            return Err(MergeLedgerCommitError::IncarnationContext(
+                "entry active-incarnation set does not match committed state".to_owned(),
+            ));
+        }
         let relays = self.lane_relays.read();
         for snapshot in &entry.lane_snapshots {
-            validate_merge_snapshot_against_nexus(
-                &nexus,
-                snapshot.lane_id,
-                snapshot.dataspace_id,
-                snapshot.lane_block_height,
+            validate_merge_snapshot_against_nexus(&nexus, snapshot.lane_id, snapshot.dataspace_id)?;
+            let expected_incarnation = self.lane_incarnation(snapshot.lane_id).ok_or(
+                MergeLedgerCommitError::UnknownLane {
+                    lane_id: snapshot.lane_id,
+                },
             )?;
+            if snapshot.lane_incarnation != expected_incarnation {
+                return Err(MergeLedgerCommitError::LaneIncarnationMismatch {
+                    lane_id: snapshot.lane_id,
+                    expected: expected_incarnation,
+                    actual: snapshot.lane_incarnation,
+                });
+            }
+            let expected_activation_height = activation_heights
+                .get(&snapshot.lane_id)
+                .copied()
+                .and_then(|height| height.checked_add(1))
+                .ok_or(MergeLedgerCommitError::UnknownLane {
+                    lane_id: snapshot.lane_id,
+                })?;
+            if snapshot.incarnation_activation_height != expected_activation_height {
+                return Err(MergeLedgerCommitError::LaneIncarnationMismatch {
+                    lane_id: snapshot.lane_id,
+                    expected: expected_incarnation,
+                    actual: snapshot.lane_incarnation,
+                });
+            }
+            if snapshot.proposal_height < snapshot.incarnation_activation_height {
+                return Err(MergeLedgerCommitError::LaneIncarnationNotActive {
+                    lane_id: snapshot.lane_id,
+                    proposal_height: snapshot.proposal_height,
+                    activation_height: snapshot.incarnation_activation_height,
+                });
+            }
+            let settlement = &snapshot.settlement_commitment;
+            if settlement.lane_id != snapshot.lane_id
+                || settlement.lane_incarnation != snapshot.lane_incarnation
+                || settlement.dataspace_id != snapshot.dataspace_id
+                || settlement.block_height != snapshot.lane_block_height
+                || HashOf::new(settlement) != snapshot.settlement_hash
+            {
+                return Err(MergeLedgerCommitError::SettlementCommitmentMismatch {
+                    lane_id: snapshot.lane_id,
+                });
+            }
             let envelope = relays
                 .get(
                     snapshot.lane_id,
@@ -26733,6 +28708,20 @@ impl State {
                     lane_id: snapshot.lane_id,
                     dataspace_id: snapshot.dataspace_id,
                     block_height: snapshot.lane_block_height,
+                });
+            }
+            if envelope.lane_incarnation != snapshot.lane_incarnation {
+                return Err(MergeLedgerCommitError::LaneIncarnationMismatch {
+                    lane_id: snapshot.lane_id,
+                    expected: snapshot.lane_incarnation,
+                    actual: envelope.lane_incarnation,
+                });
+            }
+            if envelope.settlement_hash != snapshot.settlement_hash
+                || envelope.settlement_commitment != snapshot.settlement_commitment
+            {
+                return Err(MergeLedgerCommitError::SettlementCommitmentMismatch {
+                    lane_id: snapshot.lane_id,
                 });
             }
             if envelope.block_header.hash() != snapshot.tip_hash {
@@ -26773,13 +28762,12 @@ impl State {
         entry: &MergeLedgerEntry,
     ) -> Result<(), MergeLedgerCommitError> {
         let previous_snapshots = self.merge_latest_lane_snapshots.read();
-        let reset_heights = self.da_shard_cursors.read();
         for snapshot in &entry.lane_snapshots {
             let Some(expected_height) = expected_next_merge_lane_height(
                 &previous_snapshots,
-                reset_heights.reset_heights(),
                 snapshot.lane_id,
                 snapshot.dataspace_id,
+                snapshot.lane_incarnation,
             ) else {
                 return Err(MergeLedgerCommitError::NonContiguousLaneSnapshot {
                     lane_id: snapshot.lane_id,
@@ -26808,6 +28796,334 @@ impl State {
         Ok(())
     }
 
+    fn validate_merge_execution_batch(
+        &self,
+        entry: &MergeLedgerEntry,
+        batch: &MergeExecutionBatch,
+        previous_heights: &BTreeMap<(LaneId, DataSpaceId, Hash), u64>,
+        validate_live_authority: bool,
+    ) -> Result<(), MergeLedgerCommitError> {
+        if batch.version != 1 {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                "unsupported version {}",
+                batch.version
+            )));
+        }
+        if batch.lanes.is_empty() || batch.lanes.len() > MAX_MERGE_EXECUTION_LANES {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "lane count is empty or exceeds the hard limit".to_owned(),
+            ));
+        }
+        let mut total_entrypoints = 0usize;
+        let mut total_signer_proofs = 0usize;
+        for execution in &batch.lanes {
+            total_entrypoints = total_entrypoints
+                .checked_add(execution.entrypoints.len())
+                .ok_or_else(|| {
+                    MergeLedgerCommitError::ExecutionBatchInvalid(
+                        "entrypoint count overflow".to_owned(),
+                    )
+                })?;
+            total_signer_proofs = total_signer_proofs
+                .checked_add(execution.signer_proofs.len())
+                .ok_or_else(|| {
+                    MergeLedgerCommitError::ExecutionBatchInvalid(
+                        "signer proof count overflow".to_owned(),
+                    )
+                })?;
+        }
+        if total_entrypoints > MAX_MERGE_EXECUTION_ENTRYPOINTS
+            || total_signer_proofs > MAX_MERGE_EXECUTION_SIGNER_PROOFS
+        {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "entrypoint or signer-proof count exceeds the hard limit".to_owned(),
+            ));
+        }
+        if batch.encode().len() > MAX_MERGE_EXECUTION_BATCH_BYTES {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "canonical batch bytes exceed the hard limit".to_owned(),
+            ));
+        }
+        if !crate::merge::merge_execution_batch_commitments_match(batch) {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "execution root, write-set root, post-state hash, or batch hash mismatch"
+                    .to_owned(),
+            ));
+        }
+        let expected_header = BlockHeader::new(
+            NonZeroU64::new(batch.base_state_height.saturating_add(1).max(1))
+                .expect("merge execution height is non-zero"),
+            Some(batch.base_state_hash),
+            None,
+            None,
+            0,
+            0,
+        );
+        if batch.application_block_header != expected_header {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "application block context is not canonical for the sealed base"
+                    .to_owned(),
+            ));
+        }
+
+        let expected_chain_hash = Hash::new(self.chain_id.clone().into_inner().as_bytes());
+        let world = self.world.view();
+        let multi_lane = validate_live_authority
+            && crate::queue::routable_lane_ids_for_nexus_at_height(
+                &self.nexus_snapshot(),
+                batch.application_block_header.height().get(),
+            )
+            .len()
+                > 1;
+        let mut previous_order = None;
+        let mut seen_lanes = BTreeSet::new();
+        let mut seen_entrypoints = BTreeSet::new();
+        let mut seen_transactions = BTreeSet::new();
+        for execution in &batch.lanes {
+            let descriptor = &execution.proposal.descriptor;
+            let order = (
+                descriptor.proposal_height,
+                descriptor.lane_block_height,
+                descriptor.lane_id,
+                descriptor.dataspace_id,
+                descriptor.lane_block_view,
+            );
+            if previous_order.is_some_and(|previous| order <= previous) {
+                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "lane executions are not in strict canonical total order".to_owned(),
+                ));
+            }
+            previous_order = Some(order);
+            if !seen_lanes.insert((descriptor.lane_id, descriptor.dataspace_id)) {
+                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "batch contains more than one execution for a lane".to_owned(),
+                ));
+            }
+            let binding = entry
+                .active_lanes
+                .iter()
+                .find(|binding| binding.lane_id == descriptor.lane_id)
+                .ok_or(MergeLedgerCommitError::UnknownLane {
+                    lane_id: descriptor.lane_id,
+                })?;
+            if binding.dataspace_id != descriptor.dataspace_id {
+                return Err(MergeLedgerCommitError::DataspaceMismatch {
+                    lane_id: descriptor.lane_id,
+                    expected: binding.dataspace_id,
+                    actual: descriptor.dataspace_id,
+                });
+            }
+            if binding.incarnation != descriptor.lane_incarnation {
+                return Err(MergeLedgerCommitError::LaneIncarnationMismatch {
+                    lane_id: descriptor.lane_id,
+                    expected: binding.incarnation,
+                    actual: descriptor.lane_incarnation,
+                });
+            }
+            if descriptor.proposal_height < binding.activation_height {
+                return Err(MergeLedgerCommitError::LaneIncarnationNotActive {
+                    lane_id: descriptor.lane_id,
+                    proposal_height: descriptor.proposal_height,
+                    activation_height: binding.activation_height,
+                });
+            }
+            let expected_height = previous_heights
+                .get(&(
+                    descriptor.lane_id,
+                    descriptor.dataspace_id,
+                    descriptor.lane_incarnation,
+                ))
+                .copied()
+                .unwrap_or(0)
+                .saturating_add(1);
+            if descriptor.lane_block_height != expected_height {
+                return Err(MergeLedgerCommitError::NonContiguousLaneSnapshot {
+                    lane_id: descriptor.lane_id,
+                    dataspace_id: descriptor.dataspace_id,
+                    expected_height,
+                    attempted_height: descriptor.lane_block_height,
+                });
+            }
+            if execution.autonomous_chain_id_hash != expected_chain_hash {
+                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "autonomous payload chain binding mismatch".to_owned(),
+                ));
+            }
+            if validate_live_authority
+                && execution.autonomous_epoch
+                    != crate::sumeragi::epoch_for_height_from_world(
+                        &world,
+                        descriptor.proposal_height,
+                    )
+            {
+                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "autonomous payload epoch binding differs from activation context"
+                        .to_owned(),
+                ));
+            }
+            if execution.entrypoints.len() != descriptor.accepted_candidate_indices.len()
+                || execution.entrypoint_hashes != descriptor.accepted_transaction_hashes
+                || execution.results.len() != execution.entrypoints.len()
+                || execution.result_hashes.len() != execution.results.len()
+            {
+                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "entrypoint/index/hash/result vector lengths or order mismatch".to_owned(),
+                ));
+            }
+            for (entrypoint, expected_hash) in execution
+                .entrypoints
+                .iter()
+                .zip(execution.entrypoint_hashes.iter().copied())
+            {
+                if Hash::from(entrypoint.hash()) != expected_hash {
+                    return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                        "embedded entrypoint hash mismatch".to_owned(),
+                    ));
+                }
+                if !seen_entrypoints.insert(expected_hash) {
+                    return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                        "duplicate entrypoint across lanes".to_owned(),
+                    ));
+                }
+            }
+            for (result, expected_hash) in execution
+                .results
+                .iter()
+                .zip(execution.result_hashes.iter().copied())
+            {
+                if Hash::from(result.hash()) != expected_hash {
+                    return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                        "embedded transaction result hash mismatch".to_owned(),
+                    ));
+                }
+            }
+            for tx_hash in StateBlock::merge_execution_transaction_hashes(&execution.entrypoints) {
+                if !seen_transactions.insert(tx_hash) {
+                    return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                        "duplicate signed transaction across lanes".to_owned(),
+                    ));
+                }
+            }
+            let computed_payload_hash = crate::lane_consensus::compute_lane_executable_payload_hash(
+                1,
+                execution.autonomous_chain_id_hash,
+                execution.autonomous_epoch,
+                &execution.proposal,
+                &execution.entrypoints,
+            )
+            .map_err(|_| {
+                MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "autonomous executable payload hash could not be recomputed".to_owned(),
+                )
+            })?;
+            if computed_payload_hash != execution.autonomous_payload_hash {
+                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "autonomous executable payload hash mismatch".to_owned(),
+                ));
+            }
+            let settlement = &execution.settlement_commitment;
+            if settlement.lane_id != descriptor.lane_id
+                || settlement.dataspace_id != descriptor.dataspace_id
+                || settlement.lane_incarnation != descriptor.lane_incarnation
+                || settlement.block_height != descriptor.lane_block_height
+                || HashOf::new(settlement) != execution.settlement_hash
+            {
+                return Err(MergeLedgerCommitError::SettlementCommitmentMismatch {
+                    lane_id: descriptor.lane_id,
+                });
+            }
+            if execution.signer_proofs.windows(2).any(|pair| {
+                pair[0].public_key >= pair[1].public_key
+            }) {
+                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "lane signer proofs are not unique and canonically ordered".to_owned(),
+                ));
+            }
+            if validate_live_authority {
+                let mut authoritative = if multi_lane {
+                    self.authoritative_lane_peer_ids_at_height(
+                        descriptor.lane_id,
+                        descriptor.proposal_height,
+                    )
+                } else {
+                    self.commit_topology_snapshot()
+                };
+                authoritative.sort();
+                authoritative.dedup();
+                if authoritative.is_empty() || descriptor.validator_set != authoritative {
+                    return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                        "lane committee differs from authoritative activation context"
+                            .to_owned(),
+                    ));
+                }
+            }
+        }
+
+        // Expensive PoP and aggregate verification runs only after all shape,
+        // count, byte, ordering, and duplicate guards above have passed.
+        for execution in &batch.lanes {
+            let source = Self::merge_execution_source_from_embedded(execution)?;
+            crate::kura::Kura::validate_certified_lane_block_artifact(&source.certified)
+                .map_err(|message| {
+                    MergeLedgerCommitError::ExecutionBatchInvalid(message.to_owned())
+                })?;
+        }
+        Ok(())
+    }
+
+    fn prepare_merge_execution_application<'state>(
+        &'state self,
+        entry: &MergeLedgerEntry,
+    ) -> Result<Option<StateBlock<'state>>, MergeLedgerCommitError> {
+        let Some(batch) = entry.execution_batch.as_ref() else {
+            return Ok(None);
+        };
+        if self.merge_execution_already_applied(entry, batch)? {
+            return Ok(None);
+        }
+        let actual_height = u64::try_from(self.committed_height()).unwrap_or(u64::MAX);
+        let actual_hash = self.lane_execution_state_hash();
+        if batch.base_state_height != actual_height || batch.base_state_hash != actual_hash {
+            return Err(MergeLedgerCommitError::ExecutionBaseMismatch {
+                expected_height: batch.base_state_height,
+                expected_hash: batch.base_state_hash,
+                actual_height,
+                actual_hash,
+            });
+        }
+        let sources = batch
+            .lanes
+            .iter()
+            .map(Self::merge_execution_source_from_embedded)
+            .collect::<Result<Vec<_>, _>>()?;
+        let (mut state_block, actual_lanes) = self.preexecute_merge_execution_sources(
+            batch.application_block_header.clone(),
+            sources,
+        )?;
+        if actual_lanes != batch.lanes {
+            return Err(MergeLedgerCommitError::ExecutionDivergence(
+                "ordered execution results or derived settlement evidence differ"
+                    .to_owned(),
+            ));
+        }
+        state_block.validate_merge_execution_commit_surface()?;
+        let actual_write_set_root = state_block.merge_execution_write_set_root();
+        let actual_post_state_hash = crate::merge::merge_expected_post_state_hash(
+            batch.base_state_height,
+            batch.base_state_hash,
+            actual_write_set_root,
+        );
+        if actual_write_set_root != batch.write_set_root
+            || actual_post_state_hash != batch.expected_post_state_hash
+        {
+            return Err(MergeLedgerCommitError::ExecutionDivergence(
+                "canonical WSV write set or expected post-state hash differs".to_owned(),
+            ));
+        }
+        state_block.stage_merge_execution_markers(entry, batch)?;
+        Ok(Some(state_block))
+    }
+
     /// Append a merge-ledger entry to the in-memory cache and persist it via Kura.
     ///
     /// # Errors
@@ -26817,39 +29133,65 @@ impl State {
         entry: MergeLedgerEntry,
     ) -> core::result::Result<Arc<MergeLedgerEntry>, MergeLedgerCommitError> {
         const STATE_VIEW_LOCK_THRESHOLD: Duration = Duration::from_millis(10);
-        if entry.lane_snapshots.is_empty() {
+        let _state_commit_lock = self.state_commit_lock.lock();
+        if entry.lane_snapshots.is_empty() && entry.execution_batch.is_none() {
             return Err(MergeLedgerCommitError::EmptyEntry);
         }
-        let mut prev_key: Option<(LaneId, DataSpaceId)> = None;
-        for snapshot in &entry.lane_snapshots {
-            let key = (snapshot.lane_id, snapshot.dataspace_id);
-            if let Some(prev) = prev_key
-                && key <= prev
-            {
-                return Err(MergeLedgerCommitError::LaneSnapshotOrderViolation {
-                    previous_lane: prev.0,
-                    previous_dataspace: prev.1,
-                    current_lane: key.0,
-                    current_dataspace: key.1,
-                });
-            }
-            prev_key = Some(key);
+        if entry.execution_batch.is_some() && !entry.lane_snapshots.is_empty() {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "execution-batch entries must not mix independently settled relay snapshots"
+                    .to_owned(),
+            ));
         }
+        validate_merge_entry_snapshot_order(&entry)?;
+        validate_merge_entry_incarnation_context(&entry)?;
         self.validate_merge_quorum_certificate(&entry)?;
         self.validate_merge_lane_snapshots(&entry)?;
-        if let Some(latest) = self.merge_ledger.latest() {
-            if entry.epoch_id <= latest.epoch_id {
-                return Err(MergeLedgerCommitError::NonMonotonicEpoch {
-                    latest: latest.epoch_id,
-                    attempted: entry.epoch_id,
-                });
-            }
+        let expected_epoch = self
+            .merge_ledger
+            .latest()
+            .map_or(1, |latest| latest.epoch_id.saturating_add(1));
+        if entry.epoch_id != expected_epoch {
+            return Err(MergeLedgerCommitError::NonMonotonicEpoch {
+                expected: expected_epoch,
+                attempted: entry.epoch_id,
+            });
         }
         self.validate_merge_lane_snapshot_progression(&entry)?;
-        self.settle_nexus_fee_receipts_for_merge(&entry)?;
+        let previous_execution_heights = self.latest_merge_execution_heights()?;
+        if let Some(batch) = entry.execution_batch.as_ref() {
+            self.validate_merge_execution_batch(
+                &entry,
+                batch,
+                &previous_execution_heights,
+                true,
+            )?;
+        }
+        let settlement_plan = self.prepare_nexus_fee_settlement_for_merge(&entry)?;
+        // Re-execute and seal the exact overlay before making the merge-log
+        // append durable. The state commit lock keeps the certified base fixed
+        // across validation, append, and publication.
+        let execution_overlay = self.prepare_merge_execution_application(&entry)?;
 
         let event_entry = entry.clone();
         self.kura.append_merge_entry(&entry)?;
+        if let Some(execution_overlay) = execution_overlay {
+            // No fallible operation remains after validation except an internal
+            // invariant failure. Once Kura contains the intent we must fail-stop
+            // rather than let this process accept work on an unapplied base;
+            // startup replay deterministically finishes the publication.
+            execution_overlay
+                .commit_merge_execution_overlay()
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "durable merge execution append could not be published; restart required: {err}"
+                    )
+                });
+        }
+        self.apply_nexus_fee_settlement_plan(settlement_plan)?;
+        if let Some(batch) = entry.execution_batch.as_ref() {
+            self.record_merge_execution_fee_receipts(batch);
+        }
 
         let stored_entry = {
             let state_write_lock_wait_start = Instant::now();
@@ -26898,8 +29240,38 @@ impl State {
                 qc_epoch: qc.epoch_id,
             });
         }
+        let expected_chain_id_digest = crate::merge::merge_chain_id_digest(&self.chain_id);
+        if qc.chain_id_digest != expected_chain_id_digest {
+            return Err(MergeLedgerCommitError::MergeQCChainIdMismatch {
+                expected: expected_chain_id_digest,
+                actual: qc.chain_id_digest,
+            });
+        }
+        if qc.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1 {
+            return Err(MergeLedgerCommitError::MergeQCValidatorSetHashVersion(
+                qc.validator_set_hash_version,
+            ));
+        }
+        if qc.validator_set_hash != HashOf::new(&qc.validator_set) {
+            return Err(MergeLedgerCommitError::MergeQCValidatorSetHashMismatch);
+        }
+        let mut unique_validators = BTreeSet::new();
+        if let Some(duplicate) = qc
+            .validator_set
+            .iter()
+            .find(|peer| !unique_validators.insert((*peer).clone()))
+        {
+            return Err(MergeLedgerCommitError::MergeQCDuplicateValidator(
+                duplicate.clone(),
+            ));
+        }
         let candidate = crate::merge::MergeLedgerCandidate::from(entry);
-        let expected = crate::merge::merge_qc_message_digest(&self.chain_id, &candidate);
+        let expected = crate::merge::merge_qc_message_digest(
+            &self.chain_id,
+            &candidate,
+            qc.validator_set_hash_version,
+            qc.validator_set_hash,
+        );
         if expected != qc.message_digest {
             return Err(MergeLedgerCommitError::MergeQCDigestMismatch {
                 expected,
@@ -26907,8 +29279,7 @@ impl State {
             });
         }
 
-        let commit_topology = self.commit_topology.view();
-        let roster_len = commit_topology.len();
+        let roster_len = qc.validator_set.len();
         if roster_len == 0 {
             return Err(MergeLedgerCommitError::MergeQCEmptyRoster);
         }
@@ -26918,6 +29289,13 @@ impl State {
                 expected: expected_len,
                 actual: qc.signers_bitmap.len(),
             });
+        }
+        if !qc.signers_bitmap.is_empty() && roster_len % 8 != 0 {
+            let used_bits = roster_len % 8;
+            let padding_mask = !((1u8 << used_bits) - 1);
+            if qc.signers_bitmap[expected_len - 1] & padding_mask != 0 {
+                return Err(MergeLedgerCommitError::MergeQCBitmapPadding);
+            }
         }
 
         let mut signers: Vec<usize> = Vec::new();
@@ -26948,25 +29326,50 @@ impl State {
             return Err(MergeLedgerCommitError::MergeQCAggregateSignatureMissing);
         }
 
-        let world = self.world.view();
+        if qc.signer_proofs.len() != signers.len() {
+            return Err(MergeLedgerCommitError::MergeQCSignerProofMismatch {
+                position: qc.signer_proofs.len().min(signers.len()),
+                expected: signers
+                    .get(qc.signer_proofs.len())
+                    .and_then(|signer| u32::try_from(*signer).ok()),
+                actual: qc
+                    .signer_proofs
+                    .get(signers.len())
+                    .map(|proof| proof.signer),
+            });
+        }
         let mut public_keys: Vec<&PublicKey> = Vec::with_capacity(signers.len());
-        let mut pops = Vec::with_capacity(signers.len());
-        for signer in &signers {
-            let Some(peer) = commit_topology.get().get(*signer) else {
+        let mut pop_refs = Vec::with_capacity(signers.len());
+        for (position, (signer, proof)) in signers.iter().zip(&qc.signer_proofs).enumerate() {
+            let expected_signer = u32::try_from(*signer).map_err(|_| {
+                MergeLedgerCommitError::MergeQCSignerOutOfBounds {
+                    signer: *signer,
+                    roster_len,
+                }
+            })?;
+            if proof.signer != expected_signer {
+                return Err(MergeLedgerCommitError::MergeQCSignerProofMismatch {
+                    position,
+                    expected: Some(expected_signer),
+                    actual: Some(proof.signer),
+                });
+            }
+            let Some(peer) = qc.validator_set.get(*signer) else {
                 return Err(MergeLedgerCommitError::MergeQCSignerOutOfBounds {
                     signer: *signer,
                     roster_len,
                 });
             };
             let pk = peer.public_key();
-            let Some(pop) = consensus_key_pop_for_public_key(&world, pk) else {
-                return Err(MergeLedgerCommitError::MergeQCAggregateSignatureInvalid);
-            };
+            iroha_crypto::bls_normal_pop_verify(pk, &proof.proof_of_possession).map_err(|_| {
+                MergeLedgerCommitError::MergeQCSignerPopInvalid {
+                    signer: proof.signer,
+                }
+            })?;
             public_keys.push(pk);
-            pops.push(pop);
+            pop_refs.push(proof.proof_of_possession.as_slice());
         }
 
-        let pop_refs: Vec<&[u8]> = pops.iter().map(Vec::as_slice).collect();
         iroha_crypto::bls_normal_verify_preaggregated_same_message(
             qc.message_digest.as_ref(),
             &qc.aggregate_signature,
@@ -27180,8 +29583,38 @@ impl State {
     /// applied to the current state.
     pub fn set_nexus(
         &mut self,
-        mut nexus: iroha_config::parameters::actual::Nexus,
+        nexus: iroha_config::parameters::actual::Nexus,
     ) -> Result<(), LaneLifecycleError> {
+        let configured_lane_catalog = self.nexus.read().configured_lane_catalog.clone();
+        self.set_nexus_with_configured_lane_catalog(nexus, configured_lane_catalog)
+    }
+
+    /// Install Nexus configuration sourced from this process's validated startup configuration.
+    ///
+    /// Unlike [`Self::set_nexus`], this is the single boundary allowed to establish the immutable
+    /// configured lane-catalog baseline. Snapshot/runtime topology is still supplied through
+    /// `lane_catalog`; callers must retain the process-configured value in
+    /// `configured_lane_catalog`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `LaneLifecycleError` under the same conditions as [`Self::set_nexus`].
+    pub fn set_nexus_from_config(
+        &mut self,
+        nexus: iroha_config::parameters::actual::Nexus,
+    ) -> Result<(), LaneLifecycleError> {
+        let configured_lane_catalog = nexus.configured_lane_catalog.clone();
+        self.set_nexus_with_configured_lane_catalog(nexus, configured_lane_catalog)?;
+        self.replay_persisted_merge_settlements()
+            .map_err(|err| LaneLifecycleError::Storage(format!("merge side-effect replay: {err}")))
+    }
+
+    fn set_nexus_with_configured_lane_catalog(
+        &mut self,
+        mut nexus: iroha_config::parameters::actual::Nexus,
+        configured_lane_catalog: LaneCatalog,
+    ) -> Result<(), LaneLifecycleError> {
+        nexus.configured_lane_catalog = configured_lane_catalog;
         let dataspace_ids: BTreeSet<_> = nexus
             .dataspace_catalog
             .entries()
@@ -27299,6 +29732,9 @@ impl State {
         }
         ensure_autoscale_runtime_lane_bounds(&nexus.autoscale)?;
         ensure_autoscale_default_lane_is_base(&nexus)?;
+        if nexus.enabled && nexus.autoscale.enabled {
+            ensure_autoscale_base_profile_supported(&nexus, None, None)?;
+        }
         let current_block_height = self.block_hashes.view().len() as u64;
         let protected_autoscale_lanes: BTreeMap<LaneId, iroha_data_model::nexus::LaneConfig> = self
             .nexus
@@ -27350,16 +29786,90 @@ impl State {
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         let configured_fee_asset_id = nexus.fees.fee_asset_id.clone();
-        let previous_lane_config = self.nexus.read().lane_config.clone();
+        let previous_nexus = self.nexus.read().clone();
+        let previous_lane_config = previous_nexus.lane_config.clone();
+        let previous_lane_incarnations = self.lane_incarnations_snapshot();
+        let previous_lane_incarnation_activation_heights =
+            self.lane_incarnation_activation_heights_snapshot();
+        validate_lane_incarnation_map(&previous_nexus.lane_catalog, &previous_lane_incarnations)?;
+        validate_lane_incarnation_activation_heights(
+            &previous_nexus.lane_catalog,
+            &previous_lane_incarnation_activation_heights,
+        )?;
+        let static_incarnations =
+            derive_static_lane_incarnations(&self.chain_id, &nexus.lane_catalog);
+        let updated_lane_incarnations: BTreeMap<_, _> = nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .map(|lane| {
+                let preserved = previous_nexus
+                    .lane_catalog
+                    .lanes()
+                    .iter()
+                    .find(|previous| previous.id == lane.id)
+                    .filter(|previous| *previous == lane)
+                    .and_then(|_| previous_lane_incarnations.get(&lane.id))
+                    .copied();
+                (lane.id, preserved.unwrap_or(static_incarnations[&lane.id]))
+            })
+            .collect();
+        validate_lane_incarnation_map(&nexus.lane_catalog, &updated_lane_incarnations)?;
+        let updated_lane_incarnation_activation_heights = nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .map(|lane| {
+                let preserved = previous_nexus
+                    .lane_catalog
+                    .lanes()
+                    .iter()
+                    .find(|previous| previous.id == lane.id)
+                    .filter(|previous| *previous == lane)
+                    .and_then(|_| previous_lane_incarnation_activation_heights.get(&lane.id))
+                    .copied();
+                (lane.id, preserved.unwrap_or(current_block_height))
+            })
+            .collect::<BTreeMap<_, _>>();
+        validate_lane_incarnation_activation_heights(
+            &nexus.lane_catalog,
+            &updated_lane_incarnation_activation_heights,
+        )?;
         let lanes_to_reset = lanes_requiring_state_reset(&previous_lane_config, &nexus.lane_config);
         self.apply_lane_geometry_updates(
             &previous_lane_config,
             &nexus.lane_config,
+            &previous_lane_incarnations,
+            &updated_lane_incarnations,
+            &previous_lane_incarnation_activation_heights,
+            &updated_lane_incarnation_activation_heights,
             &BTreeSet::new(),
         )?;
+        if let Err(error) = self.mark_lane_geometry_catalog_published(
+            &nexus.lane_config,
+            &updated_lane_incarnations,
+            &updated_lane_incarnation_activation_heights,
+        ) {
+            self.rollback_lane_geometry_updates(
+                &previous_lane_config,
+                &nexus.lane_config,
+                &previous_lane_incarnations,
+                &previous_lane_incarnation_activation_heights,
+                &BTreeSet::new(),
+            )
+            .map_err(|rollback| {
+                LaneLifecycleError::Storage(format!(
+                    "{error}; lane geometry rollback also failed: {rollback}"
+                ))
+            })?;
+            return Err(error);
+        }
         let active_reset_lanes = Self::active_reset_lanes(&lanes_to_reset, &nexus.lane_config);
         let reset_height = self.block_hashes.view().len() as u64;
         *self.nexus.write() = nexus;
+        *self.lane_incarnations.write() = updated_lane_incarnations;
+        *self.lane_incarnation_activation_heights.write() =
+            updated_lane_incarnation_activation_heights;
         for policy_id in configured_fee_sponsor_policy_ids {
             if self
                 .world
@@ -27625,6 +30135,7 @@ impl State {
     ///
     /// # Errors
     /// Returns a [`LaneLifecycleError`] when the lifecycle plan is invalid or fails to apply.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     fn apply_lane_lifecycle_with_options(
         &self,
         plan: &iroha_data_model::nexus::LaneLifecyclePlan,
@@ -27636,14 +30147,31 @@ impl State {
             let _state_commit_lock = self.state_commit_lock.lock();
             let _lifecycle_lock = self.lane_lifecycle_lock.lock();
             let current_block_height = self.block_hashes.view().len() as u64;
-            let lifecycle_update = {
+            let previous_lane_incarnations = self.lane_incarnations_snapshot();
+            let previous_lane_incarnation_activation_heights =
+                self.lane_incarnation_activation_heights_snapshot();
+            let committing_header_hash =
+                synthetic_lane_lifecycle_header_hash(&self.chain_id, current_block_height, plan);
+            let compliance_engine = self.lane_compliance.read().clone();
+            let (lifecycle_update, updated_lane_manifests) = {
                 let nexus = self.nexus.read();
-                prepare_lane_lifecycle_update(
+                ensure_lane_lifecycle_compliance_ready(&nexus, compliance_engine.as_deref(), plan)?;
+                let lifecycle_update = prepare_lane_lifecycle_update(
                     &nexus,
+                    &previous_lane_incarnations,
+                    &previous_lane_incarnation_activation_heights,
+                    &self.chain_id,
+                    committing_header_hash,
                     plan,
                     current_block_height,
                     allow_autoscale_managed_changes,
-                )?
+                )?;
+                let updated_lane_manifests = rebind_lane_manifests_for_lifecycle(
+                    self.lane_manifests.read().as_ref(),
+                    &lifecycle_update.updated_catalog,
+                    &nexus.governance,
+                )?;
+                (lifecycle_update, updated_lane_manifests)
             };
             let active_reset_lanes = Self::active_reset_lanes(
                 &lifecycle_update.lanes_to_reset,
@@ -27653,8 +30181,31 @@ impl State {
             self.apply_lane_geometry_updates(
                 &lifecycle_update.previous_lane_config,
                 &lifecycle_update.updated_lane_config,
+                &lifecycle_update.previous_lane_incarnations,
+                &lifecycle_update.updated_lane_incarnations,
+                &lifecycle_update.previous_lane_incarnation_activation_heights,
+                &lifecycle_update.updated_lane_incarnation_activation_heights,
                 &lifecycle_update.replaced_lane_ids,
             )?;
+            if let Err(error) = self.mark_lane_geometry_catalog_published(
+                &lifecycle_update.updated_lane_config,
+                &lifecycle_update.updated_lane_incarnations,
+                &lifecycle_update.updated_lane_incarnation_activation_heights,
+            ) {
+                self.rollback_lane_geometry_updates(
+                    &lifecycle_update.previous_lane_config,
+                    &lifecycle_update.updated_lane_config,
+                    &lifecycle_update.previous_lane_incarnations,
+                    &lifecycle_update.previous_lane_incarnation_activation_heights,
+                    &lifecycle_update.replaced_lane_ids,
+                )
+                .map_err(|rollback| {
+                    LaneLifecycleError::Storage(format!(
+                        "{error}; lane geometry rollback also failed: {rollback}"
+                    ))
+                })?;
+                return Err(error);
+            }
             let lanes_to_reset = lifecycle_update.lanes_to_reset.clone();
             let active_lane_ids: BTreeSet<_> = lifecycle_update
                 .updated_catalog
@@ -27674,6 +30225,10 @@ impl State {
                     nexus.lane_catalog = lifecycle_update.updated_catalog;
                     nexus.lane_config = lifecycle_update.updated_lane_config;
                 }
+                self.install_lane_manifests(&updated_lane_manifests);
+                *self.lane_incarnations.write() = lifecycle_update.updated_lane_incarnations;
+                *self.lane_incarnation_activation_heights.write() =
+                    lifecycle_update.updated_lane_incarnation_activation_heights;
 
                 if !lanes_to_reset.is_empty() {
                     self.reset_lane_scoped_runtime_state(&lanes_to_reset);
@@ -27732,7 +30287,8 @@ impl State {
     ///
     /// # Errors
     /// Returns a [`LaneLifecycleError`] when the lifecycle plan is invalid or cannot be applied.
-    pub fn apply_lane_lifecycle(
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub(crate) fn apply_lane_lifecycle(
         &self,
         plan: &iroha_data_model::nexus::LaneLifecyclePlan,
     ) -> core::result::Result<(), LaneLifecycleError> {
@@ -27748,7 +30304,8 @@ impl State {
     ///
     /// # Errors
     /// Returns a [`LaneLifecycleError`] when the lifecycle plan is invalid or fails to apply.
-    pub fn apply_lane_lifecycle_shared(
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub(crate) fn apply_lane_lifecycle_shared(
         self: &Arc<Self>,
         plan: &iroha_data_model::nexus::LaneLifecyclePlan,
     ) -> core::result::Result<(), LaneLifecycleError> {
@@ -27765,6 +30322,10 @@ impl State {
         &self,
         previous: &iroha_config::parameters::actual::LaneConfig,
         current: &iroha_config::parameters::actual::LaneConfig,
+        previous_incarnations: &BTreeMap<LaneId, Hash>,
+        current_incarnations: &BTreeMap<LaneId, Hash>,
+        previous_activation_heights: &BTreeMap<LaneId, u64>,
+        current_activation_heights: &BTreeMap<LaneId, u64>,
         replaced_lane_ids: &BTreeSet<LaneId>,
     ) -> Result<(), LaneLifecycleError> {
         let diff = lane_topology_diff(previous, current, replaced_lane_ids);
@@ -27777,10 +30338,26 @@ impl State {
             )
             .map_err(|err| LaneLifecycleError::Storage(format!("kura preflight: {err}")))?;
         {
-            let mut backend = self.tiered_backend.lock();
+            let backend = self.tiered_backend.lock();
             backend
                 .preflight_lane_geometry(previous, current, &diff.replacements, &diff.relabelled)
                 .map_err(|err| LaneLifecycleError::Storage(format!("tiered preflight: {err:?}")))?;
+        }
+
+        self.kura
+            .apply_lane_geometry_transition(
+                previous,
+                current,
+                previous_incarnations,
+                current_incarnations,
+                previous_activation_heights,
+                current_activation_heights,
+                replaced_lane_ids,
+            )
+            .map_err(|err| LaneLifecycleError::Storage(format!("kura journal: {err}")))?;
+
+        let tiered_result = (|| {
+            let mut backend = self.tiered_backend.lock();
             backend
                 .reconcile_lane_geometry(previous, current, &diff.replacements)
                 .map_err(|err| LaneLifecycleError::Storage(format!("tiered: {err:?}")))?;
@@ -27791,18 +30368,21 @@ impl State {
                         LaneLifecycleError::Storage(format!("tiered relabel: {err:?}"))
                     })?;
             }
-        }
-
-        if !diff.added.is_empty() || !diff.retired.is_empty() || !diff.replacements.is_empty() {
+            Ok(())
+        })();
+        if let Err(error) = tiered_result {
             self.kura
-                .reconcile_lane_segments(&diff.added, &diff.retired, &diff.replacements)
-                .map_err(|err| LaneLifecycleError::Storage(format!("kura: {err}")))?;
-        }
-
-        if !diff.relabelled.is_empty() {
-            self.kura
-                .relabel_lane_segments(&diff.relabelled)
-                .map_err(|err| LaneLifecycleError::Storage(format!("kura: {err}")))?;
+                .recover_lane_geometry_journal(
+                    previous,
+                    previous_incarnations,
+                    previous_activation_heights,
+                )
+                .map_err(|rollback| {
+                    LaneLifecycleError::Storage(format!(
+                        "{error}; Kura geometry rollback also failed: {rollback}"
+                    ))
+                })?;
+            return Err(error);
         }
 
         let should_persist = {
@@ -27816,17 +30396,82 @@ impl State {
         Ok(())
     }
 
-    fn apply_committed_autoscale_lane_lifecycle(
+    fn mark_lane_geometry_catalog_published(
         &self,
-        pending: &PendingAutoscaleLaneLifecycle,
+        lane_config: &iroha_config::parameters::actual::LaneConfig,
+        incarnations: &BTreeMap<LaneId, Hash>,
+        activation_heights: &BTreeMap<LaneId, u64>,
     ) -> Result<(), LaneLifecycleError> {
+        self.kura
+            .mark_lane_geometry_catalog_published(lane_config, incarnations, activation_heights)
+            .map_err(|err| LaneLifecycleError::Storage(format!("kura catalog publication: {err}")))
+    }
+
+    fn rollback_lane_geometry_updates(
+        &self,
+        previous: &iroha_config::parameters::actual::LaneConfig,
+        current: &iroha_config::parameters::actual::LaneConfig,
+        previous_incarnations: &BTreeMap<LaneId, Hash>,
+        previous_activation_heights: &BTreeMap<LaneId, u64>,
+        replaced_lane_ids: &BTreeSet<LaneId>,
+    ) -> Result<(), LaneLifecycleError> {
+        self.kura
+            .recover_lane_geometry_journal(
+                previous,
+                previous_incarnations,
+                previous_activation_heights,
+            )
+            .map_err(|err| LaneLifecycleError::Storage(format!("kura rollback: {err}")))?;
+
+        let reverse = lane_topology_diff(current, previous, replaced_lane_ids);
+        {
+            let mut backend = self.tiered_backend.lock();
+            backend
+                .preflight_lane_geometry(
+                    current,
+                    previous,
+                    &reverse.replacements,
+                    &reverse.relabelled,
+                )
+                .map_err(|err| {
+                    LaneLifecycleError::Storage(format!("tiered rollback preflight: {err:?}"))
+                })?;
+            backend
+                .reconcile_lane_geometry(current, previous, &reverse.replacements)
+                .map_err(|err| LaneLifecycleError::Storage(format!("tiered rollback: {err:?}")))?;
+            if !reverse.relabelled.is_empty() {
+                backend
+                    .relabel_lane_geometry(&reverse.relabelled)
+                    .map_err(|err| {
+                        LaneLifecycleError::Storage(format!("tiered rollback relabel: {err:?}"))
+                    })?;
+            }
+        }
+        let should_persist = {
+            let mut cursors = self.da_shard_cursors.write();
+            cursors.sync_mapping(previous);
+            self.da_indexes_hydrated.read().is_some()
+        };
+        if should_persist {
+            self.persist_da_shard_cursor_journal();
+        }
+        Ok(())
+    }
+
+    fn apply_committed_autoscale_lane_lifecycle(&self, pending: &PendingAutoscaleLaneLifecycle) {
         let update = &pending.catalog_update;
         {
             let mut nexus = self.nexus.write();
             nexus.lane_catalog = update.updated_catalog.clone();
             nexus.lane_config = update.updated_lane_config.clone();
-            nexus.autoscale.last_transition_height = pending.transition_height;
+            if pending.transition != PendingAutoscaleTransition::Manual {
+                nexus.autoscale.last_transition_height = pending.transition_height;
+            }
         }
+        *self.lane_incarnations.write() = update.updated_lane_incarnations.clone();
+        *self.lane_incarnation_activation_heights.write() =
+            update.updated_lane_incarnation_activation_heights.clone();
+        self.install_lane_manifests(&pending.updated_lane_manifests);
         self.reset_lane_scoped_runtime_state(&update.lanes_to_reset);
         let active_reset_lanes =
             Self::active_reset_lanes(&update.lanes_to_reset, &update.updated_lane_config);
@@ -27851,7 +30496,6 @@ impl State {
             }
         }
         pending.transition.log(pending.transition_height);
-        Ok(())
     }
 
     fn prune_committed_lane_lifecycle_state(&self, update: &LaneLifecycleCatalogUpdate) {
@@ -27879,20 +30523,46 @@ impl State {
         &self,
         pending: &PendingAutoscaleLaneLifecycle,
         block_height: u64,
+        block_header_hash: HashOf<BlockHeader>,
     ) -> Result<(), LaneLifecycleError> {
         let update = &pending.catalog_update;
-        self.validate_committed_autoscale_lane_lifecycle(pending, block_height)?;
+        self.validate_committed_autoscale_lane_lifecycle(pending, block_height, block_header_hash)?;
         self.apply_lane_geometry_updates(
             &update.previous_lane_config,
             &update.updated_lane_config,
+            &update.previous_lane_incarnations,
+            &update.updated_lane_incarnations,
+            &update.previous_lane_incarnation_activation_heights,
+            &update.updated_lane_incarnation_activation_heights,
             &update.replaced_lane_ids,
-        )
+        )?;
+        if let Err(error) = self.mark_lane_geometry_catalog_published(
+            &update.updated_lane_config,
+            &update.updated_lane_incarnations,
+            &update.updated_lane_incarnation_activation_heights,
+        ) {
+            self.rollback_lane_geometry_updates(
+                &update.previous_lane_config,
+                &update.updated_lane_config,
+                &update.previous_lane_incarnations,
+                &update.previous_lane_incarnation_activation_heights,
+                &update.replaced_lane_ids,
+            )
+            .map_err(|rollback| {
+                LaneLifecycleError::Storage(format!(
+                    "{error}; lane geometry rollback also failed: {rollback}"
+                ))
+            })?;
+            return Err(error);
+        }
+        Ok(())
     }
 
     fn validate_committed_autoscale_lane_lifecycle(
         &self,
         pending: &PendingAutoscaleLaneLifecycle,
         block_height: u64,
+        block_header_hash: HashOf<BlockHeader>,
     ) -> Result<(), LaneLifecycleError> {
         let update = &pending.catalog_update;
         let nexus = self.nexus.read();
@@ -27902,82 +30572,141 @@ impl State {
                 reason: "transition_height must match the committing block height",
             });
         }
+        let lane_incarnations = self.lane_incarnations.read();
+        let lane_incarnation_activation_heights = self.lane_incarnation_activation_heights.read();
         if nexus.lane_catalog != update.previous_catalog
             || nexus.dataspace_catalog != update.previous_dataspace_catalog
             || nexus.routing_policy != update.previous_routing_policy
             || nexus.autoscale != update.previous_autoscale
             || !lane_config_entries_match(&nexus.lane_config, &update.previous_lane_config)
+            || *lane_incarnations != update.previous_lane_incarnations
+            || *lane_incarnation_activation_heights
+                != update.previous_lane_incarnation_activation_heights
         {
             return Err(LaneLifecycleError::Storage(
                 "staged autoscale lifecycle no longer matches committed nexus state".to_owned(),
             ));
         }
-        let staged_plan = autoscale_lifecycle_plan_from_catalog_update(update);
-        let expected_catalog = update.previous_catalog.apply_lifecycle(&staged_plan)?;
-        if expected_catalog != update.updated_catalog {
-            return Err(LaneLifecycleError::AutoscaleTransitionPlanMismatch {
-                transition: pending.transition.name(),
-                reason: "updated catalog must exactly match the staged lifecycle plan",
+        let allow_autoscale_managed_changes =
+            pending.transition != PendingAutoscaleTransition::Manual;
+        let actual_incarnation_root =
+            lane_lifecycle_incarnation_root(&nexus.lane_catalog, &lane_incarnations)?;
+        if pending.expected_incarnation_root != actual_incarnation_root {
+            return Err(LaneLifecycleError::StaleIncarnationRoot {
+                expected: pending.expected_incarnation_root,
+                actual: actual_incarnation_root,
             });
         }
-        let expected_lane_config =
-            iroha_config::parameters::actual::LaneConfig::from_catalog(&expected_catalog);
-        if !lane_config_entries_match(&expected_lane_config, &update.updated_lane_config) {
+        let compliance_engine = self.lane_compliance.read().clone();
+        ensure_lane_lifecycle_compliance_ready(
+            &nexus,
+            compliance_engine.as_deref(),
+            &pending.plan,
+        )?;
+        let expected_update = prepare_lane_lifecycle_update(
+            &nexus,
+            &lane_incarnations,
+            &lane_incarnation_activation_heights,
+            &self.chain_id,
+            block_header_hash,
+            &pending.plan,
+            pending.transition_height,
+            allow_autoscale_managed_changes,
+        )?;
+        let committed_lane_manifests = rebind_lane_manifests_for_lifecycle(
+            self.lane_manifests.read().as_ref(),
+            &expected_update.updated_catalog,
+            &nexus.governance,
+        )?;
+        if committed_lane_manifests.consensus_policy_digest()
+            != pending.updated_lane_manifests.consensus_policy_digest()
+        {
+            return Err(LaneLifecycleError::Storage(
+                "installed lane manifest policy changed after lifecycle staging".to_owned(),
+            ));
+        }
+        pending
+            .updated_lane_manifests
+            .validate_active_coverage()
+            .map_err(|err| LaneLifecycleError::ManifestPolicyUnavailable {
+                lane: err.lane,
+                reason: err.message(),
+            })?;
+        if expected_update.updated_catalog != update.updated_catalog
+            || !lane_config_entries_match(
+                &expected_update.updated_lane_config,
+                &update.updated_lane_config,
+            )
+            || expected_update.lanes_to_reset != update.lanes_to_reset
+            || expected_update.replaced_lane_ids != update.replaced_lane_ids
+            || expected_update.updated_lane_incarnations != update.updated_lane_incarnations
+            || expected_update.updated_lane_incarnation_activation_heights
+                != update.updated_lane_incarnation_activation_heights
+        {
             return Err(LaneLifecycleError::AutoscaleTransitionPlanMismatch {
                 transition: pending.transition.name(),
-                reason: "updated lane config must be derived from the staged catalog",
+                reason: "staged lifecycle update must exactly match the signed plan",
             });
         }
-        for addition in &staged_plan.additions {
-            ensure_autoscale_managed_lane_created_height_is_current(
-                addition,
-                pending.transition_height,
-            )?;
+        if allow_autoscale_managed_changes {
+            for addition in &pending.plan.additions {
+                ensure_autoscale_managed_lane_created_height_is_current(
+                    addition,
+                    pending.transition_height,
+                )?;
+            }
+            ensure_autoscale_transition_matches_plan(&pending.plan, pending.transition)?;
+            ensure_autoscale_transition_capacity_matches_nexus(&nexus, pending.transition)?;
         }
-        ensure_autoscale_transition_matches_plan(&staged_plan, pending.transition)?;
-        ensure_autoscale_transition_capacity_matches_nexus(&nexus, pending.transition)?;
-        if let PendingAutoscaleTransition::ScaleIn { lane, .. } = pending.transition {
-            let dataspace_id = update.previous_routing_policy.default_dataspace;
+        for lane in &pending.plan.retire {
+            let dataspace_id = update
+                .previous_catalog
+                .lanes()
+                .iter()
+                .find(|entry| entry.id == *lane)
+                .map_or(update.previous_routing_policy.default_dataspace, |entry| {
+                    entry.dataspace_id
+                });
             if let Some((expected_height, latest_unmerged_height)) =
-                self.unmerged_merge_admissible_relay_progress(lane, dataspace_id)
+                self.unmerged_merge_admissible_relay_progress(*lane, dataspace_id)
             {
                 warn!(
                     lane = lane.as_u32(),
                     dataspace = dataspace_id.as_u64(),
                     expected_height,
                     latest_unmerged_height,
-                    "rejecting staged autoscale scale-in because the retire candidate has unmerged relay progress"
+                    "rejecting staged lane retirement because the candidate has unmerged relay progress"
                 );
-                return Err(LaneLifecycleError::AutoscaleTransitionPlanMismatch {
-                    transition: pending.transition.name(),
-                    reason: "retire lane has unmerged relay progress",
+                return Err(LaneLifecycleError::UnsafeRetirement {
+                    lane: *lane,
+                    reason: "it has unmerged relay progress",
                 });
             }
             if let Some(lane_block_height) =
-                self.unapplied_certified_lane_block_height(lane, dataspace_id)
+                self.unapplied_certified_lane_block_height(*lane, dataspace_id)
             {
                 warn!(
                     lane = lane.as_u32(),
                     dataspace = dataspace_id.as_u64(),
                     lane_block_height,
-                    "rejecting staged autoscale scale-in because the retire candidate has unapplied certified lane-block progress"
+                    "rejecting staged lane retirement because the candidate has unapplied certified lane-block progress"
                 );
-                return Err(LaneLifecycleError::AutoscaleTransitionPlanMismatch {
-                    transition: pending.transition.name(),
-                    reason: "retire lane has unapplied certified lane-block progress",
+                return Err(LaneLifecycleError::UnsafeRetirement {
+                    lane: *lane,
+                    reason: "it has unapplied certified lane-block progress",
                 });
             }
             if let Some(lane_block_height) =
-                self.unrepaired_direct_lane_application_marker_height(lane)
+                self.unrepaired_direct_lane_application_marker_height(*lane)
             {
                 warn!(
                     lane = lane.as_u32(),
                     lane_block_height,
-                    "rejecting staged autoscale scale-in because the retire candidate has an unrepaired direct lane application marker"
+                    "rejecting staged lane retirement because the candidate has an unrepaired direct lane application marker"
                 );
-                return Err(LaneLifecycleError::AutoscaleTransitionPlanMismatch {
-                    transition: pending.transition.name(),
-                    reason: "retire lane has unrepaired direct application marker",
+                return Err(LaneLifecycleError::UnsafeRetirement {
+                    lane: *lane,
+                    reason: "it has an unrepaired direct lane application marker",
                 });
             }
         }
@@ -28148,8 +30877,19 @@ impl State {
         }
     }
 
-    /// Update tiered state backend settings from configuration.
-    pub fn set_tiered_backend(&mut self, cfg: &iroha_config::parameters::actual::TieredState) {
+    /// Update tiered state backend settings and restore effective lane geometry.
+    ///
+    /// # Errors
+    /// Returns [`LaneLifecycleError::Storage`] when the configured tiered roots
+    /// or an active lane snapshot directory cannot be prepared. Startup callers
+    /// must fail closed because accepting traffic with incomplete restored lane
+    /// geometry would make persistence depend on which peer handled a request.
+    pub fn set_tiered_backend(
+        &mut self,
+        cfg: &iroha_config::parameters::actual::TieredState,
+    ) -> Result<(), LaneLifecycleError> {
+        let effective_lane_config = self.nexus_snapshot().lane_config;
+        let baseline_lane_config = iroha_config::parameters::actual::LaneConfig::default();
         let mut backend = self.tiered_backend.lock();
         backend.reconfigure(
             cfg.enabled,
@@ -28161,6 +30901,21 @@ impl State {
             cfg.max_snapshots,
             cfg.max_cold_bytes.get(),
         );
+        backend
+            .preflight_lane_geometry(&baseline_lane_config, &effective_lane_config, &[], &[])
+            .map_err(|err| {
+                LaneLifecycleError::Storage(format!(
+                    "tiered startup lane geometry preflight: {err:?}"
+                ))
+            })?;
+        backend
+            .reconcile_lane_geometry(&baseline_lane_config, &effective_lane_config, &[])
+            .map_err(|err| {
+                LaneLifecycleError::Storage(format!(
+                    "tiered startup lane geometry reconciliation: {err:?}"
+                ))
+            })?;
+        Ok(())
     }
 
     /// Update fraud monitoring settings using loaded configuration.
@@ -28589,8 +31344,208 @@ struct LaneLifecycleCatalogUpdate {
     updated_catalog: LaneCatalog,
     previous_lane_config: iroha_config::parameters::actual::LaneConfig,
     updated_lane_config: iroha_config::parameters::actual::LaneConfig,
+    previous_lane_incarnations: BTreeMap<LaneId, Hash>,
+    updated_lane_incarnations: BTreeMap<LaneId, Hash>,
+    previous_lane_incarnation_activation_heights: BTreeMap<LaneId, u64>,
+    updated_lane_incarnation_activation_heights: BTreeMap<LaneId, u64>,
     lanes_to_reset: BTreeSet<LaneId>,
     replaced_lane_ids: BTreeSet<LaneId>,
+}
+
+const STATIC_LANE_INCARNATION_DOMAIN: &[u8] = b"iroha:nexus:lane-incarnation:static:v1\0";
+const LIFECYCLE_LANE_INCARNATION_DOMAIN: &[u8] = b"iroha:nexus:lane-incarnation:lifecycle:v1\0";
+#[cfg(any(test, feature = "iroha-core-tests"))]
+const SYNTHETIC_LANE_LIFECYCLE_HEADER_DOMAIN: &[u8] =
+    b"iroha:nexus:lane-incarnation:synthetic-header:v1\0";
+
+fn lane_incarnation_is_zero(incarnation: Hash) -> bool {
+    incarnation.as_ref().iter().all(|byte| *byte == 0)
+}
+
+fn lane_incarnation_matches_at_height(
+    incarnations: &BTreeMap<LaneId, Hash>,
+    activation_heights: &BTreeMap<LaneId, u64>,
+    lane_id: LaneId,
+    proposal_height: u64,
+    actual: Hash,
+) -> bool {
+    incarnations.get(&lane_id) == Some(&actual)
+        && activation_heights
+            .get(&lane_id)
+            .is_none_or(|activation_height| proposal_height > *activation_height)
+}
+
+#[cfg(any(test, feature = "iroha-core-tests"))]
+fn synthetic_lane_lifecycle_header_hash(
+    chain_id: &iroha_data_model::ChainId,
+    current_block_height: u64,
+    plan: &iroha_data_model::nexus::LaneLifecyclePlan,
+) -> HashOf<BlockHeader> {
+    let encoded = (chain_id.clone(), current_block_height, plan.clone()).encode();
+    HashOf::from_untyped_unchecked(Hash::new_from_chunks(&[
+        SYNTHETIC_LANE_LIFECYCLE_HEADER_DOMAIN,
+        encoded.as_slice(),
+    ]))
+}
+
+fn derive_static_lane_incarnations(
+    chain_id: &iroha_data_model::ChainId,
+    catalog: &LaneCatalog,
+) -> BTreeMap<LaneId, Hash> {
+    let catalog_hash = iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(catalog);
+    catalog
+        .lanes()
+        .iter()
+        .map(|lane| {
+            let encoded = (chain_id.clone(), catalog_hash, lane.id, lane.clone()).encode();
+            (
+                lane.id,
+                Hash::new_from_chunks(&[STATIC_LANE_INCARNATION_DOMAIN, encoded.as_slice()]),
+            )
+        })
+        .collect()
+}
+
+fn validate_lane_incarnation_map(
+    catalog: &LaneCatalog,
+    incarnations: &BTreeMap<LaneId, Hash>,
+) -> Result<(), LaneLifecycleError> {
+    let expected: BTreeSet<_> = catalog.lanes().iter().map(|lane| lane.id).collect();
+    let actual: BTreeSet<_> = incarnations.keys().copied().collect();
+    if expected != actual {
+        return Err(LaneLifecycleError::LaneIncarnationState(format!(
+            "active lane ids {expected:?} do not match incarnation ids {actual:?}"
+        )));
+    }
+    if let Some(lane) = incarnations
+        .iter()
+        .find_map(|(lane, incarnation)| lane_incarnation_is_zero(*incarnation).then_some(*lane))
+    {
+        return Err(LaneLifecycleError::LaneIncarnationState(format!(
+            "lane {lane} has an all-zero incarnation commitment"
+        )));
+    }
+    let mut unique = BTreeSet::new();
+    if let Some((lane, _)) = incarnations
+        .iter()
+        .find(|(_, incarnation)| !unique.insert(**incarnation))
+    {
+        return Err(LaneLifecycleError::LaneIncarnationState(format!(
+            "lane {lane} reuses another active lane's incarnation commitment"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_lane_incarnation_activation_heights(
+    catalog: &LaneCatalog,
+    activation_heights: &BTreeMap<LaneId, u64>,
+) -> Result<(), LaneLifecycleError> {
+    let expected: BTreeSet<_> = catalog.lanes().iter().map(|lane| lane.id).collect();
+    let actual: BTreeSet<_> = activation_heights.keys().copied().collect();
+    if expected != actual {
+        return Err(LaneLifecycleError::LaneIncarnationState(format!(
+            "active lane ids {expected:?} do not match incarnation activation ids {actual:?}"
+        )));
+    }
+    Ok(())
+}
+
+fn derive_lifecycle_lane_incarnation_activation_heights(
+    previous_catalog: &LaneCatalog,
+    updated_catalog: &LaneCatalog,
+    previous: &BTreeMap<LaneId, u64>,
+    plan: &iroha_data_model::nexus::LaneLifecyclePlan,
+    committing_height: u64,
+) -> Result<BTreeMap<LaneId, u64>, LaneLifecycleError> {
+    validate_lane_incarnation_activation_heights(previous_catalog, previous)?;
+    let additions: BTreeSet<_> = plan.additions.iter().map(|lane| lane.id).collect();
+    let updated = updated_catalog
+        .lanes()
+        .iter()
+        .map(|lane| {
+            let activation_height = if additions.contains(&lane.id) {
+                committing_height
+            } else {
+                previous.get(&lane.id).copied().ok_or_else(|| {
+                    LaneLifecycleError::LaneIncarnationState(format!(
+                        "unchanged lane {} is missing its activation height",
+                        lane.id
+                    ))
+                })?
+            };
+            Ok((lane.id, activation_height))
+        })
+        .collect::<Result<BTreeMap<_, _>, LaneLifecycleError>>()?;
+    validate_lane_incarnation_activation_heights(updated_catalog, &updated)?;
+    Ok(updated)
+}
+
+fn lane_lifecycle_incarnation_root(
+    catalog: &LaneCatalog,
+    incarnations: &BTreeMap<LaneId, Hash>,
+) -> Result<Hash, LaneLifecycleError> {
+    let entries = iroha_data_model::nexus::LaneLifecycleParameterV1::canonical_incarnations(
+        catalog,
+        incarnations,
+    )
+    .map_err(|err| LaneLifecycleError::LaneIncarnationState(err.to_string()))?;
+    Ok(iroha_data_model::nexus::LaneLifecycleParameterV1::incarnation_root(&entries))
+}
+
+fn derive_lifecycle_lane_incarnations(
+    chain_id: &iroha_data_model::ChainId,
+    committing_header_hash: HashOf<BlockHeader>,
+    previous_catalog: &LaneCatalog,
+    updated_catalog: &LaneCatalog,
+    previous_incarnations: &BTreeMap<LaneId, Hash>,
+    plan: &iroha_data_model::nexus::LaneLifecyclePlan,
+) -> Result<BTreeMap<LaneId, Hash>, LaneLifecycleError> {
+    validate_lane_incarnation_map(previous_catalog, previous_incarnations)?;
+    let changed_lanes: BTreeSet<_> = plan.additions.iter().map(|lane| lane.id).collect();
+    let previous_catalog_hash =
+        iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(previous_catalog);
+    let mut updated = BTreeMap::new();
+    for lane in updated_catalog.lanes() {
+        let incarnation = if changed_lanes.contains(&lane.id) {
+            let prior = previous_incarnations.get(&lane.id).copied();
+            let prior_present = [u8::from(prior.is_some())];
+            let prior_bytes = prior.unwrap_or_else(|| Hash::prehashed([0; Hash::LENGTH]));
+            let encoded = (
+                chain_id.clone(),
+                previous_catalog_hash,
+                lane.id,
+                lane.clone(),
+            )
+                .encode();
+            Hash::new_from_chunks(&[
+                LIFECYCLE_LANE_INCARNATION_DOMAIN,
+                committing_header_hash.as_ref(),
+                prior_present.as_slice(),
+                prior_bytes.as_ref(),
+                encoded.as_slice(),
+            ])
+        } else {
+            previous_incarnations
+                .get(&lane.id)
+                .copied()
+                .ok_or_else(|| {
+                    LaneLifecycleError::LaneIncarnationState(format!(
+                        "unchanged lane {} is missing its prior incarnation",
+                        lane.id
+                    ))
+                })?
+        };
+        if lane_incarnation_is_zero(incarnation) {
+            return Err(LaneLifecycleError::LaneIncarnationState(format!(
+                "derived all-zero incarnation for lane {}",
+                lane.id
+            )));
+        }
+        updated.insert(lane.id, incarnation);
+    }
+    validate_lane_incarnation_map(updated_catalog, &updated)?;
+    Ok(updated)
 }
 
 struct PendingDaCommitmentBundle {
@@ -28622,12 +31577,16 @@ impl DaPinIntentIndexPruneKeys {
 
 struct PendingAutoscaleLaneLifecycle {
     catalog_update: LaneLifecycleCatalogUpdate,
+    updated_lane_manifests: LaneManifestRegistryHandle,
+    plan: iroha_data_model::nexus::LaneLifecyclePlan,
     transition: PendingAutoscaleTransition,
     transition_height: u64,
+    expected_incarnation_root: Hash,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PendingAutoscaleTransition {
+    Manual,
     ScaleOut {
         lane: LaneId,
         active_lanes: u64,
@@ -28647,6 +31606,7 @@ enum PendingAutoscaleTransition {
 impl PendingAutoscaleTransition {
     fn name(self) -> &'static str {
         match self {
+            Self::Manual => "manual",
             Self::ScaleOut { .. } => "scale-out",
             Self::ScaleIn { .. } => "scale-in",
         }
@@ -28654,6 +31614,12 @@ impl PendingAutoscaleTransition {
 
     fn log(self, height: u64) {
         match self {
+            Self::Manual => {
+                info!(
+                    height,
+                    "applied consensus-replayed manual lane lifecycle transition"
+                );
+            }
             Self::ScaleOut {
                 lane,
                 active_lanes,
@@ -28694,6 +31660,10 @@ impl PendingAutoscaleTransition {
 
 fn prepare_lane_lifecycle_update(
     nexus: &iroha_config::parameters::actual::Nexus,
+    previous_lane_incarnations: &BTreeMap<LaneId, Hash>,
+    previous_lane_incarnation_activation_heights: &BTreeMap<LaneId, u64>,
+    chain_id: &iroha_data_model::ChainId,
+    committing_header_hash: HashOf<BlockHeader>,
     plan: &iroha_data_model::nexus::LaneLifecyclePlan,
     current_block_height: u64,
     allow_autoscale_managed_changes: bool,
@@ -28788,6 +31758,22 @@ fn prepare_lane_lifecycle_update(
             .contains(&addition.id)
             .then_some(addition.id)
     }));
+    let updated_lane_incarnations = derive_lifecycle_lane_incarnations(
+        chain_id,
+        committing_header_hash,
+        &nexus.lane_catalog,
+        &updated_catalog,
+        previous_lane_incarnations,
+        plan,
+    )?;
+    let updated_lane_incarnation_activation_heights =
+        derive_lifecycle_lane_incarnation_activation_heights(
+            &nexus.lane_catalog,
+            &updated_catalog,
+            previous_lane_incarnation_activation_heights,
+            plan,
+            current_block_height,
+        )?;
     Ok(LaneLifecycleCatalogUpdate {
         previous_catalog: nexus.lane_catalog.clone(),
         previous_dataspace_catalog: nexus.dataspace_catalog.clone(),
@@ -28796,6 +31782,11 @@ fn prepare_lane_lifecycle_update(
         updated_catalog,
         previous_lane_config,
         updated_lane_config,
+        previous_lane_incarnations: previous_lane_incarnations.clone(),
+        updated_lane_incarnations,
+        previous_lane_incarnation_activation_heights: previous_lane_incarnation_activation_heights
+            .clone(),
+        updated_lane_incarnation_activation_heights,
         lanes_to_reset,
         replaced_lane_ids,
     })
@@ -28867,7 +31858,42 @@ fn ensure_autoscale_managed_lane_owned_by_nexus(
         nexus.autoscale.min_lanes.get(),
         nexus.autoscale.max_lanes.get(),
     )?;
-    ensure_autoscale_managed_lane_default_dataspace(lane, nexus.routing_policy.default_dataspace)
+    ensure_autoscale_managed_lane_default_dataspace(lane, nexus.routing_policy.default_dataspace)?;
+    ensure_autoscale_managed_lane_inherits_default_profile(lane, nexus)
+}
+
+const AUTOSCALE_RESTRICTED_BASE_REASON: &str =
+    "routing default lane must be public for autoscale-managed lanes";
+const AUTOSCALE_PROFILE_DRIFT_REASON: &str = "profile must match the routing default lane";
+
+fn ensure_autoscale_managed_lane_inherits_default_profile(
+    lane: &iroha_data_model::nexus::LaneConfig,
+    nexus: &iroha_config::parameters::actual::Nexus,
+) -> Result<(), LaneLifecycleError> {
+    let base_lane = nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .find(|candidate| candidate.id == nexus.routing_policy.default_lane)
+        .ok_or_else(|| {
+            LaneLifecycleError::RoutingPolicy(format!(
+                "default lane {} is not present in the lane catalog",
+                nexus.routing_policy.default_lane
+            ))
+        })?;
+    if base_lane.visibility != iroha_data_model::nexus::LaneVisibility::Public {
+        return Err(LaneLifecycleError::InvalidAutoscaleManagedLane {
+            lane: lane.id,
+            reason: AUTOSCALE_RESTRICTED_BASE_REASON,
+        });
+    }
+    if !lane.inherits_autoscale_profile_from(base_lane) {
+        return Err(LaneLifecycleError::InvalidAutoscaleManagedLane {
+            lane: lane.id,
+            reason: AUTOSCALE_PROFILE_DRIFT_REASON,
+        });
+    }
+    Ok(())
 }
 
 fn ensure_autoscale_managed_lane_created_height_not_future(
@@ -28913,6 +31939,7 @@ fn ensure_autoscale_transition_matches_plan(
     transition: PendingAutoscaleTransition,
 ) -> Result<(), LaneLifecycleError> {
     match transition {
+        PendingAutoscaleTransition::Manual => Ok(()),
         PendingAutoscaleTransition::ScaleOut { lane, .. } => {
             if plan.retire.is_empty() && plan.additions.len() == 1 && plan.additions[0].id == lane {
                 Ok(())
@@ -28941,6 +31968,7 @@ fn ensure_autoscale_transition_capacity_matches_nexus(
     transition: PendingAutoscaleTransition,
 ) -> Result<(), LaneLifecycleError> {
     let (transition_name, active_lanes, autoscale_capacity_lanes) = match transition {
+        PendingAutoscaleTransition::Manual => return Ok(()),
         PendingAutoscaleTransition::ScaleOut {
             active_lanes,
             autoscale_capacity_lanes,
@@ -28968,35 +31996,6 @@ fn ensure_autoscale_transition_capacity_matches_nexus(
         transition: transition_name,
         reason: "active_lanes and autoscale_capacity_lanes must match current autoscale capacity",
     })
-}
-
-fn autoscale_lifecycle_plan_from_catalog_update(
-    update: &LaneLifecycleCatalogUpdate,
-) -> iroha_data_model::nexus::LaneLifecyclePlan {
-    let previous_ids: BTreeSet<_> = update
-        .previous_catalog
-        .lanes()
-        .iter()
-        .map(|lane| lane.id)
-        .collect();
-    let updated_ids: BTreeSet<_> = update
-        .updated_catalog
-        .lanes()
-        .iter()
-        .map(|lane| lane.id)
-        .collect();
-    let additions = update
-        .updated_catalog
-        .lanes()
-        .iter()
-        .filter(|lane| !previous_ids.contains(&lane.id))
-        .cloned()
-        .collect();
-    let retire = previous_ids
-        .into_iter()
-        .filter(|lane_id| !updated_ids.contains(lane_id))
-        .collect();
-    iroha_data_model::nexus::LaneLifecyclePlan { additions, retire }
 }
 
 fn ensure_autoscale_managed_created_heights_not_future(
@@ -29081,6 +32080,89 @@ fn ensure_autoscale_default_lane_is_base(
         return Ok(());
     }
     Err(LaneLifecycleError::AutoscaleDefaultLaneNotBase { lane, min_lanes })
+}
+
+fn ensure_autoscale_base_profile_supported(
+    nexus: &iroha_config::parameters::actual::Nexus,
+    manifest_registry: Option<&LaneManifestRegistry>,
+    prospective_alias: Option<&str>,
+) -> Result<(), LaneLifecycleError> {
+    let lane_id = nexus.routing_policy.default_lane;
+    let Some(base_lane) = nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .find(|lane| lane.id == lane_id)
+    else {
+        return Err(LaneLifecycleError::RoutingPolicy(format!(
+            "autoscale routing base lane {lane_id} is missing"
+        )));
+    };
+    if base_lane.governance.is_some() {
+        return Err(LaneLifecycleError::AutoscaleBaseProfileUnsupported {
+            lane: lane_id,
+            reason: "governance manifests are lane-alias-specific",
+        });
+    }
+    if base_lane.storage != iroha_data_model::nexus::LaneStorageProfile::FullReplica {
+        return Err(LaneLifecycleError::AutoscaleBaseProfileUnsupported {
+            lane: lane_id,
+            reason: "private storage profiles require lane-specific manifest commitments",
+        });
+    }
+    if manifest_registry
+        .and_then(|registry| registry.status(lane_id))
+        .is_some_and(|status| {
+            status.manifest_path.is_some()
+                || status.rules().is_some()
+                || !status.privacy_commitments().is_empty()
+        })
+    {
+        return Err(LaneLifecycleError::AutoscaleBaseProfileUnsupported {
+            lane: lane_id,
+            reason: "loaded base manifest semantics are alias-specific",
+        });
+    }
+    if prospective_alias.is_some_and(|alias| {
+        manifest_registry.is_some_and(|registry| registry.has_manifest_source_alias(alias))
+    }) {
+        return Err(LaneLifecycleError::AutoscaleBaseProfileUnsupported {
+            lane: lane_id,
+            reason: "the prospective elastic alias has pre-provisioned manifest semantics that cannot be installed atomically",
+        });
+    }
+    Ok(())
+}
+
+fn ensure_lane_lifecycle_compliance_ready(
+    nexus: &iroha_config::parameters::actual::Nexus,
+    engine: Option<&LaneComplianceEngine>,
+    plan: &iroha_data_model::nexus::LaneLifecyclePlan,
+) -> Result<(), LaneLifecycleError> {
+    if !nexus.compliance.enabled {
+        return Ok(());
+    }
+    for addition in &plan.additions {
+        if !engine.is_some_and(|engine| engine.has_policy(addition.id, addition.dataspace_id)) {
+            return Err(LaneLifecycleError::CompliancePolicyUnavailable { lane: addition.id });
+        }
+    }
+    Ok(())
+}
+
+fn rebind_lane_manifests_for_lifecycle(
+    registry: &LaneManifestRegistry,
+    catalog: &LaneCatalog,
+    governance: &iroha_config::parameters::actual::GovernanceCatalog,
+) -> Result<LaneManifestRegistryHandle, LaneLifecycleError> {
+    let rebound = Arc::new(registry.rebind(catalog, governance));
+    rebound.validate_active_coverage().map_err(|err| {
+        LaneLifecycleError::ManifestPolicyUnavailable {
+            lane: err.lane,
+            reason: err.message(),
+        }
+    })?;
+    Ok(rebound)
 }
 
 fn ensure_autoscale_runtime_lane_bounds(
@@ -29192,6 +32274,20 @@ fn autoscale_managed_lane_inherits_commit_topology_authority(
         .iter()
         .find(|lane| lane.id == lane_id)
         .is_some_and(|lane| nexus_autoscale_lane_active_for_authority(lane, nexus, block_height))
+}
+
+fn nexus_lane_committee_size(
+    nexus: &iroha_config::parameters::actual::Nexus,
+    dataspace_id: DataSpaceId,
+) -> Option<usize> {
+    // Keep the exact 3f+1 shape: the canonical 2f+1 commit threshold then
+    // guarantees at least f+1 members overlap between any two quorums.
+    let fault_tolerance = nexus.dataspace_catalog.by_id(dataspace_id)?.fault_tolerance;
+    let committee_size = fault_tolerance.checked_mul(3)?.checked_add(1)?;
+    if committee_size > nexus.staking.max_validators.get() {
+        return None;
+    }
+    usize::try_from(committee_size).ok()
 }
 
 fn nexus_lane_active_for_authority(
@@ -29685,6 +32781,8 @@ pub trait StateReadOnly: WorldStateSnapshot {
     fn crypto(&self) -> Arc<iroha_config::parameters::actual::Crypto>;
     /// Nexus configuration snapshot (lanes, fusion, DA sampling policies).
     fn nexus(&self) -> &iroha_config::parameters::actual::Nexus;
+    /// Resolve the non-zero incarnation of an active lane at a proposal height.
+    fn lane_incarnation_at_height(&self, lane_id: LaneId, proposal_height: u64) -> Option<Hash>;
     /// Content lane configuration snapshot.
     fn content(&self) -> &iroha_config::parameters::actual::Content;
     /// Zero-knowledge verification settings (Halo2 backend, curve, limits).
@@ -29705,6 +32803,15 @@ pub trait StateReadOnly: WorldStateSnapshot {
 
     /// Resolve authoritative validator peer ids for a lane from the snapshot.
     fn authoritative_lane_peer_ids(&self, lane_id: LaneId) -> Vec<PeerId>;
+
+    /// Resolve authoritative validator peer ids for a lane at an explicit proposal height.
+    fn authoritative_lane_peer_ids_at_height(
+        &self,
+        lane_id: LaneId,
+        _block_height: u64,
+    ) -> Vec<PeerId> {
+        self.authoritative_lane_peer_ids(lane_id)
+    }
 
     /// Get a reference to the block one before the latest block.
     /// Returns None if at least 2 blocks are not committed.
@@ -29835,6 +32942,24 @@ macro_rules! impl_state_ro {
             fn nexus(&self) -> &iroha_config::parameters::actual::Nexus {
                 &self.nexus
             }
+            fn lane_incarnation_at_height(
+                &self,
+                lane_id: LaneId,
+                proposal_height: u64,
+            ) -> Option<Hash> {
+                nexus_active_lane_dataspace_at_height(lane_id, &self.nexus, proposal_height)?;
+                if self
+                    .lane_incarnation_activation_heights
+                    .get(&lane_id)
+                    .is_some_and(|activation_height| proposal_height <= *activation_height)
+                {
+                    return None;
+                }
+                self.lane_incarnations
+                    .get(&lane_id)
+                    .copied()
+                    .filter(|incarnation| !lane_incarnation_is_zero(*incarnation))
+            }
             fn content(&self) -> &iroha_config::parameters::actual::Content {
                 &self.content
             }
@@ -29855,10 +32980,20 @@ macro_rules! impl_state_ro {
                 }))
             }
             fn authoritative_lane_peer_ids(&self, lane_id: LaneId) -> Vec<PeerId> {
+                self.authoritative_lane_peer_ids_at_height(
+                    lane_id,
+                    u64::try_from(self.height()).unwrap_or(u64::MAX),
+                )
+            }
+            fn authoritative_lane_peer_ids_at_height(
+                &self,
+                lane_id: LaneId,
+                block_height: u64,
+            ) -> Vec<PeerId> {
                 let validator_mode = self.nexus.staking.validator_mode(lane_id, &self.nexus.lane_catalog);
-                let block_height = u64::try_from(self.height()).unwrap_or(u64::MAX);
                 State::authoritative_lane_peer_ids_from_sources(
                     self.world(),
+                    self.chain_id(),
                     lane_id,
                     validator_mode,
                     self.lane_manifests.as_ref(),
@@ -32325,26 +35460,45 @@ fn autoscale_next_lane_id(
         .map(LaneId::new)
 }
 
-fn autoscale_elastic_lane_config(
+fn autoscale_elastic_lane_config_from_base(
     lane_id: LaneId,
-    dataspace_id: DataSpaceId,
+    base_lane: &iroha_data_model::nexus::LaneConfig,
     created_height: u64,
-) -> iroha_data_model::nexus::LaneConfig {
-    let mut lane = iroha_data_model::nexus::LaneConfig {
-        id: lane_id,
-        dataspace_id,
-        alias: format!("elastic-lane-{}", lane_id.as_u32()),
-        description: Some("Consensus-managed elastic lane".to_owned()),
-        visibility: iroha_data_model::nexus::LaneVisibility::Public,
-        ..iroha_data_model::nexus::LaneConfig::default()
-    };
+) -> Result<iroha_data_model::nexus::LaneConfig, LaneLifecycleError> {
+    if base_lane.visibility != iroha_data_model::nexus::LaneVisibility::Public {
+        return Err(LaneLifecycleError::InvalidAutoscaleManagedLane {
+            lane: lane_id,
+            reason: AUTOSCALE_RESTRICTED_BASE_REASON,
+        });
+    }
+
+    let mut lane = base_lane.clone();
+    lane.id = lane_id;
+    lane.alias = format!("elastic-lane-{}", lane_id.as_u32());
+    lane.description = Some("Consensus-managed elastic lane".to_owned());
+    lane.metadata.remove(AUTOSCALE_META_MANAGED);
+    lane.metadata.remove(AUTOSCALE_META_CREATED_HEIGHT);
     lane.metadata
         .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
     lane.metadata.insert(
         AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
         created_height.to_string(),
     );
-    lane
+    Ok(lane)
+}
+
+#[cfg(test)]
+fn autoscale_elastic_lane_config(
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    created_height: u64,
+) -> iroha_data_model::nexus::LaneConfig {
+    let base_lane = iroha_data_model::nexus::LaneConfig {
+        dataspace_id,
+        ..iroha_data_model::nexus::LaneConfig::default()
+    };
+    autoscale_elastic_lane_config_from_base(lane_id, &base_lane, created_height)
+        .expect("default autoscale base lane must be public")
 }
 
 fn autoscale_sample_latency_ms(prev_ts_ms: u64, curr_ts_ms: u64) -> Option<u64> {
@@ -32856,6 +36010,10 @@ impl<'state> StateBlock<'state> {
         );
         world.dataspace_catalog = self.nexus.dataspace_catalog.clone();
         let zk = self.zk.clone();
+        let nexus = self.nexus.clone();
+        let lane_incarnations = self.lane_incarnations.clone();
+        let lane_incarnation_activation_heights = self.lane_incarnation_activation_heights.clone();
+        let lane_lifecycle_already_staged_in_block = self.pending_autoscale_lifecycle.is_some();
         StateTransaction {
             committed_fragments: &mut self.committed_fragments,
             touched_lanes: &mut self.touched_lanes,
@@ -32881,7 +36039,16 @@ impl<'state> StateBlock<'state> {
             pipeline: self.pipeline.clone(),
             oracle: self.oracle.clone(),
             crypto: self.crypto.clone(),
-            nexus: self.nexus.clone(),
+            nexus,
+            lane_incarnations,
+            lane_incarnation_activation_heights,
+            block_lane_incarnation_activation_heights: &mut self
+                .lane_incarnation_activation_heights,
+            block_nexus: &mut self.nexus,
+            block_lane_incarnations: &mut self.lane_incarnations,
+            block_pending_lane_lifecycle: &mut self.pending_autoscale_lifecycle,
+            lane_lifecycle_already_staged_in_block,
+            pending_lane_lifecycle: None,
             lane_manifests: self.lane_manifests.clone(),
             lane_privacy_registry: self.lane_privacy_registry.clone(),
             lane_compliance: self.lane_compliance.clone(),
@@ -32977,16 +36144,405 @@ impl<'state> StateBlock<'state> {
         self.direct_committed_transactions.extend(transactions);
     }
 
+    /// Hash the exact semantic WSV write set currently staged by lane execution.
+    fn merge_execution_write_set_root(&self) -> Hash {
+        let mut encoded = self.world.merge_execution_write_set_bytes();
+        let mut transaction_membership = self
+            .direct_committed_transactions
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        transaction_membership.sort_unstable();
+        append_merge_write_set_component(&mut encoded, b"direct_committed_transactions");
+        append_merge_write_set_component(&mut encoded, &transaction_membership.encode());
+        Hash::new_from_chunks(&[MERGE_EXECUTION_WRITE_SET_DOMAIN, encoded.as_slice()])
+    }
+
+    fn validate_merge_execution_commit_surface(&self) -> Result<(), MergeLedgerCommitError> {
+        if self.pending_autoscale_lifecycle.is_some()
+            || self.pending_da_commitments.is_some()
+            || self.pending_da_pin_intents.is_some()
+            || !self.verified_lane_relay_records.is_empty()
+            || self.block_hashes.has_pending()
+            || self.transactions.has_staged_block()
+            || self.commit_topology.is_dirty()
+            || self.prev_commit_topology.is_dirty()
+            || self.world.parameters.is_dirty()
+            || self.mode_cutover_next_set_in_block
+            || self.mode_cutover_activation_set_in_block
+            || !self.axt_envelopes.is_empty()
+            || !self.fastpq_transcripts.is_empty()
+        {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "autonomous merge execution staged an effect outside the bound WSV overlay"
+                    .to_owned(),
+            ));
+        }
+        if self.nexus != self.state_ref.nexus_snapshot()
+            || self.lane_incarnations != self.state_ref.lane_incarnations_snapshot()
+            || self.lane_incarnation_activation_heights
+                != self
+                    .state_ref
+                    .lane_incarnation_activation_heights_snapshot()
+        {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "autonomous merge execution changed runtime lane configuration"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn stage_merge_execution_markers(
+        &mut self,
+        entry: &MergeLedgerEntry,
+        batch: &MergeExecutionBatch,
+    ) -> Result<(), MergeLedgerCommitError> {
+        for (key, payload) in State::merge_execution_marker_payloads(entry, batch)? {
+            if self.world.smart_contract_state.get(&key).is_some() {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "marker `{key}` already exists before execution publication"
+                )));
+            }
+            self.world.smart_contract_state.insert(key, payload);
+        }
+        Ok(())
+    }
+
+    fn commit_merge_execution_overlay(mut self) -> Result<(), MergeLedgerCommitError> {
+        self.validate_merge_execution_commit_surface()?;
+        let state_ref = self.state_ref;
+        let background_enabled = state_ref.tiered_snapshot_worker.enabled();
+        let tiered_payload = background_enabled.then(|| self.world.tiered_snapshot_payload());
+        let tiered_diff = if background_enabled {
+            tiered_payload.as_ref().map(TieredSnapshotDiff::from)
+        } else {
+            Some(self.world.tiered_snapshot_diff())
+        };
+        let events = self.world.take_external_events();
+        let direct_committed_transactions = core::mem::take(&mut self.direct_committed_transactions);
+        let direct_height = NonZeroUsize::new(
+            usize::try_from(self._curr_block.height().get()).unwrap_or(usize::MAX),
+        )
+        .expect("merge execution application height is non-zero");
+        let confidential_registry_dirty = self.confidential_registry_dirty;
+        {
+            let _state_write_lock = self.state_write_lock.lock();
+            let _view_generation = state_ref.begin_state_view_write();
+            self.world.commit();
+            if !direct_committed_transactions.is_empty() {
+                state_ref.transactions.record_direct_committed_membership(
+                    direct_committed_transactions,
+                    direct_height,
+                );
+            }
+            if !events.is_empty() {
+                let mut event_block = state_ref.world.external_event_buf.block();
+                event_block.get_mut().extend(events);
+                event_block.commit();
+            }
+        }
+        if confidential_registry_dirty {
+            state_ref.confidential_digest_cache.bump();
+        }
+
+        let use_background = background_enabled && {
+            let backend = self.tiered_backend.lock();
+            backend.enabled() && backend.has_entries()
+        };
+        let snapshot_err = if use_background {
+            let payload = tiered_payload.expect("merge tiered payload missing");
+            if state_ref.tiered_snapshot_worker.schedule(payload) {
+                None
+            } else {
+                let diff = tiered_diff.expect("merge tiered diff missing");
+                state_ref
+                    .tiered_backend
+                    .lock()
+                    .record_world_snapshot_with_diff(&state_ref.world, &diff)
+                    .err()
+            }
+        } else {
+            let diff = tiered_diff.expect("merge tiered diff missing");
+            state_ref
+                .tiered_backend
+                .lock()
+                .record_world_snapshot_with_diff(&state_ref.world, &diff)
+                .err()
+        };
+        if let Some(err) = snapshot_err {
+            warn!(?err, "tiered-state: failed to record merge execution snapshot");
+        }
+        Ok(())
+    }
+
+    fn merge_execution_transaction_hashes(
+        entrypoints: &[TransactionEntrypoint],
+    ) -> Vec<HashOf<SignedTransaction>> {
+        if entrypoints
+            .iter()
+            .all(|entrypoint| matches!(entrypoint, TransactionEntrypoint::External(_)))
+        {
+            return entrypoints
+                .iter()
+                .filter_map(|entrypoint| match entrypoint {
+                    TransactionEntrypoint::External(tx) => Some(
+                        crate::tx::AcceptedTransaction::prepare_signed_metadata(tx).signed_hash,
+                    ),
+                    _ => None,
+                })
+                .collect();
+        }
+        entrypoints
+            .iter()
+            .map(|entrypoint| {
+                HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(entrypoint.hash()))
+            })
+            .collect()
+    }
+
+    fn drain_merge_lane_settlement_commitment(
+        &mut self,
+        execution: &MergeLaneExecution,
+    ) -> Result<LaneBlockCommitment, MergeLedgerCommitError> {
+        let descriptor = &execution.proposal.descriptor;
+        let mut settlements = self.drain_settlement_records();
+        let mut nexus_fees = self.drain_nexus_fee_records();
+        let transaction_hashes = Self::merge_execution_transaction_hashes(&execution.entrypoints);
+        let mut tx_count = 0u64;
+        let mut total_local_micro = 0u128;
+        let mut total_xor_due_micro = 0u128;
+        let mut total_xor_after_haircut_micro = 0u128;
+        let mut total_xor_variance_micro = 0u128;
+        let mut swap_evidence: Option<crate::fees::SwapEvidence> = None;
+        let mut receipts = Vec::new();
+        let mut nexus_fee_receipts = Vec::new();
+
+        for tx_hash in transaction_hashes {
+            let mut counted = false;
+            if let Some(record) = settlements.remove(&tx_hash) {
+                let evidence = crate::fees::SwapEvidence {
+                    epsilon_bps: record.epsilon_bps,
+                    twap_window_seconds: record.twap_window_seconds,
+                    liquidity_profile: record.liquidity_profile,
+                    twap_local_per_xor: record.twap_local_per_xor,
+                    volatility_bucket: record.volatility_bucket,
+                };
+                if swap_evidence
+                    .as_ref()
+                    .is_some_and(|existing| existing != &evidence)
+                {
+                    return Err(MergeLedgerCommitError::ExecutionDivergence(
+                        "one lane execution produced inconsistent settlement swap metadata"
+                            .to_owned(),
+                    ));
+                }
+                swap_evidence.get_or_insert(evidence);
+                total_local_micro = total_local_micro.saturating_add(record.local_amount_micro);
+                total_xor_due_micro = total_xor_due_micro.saturating_add(record.xor_due_micro);
+                total_xor_after_haircut_micro =
+                    total_xor_after_haircut_micro.saturating_add(record.xor_after_haircut_micro);
+                total_xor_variance_micro =
+                    total_xor_variance_micro.saturating_add(record.xor_variance_micro);
+                receipts.push(record.into_lane_receipt());
+                counted = true;
+            }
+            if let Some(record) = nexus_fees.remove(&tx_hash) {
+                nexus_fee_receipts.push(record.into_lane_receipt(
+                    descriptor.lane_block_height,
+                    descriptor.lane_id,
+                    descriptor.dataspace_id,
+                ));
+                counted = true;
+            }
+            if counted {
+                tx_count = tx_count.saturating_add(1);
+            }
+        }
+        if !settlements.is_empty() || !nexus_fees.is_empty() {
+            return Err(MergeLedgerCommitError::ExecutionDivergence(
+                "lane execution produced settlement evidence for an unbound transaction".to_owned(),
+            ));
+        }
+
+        Ok(LaneBlockCommitment {
+            block_height: descriptor.lane_block_height,
+            lane_id: descriptor.lane_id,
+            lane_incarnation: descriptor.lane_incarnation,
+            dataspace_id: descriptor.dataspace_id,
+            tx_count,
+            total_local_micro,
+            total_xor_due_micro,
+            total_xor_after_haircut_micro,
+            total_xor_variance_micro,
+            swap_metadata: swap_evidence.map(crate::fees::SwapEvidence::into_lane_metadata),
+            receipts,
+            nexus_fee_receipts,
+            // Autonomous native-AMX execution is admitted only when a certified
+            // receipt source is added to the lane payload. Until then the batch
+            // builder rejects NativeAmx plans before execution.
+            native_amx_receipts: Vec::new(),
+        })
+    }
+
+    fn stage_merge_execution_nexus_fee_settlement(
+        &mut self,
+        executions: &[MergeLaneExecution],
+    ) -> Result<(), MergeLedgerCommitError> {
+        if self.nexus.fees.settlement_mode != NexusFeeSettlementMode::LaneRelayBurn {
+            return Ok(());
+        }
+        let mut aggregate = BTreeMap::<AssetId, Numeric>::new();
+        let mut settlement_markers = Vec::new();
+        let mut receipt_markers = Vec::new();
+        let mut seen_sources = BTreeSet::new();
+        let mut seen_settlements = BTreeSet::new();
+        let fee_asset_id = self.nexus.fees.fee_asset_id.as_str();
+        let activation_height = self.nexus.fees.fee_receipts_activation_height;
+        let asset_definition =
+            crate::block::parse_asset_definition_literal_with_world(&self.world, fee_asset_id, 0)
+                .ok_or_else(|| {
+                MergeLedgerCommitError::InvalidNexusFeeReceipt(
+                    "invalid nexus fee asset id for merge execution".to_owned(),
+                )
+            })?;
+
+        for execution in executions {
+            let commitment = &execution.settlement_commitment;
+            if commitment.nexus_fee_receipts.is_empty() {
+                continue;
+            }
+            if commitment.block_height < activation_height {
+                return Err(MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
+                    "Nexus fee receipts are not active at lane height {}",
+                    commitment.block_height
+                )));
+            }
+            let settlement_root = *execution.settlement_hash;
+            let settlement_key = State::nexus_fee_settlement_marker_key(
+                commitment.dataspace_id,
+                commitment.lane_id,
+                commitment.block_height,
+                &settlement_root,
+            )?;
+            if !seen_settlements.insert(settlement_key.clone())
+                || self
+                    .world
+                    .smart_contract_state
+                    .get(&settlement_key)
+                    .is_some()
+            {
+                return Err(MergeLedgerCommitError::DuplicateNexusFeeReceipt(format!(
+                    "{}:{}:{}:{}",
+                    commitment.dataspace_id.as_u64(),
+                    commitment.lane_id.as_u32(),
+                    commitment.block_height,
+                    hex::encode(settlement_root.as_ref())
+                )));
+            }
+            settlement_markers.push(settlement_key);
+            for receipt in &commitment.nexus_fee_receipts {
+                State::validate_nexus_fee_receipt(
+                    receipt,
+                    commitment.lane_id,
+                    commitment.dataspace_id,
+                    commitment.block_height,
+                    fee_asset_id,
+                )?;
+                let receipt_key = State::nexus_fee_receipt_marker_key(&receipt.source_id)?;
+                if !seen_sources.insert(receipt.source_id)
+                    || self.world.smart_contract_state.get(&receipt_key).is_some()
+                {
+                    return Err(MergeLedgerCommitError::DuplicateNexusFeeReceipt(
+                        hex::encode(receipt.source_id),
+                    ));
+                }
+                let asset_id =
+                    AssetId::new(asset_definition.clone(), receipt.payer_account_id.clone());
+                let current = aggregate.remove(&asset_id).unwrap_or_else(Numeric::zero);
+                let next = current
+                    .checked_add(receipt.fee_amount.clone())
+                    .ok_or_else(|| {
+                        MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
+                            "aggregate fee overflow for payer {}",
+                            receipt.payer_account_id
+                        ))
+                    })?;
+                aggregate.insert(asset_id, next);
+                receipt_markers.push(receipt_key);
+            }
+        }
+        if aggregate.is_empty() {
+            return Ok(());
+        }
+        for (asset_id, required) in &aggregate {
+            let available = self
+                .world
+                .assets
+                .get(asset_id)
+                .map_or_else(Numeric::zero, |value| (**value).clone());
+            if available < *required {
+                return Err(MergeLedgerCommitError::InsufficientNexusFeeBalance {
+                    payer: asset_id.account().clone(),
+                    required: required.clone(),
+                    available,
+                });
+            }
+        }
+
+        let mut tx = self.transaction();
+        tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        for (asset_id, amount) in &aggregate {
+            tx.withdraw_numeric_asset(asset_id, amount)
+                .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
+            tx.decrease_asset_total_amount(asset_id.definition(), amount)
+                .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
+            tx.emit_events(Some(
+                iroha_data_model::events::data::prelude::AssetEvent::Removed(
+                    iroha_data_model::events::data::prelude::AssetChanged {
+                        asset: asset_id.clone(),
+                        amount: amount.clone(),
+                    },
+                ),
+            ));
+        }
+        for key in settlement_markers {
+            tx.smart_contract_state.insert(key, vec![1]);
+        }
+        for key in receipt_markers {
+            tx.smart_contract_state.insert(key, vec![1]);
+        }
+        tx.apply();
+        Ok(())
+    }
+
     /// Commit changes aggregated during application of block.
     ///
     /// # Errors
     /// Returns [`TransactionsBlockError`] when flushing the transaction batch fails.
-    pub fn commit(mut self) -> Result<(), TransactionsBlockError> {
+    pub fn commit(self) -> Result<(), TransactionsBlockError> {
+        self.commit_inner(true)
+    }
+
+    /// Commit while the caller already holds [`State::state_commit_lock`].
+    ///
+    /// Merge execution uses this after durably appending its certificate. Keeping
+    /// the same serialization guard across pre-execution, append, and WSV publish
+    /// prevents another block or merge from changing the certified base state.
+    fn commit_assuming_state_commit_lock(self) -> Result<(), TransactionsBlockError> {
+        self.commit_inner(false)
+    }
+
+    fn commit_inner(
+        mut self,
+        acquire_state_commit_lock: bool,
+    ) -> Result<(), TransactionsBlockError> {
         const STATE_VIEW_LOCK_THRESHOLD: Duration = Duration::from_millis(10);
         if self.mode_cutover_next_set_in_block ^ self.mode_cutover_activation_set_in_block {
             return Err(TransactionsBlockError::ModeStagingInvariant);
         }
         let block_height = self._curr_block.height().get();
+        let block_header_hash = self._curr_block.hash();
         let current_axt_slot =
             current_axt_slot_from_block(&self._curr_block, self.nexus.axt.slot_length_ms);
         let axt_replay_retention_slots = self.nexus.axt.replay_retention_slots.get();
@@ -33014,7 +36570,8 @@ impl<'state> StateBlock<'state> {
                 zk_dedup: _,
             ..
         } = self;
-        let _state_commit_lock = state_ref.state_commit_lock.lock();
+        let _state_commit_lock =
+            acquire_state_commit_lock.then(|| state_ref.state_commit_lock.lock());
         let background_enabled = state_ref.tiered_snapshot_worker.enabled();
         let (tiered_payload, tiered_diff) = if background_enabled {
             let payload = world.tiered_snapshot_payload();
@@ -33066,9 +36623,11 @@ impl<'state> StateBlock<'state> {
         let autoscale_storage_hold = if tx_validate_accepted {
             if let Some(pending) = &pending_autoscale_lifecycle {
                 let autoscale_start = Instant::now();
-                if let Err(err) =
-                    state_ref.apply_committed_autoscale_lane_geometry(pending, block_height)
-                {
+                if let Err(err) = state_ref.apply_committed_autoscale_lane_geometry(
+                    pending,
+                    block_height,
+                    block_header_hash,
+                ) {
                     error!(
                         block_height,
                         ?err,
@@ -33107,6 +36666,22 @@ impl<'state> StateBlock<'state> {
                     commit_error = Some(err);
                 }
             }
+            if !tx_commit_accepted && let Some(pending) = &pending_autoscale_lifecycle {
+                let update = &pending.catalog_update;
+                state_ref
+                    .rollback_lane_geometry_updates(
+                        &update.previous_lane_config,
+                        &update.updated_lane_config,
+                        &update.previous_lane_incarnations,
+                        &update.previous_lane_incarnation_activation_heights,
+                        &update.replaced_lane_ids,
+                    )
+                    .unwrap_or_else(|rollback| {
+                        panic!(
+                            "validated transaction commit failed and lane geometry rollback could not restore the live catalog: {rollback}"
+                        )
+                    });
+            }
             let publish_block_runtime_effects = commit_error.is_none() && tx_commit_accepted;
             // Publish block-level runtime side effects only after the transaction
             // batch is accepted; aborted transaction commits must not leak lane
@@ -33115,14 +36690,7 @@ impl<'state> StateBlock<'state> {
             let autoscale_hold = if publish_block_runtime_effects {
                 if let Some(pending) = &pending_autoscale_lifecycle {
                     let autoscale_start = Instant::now();
-                    if let Err(err) = state_ref.apply_committed_autoscale_lane_lifecycle(pending) {
-                        error!(
-                            block_height,
-                            ?err,
-                            "failed to apply staged autoscale lane lifecycle during state commit"
-                        );
-                        return Err(TransactionsBlockError::AutoscaleLaneLifecycle);
-                    }
+                    state_ref.apply_committed_autoscale_lane_lifecycle(pending);
                     autoscale_storage_hold + autoscale_start.elapsed()
                 } else {
                     autoscale_storage_hold
@@ -33781,6 +37349,54 @@ impl<'state> StateBlock<'state> {
         self.world.take_external_events()
     }
 
+    fn ensure_prospective_autoscale_lane_committee(
+        &self,
+        lane_id: LaneId,
+        lifecycle_update: &LaneLifecycleCatalogUpdate,
+        proposal_height: u64,
+    ) -> Result<(), LaneLifecycleError> {
+        let dataspace = lifecycle_update
+            .updated_catalog
+            .lanes()
+            .iter()
+            .find(|lane| lane.id == lane_id)
+            .map_or(self.nexus.routing_policy.default_dataspace, |lane| {
+                lane.dataspace_id
+            });
+        let mut prospective_nexus = self.nexus.clone();
+        prospective_nexus.lane_catalog = lifecycle_update.updated_catalog.clone();
+        prospective_nexus.lane_config = lifecycle_update.updated_lane_config.clone();
+        let required = nexus_lane_committee_size(&prospective_nexus, dataspace).ok_or(
+            LaneLifecycleError::AutoscaleCommitteeSizeInvalid {
+                lane: lane_id,
+                dataspace,
+            },
+        )?;
+        let validator_mode = prospective_nexus
+            .staking
+            .validator_mode(lane_id, &prospective_nexus.lane_catalog);
+        let commit_topology: Vec<_> = self.commit_topology.iter().cloned().collect();
+        let committee = State::authoritative_lane_peer_ids_from_sources(
+            &self.world,
+            &self.chain_id,
+            lane_id,
+            validator_mode,
+            self.lane_manifests.as_ref(),
+            &prospective_nexus,
+            &commit_topology,
+            proposal_height,
+        );
+        if committee.len() != required {
+            return Err(LaneLifecycleError::AutoscaleCommitteeUnavailable {
+                lane: lane_id,
+                dataspace,
+                required,
+                actual: committee.len(),
+            });
+        }
+        Ok(())
+    }
+
     fn apply_autoscale_lane_lifecycle(
         &mut self,
         plan: &iroha_data_model::nexus::LaneLifecyclePlan,
@@ -33788,14 +37404,62 @@ impl<'state> StateBlock<'state> {
     ) -> core::result::Result<(), LaneLifecycleError> {
         ensure_autoscale_transition_matches_plan(plan, transition)?;
         ensure_autoscale_transition_capacity_matches_nexus(&self.nexus, transition)?;
+        if matches!(transition, PendingAutoscaleTransition::ScaleOut { .. }) {
+            ensure_autoscale_base_profile_supported(
+                &self.nexus,
+                Some(self.lane_manifests.as_ref()),
+                plan.additions.first().map(|lane| lane.alias.as_str()),
+            )?;
+        }
+        ensure_lane_lifecycle_compliance_ready(&self.nexus, self.lane_compliance.as_deref(), plan)?;
+        if let Some(lane) = plan
+            .retire
+            .iter()
+            .copied()
+            .find(|lane| self.touched_lanes.contains(lane))
+        {
+            return Err(LaneLifecycleError::UnsafeRetirement {
+                lane,
+                reason: "it owns work in the committing block",
+            });
+        }
         let block_height = self._curr_block.height().get();
         for addition in &plan.additions {
             ensure_autoscale_managed_lane_created_height_is_current(addition, block_height)?;
         }
-        let lifecycle_update =
-            prepare_lane_lifecycle_update(&self.nexus, plan, block_height, true)?;
+        let lifecycle_update = prepare_lane_lifecycle_update(
+            &self.nexus,
+            &self.lane_incarnations,
+            &self.lane_incarnation_activation_heights,
+            &self.chain_id,
+            self._curr_block.hash(),
+            plan,
+            block_height,
+            true,
+        )?;
+        let updated_lane_manifests = rebind_lane_manifests_for_lifecycle(
+            self.lane_manifests.as_ref(),
+            &lifecycle_update.updated_catalog,
+            &self.nexus.governance,
+        )?;
+        if let PendingAutoscaleTransition::ScaleOut { lane, .. } = transition {
+            // The lane becomes durable only when this block commits, so its first
+            // possible lane proposal is anchored to the following global height.
+            let first_proposal_height = block_height
+                .checked_add(1)
+                .ok_or(LaneLifecycleError::AutoscaleProposalHeightOverflow(lane))?;
+            self.ensure_prospective_autoscale_lane_committee(
+                lane,
+                &lifecycle_update,
+                first_proposal_height,
+            )?;
+        }
         self.nexus.lane_catalog = lifecycle_update.updated_catalog.clone();
         self.nexus.lane_config = lifecycle_update.updated_lane_config.clone();
+        self.lane_incarnations = lifecycle_update.updated_lane_incarnations.clone();
+        self.lane_incarnation_activation_heights = lifecycle_update
+            .updated_lane_incarnation_activation_heights
+            .clone();
 
         if !lifecycle_update.lanes_to_reset.is_empty() {
             State::prune_lane_lifecycle_world_block_state_for_lanes(
@@ -33826,10 +37490,17 @@ impl<'state> StateBlock<'state> {
         for lane_id in stale_emergency_overrides {
             self.world.lane_relay_emergency_validators.remove(lane_id);
         }
+        let expected_incarnation_root = lane_lifecycle_incarnation_root(
+            &lifecycle_update.previous_catalog,
+            &lifecycle_update.previous_lane_incarnations,
+        )?;
         self.pending_autoscale_lifecycle = Some(PendingAutoscaleLaneLifecycle {
             catalog_update: lifecycle_update,
+            updated_lane_manifests,
+            plan: plan.clone(),
             transition,
             transition_height: 0,
+            expected_incarnation_root,
         });
 
         let _ = self.refresh_axt_policies_from_directory();
@@ -33857,6 +37528,13 @@ impl<'state> StateBlock<'state> {
     }
 
     fn maybe_apply_nexus_autoscale(&mut self, block: &CommittedBlock) {
+        if self.pending_autoscale_lifecycle.is_some() {
+            debug!(
+                height = block.as_ref().header().height().get(),
+                "skipping autoscale because this block already staged a lane lifecycle transition"
+            );
+            return;
+        }
         let autoscale = self.nexus.autoscale;
         if !self.nexus.enabled || !autoscale.enabled {
             return;
@@ -33909,7 +37587,7 @@ impl<'state> StateBlock<'state> {
             self.next_autoscale_lane_id(autoscale.min_lanes.get(), autoscale.max_lanes.get());
         let can_scale_out = next_scale_out_lane_id.is_some();
         let retire_lane = if autoscale_capacity_lanes > 1 {
-            self.select_autoscale_lane_for_retire()
+            self.select_autoscale_lane_for_retire(block)
         } else {
             None
         };
@@ -33981,11 +37659,37 @@ impl<'state> StateBlock<'state> {
             let Some(next_lane_id) = next_scale_out_lane_id else {
                 return;
             };
-            let lane = autoscale_elastic_lane_config(
+            let Some(base_lane) = self
+                .nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .find(|lane| lane.id == self.nexus.routing_policy.default_lane)
+            else {
+                warn!(
+                    height = block_height,
+                    lane = next_lane_id.as_u32(),
+                    default_lane = self.nexus.routing_policy.default_lane.as_u32(),
+                    "skipping deterministic lane autoscale scale-out because the routing default lane is absent"
+                );
+                return;
+            };
+            let lane = match autoscale_elastic_lane_config_from_base(
                 next_lane_id,
-                self.nexus.routing_policy.default_dataspace,
+                base_lane,
                 block_height,
-            );
+            ) {
+                Ok(lane) => lane,
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        height = block_height,
+                        lane = next_lane_id.as_u32(),
+                        "skipping deterministic lane autoscale scale-out because the routing base profile is ineligible"
+                    );
+                    return;
+                }
+            };
             let plan = iroha_data_model::nexus::LaneLifecyclePlan {
                 additions: vec![lane],
                 retire: Vec::new(),
@@ -34057,7 +37761,7 @@ impl<'state> StateBlock<'state> {
         autoscale_next_lane_id(self.nexus.lane_catalog.lanes(), min_lanes, max_lanes)
     }
 
-    fn select_autoscale_lane_for_retire(&self) -> Option<LaneId> {
+    fn select_autoscale_lane_for_retire(&self, block: &CommittedBlock) -> Option<LaneId> {
         let candidate = autoscale_managed_lane_for_retire(
             self.nexus.lane_catalog.lanes(),
             self.nexus.autoscale.min_lanes.get(),
@@ -34065,6 +37769,21 @@ impl<'state> StateBlock<'state> {
             self.nexus.routing_policy.default_dataspace,
         )?;
         let default_dataspace = self.nexus.routing_policy.default_dataspace;
+        let owns_current_block_payload =
+            block.as_ref().execution_context().is_some_and(|context| {
+                context
+                    .lane_payload_ownerships
+                    .iter()
+                    .any(|ownership| ownership.lane_id == candidate)
+            });
+        if self.touched_lanes.contains(&candidate) || owns_current_block_payload {
+            debug!(
+                lane = candidate.as_u32(),
+                dataspace = default_dataspace.as_u64(),
+                "skipping deterministic lane autoscale scale-in because the retire candidate owns current-block work"
+            );
+            return None;
+        }
         if let Some((expected_height, latest_unmerged_height)) = self
             .state_ref
             .unmerged_merge_admissible_relay_progress(candidate, default_dataspace)
@@ -35776,10 +39495,13 @@ mod tiered_snapshot_diff_tests {
     ) {
         let key = DirectLaneBlockApplicationKey {
             lane_id: LaneId::new(7),
+            lane_incarnation: iroha_crypto::Hash::new(b"direct marker incarnation"),
             lane_block_height: 3,
         };
         let marker = DirectLaneBlockApplicationMarker {
             lane_id: key.lane_id,
+            lane_incarnation: key.lane_incarnation,
+            proposal_height: 3,
             dataspace_id: DataSpaceId::new(11),
             lane_block_height: key.lane_block_height,
             descriptor_hash: iroha_crypto::Hash::new(b"direct marker descriptor"),
@@ -40373,6 +44095,85 @@ impl StateTransaction<'_, '_> {
         self._curr_block.height().get()
     }
 
+    /// Stage a signed, consensus-replayed manual lane lifecycle transition.
+    ///
+    /// The signed payload is bound to the exact pre-transition catalog. Staging
+    /// mutates only this transaction overlay; the parent block observes the new
+    /// topology only if the transaction is accepted and applied.
+    pub(crate) fn stage_consensus_lane_lifecycle(
+        &mut self,
+        payload: &iroha_data_model::nexus::LaneLifecycleParameterV1,
+    ) -> Result<(), LaneLifecycleError> {
+        if self.lane_lifecycle_already_staged_in_block || self.pending_lane_lifecycle.is_some() {
+            return Err(LaneLifecycleError::LifecycleAlreadyStaged);
+        }
+        let actual = iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(
+            &self.nexus.lane_catalog,
+        );
+        if payload.expected_catalog_hash != actual {
+            return Err(LaneLifecycleError::StaleCatalog {
+                expected: payload.expected_catalog_hash,
+                actual,
+            });
+        }
+        let actual_incarnation_root =
+            lane_lifecycle_incarnation_root(&self.nexus.lane_catalog, &self.lane_incarnations)?;
+        if payload.expected_incarnation_root != actual_incarnation_root {
+            return Err(LaneLifecycleError::StaleIncarnationRoot {
+                expected: payload.expected_incarnation_root,
+                actual: actual_incarnation_root,
+            });
+        }
+        let block_height = self.block_height();
+        ensure_lane_lifecycle_compliance_ready(
+            &self.nexus,
+            self.lane_compliance.as_deref(),
+            &payload.plan,
+        )?;
+        if let Some(lane) = payload
+            .plan
+            .retire
+            .iter()
+            .copied()
+            .find(|lane| self.touched_lanes.contains(lane))
+        {
+            return Err(LaneLifecycleError::UnsafeRetirement {
+                lane,
+                reason: "it owns work in the committing block",
+            });
+        }
+        let lifecycle_update = prepare_lane_lifecycle_update(
+            &self.nexus,
+            &self.lane_incarnations,
+            &self.lane_incarnation_activation_heights,
+            &self.chain_id,
+            self._curr_block.hash(),
+            &payload.plan,
+            block_height,
+            false,
+        )?;
+        let updated_lane_manifests = rebind_lane_manifests_for_lifecycle(
+            self.lane_manifests.as_ref(),
+            &lifecycle_update.updated_catalog,
+            &self.nexus.governance,
+        )?;
+        self.nexus.lane_catalog = lifecycle_update.updated_catalog.clone();
+        self.nexus.lane_config = lifecycle_update.updated_lane_config.clone();
+        self.lane_incarnations = lifecycle_update.updated_lane_incarnations.clone();
+        self.lane_incarnation_activation_heights = lifecycle_update
+            .updated_lane_incarnation_activation_heights
+            .clone();
+        self.pending_lane_lifecycle = Some(PendingAutoscaleLaneLifecycle {
+            catalog_update: lifecycle_update,
+            updated_lane_manifests,
+            plan: payload.plan.clone(),
+            transition: PendingAutoscaleTransition::Manual,
+            transition_height: block_height,
+            expected_incarnation_root: payload.expected_incarnation_root,
+        });
+        Ok(())
+    }
+
     /// Return whether a lane is active for authority checks at this transaction's block height.
     #[inline]
     pub fn is_lane_active_for_authority(&self, lane_id: LaneId) -> bool {
@@ -40798,6 +44599,13 @@ impl StateTransaction<'_, '_> {
             commit_topology: committed_topology,
             prev_commit_topology: prev_committed_topology,
             nexus,
+            lane_incarnations,
+            lane_incarnation_activation_heights,
+            block_nexus,
+            block_lane_incarnations,
+            block_lane_incarnation_activation_heights,
+            block_pending_lane_lifecycle,
+            pending_lane_lifecycle,
             zk,
             block_zk,
             tx_call_hash,
@@ -40828,6 +44636,12 @@ impl StateTransaction<'_, '_> {
             telemetry,
             ..
         } = self;
+        if let Some(pending) = pending_lane_lifecycle {
+            *block_nexus = nexus.clone();
+            *block_lane_incarnations = lane_incarnations;
+            *block_lane_incarnation_activation_heights = lane_incarnation_activation_heights;
+            *block_pending_lane_lifecycle = Some(pending);
+        }
         *block_zk = zk;
         if mode_cutover_next_set_in_tx {
             *mode_cutover_next_set_in_block = true;
@@ -42278,6 +46092,73 @@ pub(crate) struct SnapshotNoritoBlob {
     pub encoded_hex: String,
 }
 
+/// Active lane incarnation entry persisted in the Nexus runtime snapshot.
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+pub(crate) struct SnapshotLaneIncarnation {
+    /// Active lane identifier.
+    pub lane_id: LaneId,
+    /// Non-zero, globally unique incarnation commitment.
+    pub incarnation: Hash,
+    /// Global block height that activated this incarnation (`0` for static lanes).
+    pub activation_height: u64,
+}
+
+/// Versioned, consensus-relevant Nexus runtime state persisted with WSV snapshots.
+///
+/// Static Nexus policy remains configuration-sourced at startup. The effective lane
+/// catalog and autoscale cooldown cursor are stateful, however: both manual lifecycle
+/// operations and deterministic autoscale transitions mutate them after startup.
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+pub(crate) struct SnapshotNexusRuntime {
+    /// Snapshot layout version. Version 2 adds exact lane incarnation state.
+    pub version: u8,
+    /// Valid lane identifier namespace size.
+    pub lane_count: u32,
+    /// Effective lane catalog at the snapshot height.
+    pub lanes: Vec<iroha_data_model::nexus::LaneConfig>,
+    /// Exact active incarnation commitment for every effective lane.
+    pub lane_incarnations: Vec<SnapshotLaneIncarnation>,
+    /// Last committed block height that changed autoscale topology.
+    pub autoscale_last_transition_height: u64,
+}
+
+impl SnapshotNexusRuntime {
+    /// Current snapshot layout version.
+    pub(crate) const VERSION: u8 = 2;
+
+    /// Capture the stateful Nexus fields from a consistent state view.
+    pub(crate) fn from_nexus(
+        nexus: &iroha_config::parameters::actual::Nexus,
+        lane_incarnations: &BTreeMap<LaneId, Hash>,
+        lane_incarnation_activation_heights: &BTreeMap<LaneId, u64>,
+    ) -> Self {
+        debug_assert!(
+            validate_lane_incarnation_map(&nexus.lane_catalog, lane_incarnations).is_ok()
+        );
+        debug_assert!(
+            validate_lane_incarnation_activation_heights(
+                &nexus.lane_catalog,
+                lane_incarnation_activation_heights,
+            )
+            .is_ok()
+        );
+        Self {
+            version: Self::VERSION,
+            lane_count: nexus.lane_catalog.lane_count().get(),
+            lanes: nexus.lane_catalog.lanes().to_vec(),
+            lane_incarnations: lane_incarnations
+                .iter()
+                .map(|(&lane_id, &incarnation)| SnapshotLaneIncarnation {
+                    lane_id,
+                    incarnation,
+                    activation_height: lane_incarnation_activation_heights[&lane_id],
+                })
+                .collect(),
+            autoscale_last_transition_height: nexus.autoscale.last_transition_height,
+        }
+    }
+}
+
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 pub(crate) struct SnapshotSpaceDirectoryManifestSet {
     pub uaid: UniversalAccountId,
@@ -42353,10 +46234,39 @@ pub(crate) mod deserialize {
                 take_optional_default(&mut map, "space_directory_manifests")?;
             let sccp_route_manifests: Vec<iroha_config::parameters::actual::SccpRouteManifest> =
                 take_optional_default(&mut map, "sccp_route_manifests")?;
+            let snapshot_nexus_runtime: Option<SnapshotNexusRuntime> = map
+                .remove("nexus_runtime")
+                .map(|value| {
+                    json::value::from_value(value).map_err(|err| json::Error::InvalidField {
+                        field: "nexus_runtime".to_owned(),
+                        message: err.to_string(),
+                    })
+                })
+                .transpose()?;
 
             let chain_id: ChainId = take_required(&mut map, "chain_id")?;
             let block_hashes_vec: Vec<HashOf<BlockHeader>> =
                 take_required(&mut map, "block_hashes")?;
+            let (restored_nexus, lane_incarnations, lane_incarnation_activation_heights) =
+                match snapshot_nexus_runtime {
+                    Some(runtime) => {
+                        let (nexus, incarnations, activation_heights) =
+                            nexus_from_snapshot_runtime(runtime, block_hashes_vec.len())?;
+                        (Some(nexus), incarnations, activation_heights)
+                    }
+                    None => {
+                        let nexus = iroha_config::parameters::actual::Nexus::default();
+                        let incarnations =
+                            derive_static_lane_incarnations(&chain_id, &nexus.lane_catalog);
+                        let activation_heights = incarnations
+                            .keys()
+                            .copied()
+                            .map(|lane_id| (lane_id, 0))
+                            .collect();
+                        (None, incarnations, activation_heights)
+                    }
+                };
+            let nexus_runtime_restored_from_snapshot = restored_nexus.is_some();
             let transactions: TransactionsStorage = take_required(&mut map, "transactions")?;
             let commit_topology = take_topology_cell(&mut map, "commit_topology")?;
             let prev_commit_topology = take_topology_cell(&mut map, "prev_commit_topology")?;
@@ -42471,16 +46381,156 @@ pub(crate) mod deserialize {
                 commit_topology,
                 prev_commit_topology,
                 ivm: ivm_runtime,
+                nexus: restored_nexus.unwrap_or_default(),
+                lane_incarnations,
+                lane_incarnation_activation_heights,
+                chain_id,
+                nexus_runtime_restored_from_snapshot,
                 kura: self.kura,
                 query_handle: self.query_handle,
                 #[cfg(feature = "telemetry")]
                 telemetry: self.telemetry,
             });
-            state.chain_id = chain_id;
             *state.sccp_route_manifests.write() = sccp_route_manifests.clone();
             state.zk.sccp_route_manifests = sccp_route_manifests;
             Ok(state)
         }
+    }
+
+    fn nexus_from_snapshot_runtime(
+        runtime: SnapshotNexusRuntime,
+        committed_height: usize,
+    ) -> Result<
+        (
+            iroha_config::parameters::actual::Nexus,
+            BTreeMap<LaneId, Hash>,
+            BTreeMap<LaneId, u64>,
+        ),
+        json::Error,
+    > {
+        if runtime.version != SnapshotNexusRuntime::VERSION {
+            return Err(json::Error::InvalidField {
+                field: "nexus_runtime.version".to_owned(),
+                message: format!(
+                    "unsupported Nexus runtime snapshot version {}; expected {}",
+                    runtime.version,
+                    SnapshotNexusRuntime::VERSION
+                ),
+            });
+        }
+        let lane_count = std::num::NonZeroU32::new(runtime.lane_count).ok_or_else(|| {
+            json::Error::InvalidField {
+                field: "nexus_runtime.lane_count".to_owned(),
+                message: "lane_count must be non-zero".to_owned(),
+            }
+        })?;
+        let catalog = LaneCatalog::new(lane_count, runtime.lanes).map_err(|err| {
+            json::Error::InvalidField {
+                field: "nexus_runtime.lanes".to_owned(),
+                message: err.to_string(),
+            }
+        })?;
+        if !catalog.lanes().iter().any(|lane| lane.id == LaneId::SINGLE) {
+            return Err(json::Error::InvalidField {
+                field: "nexus_runtime.lanes".to_owned(),
+                message: "routing default lane 0 is missing".to_owned(),
+            });
+        }
+        let mut lane_incarnations = BTreeMap::new();
+        let mut lane_incarnation_activation_heights = BTreeMap::new();
+        for entry in runtime.lane_incarnations {
+            if lane_incarnation_is_zero(entry.incarnation) {
+                return Err(json::Error::InvalidField {
+                    field: "nexus_runtime.lane_incarnations".to_owned(),
+                    message: format!(
+                        "lane {} has an all-zero incarnation commitment",
+                        entry.lane_id
+                    ),
+                });
+            }
+            if lane_incarnations
+                .insert(entry.lane_id, entry.incarnation)
+                .is_some()
+            {
+                return Err(json::Error::InvalidField {
+                    field: "nexus_runtime.lane_incarnations".to_owned(),
+                    message: format!("duplicate entry for lane {}", entry.lane_id),
+                });
+            }
+            lane_incarnation_activation_heights.insert(entry.lane_id, entry.activation_height);
+        }
+        validate_lane_incarnation_map(&catalog, &lane_incarnations).map_err(|err| {
+            json::Error::InvalidField {
+                field: "nexus_runtime.lane_incarnations".to_owned(),
+                message: err.to_string(),
+            }
+        })?;
+        let committed_height = u64::try_from(committed_height).unwrap_or(u64::MAX);
+        validate_lane_incarnation_activation_heights(
+            &catalog,
+            &lane_incarnation_activation_heights,
+        )
+        .map_err(|err| json::Error::InvalidField {
+            field: "nexus_runtime.lane_incarnations".to_owned(),
+            message: err.to_string(),
+        })?;
+        if let Some((lane_id, activation_height)) = lane_incarnation_activation_heights
+            .iter()
+            .find(|(_, activation_height)| **activation_height > committed_height)
+        {
+            return Err(json::Error::InvalidField {
+                field: "nexus_runtime.lane_incarnations".to_owned(),
+                message: format!(
+                    "lane {lane_id} activation height {activation_height} exceeds snapshot height {committed_height}"
+                ),
+            });
+        }
+        if runtime.autoscale_last_transition_height > committed_height {
+            return Err(json::Error::InvalidField {
+                field: "nexus_runtime.autoscale_last_transition_height".to_owned(),
+                message: format!(
+                    "transition height {} exceeds snapshot height {committed_height}",
+                    runtime.autoscale_last_transition_height
+                ),
+            });
+        }
+        let mut latest_managed_creation_height = 0_u64;
+        for lane in catalog.lanes() {
+            if !lane_uses_reserved_autoscale_metadata(lane) {
+                continue;
+            }
+            ensure_autoscale_managed_lane_shape(lane)
+                .and_then(|()| {
+                    ensure_autoscale_managed_lane_created_height_not_future(lane, committed_height)
+                })
+                .map_err(|err| json::Error::InvalidField {
+                    field: format!("nexus_runtime.lanes[{}]", lane.id.as_u32()),
+                    message: err.to_string(),
+                })?;
+            latest_managed_creation_height = latest_managed_creation_height.max(
+                lane.autoscale_created_height()
+                    .expect("validated managed lane carries a creation height"),
+            );
+        }
+        if runtime.autoscale_last_transition_height < latest_managed_creation_height {
+            return Err(json::Error::InvalidField {
+                field: "nexus_runtime.autoscale_last_transition_height".to_owned(),
+                message: format!(
+                    "transition height {} precedes managed lane creation height {latest_managed_creation_height}",
+                    runtime.autoscale_last_transition_height
+                ),
+            });
+        }
+
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&catalog);
+        nexus.lane_catalog = catalog;
+        nexus.autoscale.last_transition_height = runtime.autoscale_last_transition_height;
+        Ok((
+            nexus,
+            lane_incarnations,
+            lane_incarnation_activation_heights,
+        ))
     }
 
     fn decode_snapshot_records<T>(
@@ -43663,6 +47713,11 @@ pub(crate) mod deserialize {
         commit_topology: Cell<Vec<PeerId>>,
         prev_commit_topology: Cell<Vec<PeerId>>,
         ivm: IVM,
+        nexus: iroha_config::parameters::actual::Nexus,
+        lane_incarnations: BTreeMap<LaneId, Hash>,
+        lane_incarnation_activation_heights: BTreeMap<LaneId, u64>,
+        chain_id: iroha_data_model::ChainId,
+        nexus_runtime_restored_from_snapshot: bool,
         kura: Arc<Kura>,
         query_handle: LiveQueryStoreHandle,
         #[cfg(feature = "telemetry")]
@@ -43677,6 +47732,11 @@ pub(crate) mod deserialize {
             commit_topology,
             prev_commit_topology,
             ivm,
+            nexus,
+            lane_incarnations,
+            lane_incarnation_activation_heights,
+            chain_id,
+            nexus_runtime_restored_from_snapshot,
             kura,
             query_handle,
             #[cfg(feature = "telemetry")]
@@ -43685,7 +47745,6 @@ pub(crate) mod deserialize {
         #[cfg(feature = "telemetry")]
         let telemetry_seed = telemetry.clone();
         let initial_crypto = iroha_config::parameters::actual::Crypto::default();
-        let nexus = iroha_config::parameters::actual::Nexus::default();
         let streaming = iroha_config::parameters::actual::Streaming {
             key_material: default_streaming_key_material(),
             session_store_dir: PathBuf::from(
@@ -43813,6 +47872,11 @@ pub(crate) mod deserialize {
             streaming,
             crypto: parking_lot::RwLock::new(Arc::new(initial_crypto.clone())),
             nexus: parking_lot::RwLock::new(nexus),
+            lane_incarnations: parking_lot::RwLock::new(lane_incarnations),
+            lane_incarnation_activation_heights: parking_lot::RwLock::new(
+                lane_incarnation_activation_heights,
+            ),
+            nexus_runtime_restored_from_snapshot,
             nexus_storage_budget_last_check_height: AtomicU64::new(0),
             tiered_backend: Arc::clone(&tiered_backend),
             tiered_snapshot_worker,
@@ -43823,7 +47887,7 @@ pub(crate) mod deserialize {
             content: default_content_cfg(),
             settlement: iroha_config::parameters::actual::Settlement::default(),
             settlement_engine: SettlementEngine::new_roadmap_default(),
-            chain_id: iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            chain_id,
             #[cfg(feature = "telemetry")]
             telemetry,
             lane_lifecycle_lock: parking_lot::Mutex::new(()),
@@ -44383,6 +48447,82 @@ mod tests {
     #[cfg(feature = "telemetry")]
     use crate::telemetry::StateTelemetry;
 
+    #[test]
+    fn merge_write_set_encoder_mentions_every_persisted_world_block_field() {
+        let source = include_str!("state.rs");
+        let struct_start = source
+            .find("pub struct WorldBlock<'world> {")
+            .expect("WorldBlock declaration must remain discoverable");
+        let struct_tail = &source[struct_start..];
+        let struct_end = struct_tail
+            .find("\n}\n\nimpl<'world> WorldBlock")
+            .expect("WorldBlock declaration terminator must remain discoverable");
+        let struct_body = &struct_tail[..struct_end];
+
+        let encoder_start = source
+            .find("fn merge_execution_write_set_bytes(&self)")
+            .expect("merge write-set encoder must exist");
+        let encoder_tail = &source[encoder_start..];
+        let encoder_end = encoder_tail
+            .find("/// Struct for single transaction's aggregated changes")
+            .expect("merge write-set encoder terminator must remain discoverable");
+        let encoder = &encoder_tail[..encoder_end];
+
+        let fields = struct_body.lines().filter_map(|line| {
+            if !line.starts_with("    ") || line.starts_with("        ") {
+                return None;
+            }
+            let declaration = line
+                .trim()
+                .strip_prefix("pub(crate) ")
+                .or_else(|| line.trim().strip_prefix("pub "))
+                .unwrap_or_else(|| line.trim());
+            let (field, _) = declaration.split_once(':')?;
+            field
+                .chars()
+                .all(|character| character == '_' || character.is_ascii_alphanumeric())
+                .then_some(field)
+        });
+
+        for field in fields {
+            if matches!(field, "dataspace_catalog" | "external_event_buf") {
+                continue;
+            }
+            assert!(
+                encoder.contains(field),
+                "persisted WorldBlock field `{field}` is absent from the merge write-set encoder"
+            );
+        }
+    }
+
+    #[test]
+    fn merge_write_set_distinguishes_equal_values_written_to_different_keys() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+
+        let mut first = state.lane_application_block(header.clone());
+        first
+            .world
+            .smart_contract_state
+            .insert("merge_delta_a".parse().expect("valid state key"), vec![7]);
+        let first_root = first.merge_execution_write_set_root();
+        drop(first);
+
+        let mut second = state.lane_application_block(header);
+        second
+            .world
+            .smart_contract_state
+            .insert("merge_delta_b".parse().expect("valid state key"), vec![7]);
+        let second_root = second.merge_execution_write_set_root();
+
+        assert_ne!(
+            first_root, second_root,
+            "equal execution results must not hide divergent WSV keys"
+        );
+    }
+
     fn checked_da_ack_signature(byte: u8) -> Signature {
         Signature::try_from_bytes(&[byte; 64])
             .expect("checked state DA acknowledgement signature fixture")
@@ -44409,10 +48549,13 @@ mod tests {
     ) {
         let key = DirectLaneBlockApplicationKey {
             lane_id: key_lane_id,
+            lane_incarnation: Hash::prehashed([seed.wrapping_add(4); 32]),
             lane_block_height,
         };
         let marker = DirectLaneBlockApplicationMarker {
             lane_id: marker_lane_id,
+            lane_incarnation: key.lane_incarnation,
+            proposal_height: u64::from(seed).saturating_add(1),
             dataspace_id,
             lane_block_height,
             descriptor_hash: Hash::prehashed([seed; 32]),
@@ -45145,6 +49288,382 @@ mod tests {
             Some(&alias),
             "effective definition still exposes the persisted binding for inspection"
         );
+    }
+
+    fn state_with_snapshot_nexus_runtime() -> State {
+        let mut state = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        state
+            .set_nexus(iroha_config::parameters::actual::Nexus {
+                enabled: true,
+                ..Default::default()
+            })
+            .expect("enable Nexus");
+        seed_committed_height_for_state_test(&state, 5);
+        state
+            .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
+                additions: vec![LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "durable-manual-lane".to_owned(),
+                    ..LaneConfig::default()
+                }],
+                retire: Vec::new(),
+            })
+            .expect("add runtime lane");
+        state.nexus.write().autoscale.last_transition_height = 4;
+        state
+    }
+
+    fn deserialize_state_snapshot_value(value: norito::json::Value) -> Result<State, json::Error> {
+        deserialize::KuraSeed {
+            kura: Kura::blank_kura_for_testing(),
+            query_handle: LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            telemetry: crate::telemetry::StateTelemetry::default(),
+        }
+        .into_state_from_json(value)
+    }
+
+    #[test]
+    fn nexus_runtime_roundtrips_through_state_json() {
+        let state = state_with_snapshot_nexus_runtime();
+        let expected = state.nexus_snapshot();
+        let expected_incarnations = state.lane_incarnations_snapshot();
+        let expected_activation_heights = state.lane_incarnation_activation_heights_snapshot();
+        let lane_incarnation = expected_incarnations[&LaneId::new(1)];
+        assert_eq!(
+            state.lane_incarnation_at_height(LaneId::new(1), 5),
+            None,
+            "new incarnation must reject evidence at its activation block"
+        );
+        assert_eq!(
+            state.lane_incarnation_at_height(LaneId::new(1), 6),
+            Some(lane_incarnation)
+        );
+        let value = norito::json::to_value(&state).expect("serialize state");
+
+        let restored = deserialize_state_snapshot_value(value).expect("deserialize state");
+        let actual = restored.nexus_snapshot();
+
+        assert!(restored.nexus_runtime_restored_from_snapshot());
+        assert_eq!(actual.lane_catalog, expected.lane_catalog);
+        assert_eq!(actual.lane_config.entries().len(), 2);
+        assert_eq!(actual.autoscale.last_transition_height, 4);
+        assert_eq!(restored.lane_incarnations_snapshot(), expected_incarnations);
+        assert_eq!(
+            restored.lane_incarnation_activation_heights_snapshot(),
+            expected_activation_heights
+        );
+        assert_eq!(
+            restored.lane_incarnation_at_height(LaneId::new(1), 5),
+            None,
+            "snapshot-only restore must preserve the activation boundary"
+        );
+        assert_eq!(
+            restored.lane_incarnation_at_height(LaneId::new(1), 6),
+            Some(lane_incarnation)
+        );
+    }
+
+    #[test]
+    fn autoscale_lane_and_cooldown_roundtrip_through_state_json() {
+        let mut state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        state
+            .set_nexus(autoscale_transition_test_nexus(
+                vec![LaneConfig::default()],
+                1,
+                3,
+                100,
+            ))
+            .expect("apply autoscale test Nexus");
+        let configured_lane_catalog = state.nexus_snapshot().configured_lane_catalog;
+        seed_committed_height_for_state_test(&state, 2);
+        state
+            .apply_lane_lifecycle_with_options(
+                &iroha_data_model::nexus::LaneLifecyclePlan {
+                    additions: vec![autoscale_elastic_lane_config(
+                        LaneId::new(1),
+                        DataSpaceId::UNIVERSAL,
+                        2,
+                    )],
+                    retire: Vec::new(),
+                },
+                false,
+                true,
+            )
+            .expect("seed committed autoscale lane");
+        state.nexus.write().autoscale.last_transition_height = 2;
+
+        let value = norito::json::to_value(&state).expect("serialize autoscale state");
+        let restored = deserialize_state_snapshot_value(value).expect("restore autoscale state");
+        let nexus = restored.nexus_snapshot();
+        let elastic = nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .find(|lane| lane.id == LaneId::new(1))
+            .expect("restored elastic lane");
+
+        assert!(elastic.is_autoscale_managed_elastic());
+        assert_eq!(elastic.autoscale_created_height(), Some(2));
+        assert_eq!(nexus.autoscale.last_transition_height, 2);
+        assert_eq!(
+            nexus.configured_lane_catalog, configured_lane_catalog,
+            "autoscale progress and snapshot restore must preserve the configured baseline"
+        );
+    }
+
+    #[test]
+    fn autoscale_scale_in_catalog_and_cooldown_roundtrip_through_state_json() {
+        let mut state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        state
+            .set_nexus(autoscale_transition_test_nexus(
+                vec![LaneConfig::default()],
+                1,
+                3,
+                100,
+            ))
+            .expect("apply autoscale test Nexus");
+        seed_committed_height_for_state_test(&state, 2);
+        state
+            .apply_lane_lifecycle_with_options(
+                &iroha_data_model::nexus::LaneLifecyclePlan {
+                    additions: vec![autoscale_elastic_lane_config(
+                        LaneId::new(1),
+                        DataSpaceId::UNIVERSAL,
+                        2,
+                    )],
+                    retire: Vec::new(),
+                },
+                false,
+                true,
+            )
+            .expect("seed committed autoscale lane");
+        seed_committed_height_for_state_test(&state, 3);
+        state
+            .apply_lane_lifecycle_with_options(
+                &iroha_data_model::nexus::LaneLifecyclePlan {
+                    additions: Vec::new(),
+                    retire: vec![LaneId::new(1)],
+                },
+                false,
+                true,
+            )
+            .expect("retire committed autoscale lane");
+        state.nexus.write().autoscale.last_transition_height = 3;
+
+        let value = norito::json::to_value(&state).expect("serialize scaled-in state");
+        let restored = deserialize_state_snapshot_value(value).expect("restore scaled-in state");
+        let nexus = restored.nexus_snapshot();
+
+        assert_eq!(nexus.lane_catalog.lanes(), &[LaneConfig::default()]);
+        assert_eq!(nexus.autoscale.last_transition_height, 3);
+    }
+
+    #[test]
+    fn legacy_state_json_without_nexus_runtime_uses_config_fallback_marker() {
+        let state = state_with_snapshot_nexus_runtime();
+        let mut value = norito::json::to_value(&state).expect("serialize state");
+        let norito::json::Value::Object(map) = &mut value else {
+            panic!("state snapshot must be an object");
+        };
+        assert!(map.remove("nexus_runtime").is_some());
+
+        let restored = deserialize_state_snapshot_value(value).expect("deserialize legacy state");
+
+        assert!(!restored.nexus_runtime_restored_from_snapshot());
+        assert_eq!(
+            restored.nexus_snapshot().lane_catalog,
+            LaneCatalog::default()
+        );
+    }
+
+    #[test]
+    fn state_json_rejects_unknown_nexus_runtime_version() {
+        let state = state_with_snapshot_nexus_runtime();
+        let mut value = norito::json::to_value(&state).expect("serialize state");
+        let norito::json::Value::Object(map) = &mut value else {
+            panic!("state snapshot must be an object");
+        };
+        let norito::json::Value::Object(runtime) = map
+            .get_mut("nexus_runtime")
+            .expect("nexus runtime snapshot")
+        else {
+            panic!("nexus runtime snapshot must be an object");
+        };
+        runtime.insert(
+            "version".to_owned(),
+            norito::json::Value::from(u64::from(SnapshotNexusRuntime::VERSION) + 1),
+        );
+
+        let err = deserialize_state_snapshot_value(value)
+            .err()
+            .expect("unknown snapshot layout must fail closed");
+        assert!(
+            err.to_string()
+                .contains("unsupported Nexus runtime snapshot version")
+        );
+    }
+
+    #[test]
+    fn state_json_rejects_future_lane_incarnation_activation_height() {
+        let state = state_with_snapshot_nexus_runtime();
+        let mut value = norito::json::to_value(&state).expect("serialize state");
+        let norito::json::Value::Object(map) = &mut value else {
+            panic!("state snapshot must be an object");
+        };
+        let norito::json::Value::Object(runtime) = map
+            .get_mut("nexus_runtime")
+            .expect("nexus runtime snapshot")
+        else {
+            panic!("nexus runtime snapshot must be an object");
+        };
+        let norito::json::Value::Array(incarnations) = runtime
+            .get_mut("lane_incarnations")
+            .expect("lane incarnation snapshot")
+        else {
+            panic!("lane incarnation snapshot must be an array");
+        };
+        let norito::json::Value::Object(entry) = incarnations
+            .iter_mut()
+            .find(|entry| {
+                entry
+                    .as_object()
+                    .and_then(|entry| entry.get("lane_id"))
+                    .is_some_and(|lane_id| lane_id == &norito::json::Value::from(1_u64))
+            })
+            .expect("runtime lane incarnation entry")
+        else {
+            panic!("lane incarnation entry must be an object");
+        };
+        entry.insert(
+            "activation_height".to_owned(),
+            norito::json::Value::from(6_u64),
+        );
+
+        let error = deserialize_state_snapshot_value(value)
+            .expect_err("future activation height must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("activation height 6 exceeds snapshot height 5")
+        );
+    }
+
+    #[test]
+    fn state_json_rejects_future_nexus_autoscale_transition_height() {
+        let state = state_with_snapshot_nexus_runtime();
+        let mut value = norito::json::to_value(&state).expect("serialize state");
+        let norito::json::Value::Object(map) = &mut value else {
+            panic!("state snapshot must be an object");
+        };
+        let norito::json::Value::Object(runtime) = map
+            .get_mut("nexus_runtime")
+            .expect("nexus runtime snapshot")
+        else {
+            panic!("nexus runtime snapshot must be an object");
+        };
+        runtime.insert(
+            "autoscale_last_transition_height".to_owned(),
+            norito::json::Value::from(6_u64),
+        );
+
+        let err = deserialize_state_snapshot_value(value)
+            .err()
+            .expect("future cooldown cursor must fail closed");
+        assert!(err.to_string().contains("exceeds snapshot height 5"));
+    }
+
+    #[test]
+    fn state_json_rejects_cooldown_cursor_before_managed_lane_creation() {
+        let mut state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        state
+            .set_nexus(autoscale_transition_test_nexus(
+                vec![LaneConfig::default()],
+                1,
+                3,
+                100,
+            ))
+            .expect("apply autoscale test Nexus");
+        seed_committed_height_for_state_test(&state, 2);
+        state
+            .apply_lane_lifecycle_with_options(
+                &iroha_data_model::nexus::LaneLifecyclePlan {
+                    additions: vec![autoscale_elastic_lane_config(
+                        LaneId::new(1),
+                        DataSpaceId::UNIVERSAL,
+                        2,
+                    )],
+                    retire: Vec::new(),
+                },
+                false,
+                true,
+            )
+            .expect("seed committed autoscale lane");
+        state.nexus.write().autoscale.last_transition_height = 2;
+        let mut value = norito::json::to_value(&state).expect("serialize autoscale state");
+        let norito::json::Value::Object(map) = &mut value else {
+            panic!("state snapshot must be an object");
+        };
+        let norito::json::Value::Object(runtime) = map
+            .get_mut("nexus_runtime")
+            .expect("nexus runtime snapshot")
+        else {
+            panic!("nexus runtime snapshot must be an object");
+        };
+        runtime.insert(
+            "autoscale_last_transition_height".to_owned(),
+            norito::json::Value::from(1_u64),
+        );
+
+        let err = deserialize_state_snapshot_value(value)
+            .err()
+            .expect("pre-creation cooldown cursor must fail closed");
+        assert!(
+            err.to_string()
+                .contains("precedes managed lane creation height 2")
+        );
+    }
+
+    #[test]
+    fn state_json_rejects_duplicate_nexus_runtime_lane() {
+        let state = state_with_snapshot_nexus_runtime();
+        let mut value = norito::json::to_value(&state).expect("serialize state");
+        let norito::json::Value::Object(map) = &mut value else {
+            panic!("state snapshot must be an object");
+        };
+        let norito::json::Value::Object(runtime) = map
+            .get_mut("nexus_runtime")
+            .expect("nexus runtime snapshot")
+        else {
+            panic!("nexus runtime snapshot must be an object");
+        };
+        let norito::json::Value::Array(lanes) =
+            runtime.get_mut("lanes").expect("nexus runtime lanes")
+        else {
+            panic!("nexus runtime lanes must be an array");
+        };
+        lanes.push(lanes[0].clone());
+
+        let err = deserialize_state_snapshot_value(value)
+            .err()
+            .expect("duplicate snapshot lane must fail closed");
+        assert!(err.to_string().contains("duplicate lane id"));
     }
 
     #[test]
@@ -47773,6 +52292,47 @@ mod tests {
     }
 
     #[test]
+    fn autoscale_runtime_elastic_range_rejects_profile_drift_and_restricted_base() {
+        let mut base_lane = LaneConfig {
+            lane_type: Some("regulated-public".to_owned()),
+            governance: Some("governance-v2".to_owned()),
+            settlement: Some("settlement-v3".to_owned()),
+            storage: LaneStorageProfile::SplitReplica,
+            proof_scheme: DaProofScheme::KzgBls12_381,
+            ..LaneConfig::default()
+        };
+        base_lane
+            .metadata
+            .insert("security.profile".to_owned(), "strict".to_owned());
+        let valid_lane = autoscale_elastic_lane_config_from_base(LaneId::new(1), &base_lane, 2)
+            .expect("public base profile should produce a managed lane");
+
+        let mut drifted_lane = valid_lane.clone();
+        drifted_lane.storage = LaneStorageProfile::FullReplica;
+        let drifted =
+            autoscale_transition_test_nexus(vec![base_lane.clone(), drifted_lane], 1, 3, 100);
+        let err = ensure_autoscale_runtime_elastic_range(&drifted)
+            .expect_err("runtime autoscale precheck must reject inherited profile drift");
+        assert!(matches!(
+            err,
+            LaneLifecycleError::InvalidAutoscaleManagedLane { lane, reason }
+                if lane == LaneId::new(1) && reason == AUTOSCALE_PROFILE_DRIFT_REASON
+        ));
+
+        let mut restricted_base = base_lane;
+        restricted_base.visibility = LaneVisibility::Restricted;
+        let restricted =
+            autoscale_transition_test_nexus(vec![restricted_base, valid_lane], 1, 3, 100);
+        let err = ensure_autoscale_runtime_elastic_range(&restricted)
+            .expect_err("runtime autoscale precheck must reject a restricted routing base");
+        assert!(matches!(
+            err,
+            LaneLifecycleError::InvalidAutoscaleManagedLane { lane, reason }
+                if lane == LaneId::new(1) && reason == AUTOSCALE_RESTRICTED_BASE_REASON
+        ));
+    }
+
+    #[test]
     fn autoscale_runtime_elastic_range_rejects_default_lane_inside_elastic_range() {
         let mut nexus = autoscale_transition_test_nexus(
             vec![
@@ -48514,6 +53074,62 @@ mod tests {
     }
 
     #[test]
+    fn autoscale_elastic_lane_config_inherits_public_base_profile_and_rejects_restricted_base() {
+        let mut base_lane = LaneConfig {
+            id: LaneId::new(2),
+            dataspace_id: DataSpaceId::new(9),
+            alias: "regulated-base".to_owned(),
+            description: Some("base profile".to_owned()),
+            visibility: LaneVisibility::Public,
+            lane_type: Some("regulated-public".to_owned()),
+            governance: Some("governance-v2".to_owned()),
+            settlement: Some("settlement-v3".to_owned()),
+            storage: LaneStorageProfile::SplitReplica,
+            proof_scheme: DaProofScheme::KzgBls12_381,
+            metadata: BTreeMap::new(),
+        };
+        base_lane
+            .metadata
+            .insert("security.profile".to_owned(), "strict".to_owned());
+        base_lane
+            .metadata
+            .insert("scheduler.teu_capacity".to_owned(), "2400".to_owned());
+
+        let lane = autoscale_elastic_lane_config_from_base(LaneId::new(3), &base_lane, 42)
+            .expect("public routing base should produce an elastic lane");
+
+        assert_eq!(lane.id, LaneId::new(3));
+        assert_eq!(lane.alias, "elastic-lane-3");
+        assert_eq!(
+            lane.description.as_deref(),
+            Some("Consensus-managed elastic lane")
+        );
+        assert!(lane.inherits_autoscale_profile_from(&base_lane));
+        assert_eq!(
+            lane.metadata
+                .get(AUTOSCALE_META_MANAGED)
+                .map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            lane.metadata
+                .get(AUTOSCALE_META_CREATED_HEIGHT)
+                .map(String::as_str),
+            Some("42")
+        );
+
+        let mut restricted_base = base_lane;
+        restricted_base.visibility = LaneVisibility::Restricted;
+        let err = autoscale_elastic_lane_config_from_base(LaneId::new(3), &restricted_base, 42)
+            .expect_err("restricted routing bases must not produce public elastic lanes");
+        assert!(matches!(
+            err,
+            LaneLifecycleError::InvalidAutoscaleManagedLane { lane, reason }
+                if lane == LaneId::new(3) && reason == AUTOSCALE_RESTRICTED_BASE_REASON
+        ));
+    }
+
+    #[test]
     fn autoscale_public_testnet_profile_retire_preserves_base_lanes() {
         let mut elastic_lane = LaneConfig {
             id: LaneId::new(3),
@@ -48830,6 +53446,428 @@ mod tests {
             .insert_block(std::collections::HashSet::new(), block_height);
     }
 
+    fn manual_lane_lifecycle_payload() -> iroha_data_model::nexus::LaneLifecycleParameterV1 {
+        let expected_catalog = LaneCatalog::default();
+        let incarnations =
+            derive_static_lane_incarnations(&DEFAULT_TEST_CHAIN_ID, &expected_catalog);
+        let incarnations =
+            iroha_data_model::nexus::LaneLifecycleParameterV1::canonical_incarnations(
+                &expected_catalog,
+                &incarnations,
+            )
+            .expect("default lifecycle incarnation set is canonical");
+        iroha_data_model::nexus::LaneLifecycleParameterV1::new(
+            &expected_catalog,
+            &incarnations,
+            iroha_data_model::nexus::LaneLifecyclePlan {
+                additions: vec![LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "manual-consensus-lane".to_owned(),
+                    ..LaneConfig::default()
+                }],
+                retire: Vec::new(),
+            },
+        )
+        .expect("manual lifecycle payload is canonical")
+    }
+
+    fn manual_lane_lifecycle_test_state(world: World) -> State {
+        let mut state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            ..Default::default()
+        };
+        nexus.fees.base_fee = Numeric::zero();
+        nexus.fees.per_byte_fee = Numeric::zero();
+        nexus.fees.per_instruction_fee = Numeric::zero();
+        nexus.fees.per_gas_unit_fee = Numeric::zero();
+        state
+            .set_nexus(nexus)
+            .expect("enable Nexus for manual lifecycle test");
+        state
+    }
+
+    fn committed_manual_lane_lifecycle_block(
+        authority: &AccountId,
+        signer: &KeyPair,
+    ) -> CommittedBlock {
+        let parameter = manual_lane_lifecycle_payload().into_custom_parameter();
+        let transaction =
+            TransactionBuilder::new((*super::DEFAULT_TEST_CHAIN_ID).clone(), authority.clone())
+                .with_instructions([iroha_data_model::isi::SetParameter::new(Parameter::Custom(
+                    parameter,
+                ))])
+                .sign(signer.private_key());
+        let entry_hash = transaction.hash_as_entrypoint();
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
+        let unverified = BlockBuilder::new(vec![accepted])
+            .chain(0, None)
+            .sign(signer.private_key())
+            .unpack(|_| {});
+        let mut signed: SignedBlock = unverified.into();
+        signed
+            .set_transaction_results(
+                Vec::new(),
+                &[entry_hash],
+                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+            )
+            .expect("manual lifecycle transaction result must match entrypoint");
+        ValidBlock::new_unverified_for_tests(signed)
+            .commit_unchecked()
+            .unpack(|_| {})
+    }
+
+    #[test]
+    fn consensus_lane_lifecycle_replay_converges_on_fresh_state() {
+        use iroha_executor_data_model::permission::parameter::CanSetParameters;
+
+        let (authority, signer) = gen_account_in("universal");
+        let committed = committed_manual_lane_lifecycle_block(&authority, &signer);
+        let replay_world = || {
+            let domain = Domain::new(sample_domain_id()).build(&authority);
+            let account = Account::new(authority.clone()).build(&authority);
+            let mut world = World::with([domain], [account], []);
+            world.account_permissions.insert(
+                authority.clone(),
+                BTreeSet::from([Permission::from(CanSetParameters)]),
+            );
+            world
+        };
+        let first = manual_lane_lifecycle_test_state(replay_world());
+        let replay = manual_lane_lifecycle_test_state(replay_world());
+
+        for state in [&first, &replay] {
+            let mut block = state.block(committed.as_ref().header());
+            let _ = block.apply(&committed, Vec::new());
+            block
+                .commit()
+                .expect("consensus lane lifecycle replay must commit");
+        }
+
+        let first_nexus = first.nexus_snapshot();
+        let replay_nexus = replay.nexus_snapshot();
+        assert_eq!(first_nexus.lane_catalog, replay_nexus.lane_catalog);
+        assert!(lane_config_entries_match(
+            &first_nexus.lane_config,
+            &replay_nexus.lane_config
+        ));
+        assert!(
+            first_nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .any(|lane| lane.id == LaneId::new(1)),
+            "replayed signed lifecycle transaction must publish the new lane"
+        );
+        assert_eq!(
+            first_nexus.autoscale.last_transition_height, 0,
+            "manual transitions must not consume autoscale cooldown"
+        );
+
+        let (events_sender, _) = tokio::sync::broadcast::channel(8);
+        let queue = crate::queue::Queue::from_config(
+            iroha_config::parameters::actual::Queue::default(),
+            events_sender,
+        );
+        assert!(queue.reconfigure_nexus_with_state_if_needed(&first_nexus, &first, None,));
+        assert!(
+            !queue.reconfigure_nexus_with_state_if_needed(&first_nexus, &first, None),
+            "queue topology refresh must be idempotent after committed lifecycle publication"
+        );
+    }
+
+    #[test]
+    fn consensus_lane_lifecycle_rejects_stale_catalog_without_overlay_mutation() {
+        use crate::smartcontracts::Execute as _;
+
+        let state = manual_lane_lifecycle_test_state(World::default());
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let mut payload = manual_lane_lifecycle_payload();
+        payload.expected_catalog_hash = Hash::new(b"stale-lane-catalog");
+        let err = iroha_data_model::isi::SetParameter::new(Parameter::Custom(
+            payload.into_custom_parameter(),
+        ))
+        .execute(&ALICE_ID, &mut transaction)
+        .expect_err("stale catalog commitment must fail closed");
+        assert!(err.to_string().contains("expected catalog hash"));
+        drop(transaction);
+
+        assert_eq!(block.nexus.lane_catalog, LaneCatalog::default());
+        assert!(block.pending_autoscale_lifecycle.is_none());
+    }
+
+    #[test]
+    fn consensus_lane_lifecycle_rejects_second_transition_and_rolls_back_first() {
+        use crate::smartcontracts::Execute as _;
+
+        let state = manual_lane_lifecycle_test_state(World::default());
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let instruction = || {
+            iroha_data_model::isi::SetParameter::new(Parameter::Custom(
+                manual_lane_lifecycle_payload().into_custom_parameter(),
+            ))
+        };
+        instruction()
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("first transition may stage in the transaction overlay");
+        let err = instruction()
+            .execute(&ALICE_ID, &mut transaction)
+            .expect_err("a second transition in the same transaction must be rejected");
+        assert!(err.to_string().contains("already staged"));
+        drop(transaction);
+
+        assert_eq!(block.nexus.lane_catalog, LaneCatalog::default());
+        assert!(block.pending_autoscale_lifecycle.is_none());
+    }
+
+    #[test]
+    fn normal_validation_requires_can_set_parameters_for_lane_lifecycle() {
+        use iroha_executor_data_model::permission::parameter::CanSetParameters;
+
+        let (authority, signer) = gen_account_in("universal");
+        let domain = Domain::new(sample_domain_id()).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let previous = autoscale_signed_block_with_committed_fragments(None, 100, 1);
+
+        for authorized in [false, true] {
+            let mut world = World::with([domain.clone()], [account.clone()], []);
+            if authorized {
+                world.account_permissions.insert(
+                    authority.clone(),
+                    BTreeSet::from([Permission::from(CanSetParameters)]),
+                );
+            }
+            let state = manual_lane_lifecycle_test_state(world);
+            let transaction =
+                TransactionBuilder::new((*super::DEFAULT_TEST_CHAIN_ID).clone(), authority.clone())
+                    .with_instructions([iroha_data_model::isi::SetParameter::new(
+                        Parameter::Custom(manual_lane_lifecycle_payload().into_custom_parameter()),
+                    )])
+                    .sign(signer.private_key());
+            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
+            let unverified = BlockBuilder::new(vec![accepted])
+                .chain(0, Some(&previous))
+                .sign(signer.private_key())
+                .unpack(|_| {});
+            let mut state_block = state.block(unverified.header());
+            let committed = unverified
+                .validate_and_record_transactions(&mut state_block)
+                .unpack(|_| {})
+                .commit_unchecked()
+                .unpack(|_| {});
+            let signed: SignedBlock = committed.into();
+
+            if authorized {
+                assert!(
+                    signed.error(0).is_none(),
+                    "CanSetParameters holder should pass lifecycle validation: {:?}",
+                    signed.error(0)
+                );
+                assert!(state_block.pending_autoscale_lifecycle.is_some());
+            } else {
+                let rejection = signed
+                    .error(0)
+                    .expect("authority without CanSetParameters must be rejected")
+                    .to_string();
+                assert!(
+                    rejection
+                        .contains("Can't set executor configuration parameters without permission"),
+                    "unexpected permission rejection: {rejection}"
+                );
+                assert!(state_block.pending_autoscale_lifecycle.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn signed_lane_lifecycle_transaction_rejects_duplicate_transition_atomically() {
+        use iroha_executor_data_model::permission::parameter::CanSetParameters;
+
+        let (authority, signer) = gen_account_in("universal");
+        let domain = Domain::new(sample_domain_id()).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let mut world = World::with([domain], [account], []);
+        world.account_permissions.insert(
+            authority.clone(),
+            BTreeSet::from([Permission::from(CanSetParameters)]),
+        );
+        let state = manual_lane_lifecycle_test_state(world);
+        let previous = autoscale_signed_block_with_committed_fragments(None, 100, 1);
+        let instruction = || {
+            iroha_data_model::isi::SetParameter::new(Parameter::Custom(
+                manual_lane_lifecycle_payload().into_custom_parameter(),
+            ))
+        };
+        let transaction =
+            TransactionBuilder::new((*super::DEFAULT_TEST_CHAIN_ID).clone(), authority.clone())
+                .with_instructions([instruction(), instruction()])
+                .sign(signer.private_key());
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
+        let unverified = BlockBuilder::new(vec![accepted])
+            .chain(0, Some(&previous))
+            .sign(signer.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(unverified.header());
+        let committed = unverified
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {})
+            .commit_unchecked()
+            .unpack(|_| {});
+        let signed: SignedBlock = committed.into();
+        let rejection = signed
+            .error(0)
+            .expect("duplicate signed lifecycle transition must be rejected")
+            .to_string();
+
+        assert!(rejection.contains("already staged"), "{rejection}");
+        assert_eq!(state_block.nexus.lane_catalog, LaneCatalog::default());
+        assert!(state_block.pending_autoscale_lifecycle.is_none());
+    }
+
+    #[test]
+    fn signed_lane_lifecycle_rejects_stale_catalog_after_prior_commit() {
+        use iroha_executor_data_model::permission::parameter::CanSetParameters;
+
+        let (authority, signer) = gen_account_in("universal");
+        let domain = Domain::new(sample_domain_id()).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let mut world = World::with([domain], [account], []);
+        world.account_permissions.insert(
+            authority.clone(),
+            BTreeSet::from([Permission::from(CanSetParameters)]),
+        );
+        let state = manual_lane_lifecycle_test_state(world);
+        let first = committed_manual_lane_lifecycle_block(&authority, &signer);
+        {
+            let mut block = state.block(first.as_ref().header());
+            let _ = block.apply(&first, Vec::new());
+            block.commit().expect("commit first lifecycle transition");
+        }
+        let before = state.nexus_snapshot().lane_catalog;
+        assert!(before.lanes().iter().any(|lane| lane.id == LaneId::new(1)));
+
+        let stale_incarnations =
+            derive_static_lane_incarnations(&DEFAULT_TEST_CHAIN_ID, &LaneCatalog::default());
+        let stale_incarnations =
+            iroha_data_model::nexus::LaneLifecycleParameterV1::canonical_incarnations(
+                &LaneCatalog::default(),
+                &stale_incarnations,
+            )
+            .expect("default lifecycle incarnation set is canonical");
+        let stale_payload = iroha_data_model::nexus::LaneLifecycleParameterV1::new(
+            &LaneCatalog::default(),
+            &stale_incarnations,
+            iroha_data_model::nexus::LaneLifecyclePlan {
+                additions: vec![LaneConfig {
+                    id: LaneId::new(2),
+                    alias: "stale-second-lane".to_owned(),
+                    ..LaneConfig::default()
+                }],
+                retire: Vec::new(),
+            },
+        )
+        .expect("stale lifecycle payload is structurally canonical");
+        let transaction =
+            TransactionBuilder::new((*super::DEFAULT_TEST_CHAIN_ID).clone(), authority.clone())
+                .with_instructions([iroha_data_model::isi::SetParameter::new(Parameter::Custom(
+                    stale_payload.into_custom_parameter(),
+                ))])
+                .sign(signer.private_key());
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
+        let unverified = BlockBuilder::new(vec![accepted])
+            .chain(0, Some(first.as_ref()))
+            .sign(signer.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(unverified.header());
+        let committed = unverified
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {})
+            .commit_unchecked()
+            .unpack(|_| {});
+        let signed: SignedBlock = committed.into();
+        let rejection = signed
+            .error(0)
+            .expect("stale signed lifecycle transition must be rejected")
+            .to_string();
+
+        assert!(rejection.contains("expected catalog hash"), "{rejection}");
+        assert_eq!(state_block.nexus.lane_catalog, before);
+        assert!(state_block.pending_autoscale_lifecycle.is_none());
+    }
+
+    #[test]
+    fn signed_lane_lifecycle_rejects_stale_identical_replacement_incarnation() {
+        let state = manual_lane_lifecycle_test_state(World::default());
+        let lane = LaneConfig {
+            id: LaneId::new(1),
+            alias: "replaceable-manual-lane".to_owned(),
+            ..LaneConfig::default()
+        };
+        let catalog = LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), lane.clone()])
+            .expect("two-lane catalog is valid");
+        state
+            .set_nexus(iroha_config::parameters::actual::Nexus {
+                enabled: true,
+                lane_catalog: catalog.clone(),
+                ..Default::default()
+            })
+            .expect("install initial manual lane");
+
+        let stale_incarnations =
+            iroha_data_model::nexus::LaneLifecycleParameterV1::canonical_incarnations(
+                &catalog,
+                &state.lane_incarnations_snapshot(),
+            )
+            .expect("active incarnations are canonical");
+        let replacement = iroha_data_model::nexus::LaneLifecyclePlan {
+            additions: vec![lane],
+            retire: vec![LaneId::new(1)],
+        };
+        let stale_payload = iroha_data_model::nexus::LaneLifecycleParameterV1::new(
+            &catalog,
+            &stale_incarnations,
+            replacement.clone(),
+        )
+        .expect("replacement payload is canonical");
+        let old_incarnation = state
+            .lane_incarnation(LaneId::new(1))
+            .expect("lane has an incarnation");
+
+        state
+            .apply_lane_lifecycle(&replacement)
+            .expect("first identical replacement succeeds");
+        assert_eq!(state.nexus_snapshot().lane_catalog, catalog);
+        assert_ne!(
+            state.lane_incarnation(LaneId::new(1)),
+            Some(old_incarnation),
+            "byte-identical replacement must rotate the incarnation"
+        );
+
+        let before_incarnations = state.lane_incarnations_snapshot();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let error = transaction
+            .stage_consensus_lane_lifecycle(&stale_payload)
+            .expect_err("old incarnation-bound payload must not replay");
+        assert!(matches!(
+            error,
+            LaneLifecycleError::StaleIncarnationRoot { .. }
+        ));
+        assert_eq!(transaction.lane_incarnations, before_incarnations);
+        drop(transaction);
+        drop(block);
+        assert_eq!(state.lane_incarnations_snapshot(), before_incarnations);
+    }
+
     fn signed_lane_block_vote_for_state_test(
         proposal: &LaneBlockProposalV1,
         phase: CertPhase,
@@ -49028,6 +54066,89 @@ mod tests {
         nexus
     }
 
+    fn seed_autoscale_committee_for_test(state: &State, peer_count: usize) -> Vec<KeyPair> {
+        let keypairs: Vec<_> = (0..peer_count)
+            .map(|index| {
+                let seed = u8::try_from(index)
+                    .expect("autoscale committee test index must fit u8")
+                    .saturating_add(0x41);
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic autoscale committee BLS key")
+            })
+            .collect();
+        seed_consensus_keys_with_pops(state, &keypairs);
+        let mut topology = state.commit_topology.block();
+        topology.clear();
+        for keypair in &keypairs {
+            topology.push(PeerId::new(keypair.public_key().clone()));
+        }
+        topology.commit();
+        keypairs
+    }
+
+    fn autoscale_committee_guard_test_state() -> State {
+        let mut state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        state
+            .set_nexus(autoscale_transition_test_nexus(
+                vec![LaneConfig::default()],
+                1,
+                3,
+                100,
+            ))
+            .expect("apply autoscale committee-guard test nexus config");
+        state
+    }
+
+    fn autoscale_scale_out_plan_for_test(
+        proposal_height: u64,
+    ) -> iroha_data_model::nexus::LaneLifecyclePlan {
+        iroha_data_model::nexus::LaneLifecyclePlan {
+            additions: vec![autoscale_elastic_lane_config(
+                LaneId::new(1),
+                DataSpaceId::UNIVERSAL,
+                proposal_height,
+            )],
+            retire: Vec::new(),
+        }
+    }
+
+    fn autoscale_scale_out_transition_for_test() -> PendingAutoscaleTransition {
+        PendingAutoscaleTransition::ScaleOut {
+            lane: LaneId::new(1),
+            active_lanes: 1,
+            autoscale_capacity_lanes: 1,
+            out_latency_ratio_permille: 0,
+            out_utilization_p95_permille: 0,
+        }
+    }
+
+    fn assert_autoscale_committee_rejection_is_atomic(state_block: &StateBlock<'_>) {
+        assert_eq!(
+            state_block.nexus.lane_catalog,
+            LaneCatalog::default(),
+            "committee rejection must leave the block-local catalog unchanged"
+        );
+        assert!(
+            lane_config_entries_match(
+                &state_block.nexus.lane_config,
+                &RuntimeLaneConfig::default()
+            ),
+            "committee rejection must leave block-local lane geometry unchanged"
+        );
+        assert_eq!(
+            state_block.nexus.autoscale.last_transition_height, 0,
+            "committee rejection must not consume autoscale cooldown"
+        );
+        assert!(
+            state_block.pending_autoscale_lifecycle.is_none(),
+            "committee rejection must not stage storage or cursor reconciliation"
+        );
+    }
+
     fn enable_nexus_autoscale_for_testing(state: &State) {
         let mut nexus = state.nexus.write();
         nexus.enabled = true;
@@ -49129,6 +54250,7 @@ mod tests {
                 100,
             ))
             .expect("apply autoscale test nexus config");
+        seed_autoscale_committee_for_test(&state, 4);
 
         let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
@@ -49229,6 +54351,7 @@ mod tests {
                 100,
             ))
             .expect("apply autoscale test nexus config");
+        seed_autoscale_committee_for_test(&state, 4);
 
         let retained_lane = LaneId::SINGLE;
         let stale_lane = LaneId::new(9);
@@ -49340,6 +54463,7 @@ mod tests {
         state
             .set_nexus(nexus)
             .expect("apply autoscale telemetry test nexus config");
+        seed_autoscale_committee_for_test(&state, 4);
 
         let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
@@ -49384,6 +54508,7 @@ mod tests {
                 100,
             ))
             .expect("apply autoscale test nexus config");
+        seed_autoscale_committee_for_test(&state, 4);
 
         let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
@@ -49455,6 +54580,7 @@ mod tests {
                 100,
             ))
             .expect("apply autoscale test nexus config");
+        seed_autoscale_committee_for_test(&state, 4);
         *state.tiered_backend.lock() =
             TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
 
@@ -49570,6 +54696,7 @@ mod tests {
                 100,
             ))
             .expect("apply autoscale test nexus config");
+        seed_autoscale_committee_for_test(&state, 4);
         *state.tiered_backend.lock() =
             TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
 
@@ -49698,6 +54825,7 @@ mod tests {
         store_root: &Path,
         cold_root: &Path,
     ) -> AutoscaleCommitRevalidationStage<'state> {
+        seed_autoscale_committee_for_test(state, 4);
         let elastic_lane = autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 2);
         let updated_catalog =
             LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic_lane])
@@ -49738,6 +54866,69 @@ mod tests {
             elastic_blocks_dir,
             elastic_snapshot_dir,
         }
+    }
+
+    #[test]
+    fn autoscale_catalog_publication_failure_rolls_back_prepared_geometry_in_process() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let store_root = temp_dir.path().join("kura");
+        let cold_root = temp_dir.path().join("cold");
+        let initial_config = RuntimeLaneConfig::default();
+        let kura = strict_kura_for_testing(store_root.clone(), &initial_config);
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+        state
+            .set_nexus(autoscale_transition_test_nexus(
+                vec![LaneConfig::default()],
+                1,
+                3,
+                100,
+            ))
+            .expect("apply autoscale test nexus config");
+        *state.tiered_backend.lock() =
+            TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
+
+        let AutoscaleCommitRevalidationStage {
+            state_block,
+            elastic_blocks_dir,
+            elastic_snapshot_dir,
+        } = stage_autoscale_scale_out_for_commit_revalidation(
+            &state,
+            &kura,
+            &store_root,
+            &cold_root,
+        );
+        kura.fail_next_lane_geometry_publication_for_test();
+
+        let err = state_block
+            .commit()
+            .expect_err("publication failure must abort before transaction/catalog commit");
+        assert!(matches!(
+            err,
+            TransactionsBlockError::AutoscaleLaneLifecycle
+        ));
+        assert_eq!(
+            state
+                .nexus_snapshot()
+                .lane_catalog
+                .lanes()
+                .iter()
+                .map(|lane| lane.id)
+                .collect::<Vec<_>>(),
+            vec![LaneId::SINGLE]
+        );
+        assert_eq!(state.transactions.view().latest_height_for_tests(), 1);
+        assert!(
+            !elastic_blocks_dir.exists(),
+            "failed publication must roll Kura back without waiting for restart"
+        );
+        assert!(
+            !elastic_snapshot_dir.exists(),
+            "failed publication must remove uncommitted tiered geometry"
+        );
+        state
+            .restore_kura_lane_segments_from_nexus()
+            .expect("rolled-back geometry remains restart-verifiable");
     }
 
     struct AutoscaleScaleInCommitRevalidationStage<'state> {
@@ -50261,6 +55452,7 @@ mod tests {
                 100,
             ))
             .expect("apply autoscale test nexus config");
+        seed_autoscale_committee_for_test(&state, 4);
         *state.tiered_backend.lock() =
             TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
 
@@ -50356,6 +55548,7 @@ mod tests {
                 100,
             ))
             .expect("apply autoscale test nexus config");
+        seed_autoscale_committee_for_test(&state, 4);
         *state.tiered_backend.lock() =
             TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
 
@@ -50614,6 +55807,7 @@ mod tests {
                 100,
             ))
             .expect("apply autoscale test nexus config");
+        seed_autoscale_committee_for_test(&state, 4);
         *state.tiered_backend.lock() =
             TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
 
@@ -50714,6 +55908,7 @@ mod tests {
                 100,
             ))
             .expect("apply autoscale test nexus config");
+        seed_autoscale_committee_for_test(&state, 4);
         *state.tiered_backend.lock() =
             TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
 
@@ -50808,6 +56003,7 @@ mod tests {
                 100,
             ))
             .expect("apply autoscale test nexus config");
+        seed_autoscale_committee_for_test(&state, 4);
 
         let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
         let mut first_state_block = state.block(first.header());
@@ -50914,6 +56110,7 @@ mod tests {
                 100,
             ))
             .expect("apply autoscale test nexus config");
+        seed_autoscale_committee_for_test(&state, 4);
         *state.tiered_backend.lock() =
             TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
 
@@ -51040,6 +56237,7 @@ mod tests {
                 100,
             ))
             .expect("apply autoscale test nexus config");
+        seed_autoscale_committee_for_test(&state, 4);
         *state.tiered_backend.lock() =
             TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
 
@@ -51958,6 +57156,7 @@ mod tests {
         state
             .set_nexus(nexus)
             .expect("apply autoscale conflicting-window test nexus config");
+        seed_autoscale_committee_for_test(&state, 4);
         state
             .apply_lane_lifecycle_with_options(
                 &iroha_data_model::nexus::LaneLifecyclePlan {
@@ -52013,14 +57212,27 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+        let mut base_lane = LaneConfig {
+            id: LaneId::new(0),
+            alias: "core".to_owned(),
+            lane_type: Some("regulated-public".to_owned()),
+            governance: Some("governance-v2".to_owned()),
+            settlement: Some("settlement-v3".to_owned()),
+            storage: LaneStorageProfile::SplitReplica,
+            proof_scheme: DaProofScheme::KzgBls12_381,
+            ..LaneConfig::default()
+        };
+        base_lane
+            .metadata
+            .insert("security.profile".to_owned(), "strict".to_owned());
+        base_lane
+            .metadata
+            .insert("scheduler.teu_capacity".to_owned(), "2400".to_owned());
+        let expected_base_profile = base_lane.clone();
         state
             .set_nexus(autoscale_transition_test_nexus(
                 vec![
-                    LaneConfig {
-                        id: LaneId::new(0),
-                        alias: "core".to_owned(),
-                        ..LaneConfig::default()
-                    },
+                    base_lane,
                     LaneConfig {
                         id: LaneId::new(1),
                         alias: "governance".to_owned(),
@@ -52037,6 +57249,7 @@ mod tests {
                 100,
             ))
             .expect("apply autoscale public-profile test nexus config");
+        seed_autoscale_committee_for_test(&state, 4);
 
         let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
@@ -52059,6 +57272,22 @@ mod tests {
             .expect("scale-out should add first elastic public-profile lane");
         assert_eq!(lane.dataspace_id, DataSpaceId::UNIVERSAL);
         assert_eq!(lane.alias, "elastic-lane-3");
+        assert!(lane.inherits_autoscale_profile_from(&expected_base_profile));
+        assert_eq!(lane.lane_type.as_deref(), Some("regulated-public"));
+        assert_eq!(lane.governance.as_deref(), Some("governance-v2"));
+        assert_eq!(lane.settlement.as_deref(), Some("settlement-v3"));
+        assert_eq!(lane.storage, LaneStorageProfile::SplitReplica);
+        assert_eq!(lane.proof_scheme, DaProofScheme::KzgBls12_381);
+        assert_eq!(
+            lane.metadata.get("security.profile").map(String::as_str),
+            Some("strict")
+        );
+        assert_eq!(
+            lane.metadata
+                .get("scheduler.teu_capacity")
+                .map(String::as_str),
+            Some("2400")
+        );
         assert_eq!(
             lane.metadata.get(AUTOSCALE_META_MANAGED),
             Some(&"true".to_owned())
@@ -52082,6 +57311,50 @@ mod tests {
             ]
         );
         assert_eq!(nexus.autoscale.last_transition_height, 2);
+    }
+
+    #[test]
+    fn autoscale_transition_fails_closed_for_restricted_base_profile() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+        let restricted_base = LaneConfig {
+            visibility: LaneVisibility::Restricted,
+            lane_type: Some("private-regulated".to_owned()),
+            governance: Some("restricted-governance".to_owned()),
+            storage: LaneStorageProfile::CommitmentOnly,
+            ..LaneConfig::default()
+        };
+        state
+            .set_nexus(autoscale_transition_test_nexus(
+                vec![restricted_base.clone()],
+                1,
+                3,
+                100,
+            ))
+            .expect("apply restricted autoscale-base test nexus config");
+
+        let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
+        let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
+        kura.store_block(Arc::new(first))
+            .expect("store previous autoscale block");
+
+        let mut state_block = state.block(second.header());
+        state_block.add_committed_fragments(20);
+        let committed_second = ValidBlock::new_unverified_for_tests(second)
+            .commit_unchecked()
+            .unpack(|_| {});
+        state_block.maybe_apply_nexus_autoscale(&committed_second);
+
+        assert_eq!(
+            state_block.nexus.lane_catalog.lanes(),
+            &[restricted_base],
+            "restricted routing bases must not be weakened into public elastic lanes"
+        );
+        assert_eq!(
+            state_block.nexus.autoscale.last_transition_height, 0,
+            "rejected scale-out must not enter cooldown"
+        );
     }
 
     #[test]
@@ -52113,6 +57386,7 @@ mod tests {
                 100,
             ))
             .expect("apply autoscale mixed-profile test nexus config");
+        seed_autoscale_committee_for_test(&state, 4);
 
         let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
@@ -52742,6 +58016,284 @@ mod tests {
             "scale-in capacity mismatch must leave the managed lane intact"
         );
         assert!(state_block.pending_autoscale_lifecycle.is_none());
+    }
+
+    #[test]
+    fn autoscale_scale_out_committee_preflight_accepts_four_live_peers() {
+        let state = autoscale_committee_guard_test_state();
+        let keypairs = seed_autoscale_committee_for_test(&state, 4);
+        let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
+        let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
+        let mut state_block = state.block(second.header());
+
+        state_block
+            .apply_autoscale_lane_lifecycle(
+                &autoscale_scale_out_plan_for_test(2),
+                autoscale_scale_out_transition_for_test(),
+            )
+            .expect("four distinct live peers must satisfy f=1 autoscale placement");
+
+        assert_eq!(
+            state_block
+                .nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .map(|lane| lane.id)
+                .collect::<Vec<_>>(),
+            vec![LaneId::SINGLE, LaneId::new(1)]
+        );
+        let prospective = &state_block.nexus;
+        let validator_mode = prospective
+            .staking
+            .validator_mode(LaneId::new(1), &prospective.lane_catalog);
+        let topology: Vec<_> = state_block.commit_topology.iter().cloned().collect();
+        let committee = State::authoritative_lane_peer_ids_from_sources(
+            &state_block.world,
+            &state_block.chain_id,
+            LaneId::new(1),
+            validator_mode,
+            state_block.lane_manifests.as_ref(),
+            prospective,
+            &topology,
+            3,
+        );
+        assert_eq!(committee.len(), 4);
+        assert!(committee.iter().all(|peer| {
+            keypairs
+                .iter()
+                .any(|keypair| peer.public_key() == keypair.public_key())
+        }));
+        assert!(state_block.pending_autoscale_lifecycle.is_some());
+    }
+
+    #[test]
+    fn autoscale_scale_out_committee_preflight_rejects_three_peers_atomically() {
+        let state = autoscale_committee_guard_test_state();
+        seed_autoscale_committee_for_test(&state, 3);
+        let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
+        let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
+        let mut state_block = state.block(second.header());
+
+        let err = state_block
+            .apply_autoscale_lane_lifecycle(
+                &autoscale_scale_out_plan_for_test(2),
+                autoscale_scale_out_transition_for_test(),
+            )
+            .expect_err("three peers cannot form the exact f=1 committee");
+
+        assert!(matches!(
+            err,
+            LaneLifecycleError::AutoscaleCommitteeUnavailable {
+                lane,
+                dataspace,
+                required: 4,
+                actual: 0,
+            } if lane == LaneId::new(1) && dataspace == DataSpaceId::UNIVERSAL
+        ));
+        assert_autoscale_committee_rejection_is_atomic(&state_block);
+        assert!(
+            state
+                .da_shard_canonical_reset_heights_snapshot_cached()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn autoscale_scale_out_committee_preflight_rejects_duplicate_topology_peers() {
+        let state = autoscale_committee_guard_test_state();
+        let keypairs = seed_autoscale_committee_for_test(&state, 3);
+        {
+            let mut topology = state.commit_topology.block();
+            topology.push(PeerId::new(keypairs[2].public_key().clone()));
+            topology.commit();
+        }
+        let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
+        let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
+        let mut state_block = state.block(second.header());
+
+        let err = state_block
+            .apply_autoscale_lane_lifecycle(
+                &autoscale_scale_out_plan_for_test(2),
+                autoscale_scale_out_transition_for_test(),
+            )
+            .expect_err("duplicate topology entries must not inflate committee authority");
+
+        assert!(matches!(
+            err,
+            LaneLifecycleError::AutoscaleCommitteeUnavailable {
+                required: 4,
+                actual: 0,
+                ..
+            }
+        ));
+        assert_autoscale_committee_rejection_is_atomic(&state_block);
+    }
+
+    #[test]
+    fn autoscale_scale_out_committee_preflight_rejects_non_live_consensus_key() {
+        let state = autoscale_committee_guard_test_state();
+        let keypairs = seed_autoscale_committee_for_test(&state, 4);
+        seed_consensus_key_with_lifecycle_for_test(
+            &state,
+            &keypairs[3],
+            ConsensusKeyStatus::Active,
+            0,
+            Some(3),
+        );
+        let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
+        let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
+        let mut state_block = state.block(second.header());
+
+        let err = state_block
+            .apply_autoscale_lane_lifecycle(
+                &autoscale_scale_out_plan_for_test(2),
+                autoscale_scale_out_transition_for_test(),
+            )
+            .expect_err("a key expired at proposal height must not authorize a new lane");
+
+        assert!(matches!(
+            err,
+            LaneLifecycleError::AutoscaleCommitteeUnavailable {
+                required: 4,
+                actual: 0,
+                ..
+            }
+        ));
+        assert_autoscale_committee_rejection_is_atomic(&state_block);
+    }
+
+    #[test]
+    fn autoscale_scale_out_committee_preflight_rejects_insufficient_explicit_manifest() {
+        let state = autoscale_committee_guard_test_state();
+        seed_autoscale_committee_for_test(&state, 4);
+        let (manifest_validators, manifest_keypairs) = bls_accounts_in("validators", 3);
+        seed_consensus_keys_with_pops(&state, &manifest_keypairs);
+        install_lane_manifest_registry(
+            &state,
+            &[(LaneId::new(1), DataSpaceId::UNIVERSAL, manifest_validators)],
+        );
+        let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
+        let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
+        let mut state_block = state.block(second.header());
+
+        let err = state_block
+            .apply_autoscale_lane_lifecycle(
+                &autoscale_scale_out_plan_for_test(2),
+                autoscale_scale_out_transition_for_test(),
+            )
+            .expect_err("an explicit three-validator manifest must suppress topology fallback");
+
+        assert!(matches!(
+            err,
+            LaneLifecycleError::AutoscaleCommitteeUnavailable {
+                required: 4,
+                actual: 0,
+                ..
+            }
+        ));
+        assert_autoscale_committee_rejection_is_atomic(&state_block);
+    }
+
+    #[test]
+    fn autoscale_scale_out_committee_preflight_rejects_duplicate_manifest_authority() {
+        let state = autoscale_committee_guard_test_state();
+        seed_autoscale_committee_for_test(&state, 4);
+        let (mut manifest_validators, manifest_keypairs) = bls_accounts_in("validators", 4);
+        seed_consensus_keys_with_pops(&state, &manifest_keypairs);
+        manifest_validators[3] = manifest_validators[2].clone();
+        install_lane_manifest_registry(
+            &state,
+            &[(LaneId::new(1), DataSpaceId::UNIVERSAL, manifest_validators)],
+        );
+        let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
+        let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
+        let mut state_block = state.block(second.header());
+
+        let err = state_block
+            .apply_autoscale_lane_lifecycle(
+                &autoscale_scale_out_plan_for_test(2),
+                autoscale_scale_out_transition_for_test(),
+            )
+            .expect_err("duplicate manifest validators must fail closed");
+
+        assert!(matches!(
+            err,
+            LaneLifecycleError::AutoscaleCommitteeUnavailable {
+                required: 4,
+                actual: 0,
+                ..
+            }
+        ));
+        assert_autoscale_committee_rejection_is_atomic(&state_block);
+    }
+
+    #[test]
+    fn autoscale_scale_out_committee_preflight_rejects_invalid_size_policy() {
+        for case in ["validator-cap", "overflow"] {
+            let state = autoscale_committee_guard_test_state();
+            {
+                let mut nexus = state.nexus.write();
+                if case == "validator-cap" {
+                    nexus.staking.max_validators = nonzero!(3_u32);
+                } else {
+                    let mut dataspace = DataSpaceMetadata::default();
+                    dataspace.fault_tolerance = u32::MAX;
+                    nexus.dataspace_catalog = DataSpaceCatalog::new(vec![dataspace])
+                        .expect("overflow fault-tolerance catalog remains structurally valid");
+                }
+            }
+            seed_autoscale_committee_for_test(&state, 4);
+            let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
+            let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
+            let mut state_block = state.block(second.header());
+
+            let err = state_block
+                .apply_autoscale_lane_lifecycle(
+                    &autoscale_scale_out_plan_for_test(2),
+                    autoscale_scale_out_transition_for_test(),
+                )
+                .unwrap_err();
+
+            assert!(
+                matches!(
+                    &err,
+                    LaneLifecycleError::AutoscaleCommitteeSizeInvalid { lane, dataspace }
+                        if *lane == LaneId::new(1) && *dataspace == DataSpaceId::UNIVERSAL
+                ),
+                "unexpected {case} rejection: {err:?}"
+            );
+            assert_autoscale_committee_rejection_is_atomic(&state_block);
+        }
+    }
+
+    #[test]
+    fn autoscale_scale_out_committee_preflight_rejects_proposal_height_overflow() {
+        let state = autoscale_committee_guard_test_state();
+        seed_autoscale_committee_for_test(&state, 4);
+        let header = BlockHeader::new(
+            NonZeroU64::new(u64::MAX).expect("maximum height is nonzero"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut state_block = state.block(header);
+
+        let err = state_block
+            .apply_autoscale_lane_lifecycle(
+                &autoscale_scale_out_plan_for_test(u64::MAX),
+                autoscale_scale_out_transition_for_test(),
+            )
+            .expect_err("a committed lane must have a representable first proposal height");
+
+        assert!(matches!(
+            err,
+            LaneLifecycleError::AutoscaleProposalHeightOverflow(lane)
+                if lane == LaneId::new(1)
+        ));
+        assert_autoscale_committee_rejection_is_atomic(&state_block);
     }
 
     #[test]
@@ -57369,10 +62921,8 @@ mod tests {
             },
             9,
         );
-        let elastic_lane = confidential_lane(
-            autoscale_elastic_lane_config(retired_lane_id, DataSpaceId::UNIVERSAL, 1),
-            8,
-        );
+        let elastic_lane = autoscale_elastic_lane_config_from_base(retired_lane_id, &base_lane, 1)
+            .expect("confidential public base should produce a matching elastic lane");
         state
             .set_nexus(autoscale_transition_test_nexus(
                 vec![base_lane, retained_side_lane],
@@ -58878,16 +64428,18 @@ mod tests {
         streaming.soravpn.provision_spool_dir = soravpn_spool.clone();
         state.set_streaming(streaming);
 
-        state.set_tiered_backend(&iroha_config::parameters::actual::TieredState {
-            enabled: true,
-            hot_retained_keys: 0,
-            hot_retained_bytes: iroha_config::base::util::Bytes(0),
-            hot_retained_grace_snapshots: 0,
-            cold_store_root: Some(cold_root.clone()),
-            da_store_root: None,
-            max_snapshots: 0,
-            max_cold_bytes: iroha_config::base::util::Bytes(0),
-        });
+        state
+            .set_tiered_backend(&iroha_config::parameters::actual::TieredState {
+                enabled: true,
+                hot_retained_keys: 0,
+                hot_retained_bytes: iroha_config::base::util::Bytes(0),
+                hot_retained_grace_snapshots: 0,
+                cold_store_root: Some(cold_root.clone()),
+                da_store_root: None,
+                max_snapshots: 0,
+                max_cold_bytes: iroha_config::base::util::Bytes(0),
+            })
+            .expect("configure tiered state for storage budget test");
 
         let oldest_spool_size = std::fs::metadata(soranet_spool.join("a-file.norito"))
             .expect("stat soranet spool file")
@@ -59511,9 +65063,19 @@ mod tests {
 
         let old_dir = lane_entry.blocks_dir(&store_root);
         assert!(old_dir.exists(), "expected original directory to exist");
+        let incarnations = derive_static_lane_incarnations(&state.chain_id, &initial_catalog);
+        let activation_heights = BTreeMap::from([(LaneId::SINGLE, 0)]);
 
         state
-            .apply_lane_geometry_updates(&initial_config, &updated_config, &BTreeSet::new())
+            .apply_lane_geometry_updates(
+                &initial_config,
+                &updated_config,
+                &incarnations,
+                &incarnations,
+                &activation_heights,
+                &activation_heights,
+                &BTreeSet::new(),
+            )
             .expect("lane geometry update");
 
         let new_dir = updated_entry.blocks_dir(&store_root);
@@ -61038,6 +66600,9 @@ mod tests {
         let off_default = autoscale_elastic_lane_config(LaneId::new(1), off_default_dataspace, 2);
         let disabled_owner =
             autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 2);
+        let mut profile_drift =
+            autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 2);
+        profile_drift.storage = LaneStorageProfile::SplitReplica;
 
         for case in [
             RepairCase {
@@ -61063,6 +66628,12 @@ mod tests {
                 lane: disabled_owner,
                 extra_dataspace: None,
                 autoscale_enabled: false,
+            },
+            RepairCase {
+                name: "profile-drift",
+                lane: profile_drift,
+                extra_dataspace: None,
+                autoscale_enabled: true,
             },
         ] {
             let kura = Kura::blank_kura_for_testing();
@@ -61217,6 +66788,110 @@ mod tests {
                     if lane == lane_id && reason == expected_reason
             ));
             assert_eq!(state.nexus_snapshot().lane_catalog.lanes().len(), 1);
+        }
+    }
+
+    #[test]
+    fn apply_lane_lifecycle_internal_autoscale_rejects_base_profile_drift() {
+        let mut base_lane = LaneConfig {
+            lane_type: Some("regulated-public".to_owned()),
+            governance: Some("governance-v2".to_owned()),
+            settlement: Some("settlement-v3".to_owned()),
+            storage: LaneStorageProfile::SplitReplica,
+            proof_scheme: DaProofScheme::KzgBls12_381,
+            ..LaneConfig::default()
+        };
+        base_lane
+            .metadata
+            .insert("security.profile".to_owned(), "strict".to_owned());
+        base_lane
+            .metadata
+            .insert("scheduler.teu_capacity".to_owned(), "2400".to_owned());
+        let valid_lane = autoscale_elastic_lane_config_from_base(LaneId::new(1), &base_lane, 2)
+            .expect("public base profile should produce a managed lane");
+        let profile_drifts = [
+            ("lane type", {
+                let mut drift = valid_lane.clone();
+                drift.lane_type = Some("unregulated".to_owned());
+                drift
+            }),
+            ("governance", {
+                let mut drift = valid_lane.clone();
+                drift.governance = Some("governance-v1".to_owned());
+                drift
+            }),
+            ("settlement", {
+                let mut drift = valid_lane.clone();
+                drift.settlement = Some("settlement-v1".to_owned());
+                drift
+            }),
+            ("storage", {
+                let mut drift = valid_lane.clone();
+                drift.storage = LaneStorageProfile::FullReplica;
+                drift
+            }),
+            ("proof scheme", {
+                let mut drift = valid_lane.clone();
+                drift.proof_scheme = DaProofScheme::MerkleSha256;
+                drift
+            }),
+            ("metadata value", {
+                let mut drift = valid_lane.clone();
+                drift
+                    .metadata
+                    .insert("security.profile".to_owned(), "permissive".to_owned());
+                drift
+            }),
+            ("missing metadata", {
+                let mut drift = valid_lane.clone();
+                drift.metadata.remove("scheduler.teu_capacity");
+                drift
+            }),
+            ("extra metadata", {
+                let mut drift = valid_lane;
+                drift
+                    .metadata
+                    .insert("unexpected".to_owned(), "value".to_owned());
+                drift
+            }),
+        ];
+
+        for (field, lane) in profile_drifts {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let mut state = State::new_for_testing(World::default(), kura, query_handle);
+            state
+                .set_nexus(autoscale_transition_test_nexus(
+                    vec![base_lane.clone()],
+                    1,
+                    3,
+                    100,
+                ))
+                .expect("apply autoscale profile-drift test nexus config");
+
+            let err = state
+                .apply_lane_lifecycle_with_options(
+                    &iroha_data_model::nexus::LaneLifecyclePlan {
+                        additions: vec![lane],
+                        retire: Vec::new(),
+                    },
+                    false,
+                    true,
+                )
+                .unwrap_err();
+            assert!(
+                matches!(
+                    &err,
+                    LaneLifecycleError::InvalidAutoscaleManagedLane { lane, reason }
+                        if *lane == LaneId::new(1) && *reason == AUTOSCALE_PROFILE_DRIFT_REASON
+                ),
+                "internal autoscale lifecycle accepted {field} drift: {err}"
+            );
+            assert_eq!(
+                state.nexus_snapshot().lane_catalog.lanes(),
+                &[base_lane.clone()],
+                "rejected {field} drift must not mutate the lane catalog"
+            );
         }
     }
 
@@ -62273,6 +67948,58 @@ mod tests {
             conflicting_blocks_dir.is_file(),
             "Kura preflight must leave the conflicting path unchanged"
         );
+    }
+
+    #[test]
+    fn configured_lane_catalog_is_immutable_across_runtime_updates() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+        let configured_catalog = LaneCatalog::new(
+            nonzero!(2_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "configured-lane".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("configured lane catalog");
+        state
+            .set_nexus_from_config(iroha_config::parameters::actual::Nexus {
+                enabled: true,
+                lane_catalog: configured_catalog.clone(),
+                configured_lane_catalog: configured_catalog.clone(),
+                ..Default::default()
+            })
+            .expect("install startup Nexus configuration");
+
+        let mut attempted_runtime_rebind = state.nexus_snapshot();
+        attempted_runtime_rebind.configured_lane_catalog = LaneCatalog::default();
+        state
+            .set_nexus(attempted_runtime_rebind)
+            .expect("apply runtime Nexus overlay");
+        assert_eq!(
+            state.nexus_snapshot().configured_lane_catalog,
+            configured_catalog,
+            "runtime overlays must not replace the process-configured baseline"
+        );
+
+        state
+            .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
+                additions: vec![LaneConfig {
+                    id: LaneId::new(2),
+                    alias: "runtime-lane".to_owned(),
+                    ..LaneConfig::default()
+                }],
+                retire: Vec::new(),
+            })
+            .expect("apply runtime lane lifecycle");
+        let nexus = state.nexus_snapshot();
+        assert_eq!(nexus.configured_lane_catalog, configured_catalog);
+        assert_eq!(nexus.lane_catalog.lanes().len(), 3);
     }
 
     #[test]
@@ -63854,7 +69581,7 @@ mod tests {
             .write()
             .insert(lane1_h1.clone())
             .expect("lane1 relay stored");
-        let candidate = merge_candidate_from_relay(1, &lane1_h1);
+        let candidate = merge_candidate_from_relay(&state, 1, &lane1_h1);
         let merge_qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
         state
             .commit_merge_entry(merge_entry_from_candidate(candidate, merge_qc))
@@ -65262,52 +70989,149 @@ mod tests {
     }
 
     #[test]
-    fn set_nexus_aborts_on_storage_error() {
+    fn set_tiered_backend_aborts_on_storage_error() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
         let temp_file = tempfile::NamedTempFile::new().expect("temp file");
-        state.set_tiered_backend(&iroha_config::parameters::actual::TieredState {
-            enabled: true,
-            hot_retained_keys: 1,
-            hot_retained_bytes:
-                iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_BYTES,
-            hot_retained_grace_snapshots:
-                iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_GRACE_SNAPSHOTS,
-            cold_store_root: Some(temp_file.path().to_path_buf()),
-            da_store_root: None,
-            max_snapshots: 1,
-            max_cold_bytes: iroha_config::parameters::defaults::tiered_state::MAX_COLD_BYTES,
-        });
         let initial_catalog = state.nexus_snapshot().lane_catalog.clone();
-
-        let nexus = iroha_config::parameters::actual::Nexus {
-            enabled: true,
-            lane_catalog: LaneCatalog::new(
-                nonzero!(2_u32),
-                vec![
-                    LaneConfig::default(),
-                    LaneConfig {
-                        id: LaneId::new(1),
-                        alias: "beta".to_string(),
-                        ..LaneConfig::default()
-                    },
-                ],
-            )
-            .expect("lane catalog"),
-            ..iroha_config::parameters::actual::Nexus::default()
-        };
         let err = state
-            .set_nexus(nexus)
-            .expect_err("storage reconciliation should fail");
+            .set_tiered_backend(&iroha_config::parameters::actual::TieredState {
+                enabled: true,
+                hot_retained_keys: 1,
+                hot_retained_bytes:
+                    iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_BYTES,
+                hot_retained_grace_snapshots:
+                    iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_GRACE_SNAPSHOTS,
+                cold_store_root: Some(temp_file.path().to_path_buf()),
+                da_store_root: None,
+                max_snapshots: 1,
+                max_cold_bytes: iroha_config::parameters::defaults::tiered_state::MAX_COLD_BYTES,
+            })
+            .expect_err("tiered startup geometry must reject a file root");
 
         assert!(matches!(err, LaneLifecycleError::Storage(_)));
         assert_eq!(state.nexus_snapshot().lane_catalog, initial_catalog);
     }
 
     #[test]
-    fn set_nexus_tiered_failure_does_not_create_kura_lane_storage() {
+    fn set_tiered_backend_restores_scale_out_lane_geometry_from_effective_nexus() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let cold_root = temp_dir.path().join("cold");
+        let mut state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let expanded_catalog = LaneCatalog::new(
+            nonzero!(2_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "restored-scale-out".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("expanded lane catalog");
+        let expanded_config = RuntimeLaneConfig::from_catalog(&expanded_catalog);
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.lane_catalog = expanded_catalog;
+            nexus.lane_config = expanded_config.clone();
+        }
+
+        state
+            .set_tiered_backend(&iroha_config::parameters::actual::TieredState {
+                enabled: true,
+                hot_retained_keys: 1,
+                hot_retained_bytes:
+                    iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_BYTES,
+                hot_retained_grace_snapshots:
+                    iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_GRACE_SNAPSHOTS,
+                cold_store_root: Some(cold_root.clone()),
+                da_store_root: None,
+                max_snapshots: 1,
+                max_cold_bytes: iroha_config::parameters::defaults::tiered_state::MAX_COLD_BYTES,
+            })
+            .expect("restore tiered geometry for expanded Nexus");
+
+        for entry in expanded_config.entries() {
+            assert!(
+                cold_root.join("lanes").join(&entry.kura_segment).is_dir(),
+                "missing restored tiered lane directory for lane {}",
+                entry.lane_id.as_u32()
+            );
+        }
+    }
+
+    #[test]
+    fn set_tiered_backend_does_not_recreate_scaled_in_lane_geometry() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let cold_root = temp_dir.path().join("cold");
+        let retired_catalog = LaneCatalog::new(
+            nonzero!(2_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "retired-before-restart".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("pre-scale-in lane catalog");
+        let retired_config = RuntimeLaneConfig::from_catalog(&retired_catalog);
+        let retired_entry = retired_config
+            .entry(LaneId::new(1))
+            .expect("retired lane entry");
+        let mut state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        state.nexus.get_mut().enabled = true;
+
+        state
+            .set_tiered_backend(&iroha_config::parameters::actual::TieredState {
+                enabled: true,
+                hot_retained_keys: 1,
+                hot_retained_bytes:
+                    iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_BYTES,
+                hot_retained_grace_snapshots:
+                    iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_GRACE_SNAPSHOTS,
+                cold_store_root: Some(cold_root.clone()),
+                da_store_root: None,
+                max_snapshots: 1,
+                max_cold_bytes: iroha_config::parameters::defaults::tiered_state::MAX_COLD_BYTES,
+            })
+            .expect("restore tiered geometry after scale-in");
+
+        let active_config = RuntimeLaneConfig::default();
+        let active_entry = active_config
+            .entry(LaneId::SINGLE)
+            .expect("default active lane entry");
+        assert!(
+            cold_root
+                .join("lanes")
+                .join(&active_entry.kura_segment)
+                .is_dir(),
+            "active default lane geometry must be restored"
+        );
+        assert!(
+            !cold_root
+                .join("lanes")
+                .join(&retired_entry.kura_segment)
+                .exists(),
+            "a lane retired before restart must not be recreated from static geometry"
+        );
+    }
+
+    #[test]
+    fn tiered_startup_failure_does_not_create_kura_lane_storage() {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let store_root = temp_dir.path().join("kura");
         let cold_root = temp_dir.path().join("cold");
@@ -65316,18 +71140,6 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
         std::fs::write(&cold_root, b"blocker file").expect("seed tiered cold root blocker");
-        state.set_tiered_backend(&iroha_config::parameters::actual::TieredState {
-            enabled: true,
-            hot_retained_keys: 1,
-            hot_retained_bytes:
-                iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_BYTES,
-            hot_retained_grace_snapshots:
-                iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_GRACE_SNAPSHOTS,
-            cold_store_root: Some(cold_root),
-            da_store_root: None,
-            max_snapshots: 1,
-            max_cold_bytes: iroha_config::parameters::defaults::tiered_state::MAX_COLD_BYTES,
-        });
         let initial_catalog = state.nexus_snapshot().lane_catalog.clone();
 
         let added_lane = LaneConfig {
@@ -65348,12 +71160,19 @@ mod tests {
         let added_merge_log = added_entry.merge_log_path(&store_root);
 
         let err = state
-            .set_nexus(iroha_config::parameters::actual::Nexus {
+            .set_tiered_backend(&iroha_config::parameters::actual::TieredState {
                 enabled: true,
-                lane_catalog: updated_catalog,
-                ..iroha_config::parameters::actual::Nexus::default()
+                hot_retained_keys: 1,
+                hot_retained_bytes:
+                    iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_BYTES,
+                hot_retained_grace_snapshots:
+                    iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_GRACE_SNAPSHOTS,
+                cold_store_root: Some(cold_root),
+                da_store_root: None,
+                max_snapshots: 1,
+                max_cold_bytes: iroha_config::parameters::defaults::tiered_state::MAX_COLD_BYTES,
             })
-            .expect_err("tiered preflight should fail before Kura geometry changes");
+            .expect_err("tiered startup preflight should fail before Kura geometry changes");
 
         assert!(matches!(err, LaneLifecycleError::Storage(_)));
         assert_eq!(state.nexus_snapshot().lane_catalog, initial_catalog);
@@ -65376,18 +71195,20 @@ mod tests {
         let kura = strict_kura_for_testing(store_root.clone(), &initial_config);
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
-        state.set_tiered_backend(&iroha_config::parameters::actual::TieredState {
-            enabled: true,
-            hot_retained_keys: 1,
-            hot_retained_bytes:
-                iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_BYTES,
-            hot_retained_grace_snapshots:
-                iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_GRACE_SNAPSHOTS,
-            cold_store_root: Some(cold_root.clone()),
-            da_store_root: None,
-            max_snapshots: 1,
-            max_cold_bytes: iroha_config::parameters::defaults::tiered_state::MAX_COLD_BYTES,
-        });
+        state
+            .set_tiered_backend(&iroha_config::parameters::actual::TieredState {
+                enabled: true,
+                hot_retained_keys: 1,
+                hot_retained_bytes:
+                    iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_BYTES,
+                hot_retained_grace_snapshots:
+                    iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_GRACE_SNAPSHOTS,
+                cold_store_root: Some(cold_root.clone()),
+                da_store_root: None,
+                max_snapshots: 1,
+                max_cold_bytes: iroha_config::parameters::defaults::tiered_state::MAX_COLD_BYTES,
+            })
+            .expect("configure tiered state before Kura preflight test");
         let initial_catalog = state.nexus_snapshot().lane_catalog.clone();
 
         let added_lane = LaneConfig {
@@ -65441,18 +71262,20 @@ mod tests {
         let kura = strict_kura_for_testing(store_root.clone(), &initial_config);
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
-        state.set_tiered_backend(&iroha_config::parameters::actual::TieredState {
-            enabled: true,
-            hot_retained_keys: 1,
-            hot_retained_bytes:
-                iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_BYTES,
-            hot_retained_grace_snapshots:
-                iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_GRACE_SNAPSHOTS,
-            cold_store_root: Some(cold_root.clone()),
-            da_store_root: None,
-            max_snapshots: 1,
-            max_cold_bytes: iroha_config::parameters::defaults::tiered_state::MAX_COLD_BYTES,
-        });
+        state
+            .set_tiered_backend(&iroha_config::parameters::actual::TieredState {
+                enabled: true,
+                hot_retained_keys: 1,
+                hot_retained_bytes:
+                    iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_BYTES,
+                hot_retained_grace_snapshots:
+                    iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_GRACE_SNAPSHOTS,
+                cold_store_root: Some(cold_root.clone()),
+                da_store_root: None,
+                max_snapshots: 1,
+                max_cold_bytes: iroha_config::parameters::defaults::tiered_state::MAX_COLD_BYTES,
+            })
+            .expect("configure tiered state before Kura relabel test");
 
         let lane_id = LaneId::new(1);
         let source_lane = LaneConfig {
@@ -65536,18 +71359,20 @@ mod tests {
         let kura = strict_kura_for_testing(store_root.clone(), &initial_config);
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
-        state.set_tiered_backend(&iroha_config::parameters::actual::TieredState {
-            enabled: true,
-            hot_retained_keys: 1,
-            hot_retained_bytes:
-                iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_BYTES,
-            hot_retained_grace_snapshots:
-                iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_GRACE_SNAPSHOTS,
-            cold_store_root: Some(cold_root.clone()),
-            da_store_root: None,
-            max_snapshots: 1,
-            max_cold_bytes: iroha_config::parameters::defaults::tiered_state::MAX_COLD_BYTES,
-        });
+        state
+            .set_tiered_backend(&iroha_config::parameters::actual::TieredState {
+                enabled: true,
+                hot_retained_keys: 1,
+                hot_retained_bytes:
+                    iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_BYTES,
+                hot_retained_grace_snapshots:
+                    iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_GRACE_SNAPSHOTS,
+                cold_store_root: Some(cold_root.clone()),
+                da_store_root: None,
+                max_snapshots: 1,
+                max_cold_bytes: iroha_config::parameters::defaults::tiered_state::MAX_COLD_BYTES,
+            })
+            .expect("configure tiered state before tiered relabel preflight test");
 
         let lane_id = LaneId::new(1);
         let source_lane = LaneConfig {
@@ -65644,18 +71469,20 @@ mod tests {
         let kura = strict_kura_for_testing(store_root.clone(), &initial_config);
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
-        state.set_tiered_backend(&iroha_config::parameters::actual::TieredState {
-            enabled: true,
-            hot_retained_keys: 1,
-            hot_retained_bytes:
-                iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_BYTES,
-            hot_retained_grace_snapshots:
-                iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_GRACE_SNAPSHOTS,
-            cold_store_root: Some(cold_root.clone()),
-            da_store_root: None,
-            max_snapshots: 1,
-            max_cold_bytes: iroha_config::parameters::defaults::tiered_state::MAX_COLD_BYTES,
-        });
+        state
+            .set_tiered_backend(&iroha_config::parameters::actual::TieredState {
+                enabled: true,
+                hot_retained_keys: 1,
+                hot_retained_bytes:
+                    iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_BYTES,
+                hot_retained_grace_snapshots:
+                    iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_GRACE_SNAPSHOTS,
+                cold_store_root: Some(cold_root.clone()),
+                da_store_root: None,
+                max_snapshots: 1,
+                max_cold_bytes: iroha_config::parameters::defaults::tiered_state::MAX_COLD_BYTES,
+            })
+            .expect("configure tiered state before Kura retirement test");
 
         let lane_id = LaneId::new(1);
         let source_lane = LaneConfig {
@@ -65750,18 +71577,20 @@ mod tests {
         let kura = strict_kura_for_testing(store_root.clone(), &initial_config);
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
-        state.set_tiered_backend(&iroha_config::parameters::actual::TieredState {
-            enabled: true,
-            hot_retained_keys: 1,
-            hot_retained_bytes:
-                iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_BYTES,
-            hot_retained_grace_snapshots:
-                iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_GRACE_SNAPSHOTS,
-            cold_store_root: Some(cold_root.clone()),
-            da_store_root: None,
-            max_snapshots: 1,
-            max_cold_bytes: iroha_config::parameters::defaults::tiered_state::MAX_COLD_BYTES,
-        });
+        state
+            .set_tiered_backend(&iroha_config::parameters::actual::TieredState {
+                enabled: true,
+                hot_retained_keys: 1,
+                hot_retained_bytes:
+                    iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_BYTES,
+                hot_retained_grace_snapshots:
+                    iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_GRACE_SNAPSHOTS,
+                cold_store_root: Some(cold_root.clone()),
+                da_store_root: None,
+                max_snapshots: 1,
+                max_cold_bytes: iroha_config::parameters::defaults::tiered_state::MAX_COLD_BYTES,
+            })
+            .expect("configure tiered state before tiered retirement test");
 
         let lane_id = LaneId::new(1);
         let source_lane = LaneConfig {
@@ -66542,7 +72371,7 @@ mod tests {
             let _ = relays.insert(lane1_h1.clone()).expect("lane1 relay stored");
         }
         crate::sumeragi::status::set_lane_relay_envelopes(vec![lane0_h1.clone(), lane1_h1.clone()]);
-        let merge_candidate = merge_candidate_from_relay(1, &lane1_h1);
+        let merge_candidate = merge_candidate_from_relay(&state, 1, &lane1_h1);
         let merge_qc = merge_qc_for_candidate(&state, &merge_candidate, &commit_keypairs, &[0]);
         state
             .commit_merge_entry(merge_entry_from_candidate(merge_candidate, merge_qc))
@@ -66929,7 +72758,7 @@ mod tests {
             .write()
             .insert(lane1_h1.clone())
             .expect("lane1 relay stored");
-        let candidate = merge_candidate_from_relay(1, &lane1_h1);
+        let candidate = merge_candidate_from_relay(&state, 1, &lane1_h1);
         let merge_qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
         state
             .commit_merge_entry(merge_entry_from_candidate(candidate, merge_qc))
@@ -67278,7 +73107,7 @@ mod tests {
         )
         .expect("load reset journal");
         assert_eq!(
-            reset_journal.reset_height_for_lane(recreated_lane_id),
+            reset_journal.canonical_reset_height_for_lane(recreated_lane_id),
             Some(old_block_height),
             "same-lane policy reset should persist a reset watermark at the old block height"
         );
@@ -67327,7 +73156,7 @@ mod tests {
             restarted
                 .da_shard_cursors
                 .read()
-                .reset_height_for_lane(recreated_lane_id),
+                .canonical_reset_height_for_lane(recreated_lane_id),
             Some(old_block_height),
             "restart should restore the lane reset watermark before certified sidecar replay"
         );
@@ -67445,7 +73274,7 @@ mod tests {
             state
                 .da_shard_cursors
                 .read()
-                .reset_height_for_lane(reset_lane_id),
+                .canonical_reset_height_for_lane(reset_lane_id),
             Some(reset_height),
             "same-lane policy reset should install the reset watermark"
         );
@@ -68306,7 +74135,7 @@ mod tests {
         )
         .expect("load reset journal");
         assert_eq!(
-            reset_journal.reset_height_for_lane(rebound_lane_id),
+            reset_journal.canonical_reset_height_for_lane(rebound_lane_id),
             Some(old_block.header().height().get()),
             "same-shard dataspace rebind should persist a reset watermark at the old block height"
         );
@@ -68462,7 +74291,7 @@ mod tests {
         )
         .expect("load reset journal");
         assert_eq!(
-            reset_journal.reset_height_for_lane(policy_lane_id),
+            reset_journal.canonical_reset_height_for_lane(policy_lane_id),
             Some(old_block.header().height().get()),
             "proof-policy change should persist a reset watermark at the old block height"
         );
@@ -68637,7 +74466,7 @@ mod tests {
         )
         .expect("load reset journal");
         assert_eq!(
-            reset_journal.reset_height_for_lane(policy_lane_id),
+            reset_journal.canonical_reset_height_for_lane(policy_lane_id),
             Some(old_block.header().height().get()),
             "manifest-policy change should persist a reset watermark at the old block height"
         );
@@ -68808,7 +74637,7 @@ mod tests {
         )
         .expect("load reset journal");
         assert_eq!(
-            reset_journal.reset_height_for_lane(policy_lane_id),
+            reset_journal.canonical_reset_height_for_lane(policy_lane_id),
             Some(old_block.header().height().get()),
             "shard remap should persist a reset watermark at the old block height"
         );
@@ -69011,7 +74840,7 @@ mod tests {
         )
         .expect("load reset journal");
         assert_eq!(
-            reset_journal.reset_height_for_lane(policy_lane_id),
+            reset_journal.canonical_reset_height_for_lane(policy_lane_id),
             Some(old_block.header().height().get()),
             "storage-profile change should persist a reset watermark at the old block height"
         );
@@ -69186,7 +75015,7 @@ mod tests {
         )
         .expect("load reset journal");
         assert_eq!(
-            reset_journal.reset_height_for_lane(policy_lane_id),
+            reset_journal.canonical_reset_height_for_lane(policy_lane_id),
             Some(old_block.header().height().get()),
             "visibility change should persist a reset watermark at the old block height"
         );
@@ -69383,7 +75212,7 @@ mod tests {
         )
         .expect("load reset journal");
         assert_eq!(
-            reset_journal.reset_height_for_lane(policy_lane_id),
+            reset_journal.canonical_reset_height_for_lane(policy_lane_id),
             Some(old_block.header().height().get()),
             "confidential-policy change should persist a reset watermark at the old block height"
         );
@@ -70108,6 +75937,7 @@ mod tests {
         let settlement = LaneBlockCommitment {
             block_height: height,
             lane_id,
+            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id,
             tx_count: 1,
             total_local_micro: 1,
@@ -70159,6 +75989,7 @@ mod tests {
         let world = state.world.view();
         let base_pool = State::authoritative_lane_peer_ids_from_sources(
             &world,
+            state.chain_id_ref(),
             lane_id,
             validator_mode,
             manifest_registry.as_ref(),
@@ -70256,6 +76087,7 @@ mod tests {
         let settlement = LaneBlockCommitment {
             block_height: height,
             lane_id,
+            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id,
             tx_count: 1,
             total_local_micro: 1,
@@ -70314,6 +76146,7 @@ mod tests {
         let settlement = LaneBlockCommitment {
             block_height: height,
             lane_id,
+            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id,
             tx_count: 1,
             total_local_micro: 0,
@@ -72501,6 +78334,7 @@ mod tests {
         let settlement = LaneBlockCommitment {
             block_height: height,
             lane_id: LaneId::new(0),
+            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::UNIVERSAL,
             tx_count: 1,
             total_local_micro: 1,
@@ -72643,6 +78477,7 @@ mod tests {
         let settlement = LaneBlockCommitment {
             block_height: height,
             lane_id: LaneId::new(0),
+            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::UNIVERSAL,
             tx_count: 1,
             total_local_micro: 1,
@@ -72999,6 +78834,7 @@ mod tests {
         let settlement = LaneBlockCommitment {
             block_height: height,
             lane_id: LaneId::new(0),
+            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::UNIVERSAL,
             tx_count: 1,
             total_local_micro: 1,
@@ -73170,6 +79006,7 @@ mod tests {
         let settlement = LaneBlockCommitment {
             block_height: height,
             lane_id: LaneId::new(0),
+            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::UNIVERSAL,
             tx_count: 1,
             total_local_micro: 1,
@@ -73344,6 +79181,7 @@ mod tests {
         let settlement = LaneBlockCommitment {
             block_height: height,
             lane_id: LaneId::new(0),
+            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::UNIVERSAL,
             tx_count: 1,
             total_local_micro: 1,
@@ -73562,17 +79400,33 @@ mod tests {
         state: &State,
         lane: iroha_data_model::nexus::LaneConfig,
     ) {
+        install_autoscale_elastic_lanes_for_test(state, vec![lane]);
+    }
+
+    fn install_autoscale_elastic_lanes_for_test(
+        state: &State,
+        lanes: Vec<iroha_data_model::nexus::LaneConfig>,
+    ) {
+        let lane_count = lanes
+            .iter()
+            .map(|lane| lane.id.as_u32())
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1);
+        let mut catalog_lanes = Vec::with_capacity(lanes.len().saturating_add(1));
+        catalog_lanes.push(iroha_data_model::nexus::LaneConfig::default());
+        catalog_lanes.extend(lanes);
         let lane_catalog = LaneCatalog::new(
-            core::num::NonZeroU32::new(lane.id.as_u32().saturating_add(1))
-                .expect("nonzero lane count"),
-            vec![iroha_data_model::nexus::LaneConfig::default(), lane],
+            core::num::NonZeroU32::new(lane_count).expect("nonzero lane count"),
+            catalog_lanes,
         )
         .expect("autoscale lane catalog");
         let mut nexus = state.nexus.write();
         nexus.enabled = true;
         nexus.autoscale.enabled = true;
         nexus.autoscale.min_lanes = nonzero!(1_u32);
-        nexus.autoscale.max_lanes = nonzero!(2_u32);
+        nexus.autoscale.max_lanes =
+            core::num::NonZeroU32::new(lane_count).expect("nonzero autoscale lane bound");
         nexus.lane_catalog = lane_catalog;
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
@@ -73627,6 +79481,7 @@ mod tests {
         let world = state.world.view();
         let base_pool = State::authoritative_lane_peer_ids_from_sources(
             &world,
+            state.chain_id_ref(),
             lane_id,
             validator_mode,
             &manifest_registry,
@@ -73652,7 +79507,7 @@ mod tests {
     }
 
     #[test]
-    fn authoritative_lane_peers_for_autoscale_elastic_lane_inherit_commit_topology() {
+    fn authoritative_lane_peers_for_autoscale_elastic_lane_place_bounded_committee() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
@@ -73663,12 +79518,15 @@ mod tests {
         );
         seed_latest_lane_authority_height_for_test(&state, 1);
 
-        let keypairs: Vec<_> = (0..3)
-            .map(|_| crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal))
+        let keypairs: Vec<_> = (1_u8..=7)
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic BLS test key")
+            })
             .collect();
         let inactive_keypair = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         seed_consensus_keys_with_pops(&state, &keypairs);
-        let mut expected: Vec<_> = keypairs
+        let eligible: Vec<_> = keypairs
             .iter()
             .map(|keypair| PeerId::new(keypair.public_key().clone()))
             .collect();
@@ -73677,25 +79535,183 @@ mod tests {
         {
             let mut topology = state.commit_topology.block();
             topology.clear();
-            for peer in &expected {
+            for peer in &eligible {
                 topology.push(peer.clone());
             }
-            topology.push(inactive_peer);
+            topology.push(inactive_peer.clone());
             topology.commit();
         }
-        expected.sort();
 
-        assert_eq!(state.authoritative_lane_peer_ids(lane_id), expected);
+        let committee = state.authoritative_lane_peer_ids(lane_id);
+        assert_eq!(committee.len(), 4, "f=1 requires an exact 3f+1 committee");
+        assert!(
+            committee.iter().all(|peer| eligible.contains(peer)),
+            "committee members must come from the present, live topology pool"
+        );
+        assert!(
+            !committee.contains(&inactive_peer),
+            "topology entries without a live consensus key must not be selected"
+        );
+        assert!(
+            committee.windows(2).all(|pair| pair[0] < pair[1]),
+            "committee must use canonical peer ordering without duplicates"
+        );
+        assert!(
+            committee.len() < eligible.len(),
+            "elastic lane authority must not fan out to every global validator"
+        );
+
+        {
+            let mut topology = state.commit_topology.block();
+            topology.clear();
+            for peer in eligible.iter().rev() {
+                topology.push(peer.clone());
+            }
+            topology.commit();
+        }
+        assert_eq!(
+            state.authoritative_lane_peer_ids(lane_id),
+            committee,
+            "committee placement must not depend on local topology iteration order"
+        );
         assert!(
             state
                 .authoritative_lane_validator_accounts(lane_id)
                 .is_empty(),
-            "commit-topology inheritance must not fabricate public staking records"
+            "committee placement must not fabricate public staking records"
         );
     }
 
     #[test]
-    fn authoritative_lane_peers_for_autoscale_elastic_lane_require_present_topology_peers() {
+    fn autoscale_lane_committee_placement_spreads_lanes_and_preserves_four_peer_quorum() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+        let lane_a = LaneId::new(1);
+        let lane_b = LaneId::new(2);
+        install_autoscale_elastic_lanes_for_test(
+            &state,
+            vec![
+                autoscale_elastic_catalog_lane_for_test(lane_a, 1),
+                autoscale_elastic_catalog_lane_for_test(lane_b, 1),
+            ],
+        );
+        seed_latest_lane_authority_height_for_test(&state, 1);
+
+        let keypairs: Vec<_> = (0x21_u8..=0x2c)
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic BLS test key")
+            })
+            .collect();
+        seed_consensus_keys_with_pops(&state, &keypairs);
+        let peers: Vec<_> = keypairs
+            .iter()
+            .map(|keypair| PeerId::new(keypair.public_key().clone()))
+            .collect();
+        {
+            let mut topology = state.commit_topology.block();
+            topology.clear();
+            for peer in &peers {
+                topology.push(peer.clone());
+            }
+            topology.commit();
+        }
+
+        let committee_a = state.authoritative_lane_peer_ids(lane_a);
+        let committee_b = state.authoritative_lane_peer_ids(lane_b);
+        assert_eq!(committee_a.len(), 4);
+        assert_eq!(committee_b.len(), 4);
+        assert_ne!(
+            committee_a, committee_b,
+            "lane-bound seed domains must distribute work across a larger validator pool"
+        );
+        assert_eq!(
+            crate::sumeragi::network_topology::commit_quorum_from_len(committee_a.len()),
+            3,
+            "f=1 committees must retain the canonical 2f+1 commit quorum"
+        );
+
+        let mut four_peer_topology = peers[..4].to_vec();
+        four_peer_topology.reverse();
+        {
+            let mut topology = state.commit_topology.block();
+            topology.clear();
+            for peer in &four_peer_topology {
+                topology.push(peer.clone());
+            }
+            topology.commit();
+        }
+        four_peer_topology.sort();
+        assert_eq!(
+            state.authoritative_lane_peer_ids(lane_a),
+            four_peer_topology
+        );
+        assert_eq!(
+            state.authoritative_lane_peer_ids(lane_b),
+            four_peer_topology,
+            "a four-validator integration network must keep all 3f+1 validators"
+        );
+    }
+
+    #[test]
+    fn nexus_lane_committee_size_rejects_overflow_and_validator_cap_conflicts() {
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        assert_eq!(
+            nexus_lane_committee_size(&nexus, DataSpaceId::UNIVERSAL),
+            Some(4)
+        );
+
+        nexus.staking.max_validators = nonzero!(3_u32);
+        assert_eq!(
+            nexus_lane_committee_size(&nexus, DataSpaceId::UNIVERSAL),
+            None,
+            "a validator cap below 3f+1 must fail closed"
+        );
+
+        let overflow_dataspace = DataSpaceId::new(9);
+        nexus.staking.max_validators = nonzero!(32_u32);
+        nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: overflow_dataspace,
+                alias: "overflow".to_owned(),
+                description: None,
+                fault_tolerance: u32::MAX,
+            },
+        ])
+        .expect("nonzero fault tolerance is catalog-valid");
+        assert_eq!(
+            nexus_lane_committee_size(&nexus, overflow_dataspace),
+            None,
+            "3f+1 arithmetic overflow must never wrap into a weak committee"
+        );
+        assert_eq!(
+            nexus_lane_committee_size(&nexus, DataSpaceId::new(10)),
+            None,
+            "unknown dataspaces must not receive an implicit committee size"
+        );
+    }
+
+    #[test]
+    fn autoscale_lane_committee_quorums_have_f_plus_one_overlap() {
+        for fault_tolerance in 1_usize..=16 {
+            let committee_size = fault_tolerance * 3 + 1;
+            let quorum = crate::sumeragi::network_topology::commit_quorum_from_len(committee_size);
+            let minimum_overlap = quorum
+                .checked_mul(2)
+                .and_then(|twice_quorum| twice_quorum.checked_sub(committee_size))
+                .expect("canonical quorum must exceed half the committee");
+            assert_eq!(
+                minimum_overlap,
+                fault_tolerance + 1,
+                "two adversarially chosen canonical quorums must still share f+1 validators"
+            );
+        }
+    }
+
+    #[test]
+    fn authoritative_lane_peers_for_autoscale_elastic_lane_fail_closed_below_3f_plus_1() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
@@ -73725,20 +79741,23 @@ mod tests {
 
         let removed_peer = peers[3].clone();
         remove_world_peer_for_test(&state, &removed_peer);
-        let mut expected = peers[..3].to_vec();
-        expected.sort();
-
-        assert_eq!(state.authoritative_lane_peer_ids(lane_id), expected);
         assert!(
-            !state
-                .authoritative_lane_peer_ids(lane_id)
-                .contains(&removed_peer),
-            "removed topology peers must not remain authoritative only because their consensus key record is still live"
+            state.authoritative_lane_peer_ids(lane_id).is_empty(),
+            "removing one member from a four-peer f=1 pool must fail closed instead of silently lowering quorum"
+        );
+        assert!(
+            state
+                .world
+                .view()
+                .consensus_keys()
+                .iter()
+                .any(|(_, record)| &record.public_key == removed_peer.public_key()),
+            "test fixture must retain the removed peer's otherwise-live consensus key"
         );
     }
 
     #[test]
-    fn authoritative_lane_peers_for_autoscale_elastic_lane_prefer_manifest_binding() {
+    fn authoritative_lane_peers_for_autoscale_elastic_lane_bound_manifest_committee() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
@@ -73749,20 +79768,16 @@ mod tests {
         );
         seed_latest_lane_authority_height_for_test(&state, 1);
 
-        let (manifest_validator, manifest_keypair) = bls_account_in("validators");
+        let (manifest_validators, manifest_keypairs) = bls_accounts_in("validators", 6);
         let topology_keypairs: Vec<_> = (0..3)
             .map(|_| crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal))
             .collect();
         let mut live_keypairs = topology_keypairs.clone();
-        live_keypairs.push(manifest_keypair);
+        live_keypairs.extend(manifest_keypairs.iter().cloned());
         seed_consensus_keys_with_pops(&state, &live_keypairs);
         install_lane_manifest_registry(
             &state,
-            &[(
-                lane_id,
-                DataSpaceId::UNIVERSAL,
-                vec![manifest_validator.clone()],
-            )],
+            &[(lane_id, DataSpaceId::UNIVERSAL, manifest_validators.clone())],
         );
 
         {
@@ -73774,10 +79789,25 @@ mod tests {
             topology.commit();
         }
 
+        let manifest_peers: BTreeSet<_> = manifest_validators
+            .iter()
+            .map(peer_id_for_account)
+            .collect();
+        let committee = state.authoritative_lane_peer_ids(lane_id);
         assert_eq!(
-            state.authoritative_lane_peer_ids(lane_id),
-            vec![peer_id_for_account(&manifest_validator)],
-            "explicit lane-manifest bindings must override autoscale commit-topology inheritance"
+            committee.len(),
+            4,
+            "explicit autoscale authority must still satisfy the dataspace 3f+1 placement size"
+        );
+        assert!(
+            committee.iter().all(|peer| manifest_peers.contains(peer)),
+            "explicit lane-manifest authority must override commit-topology candidates"
+        );
+        assert!(
+            topology_keypairs
+                .iter()
+                .all(|keypair| !committee.contains(&PeerId::new(keypair.public_key().clone()))),
+            "topology peers must not top up or replace a sufficient explicit manifest pool"
         );
     }
 
@@ -74055,10 +80085,9 @@ mod tests {
             &state,
             &[(lane_id, DataSpaceId::UNIVERSAL, manifest_validators)],
         );
-        assert_eq!(
-            state.authoritative_lane_peer_ids(lane_id).len(),
-            1,
-            "explicit under-quorum manifest must suppress autoscale topology fallback"
+        assert!(
+            state.authoritative_lane_peer_ids(lane_id).is_empty(),
+            "explicit under-quorum manifest must fail closed and suppress autoscale topology fallback"
         );
 
         let signers: Vec<_> = topology_signers.iter().collect();
@@ -74262,6 +80291,7 @@ mod tests {
             let world = state.world.view();
             let authoritative_peers = State::authoritative_lane_peer_ids_from_sources(
                 &world,
+                state.chain_id_ref(),
                 lane_id,
                 validator_mode,
                 manifest_registry.as_ref(),
@@ -74318,10 +80348,9 @@ mod tests {
             }
             topology.commit();
         }
-        assert_eq!(
-            state.authoritative_lane_peer_ids(lane_id).len(),
-            3,
-            "non-live topology members must be filtered before autoscale relay committee selection"
+        assert!(
+            state.authoritative_lane_peer_ids(lane_id).is_empty(),
+            "filtering a non-live member below 3f+1 must fail closed"
         );
 
         let signers: Vec<_> = topology_keypairs.iter().collect();
@@ -74385,6 +80414,7 @@ mod tests {
             let world = state.world.view();
             let authoritative_peers = State::authoritative_lane_peer_ids_from_sources(
                 &world,
+                state.chain_id_ref(),
                 lane_id,
                 validator_mode,
                 &manifest_registry,
@@ -74392,10 +80422,9 @@ mod tests {
                 &commit_topology,
                 height,
             );
-            assert_eq!(
-                authoritative_peers.len(),
-                3,
-                "{case}: non-live lifecycle state must remove the topology member from envelope-height autoscale relay authority"
+            assert!(
+                authoritative_peers.is_empty(),
+                "{case}: non-live lifecycle state must make an undersized envelope-height committee fail closed"
             );
 
             let signers: Vec<_> = topology_keypairs.iter().collect();
@@ -87440,7 +93469,42 @@ mod tests {
     }
 
     fn dummy_merge_qc() -> MergeQuorumCertificate {
-        MergeQuorumCertificate::new(0, 0, vec![0x01], vec![0xAA], iroha_crypto::Hash::new(b"qc"))
+        let validator_set = Vec::<PeerId>::new();
+        MergeQuorumCertificate::new(
+            0,
+            0,
+            iroha_crypto::Hash::new(b"chain"),
+            VALIDATOR_SET_HASH_VERSION_V1,
+            HashOf::new(&validator_set),
+            validator_set,
+            vec![0x01],
+            Vec::new(),
+            vec![0xAA],
+            iroha_crypto::Hash::new(b"qc"),
+        )
+    }
+
+    fn empty_merge_settlement(
+        lane_id: LaneId,
+        lane_incarnation: Hash,
+        dataspace_id: DataSpaceId,
+        block_height: u64,
+    ) -> LaneBlockCommitment {
+        LaneBlockCommitment {
+            block_height,
+            lane_id,
+            lane_incarnation,
+            dataspace_id,
+            tx_count: 0,
+            total_local_micro: 0,
+            total_xor_due_micro: 0,
+            total_xor_after_haircut_micro: 0,
+            total_xor_variance_micro: 0,
+            swap_metadata: None,
+            receipts: Vec::new(),
+            nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
+        }
     }
 
     fn merge_candidate_with_lanes(epoch: u64, count: usize) -> crate::merge::MergeLedgerCandidate {
@@ -87448,14 +93512,45 @@ mod tests {
         for idx in 0..count {
             let tip = u8::try_from(idx).expect("lane index fits in u8");
             let hint = tip.strict_add(1);
+            let lane_id = LaneId::new(u32::try_from(idx).expect("lane index fits in u32"));
+            let lane_incarnation = iroha_crypto::Hash::new([tip, 0x49]);
+            let dataspace_id = DataSpaceId::new(u64::try_from(idx + 1).expect("dsid fits in u64"));
+            let settlement_commitment =
+                empty_merge_settlement(lane_id, lane_incarnation, dataspace_id, epoch);
             lane_snapshots.push(MergeLaneSnapshot {
-                lane_id: LaneId::new(u32::try_from(idx).expect("lane index fits in u32")),
-                dataspace_id: DataSpaceId::new(u64::try_from(idx + 1).expect("dsid fits in u64")),
+                lane_id,
+                lane_incarnation,
+                incarnation_activation_height: 1,
+                proposal_height: epoch.max(1),
+                dataspace_id,
                 lane_block_height: epoch.saturating_add(u64::try_from(idx).expect("height fits")),
                 tip_hash: HashOf::from_untyped_unchecked(iroha_crypto::Hash::new([tip])),
                 merge_hint_root: iroha_crypto::Hash::new([hint]),
+                settlement_hash: HashOf::new(&settlement_commitment),
+                settlement_commitment,
             });
         }
+        let active_lanes = lane_snapshots
+            .iter()
+            .map(|snapshot| MergeLaneBinding {
+                lane_id: snapshot.lane_id,
+                dataspace_id: snapshot.dataspace_id,
+                lane_config_hash: Hash::new(
+                    format!("test-merge-lane-{}", snapshot.lane_id.as_u32()).as_bytes(),
+                ),
+                incarnation: snapshot.lane_incarnation,
+                activation_height: snapshot.incarnation_activation_height,
+            })
+            .collect::<Vec<_>>();
+        let lifecycle_incarnations = active_lanes
+            .iter()
+            .map(
+                |binding| iroha_data_model::nexus::LaneLifecycleIncarnationEntry {
+                    lane_id: binding.lane_id,
+                    incarnation: binding.incarnation,
+                },
+            )
+            .collect::<Vec<_>>();
         let merge_hint_roots: Vec<Hash> = lane_snapshots
             .iter()
             .map(|snapshot| snapshot.merge_hint_root)
@@ -87464,29 +93559,77 @@ mod tests {
         crate::merge::MergeLedgerCandidate {
             epoch_id: epoch,
             view: 0,
+            lane_catalog_hash: Hash::new(format!("test-merge-catalog-{count}").as_bytes()),
+            incarnation_root: iroha_data_model::nexus::LaneLifecycleParameterV1::incarnation_root(
+                &lifecycle_incarnations,
+            ),
+            activation_root: crate::merge::merge_activation_root(&active_lanes),
+            active_lanes,
             lane_snapshots,
+            execution_batch: None,
             global_state_root,
         }
     }
 
     fn merge_candidate_from_relay(
+        state: &State,
         epoch: u64,
         envelope: &LaneRelayEnvelope,
     ) -> crate::merge::MergeLedgerCandidate {
         let merge_hint_root = envelope.merge_hint_root().expect("merge hint root");
         let lane_snapshots = vec![MergeLaneSnapshot {
             lane_id: envelope.lane_id,
+            lane_incarnation: envelope.lane_incarnation,
+            incarnation_activation_height: state.lane_incarnation_activation_heights_snapshot()
+                [&envelope.lane_id]
+                .saturating_add(1),
+            proposal_height: envelope.block_header.height().get(),
             dataspace_id: envelope.dataspace_id,
             lane_block_height: envelope.block_height,
             tip_hash: envelope.block_header.hash(),
             merge_hint_root,
+            settlement_commitment: envelope.settlement_commitment.clone(),
+            settlement_hash: envelope.settlement_hash,
         }];
+        let nexus = state.nexus_snapshot();
+        let incarnations = state.lane_incarnations_snapshot();
+        let activations = state.lane_incarnation_activation_heights_snapshot();
+        let active_lanes = nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .map(|lane| MergeLaneBinding {
+                lane_id: lane.id,
+                dataspace_id: lane.dataspace_id,
+                lane_config_hash: crate::merge::merge_lane_config_hash(lane),
+                incarnation: incarnations[&lane.id],
+                activation_height: activations[&lane.id].saturating_add(1),
+            })
+            .collect::<Vec<_>>();
+        let lifecycle_incarnations = active_lanes
+            .iter()
+            .map(
+                |binding| iroha_data_model::nexus::LaneLifecycleIncarnationEntry {
+                    lane_id: binding.lane_id,
+                    incarnation: binding.incarnation,
+                },
+            )
+            .collect::<Vec<_>>();
         let merge_hint_roots = vec![merge_hint_root];
         let global_state_root = crate::merge::reduce_merge_hint_roots(&merge_hint_roots);
         crate::merge::MergeLedgerCandidate {
             epoch_id: epoch,
             view: envelope.block_header.view_change_index(),
+            lane_catalog_hash: iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(
+                &nexus.lane_catalog,
+            ),
+            incarnation_root: iroha_data_model::nexus::LaneLifecycleParameterV1::incarnation_root(
+                &lifecycle_incarnations,
+            ),
+            activation_root: crate::merge::merge_activation_root(&active_lanes),
+            active_lanes,
             lane_snapshots,
+            execution_batch: None,
             global_state_root,
         }
     }
@@ -88324,9 +94467,20 @@ mod tests {
         keypairs: &[KeyPair],
         signers: &[usize],
     ) -> MergeQuorumCertificate {
-        let message_digest = crate::merge::merge_qc_message_digest(&state.chain_id, candidate);
+        let validator_set = keypairs
+            .iter()
+            .map(|keypair| PeerId::new(keypair.public_key().clone()))
+            .collect::<Vec<_>>();
+        let validator_set_hash = HashOf::new(&validator_set);
+        let message_digest = crate::merge::merge_qc_message_digest(
+            &state.chain_id,
+            candidate,
+            VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash,
+        );
         let mut signers_set = BTreeSet::new();
         let mut signature_payloads = Vec::with_capacity(signers.len());
+        let mut signer_proofs = Vec::with_capacity(signers.len());
         for idx in signers {
             let idx_u32 = u32::try_from(*idx).expect("signer index fits in u32");
             signers_set.insert(idx_u32);
@@ -88334,6 +94488,13 @@ mod tests {
                 Signature::try_new(keypairs[*idx].private_key(), message_digest.as_ref())
                     .expect("test fixture signing should succeed");
             signature_payloads.push(signature.payload().to_vec());
+            signer_proofs.push(iroha_data_model::merge::MergeSignerProof {
+                signer: idx_u32,
+                proof_of_possession: iroha_crypto::bls_normal_pop_prove(
+                    keypairs[*idx].private_key(),
+                )
+                .expect("test signer PoP"),
+            });
         }
         let signature_refs: Vec<&[u8]> = signature_payloads.iter().map(Vec::as_slice).collect();
         let aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
@@ -88342,7 +94503,12 @@ mod tests {
         MergeQuorumCertificate::new(
             candidate.view,
             candidate.epoch_id,
+            crate::merge::merge_chain_id_digest(&state.chain_id),
+            VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash,
+            validator_set,
             signers_bitmap,
+            signer_proofs,
             aggregate_signature,
             message_digest,
         )
@@ -88484,9 +94650,7 @@ mod tests {
         state.settled_nexus_fee_receipts.write().clear();
         let duplicate_candidate = crate::merge::MergeLedgerCandidate {
             epoch_id: 2,
-            view: candidate.view,
-            lane_snapshots: candidate.lane_snapshots,
-            global_state_root: candidate.global_state_root,
+            ..candidate.clone()
         };
         let duplicate_qc =
             merge_qc_for_candidate(&state, &duplicate_candidate, &commit_keypairs, &[0]);
@@ -88531,6 +94695,75 @@ mod tests {
     }
 
     #[test]
+    fn merge_append_failure_does_not_mutate_fee_state_or_replay_markers() {
+        let (state, sponsor_id, asset_def_id, commit_keypairs) =
+            setup_nexus_fee_merge_state(Numeric::from(10_u32), Numeric::from(3_u32), [0x44; 32]);
+        let candidate = state
+            .merge_entry_candidates_from_lane_relays()
+            .into_iter()
+            .next()
+            .expect("merge candidate");
+        let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
+        let entry = merge_entry_from_candidate(candidate, qc);
+        state.kura.fail_next_merge_append_for_test();
+
+        state
+            .commit_merge_entry(entry)
+            .expect_err("durable append failure must abort before settlement");
+
+        assert_eq!(
+            account_numeric_asset_balance(&state, &asset_def_id, &sponsor_id),
+            Numeric::from(10_u32)
+        );
+        assert!(state.kura.merge_ledger_snapshot().is_empty());
+        assert!(state.settled_nexus_fee_receipts.read().is_empty());
+    }
+
+    #[test]
+    fn restart_replays_durable_merge_settlement_exactly_once() {
+        let source_id = [0x45; 32];
+        let (state, sponsor_id, asset_def_id, commit_keypairs) =
+            setup_nexus_fee_merge_state(Numeric::from(10_u32), Numeric::from(3_u32), source_id);
+        let candidate = state
+            .merge_entry_candidates_from_lane_relays()
+            .into_iter()
+            .next()
+            .expect("merge candidate");
+        let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
+        let entry = merge_entry_from_candidate(candidate, qc);
+
+        // Model a process dying after the append fsync and before the atomic WSV
+        // burn+marker transaction. Startup validates the history first, then
+        // replays the missing settlement from the embedded commitment.
+        state
+            .kura
+            .append_merge_entry(&entry)
+            .expect("persist merge entry without settlement");
+        state.recover_merge_ledger_from_kura();
+        assert_eq!(
+            account_numeric_asset_balance(&state, &asset_def_id, &sponsor_id),
+            Numeric::from(10_u32)
+        );
+
+        state
+            .replay_persisted_merge_settlements()
+            .expect("replay missing settlement");
+        assert_eq!(
+            account_numeric_asset_balance(&state, &asset_def_id, &sponsor_id),
+            Numeric::from(7_u32)
+        );
+        assert!(state.settled_nexus_fee_receipts.read().contains(&source_id));
+
+        state
+            .replay_persisted_merge_settlements()
+            .expect("marker-backed replay is idempotent");
+        assert_eq!(
+            account_numeric_asset_balance(&state, &asset_def_id, &sponsor_id),
+            Numeric::from(7_u32)
+        );
+    }
+
+    #[test]
     fn commit_merge_entry_rejects_replayed_lane_snapshot_at_higher_epoch() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -88544,9 +94777,7 @@ mod tests {
 
         let replay_candidate = crate::merge::MergeLedgerCandidate {
             epoch_id: candidate.epoch_id.saturating_add(1),
-            view: candidate.view,
-            lane_snapshots: candidate.lane_snapshots,
-            global_state_root: candidate.global_state_root,
+            ..candidate
         };
         let qc = merge_qc_for_candidate(&state, &replay_candidate, &commit_keypairs, &[0]);
         let err = state
@@ -88585,7 +94816,7 @@ mod tests {
             .insert(skipped.clone())
             .expect("seed skipped relay");
 
-        let regressed_candidate = merge_candidate_from_relay(1, &skipped);
+        let regressed_candidate = merge_candidate_from_relay(&state, 1, &skipped);
         let regressed_qc =
             merge_qc_for_candidate(&state, &regressed_candidate, &commit_keypairs, &[0]);
         let err = state
@@ -88613,10 +94844,11 @@ mod tests {
         let mut state = State::new_for_testing(World::default(), kura, query);
         let (first_candidate, commit_keypairs) =
             record_commit_ready_merge_candidate_with_lanes(&mut state, 2, 1);
+        let replay_context = first_candidate.clone();
         let lane1_snapshot = first_candidate
             .lane_snapshots
             .iter()
-            .copied()
+            .cloned()
             .find(|snapshot| snapshot.lane_id == LaneId::new(1))
             .expect("first merge includes lane1");
         let first_qc = merge_qc_for_candidate(&state, &first_candidate, &commit_keypairs, &[0]);
@@ -88637,7 +94869,7 @@ mod tests {
             .write()
             .insert(lane0_h2.clone())
             .expect("seed newer lane0 relay");
-        let second_candidate = merge_candidate_from_relay(2, &lane0_h2);
+        let second_candidate = merge_candidate_from_relay(&state, 2, &lane0_h2);
         let second_qc = merge_qc_for_candidate(&state, &second_candidate, &commit_keypairs, &[0]);
         state
             .commit_merge_entry(merge_entry_from_candidate(second_candidate, second_qc))
@@ -88649,6 +94881,7 @@ mod tests {
             view: 0,
             lane_snapshots: vec![lane1_snapshot],
             global_state_root: crate::merge::reduce_merge_hint_roots(&replay_roots),
+            ..replay_context
         };
         let replay_qc = merge_qc_for_candidate(&state, &replay_candidate, &commit_keypairs, &[0]);
         let err = state
@@ -88686,7 +94919,7 @@ mod tests {
             .write()
             .insert(envelope.clone())
             .expect("seed relay cache");
-        let candidate = merge_candidate_from_relay(1, &envelope);
+        let candidate = merge_candidate_from_relay(&state, 1, &envelope);
         let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
         let entry = merge_entry_from_candidate(candidate, qc);
 
@@ -88717,7 +94950,7 @@ mod tests {
             .write()
             .insert(envelope.clone())
             .expect("seed stale relay cache");
-        let candidate = merge_candidate_from_relay(1, &envelope);
+        let candidate = merge_candidate_from_relay(&state, 1, &envelope);
         let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
         let entry = merge_entry_from_candidate(candidate, qc);
 
@@ -88784,7 +95017,7 @@ mod tests {
             .write()
             .insert(envelope.clone())
             .expect("seed stale relay cache");
-        let candidate = merge_candidate_from_relay(1, &envelope);
+        let candidate = merge_candidate_from_relay(&state, 1, &envelope);
         let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
         let entry = merge_entry_from_candidate(candidate, qc);
 
@@ -88819,7 +95052,7 @@ mod tests {
             .write()
             .insert(stale_relay.clone())
             .expect("seed stale future-created relay cache");
-        let candidate = merge_candidate_from_relay(1, &stale_relay);
+        let candidate = merge_candidate_from_relay(&state, 1, &stale_relay);
         let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
         let entry = merge_entry_from_candidate(candidate, qc);
 
@@ -88855,7 +95088,7 @@ mod tests {
             .write()
             .insert(envelope.clone())
             .expect("seed stale relay cache");
-        let candidate = merge_candidate_from_relay(1, &envelope);
+        let candidate = merge_candidate_from_relay(&state, 1, &envelope);
         let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
         let entry = merge_entry_from_candidate(candidate, qc);
 
@@ -88900,7 +95133,7 @@ mod tests {
             .write()
             .insert(envelope.clone())
             .expect("seed stale relay cache");
-        let candidate = merge_candidate_from_relay(1, &envelope);
+        let candidate = merge_candidate_from_relay(&state, 1, &envelope);
         let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
         let entry = merge_entry_from_candidate(candidate, qc);
 
@@ -88924,7 +95157,12 @@ mod tests {
 
         let entry = MergeLedgerEntry {
             epoch_id: 1,
+            lane_catalog_hash: Hash::new(b"catalog"),
+            active_lanes: Vec::new(),
+            incarnation_root: Hash::new(b"incarnations"),
+            activation_root: Hash::new(b"activations"),
             lane_snapshots: Vec::new(),
+            execution_batch: None,
             global_state_root: iroha_crypto::Hash::new(b"root"),
             merge_qc: dummy_merge_qc(),
         };
@@ -89016,6 +95254,95 @@ mod tests {
             err,
             MergeLedgerCommitError::MergeQCAggregateSignatureInvalid
         ));
+    }
+
+    #[test]
+    fn commit_merge_entry_rejects_qc_for_another_chain() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query);
+        let keypairs = configure_commit_topology(&state, 1);
+        let candidate = merge_candidate_with_lanes(1, 1);
+        let mut qc = merge_qc_for_candidate(&state, &candidate, &keypairs, &[0]);
+        qc.chain_id_digest = Hash::new(b"another-chain");
+
+        let err = state
+            .commit_merge_entry(merge_entry_from_candidate(candidate, qc))
+            .expect_err("cross-chain QC must fail closed");
+        assert!(matches!(
+            err,
+            MergeLedgerCommitError::MergeQCChainIdMismatch { .. }
+        ));
+    }
+
+    #[test]
+    fn commit_merge_entry_rejects_duplicate_historical_validator() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query);
+        let keypairs = configure_commit_topology(&state, 1);
+        let candidate = merge_candidate_with_lanes(1, 1);
+        let mut qc = merge_qc_for_candidate(&state, &candidate, &keypairs, &[0]);
+        qc.validator_set.push(qc.validator_set[0].clone());
+        qc.validator_set_hash = HashOf::new(&qc.validator_set);
+
+        let err = state
+            .commit_merge_entry(merge_entry_from_candidate(candidate, qc))
+            .expect_err("duplicated historical roster entries must fail closed");
+        assert!(matches!(
+            err,
+            MergeLedgerCommitError::MergeQCDuplicateValidator(_)
+        ));
+    }
+
+    #[test]
+    fn commit_merge_entry_rejects_nonzero_signer_bitmap_padding() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query);
+        let keypairs = configure_commit_topology(&state, 1);
+        let candidate = merge_candidate_with_lanes(1, 1);
+        let mut qc = merge_qc_for_candidate(&state, &candidate, &keypairs, &[0]);
+        qc.signers_bitmap[0] |= 0x80;
+
+        let err = state
+            .commit_merge_entry(merge_entry_from_candidate(candidate, qc))
+            .expect_err("bitmap padding is malleable and must be rejected");
+        assert!(matches!(err, MergeLedgerCommitError::MergeQCBitmapPadding));
+    }
+
+    #[test]
+    fn commit_merge_entry_rejects_invalid_historical_signer_pop() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query);
+        let keypairs = configure_commit_topology(&state, 1);
+        let candidate = merge_candidate_with_lanes(1, 1);
+        let mut qc = merge_qc_for_candidate(&state, &candidate, &keypairs, &[0]);
+        qc.signer_proofs[0].proof_of_possession[0] ^= 0x80;
+
+        let err = state
+            .commit_merge_entry(merge_entry_from_candidate(candidate, qc))
+            .expect_err("invalid historical PoP must fail closed");
+        assert!(matches!(
+            err,
+            MergeLedgerCommitError::MergeQCSignerPopInvalid { signer: 0 }
+        ));
+    }
+
+    #[test]
+    fn commit_merge_entry_rejects_tampered_incarnation_context() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query);
+        let candidate = merge_candidate_with_lanes(1, 1);
+        let mut entry = merge_entry_from_candidate(candidate, dummy_merge_qc());
+        entry.activation_root = Hash::new(b"tampered-activation-root");
+
+        let err = state
+            .commit_merge_entry(entry)
+            .expect_err("tampered historical activation root must fail closed");
+        assert!(matches!(err, MergeLedgerCommitError::IncarnationContext(_)));
     }
 
     #[test]
@@ -89126,16 +95453,27 @@ mod tests {
     #[test]
     fn state_rehydrates_merge_ledger_from_kura_snapshot() {
         let kura = Kura::blank_kura_for_testing();
-        let first = merge_entry_from_candidate(merge_candidate_with_lanes(11, 2), dummy_merge_qc());
-        let second =
-            merge_entry_from_candidate(merge_candidate_with_lanes(12, 2), dummy_merge_qc());
-        kura.append_merge_entry(&first)
-            .expect("append first merge entry");
-        kura.append_merge_entry(&second)
-            .expect("append second merge entry");
+        let query = LiveQueryStore::start_test();
+        let mut original = State::new_for_testing(World::default(), Arc::clone(&kura), query);
+        let (first_candidate, first_keypairs) =
+            record_commit_ready_merge_candidate_with_lanes(&mut original, 2, 1);
+        let first_qc = merge_qc_for_candidate(&original, &first_candidate, &first_keypairs, &[0]);
+        let first = merge_entry_from_candidate(first_candidate, first_qc);
+        original
+            .commit_merge_entry(first.clone())
+            .expect("commit first authenticated merge entry");
+        let (second_candidate, second_keypairs) =
+            record_commit_ready_merge_candidate_with_lanes(&mut original, 2, 2);
+        let second_qc =
+            merge_qc_for_candidate(&original, &second_candidate, &second_keypairs, &[0]);
+        let second = merge_entry_from_candidate(second_candidate, second_qc);
+        original
+            .commit_merge_entry(second.clone())
+            .expect("commit second authenticated merge entry");
+        drop(original);
 
         let query = LiveQueryStore::start_test();
-        let state = State::new(World::default(), Arc::clone(&kura), query);
+        let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
 
         let snapshot = state.merge_ledger().snapshot();
         assert_eq!(snapshot.len(), 2, "state seeds merge cache from kura");
@@ -89144,6 +95482,39 @@ mod tests {
 
         let kura_snapshot = kura.merge_ledger_snapshot();
         assert_eq!(kura_snapshot, vec![first, second]);
+    }
+
+    #[test]
+    fn restart_truncates_invalid_historical_merge_qc_suffix() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let mut original = State::new_for_testing(World::default(), Arc::clone(&kura), query);
+        let (first_candidate, first_keypairs) =
+            record_commit_ready_merge_candidate_with_lanes(&mut original, 1, 1);
+        let first_qc = merge_qc_for_candidate(&original, &first_candidate, &first_keypairs, &[0]);
+        let first = merge_entry_from_candidate(first_candidate, first_qc);
+        original
+            .commit_merge_entry(first.clone())
+            .expect("commit authenticated prefix");
+
+        let (second_candidate, second_keypairs) =
+            record_commit_ready_merge_candidate_with_lanes(&mut original, 1, 2);
+        let mut second_qc =
+            merge_qc_for_candidate(&original, &second_candidate, &second_keypairs, &[0]);
+        second_qc.aggregate_signature[0] ^= 0x80;
+        let invalid = merge_entry_from_candidate(second_candidate, second_qc);
+        kura.append_merge_entry(&invalid)
+            .expect("inject invalid durable suffix");
+        drop(original);
+
+        let query = LiveQueryStore::start_test();
+        let recovered = State::new_for_testing(World::default(), Arc::clone(&kura), query);
+        assert_eq!(recovered.merge_ledger().snapshot().len(), 1);
+        assert_eq!(recovered.merge_ledger().latest().as_deref(), Some(&first));
+        assert_eq!(
+            kura.merge_ledger_all_entries().expect("durable prefix"),
+            vec![first]
+        );
     }
 
     #[test]
