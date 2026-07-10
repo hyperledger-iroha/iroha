@@ -61,6 +61,11 @@ filesystem_id = "dev:16777232"
 storage_pin_max_events = 64
 storage_pin_window_secs = 3600
 
+[sorafs.gateway.site_bindings]
+path = "/config/sorafs_sites.json"
+max_bytes = 1048576
+max_sites = 1024
+
 [streaming]
 identity_private_key = "802620282ED9F3CF92811C3818DBC4AE594ED59DC1A2F78E4241E31924E101D6B1FB83"
 identity_public_key = "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B"

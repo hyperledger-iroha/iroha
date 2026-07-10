@@ -109,6 +109,8 @@ pub mod kura;
 pub mod lane_consensus;
 /// Merge-ledger reduction helpers.
 pub mod merge;
+/// Authenticated bounded transfer of certified merge-ledger sidecars.
+pub mod merge_sidecar;
 /// Minimal Merkle Mountain Range for bridge commitments.
 pub mod mmr;
 /// Native AMX participant attestation control plane.
@@ -207,6 +209,7 @@ use tokio::sync::broadcast;
 
 use crate::{
     block_sync::message::Message as BlockSyncMessage,
+    merge_sidecar::{CertifiedMergeSidecarMessage, MergeCandidateMessage},
     peers_gossiper::{PeerTrustGossip, PeersGossip},
     sumeragi::message::{BlockMessage, BlockMessageWire, CertifiedBlockFetch, ControlFlow},
 };
@@ -234,6 +237,10 @@ pub enum NetworkMessage {
     LaneRelay(Box<LaneRelayEnvelope>),
     /// Merge committee signature share for merge-ledger quorum certificates.
     MergeCommitteeSignature(Box<MergeCommitteeSignature>),
+    /// Authenticated request/chunk traffic for a block-referenced certified merge sidecar.
+    CertifiedMergeSidecar(Box<CertifiedMergeSidecarMessage>),
+    /// Round-leader announcement/request/chunk traffic for pre-QC merge candidates.
+    MergeCandidate(Box<MergeCandidateMessage>),
     /// Native AMX participant attestation control-plane message.
     NativeAmx(Box<native_amx::NativeAmxMessage>),
     /// Block sync message.
@@ -346,6 +353,16 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                 | BlockMessage::RbcDeliver(_)
                 | BlockMessage::RbcChunk(_)
                 | BlockMessage::RbcChunkCompact(_) => T::ConsensusChunk,
+            },
+            NetworkMessage::CertifiedMergeSidecar(message) => match message.as_ref() {
+                CertifiedMergeSidecarMessage::Request(_) => T::Consensus,
+                CertifiedMergeSidecarMessage::Chunk(_) => T::ConsensusChunk,
+            },
+            NetworkMessage::MergeCandidate(message) => match message.as_ref() {
+                MergeCandidateMessage::Advert(_) | MergeCandidateMessage::Request(_) => {
+                    T::Consensus
+                }
+                MergeCandidateMessage::Chunk(_) => T::ConsensusChunk,
             },
             NetworkMessage::SumeragiControlFlow(_)
             | NetworkMessage::LaneRelay(_)
@@ -689,6 +706,139 @@ mod tests {
         let decoded: NetworkMessage = view.decode().expect("decode network message");
 
         assert!(matches!(decoded, NetworkMessage::Health));
+    }
+
+    #[test]
+    fn certified_merge_sidecar_messages_roundtrip_on_bounded_consensus_topics() {
+        use iroha_data_model::merge::MergeLedgerEntry;
+
+        use crate::merge_sidecar::{
+            CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarChunkV1,
+            CertifiedMergeSidecarMessage, CertifiedMergeSidecarRequestV1,
+            MergeCandidateAdvertV1, MergeCandidateChunkV1, MergeCandidateMessage,
+            MergeCandidateRequestV1,
+        };
+
+        let requester = PeerId::new(checked_topic_keypair().public_key().clone());
+        let responder = PeerId::new(checked_topic_keypair().public_key().clone());
+        let entry_hash = iroha_crypto::HashOf::<MergeLedgerEntry>::from_untyped_unchecked(
+            Hash::new(b"merge-sidecar-entry"),
+        );
+        let request = CertifiedMergeSidecarRequestV1 {
+            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+            request_id: Hash::new(b"merge-sidecar-request"),
+            entry_hash,
+            encoded_len: 3,
+            epoch_id: 4,
+            reference_digest: Hash::new(b"merge-sidecar-reference"),
+            requester: requester.clone(),
+            responder: responder.clone(),
+        };
+        let request_message = NetworkMessage::CertifiedMergeSidecar(Box::new(
+            CertifiedMergeSidecarMessage::Request(request.clone()),
+        ));
+        assert_eq!(request_message.topic(), NetworkTopic::Consensus);
+        let encoded = norito::to_bytes(&request_message).expect("encode sidecar request");
+        let decoded = norito::decode_from_bytes::<NetworkMessage>(&encoded)
+            .expect("decode sidecar request");
+        assert!(matches!(
+            decoded,
+            NetworkMessage::CertifiedMergeSidecar(message)
+                if *message == CertifiedMergeSidecarMessage::Request(request)
+        ));
+
+        let chunk = CertifiedMergeSidecarChunkV1 {
+            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+            request_id: request.request_id,
+            entry_hash,
+            encoded_len: 3,
+            epoch_id: 4,
+            reference_digest: request.reference_digest,
+            requester,
+            responder,
+            chunk_index: 0,
+            chunk_count: 1,
+            bytes: vec![1, 2, 3],
+        };
+        let chunk_message = NetworkMessage::CertifiedMergeSidecar(Box::new(
+            CertifiedMergeSidecarMessage::Chunk(chunk.clone()),
+        ));
+        assert_eq!(chunk_message.topic(), NetworkTopic::ConsensusChunk);
+        let encoded = norito::to_bytes(&chunk_message).expect("encode sidecar chunk");
+        let decoded = norito::decode_from_bytes::<NetworkMessage>(&encoded)
+            .expect("decode sidecar chunk");
+        assert!(matches!(
+            decoded,
+            NetworkMessage::CertifiedMergeSidecar(message)
+                if *message == CertifiedMergeSidecarMessage::Chunk(chunk)
+        ));
+
+        let advert = MergeCandidateAdvertV1::new(
+            4,
+            1,
+            9,
+            iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"candidate-parent")),
+            iroha_crypto::HashOf::new(&vec![request.requester.clone(), request.responder.clone()]),
+            Hash::new(b"candidate-digest"),
+            Hash::new(b"candidate-body"),
+            128,
+            request.responder.clone(),
+        );
+        let advert_message = NetworkMessage::MergeCandidate(Box::new(
+            MergeCandidateMessage::Advert(advert.clone()),
+        ));
+        assert_eq!(advert_message.topic(), NetworkTopic::Consensus);
+        let encoded = norito::to_bytes(&advert_message).expect("encode candidate advert");
+        let decoded = norito::decode_from_bytes::<NetworkMessage>(&encoded)
+            .expect("decode candidate advert");
+        assert!(matches!(
+            decoded,
+            NetworkMessage::MergeCandidate(message)
+                if *message == MergeCandidateMessage::Advert(advert)
+        ));
+
+        let candidate_request = MergeCandidateRequestV1 {
+            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+            request_id: Hash::new(b"merge-candidate-request"),
+            advert: advert.clone(),
+            requester: request.requester.clone(),
+            responder: request.responder.clone(),
+        };
+        let request_message = NetworkMessage::MergeCandidate(Box::new(
+            MergeCandidateMessage::Request(candidate_request.clone()),
+        ));
+        assert_eq!(request_message.topic(), NetworkTopic::Consensus);
+        let encoded = norito::to_bytes(&request_message).expect("encode candidate request");
+        let decoded = norito::decode_from_bytes::<NetworkMessage>(&encoded)
+            .expect("decode candidate request");
+        assert!(matches!(
+            decoded,
+            NetworkMessage::MergeCandidate(message)
+                if *message == MergeCandidateMessage::Request(candidate_request)
+        ));
+
+        let candidate_chunk = MergeCandidateChunkV1 {
+            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+            request_id: candidate_request.request_id,
+            advert,
+            requester: candidate_request.requester,
+            responder: candidate_request.responder,
+            chunk_index: 0,
+            chunk_count: 1,
+            bytes: vec![7; 128],
+        };
+        let chunk_message = NetworkMessage::MergeCandidate(Box::new(
+            MergeCandidateMessage::Chunk(candidate_chunk.clone()),
+        ));
+        assert_eq!(chunk_message.topic(), NetworkTopic::ConsensusChunk);
+        let encoded = norito::to_bytes(&chunk_message).expect("encode candidate chunk");
+        let decoded = norito::decode_from_bytes::<NetworkMessage>(&encoded)
+            .expect("decode candidate chunk");
+        assert!(matches!(
+            decoded,
+            NetworkMessage::MergeCandidate(message)
+                if *message == MergeCandidateMessage::Chunk(candidate_chunk)
+        ));
     }
 
     #[test]

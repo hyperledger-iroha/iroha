@@ -47,16 +47,20 @@ use iroha_data_model::{
     block::{
         BlockHeader, SignedBlock,
         consensus::{
-            CertPhase, LaneBlockDescriptorV1, LaneBlockProposalV1, LaneBlockQcV1,
+            CertPhase, LaneBlockDescriptorV1, LaneBlockProposalV1, LaneBlockQcV1, NativeAmxReceipt,
             SumeragiLanePayloadOwnership,
         },
         decode_framed_signed_block,
     },
     consensus::{Qc, ValidatorSetCheckpoint},
-    merge::MergeLedgerEntry,
+    merge::{
+        MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES, MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES,
+        MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES, MAX_MERGE_LEDGER_ENTRY_BYTES, MergeExecutionBatch,
+        MergeLaneExecution, MergeLedgerEntry,
+    },
     nexus::{DataSpaceId, LaneId},
     peer::PeerId,
-    transaction::signed::{TransactionEntrypoint, TransactionResult},
+    transaction::signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
 };
 use iroha_file_mmap::ReadOnlyMmap;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, spawn_os_thread_as_future};
@@ -108,8 +112,6 @@ const AUTONOMOUS_LANE_BLOCKS_INDEX_FILE: &str = "autonomous_blocks.index";
 const AUTONOMOUS_LANE_BLOCK_VIEW_STATE_PREFIX: &str = "autonomous_view";
 const AUTONOMOUS_LANE_ENTRYPOINT_CLAIMS_DIR_PREFIX: &str = "autonomous_entrypoint_claims";
 const AUTONOMOUS_LANE_ENTRYPOINT_CLAIM_MAX_BYTES: usize = 4 * 1024;
-/// Hard wire/storage cap for one hash-addressed autonomous merge bundle.
-pub(crate) const MAX_AUTONOMOUS_LANE_MERGE_BUNDLE_BYTES: usize = 32 * 1024 * 1024;
 const LANE_BLOCK_EXECUTION_INPUTS_DATA_FILE: &str = "execution_inputs.norito";
 const LANE_BLOCK_EXECUTION_INPUTS_INDEX_FILE: &str = "execution_inputs.index";
 const LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE: &str = "execution_preflights.norito";
@@ -136,10 +138,18 @@ const BLOCK_NOTIFY_CHANNEL_CAPACITY: usize = 1;
 const SIZE_OF_BLOCK_HASH: u64 = Hash::LENGTH as u64;
 pub(crate) const STRICT_INIT_MAX_BLOCK_BYTES: u64 = 256 * 1024 * 1024;
 const EVICTED_BLOCK_START: u64 = u64::MAX;
-/// Upper bound for merge-ledger entry payloads to avoid unbounded allocations on recovery.
-const MERGE_LEDGER_MAX_ENTRY_BYTES: usize = 16 * 1024 * 1024;
+const PENDING_MERGE_ENTRIES_DIR: &str = "pending_merge_entries";
+const MAX_PENDING_CERTIFIED_MERGE_ENTRIES: usize = 1_024;
+/// Aggregate bound for uncommitted certified merge sidecars.
+const MAX_PENDING_CERTIFIED_MERGE_BYTES: usize = 256 * 1024 * 1024;
+const MERGE_CARRIERS_DIR: &str = "merge_carriers";
+const MERGE_CARRIER_MAX_BYTES: usize = 4 * 1024;
 const HARD_FORK_SNAPSHOT_BOOTSTRAP_ENV: &str = "IROHA_HARD_FORK_SNAPSHOT_BOOTSTRAP";
 const HARD_FORK_SNAPSHOT_BOOTSTRAP_HEIGHT_ENV: &str = "IROHA_HARD_FORK_SNAPSHOT_BOOTSTRAP_HEIGHT";
+
+const fn pending_merge_bytes_within_limit(bytes: usize) -> bool {
+    bytes <= MAX_PENDING_CERTIFIED_MERGE_BYTES
+}
 
 #[cfg(any(test, feature = "bench"))]
 fn checked_keypair() -> KeyPair {
@@ -235,6 +245,10 @@ pub struct Kura {
     block_plain_text_path: Mutex<Option<PathBuf>>,
     /// Serialize sidecar writes to avoid index/data races.
     sidecar_lock: Mutex<()>,
+    /// Serialize sparse merge-carrier index publication and reconciliation.
+    merge_carrier_lock: Mutex<()>,
+    /// Validated in-memory sparse carrier maps loaded during startup reconciliation.
+    merge_carrier_index: Mutex<MergeCarrierIndex>,
     /// Queue of pipeline sidecar writes flushed by the Kura writer thread.
     pipeline_sidecar_queue: Mutex<VecDeque<PipelineRecoverySidecar>>,
     /// Maximum queued pipeline sidecar writes.
@@ -335,11 +349,19 @@ pub struct Kura {
 type BlockData = Vec<(HashOf<BlockHeader>, Option<Arc<SignedBlock>>)>;
 type BlockHeightIndex = BTreeMap<HashOf<BlockHeader>, NonZeroUsize>;
 type TransactionEntrypointHeights = BTreeMap<HashOf<TransactionEntrypoint>, BTreeSet<NonZeroUsize>>;
+type TransactionHashHeights = BTreeMap<HashOf<SignedTransaction>, BTreeSet<NonZeroUsize>>;
 type TransactionAuthorityHeights = BTreeMap<AccountId, BTreeSet<NonZeroUsize>>;
 type TransactionTimestampHeights = BTreeMap<u64, BTreeSet<NonZeroUsize>>;
 type TransactionResultStatusHeights = BTreeMap<bool, BTreeSet<NonZeroUsize>>;
 type BlockReplicaKey = (u64, HashOf<BlockHeader>);
 type BlockReplicaRegistry = BTreeMap<BlockReplicaKey, BTreeMap<PeerId, BlockReplicaAdvert>>;
+
+#[derive(Debug, Default)]
+struct MergeCarrierIndex {
+    initialized: bool,
+    by_height: BTreeMap<u64, MergeLedgerCarrierRecord>,
+    by_entry: BTreeMap<HashOf<MergeLedgerEntry>, MergeLedgerCarrierRecord>,
+}
 
 #[derive(Debug, Clone)]
 struct QueuedFastpqProofSnapshot {
@@ -420,6 +442,7 @@ struct TransactionEntrypointIndex {
     complete: bool,
     indexed_heights: BTreeSet<NonZeroUsize>,
     heights_by_entrypoint: TransactionEntrypointHeights,
+    heights_by_transaction: TransactionHashHeights,
     heights_by_authority: TransactionAuthorityHeights,
     heights_by_timestamp_ms: TransactionTimestampHeights,
     heights_by_result_status: TransactionResultStatusHeights,
@@ -431,6 +454,7 @@ impl TransactionEntrypointIndex {
             complete: true,
             indexed_heights: BTreeSet::new(),
             heights_by_entrypoint: BTreeMap::new(),
+            heights_by_transaction: BTreeMap::new(),
             heights_by_authority: BTreeMap::new(),
             heights_by_timestamp_ms: BTreeMap::new(),
             heights_by_result_status: BTreeMap::new(),
@@ -653,8 +677,52 @@ struct MergeLedgerLog {
     entries: Vec<MergeLedgerEntry>,
     cache_capacity: usize,
     total_entries: usize,
+    frames_by_hash: BTreeMap<HashOf<MergeLedgerEntry>, MergeLedgerFrameIndex>,
+    frames_by_epoch: BTreeMap<u64, MergeLedgerFrameIndex>,
+    in_memory_entries: BTreeMap<HashOf<MergeLedgerEntry>, MergeLedgerEntry>,
+    latest_execution_heights: BTreeMap<(LaneId, DataSpaceId, Hash), u64>,
+    #[cfg(test)]
+    full_history_scans: usize,
+    #[cfg(test)]
+    indexed_lookups: usize,
     #[cfg(test)]
     fail_next_append: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MergeLedgerFrameIndex {
+    frame_offset: u64,
+    payload_len: u32,
+    epoch_id: u64,
+    entry_hash: HashOf<MergeLedgerEntry>,
+}
+
+/// Durable sparse association between one committed merge entry and the exact
+/// global block whose compact reference ordered its application.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+pub(crate) struct MergeLedgerCarrierRecord {
+    /// Carrier-record schema version. Only version one is accepted.
+    pub version: u8,
+    /// Canonical full-entry sidecar hash.
+    pub entry_hash: HashOf<MergeLedgerEntry>,
+    /// Contiguous merge-ledger epoch authenticated by the entry QC.
+    pub epoch_id: u64,
+    /// Sparse canonical global block height carrying the compact reference.
+    pub block_height: u64,
+    /// Exact canonical global block hash at `block_height`.
+    pub block_hash: HashOf<BlockHeader>,
+}
+
+impl MergeLedgerCarrierRecord {
+    fn new(entry: &MergeLedgerEntry, block: &SignedBlock) -> Self {
+        Self {
+            version: 1,
+            entry_hash: entry.canonical_hash(),
+            epoch_id: entry.epoch_id,
+            block_height: block.header().height().get(),
+            block_hash: block.hash(),
+        }
+    }
 }
 
 fn sanitize_merge_cache_capacity(capacity: usize) -> usize {
@@ -675,13 +743,22 @@ impl MergeLedgerLog {
         let mut file = FileWrap::open_with(path.to_path_buf(), |opts| {
             opts.read(true).create(true).append(true);
         })?;
-        let (entries, total_entries) = Self::load_entries(&mut file, cache_capacity)?;
+        let (entries, total_entries, frames_by_hash, frames_by_epoch, latest_execution_heights) =
+            Self::load_entries(&mut file, cache_capacity)?;
         file.try_io(|f| f.seek(SeekFrom::End(0)))?;
         Ok(Self {
             file: Some(file),
             entries,
             cache_capacity,
             total_entries,
+            frames_by_hash,
+            frames_by_epoch,
+            in_memory_entries: BTreeMap::new(),
+            latest_execution_heights,
+            #[cfg(test)]
+            full_history_scans: 0,
+            #[cfg(test)]
+            indexed_lookups: 0,
             #[cfg(test)]
             fail_next_append: false,
         })
@@ -694,28 +771,43 @@ impl MergeLedgerLog {
             entries: Vec::new(),
             cache_capacity,
             total_entries: 0,
+            frames_by_hash: BTreeMap::new(),
+            frames_by_epoch: BTreeMap::new(),
+            in_memory_entries: BTreeMap::new(),
+            latest_execution_heights: BTreeMap::new(),
+            #[cfg(test)]
+            full_history_scans: 0,
+            #[cfg(test)]
+            indexed_lookups: 0,
             #[cfg(test)]
             fail_next_append: false,
         }
     }
 
     fn append(&mut self, entry: &MergeLedgerEntry) -> Result<()> {
-        let expected_epoch = self
-            .entries
-            .last()
-            .map_or(1, |previous| previous.epoch_id.saturating_add(1));
+        let expected_epoch = u64::try_from(self.total_entries)
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
         if entry.epoch_id != expected_epoch {
             return Err(Error::NoritoFrame(norito::core::Error::Message(format!(
                 "merge ledger epoch must be contiguous: expected {expected_epoch}, got {}",
                 entry.epoch_id
             ))));
         }
-        let encoded = Encode::encode(entry);
-        if encoded.len() > MERGE_LEDGER_MAX_ENTRY_BYTES {
+        if !entry.canonical_size_within_limit() {
             return Err(Error::NoritoFrame(norito::core::Error::Message(format!(
-                "merge ledger entry exceeds {MERGE_LEDGER_MAX_ENTRY_BYTES} bytes"
+                "merge ledger entry exceeds {MAX_MERGE_LEDGER_ENTRY_BYTES} bytes"
             ))));
         }
+        let entry_hash = entry.canonical_hash();
+        if self.frames_by_hash.contains_key(&entry_hash)
+            || self.frames_by_epoch.contains_key(&entry.epoch_id)
+        {
+            return Err(Error::MergeCarrierConflict(
+                "merge ledger append duplicates an indexed hash or epoch".to_owned(),
+            ));
+        }
+        let encoded = Encode::encode(entry);
         let len: u32 = encoded.len().try_into().map_err(|_| {
             Error::NoritoFrame(norito::core::Error::Message(
                 "merge ledger entry exceeds 4 GiB".into(),
@@ -730,13 +822,29 @@ impl MergeLedgerLog {
             ));
         }
 
-        if let Some(file) = self.file.as_mut() {
+        let frame_offset = if let Some(file) = self.file.as_mut() {
+            let frame_offset = file.try_io(|f| f.seek(SeekFrom::End(0)))?;
             file.try_io(|f| f.write_all(&len.to_le_bytes()))?;
             file.try_io(|f| f.write_all(&encoded))?;
             file.try_io(|f| f.sync_data())?;
-        }
+            frame_offset
+        } else {
+            u64::try_from(self.total_entries).unwrap_or(u64::MAX)
+        };
 
         self.total_entries = self.total_entries.saturating_add(1);
+        let frame = MergeLedgerFrameIndex {
+            frame_offset,
+            payload_len: len,
+            epoch_id: entry.epoch_id,
+            entry_hash,
+        };
+        self.frames_by_hash.insert(entry_hash, frame);
+        self.frames_by_epoch.insert(entry.epoch_id, frame);
+        if self.file.is_none() {
+            self.in_memory_entries.insert(entry_hash, entry.clone());
+        }
+        Self::record_execution_heights(&mut self.latest_execution_heights, entry);
         self.entries.push(entry.clone());
         self.trim_cache();
         Ok(())
@@ -746,41 +854,119 @@ impl MergeLedgerLog {
         self.entries.clone()
     }
 
-    fn all_entries(&mut self) -> Result<Vec<MergeLedgerEntry>> {
-        let Some(file) = self.file.as_mut() else {
-            return Ok(self.entries.clone());
+    fn entry_hashes(&self) -> BTreeSet<HashOf<MergeLedgerEntry>> {
+        self.frames_by_hash.keys().copied().collect()
+    }
+
+    fn entry_by_hash(
+        &mut self,
+        hash: HashOf<MergeLedgerEntry>,
+    ) -> Result<Option<MergeLedgerEntry>> {
+        #[cfg(test)]
+        {
+            self.indexed_lookups = self.indexed_lookups.saturating_add(1);
+        }
+        let Some(frame) = self.frames_by_hash.get(&hash).copied() else {
+            return Ok(None);
         };
-        let (entries, total_entries) = Self::load_entries(file, usize::MAX)?;
+        let Some(file) = self.file.as_mut() else {
+            return self
+                .in_memory_entries
+                .get(&hash)
+                .cloned()
+                .map(Some)
+                .ok_or_else(|| {
+                    Error::MergeCarrierConflict(
+                        "in-memory merge frame index references a missing entry".to_owned(),
+                    )
+                });
+        };
+        let result = (|| {
+            file.try_io(|inner| inner.seek(SeekFrom::Start(frame.frame_offset)))?;
+            let mut len_buf = [0u8; 4];
+            file.try_io(|inner| inner.read_exact(&mut len_buf))?;
+            let payload_len = u32::from_le_bytes(len_buf);
+            if payload_len != frame.payload_len
+                || usize::try_from(payload_len).unwrap_or(usize::MAX) > MAX_MERGE_LEDGER_ENTRY_BYTES
+            {
+                return Err(Error::MergeCarrierConflict(
+                    "indexed merge frame length changed after startup validation".to_owned(),
+                ));
+            }
+            let mut bytes = vec![0u8; usize::try_from(payload_len)?];
+            file.try_io(|inner| inner.read_exact(&mut bytes))?;
+            let mut input = bytes.as_slice();
+            let entry = MergeLedgerEntry::decode_all(&mut input).map_err(Error::NoritoFrame)?;
+            if entry.epoch_id != frame.epoch_id || entry.canonical_hash() != frame.entry_hash {
+                return Err(Error::MergeCarrierConflict(
+                    "indexed merge frame identity changed after startup validation".to_owned(),
+                ));
+            }
+            Ok(Some(entry))
+        })();
+        let restore = file.try_io(|inner| inner.seek(SeekFrom::End(0)));
+        restore?;
+        result
+    }
+
+    fn all_entries(&mut self) -> Result<Vec<MergeLedgerEntry>> {
+        #[cfg(test)]
+        {
+            self.full_history_scans = self.full_history_scans.saturating_add(1);
+        }
+        let Some(file) = self.file.as_mut() else {
+            return Ok(self
+                .frames_by_epoch
+                .values()
+                .filter_map(|frame| self.in_memory_entries.get(&frame.entry_hash).cloned())
+                .collect());
+        };
+        let (entries, total_entries, frames_by_hash, frames_by_epoch) =
+            Self::load_entries(file, usize::MAX)?;
         file.try_io(|inner| inner.seek(SeekFrom::End(0)))?;
         self.total_entries = total_entries;
+        self.frames_by_hash = frames_by_hash;
+        self.frames_by_epoch = frames_by_epoch;
+        self.entries = entries
+            .iter()
+            .rev()
+            .take(self.cache_capacity)
+            .cloned()
+            .collect::<Vec<_>>();
+        self.entries.reverse();
         Ok(entries)
     }
 
     fn load_entries(
         file: &mut FileWrap,
         cache_capacity: usize,
-    ) -> Result<(Vec<MergeLedgerEntry>, usize)> {
+    ) -> Result<(
+        Vec<MergeLedgerEntry>,
+        usize,
+        BTreeMap<HashOf<MergeLedgerEntry>, MergeLedgerFrameIndex>,
+        BTreeMap<u64, MergeLedgerFrameIndex>,
+    )> {
         file.try_io(|f| f.seek(SeekFrom::Start(0)))?;
         let file_len = file.try_io(|f| f.metadata().map(|meta| meta.len()))?;
         let mut entries = Vec::new();
         let mut total_entries = 0usize;
         let mut valid_len = 0u64;
+        let mut frames_by_hash = BTreeMap::new();
+        let mut frames_by_epoch = BTreeMap::new();
         let truncated = loop {
             let mut len_buf = [0u8; 4];
             match file.try_io(|f| f.read_exact(&mut len_buf)) {
                 Ok(()) => {
                     let len = u32::from_le_bytes(len_buf) as usize;
                     if len == 0 {
-                        warn!("merge ledger entry length is zero; truncating tail");
-                        break true;
+                        return Err(Error::MergeCarrierConflict(
+                            "merge ledger contains a zero-length complete frame".to_owned(),
+                        ));
                     }
-                    if len > MERGE_LEDGER_MAX_ENTRY_BYTES {
-                        warn!(
-                            len,
-                            limit = MERGE_LEDGER_MAX_ENTRY_BYTES,
-                            "merge ledger entry length exceeds maximum; truncating tail"
-                        );
-                        break true;
+                    if len > MAX_MERGE_LEDGER_ENTRY_BYTES {
+                        return Err(Error::MergeCarrierConflict(format!(
+                            "merge ledger frame length {len} exceeds {MAX_MERGE_LEDGER_ENTRY_BYTES} bytes"
+                        )));
                     }
                     let mut buf = vec![0u8; len];
                     match file.try_io(|f| f.read_exact(&mut buf)) {
@@ -791,17 +977,46 @@ impl MergeLedgerLog {
                         Err(err) => return Err(err),
                     }
                     let mut input = &buf[..];
-                    let entry = match MergeLedgerEntry::decode_all(&mut input) {
-                        Ok(entry) => entry,
-                        Err(err) => {
-                            warn!(
-                                ?err,
-                                entry = total_entries,
-                                "merge ledger entry failed exact Norito decode; truncating suffix"
-                            );
-                            break true;
-                        }
+                    let entry = MergeLedgerEntry::decode_all(&mut input).map_err(|err| {
+                        Error::MergeCarrierConflict(format!(
+                            "merge ledger frame {total_entries} failed exact Norito decode: {err}"
+                        ))
+                    })?;
+                    if entry.encode() != buf {
+                        return Err(Error::MergeCarrierConflict(format!(
+                            "merge ledger frame {total_entries} is not canonical Norito"
+                        )));
+                    }
+                    if !entry.canonical_size_within_limit() {
+                        return Err(Error::MergeCarrierConflict(format!(
+                            "merge ledger frame {total_entries} exceeds the canonical framed size limit"
+                        )));
+                    }
+                    let expected_epoch = u64::try_from(total_entries)
+                        .unwrap_or(u64::MAX)
+                        .saturating_add(1);
+                    let entry_hash = entry.canonical_hash();
+                    if entry.epoch_id != expected_epoch
+                        || frames_by_hash.contains_key(&entry_hash)
+                        || frames_by_epoch.contains_key(&entry.epoch_id)
+                    {
+                        return Err(Error::MergeCarrierConflict(format!(
+                            "merge ledger frame {} has a non-contiguous epoch or duplicate hash",
+                            total_entries
+                        )));
+                    }
+                    let frame = MergeLedgerFrameIndex {
+                        frame_offset: valid_len,
+                        payload_len: u32::try_from(len).map_err(|_| {
+                            Error::MergeCarrierConflict(
+                                "merge ledger frame length does not fit its index".to_owned(),
+                            )
+                        })?,
+                        epoch_id: entry.epoch_id,
+                        entry_hash,
                     };
+                    frames_by_hash.insert(entry_hash, frame);
+                    frames_by_epoch.insert(entry.epoch_id, frame);
                     total_entries = total_entries.saturating_add(1);
                     entries.push(entry);
                     valid_len = valid_len.saturating_add(4 + len as u64);
@@ -826,7 +1041,7 @@ impl MergeLedgerLog {
             file.try_io(|f| f.set_len(valid_len))?;
             file.try_io(|f| f.sync_data())?;
         }
-        Ok((entries, total_entries))
+        Ok((entries, total_entries, frames_by_hash, frames_by_epoch))
     }
 
     fn truncate_to_len(&mut self, keep: usize) -> Result<()> {
@@ -835,38 +1050,59 @@ impl MergeLedgerLog {
         }
 
         if let Some(file) = self.file.as_mut() {
-            file.try_io(|f| f.seek(SeekFrom::Start(0)))?;
-            let mut entries = Vec::new();
-            let mut new_len = 0u64;
-            for _ in 0..keep {
-                let mut len_buf = [0u8; 4];
-                file.try_io(|f| f.read_exact(&mut len_buf))?;
-                let len = u32::from_le_bytes(len_buf);
-                let len_usize: usize = len as usize;
-                new_len = new_len
-                    .checked_add(4 + u64::from(len))
-                    .expect("merge-ledger log length overflow");
-
-                let mut buf = vec![0u8; len_usize];
-                file.try_io(|f| f.read_exact(&mut buf))?;
-                let mut input = &buf[..];
-                let entry = MergeLedgerEntry::decode_all(&mut input).map_err(Error::NoritoFrame)?;
-                entries.push(entry);
-                if entries.len() > self.cache_capacity {
-                    let overflow = entries.len() - self.cache_capacity;
-                    entries.drain(0..overflow);
-                }
-            }
-
+            let new_len = if keep == 0 {
+                0
+            } else {
+                let epoch = u64::try_from(keep)?;
+                let frame = self.frames_by_epoch.get(&epoch).ok_or_else(|| {
+                    Error::MergeCarrierConflict(
+                        "merge truncate index is missing its retained terminal epoch".to_owned(),
+                    )
+                })?;
+                frame
+                    .frame_offset
+                    .checked_add(4)
+                    .and_then(|offset| offset.checked_add(u64::from(frame.payload_len)))
+                    .ok_or_else(|| {
+                        Error::MergeCarrierConflict(
+                            "merge truncate frame offset overflow".to_owned(),
+                        )
+                    })?
+            };
             file.try_io(|f| f.set_len(new_len))?;
             file.try_io(|f| f.sync_data())?;
-            file.try_io(|f| f.seek(SeekFrom::End(0)))?;
+            let (entries, total_entries, frames_by_hash, frames_by_epoch) =
+                Self::load_entries(file, self.cache_capacity)?;
+            file.try_io(|inner| inner.seek(SeekFrom::End(0)))?;
             self.entries = entries;
+            self.total_entries = total_entries;
+            self.frames_by_hash = frames_by_hash;
+            self.frames_by_epoch = frames_by_epoch;
         } else {
-            self.entries.truncate(keep);
+            self.frames_by_epoch
+                .retain(|epoch, _| usize::try_from(*epoch).is_ok_and(|epoch| epoch <= keep));
+            let removed_hashes = self
+                .frames_by_hash
+                .iter()
+                .filter_map(|(hash, frame)| {
+                    (!usize::try_from(frame.epoch_id).is_ok_and(|epoch| epoch <= keep))
+                        .then_some(*hash)
+                })
+                .collect::<Vec<_>>();
+            self.frames_by_hash.retain(|_, frame| {
+                usize::try_from(frame.epoch_id).is_ok_and(|epoch| epoch <= keep)
+            });
+            for hash in removed_hashes {
+                self.in_memory_entries.remove(&hash);
+            }
+            self.entries = self
+                .frames_by_epoch
+                .values()
+                .filter_map(|frame| self.in_memory_entries.get(&frame.entry_hash).cloned())
+                .collect();
+            self.total_entries = keep;
         }
 
-        self.total_entries = keep;
         self.trim_cache();
         Ok(())
     }
@@ -931,6 +1167,7 @@ impl Kura {
             complete: false,
             indexed_heights: BTreeSet::new(),
             heights_by_entrypoint: BTreeMap::new(),
+            heights_by_transaction: BTreeMap::new(),
             heights_by_authority: BTreeMap::new(),
             heights_by_timestamp_ms: BTreeMap::new(),
             heights_by_result_status: BTreeMap::new(),
@@ -966,7 +1203,15 @@ impl Kura {
                 .or_default()
                 .insert(height);
         }
-        for entrypoint in block.entrypoints_cloned() {
+        let entrypoints = block.entrypoints_cloned();
+        for hash in crate::state::committed_transaction_hashes_for_entrypoints(&entrypoints) {
+            index
+                .heights_by_transaction
+                .entry(hash)
+                .or_default()
+                .insert(height);
+        }
+        for entrypoint in entrypoints {
             if let Some(authority) = entrypoint.authority_opt() {
                 index
                     .heights_by_authority
@@ -991,11 +1236,115 @@ impl Kura {
         }
     }
 
+    fn validate_merge_transaction_uniqueness(
+        block: &SignedBlock,
+        entry: &MergeLedgerEntry,
+    ) -> Result<()> {
+        let Some(batch) = entry.execution_batch.as_ref() else {
+            return Ok(());
+        };
+        let ordinary_entrypoints = block.entrypoint_hashes().collect::<BTreeSet<_>>();
+        let merge_entrypoints = batch
+            .lanes
+            .iter()
+            .flat_map(|execution| {
+                execution
+                    .entrypoints
+                    .iter()
+                    .map(|entrypoint| entrypoint.hash())
+            })
+            .collect::<Vec<_>>();
+        if merge_entrypoints
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .len()
+            != merge_entrypoints.len()
+            || merge_entrypoints
+                .iter()
+                .any(|hash| ordinary_entrypoints.contains(hash))
+        {
+            return Err(Error::MergeReferenceMismatch(
+                "carrier block duplicates an ordinary and/or merge entrypoint hash".to_owned(),
+            ));
+        }
+
+        let ordinary_entrypoints = block.entrypoints_cloned();
+        let ordinary_transactions =
+            crate::state::committed_transaction_hashes_for_entrypoints(&ordinary_entrypoints)
+                .into_iter()
+                .collect::<BTreeSet<_>>();
+        let merge_transactions = crate::state::merge_execution_committed_transaction_hashes(batch);
+        if merge_transactions
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .len()
+            != merge_transactions.len()
+            || merge_transactions
+                .iter()
+                .any(|hash| ordinary_transactions.contains(hash))
+        {
+            return Err(Error::MergeReferenceMismatch(
+                "carrier block duplicates an ordinary and/or merge transaction hash".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn insert_merge_execution_index_heights(
+        index: &mut TransactionEntrypointIndex,
+        height: NonZeroUsize,
+        batch: &MergeExecutionBatch,
+    ) {
+        for execution in &batch.lanes {
+            for entrypoint in &execution.entrypoints {
+                index
+                    .heights_by_entrypoint
+                    .entry(entrypoint.hash())
+                    .or_default()
+                    .insert(height);
+                if let Some(authority) = entrypoint.authority_opt() {
+                    index
+                        .heights_by_authority
+                        .entry(authority.clone())
+                        .or_default()
+                        .insert(height);
+                }
+                if let Some(timestamp_ms) = entrypoint.creation_time_ms() {
+                    index
+                        .heights_by_timestamp_ms
+                        .entry(timestamp_ms)
+                        .or_default()
+                        .insert(height);
+                }
+            }
+            for result in &execution.results {
+                index
+                    .heights_by_result_status
+                    .entry(result.as_ref().is_ok())
+                    .or_default()
+                    .insert(height);
+            }
+        }
+        for hash in crate::state::merge_execution_committed_transaction_hashes(batch) {
+            index
+                .heights_by_transaction
+                .entry(hash)
+                .or_default()
+                .insert(height);
+        }
+    }
+
     fn remove_transaction_entrypoint_height(
         index: &mut TransactionEntrypointIndex,
         height: NonZeroUsize,
     ) {
         index.heights_by_entrypoint.retain(|_, heights| {
+            heights.remove(&height);
+            !heights.is_empty()
+        });
+        index.heights_by_transaction.retain(|_, heights| {
             heights.remove(&height);
             !heights.is_empty()
         });
@@ -1029,6 +1378,16 @@ impl Kura {
         index.complete = index.indexed_heights.len() == chain_len;
     }
 
+    fn set_merge_transaction_index_entry(&self, height: usize, entry: &MergeLedgerEntry) {
+        let (Some(height), Some(batch)) =
+            (NonZeroUsize::new(height), entry.execution_batch.as_ref())
+        else {
+            return;
+        };
+        let mut index = self.transaction_entrypoint_index.lock();
+        Self::insert_merge_execution_index_heights(&mut index, height, batch);
+    }
+
     fn truncate_transaction_heights<K: Ord>(
         index: &mut BTreeMap<K, BTreeSet<NonZeroUsize>>,
         keep: usize,
@@ -1045,6 +1404,7 @@ impl Kura {
             .indexed_heights
             .retain(|indexed_height| indexed_height.get() <= keep);
         Self::truncate_transaction_heights(&mut index.heights_by_entrypoint, keep);
+        Self::truncate_transaction_heights(&mut index.heights_by_transaction, keep);
         Self::truncate_transaction_heights(&mut index.heights_by_authority, keep);
         Self::truncate_transaction_heights(&mut index.heights_by_timestamp_ms, keep);
         Self::truncate_transaction_heights(&mut index.heights_by_result_status, keep);
@@ -1335,6 +1695,8 @@ impl Kura {
             block_notify_rx: Mutex::new(Some(block_notify_rx)),
             block_plain_text_path: Mutex::new(block_plain_text_path),
             sidecar_lock: Mutex::new(()),
+            merge_carrier_lock: Mutex::new(()),
+            merge_carrier_index: Mutex::new(MergeCarrierIndex::default()),
             pipeline_sidecar_queue: Mutex::new(VecDeque::new()),
             pipeline_sidecar_queue_cap: AtomicUsize::new(config.blocks_in_memory.get()),
             fastpq_proof_queue: Mutex::new(VecDeque::new()),
@@ -1393,6 +1755,8 @@ impl Kura {
             eviction_paused_after_snapshot: AtomicBool::new(false),
             _temp_store_dir: None,
         });
+
+        kura.reconcile_merge_carriers_from_durable_blocks()?;
 
         if block_count > 0 {
             let _ = kura.commit_manifest(block_count as u64)?;
@@ -1458,6 +1822,8 @@ impl Kura {
             block_notify_rx: Mutex::new(Some(block_notify_rx)),
             block_plain_text_path: Mutex::new(None),
             sidecar_lock: Mutex::new(()),
+            merge_carrier_lock: Mutex::new(()),
+            merge_carrier_index: Mutex::new(MergeCarrierIndex::default()),
             pipeline_sidecar_queue: Mutex::new(VecDeque::new()),
             pipeline_sidecar_queue_cap: AtomicUsize::new(default_pipeline_sidecar_queue_cap()),
             fastpq_proof_queue: Mutex::new(VecDeque::new()),
@@ -2772,23 +3138,1042 @@ impl Kura {
         Ok(())
     }
 
-    fn append_merge_entry_for_existing_block_if_missing(
+    fn merge_carrier_dir(&self) -> PathBuf {
+        self.store_root.join(MERGE_CARRIERS_DIR)
+    }
+
+    fn merge_carrier_path(&self, block_height: u64) -> PathBuf {
+        self.merge_carrier_dir()
+            .join(format!("{block_height}.norito"))
+    }
+
+    fn regular_sidecar_metadata(
         &self,
-        height: u64,
+        path: &Path,
+        expected_directory: &Path,
+    ) -> Result<Option<std::fs::Metadata>> {
+        let metadata = match std::fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(Error::IO(err, path.to_path_buf())),
+        };
+        if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "sidecar path is not a regular no-follow file",
+                ),
+                path.to_path_buf(),
+            ));
+        }
+        let canonical_root = std::fs::canonicalize(&self.store_root)
+            .map_err(|err| Error::IO(err, self.store_root.clone()))?;
+        let canonical_directory = std::fs::canonicalize(expected_directory)
+            .map_err(|err| Error::IO(err, expected_directory.to_path_buf()))?;
+        let canonical_path =
+            std::fs::canonicalize(path).map_err(|err| Error::IO(err, path.to_path_buf()))?;
+        if !canonical_directory.starts_with(&canonical_root)
+            || canonical_path.parent() != Some(canonical_directory.as_path())
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "sidecar path escapes its canonical Kura directory",
+                ),
+                path.to_path_buf(),
+            ));
+        }
+        Ok(Some(metadata))
+    }
+
+    fn read_regular_sidecar_bytes(
+        &self,
+        path: &Path,
+        expected_directory: &Path,
+        byte_limit: usize,
+    ) -> Result<Option<Vec<u8>>> {
+        let Some(metadata) = self.regular_sidecar_metadata(path, expected_directory)? else {
+            return Ok(None);
+        };
+        if metadata.len() > u64::try_from(byte_limit)? {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "sidecar exceeds its hard byte limit",
+                ),
+                path.to_path_buf(),
+            ));
+        }
+        let file = std::fs::File::open(path).map_err(|err| Error::IO(err, path.to_path_buf()))?;
+        let opened_metadata = file
+            .metadata()
+            .map_err(|err| Error::IO(err, path.to_path_buf()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            if metadata.dev() != opened_metadata.dev() || metadata.ino() != opened_metadata.ino() {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "sidecar file changed during no-follow validation",
+                    ),
+                    path.to_path_buf(),
+                ));
+            }
+        }
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(usize::try_from(metadata.len())?)?;
+        file.take(u64::try_from(byte_limit.saturating_add(1))?)
+            .read_to_end(&mut bytes)
+            .map_err(|err| Error::IO(err, path.to_path_buf()))?;
+        if bytes.len() > byte_limit {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "sidecar grew past its hard byte limit while reading",
+                ),
+                path.to_path_buf(),
+            ));
+        }
+        Ok(Some(bytes))
+    }
+
+    fn block_merge_reference(
+        block: &SignedBlock,
+    ) -> Option<&iroha_data_model::block::CertifiedMergeLedgerReference> {
+        block.execution_context()?.merge_entry.as_ref()
+    }
+
+    fn carrier_record_for_block_entry(
+        block: &SignedBlock,
         entry: &MergeLedgerEntry,
-    ) -> Result<()> {
-        let total_entries = self.merge_log.lock().total_entries;
-        let expected_entries = usize::try_from(height)?;
-        if total_entries >= expected_entries {
+    ) -> Result<MergeLedgerCarrierRecord> {
+        let reference = Self::block_merge_reference(block).ok_or_else(|| {
+            Error::MergeReferenceMismatch(
+                "merge entry supplied for a block without a compact reference".to_owned(),
+            )
+        })?;
+        if !reference.matches_entry(entry) {
+            return Err(Error::MergeReferenceMismatch(
+                "compact block reference does not match the resolved full entry".to_owned(),
+            ));
+        }
+        if entry.merge_qc.carrier_height != block.header().height().get()
+            || Some(entry.merge_qc.carrier_parent_hash) != block.header().prev_block_hash()
+        {
+            return Err(Error::MergeReferenceMismatch(
+                "merge QC carrier height or parent does not match the referencing block".to_owned(),
+            ));
+        }
+        Ok(MergeLedgerCarrierRecord::new(entry, block))
+    }
+
+    fn read_merge_carrier_path(&self, path: &Path) -> Result<Option<MergeLedgerCarrierRecord>> {
+        let Some(bytes) = self.read_regular_sidecar_bytes(
+            path,
+            &self.merge_carrier_dir(),
+            MERGE_CARRIER_MAX_BYTES,
+        )?
+        else {
+            return Ok(None);
+        };
+        let record =
+            norito::decode_from_bytes::<MergeLedgerCarrierRecord>(&bytes).map_err(|err| {
+                Error::MergeCarrierConflict(format!(
+                    "carrier record {} is not exact framed Norito: {err}",
+                    path.display()
+                ))
+            })?;
+        if record.version != 1
+            || record.block_height == 0
+            || norito::to_bytes(&record).map_err(Error::NoritoFrame)? != bytes
+            || self.merge_carrier_path(record.block_height) != path
+        {
+            return Err(Error::MergeCarrierConflict(format!(
+                "carrier record {} has a non-canonical identity",
+                path.display()
+            )));
+        }
+        Ok(Some(record))
+    }
+
+    fn merge_carrier_records_from_disk_unlocked(&self) -> Result<Vec<MergeLedgerCarrierRecord>> {
+        let directory = self.merge_carrier_dir();
+        let read_dir = match std::fs::read_dir(&directory) {
+            Ok(read_dir) => read_dir,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(err) => return Err(Error::IO(err, directory)),
+        };
+        let mut paths = read_dir
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<std::io::Result<Vec<_>>>()
+            .map_err(|err| Error::IO(err, directory.clone()))?;
+        paths.retain(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "norito")
+        });
+        paths.sort();
+        let mut records = Vec::with_capacity(paths.len());
+        let mut entry_hashes = BTreeSet::new();
+        let mut block_heights = BTreeSet::new();
+        for path in paths {
+            let Some(record) = self.read_merge_carrier_path(&path)? else {
+                continue;
+            };
+            if !entry_hashes.insert(record.entry_hash) || !block_heights.insert(record.block_height)
+            {
+                return Err(Error::MergeCarrierConflict(
+                    "carrier index duplicates an entry hash or block height".to_owned(),
+                ));
+            }
+            records.push(record);
+        }
+        records.sort_by_key(|record| record.block_height);
+        Ok(records)
+    }
+
+    fn merge_carrier_records_unlocked(&self) -> Result<Vec<MergeLedgerCarrierRecord>> {
+        {
+            let index = self.merge_carrier_index.lock();
+            if index.initialized {
+                return Ok(index.by_height.values().copied().collect());
+            }
+        }
+        let records = self.merge_carrier_records_from_disk_unlocked()?;
+        let mut index = self.merge_carrier_index.lock();
+        index.by_height = records
+            .iter()
+            .map(|record| (record.block_height, *record))
+            .collect();
+        index.by_entry = records
+            .iter()
+            .map(|record| (record.entry_hash, *record))
+            .collect();
+        index.initialized = true;
+        Ok(records)
+    }
+
+    fn write_merge_carrier_record_unlocked(
+        &self,
+        record: MergeLedgerCarrierRecord,
+    ) -> Result<bool> {
+        let directory = self.merge_carrier_dir();
+        std::fs::create_dir_all(&directory).map_err(|err| Error::MkDir(err, directory.clone()))?;
+        let records = self.merge_carrier_records_unlocked()?;
+        if let Some(existing) = records
+            .iter()
+            .find(|existing| existing.entry_hash == record.entry_hash)
+        {
+            if *existing == record {
+                return Ok(false);
+            }
+            return Err(Error::MergeCarrierConflict(format!(
+                "entry {} is already carried by block {} ({})",
+                record.entry_hash, existing.block_height, existing.block_hash
+            )));
+        }
+        if let Some(existing) = records
+            .iter()
+            .find(|existing| existing.block_height == record.block_height)
+        {
+            return Err(Error::MergeCarrierConflict(format!(
+                "block {} ({}) already carries merge entry {}",
+                existing.block_height, existing.block_hash, existing.entry_hash
+            )));
+        }
+        let path = self.merge_carrier_path(record.block_height);
+        let bytes = norito::to_bytes(&record).map_err(Error::NoritoFrame)?;
+        if bytes.len() > MERGE_CARRIER_MAX_BYTES {
+            return Err(Error::MergeCarrierConflict(
+                "canonical carrier record exceeds its hard byte limit".to_owned(),
+            ));
+        }
+        let temp_path = path.with_extension("norito.tmp");
+        if let Err(err) = std::fs::remove_file(&temp_path)
+            && err.kind() != ErrorKind::NotFound
+        {
+            return Err(Error::IO(err, temp_path));
+        }
+        {
+            let mut temp = std::fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&temp_path)
+                .map_err(|err| Error::IO(err, temp_path.clone()))?;
+            temp.write_all(&bytes)
+                .map_err(|err| Error::IO(err, temp_path.clone()))?;
+            temp.sync_all()
+                .map_err(|err| Error::IO(err, temp_path.clone()))?;
+        }
+        std::fs::rename(&temp_path, &path).map_err(|err| Error::IO(err, path.clone()))?;
+        sync_dir(&directory).map_err(|err| Error::IO(err, directory))?;
+        self.add_disk_usage_bytes(u64::try_from(bytes.len())?);
+        let mut index = self.merge_carrier_index.lock();
+        index.by_height.insert(record.block_height, record);
+        index.by_entry.insert(record.entry_hash, record);
+        index.initialized = true;
+        Ok(true)
+    }
+
+    fn remove_merge_carrier_record_unlocked(&self, record: MergeLedgerCarrierRecord) -> Result<()> {
+        let path = self.merge_carrier_path(record.block_height);
+        let Some(existing) = self.read_merge_carrier_path(&path)? else {
             return Ok(());
+        };
+        if existing != record {
+            return Err(Error::MergeCarrierConflict(
+                "refusing to remove a different merge carrier record".to_owned(),
+            ));
         }
-        if total_entries.saturating_add(1) != expected_entries {
-            return Err(Error::BlockHeightGap {
-                expected_next_height: u64::try_from(total_entries.saturating_add(1))?,
-                actual_height: height,
-            });
+        let bytes = std::fs::metadata(&path).map_or(0, |metadata| metadata.len());
+        std::fs::remove_file(&path).map_err(|err| Error::IO(err, path))?;
+        sync_dir(&self.merge_carrier_dir())
+            .map_err(|err| Error::IO(err, self.merge_carrier_dir()))?;
+        self.sub_disk_usage_bytes(bytes);
+        let mut index = self.merge_carrier_index.lock();
+        index.by_height.remove(&record.block_height);
+        index.by_entry.remove(&record.entry_hash);
+        Ok(())
+    }
+
+    fn validate_merge_carrier_record(
+        &self,
+        record: MergeLedgerCarrierRecord,
+    ) -> Result<MergeLedgerEntry> {
+        let persisted = self
+            .read_merge_carrier_path(&self.merge_carrier_path(record.block_height))?
+            .ok_or_else(|| {
+                Error::MergeCarrierConflict(format!(
+                    "cached carrier record for block {} is missing",
+                    record.block_height
+                ))
+            })?;
+        if persisted != record {
+            return Err(Error::MergeCarrierConflict(format!(
+                "cached carrier record for block {} differs from disk",
+                record.block_height
+            )));
         }
-        self.append_merge_entry(entry)
+        let height = NonZeroUsize::new(usize::try_from(record.block_height)?)
+            .ok_or_else(|| Error::MergeCarrierConflict("carrier height is zero".to_owned()))?;
+        if self.get_durable_block_hash(height) != Some(record.block_hash) {
+            return Err(Error::MergeCarrierConflict(format!(
+                "carrier for entry {} does not match canonical block {}",
+                record.entry_hash, record.block_height
+            )));
+        }
+        let block = self.get_block(height).ok_or_else(|| {
+            Error::MergeCarrierConflict(format!(
+                "carrier block {} body is unavailable; compact merge reference cannot be revalidated",
+                record.block_height
+            ))
+        })?;
+        let reference = Self::block_merge_reference(&block).ok_or_else(|| {
+            Error::MergeCarrierConflict(format!(
+                "carrier block {} no longer contains a compact merge reference",
+                record.block_height
+            ))
+        })?;
+        let entry = self
+            .merge_log
+            .lock()
+            .entry_by_hash(record.entry_hash)?
+            .ok_or_else(|| {
+                Error::MergeCarrierConflict(format!(
+                    "carrier for entry {} is absent from the committed merge log",
+                    record.entry_hash
+                ))
+            })?;
+        if block.hash() != record.block_hash
+            || reference.entry_hash != record.entry_hash
+            || reference.epoch_id != record.epoch_id
+            || entry.epoch_id != record.epoch_id
+            || entry.merge_qc.carrier_height != record.block_height
+            || Some(entry.merge_qc.carrier_parent_hash) != block.header().prev_block_hash()
+            || !reference.matches_entry(&entry)
+        {
+            return Err(Error::MergeCarrierConflict(format!(
+                "carrier block {} compact reference differs from its record or full entry",
+                record.block_height
+            )));
+        }
+        Ok(entry)
+    }
+
+    /// Resolve the exact canonical carrier for a committed merge entry hash.
+    ///
+    /// # Errors
+    /// Returns an error if the sparse carrier index is malformed or the carrier
+    /// no longer matches Kura's canonical block hash.
+    pub(crate) fn merge_carrier_for_entry(
+        &self,
+        entry_hash: HashOf<MergeLedgerEntry>,
+    ) -> Result<Option<MergeLedgerCarrierRecord>> {
+        let record = {
+            let _guard = self.merge_carrier_lock.lock();
+            let _ = self.merge_carrier_records_unlocked()?;
+            self.merge_carrier_index
+                .lock()
+                .by_entry
+                .get(&entry_hash)
+                .copied()
+        };
+        if let Some(record) = record {
+            let _ = self.validate_merge_carrier_record(record)?;
+        }
+        Ok(record)
+    }
+
+    /// Resolve the complete committed merge entry carried by an exact global block.
+    ///
+    /// This reads the complete merge log rather than the capacity-truncated
+    /// in-memory cache and revalidates the sparse carrier and compact reference.
+    pub(crate) fn merge_entry_for_carrier(
+        &self,
+        block_height: u64,
+        block_hash: HashOf<BlockHeader>,
+    ) -> Result<Option<MergeLedgerEntry>> {
+        let record = {
+            let _guard = self.merge_carrier_lock.lock();
+            let _ = self.merge_carrier_records_unlocked()?;
+            self.merge_carrier_index
+                .lock()
+                .by_height
+                .get(&block_height)
+                .copied()
+        };
+        let Some(record) = record.filter(|record| record.block_hash == block_hash) else {
+            return Ok(None);
+        };
+        let entry = self.validate_merge_carrier_record(record)?;
+        Ok(Some(entry))
+    }
+
+    /// Resolve a complete execution entry carried by an exact global block.
+    pub(crate) fn merge_execution_entry_for_carrier(
+        &self,
+        block_height: u64,
+        block_hash: HashOf<BlockHeader>,
+    ) -> Result<Option<MergeLedgerEntry>> {
+        Ok(self
+            .merge_entry_for_carrier(block_height, block_hash)?
+            .filter(|entry| entry.execution_batch.is_some()))
+    }
+
+    /// Return every globally carried execution entry in sparse carrier order.
+    ///
+    /// The result is complete regardless of merge-log cache capacity.
+    pub(crate) fn committed_merge_execution_entries(
+        &self,
+    ) -> Result<Vec<(MergeLedgerCarrierRecord, MergeLedgerEntry)>> {
+        for _ in 0..2 {
+            let records = self.merge_carrier_records()?;
+            if self.merge_carrier_records()? != records {
+                continue;
+            }
+            let mut committed = Vec::new();
+            for record in records {
+                let entry = self
+                    .merge_log
+                    .lock()
+                    .entry_by_hash(record.entry_hash)?
+                    .ok_or_else(|| {
+                        Error::MergeCarrierConflict(format!(
+                            "carrier block {} references a missing committed merge entry",
+                            record.block_height
+                        ))
+                    })?;
+                if entry.execution_batch.is_some() {
+                    committed.push((record, entry));
+                }
+            }
+            return Ok(committed);
+        }
+        Err(Error::MergeCarrierConflict(
+            "sparse merge carriers changed during complete query snapshot".to_owned(),
+        ))
+    }
+
+    /// Snapshot every sparse merge carrier after validating each record against
+    /// the canonical durable block hash. The result is ordered by block height.
+    ///
+    /// # Errors
+    /// Returns an error if the carrier index is malformed or references a
+    /// non-canonical block.
+    pub(crate) fn merge_carrier_records(&self) -> Result<Vec<MergeLedgerCarrierRecord>> {
+        let records = {
+            let _guard = self.merge_carrier_lock.lock();
+            self.merge_carrier_records_unlocked()?
+        };
+        for record in records.iter().copied() {
+            let _ = self.validate_merge_carrier_record(record)?;
+        }
+        Ok(records)
+    }
+
+    fn reconcile_merge_carriers_from_durable_blocks(&self) -> Result<()> {
+        self.validate_pending_merge_entries_on_startup()?;
+        let block_count = self.durable_blocks_count();
+        // Existing carrier files must never silently migrate to a different
+        // block after truncation or fork replacement.
+        let _ = self.merge_carrier_records()?;
+        for height in 1..=block_count {
+            let height = NonZeroUsize::new(height).expect("durable block height is non-zero");
+            let Some(block) = self.get_block(height) else {
+                continue;
+            };
+            let Some(reference) = Self::block_merge_reference(&block) else {
+                continue;
+            };
+            let entry = self.merge_entry_by_hash(reference.entry_hash)?.ok_or(
+                Error::MissingCertifiedMergeSidecar {
+                    entry_hash: reference.entry_hash,
+                },
+            )?;
+            if !reference.matches_entry(&entry) {
+                return Err(Error::MergeReferenceMismatch(format!(
+                    "canonical block {} compact reference does not match its sidecar",
+                    height.get()
+                )));
+            }
+            self.append_committed_merge_entry_for_block_if_missing(&block, &entry)?;
+            self.set_merge_transaction_index_entry(height.get(), &entry);
+            self.remove_pending_certified_merge_entry(reference.entry_hash)?;
+        }
+        Ok(())
+    }
+
+    fn pending_merge_entry_dir(&self) -> PathBuf {
+        self.store_root.join(PENDING_MERGE_ENTRIES_DIR)
+    }
+
+    fn pending_merge_entry_path(&self, hash: HashOf<MergeLedgerEntry>) -> PathBuf {
+        self.pending_merge_entry_dir()
+            .join(format!("{}.norito", hex::encode(hash.as_ref())))
+    }
+
+    fn invalid_pending_merge_entry_error(path: PathBuf, message: impl Into<String>) -> Error {
+        Error::IO(
+            std::io::Error::new(ErrorKind::InvalidData, message.into()),
+            path,
+        )
+    }
+
+    fn pending_merge_entry_paths_unlocked(&self) -> Result<(Vec<PathBuf>, usize)> {
+        let directory = self.pending_merge_entry_dir();
+        let read_dir = match std::fs::read_dir(&directory) {
+            Ok(read_dir) => read_dir,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok((Vec::new(), 0)),
+            Err(err) => return Err(Error::IO(err, directory)),
+        };
+        let mut paths = Vec::new();
+        let mut total_bytes = 0usize;
+        for entry in read_dir {
+            if paths.len() == MAX_PENDING_CERTIFIED_MERGE_ENTRIES {
+                return Err(Self::invalid_pending_merge_entry_error(
+                    directory,
+                    "pending certified merge entry count exceeds the hard limit",
+                ));
+            }
+            let entry = entry.map_err(|err| Error::IO(err, directory.clone()))?;
+            let path = entry.path();
+            let Some(file_name) = entry.file_name().to_str().map(str::to_owned) else {
+                return Err(Self::invalid_pending_merge_entry_error(
+                    path,
+                    "pending merge directory contains a non-UTF-8 entry",
+                ));
+            };
+            let Some(hash_text) = file_name.strip_suffix(".norito") else {
+                return Err(Self::invalid_pending_merge_entry_error(
+                    path,
+                    "pending merge directory contains an unexpected non-Norito entry",
+                ));
+            };
+            let decoded_hash = hex::decode(hash_text).map_err(|_| {
+                Self::invalid_pending_merge_entry_error(
+                    path.clone(),
+                    "pending merge sidecar filename is not a canonical hash",
+                )
+            })?;
+            if decoded_hash.len() != Hash::LENGTH || hex::encode(&decoded_hash) != hash_text {
+                return Err(Self::invalid_pending_merge_entry_error(
+                    path,
+                    "pending merge sidecar filename is not a canonical lowercase hash",
+                ));
+            }
+            let metadata =
+                std::fs::symlink_metadata(&path).map_err(|err| Error::IO(err, path.clone()))?;
+            if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+                return Err(Self::invalid_pending_merge_entry_error(
+                    path,
+                    "pending merge directory entry is not a regular no-follow file",
+                ));
+            }
+            let file_bytes = usize::try_from(metadata.len())?;
+            total_bytes = total_bytes.checked_add(file_bytes).ok_or_else(|| {
+                Self::invalid_pending_merge_entry_error(
+                    directory.clone(),
+                    "pending certified merge byte count overflow",
+                )
+            })?;
+            if !pending_merge_bytes_within_limit(total_bytes) {
+                return Err(Self::invalid_pending_merge_entry_error(
+                    directory,
+                    "pending certified merge bytes exceed the aggregate hard limit",
+                ));
+            }
+            paths.push(path);
+        }
+        paths.sort();
+        Ok((paths, total_bytes))
+    }
+
+    fn validate_pending_merge_entries_on_startup(&self) -> Result<()> {
+        let _guard = self.sidecar_lock.lock();
+        self.reconcile_pending_merge_temp_files_unlocked()?;
+        let (paths, _) = self.pending_merge_entry_paths_unlocked()?;
+        for path in paths {
+            let _ = self
+                .read_pending_merge_entry_path(&path, None)?
+                .ok_or_else(|| {
+                    Self::invalid_pending_merge_entry_error(
+                        path,
+                        "pending merge sidecar disappeared during startup validation",
+                    )
+                })?;
+        }
+        Ok(())
+    }
+
+    fn reconcile_pending_merge_temp_files_unlocked(&self) -> Result<()> {
+        let directory = self.pending_merge_entry_dir();
+        let read_dir = match std::fs::read_dir(&directory) {
+            Ok(read_dir) => read_dir,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(err) => return Err(Error::IO(err, directory)),
+        };
+        let mut scanned = 0usize;
+        let mut total_bytes = 0usize;
+        let mut temp_paths = Vec::new();
+        #[cfg(unix)]
+        let mut seen_inodes = BTreeSet::new();
+        for entry in read_dir {
+            scanned = scanned.saturating_add(1);
+            if scanned > MAX_PENDING_CERTIFIED_MERGE_ENTRIES {
+                return Err(Self::invalid_pending_merge_entry_error(
+                    directory,
+                    "pending merge directory entry count exceeds the hard limit",
+                ));
+            }
+            let entry = entry.map_err(|err| Error::IO(err, directory.clone()))?;
+            let path = entry.path();
+            let metadata =
+                std::fs::symlink_metadata(&path).map_err(|err| Error::IO(err, path.clone()))?;
+            if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+                return Err(Self::invalid_pending_merge_entry_error(
+                    path,
+                    "pending merge directory entry is not a regular no-follow file",
+                ));
+            }
+            #[cfg(unix)]
+            let count_file_bytes = {
+                use std::os::unix::fs::MetadataExt as _;
+                seen_inodes.insert((metadata.dev(), metadata.ino()))
+            };
+            #[cfg(not(unix))]
+            let count_file_bytes = true;
+            if count_file_bytes {
+                total_bytes = total_bytes
+                    .checked_add(usize::try_from(metadata.len())?)
+                    .ok_or_else(|| {
+                        Self::invalid_pending_merge_entry_error(
+                            directory.clone(),
+                            "pending merge directory byte count overflow",
+                        )
+                    })?;
+            }
+            if !pending_merge_bytes_within_limit(total_bytes) {
+                return Err(Self::invalid_pending_merge_entry_error(
+                    directory,
+                    "pending merge directory bytes exceed the aggregate hard limit",
+                ));
+            }
+            let Some(file_name) = entry.file_name().to_str().map(str::to_owned) else {
+                return Err(Self::invalid_pending_merge_entry_error(
+                    path,
+                    "pending merge directory contains a non-UTF-8 entry",
+                ));
+            };
+            if file_name.ends_with(".norito") {
+                continue;
+            }
+            let Some(hash_text) = file_name.strip_suffix(".norito.tmp") else {
+                return Err(Self::invalid_pending_merge_entry_error(
+                    path,
+                    "pending merge directory contains an unexpected temporary entry",
+                ));
+            };
+            let decoded_hash = hex::decode(hash_text).map_err(|_| {
+                Self::invalid_pending_merge_entry_error(
+                    path.clone(),
+                    "pending merge temporary filename is not a canonical hash",
+                )
+            })?;
+            if decoded_hash.len() != Hash::LENGTH || hex::encode(&decoded_hash) != hash_text {
+                return Err(Self::invalid_pending_merge_entry_error(
+                    path,
+                    "pending merge temporary filename is not a canonical lowercase hash",
+                ));
+            }
+            temp_paths.push((path, hash_text.to_owned()));
+        }
+
+        for (temp_path, hash_text) in temp_paths {
+            let bytes = self
+                .read_regular_sidecar_bytes(&temp_path, &directory, MAX_MERGE_LEDGER_ENTRY_BYTES)?
+                .ok_or_else(|| {
+                    Self::invalid_pending_merge_entry_error(
+                        temp_path.clone(),
+                        "pending merge temporary disappeared during recovery",
+                    )
+                })?;
+            let entry = norito::decode_from_bytes::<MergeLedgerEntry>(&bytes).map_err(|err| {
+                Self::invalid_pending_merge_entry_error(
+                    temp_path.clone(),
+                    format!("pending merge temporary is not exact framed Norito: {err}"),
+                )
+            })?;
+            if entry.canonical_bytes() != bytes
+                || hex::encode(entry.canonical_hash().as_ref()) != hash_text
+            {
+                return Err(Self::invalid_pending_merge_entry_error(
+                    temp_path,
+                    "pending merge temporary bytes do not match their canonical hash path",
+                ));
+            }
+            let target_path = self.pending_merge_entry_path(entry.canonical_hash());
+            if let Some(existing) =
+                self.read_pending_merge_entry_path(&target_path, Some(entry.canonical_hash()))?
+            {
+                if existing != entry {
+                    return Err(Self::invalid_pending_merge_entry_error(
+                        temp_path,
+                        "pending merge temporary conflicts with its published target",
+                    ));
+                }
+                std::fs::remove_file(&temp_path)
+                    .map_err(|err| Error::IO(err, temp_path.clone()))?;
+                sync_dir(&directory).map_err(|err| Error::IO(err, directory.clone()))?;
+                continue;
+            }
+            std::fs::hard_link(&temp_path, &target_path)
+                .map_err(|err| Error::IO(err, target_path.clone()))?;
+            std::fs::File::open(&target_path)
+                .and_then(|file| file.sync_all())
+                .map_err(|err| Error::IO(err, target_path.clone()))?;
+            sync_dir(&directory).map_err(|err| Error::IO(err, directory.clone()))?;
+            std::fs::remove_file(&temp_path).map_err(|err| Error::IO(err, temp_path.clone()))?;
+            sync_dir(&directory).map_err(|err| Error::IO(err, directory.clone()))?;
+        }
+        Ok(())
+    }
+
+    fn read_pending_merge_entry_path(
+        &self,
+        path: &Path,
+        expected_hash: Option<HashOf<MergeLedgerEntry>>,
+    ) -> Result<Option<MergeLedgerEntry>> {
+        let Some(bytes) = self.read_regular_sidecar_bytes(
+            path,
+            &self.pending_merge_entry_dir(),
+            MAX_MERGE_LEDGER_ENTRY_BYTES,
+        )?
+        else {
+            return Ok(None);
+        };
+        let entry = norito::decode_from_bytes::<MergeLedgerEntry>(&bytes).map_err(|err| {
+            Self::invalid_pending_merge_entry_error(
+                path.to_path_buf(),
+                format!("pending certified merge entry is not exact framed Norito: {err}"),
+            )
+        })?;
+        let canonical = crate::merge::canonical_merge_ledger_entry_bytes(&entry);
+        if canonical != bytes {
+            return Err(Self::invalid_pending_merge_entry_error(
+                path.to_path_buf(),
+                "pending certified merge entry is not canonical framed Norito",
+            ));
+        }
+        let actual_hash = crate::merge::merge_ledger_entry_hash(&entry);
+        if expected_hash.is_some_and(|expected| expected != actual_hash)
+            || self.pending_merge_entry_path(actual_hash) != path
+        {
+            return Err(Self::invalid_pending_merge_entry_error(
+                path.to_path_buf(),
+                "pending certified merge entry path/hash mismatch",
+            ));
+        }
+        Ok(Some(entry))
+    }
+
+    fn prune_pending_certified_merge_entries_not_bound_to_unlocked(
+        &self,
+        carrier_height: u64,
+        carrier_parent_hash: HashOf<BlockHeader>,
+        view: u64,
+    ) -> Result<usize> {
+        let directory = self.pending_merge_entry_dir();
+        let (paths, _) = self.pending_merge_entry_paths_unlocked()?;
+        let mut removed = 0usize;
+        let mut removed_bytes = 0u64;
+        for path in paths {
+            let Some(entry) = self.read_pending_merge_entry_path(&path, None)? else {
+                continue;
+            };
+            if entry.merge_qc.carrier_height == carrier_height
+                && entry.merge_qc.carrier_parent_hash == carrier_parent_hash
+                && entry.merge_qc.view == view
+            {
+                continue;
+            }
+            removed_bytes = removed_bytes
+                .saturating_add(std::fs::metadata(&path).map_or(0, |metadata| metadata.len()));
+            std::fs::remove_file(&path).map_err(|err| Error::IO(err, path))?;
+            removed = removed.saturating_add(1);
+        }
+        if removed > 0 {
+            sync_dir(&directory).map_err(|err| Error::IO(err, directory))?;
+            self.sub_disk_usage_bytes(removed_bytes);
+        }
+        Ok(removed)
+    }
+
+    /// Remove pending certificates that can no longer be carried by the exact current round.
+    ///
+    /// This cleanup runs before pending-count and aggregate-byte admission, so missed rounds
+    /// cannot permanently consume the bounded pending store.
+    pub(crate) fn prune_pending_certified_merge_entries_not_bound_to(
+        &self,
+        carrier_height: u64,
+        carrier_parent_hash: HashOf<BlockHeader>,
+        view: u64,
+    ) -> Result<usize> {
+        let _guard = self.sidecar_lock.lock();
+        self.reconcile_pending_merge_temp_files_unlocked()?;
+        self.prune_pending_certified_merge_entries_not_bound_to_unlocked(
+            carrier_height,
+            carrier_parent_hash,
+            view,
+        )
+    }
+
+    /// Persist a fully certified entry in the hash-addressed pending sidecar
+    /// store without appending it to the globally committed merge log.
+    ///
+    /// # Errors
+    /// Returns an error for an oversized or conflicting sidecar, or when the
+    /// atomic file publication cannot be completed.
+    pub(crate) fn persist_pending_certified_merge_entry(
+        &self,
+        entry: &MergeLedgerEntry,
+    ) -> Result<HashOf<MergeLedgerEntry>> {
+        let bytes = crate::merge::canonical_merge_ledger_entry_bytes(entry);
+        if bytes.len() > MAX_MERGE_LEDGER_ENTRY_BYTES {
+            return Err(Self::invalid_pending_merge_entry_error(
+                self.pending_merge_entry_dir(),
+                "pending certified merge entry exceeds the hard byte limit",
+            ));
+        }
+        let hash = crate::merge::merge_ledger_entry_hash(entry);
+        let path = self.pending_merge_entry_path(hash);
+        let directory = self.pending_merge_entry_dir();
+        let _guard = self.sidecar_lock.lock();
+        std::fs::create_dir_all(&directory).map_err(|err| Error::MkDir(err, directory.clone()))?;
+        self.reconcile_pending_merge_temp_files_unlocked()?;
+        self.prune_pending_certified_merge_entries_not_bound_to_unlocked(
+            entry.merge_qc.carrier_height,
+            entry.merge_qc.carrier_parent_hash,
+            entry.merge_qc.view,
+        )?;
+        let temp_path = path.with_extension("norito.tmp");
+        if let Err(err) = std::fs::remove_file(&temp_path)
+            && err.kind() != ErrorKind::NotFound
+        {
+            return Err(Error::IO(err, temp_path));
+        }
+        let (paths, pending_bytes) = self.pending_merge_entry_paths_unlocked()?;
+        if let Some(existing) = self.read_pending_merge_entry_path(&path, Some(hash))? {
+            if existing == *entry {
+                return Ok(hash);
+            }
+            return Err(Self::invalid_pending_merge_entry_error(
+                path,
+                "hash-addressed pending merge sidecar conflicts with existing bytes",
+            ));
+        }
+        if paths.len() == MAX_PENDING_CERTIFIED_MERGE_ENTRIES {
+            return Err(Self::invalid_pending_merge_entry_error(
+                directory,
+                "pending certified merge entry count exceeds the hard limit",
+            ));
+        }
+        if pending_bytes
+            .checked_add(bytes.len())
+            .is_none_or(|total| !pending_merge_bytes_within_limit(total))
+        {
+            return Err(Self::invalid_pending_merge_entry_error(
+                directory,
+                "pending certified merge bytes exceed the aggregate hard limit",
+            ));
+        }
+        {
+            let mut temp = std::fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&temp_path)
+                .map_err(|err| Error::IO(err, temp_path.clone()))?;
+            temp.write_all(&bytes)
+                .map_err(|err| Error::IO(err, temp_path.clone()))?;
+            temp.sync_all()
+                .map_err(|err| Error::IO(err, temp_path.clone()))?;
+        }
+        std::fs::rename(&temp_path, &path).map_err(|err| Error::IO(err, path.clone()))?;
+        sync_dir(&directory).map_err(|err| Error::IO(err, directory))?;
+        self.add_disk_usage_bytes(u64::try_from(bytes.len())?);
+        Ok(hash)
+    }
+
+    /// Resolve an exact merge entry from the pending sidecar store or the
+    /// globally committed merge log.
+    ///
+    /// # Errors
+    /// Returns an error if a matching pending sidecar is corrupt or committed
+    /// merge-log recovery fails.
+    pub(crate) fn merge_entry_by_hash(
+        &self,
+        hash: HashOf<MergeLedgerEntry>,
+    ) -> Result<Option<MergeLedgerEntry>> {
+        let path = self.pending_merge_entry_path(hash);
+        {
+            let _guard = self.sidecar_lock.lock();
+            if let Some(entry) = self.read_pending_merge_entry_path(&path, Some(hash))? {
+                return Ok(Some(entry));
+            }
+        }
+        self.merge_log.lock().entry_by_hash(hash)
+    }
+
+    fn pending_certified_merge_entries(
+        &self,
+    ) -> Result<Vec<(HashOf<MergeLedgerEntry>, MergeLedgerEntry)>> {
+        let entries = {
+            let _guard = self.sidecar_lock.lock();
+            let (paths, _) = self.pending_merge_entry_paths_unlocked()?;
+            let mut entries = Vec::with_capacity(paths.len());
+            for path in paths {
+                let Some(entry) = self.read_pending_merge_entry_path(&path, None)? else {
+                    continue;
+                };
+                entries.push((entry.canonical_hash(), entry));
+            }
+            entries
+        };
+        let committed = self.merge_log.lock().entry_hashes();
+        let mut entries = entries
+            .into_iter()
+            .filter(|(hash, _)| !committed.contains(hash))
+            .collect::<Vec<_>>();
+        entries.sort_by_key(|(hash, entry)| (entry.epoch_id, *hash));
+        Ok(entries)
+    }
+
+    /// Select the next pending certified entry deterministically by
+    /// `(epoch_id, entry_hash)`, excluding entries already in the committed log.
+    ///
+    /// # Errors
+    /// Returns an error when the pending directory is unreadable, exceeds its
+    /// hard entry-count/byte caps, or contains a malformed sidecar.
+    pub(crate) fn select_pending_certified_merge_entry(
+        &self,
+    ) -> Result<Option<(HashOf<MergeLedgerEntry>, MergeLedgerEntry)>> {
+        Ok(self.pending_certified_merge_entries()?.into_iter().next())
+    }
+
+    /// Select the first canonical pending entry accepted by `eligible`.
+    ///
+    /// The predicate runs without the sidecar lock, allowing callers to perform
+    /// full state/QC validation. Rejected stale entries remain durable and do
+    /// not poison selection of a later eligible candidate.
+    pub(crate) fn select_pending_certified_merge_entry_matching(
+        &self,
+        mut eligible: impl FnMut(HashOf<MergeLedgerEntry>, &MergeLedgerEntry) -> bool,
+    ) -> Result<Option<(HashOf<MergeLedgerEntry>, MergeLedgerEntry)>> {
+        Ok(self
+            .pending_certified_merge_entries()?
+            .into_iter()
+            .find(|(hash, entry)| eligible(*hash, entry)))
+    }
+
+    /// Remove a pending sidecar after the same entry is globally committed.
+    ///
+    /// # Errors
+    /// Returns an error when the sidecar cannot be removed or its parent cannot
+    /// be synchronized.
+    pub(crate) fn remove_pending_certified_merge_entry(
+        &self,
+        hash: HashOf<MergeLedgerEntry>,
+    ) -> Result<()> {
+        let path = self.pending_merge_entry_path(hash);
+        let directory = self.pending_merge_entry_dir();
+        let _guard = self.sidecar_lock.lock();
+        let bytes = std::fs::metadata(&path).map_or(0, |metadata| metadata.len());
+        match std::fs::remove_file(&path) {
+            Ok(()) => {
+                sync_dir(&directory).map_err(|err| Error::IO(err, directory))?;
+                self.sub_disk_usage_bytes(bytes);
+                Ok(())
+            }
+            Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(Error::IO(err, path)),
+        }
+    }
+
+    fn append_committed_merge_entry_for_block_if_missing(
+        &self,
+        block: &SignedBlock,
+        entry: &MergeLedgerEntry,
+    ) -> Result<(usize, bool)> {
+        let record = Self::carrier_record_for_block_entry(block, entry)?;
+        let entry_hash = record.entry_hash;
+        let merge_log_len_before = self.merge_log.lock().total_entries;
+        let existing = self.merge_log.lock().entry_by_hash(entry_hash)?;
+        if let Some(existing) = existing.as_ref() {
+            if existing != entry {
+                return Err(Error::MergeCarrierConflict(
+                    "committed merge log contains different bytes for the same entry hash"
+                        .to_owned(),
+                ));
+            }
+        } else {
+            self.append_merge_entry(entry)?;
+        }
+
+        let carrier_written = {
+            let _guard = self.merge_carrier_lock.lock();
+            match self.write_merge_carrier_record_unlocked(record) {
+                Ok(written) => written,
+                Err(err) => {
+                    if let Err(rollback_err) = self.truncate_merge_log_to_len(merge_log_len_before)
+                    {
+                        panic!(
+                            "merge carrier publication failed and merge-log rollback failed: {rollback_err}"
+                        );
+                    }
+                    return Err(err);
+                }
+            }
+        };
+        Ok((merge_log_len_before, carrier_written))
     }
 
     /// Snapshot merge-ledger entries retained in the in-memory cache.
@@ -3405,6 +4790,24 @@ impl Kura {
         index.complete.then(|| {
             index
                 .heights_by_entrypoint
+                .get(&hash)
+                .cloned()
+                .unwrap_or_default()
+        })
+    }
+
+    /// Resolve block heights containing the given committed transaction hash.
+    ///
+    /// Merge-sidecar transactions are indexed at their exact sparse global
+    /// carrier height. Returns `None` when the in-memory index is partial.
+    pub fn get_block_heights_by_transaction_hash(
+        &self,
+        hash: HashOf<SignedTransaction>,
+    ) -> Option<BTreeSet<NonZeroUsize>> {
+        let index = self.transaction_entrypoint_index.lock();
+        index.complete.then(|| {
+            index
+                .heights_by_transaction
                 .get(&hash)
                 .cloned()
                 .unwrap_or_default()
@@ -4445,6 +5848,28 @@ impl Kura {
         let block_hash = block.hash();
         let actual_height = block.header().height().get();
         let actual_height_usize = usize::try_from(actual_height)?;
+        match (Self::block_merge_reference(block), merge_entry) {
+            (Some(reference), Some(entry)) if reference.matches_entry(entry) => {}
+            (Some(reference), None) => {
+                return Err(Error::MissingCertifiedMergeSidecar {
+                    entry_hash: reference.entry_hash,
+                });
+            }
+            (Some(_), Some(_)) => {
+                return Err(Error::MergeReferenceMismatch(
+                    "block compact reference does not match supplied merge entry".to_owned(),
+                ));
+            }
+            (None, Some(_)) => {
+                return Err(Error::MergeReferenceMismatch(
+                    "merge entry supplied for a block without a compact reference".to_owned(),
+                ));
+            }
+            (None, None) => {}
+        }
+        if let Some(entry) = merge_entry {
+            Self::validate_merge_transaction_uniqueness(block, entry)?;
+        }
 
         {
             let block_data = self.block_data.lock();
@@ -4462,7 +5887,9 @@ impl Kura {
                 self.set_block_height_index_entry(actual_height_usize, block_hash);
                 self.set_transaction_entrypoint_index_entry(actual_height_usize, block, chain_len);
                 if let Some(entry) = merge_entry {
-                    self.append_merge_entry_for_existing_block_if_missing(actual_height, entry)?;
+                    self.append_committed_merge_entry_for_block_if_missing(block, entry)?;
+                    self.set_merge_transaction_index_entry(actual_height_usize, entry);
+                    self.remove_pending_certified_merge_entry(entry.canonical_hash())?;
                 }
                 debug!(
                     height = actual_height,
@@ -4496,7 +5923,9 @@ impl Kura {
             self.set_block_height_index_entry(actual_height_usize, block_hash);
             self.set_transaction_entrypoint_index_entry(actual_height_usize, block, chain_len);
             if let Some(entry) = merge_entry {
-                self.append_merge_entry_for_existing_block_if_missing(actual_height, entry)?;
+                self.append_committed_merge_entry_for_block_if_missing(block, entry)?;
+                self.set_merge_transaction_index_entry(actual_height_usize, entry);
+                self.remove_pending_certified_merge_entry(entry.canonical_hash())?;
             }
             debug!(
                 height = actual_height,
@@ -4506,37 +5935,53 @@ impl Kura {
             return Ok(());
         }
 
-        let merge_log_len_before = self.merge_log.lock().total_entries;
-        if let Some(entry) = merge_entry
-            && let Err(err) = self.append_merge_entry(entry)
-        {
-            error!(
-                ?err,
-                ?block_hash,
-                entry_epoch = entry.epoch_id,
-                "Failed to append merge-ledger entry while storing block"
-            );
-            if let Some(mut batch) = lane_artifacts.take()
-                && let Err(rollback_err) = batch.rollback()
-            {
-                error!(
-                    ?rollback_err,
-                    ?block_hash,
-                    "Failed to rollback lane artifacts after merge-ledger append failure"
-                );
+        let mut merge_rollback = None;
+        if let Some(entry) = merge_entry {
+            match self.append_committed_merge_entry_for_block_if_missing(block, entry) {
+                Ok(rollback) => merge_rollback = Some((entry.canonical_hash(), rollback)),
+                Err(err) => {
+                    error!(
+                        ?err,
+                        ?block_hash,
+                        entry_epoch = entry.epoch_id,
+                        "Failed to append merge-ledger entry/carrier while storing block"
+                    );
+                    if let Some(mut batch) = lane_artifacts.take()
+                        && let Err(rollback_err) = batch.rollback()
+                    {
+                        error!(
+                            ?rollback_err,
+                            ?block_hash,
+                            "Failed to rollback lane artifacts after merge-ledger append failure"
+                        );
+                    }
+                    return Err(err);
+                }
             }
-            return Err(err);
         }
 
         if let Err(err) = self.persist_block_at_height(block, actual_height) {
-            if merge_entry.is_some()
-                && let Err(rollback_err) = self.truncate_merge_log_to_len(merge_log_len_before)
-            {
-                error!(
-                    ?rollback_err,
-                    ?block_hash,
-                    "Failed to rollback merge-ledger entry after block write failure"
-                );
+            if let Some((_, (merge_log_len_before, carrier_written))) = merge_rollback {
+                if let Err(rollback_err) = self.truncate_merge_log_to_len(merge_log_len_before) {
+                    error!(
+                        ?rollback_err,
+                        ?block_hash,
+                        "Failed to rollback merge-ledger entry after block write failure"
+                    );
+                }
+                if carrier_written {
+                    let record = merge_entry
+                        .map(|entry| MergeLedgerCarrierRecord::new(entry, block))
+                        .expect("merge rollback record has an entry");
+                    let _guard = self.merge_carrier_lock.lock();
+                    if let Err(rollback_err) = self.remove_merge_carrier_record_unlocked(record) {
+                        error!(
+                            ?rollback_err,
+                            ?block_hash,
+                            "Failed to rollback merge carrier after block write failure"
+                        );
+                    }
+                }
             }
             if let Some(mut batch) = lane_artifacts.take()
                 && let Err(rollback_err) = batch.rollback()
@@ -4553,6 +5998,9 @@ impl Kura {
         if let Some(batch) = lane_artifacts.take() {
             batch.commit();
         }
+        if let Some((entry_hash, _)) = merge_rollback {
+            self.remove_pending_certified_merge_entry(entry_hash)?;
+        }
         block_data.push((block_hash, Some(Arc::clone(block))));
         Self::drop_persisted_blocks(
             &mut block_data,
@@ -4562,6 +6010,9 @@ impl Kura {
         let new_len = block_data.len();
         self.set_block_height_index_entry(actual_height_usize, block_hash);
         self.set_transaction_entrypoint_index_entry(actual_height_usize, block, new_len);
+        if let Some(entry) = merge_entry {
+            self.set_merge_transaction_index_entry(actual_height_usize, entry);
+        }
         drop(block_data);
         self.append_debug_block_dump(block);
 
@@ -4923,27 +6374,78 @@ impl Kura {
         if root.as_os_str().is_empty() {
             return Ok(0);
         }
-        let entries = match std::fs::read_dir(root) {
-            Ok(entries) => entries,
+        let root_metadata = match std::fs::symlink_metadata(root) {
+            Ok(metadata) => metadata,
             Err(err) if err.kind() == ErrorKind::NotFound => return Ok(0),
             Err(err) => return Err(Error::IO(err, root.to_path_buf())),
         };
+        if root_metadata.file_type().is_symlink() || !root_metadata.file_type().is_dir() {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "Kura retained geometry root must be a non-symlink directory",
+                ),
+                root.to_path_buf(),
+            ));
+        }
         let mut total = 0u64;
-        for entry in entries {
-            let entry = entry.map_err(|err| Error::IO(err, root.to_path_buf()))?;
-            let path = entry.path();
-            let file_type = entry
-                .file_type()
-                .map_err(|err| Error::IO(err, path.clone()))?;
-            if file_type.is_file() {
-                total = total.saturating_add(
-                    entry
-                        .metadata()
-                        .map_err(|err| Error::IO(err, path.clone()))?
-                        .len(),
-                );
-            } else if file_type.is_dir() {
-                total = total.saturating_add(Self::directory_tree_file_bytes(&path)?);
+        let mut seen = 0_usize;
+        let mut pending = vec![(root.to_path_buf(), 0_usize)];
+        while let Some((directory, depth)) = pending.pop() {
+            if depth > 128 {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "Kura retained geometry tree exceeds the maximum directory depth",
+                    ),
+                    directory,
+                ));
+            }
+            let entries =
+                std::fs::read_dir(&directory).map_err(|err| Error::IO(err, directory.clone()))?;
+            for entry in entries {
+                let entry = entry.map_err(|err| Error::IO(err, directory.clone()))?;
+                seen = seen.saturating_add(1);
+                if seen > 4_000_000 {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "Kura retained geometry tree exceeds the maximum entry count",
+                        ),
+                        directory,
+                    ));
+                }
+                let path = entry.path();
+                let file_type = entry
+                    .file_type()
+                    .map_err(|err| Error::IO(err, path.clone()))?;
+                if file_type.is_symlink() {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "Kura retained geometry tree contains a symbolic link",
+                        ),
+                        path,
+                    ));
+                }
+                if file_type.is_file() {
+                    total = total.saturating_add(
+                        entry
+                            .metadata()
+                            .map_err(|err| Error::IO(err, path.clone()))?
+                            .len(),
+                    );
+                } else if file_type.is_dir() {
+                    pending.push((path, depth.saturating_add(1)));
+                } else {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "Kura retained geometry tree contains a non-regular entry",
+                        ),
+                        path,
+                    ));
+                }
             }
         }
         Ok(total)
@@ -5368,7 +6870,16 @@ impl Kura {
     /// Returns an error if the block violates canonical height ordering or cannot be persisted.
     pub fn store_block(&self, block: impl Into<Arc<SignedBlock>>) -> Result<()> {
         let block = block.into();
-        self.store_block_durable(&block, None)
+        let merge_entry = if let Some(reference) = Self::block_merge_reference(&block) {
+            Some(self.merge_entry_by_hash(reference.entry_hash)?.ok_or(
+                Error::MissingCertifiedMergeSidecar {
+                    entry_hash: reference.entry_hash,
+                },
+            )?)
+        } else {
+            None
+        };
+        self.store_block_durable(&block, merge_entry.as_ref())
     }
 
     /// Store a block durably in Kura and persist the merge-ledger entry sealing it.
@@ -5396,6 +6907,26 @@ impl Kura {
         let height = block.header().height().get();
         let height_usize = usize::try_from(height)?;
         let block_hash = block.hash();
+        if Self::block_merge_reference(&block).is_some() {
+            return Err(Error::MergeCarrierConflict(
+                "replace_top_block does not support replacing a compact merge carrier".to_owned(),
+            ));
+        }
+        if let Some(current_height) = NonZeroUsize::new(self.blocks_count()) {
+            if self
+                .get_block(current_height)
+                .as_deref()
+                .and_then(Self::block_merge_reference)
+                .is_some()
+                || self.merge_carrier_records()?.iter().any(|record| {
+                    record.block_height == u64::try_from(current_height.get()).unwrap_or(u64::MAX)
+                })
+            {
+                return Err(Error::MergeCarrierConflict(
+                    "replace_top_block cannot replace an existing compact merge carrier".to_owned(),
+                ));
+            }
+        }
 
         {
             let data = self.block_data.lock();
@@ -5493,6 +7024,31 @@ impl Kura {
     /// truncating the merge log fails.
     pub fn prune_to_height(&self, height: u64) -> Result<()> {
         let keep = usize::try_from(height)?;
+        let carrier_records = self.merge_carrier_records()?;
+        let merge_entries = self.merge_log.lock().all_entries()?;
+        let legacy_count = merge_entries
+            .len()
+            .checked_sub(carrier_records.len())
+            .ok_or_else(|| {
+                Error::MergeCarrierConflict(
+                    "sparse carrier count exceeds committed merge-log length".to_owned(),
+                )
+            })?;
+        if merge_entries[legacy_count..]
+            .iter()
+            .map(MergeLedgerEntry::canonical_hash)
+            .ne(carrier_records.iter().map(|record| record.entry_hash))
+        {
+            return Err(Error::MergeCarrierConflict(
+                "sparse merge carriers are not the canonical merge-log suffix".to_owned(),
+            ));
+        }
+        let retained_legacy = legacy_count.min(keep);
+        let retained_carriers = carrier_records
+            .iter()
+            .take_while(|record| record.block_height <= height)
+            .count();
+        let retained_merge_entries = retained_legacy.saturating_add(retained_carriers);
         {
             let mut data = self.block_data.lock();
             if keep >= data.len() {
@@ -5524,7 +7080,18 @@ impl Kura {
             self.publish_durable_budget_snapshot(keep, 0);
         }
 
-        self.truncate_merge_log_to_len(keep)?;
+        self.truncate_merge_log_to_len(retained_merge_entries)?;
+        {
+            let _guard = self.merge_carrier_lock.lock();
+            for record in carrier_records
+                .iter()
+                .rev()
+                .copied()
+                .take_while(|record| record.block_height > height)
+            {
+                self.remove_merge_carrier_record_unlocked(record)?;
+            }
+        }
         let roster_before = match self.roster_journal_tracked_bytes() {
             Ok(bytes) => Some(bytes),
             Err(err) => {
@@ -6235,7 +7802,13 @@ impl PipelineRecoverySidecar {
     ///
     /// Returns an error if framing fails (e.g., compression/header mismatch).
     pub fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
-        norito::to_bytes(self)
+        let bytes = norito::to_bytes(self)?;
+        if bytes.len() > MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES {
+            return Err(norito::Error::Message(
+                "certified lane block exceeds the merge source envelope byte limit".to_owned(),
+            ));
+        }
+        Ok(bytes)
     }
 }
 
@@ -6588,7 +8161,13 @@ impl AutonomousLaneBlockArtifact {
     }
 
     fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
-        norito::to_bytes(self)
+        let bytes = norito::to_bytes(self)?;
+        if bytes.len() > MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES {
+            return Err(norito::Error::Message(
+                "autonomous lane block exceeds the merge source byte limit".to_owned(),
+            ));
+        }
+        Ok(bytes)
     }
 }
 
@@ -6600,20 +8179,26 @@ pub(crate) struct AutonomousLaneMergeBundleV1 {
     /// Bundle schema version. Only version one is accepted.
     pub(crate) version: u8,
     /// Immutable payload, availability proof, and authenticated view chain.
-    autonomous: AutonomousLaneBlockArtifact,
+    pub(crate) autonomous: AutonomousLaneBlockArtifact,
     /// Exact current proposal with prepare/commit QCs and signer PoPs.
     pub(crate) certified: CertifiedLaneBlockArtifact,
 }
 
 impl AutonomousLaneMergeBundleV1 {
-    /// Domain-separated digest committed by canonical merge batches.
-    pub(crate) fn bundle_hash(&self) -> Result<Hash> {
+    /// Canonical framed bytes used by authenticated bundle transport and merge logs.
+    pub(crate) fn encode_framed(&self) -> Result<Vec<u8>> {
         let bytes = norito::to_bytes(self)?;
-        if bytes.len() > MAX_AUTONOMOUS_LANE_MERGE_BUNDLE_BYTES {
+        if bytes.len() > MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES {
             return Err(Error::NoritoFrame(norito::Error::Message(
                 "autonomous lane merge bundle exceeds hard byte limit".to_owned(),
             )));
         }
+        Ok(bytes)
+    }
+
+    /// Domain-separated digest committed by canonical merge batches.
+    pub(crate) fn bundle_hash(&self) -> Result<Hash> {
+        let bytes = self.encode_framed()?;
         Ok(Hash::new_from_chunks(&[
             b"iroha:nexus:autonomous-lane-merge-bundle:v1\0",
             &bytes,
@@ -6640,10 +8225,7 @@ impl AutonomousLaneMergeBundleV1 {
                     if byte & (1_u8 << bit) == 0 {
                         continue;
                     }
-                    if let Some(peer) = deliver
-                        .certificate
-                        .validator_set
-                        .get(byte_index * 8 + bit)
+                    if let Some(peer) = deliver.certificate.validator_set.get(byte_index * 8 + bit)
                     {
                         holders.insert(peer.clone());
                     }
@@ -7117,6 +8699,12 @@ pub struct RecoveredLaneBlockPayload {
     pub autonomous_payload_hash: Option<Hash>,
     /// Accepted entrypoints in lane descriptor order.
     pub entrypoints: Vec<TransactionEntrypoint>,
+    /// Exact durable queue reservation identities in entrypoint order.
+    pub reservation_keys: Vec<crate::queue::LaneQueueReservationKeyV1>,
+    /// Complete routing plans in entrypoint order.
+    pub routing_plans: Vec<crate::queue::RoutingPlan>,
+    /// Producer-authenticated native-AMX receipts in entrypoint order.
+    pub native_amx_receipts: Vec<Option<NativeAmxReceipt>>,
 }
 
 /// Known metadata format variants for durable lane-block execution input.
@@ -7149,6 +8737,15 @@ pub struct LaneBlockExecutionInputArtifact {
     pub entrypoint_hashes: Vec<Hash>,
     /// Accepted entrypoints in lane descriptor order.
     pub entrypoints: Vec<TransactionEntrypoint>,
+    /// Exact durable queue reservation identities in entrypoint order.
+    #[norito(default)]
+    pub reservation_keys: Vec<crate::queue::LaneQueueReservationKeyV1>,
+    /// Complete routing plans in entrypoint order.
+    #[norito(default)]
+    pub routing_plans: Vec<crate::queue::RoutingPlan>,
+    /// Producer-authenticated native-AMX receipts in entrypoint order.
+    #[norito(default)]
+    pub native_amx_receipts: Vec<Option<NativeAmxReceipt>>,
 }
 
 impl LaneBlockExecutionInputArtifact {
@@ -7171,6 +8768,9 @@ impl LaneBlockExecutionInputArtifact {
             autonomous_payload_hash: recovered.autonomous_payload_hash,
             entrypoint_hashes,
             entrypoints: recovered.entrypoints,
+            reservation_keys: recovered.reservation_keys,
+            routing_plans: recovered.routing_plans,
+            native_amx_receipts: recovered.native_amx_receipts,
         }
     }
 
@@ -7284,6 +8884,9 @@ pub enum LaneBlockApplicationReceiptArtifactFormat {
     #[codec(index = 2)]
     /// Direct standalone execution results proving lane payload state application.
     DirectExecution,
+    #[codec(index = 3)]
+    /// Canonical merge-batch execution results proving lane payload state application.
+    MergeExecution,
 }
 
 /// Durable receipt proving a certified standalone lane block has committed results.
@@ -7307,6 +8910,40 @@ pub struct LaneBlockApplicationReceiptArtifact {
     pub result_hashes: Vec<Hash>,
     /// Committed transaction results in lane descriptor order.
     pub results: Vec<TransactionResult>,
+    /// Merge epoch whose durable entry authorized this application.
+    #[norito(default)]
+    pub merge_epoch_id: Option<u64>,
+    /// Hash of the exact full merge-ledger entry referenced by the carrier block.
+    #[norito(default)]
+    pub merge_entry_hash: Option<HashOf<MergeLedgerEntry>>,
+    /// Actual globally committed block height carrying the compact merge reference.
+    #[norito(default)]
+    pub merge_carrier_block_height: Option<u64>,
+    /// Actual globally committed block hash carrying the compact merge reference.
+    #[norito(default)]
+    pub merge_carrier_block_hash: Option<HashOf<BlockHeader>>,
+    /// Hash-addressed authenticated source bundle committed by the merge batch.
+    #[norito(default)]
+    pub merge_source_bundle_hash: Option<Hash>,
+    /// Stable pre-marker batch identity included in the complete write set.
+    #[norito(default)]
+    pub merge_batch_identity_hash: Option<Hash>,
+    /// Final marker-inclusive merge batch hash sealed by the merge QC.
+    #[norito(default)]
+    pub merge_batch_hash: Option<Hash>,
+    /// Canonical base WSV commitment sealed by the merge batch.
+    #[norito(default)]
+    pub merge_base_state_hash: Option<HashOf<BlockHeader>>,
+    /// Canonical complete marker-inclusive write-set root.
+    #[norito(default)]
+    pub merge_write_set_root: Option<Hash>,
+    /// Expected post-state transition commitment after the batch.
+    #[norito(default)]
+    pub merge_expected_post_state_hash: Option<HashOf<BlockHeader>>,
+    /// Exact lane settlement commitment hash staged atomically with execution.
+    #[norito(default)]
+    pub merge_settlement_hash:
+        Option<HashOf<iroha_data_model::block::consensus::LaneBlockCommitment>>,
 }
 
 impl LaneBlockApplicationReceiptArtifact {
@@ -7344,6 +8981,17 @@ impl LaneBlockApplicationReceiptArtifact {
             entrypoint_hashes,
             result_hashes,
             results,
+            merge_epoch_id: None,
+            merge_entry_hash: None,
+            merge_carrier_block_height: None,
+            merge_carrier_block_hash: None,
+            merge_source_bundle_hash: None,
+            merge_batch_identity_hash: None,
+            merge_batch_hash: None,
+            merge_base_state_hash: None,
+            merge_write_set_root: None,
+            merge_expected_post_state_hash: None,
+            merge_settlement_hash: None,
         }
     }
 
@@ -7372,7 +9020,56 @@ impl LaneBlockApplicationReceiptArtifact {
             entrypoint_hashes: preflight.entrypoint_hashes.clone(),
             result_hashes: preflight.result_hashes.clone(),
             results: preflight.results.clone(),
+            merge_epoch_id: None,
+            merge_entry_hash: None,
+            merge_carrier_block_height: None,
+            merge_carrier_block_hash: None,
+            merge_source_bundle_hash: None,
+            merge_batch_identity_hash: None,
+            merge_batch_hash: None,
+            merge_base_state_hash: None,
+            merge_write_set_root: None,
+            merge_expected_post_state_hash: None,
+            merge_settlement_hash: None,
         })
+    }
+
+    fn new_merge_execution(
+        entry: &MergeLedgerEntry,
+        batch: &MergeExecutionBatch,
+        execution: &MergeLaneExecution,
+        artifact: LaneBlockArtifact,
+        carrier_block_height: u64,
+        carrier_block_hash: HashOf<BlockHeader>,
+    ) -> Self {
+        Self {
+            format: LaneBlockApplicationReceiptArtifactFormat::MergeExecution,
+            proposal: execution.proposal.clone(),
+            artifact,
+            application_block_height: carrier_block_height,
+            application_block_hash: carrier_block_hash,
+            entrypoint_indices: execution
+                .proposal
+                .descriptor
+                .accepted_candidate_indices
+                .clone(),
+            entrypoint_hashes: execution.entrypoint_hashes.clone(),
+            result_hashes: execution.result_hashes.clone(),
+            results: execution.results.clone(),
+            merge_epoch_id: Some(entry.epoch_id),
+            merge_entry_hash: Some(crate::merge::merge_ledger_entry_hash(entry)),
+            merge_carrier_block_height: Some(carrier_block_height),
+            merge_carrier_block_hash: Some(carrier_block_hash),
+            merge_source_bundle_hash: Some(execution.source_bundle_hash),
+            merge_batch_identity_hash: Some(crate::merge::merge_execution_batch_identity_hash(
+                batch,
+            )),
+            merge_batch_hash: Some(batch.batch_hash),
+            merge_base_state_hash: Some(batch.base_state_hash),
+            merge_write_set_root: Some(batch.write_set_root),
+            merge_expected_post_state_hash: Some(batch.expected_post_state_hash),
+            merge_settlement_hash: Some(execution.settlement_hash),
+        }
     }
 
     /// Return the human-readable format tag describing the artifact payload.
@@ -7380,7 +9077,8 @@ impl LaneBlockApplicationReceiptArtifact {
     pub fn format_label(&self) -> &'static str {
         match self.format {
             LaneBlockApplicationReceiptArtifactFormat::Current
-            | LaneBlockApplicationReceiptArtifactFormat::DirectExecution => Self::FORMAT_LABEL,
+            | LaneBlockApplicationReceiptArtifactFormat::DirectExecution
+            | LaneBlockApplicationReceiptArtifactFormat::MergeExecution => Self::FORMAT_LABEL,
         }
     }
 
@@ -7613,6 +9311,9 @@ impl Kura {
     pub(crate) fn validate_certified_lane_block_artifact(
         artifact: &CertifiedLaneBlockArtifact,
     ) -> std::result::Result<(), &'static str> {
+        artifact
+            .encode_framed()
+            .map_err(|_| "certified lane block exceeds the merge source envelope byte limit")?;
         crate::lane_consensus::validate_lane_block_proposal(&artifact.proposal)
             .map_err(|_| "invalid lane block proposal")?;
         crate::lane_consensus::validate_lane_block_qc(&artifact.prepare_qc)
@@ -7665,6 +9366,9 @@ impl Kura {
         expected_chain_id_hash: Hash,
         expected_epoch: u64,
     ) -> std::result::Result<LaneBlockProposalV1, &'static str> {
+        artifact
+            .encode_framed()
+            .map_err(|_| "autonomous lane block exceeds the merge source byte limit")?;
         match artifact.format {
             AutonomousLaneBlockArtifactFormat::Current => {}
         }
@@ -7725,6 +9429,108 @@ impl Kura {
         Ok(current)
     }
 
+    /// Validate a complete autonomous merge source without consulting mutable
+    /// committee state or local sidecars.
+    pub(crate) fn validate_autonomous_lane_merge_bundle(
+        bundle: &AutonomousLaneMergeBundleV1,
+        expected_chain_id_hash: Hash,
+        expected_epoch: u64,
+    ) -> std::result::Result<(), &'static str> {
+        if bundle.version != 1 {
+            return Err("unsupported autonomous lane merge bundle version");
+        }
+        if bundle
+            .encode_framed()
+            .map_err(|_| "oversized autonomous lane merge bundle")?
+            .len()
+            > MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES
+        {
+            return Err("autonomous lane merge bundle exceeds hard byte limit");
+        }
+        if bundle.autonomous.availability_certificate.is_none() {
+            return Err("autonomous lane merge bundle lacks a durable availability certificate");
+        }
+        let current = Self::validate_autonomous_lane_block_artifact(
+            &bundle.autonomous,
+            expected_chain_id_hash,
+            expected_epoch,
+        )?;
+        Self::validate_certified_lane_block_artifact(&bundle.certified)?;
+        let availability = bundle
+            .autonomous
+            .availability_certificate
+            .as_ref()
+            .ok_or("autonomous lane merge bundle lacks a durable availability certificate")?;
+        if availability.certificate != bundle.certified.prepare_qc {
+            return Err("payload availability certificate is not the exact current prepare QC");
+        }
+        if current != bundle.certified.proposal
+            || !bundle
+                .autonomous
+                .executable_payload
+                .matches_proposal_static(&bundle.certified.proposal)
+        {
+            return Err(
+                "autonomous lane merge bundle certified proposal does not match its view chain",
+            );
+        }
+        Ok(())
+    }
+
+    /// Decode exact canonical framed bundle bytes and verify all embedded proofs.
+    pub(crate) fn decode_autonomous_lane_merge_bundle(
+        bytes: &[u8],
+        expected_chain_id_hash: Hash,
+        expected_epoch: u64,
+    ) -> std::result::Result<AutonomousLaneMergeBundleV1, &'static str> {
+        if bytes.len() > MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES {
+            return Err("autonomous lane merge bundle exceeds hard byte limit");
+        }
+        let bundle = norito::decode_from_bytes::<AutonomousLaneMergeBundleV1>(bytes)
+            .map_err(|_| "autonomous lane merge bundle is not valid framed Norito")?;
+        let canonical = bundle
+            .encode_framed()
+            .map_err(|_| "autonomous lane merge bundle cannot be canonically encoded")?;
+        if canonical != bytes {
+            return Err("autonomous lane merge bundle is not canonical framed Norito");
+        }
+        Self::validate_autonomous_lane_merge_bundle(
+            &bundle,
+            expected_chain_id_hash,
+            expected_epoch,
+        )?;
+        Ok(bundle)
+    }
+
+    /// Assemble the exact locally durable merge source for a certified proposal.
+    pub(crate) fn autonomous_lane_merge_bundle(
+        &self,
+        certified: CertifiedLaneBlockArtifact,
+        expected_chain_id_hash: Hash,
+        expected_epoch: u64,
+    ) -> std::result::Result<AutonomousLaneMergeBundleV1, &'static str> {
+        let descriptor = &certified.proposal.descriptor;
+        let autonomous = self
+            .read_autonomous_lane_block_artifact(
+                descriptor.lane_id,
+                descriptor.lane_block_height,
+                expected_chain_id_hash,
+                expected_epoch,
+            )
+            .ok_or("autonomous lane merge payload is unavailable")?;
+        let bundle = AutonomousLaneMergeBundleV1 {
+            version: 1,
+            autonomous,
+            certified,
+        };
+        Self::validate_autonomous_lane_merge_bundle(
+            &bundle,
+            expected_chain_id_hash,
+            expected_epoch,
+        )?;
+        Ok(bundle)
+    }
+
     pub(crate) fn validate_lane_block_execution_input_artifact(
         artifact: &LaneBlockExecutionInputArtifact,
     ) -> std::result::Result<(), &'static str> {
@@ -7736,7 +9542,29 @@ impl Kura {
             artifact.autonomous_epoch,
             artifact.autonomous_payload_hash,
         ) {
-            (Some(_), Some(_), Some(_)) | (None, None, None) => {}
+            (Some(_), Some(_), Some(_)) => {
+                let compatibility_handoff = artifact.proposal.payload_block_hint.is_some()
+                    && artifact.reservation_keys.is_empty()
+                    && artifact.routing_plans.is_empty()
+                    && artifact.native_amx_receipts.is_empty();
+                if !compatibility_handoff
+                    && (artifact.reservation_keys.len() != artifact.entrypoints.len()
+                        || artifact.routing_plans.len() != artifact.entrypoints.len()
+                        || artifact.native_amx_receipts.len() != artifact.entrypoints.len())
+                {
+                    return Err(
+                        "autonomous execution input reservation and routing vectors are not aligned",
+                    );
+                }
+            }
+            (None, None, None) => {
+                if !artifact.reservation_keys.is_empty()
+                    || !artifact.routing_plans.is_empty()
+                    || !artifact.native_amx_receipts.is_empty()
+                {
+                    return Err("global execution input carries autonomous reservation metadata");
+                }
+            }
             _ => return Err("execution input autonomous source binding is incomplete"),
         }
         if !Self::lane_block_artifact_matches_descriptor(&artifact.artifact.ownership, descriptor) {
@@ -7814,10 +9642,57 @@ impl Kura {
                 if artifact.application_block_hash != artifact.artifact.proposal_block_hash {
                     return Err("application receipt block hash does not match lane artifact");
                 }
+                if artifact.merge_epoch_id.is_some()
+                    || artifact.merge_entry_hash.is_some()
+                    || artifact.merge_carrier_block_height.is_some()
+                    || artifact.merge_carrier_block_hash.is_some()
+                    || artifact.merge_source_bundle_hash.is_some()
+                    || artifact.merge_batch_identity_hash.is_some()
+                    || artifact.merge_batch_hash.is_some()
+                    || artifact.merge_base_state_hash.is_some()
+                    || artifact.merge_write_set_root.is_some()
+                    || artifact.merge_expected_post_state_hash.is_some()
+                    || artifact.merge_settlement_hash.is_some()
+                {
+                    return Err("canonical block receipt carries merge-only evidence");
+                }
             }
             LaneBlockApplicationReceiptArtifactFormat::DirectExecution => {
                 // Direct receipts are tied to the committed WSV base used for
                 // preflight. A fresh chain can have a valid WSV hash at height 0.
+                if artifact.merge_epoch_id.is_some()
+                    || artifact.merge_entry_hash.is_some()
+                    || artifact.merge_carrier_block_height.is_some()
+                    || artifact.merge_carrier_block_hash.is_some()
+                    || artifact.merge_source_bundle_hash.is_some()
+                    || artifact.merge_batch_identity_hash.is_some()
+                    || artifact.merge_batch_hash.is_some()
+                    || artifact.merge_base_state_hash.is_some()
+                    || artifact.merge_write_set_root.is_some()
+                    || artifact.merge_expected_post_state_hash.is_some()
+                    || artifact.merge_settlement_hash.is_some()
+                {
+                    return Err("direct receipt carries merge-only evidence");
+                }
+            }
+            LaneBlockApplicationReceiptArtifactFormat::MergeExecution => {
+                if artifact.merge_epoch_id.is_none()
+                    || artifact.merge_entry_hash.is_none()
+                    || artifact.merge_carrier_block_height.is_none()
+                    || artifact.merge_carrier_block_hash.is_none()
+                    || artifact.merge_source_bundle_hash.is_none()
+                    || artifact.merge_batch_identity_hash.is_none()
+                    || artifact.merge_batch_hash.is_none()
+                    || artifact.merge_base_state_hash.is_none()
+                    || artifact.merge_write_set_root.is_none()
+                    || artifact.merge_expected_post_state_hash.is_none()
+                    || artifact.merge_settlement_hash.is_none()
+                    || artifact.merge_carrier_block_height
+                        != Some(artifact.application_block_height)
+                    || artifact.merge_carrier_block_hash != Some(artifact.application_block_hash)
+                {
+                    return Err("merge receipt evidence is incomplete or inconsistent");
+                }
             }
         }
         if artifact.entrypoint_indices != descriptor.accepted_candidate_indices {
@@ -9181,10 +11056,21 @@ impl Kura {
             if existing == &certificate {
                 return Ok(());
             }
-            return Err(Self::invalid_lane_artifact_error(
-                data_path,
-                "conflicting autonomous lane availability certificate",
-            ));
+            let current = Self::validate_autonomous_lane_block_artifact(
+                &artifact,
+                expected_chain_id_hash,
+                expected_epoch,
+            )
+            .map_err(|message| Self::invalid_lane_artifact_error(data_path.clone(), message))?;
+            if certificate.certificate.body != current.vote_body(CertPhase::Prepare)
+                || certificate.certificate.body.lane_block_view
+                    <= existing.certificate.body.lane_block_view
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    data_path,
+                    "conflicting or non-current autonomous lane availability certificate",
+                ));
+            }
         }
         artifact.availability_certificate = Some(certificate);
         self.write_autonomous_lane_block_view_state_locked(
@@ -9217,6 +11103,7 @@ impl Kura {
                     artifact
                         .executable_payload
                         .matches_proposal_static(proposal)
+                        && certificate.certificate.body == proposal.vote_body(CertPhase::Prepare)
                         && crate::lane_consensus::validate_lane_payload_availability_certificate(
                             certificate,
                             &artifact.executable_payload,
@@ -9326,15 +11213,30 @@ impl Kura {
                 format!("invalid autonomous lane NewView certificate: {err}"),
             )
         })?;
-        if artifact.new_view_certificates.len() == MAX_LANE_NEW_VIEW_CERTIFICATES {
-            artifact.view_checkpoint = Some(DurableLaneBlockViewCheckpointV1 {
-                source_proposal: current,
-                target_proposal: target.clone(),
-                certificate: durable_certificate,
-            });
+        let checkpoint = DurableLaneBlockViewCheckpointV1 {
+            source_proposal: current,
+            target_proposal: target.clone(),
+            certificate: durable_certificate.clone(),
+        };
+        let count_requires_checkpoint =
+            artifact.new_view_certificates.len() >= MAX_LANE_NEW_VIEW_CERTIFICATES;
+        let mut appended = artifact.clone();
+        appended.new_view_certificates.push(durable_certificate);
+        let appended_bytes = norito::to_bytes(&appended).map_err(Error::NoritoFrame)?;
+        let bytes_require_checkpoint =
+            appended_bytes.len() > MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES;
+        if count_requires_checkpoint || bytes_require_checkpoint {
+            artifact.view_checkpoint = Some(checkpoint);
             artifact.new_view_certificates.clear();
+            let compacted_bytes = norito::to_bytes(&artifact).map_err(Error::NoritoFrame)?;
+            if compacted_bytes.len() > MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES {
+                return Err(Self::invalid_lane_artifact_error(
+                    data_path,
+                    "compacted autonomous lane view checkpoint exceeds the merge source byte limit",
+                ));
+            }
         } else {
-            artifact.new_view_certificates.push(durable_certificate);
+            artifact = appended;
         }
         self.write_autonomous_lane_block_view_state_locked(
             &artifact,
@@ -10282,6 +12184,101 @@ impl Kura {
         self.write_lane_block_application_receipt_artifact(&artifact)
     }
 
+    fn merge_lane_block_artifact(execution: &MergeLaneExecution) -> LaneBlockArtifact {
+        let descriptor = &execution.proposal.descriptor;
+        let (proposal_block_hash, proposal_view) = Self::autonomous_lane_execution_anchor(
+            &execution.origin_proposal,
+            execution.autonomous_payload_hash,
+        );
+        let ownership = SumeragiLanePayloadOwnership {
+            proposal_height: descriptor.proposal_height,
+            proposal_view,
+            lane_id: descriptor.lane_id,
+            dataspace_id: descriptor.dataspace_id,
+            lane_incarnation: descriptor.lane_incarnation,
+            lane_block_height: descriptor.lane_block_height,
+            lane_block_view: descriptor.lane_block_view,
+            subject_hash: descriptor.subject_hash,
+            qc_mode_tag: descriptor.qc_mode_tag.clone(),
+            accepted_candidate_indices: descriptor.accepted_candidate_indices.clone(),
+            accepted_transaction_hashes: descriptor.accepted_transaction_hashes.clone(),
+            previous_lane_block_height: descriptor.previous_lane_block_height,
+            previous_lane_block_descriptor_hash: descriptor.previous_lane_block_descriptor_hash,
+            lane_block_descriptor_hash: Some(descriptor.descriptor_hash),
+            lane_block_descriptor_validator_set: descriptor.validator_set.clone(),
+            lane_block_descriptor_validator_count: descriptor.validator_count,
+            lane_block_descriptor_min_quorum: descriptor.min_quorum,
+            payload_ownership_hash: descriptor.payload_ownership_hash,
+            rbc_instance_hash: descriptor.rbc_instance_hash,
+        };
+        LaneBlockArtifact::new(proposal_block_hash, ownership)
+    }
+
+    /// Persist idempotent lane-application receipts for a WSV-applied merge entry.
+    ///
+    /// The caller must invoke this only after the marker-inclusive WSV overlay is
+    /// published. A crash before or during these sidecar writes is repaired from
+    /// the durable merge log at startup; a conflicting existing receipt fails.
+    pub(crate) fn persist_merge_lane_block_application_receipts(
+        &self,
+        entry: &MergeLedgerEntry,
+        carrier_block_height: u64,
+        carrier_block_hash: HashOf<BlockHeader>,
+    ) -> Result<()> {
+        let Some(batch) = entry.execution_batch.as_ref() else {
+            return Ok(());
+        };
+        if self
+            .merge_entry_for_carrier(carrier_block_height, carrier_block_hash)?
+            .as_ref()
+            != Some(entry)
+        {
+            return Err(Self::invalid_pending_merge_entry_error(
+                self.store_root.clone(),
+                "merge receipt publication carrier does not match the committed full entry",
+            ));
+        }
+        for execution in &batch.lanes {
+            let artifact = Self::merge_lane_block_artifact(execution);
+            let receipt = LaneBlockApplicationReceiptArtifact::new_merge_execution(
+                entry,
+                batch,
+                execution,
+                artifact,
+                carrier_block_height,
+                carrier_block_hash,
+            );
+            self.write_lane_block_application_receipt_artifact(&receipt)?;
+        }
+        Ok(())
+    }
+
+    /// Repair merge application receipts from an entry already aligned with a
+    /// canonical carrier block in the committed merge log.
+    pub(crate) fn persist_merge_lane_block_application_receipts_from_committed_log(
+        &self,
+        entry: &MergeLedgerEntry,
+    ) -> Result<()> {
+        let entry_hash = crate::merge::merge_ledger_entry_hash(entry);
+        if self.merge_log.lock().entry_by_hash(entry_hash)?.as_ref() != Some(entry) {
+            return Err(Self::invalid_pending_merge_entry_error(
+                self.store_root.clone(),
+                "merge receipt repair entry is absent from the committed merge log",
+            ));
+        }
+        let carrier = self.merge_carrier_for_entry(entry_hash)?.ok_or_else(|| {
+            Self::invalid_pending_merge_entry_error(
+                self.store_root.clone(),
+                "merge receipt carrier record is unavailable",
+            )
+        })?;
+        self.persist_merge_lane_block_application_receipts(
+            entry,
+            carrier.block_height,
+            carrier.block_hash,
+        )
+    }
+
     pub(crate) fn persist_lane_block_application_receipt_if_ready(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -10536,6 +12533,9 @@ impl Kura {
         if artifact.format == LaneBlockApplicationReceiptArtifactFormat::Current {
             return true;
         }
+        if artifact.format == LaneBlockApplicationReceiptArtifactFormat::MergeExecution {
+            return true;
+        }
         if self.lane_block_application_receipt_conflicts_with_preflight(proposal) {
             iroha_logger::warn!(
                 lane = %proposal.descriptor.lane_id.as_u32(),
@@ -10578,7 +12578,58 @@ impl Kura {
             LaneBlockApplicationReceiptArtifactFormat::DirectExecution => {
                 self.lane_block_application_receipt_matches_direct_preflight(artifact)
             }
+            LaneBlockApplicationReceiptArtifactFormat::MergeExecution => {
+                self.lane_block_application_receipt_matches_merge_log(artifact)
+            }
         }
+    }
+
+    fn lane_block_application_receipt_matches_merge_log(
+        &self,
+        artifact: &LaneBlockApplicationReceiptArtifact,
+    ) -> bool {
+        let (Some(epoch_id), Some(entry_hash), Some(carrier_height), Some(carrier_hash)) = (
+            artifact.merge_epoch_id,
+            artifact.merge_entry_hash,
+            artifact.merge_carrier_block_height,
+            artifact.merge_carrier_block_hash,
+        ) else {
+            return false;
+        };
+        let Ok(Some(entry)) = self.merge_log.lock().entry_by_hash(entry_hash) else {
+            return false;
+        };
+        if entry.epoch_id != epoch_id
+            || self.merge_carrier_for_entry(entry_hash).ok().flatten()
+                != Some(MergeLedgerCarrierRecord {
+                    version: 1,
+                    entry_hash,
+                    epoch_id,
+                    block_height: carrier_height,
+                    block_hash: carrier_hash,
+                })
+        {
+            return false;
+        }
+        let Some(batch) = entry.execution_batch.as_ref() else {
+            return false;
+        };
+        let Some(execution) = batch
+            .lanes
+            .iter()
+            .find(|execution| execution.proposal == artifact.proposal)
+        else {
+            return false;
+        };
+        let expected = LaneBlockApplicationReceiptArtifact::new_merge_execution(
+            &entry,
+            batch,
+            execution,
+            Self::merge_lane_block_artifact(execution),
+            carrier_height,
+            carrier_hash,
+        );
+        expected == *artifact
     }
 
     fn lane_block_application_receipt_matches_canonical_results(
@@ -10755,6 +12806,9 @@ impl Kura {
             autonomous_epoch: None,
             autonomous_payload_hash: None,
             entrypoints,
+            reservation_keys: Vec::new(),
+            routing_plans: Vec::new(),
+            native_amx_receipts: Vec::new(),
         })
     }
 
@@ -10828,6 +12882,9 @@ impl Kura {
             autonomous_epoch: Some(expected_epoch),
             autonomous_payload_hash: Some(artifact.executable_payload.payload_hash),
             entrypoints,
+            reservation_keys: artifact.executable_payload.reservation_keys.clone(),
+            routing_plans: artifact.executable_payload.routing_plans.clone(),
+            native_amx_receipts: artifact.executable_payload.native_amx_receipts.clone(),
         })
     }
 
@@ -10874,6 +12931,9 @@ impl Kura {
                 autonomous_epoch: Some(expected_epoch),
                 autonomous_payload_hash: Some(payload.payload_hash),
                 entrypoints: payload.entrypoints.clone(),
+                reservation_keys: payload.reservation_keys.clone(),
+                routing_plans: payload.routing_plans.clone(),
+                native_amx_receipts: payload.native_amx_receipts.clone(),
             },
         ))
     }
@@ -14885,7 +16945,7 @@ impl FileWrap {
     }
 }
 
-type Result<T, E = Error> = std::result::Result<T, E>;
+pub(crate) type Result<T, E = Error> = std::result::Result<T, E>;
 /// Error variants for persistent storage logic
 #[derive(thiserror::Error, Debug, displaydoc::Display)]
 pub enum Error {
@@ -14964,6 +17024,15 @@ pub enum Error {
         /// Hash of the incoming block.
         actual: HashOf<BlockHeader>,
     },
+    /// Certified merge sidecar `{entry_hash:?}` is unavailable
+    MissingCertifiedMergeSidecar {
+        /// Hash requested by the compact block reference.
+        entry_hash: HashOf<MergeLedgerEntry>,
+    },
+    /// Certified merge compact reference is inconsistent: {0}
+    MergeReferenceMismatch(String),
+    /// Durable sparse merge carrier is inconsistent: {0}
+    MergeCarrierConflict(String),
 }
 
 trait AddErrContextExt<T> {
@@ -15863,6 +17932,7 @@ mod tests {
                     native_amx_receipts: Vec::new(),
                 },
             ),
+            relay_envelope: None,
         }];
         let merge_hint_roots: Vec<Hash> = lane_snapshots
             .iter()
@@ -15887,6 +17957,8 @@ mod tests {
             merge_qc: MergeQuorumCertificate::new(
                 epoch,
                 epoch,
+                epoch,
+                HashOf::from_untyped_unchecked(Hash::new([epoch_plus_three; Hash::LENGTH])),
                 Hash::new(b"kura-merge-test-chain"),
                 iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
                 HashOf::new(&Vec::<PeerId>::new()),
@@ -16002,6 +18074,84 @@ mod tests {
             2,
             "merge log should survive with paired blocks"
         );
+    }
+
+    #[test]
+    fn merge_log_hash_index_reads_evicted_frames_without_full_scan() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path().join("merge.log");
+        let first_hash;
+        {
+            let mut log = MergeLedgerLog::open_at(&path, 2).expect("open merge log");
+            first_hash = sample_merge_entry(1).canonical_hash();
+            for epoch in 1..=128 {
+                log.append(&sample_merge_entry(epoch))
+                    .expect("append indexed merge frame");
+            }
+            assert_eq!(log.snapshot().len(), 2, "test must evict old cache entries");
+        }
+
+        let mut reopened = MergeLedgerLog::open_at(&path, 2).expect("reopen indexed merge log");
+        reopened.full_history_scans = 0;
+        reopened.indexed_lookups = 0;
+        let first = reopened
+            .entry_by_hash(first_hash)
+            .expect("bounded indexed read")
+            .expect("old indexed frame");
+        assert_eq!(first.epoch_id, 1);
+        assert_eq!(reopened.full_history_scans, 0);
+        assert_eq!(reopened.indexed_lookups, 1);
+    }
+
+    #[test]
+    fn merge_log_indexed_lookup_fails_closed_on_corruption_and_truncation() {
+        for truncate in [false, true] {
+            let dir = TempDir::new().expect("tempdir");
+            let path = dir.path().join("merge.log");
+            let mut log = MergeLedgerLog::open_at(&path, 1).expect("open merge log");
+            for epoch in 1..=3 {
+                log.append(&sample_merge_entry(epoch))
+                    .expect("append indexed merge frame");
+            }
+            let target = sample_merge_entry(3).canonical_hash();
+            let frame = log.frames_by_hash[&target];
+            let mut file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .expect("open merge bytes for adversarial mutation");
+            if truncate {
+                file.set_len(
+                    frame
+                        .frame_offset
+                        .saturating_add(4)
+                        .saturating_add(u64::from(frame.payload_len))
+                        .saturating_sub(1),
+                )
+                .expect("truncate indexed payload");
+            } else {
+                let mut byte = [0u8; 1];
+                file.seek(SeekFrom::Start(
+                    frame
+                        .frame_offset
+                        .saturating_add(4)
+                        .saturating_add(u64::from(frame.payload_len))
+                        .saturating_sub(1),
+                ))
+                .expect("seek indexed payload tail");
+                file.read_exact(&mut byte).expect("read payload tail");
+                byte[0] ^= 0x80;
+                file.seek(SeekFrom::Current(-1))
+                    .expect("rewind payload tail");
+                file.write_all(&byte).expect("corrupt payload tail");
+                file.sync_all().expect("sync corrupt payload");
+            }
+            assert!(
+                log.entry_by_hash(target).is_err(),
+                "indexed lookup must fail closed after {}",
+                if truncate { "truncation" } else { "corruption" }
+            );
+        }
     }
 
     #[test]
@@ -17359,7 +19509,7 @@ mod tests {
         }
 
         let oversize_len =
-            u32::try_from(MERGE_LEDGER_MAX_ENTRY_BYTES + 1).expect("max entry size fits in u32");
+            u32::try_from(MAX_MERGE_LEDGER_ENTRY_BYTES + 1).expect("max entry size fits in u32");
         let mut file = std::fs::OpenOptions::new()
             .append(true)
             .open(&log_path)
@@ -17383,7 +19533,7 @@ mod tests {
     fn merge_log_rejects_oversized_entry() {
         let mut merge_log = MergeLedgerLog::in_memory(MERGE_LEDGER_CACHE_CAPACITY);
         let mut entry = sample_merge_entry(1);
-        entry.merge_qc.aggregate_signature = vec![0u8; MERGE_LEDGER_MAX_ENTRY_BYTES];
+        entry.merge_qc.aggregate_signature = vec![0u8; MAX_MERGE_LEDGER_ENTRY_BYTES];
 
         let err = merge_log
             .append(&entry)
@@ -19980,6 +22130,7 @@ mod tests {
             body,
             signer: PeerId::new(keypair.public_key().clone()),
             bls_signature: signature.payload().to_vec(),
+            payload_availability_vote: None,
         }
     }
 
@@ -20422,10 +22573,27 @@ mod tests {
         let body = proposal.vote_body(Phase::Prepare);
         let signature = Signature::try_new(signer.private_key(), &body.signature_preimage())
             .expect("availability READY signature");
+        let validator_set_pops =
+            vec![bls_normal_pop_prove(signer.private_key()).expect("availability signer PoP")];
+        let availability_body = crate::lane_consensus::lane_payload_availability_body(
+            payload,
+            proposal,
+            payload.chain_id_hash,
+            payload.epoch,
+        )
+        .expect("availability body");
+        let availability_vote = crate::lane_consensus::LanePayloadAvailabilityVoteV1::new_signed(
+            availability_body,
+            PeerId::new(signer.public_key().clone()),
+            validator_set_pops,
+            signer.private_key(),
+        )
+        .expect("availability READY vote");
         let vote = crate::lane_consensus::LaneBlockVoteV1 {
             body: body.clone(),
             signer: PeerId::new(signer.public_key().clone()),
             bls_signature: signature.payload().to_vec(),
+            payload_availability_vote: Some(availability_vote),
         };
         let certificate = crate::lane_consensus::aggregate_lane_block_votes_to_qc(
             body,
@@ -20433,16 +22601,7 @@ mod tests {
             &[vote],
         )
         .expect("availability DELIVER QC");
-        DurableLanePayloadAvailabilityCertificateV1 {
-            chain_id_hash: payload.chain_id_hash,
-            epoch: payload.epoch,
-            executable_payload_hash: payload.payload_hash,
-            certificate,
-            signer_pops: BTreeMap::from([(
-                signer.public_key().clone(),
-                bls_normal_pop_prove(signer.private_key()).expect("availability signer PoP"),
-            )]),
-        }
+        DurableLanePayloadAvailabilityCertificateV1 { certificate }
     }
 
     #[test]
@@ -20492,7 +22651,13 @@ mod tests {
         ));
 
         let mut conflicting = deliver;
-        conflicting.executable_payload_hash = Hash::new(b"conflicting-availability-body");
+        conflicting
+            .certificate
+            .payload_availability_qc
+            .as_mut()
+            .expect("availability QC")
+            .body
+            .executable_payload_hash = Hash::new(b"conflicting-availability-body");
         assert!(
             kura.persist_lane_payload_availability_certificate(
                 lane_id,

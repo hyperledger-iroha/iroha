@@ -61,8 +61,8 @@ pub mod header;
 pub mod payload;
 
 pub use execution_context::{
-    BlockExecutionContextBundle, ExternalExecutionContext, ExternalExecutionRouteLeg,
-    ExternalExecutionRouteRole,
+    BlockExecutionContextBundle, CertifiedMergeLedgerReference, ExternalExecutionContext,
+    ExternalExecutionRouteLeg, ExternalExecutionRouteRole,
 };
 pub use header::{BlockHeader as Header, BlockHeader, BlockSignature};
 pub use payload::{BlockPayload as Payload, BlockPayload, BlockResult};
@@ -1549,7 +1549,9 @@ mod tests {
             pin_intent::{DaPinIntent, DaPinIntentBundle},
             types::{BlobDigest, RetentionPolicy, StorageTicketId},
         },
+        merge::{MergeLedgerEntry, MergeQuorumCertificate},
         nexus::{DataSpaceId, LaneId},
+        peer::PeerId,
         query::dsl::{HasProjection, PredicateMarker, SelectorMarker},
         sorafs::pin_registry::ManifestDigest,
         transaction::{TransactionBuilder, signed::TransactionEntrypoint},
@@ -1652,6 +1654,55 @@ mod tests {
         };
 
         assert!(block.is_empty());
+    }
+
+    #[test]
+    fn signed_block_with_only_certified_merge_reference_is_not_empty() {
+        let validators = Vec::<PeerId>::new();
+        let entry = MergeLedgerEntry {
+            epoch_id: 1,
+            lane_catalog_hash: Hash::new(b"merge-only-catalog"),
+            active_lanes: Vec::new(),
+            incarnation_root: Hash::new(b"merge-only-incarnations"),
+            activation_root: Hash::new(b"merge-only-activations"),
+            lane_snapshots: Vec::new(),
+            global_state_root: Hash::new(b"merge-only-global-state"),
+            merge_qc: MergeQuorumCertificate::new(
+                0,
+                1,
+                1,
+                HashOf::from_untyped_unchecked(Hash::new(b"merge-only-parent")),
+                Hash::new(b"merge-only-chain"),
+                1,
+                HashOf::new(&validators),
+                validators,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Hash::new(b"merge-only-message"),
+            ),
+            execution_batch: None,
+        };
+        let execution_context = BlockExecutionContextBundle::new(Vec::new())
+            .with_merge_entry(CertifiedMergeLedgerReference::new(&entry));
+        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 1, 0);
+        let block = SignedBlock {
+            signatures: BTreeSet::new(),
+            payload: BlockPayload {
+                header,
+                transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
+                execution_context: Some(execution_context),
+                da_commitments: None,
+                da_proof_policies: None,
+                da_pin_intents: None,
+                previous_roster_evidence: None,
+                npos_consensus_effects: None,
+            },
+            result: None,
+        };
+
+        assert!(!block.is_empty());
     }
 
     #[cfg(feature = "transparent_api")]

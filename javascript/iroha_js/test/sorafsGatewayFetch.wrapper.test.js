@@ -330,6 +330,10 @@ baseTest("sorafsGatewayFetch rejects noncanonical and non-public gateway URLs", 
     "https://gateway.test/?query=1",
     "https://gateway.test/#fragment",
     "https://localhost/",
+    "https://node.localhost/",
+    "https://node.local/",
+    "https://node.internal/",
+    "https://node.lan/",
     "https://127.0.0.1/",
     "https://10.0.0.1/",
     "https://192.0.2.1/",
@@ -468,8 +472,8 @@ test("sorafsGatewayFetch rejects invalid or oversized stream tokens", () => {
   };
   for (const streamTokenB64 of [
     "not-base64!!",
-    "A".repeat(90 * 1024 + 1),
-    Buffer.alloc(64 * 1024 + 1).toString("base64"),
+    "A".repeat(4 * 1024 + 1),
+    Buffer.alloc(2 * 1024 + 1).toString("base64"),
   ]) {
     const providers = [
       {
@@ -493,6 +497,27 @@ test("sorafsGatewayFetch rejects invalid or oversized stream tokens", () => {
     );
   }
   assert.equal(calls, 0);
+});
+
+test("sorafsGatewayFetch accepts the exact stream-token wire ceiling", () => {
+  let calls = 0;
+  const providers = [PROVIDER_ID_HEX, SECOND_PROVIDER_ID_HEX].map(
+    (providerIdHex, index) => ({
+      name: `provider-${index}`,
+      providerIdHex,
+      gatewayPublicKeyHex: GATEWAY_PUBLIC_KEY_HEX,
+      baseUrl: `https://gateway-${index}.test/`,
+      streamTokenB64: Buffer.alloc(2 * 1024).toString("base64"),
+    }),
+  );
+  sorafsGatewayFetch(
+    MANIFEST_HEX,
+    "sorafs.sf1@1.0.0",
+    "[]",
+    providers,
+    { __nativeBinding: { sorafsGatewayFetch: () => { calls += 1; return createStubResult(); } } },
+  );
+  assert.equal(calls, 1);
 });
 
 test("sorafsGatewayFetch rejects provider lists above the protocol ceiling", () => {

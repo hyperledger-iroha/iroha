@@ -1313,6 +1313,11 @@ case "$mode" in
     cfg_file="$spec_dir/SumeragiMergeExecutionOrder_fast.cfg"
     apalache_length=8
     ;;
+  merge-carrier-safety-fast)
+    spec_file="$spec_dir/SumeragiMergeCarrierSafety.tla"
+    cfg_file="$spec_dir/SumeragiMergeCarrierSafety_fast.cfg"
+    apalache_length=10
+    ;;
   commit-quorum-signers-fast)
     spec_file="$spec_dir/SumeragiCommitQuorumSignersGate.tla"
     cfg_file="$spec_dir/SumeragiCommitQuorumSignersGate_fast.cfg"
@@ -5136,6 +5141,14 @@ case "$mode" in
     spec_file="$spec_dir/SumeragiMergeExecutionOrder.tla"
     cfg_file="$spec_dir/SumeragiMergeExecutionOrder_bug_${cfg_bug_name}.cfg"
     apalache_length=8
+    expect_failure=1
+    ;;
+  merge-carrier-safety-bug-*)
+    bug_name="${mode#merge-carrier-safety-bug-}"
+    cfg_bug_name="${bug_name//-/_}"
+    spec_file="$spec_dir/SumeragiMergeCarrierSafety.tla"
+    cfg_file="$spec_dir/SumeragiMergeCarrierSafety_bug_${cfg_bug_name}.cfg"
+    apalache_length=10
     expect_failure=1
     ;;
   commit-quorum-signers-bug-*)

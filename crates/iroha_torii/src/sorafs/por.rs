@@ -972,6 +972,88 @@ impl ChallengeRecord {
 
         status
     }
+
+    fn validate_persisted(&self) -> Result<(), String> {
+        self.challenge
+            .validate()
+            .map_err(|error| error.to_string())?;
+        if self.proof_digest.is_some() != self.proof_submitted_at.is_some() {
+            return Err(
+                "proof digest and submission timestamp must both be present or absent".to_owned(),
+            );
+        }
+        if let Some(submitted_at) = self.proof_submitted_at
+            && (submitted_at < self.challenge.issued_at
+                || submitted_at > self.challenge.deadline_at)
+        {
+            return Err("proof submission timestamp is outside the challenge window".to_owned());
+        }
+
+        let expected_responded_at = match &self.verdict {
+            None => {
+                if self.repair_history_id.is_some() {
+                    return Err("repair history cannot exist without a verdict".to_owned());
+                }
+                self.proof_submitted_at
+            }
+            Some(verdict) => {
+                if verdict.decided_at < self.challenge.issued_at
+                    || self
+                        .proof_submitted_at
+                        .is_some_and(|submitted_at| verdict.decided_at < submitted_at)
+                {
+                    return Err("verdict timestamp predates its challenge or proof".to_owned());
+                }
+                if verdict.proof_digest != self.proof_digest {
+                    return Err(
+                        "verdict proof digest does not match recorded proof state".to_owned()
+                    );
+                }
+                match verdict.outcome {
+                    AuditOutcomeV1::Success => {
+                        if verdict.failure_reason.is_some()
+                            || self.proof_digest.is_none()
+                            || self.repair_history_id.is_some()
+                        {
+                            return Err(
+                                "successful verdict has inconsistent proof, reason, or repair state"
+                                    .to_owned(),
+                            );
+                        }
+                    }
+                    AuditOutcomeV1::Failed => {
+                        if verdict
+                            .failure_reason
+                            .as_deref()
+                            .is_none_or(|reason| reason.trim().is_empty())
+                        {
+                            return Err("failed verdict is missing a reason".to_owned());
+                        }
+                    }
+                    AuditOutcomeV1::Repaired => {
+                        if verdict
+                            .failure_reason
+                            .as_deref()
+                            .is_none_or(|reason| reason.trim().is_empty())
+                            || self.proof_digest.is_none()
+                        {
+                            return Err(
+                                "repaired verdict is missing a proof or failure reason".to_owned()
+                            );
+                        }
+                    }
+                }
+                if self.repair_history_id == Some(0) {
+                    return Err("repair history id zero is reserved".to_owned());
+                }
+                self.proof_submitted_at.or(Some(verdict.decided_at))
+            }
+        };
+        if self.responded_at != expected_responded_at {
+            return Err("responded_at does not match the persisted lifecycle".to_owned());
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
@@ -1066,7 +1148,7 @@ enum SecureFileError {
     Conflict,
 }
 
-fn ensure_secure_parent(path: &Path) -> Result<(PathBuf, fs::Metadata), SecureFileError> {
+fn absolute_secure_path(path: &Path) -> Result<PathBuf, SecureFileError> {
     if path
         .components()
         .any(|component| component == Component::ParentDir)
@@ -1075,11 +1157,33 @@ fn ensure_secure_parent(path: &Path) -> Result<(PathBuf, fs::Metadata), SecureFi
             "parent-directory components are forbidden".to_owned(),
         ));
     }
-    let absolute = if path.is_absolute() {
+    let candidate = if path.is_absolute() {
         path.to_owned()
     } else {
         std::env::current_dir()?.join(path)
     };
+    let mut absolute = PathBuf::new();
+    for component in candidate.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                return Err(SecureFileError::UnsafePath(
+                    "parent-directory components are forbidden".to_owned(),
+                ));
+            }
+            _ => absolute.push(component.as_os_str()),
+        }
+    }
+    if absolute.file_name().is_none() {
+        return Err(SecureFileError::UnsafePath(
+            "persistence path must name a file".to_owned(),
+        ));
+    }
+    Ok(absolute)
+}
+
+fn ensure_secure_parent(path: &Path) -> Result<(PathBuf, PathBuf, fs::Metadata), SecureFileError> {
+    let absolute = absolute_secure_path(path)?;
     let parent = absolute
         .parent()
         .ok_or_else(|| SecureFileError::UnsafePath("persistence path has no parent".to_owned()))?;
@@ -1115,7 +1219,7 @@ fn ensure_secure_parent(path: &Path) -> Result<(PathBuf, fs::Metadata), SecureFi
             parent.display()
         )));
     }
-    Ok((parent.to_owned(), metadata))
+    Ok((absolute, parent.to_owned(), metadata))
 }
 
 fn validate_secure_file_metadata(
@@ -1142,13 +1246,13 @@ fn validate_secure_file_metadata(
 }
 
 fn secure_read_bytes(path: &Path, max_bytes: usize) -> Result<Option<Vec<u8>>, SecureFileError> {
-    let _ = ensure_secure_parent(path)?;
-    let metadata = match fs::symlink_metadata(path) {
+    let (absolute, _, _) = ensure_secure_parent(path)?;
+    let metadata = match fs::symlink_metadata(&absolute) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
-    validate_secure_file_metadata(path, &metadata)?;
+    validate_secure_file_metadata(&absolute, &metadata)?;
     if metadata.len() > max_bytes as u64 {
         return Err(SecureFileError::Oversize { limit: max_bytes });
     }
@@ -1156,14 +1260,14 @@ fn secure_read_bytes(path: &Path, max_bytes: usize) -> Result<Option<Vec<u8>>, S
     options.read(true);
     #[cfg(unix)]
     options.custom_flags(libc::O_NOFOLLOW);
-    let mut file = options.open(path)?;
+    let mut file = options.open(&absolute)?;
     let opened = file.metadata()?;
-    validate_secure_file_metadata(path, &opened)?;
+    validate_secure_file_metadata(&absolute, &opened)?;
     #[cfg(unix)]
     if opened.dev() != metadata.dev() || opened.ino() != metadata.ino() {
         return Err(SecureFileError::UnsafePath(format!(
             "{} changed while opening",
-            path.display()
+            absolute.display()
         )));
     }
     let mut bytes = Vec::with_capacity(opened.len() as usize);
@@ -1172,6 +1276,15 @@ fn secure_read_bytes(path: &Path, max_bytes: usize) -> Result<Option<Vec<u8>>, S
         return Err(SecureFileError::Oversize { limit: max_bytes });
     }
     Ok(Some(bytes))
+}
+
+fn sync_secure_directory(parent: &Path) -> Result<(), SecureFileError> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW);
+    options.open(parent)?.sync_all()?;
+    Ok(())
 }
 
 fn secure_atomic_write(
@@ -1183,16 +1296,17 @@ fn secure_atomic_write(
     if bytes.len() > max_bytes {
         return Err(SecureFileError::Oversize { limit: max_bytes });
     }
-    let (parent, parent_before) = ensure_secure_parent(path)?;
-    if let Some(existing) = secure_read_bytes(path, max_bytes)? {
+    let (absolute, parent, parent_before) = ensure_secure_parent(path)?;
+    if let Some(existing) = secure_read_bytes(&absolute, max_bytes)? {
         if existing == bytes {
+            sync_secure_directory(&parent)?;
             return Ok(());
         }
         if !replace_existing {
             return Err(SecureFileError::Conflict);
         }
     }
-    let filename = path
+    let filename = absolute
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| {
@@ -1230,17 +1344,31 @@ fn secure_atomic_write(
                 "persistence parent changed before rename".to_owned(),
             ));
         }
-        if let Ok(destination) = fs::symlink_metadata(path) {
-            validate_secure_file_metadata(path, &destination)?;
+        if let Ok(destination) = fs::symlink_metadata(&absolute) {
+            validate_secure_file_metadata(&absolute, &destination)?;
         }
-        fs::rename(&temp_path, path)?;
-        let mut directory_options = OpenOptions::new();
-        directory_options.read(true);
-        #[cfg(unix)]
-        directory_options.custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW);
-        directory_options.open(&parent)?.sync_all()?;
-        let final_metadata = fs::symlink_metadata(path)?;
-        validate_secure_file_metadata(path, &final_metadata)?;
+        if replace_existing {
+            fs::rename(&temp_path, &absolute)?;
+        } else {
+            match fs::hard_link(&temp_path, &absolute) {
+                Ok(()) => fs::remove_file(&temp_path)?,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    fs::remove_file(&temp_path)?;
+                    return match secure_read_bytes(&absolute, max_bytes)? {
+                        Some(existing) if existing == bytes => {
+                            sync_secure_directory(&parent)?;
+                            Ok(())
+                        }
+                        Some(_) => Err(SecureFileError::Conflict),
+                        None => Err(SecureFileError::Io(error)),
+                    };
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        sync_secure_directory(&parent)?;
+        let final_metadata = fs::symlink_metadata(&absolute)?;
+        validate_secure_file_metadata(&absolute, &final_metadata)?;
         Ok(())
     })();
     if result.is_err() {
@@ -1330,12 +1458,27 @@ impl PorPersistence {
                 "snapshot entry count exceeds production bounds".to_owned(),
             ));
         }
+        let mut expected_forced = HashMap::<[u8; 32], BTreeSet<u64>>::new();
+        let mut previous_challenge_id = None;
         for record in snapshot.records {
             let record = record.into_record()?;
             record
-                .challenge
-                .validate()
-                .map_err(|error| PorPersistenceError::Decode(error.to_string()))?;
+                .validate_persisted()
+                .map_err(PorPersistenceError::Decode)?;
+            if previous_challenge_id
+                .is_some_and(|previous| previous >= record.challenge.challenge_id)
+            {
+                return Err(PorPersistenceError::Decode(
+                    "snapshot challenge records are not strictly ordered".to_owned(),
+                ));
+            }
+            previous_challenge_id = Some(record.challenge.challenge_id);
+            if record.challenge.forced {
+                expected_forced
+                    .entry(record.challenge.provider_id)
+                    .or_default()
+                    .insert(record.challenge.epoch_id);
+            }
             if records
                 .insert(record.challenge.challenge_id, record)
                 .is_some()
@@ -1347,17 +1490,30 @@ impl PorPersistence {
         }
 
         let mut forced_guard = forced.write();
+        let mut previous_provider_id = None;
         for provider in snapshot.forced {
             if provider.provider_id.iter().all(|byte| *byte == 0)
                 || provider.epochs.len() > 65_536
-                || forced_guard
-                    .insert(provider.provider_id, provider.into_set())
-                    .is_some()
+                || previous_provider_id.is_some_and(|previous| previous >= provider.provider_id)
             {
                 return Err(PorPersistenceError::Decode(
-                    "snapshot contains invalid or duplicate forced-provider state".to_owned(),
+                    "snapshot contains invalid or unordered forced-provider state".to_owned(),
                 ));
             }
+            previous_provider_id = Some(provider.provider_id);
+            if provider.epochs.is_empty()
+                || provider.epochs.windows(2).any(|pair| pair[0] >= pair[1])
+            {
+                return Err(PorPersistenceError::Decode(
+                    "forced-provider epochs must be non-empty and strictly ordered".to_owned(),
+                ));
+            }
+            forced_guard.insert(provider.provider_id, provider.into_set());
+        }
+        if *forced_guard != expected_forced {
+            return Err(PorPersistenceError::Decode(
+                "forced-provider index does not match forced challenge records".to_owned(),
+            ));
         }
         drop(forced_guard);
 
@@ -2178,18 +2334,13 @@ impl VerifiedVrfProvider {
         })
     }
 
-    /// Authenticate, verify, replay-check, and durably accept one provider VRF.
-    pub fn submit(
+    fn verify_submission(
         &self,
-        submission: ProviderVrfSubmissionV1,
+        submission: &ProviderVrfSubmissionV1,
         now_secs: u64,
         current_epoch: u64,
-        target_is_active: bool,
     ) -> Result<(), VrfError> {
         submission.validate()?;
-        if !target_is_active {
-            return Err(VrfError::UnknownManifest);
-        }
         if submission.issued_at > now_secs.saturating_add(self.max_clock_skew_secs)
             || now_secs.saturating_sub(submission.issued_at) > self.max_clock_skew_secs
         {
@@ -2206,7 +2357,15 @@ impl VerifiedVrfProvider {
         submission
             .verify_signature_for_provider(record.advert_key())
             .map_err(|error| VrfError::InvalidSignature(error.to_string()))?;
-        verify_provider_vrf(&submission, record.por_vrf_key(), &self.chain_id)?;
+        verify_provider_vrf(submission, record.por_vrf_key(), &self.chain_id)
+    }
+
+    fn accept_verified(
+        &self,
+        submission: ProviderVrfSubmissionV1,
+        current_epoch: u64,
+    ) -> Result<(), VrfError> {
+        let oldest = current_epoch.saturating_sub(self.retention_epochs);
 
         let key = VrfStateKeyV1 {
             epoch_id: submission.epoch_id,
@@ -2214,7 +2373,6 @@ impl VerifiedVrfProvider {
             manifest_digest: submission.manifest_digest,
         };
         let mut state = self.state.lock();
-        state.entries.retain(|key, _| key.epoch_id >= oldest);
         if let Some(existing) = state.entries.get(&key) {
             if existing.drand_round == submission.drand_round
                 && existing.output == submission.output
@@ -2235,12 +2393,18 @@ impl VerifiedVrfProvider {
                 high_water,
             });
         }
-        if state.entries.len() >= self.max_entries {
+        let retained_entries = state
+            .entries
+            .keys()
+            .filter(|key| key.epoch_id >= oldest)
+            .count();
+        if retained_entries >= self.max_entries {
             return Err(VrfError::Limit {
                 limit: self.max_entries,
             });
         }
         let previous = state.clone();
+        state.entries.retain(|key, _| key.epoch_id >= oldest);
         state
             .sequences
             .insert(submission.provider_id, submission.sequence);
@@ -2250,6 +2414,21 @@ impl VerifiedVrfProvider {
             return Err(error);
         }
         Ok(())
+    }
+
+    /// Authenticate, verify, replay-check, and durably accept one provider VRF.
+    pub fn submit(
+        &self,
+        submission: ProviderVrfSubmissionV1,
+        now_secs: u64,
+        current_epoch: u64,
+        target_is_active: bool,
+    ) -> Result<(), VrfError> {
+        self.verify_submission(&submission, now_secs, current_epoch)?;
+        if !target_is_active {
+            return Err(VrfError::UnknownManifest);
+        }
+        self.accept_verified(submission, current_epoch)
     }
 }
 
@@ -2400,9 +2579,18 @@ fn load_vrf_state(
         }
         previous_key = Some(entry.key);
         entry.submission.validate()?;
-        let record = admission
-            .entry(&entry.key.provider_id)
-            .ok_or(VrfError::UnadmittedProvider)?;
+        let Some(record) = admission.entry(&entry.key.provider_id) else {
+            // Revocation deliberately removes the provider's verification keys
+            // from the active registry. Drop its expired trust-bound payloads,
+            // but retain the separately persisted sequence high-water below so
+            // re-admission cannot resurrect an old signed submission.
+            iroha_logger::warn!(
+                provider_id = %hex::encode(entry.key.provider_id),
+                epoch_id = entry.key.epoch_id,
+                "dropping persisted PoR VRF entry for a no-longer-admitted provider"
+            );
+            continue;
+        };
         entry
             .submission
             .verify_signature_for_provider(record.advert_key())
@@ -2500,15 +2688,9 @@ pub struct FilesystemGovernancePublisher {
 impl FilesystemGovernancePublisher {
     const MAX_ARTEFACT_BYTES: usize = 16 * 1024 * 1024;
 
-    #[must_use]
-    /// Create a publisher rooted at the supplied directory.
-    pub fn new(root: PathBuf) -> Self {
-        Self { root }
-    }
-
     /// Create a publisher and validate/create its private non-symlink root.
     pub fn try_new(root: PathBuf) -> Result<Self, GovernancePublishError> {
-        ensure_secure_parent(&root.join(".por-publisher-probe"))
+        let (_, root, _) = ensure_secure_parent(&root.join(".por-publisher-probe"))
             .map_err(|error| GovernancePublishError::Persistence(error.to_string()))?;
         Ok(Self { root })
     }
@@ -2828,12 +3010,16 @@ impl PorCoordinatorRuntime {
             .as_ref()
             .ok_or_else(|| VrfError::Persistence("VRF submission store is disabled".to_owned()))?;
         let current_epoch = self.compute_epoch(now_secs);
+        provider.verify_submission(&submission, now_secs, current_epoch)?;
         let target_is_active = self.storage.vrf_target_is_active(
             submission.provider_id,
             submission.manifest_digest,
             now_secs,
         );
-        provider.submit(submission, now_secs, current_epoch, target_is_active)
+        if !target_is_active {
+            return Err(VrfError::UnknownManifest);
+        }
+        provider.accept_verified(submission, current_epoch)
     }
 
     /// Spawn a Tokio task that periodically runs [`run_once`](Self::run_once`) until shutdown.
@@ -3184,8 +3370,8 @@ mod tests {
     use ed25519_dalek::{Signer as _, SigningKey};
     use sorafs_manifest::{
         por::{
-            POR_CHALLENGE_VERSION_V1, POR_PROOF_VERSION_V1, derive_challenge_id,
-            derive_challenge_seed,
+            POR_CHALLENGE_VERSION_V1, POR_PROOF_VERSION_V1, POR_VRF_SUBMISSION_VERSION_V1,
+            derive_challenge_id, derive_challenge_seed,
         },
         provider_advert::{AdvertSignature, SignatureAlgorithm},
     };
@@ -3235,6 +3421,163 @@ mod tests {
         let base = PathBuf::from("/tmp/por_snapshot.norito.json");
         let persistence = PorPersistence::new(base.clone());
         assert_eq!(persistence.path, base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn immutable_secure_publication_is_exactly_idempotent_and_conflict_safe() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = tempdir().expect("temp dir");
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).expect("private root");
+        let path = dir.path().join("challenge.json");
+        secure_atomic_write(&path, b"canonical-a", 1_024, false).expect("first publication");
+        secure_atomic_write(&path, b"canonical-a", 1_024, false).expect("exact replay");
+        assert!(matches!(
+            secure_atomic_write(&path, b"canonical-b", 1_024, false),
+            Err(SecureFileError::Conflict)
+        ));
+        assert_eq!(fs::read(&path).expect("published bytes"), b"canonical-a");
+        assert_eq!(
+            fs::read_dir(dir.path())
+                .expect("list publication root")
+                .filter_map(Result::ok)
+                .count(),
+            1,
+            "temporary files must not survive publication or conflict"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn concurrent_immutable_publication_has_one_canonical_winner() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        const WORKERS: usize = 16;
+        let dir = tempdir().expect("temp dir");
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).expect("private root");
+        let path = StdArc::new(dir.path().join("challenge.json"));
+        let barrier = StdArc::new(Barrier::new(WORKERS));
+        let results = std::thread::scope(|scope| {
+            let mut workers = Vec::with_capacity(WORKERS);
+            for index in 0..WORKERS {
+                let path = StdArc::clone(&path);
+                let barrier = StdArc::clone(&barrier);
+                workers.push(scope.spawn(move || {
+                    let body = format!("canonical-{index:02}");
+                    barrier.wait();
+                    (
+                        body.clone(),
+                        secure_atomic_write(&path, body.as_bytes(), 1_024, false),
+                    )
+                }));
+            }
+            workers
+                .into_iter()
+                .map(|worker| worker.join().expect("publication worker"))
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(
+            results.iter().filter(|(_, result)| result.is_ok()).count(),
+            1
+        );
+        assert_eq!(
+            results
+                .iter()
+                .filter(|(_, result)| matches!(result, Err(SecureFileError::Conflict)))
+                .count(),
+            WORKERS - 1
+        );
+        let winner = results
+            .iter()
+            .find(|(_, result)| result.is_ok())
+            .map(|(body, _)| body.as_bytes())
+            .expect("one winner");
+        assert_eq!(fs::read(&*path).expect("winner bytes"), winner);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secure_persistence_rejects_parent_traversal_symlinks_and_hardlinks() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+        let dir = tempdir().expect("temp dir");
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).expect("private root");
+        assert!(matches!(
+            secure_atomic_write(&dir.path().join("nested/../escape"), b"x", 8, true),
+            Err(SecureFileError::UnsafePath(_))
+        ));
+
+        let real = dir.path().join("real");
+        fs::create_dir(&real).expect("real directory");
+        fs::set_permissions(&real, fs::Permissions::from_mode(0o700)).expect("private real dir");
+        let linked = dir.path().join("linked");
+        symlink(&real, &linked).expect("linked ancestor");
+        assert!(matches!(
+            secure_atomic_write(&linked.join("state.to"), b"x", 8, true),
+            Err(SecureFileError::UnsafePath(_))
+        ));
+
+        let destination = real.join("state.to");
+        secure_atomic_write(&destination, b"state", 8, true).expect("initial state");
+        let alias = real.join("state-alias.to");
+        fs::hard_link(&destination, &alias).expect("hard link");
+        assert!(matches!(
+            secure_read_bytes(&destination, 8),
+            Err(SecureFileError::UnsafePath(_))
+        ));
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn vrf_restart_drops_revoked_provider_entries_but_keeps_replay_high_water() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            let dir = tempdir().expect("temp dir");
+            fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700))
+                .expect("private state root");
+            let path = dir.path().join("vrf-state.to");
+            let provider_id = [0x41; 32];
+            let manifest_digest = [0x42; 32];
+            let submission = ProviderVrfSubmissionV1 {
+                version: POR_VRF_SUBMISSION_VERSION_V1,
+                provider_id,
+                manifest_digest,
+                epoch_id: 7,
+                drand_round: 9,
+                output: [0x43; 32],
+                proof: iroha_crypto::vrf::VrfProof::SigInG1([0x44; 48]),
+                sequence: 11,
+                issued_at: 1_800_000_000,
+                signature: AdvertSignature {
+                    algorithm: SignatureAlgorithm::Ed25519,
+                    public_key: vec![0x45; 32],
+                    signature: vec![0x46; 64],
+                },
+            };
+            submission.validate().expect("structural submission");
+            let key = VrfStateKeyV1 {
+                epoch_id: submission.epoch_id,
+                provider_id,
+                manifest_digest,
+            };
+            let mut persisted = VrfState::default();
+            persisted.entries.insert(key, submission);
+            persisted.sequences.insert(provider_id, 11);
+            persist_vrf_state(&path, &persisted).expect("persist admitted-era state");
+
+            let restored = load_vrf_state(
+                &path,
+                16,
+                &crate::sorafs::AdmissionRegistry::empty(),
+                b"test-chain",
+            )
+            .expect("revoked-provider state must not brick restart");
+            assert!(restored.entries.is_empty());
+            assert_eq!(restored.sequences.get(&provider_id), Some(&11));
+        }
     }
 
     fn sample_challenge(forced: bool) -> PorChallengeV1 {
@@ -3840,7 +4183,16 @@ mod tests {
 
     #[cfg(feature = "app_api")]
     mod runtime {
-        use std::{collections::HashMap, fs, path::Path, str::FromStr, sync::Arc};
+        use std::{
+            collections::HashMap,
+            fs,
+            path::Path,
+            str::FromStr,
+            sync::{
+                Arc,
+                atomic::{AtomicUsize, Ordering as AtomicOrdering},
+            },
+        };
 
         use iroha_config::base::util::Bytes;
         use iroha_data_model::{
@@ -3911,6 +4263,75 @@ mod tests {
                     .get(&randomness.epoch_id)
                     .cloned()
                     .unwrap_or_default())
+            }
+        }
+
+        #[derive(Clone)]
+        struct ReplaySafeStorage {
+            planned: Vec<PlannedChallenge>,
+            recorded: Arc<Mutex<Option<PorChallengeV1>>>,
+        }
+
+        impl PorStorage for ReplaySafeStorage {
+            fn plan_challenges(
+                &self,
+                _randomness: PorRandomness,
+                _vrf_records: &HashMap<ManifestVrfKey, ManifestVrfBundle>,
+                _allow_forced: bool,
+            ) -> Result<Vec<PlannedChallenge>, PorChallengePlannerError> {
+                Ok(self.planned.clone())
+            }
+
+            fn record_challenge(
+                &self,
+                challenge: &PorChallengeV1,
+            ) -> Result<(), sorafs_node::PorTrackerError> {
+                let mut recorded = self.recorded.lock();
+                match recorded.as_ref() {
+                    Some(existing) if existing == challenge => Ok(()),
+                    Some(_) => Err(sorafs_node::PorTrackerError::ChallengeConflict),
+                    None => {
+                        *recorded = Some(challenge.clone());
+                        Ok(())
+                    }
+                }
+            }
+
+            fn vrf_target_is_active(
+                &self,
+                _provider_id: [u8; 32],
+                _manifest_digest: [u8; 32],
+                _now_secs: u64,
+            ) -> bool {
+                true
+            }
+        }
+
+        struct FailOncePublisher {
+            attempts: AtomicUsize,
+            published: Mutex<Vec<PorChallengeV1>>,
+        }
+
+        impl GovernancePublisher for FailOncePublisher {
+            fn publish_challenge(
+                &self,
+                challenge: &PorChallengeV1,
+                _duplicate_samples: usize,
+            ) -> Result<(), GovernancePublishError> {
+                if self.attempts.fetch_add(1, AtomicOrdering::SeqCst) == 0 {
+                    return Err(GovernancePublishError::Io(std::io::Error::other(
+                        "injected publication failure",
+                    )));
+                }
+                self.published.lock().push(challenge.clone());
+                Ok(())
+            }
+
+            fn publish_weekly_report(
+                &self,
+                _report: &PorWeeklyReportV1,
+            ) -> Result<(), GovernancePublishError> {
+                Ok(())
             }
         }
 
@@ -4004,6 +4425,71 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn runtime_retries_exact_sinks_after_mid_pipeline_failure() {
+            let epoch_interval = 3_600;
+            let epoch_id = 42;
+            let vrf_deadline = 300;
+            let now_secs = epoch_id * epoch_interval + vrf_deadline;
+            let mut challenge = sample_challenge(true);
+            challenge.issued_at = now_secs;
+            challenge.deadline_at = now_secs + 900;
+            let planned = PlannedChallenge {
+                challenge: challenge.clone(),
+                duplicate_samples: 0,
+            };
+            let recorded = Arc::new(Mutex::new(None));
+            let storage = Arc::new(ReplaySafeStorage {
+                planned: vec![planned],
+                recorded: Arc::clone(&recorded),
+            });
+            let publisher = Arc::new(FailOncePublisher {
+                attempts: AtomicUsize::new(0),
+                published: Mutex::new(Vec::new()),
+            });
+            let randomness = PorRandomness {
+                epoch_id,
+                issued_at_unix: now_secs,
+                response_window_secs: 900,
+                drand_round: challenge.drand_round,
+                drand_randomness: challenge.drand_randomness,
+                drand_signature: challenge.drand_signature,
+            };
+            let coordinator = Arc::new(PorCoordinator::new());
+            let runtime = PorCoordinatorRuntime::new(
+                storage,
+                Arc::clone(&coordinator),
+                Arc::new(StaticRandomnessProvider { randomness }),
+                Arc::new(StaticVrfProvider::default()),
+                publisher.clone(),
+                epoch_interval,
+                900,
+                vrf_deadline,
+            );
+
+            assert!(matches!(
+                runtime.run_once_at(now_secs).await,
+                Err(PorAutomationError::Governance(_))
+            ));
+            assert_eq!(recorded.lock().as_ref(), Some(&challenge));
+            assert_eq!(
+                coordinator
+                    .query_statuses(&PorStatusFilter::default(), None, None)
+                    .len(),
+                1
+            );
+
+            assert!(
+                runtime
+                    .run_once_at(now_secs)
+                    .await
+                    .expect("exact retry succeeds")
+            );
+            assert_eq!(publisher.published.lock().as_slice(), &[challenge]);
+            assert!(!runtime.run_once_at(now_secs).await.expect("epoch complete"));
+            assert_eq!(publisher.attempts.load(AtomicOrdering::SeqCst), 2);
+        }
+
+        #[tokio::test]
         async fn runtime_emits_governance_challenge_with_vrf() {
             let temp_dir = tempdir().expect("temp dir");
             let governance_dir = temp_dir.path().join("governance");
@@ -4040,7 +4526,10 @@ mod tests {
                     proof: iroha_crypto::vrf::VrfProof::SigInG1([0x66; 48]),
                 },
             ));
-            let publisher = Arc::new(FilesystemGovernancePublisher::new(governance_dir.clone()));
+            let publisher = Arc::new(
+                FilesystemGovernancePublisher::try_new(governance_dir.clone())
+                    .expect("governance publisher"),
+            );
             let coordinator = Arc::new(PorCoordinator::new());
             let storage: Arc<dyn PorStorage> = Arc::new(handle.clone());
             #[cfg(feature = "telemetry")]
@@ -4151,7 +4640,10 @@ mod tests {
                 randomness: randomness.clone(),
             });
             let vrf_provider = Arc::new(StaticVrfProvider::default());
-            let publisher = Arc::new(FilesystemGovernancePublisher::new(governance_dir.clone()));
+            let publisher = Arc::new(
+                FilesystemGovernancePublisher::try_new(governance_dir.clone())
+                    .expect("governance publisher"),
+            );
             let coordinator = Arc::new(PorCoordinator::new());
             let storage: Arc<dyn PorStorage> = Arc::new(handle.clone());
 

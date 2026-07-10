@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.android.sorafs;
 
+import java.util.Base64;
 import java.util.Map;
 
 public final class SorafsGatewayFetchOptionsTests {
@@ -271,12 +272,25 @@ public final class SorafsGatewayFetchOptionsTests {
   }
 
   private static void rejectsOversizedProviderInputsAndProviderLists() {
+    GatewayProvider.builder()
+        .setName("primary")
+        .setProviderIdHex(PROVIDER_ID_HEX)
+        .setGatewayPublicKeyHex(GATEWAY_PUBLIC_KEY_HEX)
+        .setBaseUrl("https://gateway.example/")
+        .setStreamTokenBase64(Base64.getEncoder().encodeToString(new byte[2 * 1024]))
+        .build();
     assertThrows(
         () -> GatewayProvider.builder().setName("a".repeat(129)),
         "expected oversized provider name to throw");
     assertThrows(
-        () -> GatewayProvider.builder().setStreamTokenBase64("A".repeat(90 * 1024 + 1)),
+        () -> GatewayProvider.builder().setStreamTokenBase64("A".repeat(4 * 1024 + 1)),
         "expected oversized stream token to throw before decoding");
+    assertThrows(
+        () ->
+            GatewayProvider.builder()
+                .setStreamTokenBase64(
+                    Base64.getEncoder().encodeToString(new byte[2 * 1024 + 1])),
+        "expected decoded stream token above the wire ceiling to throw");
 
     final GatewayProvider provider =
         GatewayProvider.builder()

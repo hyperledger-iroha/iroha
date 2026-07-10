@@ -1867,6 +1867,10 @@ fn orderbook_runtime_snapshot_context(
         ValidationContextFieldV1::new("version", snapshot.version.to_string()),
         ValidationContextFieldV1::new("next_sequence", snapshot.next_sequence.to_string()),
         ValidationContextFieldV1::new("generated_at_unix", snapshot.generated_at_unix.to_string()),
+        ValidationContextFieldV1::new(
+            "owner_nonce_high_water_count",
+            snapshot.owner_nonce_high_waters.len().to_string(),
+        ),
         ValidationContextFieldV1::new("open_order_count", snapshot.open_orders.len().to_string()),
         ValidationContextFieldV1::new("trade_count", snapshot.trades.len().to_string()),
         ValidationContextFieldV1::new(
@@ -2970,8 +2974,6 @@ pub enum OrderbookPayloadSigningError {
 /// Field-level input for building a signed [`OrderRequestV1`] payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrderbookOrderRequestFieldsV1 {
-    /// Unique order identifier.
-    pub order_id: [u8; 32],
     /// Bid or ask.
     pub side: OrderSideV1,
     /// Storage tier priced by the order.
@@ -3055,9 +3057,10 @@ pub fn build_signed_orderbook_order_request_bytes_ed25519_v1(
     signing_key_bytes: &[u8],
 ) -> Result<Vec<u8>, OrderbookPayloadSigningError> {
     let signing_key = orderbook_signing_key_from_bytes(signing_key_bytes)?;
+    let order_id = crate::derive_orderbook_order_id_v1(&fields.owner_account, fields.nonce);
     let payload = OrderRequestV1 {
         version: ORDERBOOK_ORDER_VERSION_V1,
-        order_id: fields.order_id,
+        order_id,
         side: fields.side,
         tier: fields.tier,
         price_per_gib: XorAmount::from_micro(fields.price_per_gib_micro_xor),
@@ -6601,17 +6604,19 @@ mod tests {
     }
 
     fn orderbook_order_request() -> OrderRequestV1 {
+        let owner_account = b"buyer@sora".to_vec();
+        let nonce = 7;
         OrderRequestV1 {
             version: crate::ORDERBOOK_ORDER_VERSION_V1,
-            order_id: [0x71; 32],
+            order_id: crate::derive_orderbook_order_id_v1(&owner_account, nonce),
             side: OrderSideV1::Bid,
             tier: OrderTierV1::Hot,
             price_per_gib: crate::XorAmount::from_micro(1_250_000),
             quantity_gib: 64,
             remaining_gib: 64,
-            owner_account: b"buyer@sora".to_vec(),
+            owner_account,
             expiry_unix: 1_800_000_000,
-            nonce: 7,
+            nonce,
             maker_fee_bps: 10,
             taker_fee_bps: 15,
             signature: orderbook_signature(),
@@ -6619,10 +6624,11 @@ mod tests {
     }
 
     fn orderbook_order_cancel() -> OrderCancelV1 {
+        let order = orderbook_order_request();
         OrderCancelV1 {
             version: crate::ORDERBOOK_CANCEL_VERSION_V1,
-            order_id: [0x71; 32],
-            owner_account: b"buyer@sora".to_vec(),
+            order_id: order.order_id,
+            owner_account: order.owner_account,
             reason: OrderCancelReasonV1::OwnerRequested,
             nonce: 9,
             signature: orderbook_signature(),
@@ -6677,11 +6683,11 @@ mod tests {
 
     fn orderbook_runtime_snapshot() -> OrderbookRuntimeSnapshotV1 {
         let mut open = orderbook_order_request();
-        open.order_id = [0x73; 32];
         open.side = OrderSideV1::Ask;
         open.owner_account = b"provider@sora".to_vec();
         open.expiry_unix = 1_800_000_500;
         open.nonce = 8;
+        open.order_id = crate::derive_orderbook_order_id_v1(&open.owner_account, open.nonce);
         let trade = orderbook_trade_event();
         let channel = orderbook_settlement_channel(&trade);
         let mut receipt = orderbook_settlement_receipt();
@@ -6693,6 +6699,10 @@ mod tests {
             version: crate::ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1,
             next_sequence: 4,
             generated_at_unix: 1_800_000_020,
+            owner_nonce_high_waters: vec![crate::OrderbookOwnerNonceHighWaterV1 {
+                owner_account: open.owner_account.clone(),
+                highest_nonce: open.nonce,
+            }],
             open_orders: vec![crate::OrderBookEntryV1 {
                 order: open,
                 sequence: 3,
@@ -8313,17 +8323,19 @@ mod tests {
             .to_bytes()
             .to_vec();
 
+        let owner_account = vec![0x03; 32];
+        let order_nonce = 1;
+        let order_id = crate::derive_orderbook_order_id_v1(&owner_account, order_nonce);
         let order_bytes = build_signed_orderbook_order_request_bytes_ed25519_v1(
             OrderbookOrderRequestFieldsV1 {
-                order_id: [0x01; 32],
                 side: OrderSideV1::Bid,
                 tier: OrderTierV1::Hot,
                 price_per_gib_micro_xor: 1_500_000,
                 quantity_gib: 10,
                 remaining_gib: 10,
-                owner_account: vec![0x03; 32],
+                owner_account: owner_account.clone(),
                 expiry_unix: 1_800_000_000,
-                nonce: 1,
+                nonce: order_nonce,
                 maker_fee_bps: 5,
                 taker_fee_bps: 10,
             },
@@ -8337,8 +8349,8 @@ mod tests {
 
         let cancel_bytes = build_signed_orderbook_order_cancel_bytes_ed25519_v1(
             OrderbookOrderCancelFieldsV1 {
-                order_id: [0x01; 32],
-                owner_account: vec![0x03; 32],
+                order_id,
+                owner_account,
                 reason: OrderCancelReasonV1::OwnerRequested,
                 nonce: 2,
             },
@@ -8449,6 +8461,10 @@ mod tests {
 
         assert!(outcome.is_ok(), "{outcome:?}");
         assert_eq!(outcome.code, "SFS-OK-000");
+        assert!(outcome.context.iter().any(|field| {
+            field.key == "owner_nonce_high_water_count"
+                && field.value == snapshot.owner_nonce_high_waters.len().to_string()
+        }));
         assert!(outcome.context.iter().any(|field| {
             field.key == "settlement_receipt_count"
                 && field.value == snapshot.settlement_receipts.len().to_string()

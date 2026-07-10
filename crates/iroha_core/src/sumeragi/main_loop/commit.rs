@@ -795,6 +795,7 @@ pub(super) fn execute_commit_work(
         Ok((committed_block, mut state_block, exec_witness, fastpq_witness_context)) => {
             let persist_start = Instant::now();
             let pipeline_events = pipeline_events;
+            let staged_merge_entry = state_block.staged_merge_entry().cloned();
             let validated_commit_artifact_for_manifest = validated_commit_artifact.or_else(|| {
                 exec_witness
                     .as_ref()
@@ -809,7 +810,12 @@ pub(super) fn execute_commit_work(
             let committed_block_for_kura = committed_block.clone();
             log_stage_start("kura_store");
             let kura_start = Instant::now();
-            if let Err(err) = kura.store_block(committed_block_for_kura) {
+            let kura_store_result = if let Some(entry) = staged_merge_entry.as_ref() {
+                kura.store_block_with_merge_entry(committed_block_for_kura, entry)
+            } else {
+                kura.store_block(committed_block_for_kura)
+            };
+            if let Err(err) = kura_store_result {
                 log_stage_end("kura_store", kura_start);
                 timings.kura_store_ms = Some(to_ms(kura_start.elapsed()));
                 timings.persist_ms = Some(to_ms(persist_start.elapsed()));
@@ -871,7 +877,33 @@ pub(super) fn execute_commit_work(
             }
             timings.state_commit_ms = Some(to_ms(state_commit_start.elapsed()));
             log_stage_end("state_commit", state_commit_start);
+            if let Some(entry) = staged_merge_entry.as_ref() {
+                state
+                    .record_globally_committed_merge_entry(entry)
+                    .unwrap_or_else(|err| {
+                        panic!(
+                            "canonical merge carrier {block_hash} at height {block_height} committed its WSV but could not publish the verified merge cache: {err}; restart recovery is required"
+                        )
+                    });
+            }
             let mut post_commit_persistence_error = None;
+            if let Some(entry) = staged_merge_entry.as_ref()
+                && let Err(err) = kura.persist_merge_lane_block_application_receipts(
+                    entry,
+                    block_height,
+                    block_hash,
+                )
+            {
+                post_commit_persistence_error = Some(format!("merge application receipts: {err}"));
+                error!(
+                    ?err,
+                    height = block_height,
+                    block = %block_hash,
+                    merge_epoch = entry.epoch_id,
+                    merge_entry = %entry.canonical_hash(),
+                    "failed to persist merge application receipts after state commit; restart recovery will retry from the canonical carrier"
+                );
+            }
             let wsv_checkpoint_hash = crate::snapshot::canonical_state_snapshot_hash(state);
             if std::env::var_os("IROHA_DEBUG_WSV_COMPONENTS").is_some() {
                 let components = crate::snapshot::canonical_state_snapshot_component_hashes(state);
@@ -888,7 +920,10 @@ pub(super) fn execute_commit_work(
             if let Err(err) =
                 kura.store_wsv_checkpoint(block_height, block_hash, wsv_checkpoint_hash)
             {
-                post_commit_persistence_error = Some(format!("WSV checkpoint: {err}"));
+                post_commit_persistence_error = Some(match post_commit_persistence_error.take() {
+                    Some(previous) => format!("{previous}; WSV checkpoint: {err}"),
+                    None => format!("WSV checkpoint: {err}"),
+                });
                 error!(
                     ?err,
                     height = block_height,
@@ -2145,6 +2180,44 @@ impl Actor {
             } => {
                 let pending = take_pending_or_return!();
                 self.note_view_change_from_block(pending_height, pending_view);
+                if let Some(reference) = committed_block
+                    .as_ref()
+                    .execution_context()
+                    .and_then(|bundle| bundle.merge_entry.as_ref())
+                {
+                    let entry = self
+                        .kura
+                        .merge_entry_by_hash(reference.entry_hash)
+                        .unwrap_or_else(|err| {
+                            panic!(
+                                "committed merge carrier {block_hash} cannot read its durable entry: {err}; restart recovery is required"
+                            )
+                        })
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "committed merge carrier {block_hash} lost durable entry {}; restart recovery is required",
+                                reference.entry_hash
+                            )
+                        });
+                    let reservations = crate::state::certified_merge_queue_reservations(&entry)
+                        .unwrap_or_else(|err| {
+                            panic!(
+                                "committed merge carrier {block_hash} has invalid queue bindings: {err}; restart recovery is required"
+                            )
+                        });
+                    for (transaction_hash, reservation) in reservations {
+                        if let Err(err) = self.queue.commit_lane_reservation(&reservation) {
+                            error!(
+                                ?err,
+                                height = pending_height,
+                                block = %block_hash,
+                                %transaction_hash,
+                                reservation = ?reservation,
+                                "failed to finalize exact committed merge reservation; durable reconciliation will retry"
+                            );
+                        }
+                    }
+                }
                 let committed_tx_hashes = committed_block
                     .as_ref()
                     .external_transactions()

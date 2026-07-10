@@ -20,7 +20,8 @@ use rand::{
     rngs::OsRng,
 };
 use sorafs_manifest::{
-    STREAM_TOKEN_MAX_TTL_SECS_V1, StreamTokenBodyV1, StreamTokenError, StreamTokenV1,
+    STREAM_TOKEN_MAX_BASE64_BYTES_V1, STREAM_TOKEN_MAX_TTL_SECS_V1, STREAM_TOKEN_MAX_WIRE_BYTES_V1,
+    StreamTokenBodyV1, StreamTokenError, StreamTokenV1,
 };
 use thiserror::Error;
 
@@ -32,9 +33,9 @@ const CLIENT_QUOTA_WINDOW: Duration = Duration::from_mins(1);
 /// Maximum number of active issuance-client budgets retained by one gateway.
 const MAX_ISSUANCE_CLIENTS: usize = 4_096;
 /// Maximum accepted encoded token header length.
-pub(crate) const MAX_STREAM_TOKEN_BASE64_BYTES: usize = 4_096;
+pub(crate) const MAX_STREAM_TOKEN_BASE64_BYTES: usize = STREAM_TOKEN_MAX_BASE64_BYTES_V1;
 /// Maximum accepted decoded token frame length.
-const MAX_STREAM_TOKEN_WIRE_BYTES: usize = 2_048;
+const MAX_STREAM_TOKEN_WIRE_BYTES: usize = STREAM_TOKEN_MAX_WIRE_BYTES_V1;
 /// Canonical token IDs are 16 random bytes rendered as lowercase hexadecimal.
 const TOKEN_ID_HEX_LEN: usize = 32;
 /// Maximum manifest CID bytes carried by a token.

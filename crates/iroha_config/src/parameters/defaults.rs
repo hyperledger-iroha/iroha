@@ -1371,6 +1371,25 @@ pub mod sorafs {
         /// Limit canonical redirects to browser HTML navigations.
         pub const REDIRECT_HTML_ONLY: bool = true;
 
+        /// Static-site host binding file defaults.
+        pub mod site_bindings {
+            use std::{num::NonZeroUsize, path::PathBuf};
+
+            use iroha_config_base::util::Bytes;
+            use nonzero_ext::nonzero;
+
+            /// Optional JSON binding document loaded and validated when Torii starts.
+            #[must_use]
+            pub fn path() -> Option<PathBuf> {
+                None
+            }
+
+            /// Maximum encoded binding-document size accepted at startup.
+            pub const MAX_BYTES: Bytes<u64> = Bytes(1024 * 1024);
+            /// Maximum number of named host bindings accepted at startup.
+            pub const MAX_SITES: NonZeroUsize = nonzero!(1024usize);
+        }
+
         /// Rate-limiting defaults applied to gateway clients.
         pub mod rate_limit {
             use std::time::Duration;

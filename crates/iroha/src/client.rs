@@ -8440,6 +8440,7 @@ mod evidence_http_tests {
             result_hash: result.hash(),
             result_proof: MerkleProof::from_audit_path(0, Vec::new()),
             result,
+            merge_inclusion: None,
         };
 
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
@@ -8655,6 +8656,7 @@ mod evidence_http_tests {
             result_hash: result.hash(),
             result_proof: MerkleProof::from_audit_path(0, Vec::new()),
             result,
+            merge_inclusion: None,
         };
         let status_payload = norito::json!({
             "hash": "deadbeef",
@@ -9221,6 +9223,7 @@ mod evidence_http_tests {
             result_hash: result.hash(),
             result_proof: MerkleProof::from_audit_path(0, Vec::new()),
             result,
+            merge_inclusion: None,
         };
 
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
@@ -13452,6 +13455,11 @@ impl Client {
         proposal: &RepairSlashProposalV1,
     ) -> Result<Response<Vec<u8>>> {
         ensure_canonical_i105_account_id(&proposal.auditor_account, "auditor_account")?;
+        if proposal.approval.is_some() {
+            return Err(eyre!(
+                "repair slash proposals must not embed approval summaries; governance decisions require authenticated stored votes"
+            ));
+        }
         let url = join_torii_url(&self.torii_url, "v1/sorafs/audit/repair/slash");
         let body = norito::json::to_vec(proposal)?;
         self.default_request(HttpMethod::POST, url)
@@ -18199,6 +18207,7 @@ mod tx_hash_tests {
             result_hash: result.hash(),
             result_proof: MerkleProof::from_audit_path(0, Vec::new()),
             result,
+            merge_inclusion: None,
         };
 
         assert!(super::Client::committed_transaction_matches_hash(
@@ -18227,6 +18236,7 @@ mod tx_hash_tests {
             result_hash: time_result.hash(),
             result_proof: MerkleProof::from_audit_path(0, Vec::new()),
             result: time_result,
+            merge_inclusion: None,
         };
 
         assert!(super::Client::committed_transaction_matches_hash(
@@ -27544,14 +27554,7 @@ mod tests {
             proposed_penalty_nano: 500,
             submitted_at_unix: 1_700_000_004,
             rationale: "sla_missed".to_string(),
-            approval: Some(RepairEscalationApprovalV1 {
-                version: REPAIR_ESCALATION_APPROVAL_VERSION_V1,
-                approve_votes: 2,
-                reject_votes: 1,
-                abstain_votes: 0,
-                approved_at_unix: 1_700_000_104,
-                finalized_at_unix: 1_700_000_204,
-            }),
+            approval: None,
         };
 
         with_mock_http(respond_with(&store, response), || {
@@ -27568,6 +27571,34 @@ mod tests {
             norito::json::from_slice(&snapshot.body).expect("decode request body");
         let expected = norito::json::to_value(&proposal).expect("encode request");
         assert_eq!(body, expected);
+    }
+
+    #[test]
+    fn sorafs_repair_slash_rejects_embedded_approval_before_network_io() {
+        let client = client_with_base_url(base_url());
+        let proposal = RepairSlashProposalV1 {
+            version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
+            ticket_id: RepairTicketId("REP-404-approval".to_string()),
+            provider_id: [0x77; 32],
+            manifest_digest: [0x88; 32],
+            auditor_account: TEST_AUDITOR_I105.to_string(),
+            proposed_penalty_nano: 500,
+            submitted_at_unix: 1_700_000_004,
+            rationale: "untrusted embedded approval".to_string(),
+            approval: Some(RepairEscalationApprovalV1 {
+                version: REPAIR_ESCALATION_APPROVAL_VERSION_V1,
+                approve_votes: 2,
+                reject_votes: 1,
+                abstain_votes: 0,
+                approved_at_unix: 1_700_000_104,
+                finalized_at_unix: 1_700_000_204,
+            }),
+        };
+
+        let error = client
+            .post_sorafs_repair_slash(&proposal)
+            .expect_err("embedded approval must fail before request construction");
+        assert!(error.to_string().contains("must not embed approval summaries"));
     }
 
     #[test]

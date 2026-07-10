@@ -9,10 +9,13 @@ use thiserror::Error;
 pub const STREAM_TOKEN_SIGNATURE_DOMAIN_V1: &[u8] = b"sorafs.stream-token.signature.v1\0";
 /// Maximum lifetime of a first-release stream token, in seconds.
 pub const STREAM_TOKEN_MAX_TTL_SECS_V1: u64 = 3_600;
-/// Maximum decoded wire size of a first-release stream token.
-pub const STREAM_TOKEN_MAX_WIRE_BYTES_V1: usize = 2 * 1_024;
-/// Maximum canonical Base64 header size of a first-release stream token.
-pub const STREAM_TOKEN_MAX_BASE64_BYTES_V1: usize = 4 * 1_024;
+/// Maximum canonical Norito stream-token frame accepted in the first release.
+pub const STREAM_TOKEN_MAX_WIRE_BYTES_V1: usize = 2_048;
+/// Maximum canonical base64 stream-token header accepted in the first release.
+///
+/// This deliberately leaves headroom over the padded base64 expansion of the
+/// wire ceiling while remaining below common HTTP header budgets.
+pub const STREAM_TOKEN_MAX_BASE64_BYTES_V1: usize = 4_096;
 
 /// Canonical body for stream tokens issued by gateways.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]

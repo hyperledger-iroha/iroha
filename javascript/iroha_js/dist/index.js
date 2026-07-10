@@ -1073,6 +1073,7 @@ export {
   validatePdpPayload,
   validateOrderbookPayload,
   signOrderbookPayload,
+  deriveOrderbookOrderId,
   buildSignedOrderbookOrderRequest,
   buildSignedOrderbookOrderCancel,
   buildSignedOrderbookSettlementReceipt,

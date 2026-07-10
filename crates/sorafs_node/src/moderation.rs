@@ -5042,6 +5042,8 @@ fn validate_restored_tally(
 
 #[cfg(test)]
 mod tests {
+    use iroha_data_model::sorafs::moderation::SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1;
+
     use super::*;
 
     fn screening_input(

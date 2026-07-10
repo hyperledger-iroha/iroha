@@ -6,22 +6,83 @@
 //! entries. See `docs/source/merge_ledger.md` for the normative behaviour the
 //! runtime must enforce when producing and validating these records.
 
-use iroha_crypto::{Hash, HashOf, PublicKey};
+use iroha_crypto::{Hash, HashOf, MerkleTree, PublicKey};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
 use crate::{
     block::{
         BlockHeader,
-        consensus::{LaneBlockCommitment, LaneBlockProposalV1, LaneBlockQcV1, ValidatorIndex},
+        consensus::{
+            LaneBlockCommitment, LaneBlockProposalV1, LaneBlockQcV1, NativeAmxReceipt,
+            ValidatorIndex,
+        },
     },
-    nexus::{DataSpaceId, LaneId},
+    nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
     peer::PeerId,
     transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
 
+const MERGE_LEDGER_ENTRY_HASH_DOMAIN: &[u8] = b"iroha:merge:ledger-entry:v1\0";
+
+/// Maximum canonical framed size of one full merge-ledger entry.
+///
+/// This is the protocol-wide limit used by pending sidecars, compact block
+/// references, recovery, and admission. Keep all consumers on this constant so
+/// a certified entry cannot be accepted by one layer and rejected by another.
+pub const MAX_MERGE_LEDGER_ENTRY_BYTES: usize = 16 * 1024 * 1024;
+
+/// Maximum canonical size of the execution-batch field inside a merge entry.
+///
+/// Four MiB of the full-entry envelope is reserved for the active-lane set,
+/// snapshots, merge QC, and Norito framing. Admission still checks the exact
+/// final full-entry size after the QC is attached.
+pub const MAX_MERGE_EXECUTION_BATCH_BYTES: usize = 12 * 1024 * 1024;
+
+/// Maximum number of ordered entrypoints in one certified merge execution batch.
+///
+/// Lane-local proposal admission uses the same ceiling so every certified lane
+/// block is individually eligible for inclusion in a global merge batch.
+pub const MAX_MERGE_EXECUTION_ENTRYPOINTS: usize = 4_096;
+
+/// Maximum canonical size of one authenticated autonomous-lane source bundle.
+///
+/// A merge execution repeats selected payload material beside this bundle and
+/// adds deterministic results, settlement evidence, and committee proofs. The
+/// four-MiB source ceiling therefore preserves enough of the 12-MiB execution
+/// envelope for every individually certified lane source to remain mergeable.
+pub const MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES: usize = 4 * 1024 * 1024;
+
+/// Maximum canonical size reserved for the certified-proposal half of one source bundle.
+///
+/// The certified envelope repeats the bounded entrypoint commitments in the proposal and
+/// prepare/commit vote bodies and carries the validator sets, availability QC, and signer PoPs.
+/// Keeping this reservation protocol-wide prevents an autonomous view chain from consuming the
+/// complete source budget before the globally executable certificate is attached.
+pub const MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES: usize = 1024 * 1024;
+
+/// Maximum canonical size of the autonomous payload and authenticated view-chain half.
+///
+/// NewView persistence checkpoints before this budget is exceeded. The independently bounded
+/// certified envelope and the exact final bundle check then keep every accepted source within
+/// [`MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES`].
+pub const MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES: usize =
+    MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES - MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES;
+
+/// Return whether an exact canonical full-entry length is protocol-admissible.
+#[must_use]
+pub const fn merge_ledger_entry_size_within_limit(encoded_len: usize) -> bool {
+    encoded_len <= MAX_MERGE_LEDGER_ENTRY_BYTES
+}
+
+/// Return whether an exact canonical execution-batch length fits its reserved envelope.
+#[must_use]
+pub const fn merge_execution_batch_size_within_limit(encoded_len: usize) -> bool {
+    encoded_len <= MAX_MERGE_EXECUTION_BATCH_BYTES
+}
+
 /// Proof of possession for one signer selected by a merge QC bitmap.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -53,7 +114,7 @@ pub struct MergeLaneBinding {
 }
 
 /// BFT quorum certificate produced by the merge committee for a merge-ledger entry.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -63,6 +124,10 @@ pub struct MergeQuorumCertificate {
     pub view: u64,
     /// Epoch identifier active when the merge entry was finalized.
     pub epoch_id: u64,
+    /// Exact global block height authorized to carry this merge entry.
+    pub carrier_height: u64,
+    /// Exact canonical parent authorized for the global carrier.
+    pub carrier_parent_hash: HashOf<BlockHeader>,
     /// Domain-separated digest of the chain identifier sealed by this QC.
     pub chain_id_digest: Hash,
     /// Version of the canonical validator-set hashing scheme.
@@ -86,6 +151,8 @@ impl MergeQuorumCertificate {
     pub fn new(
         view: u64,
         epoch_id: u64,
+        carrier_height: u64,
+        carrier_parent_hash: HashOf<BlockHeader>,
         chain_id_digest: Hash,
         validator_set_hash_version: u16,
         validator_set_hash: HashOf<Vec<PeerId>>,
@@ -98,6 +165,8 @@ impl MergeQuorumCertificate {
         Self {
             view,
             epoch_id,
+            carrier_height,
+            carrier_parent_hash,
             chain_id_digest,
             validator_set_hash_version,
             validator_set_hash,
@@ -156,6 +225,14 @@ pub struct MergeLaneSnapshot {
     pub settlement_commitment: LaneBlockCommitment,
     /// Hash binding [`Self::settlement_commitment`] to the certified relay.
     pub settlement_hash: HashOf<LaneBlockCommitment>,
+    /// Exact authenticated relay envelope from which every snapshot field was derived.
+    ///
+    /// This is optional at the codec layer so malformed/missing-proof candidates can be decoded
+    /// and rejected deterministically. Production admission requires `Some` and never consults a
+    /// follower's opportunistic relay cache.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub relay_envelope: Option<LaneRelayEnvelope>,
 }
 
 /// Proof of possession retained for a signer of an embedded lane-local QC.
@@ -178,10 +255,16 @@ pub struct MergeLaneSignerProof {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct MergeLaneExecution {
-    /// Hash-addressed autonomous merge bundle fetched from availability holders.
+    /// Canonical framed Norito bytes of the complete producer-authenticated
+    /// payload, availability certificate, NewView chain, and lane QCs.
+    pub source_bundle: Vec<u8>,
+    /// Hash of `source_bundle`, used for holder fetch and corruption checks.
     pub source_bundle_hash: Hash,
     /// Commit-certified lane-local proposal.
     pub proposal: LaneBlockProposalV1,
+    /// Producer-authenticated origin proposal whose view owns the durable queue
+    /// reservations; `proposal` may be a later quorum-authorized view.
+    pub origin_proposal: LaneBlockProposalV1,
     /// Prepare QC that also proves quorum payload availability.
     pub prepare_qc: LaneBlockQcV1,
     /// Commit QC authorizing execution of the proposal.
@@ -198,6 +281,18 @@ pub struct MergeLaneExecution {
     pub entrypoint_hashes: Vec<Hash>,
     /// Exact entrypoints executed in descriptor order.
     pub entrypoints: Vec<TransactionEntrypoint>,
+    /// Canonical Norito encodings of the exact durable queue reservation keys,
+    /// aligned one-for-one with `entrypoints`.
+    ///
+    /// The concrete reservation type belongs to `iroha_core`, so the data model
+    /// retains its exact canonical bytes without introducing a dependency cycle.
+    pub reservation_keys: Vec<Vec<u8>>,
+    /// Canonical Norito encodings of the complete routing plans, aligned
+    /// one-for-one with `entrypoints` and `reservation_keys`.
+    pub routing_plans: Vec<Vec<u8>>,
+    /// Producer-authenticated native-AMX receipts aligned one-for-one with
+    /// `entrypoints` and routing plans (`Some` only for native-AMX plans).
+    pub native_amx_receipts: Vec<Option<NativeAmxReceipt>>,
     /// Deterministic result hashes in descriptor order.
     pub result_hashes: Vec<Hash>,
     /// Exact deterministic results in descriptor order.
@@ -229,9 +324,19 @@ pub struct MergeExecutionBatch {
     pub application_block_header: BlockHeader,
     /// Lane executions in the canonical merge total order.
     pub lanes: Vec<MergeLaneExecution>,
+    /// Number of ordered entrypoint/result leaves committed by this batch.
+    pub entrypoint_count: u64,
+    /// Canonical Merkle root of entrypoint hashes in lane/batch execution order.
+    pub entrypoint_merkle_root: HashOf<MerkleTree<TransactionEntrypoint>>,
+    /// Canonical Merkle root of result hashes in the same execution order.
+    pub result_merkle_root: HashOf<MerkleTree<TransactionResult>>,
     /// Merkle-style domain hash of the ordered lane execution transcripts.
     pub execution_root: Hash,
-    /// Canonical root of the ordered WSV write set produced by pre-execution.
+    /// Canonical root of execution, settlement, event, and transaction-membership
+    /// effects before deterministic replay markers are added.
+    pub application_write_set_root: Hash,
+    /// Canonical root of the complete ordered WSV write set, including the
+    /// deterministic replay markers derived from the stable batch identity.
     pub write_set_root: Hash,
     /// Expected post-state identity derived from the canonical base WSV and write-set root.
     pub expected_post_state_hash: HashOf<BlockHeader>,
@@ -272,6 +377,35 @@ pub struct MergeLedgerEntry {
 }
 
 impl MergeLedgerEntry {
+    /// Return the canonical framed Norito bytes used by hash-addressed entry sidecars.
+    #[must_use]
+    pub fn canonical_bytes(&self) -> Vec<u8> {
+        norito::to_bytes(self).expect("merge-ledger entry must have a canonical Norito encoding")
+    }
+
+    /// Return the single canonical, domain-separated hash used by compact block
+    /// references, pending sidecars, committed carrier indexes, and receipts.
+    #[must_use]
+    pub fn canonical_hash(&self) -> HashOf<Self> {
+        let bytes = self.canonical_bytes();
+        HashOf::from_untyped_unchecked(Hash::new_from_chunks(&[
+            MERGE_LEDGER_ENTRY_HASH_DOMAIN,
+            bytes.as_slice(),
+        ]))
+    }
+
+    /// Return the exact canonical framed length committed by compact references.
+    #[must_use]
+    pub fn canonical_encoded_len(&self) -> u64 {
+        u64::try_from(self.canonical_bytes().len()).unwrap_or(u64::MAX)
+    }
+
+    /// Return whether this entry fits the protocol-wide full-entry envelope.
+    #[must_use]
+    pub fn canonical_size_within_limit(&self) -> bool {
+        merge_ledger_entry_size_within_limit(self.canonical_bytes().len())
+    }
+
     /// Number of lanes represented by this entry.
     #[must_use]
     pub fn lane_count(&self) -> usize {
@@ -299,6 +433,8 @@ impl MergeLedgerEntry {
 
 #[cfg(test)]
 mod tests {
+    use iroha_crypto::{Algorithm, KeyPair};
+
     use super::*;
 
     #[derive(Encode)]
@@ -345,10 +481,92 @@ mod tests {
     }
 
     #[test]
+    fn merge_protocol_size_limits_are_inclusive_and_reserve_entry_headroom() {
+        assert!(merge_execution_batch_size_within_limit(
+            MAX_MERGE_EXECUTION_BATCH_BYTES
+        ));
+        assert!(!merge_execution_batch_size_within_limit(
+            MAX_MERGE_EXECUTION_BATCH_BYTES + 1
+        ));
+        assert!(merge_ledger_entry_size_within_limit(
+            MAX_MERGE_LEDGER_ENTRY_BYTES
+        ));
+        assert!(!merge_ledger_entry_size_within_limit(
+            MAX_MERGE_LEDGER_ENTRY_BYTES + 1
+        ));
+        assert_eq!(
+            MAX_MERGE_LEDGER_ENTRY_BYTES - MAX_MERGE_EXECUTION_BATCH_BYTES,
+            4 * 1024 * 1024
+        );
+    }
+
+    #[test]
+    fn reserved_entry_headroom_fits_maximum_execution_committee_and_lane_bindings() {
+        const MAX_ACTIVE_LANES: usize = 1_024;
+        const MAX_MERGE_VALIDATORS: usize = 4_096;
+        const BLS_PROOF_BYTES: usize = 96;
+
+        let keypair =
+            KeyPair::try_random_with_algorithm(Algorithm::BlsNormal).expect("BLS fixture keypair");
+        let peer = PeerId::new(keypair.public_key().clone());
+        let validator_set = vec![peer; MAX_MERGE_VALIDATORS];
+        let validator_set_hash = HashOf::new(&validator_set);
+        let signer_proofs = (0..MAX_MERGE_VALIDATORS)
+            .map(|index| MergeSignerProof {
+                signer: u32::try_from(index).expect("validator index fits"),
+                proof_of_possession: vec![0; BLS_PROOF_BYTES],
+            })
+            .collect();
+        let active_lanes = (0..MAX_ACTIVE_LANES)
+            .map(|index| {
+                let index_u64 = u64::try_from(index).expect("lane index fits u64");
+                MergeLaneBinding {
+                    lane_id: LaneId::new(u32::try_from(index).expect("lane index fits")),
+                    dataspace_id: DataSpaceId::new(index_u64),
+                    lane_config_hash: sample_hash(&index_u64.to_le_bytes()),
+                    incarnation: sample_hash(&index_u64.saturating_add(1).to_le_bytes()),
+                    activation_height: 1,
+                }
+            })
+            .collect();
+        let entry = MergeLedgerEntry {
+            epoch_id: 1,
+            lane_catalog_hash: sample_hash(b"max-overhead-catalog"),
+            active_lanes,
+            incarnation_root: sample_hash(b"max-overhead-incarnations"),
+            activation_root: sample_hash(b"max-overhead-activations"),
+            lane_snapshots: Vec::new(),
+            global_state_root: sample_hash(b"max-overhead-global-root"),
+            merge_qc: MergeQuorumCertificate::new(
+                0,
+                1,
+                1,
+                HashOf::from_untyped_unchecked(sample_hash(b"max-overhead-parent")),
+                sample_hash(b"max-overhead-chain"),
+                1,
+                validator_set_hash,
+                validator_set,
+                vec![0xff; MAX_MERGE_VALIDATORS.div_ceil(8)],
+                signer_proofs,
+                vec![0; BLS_PROOF_BYTES],
+                sample_hash(b"max-overhead-message"),
+            ),
+            execution_batch: None,
+        };
+        let envelope_overhead = entry.canonical_bytes().len();
+        assert!(
+            envelope_overhead <= MAX_MERGE_LEDGER_ENTRY_BYTES - MAX_MERGE_EXECUTION_BATCH_BYTES,
+            "maximum committee/lane envelope {envelope_overhead} exceeds reserved headroom"
+        );
+    }
+
+    #[test]
     fn merge_entry_roundtrip() {
         let qc = MergeQuorumCertificate::new(
             7,
             3,
+            4,
+            HashOf::from_untyped_unchecked(sample_hash(b"carrier-parent")),
             sample_hash(b"chain"),
             1,
             HashOf::new(&Vec::<PeerId>::new()),
@@ -401,6 +619,7 @@ mod tests {
                         DataSpaceId::new(7),
                         11,
                     )),
+                    relay_envelope: None,
                 },
                 MergeLaneSnapshot {
                     lane_id: LaneId::new(2),
@@ -423,6 +642,7 @@ mod tests {
                         DataSpaceId::new(9),
                         14,
                     )),
+                    relay_envelope: None,
                 },
             ],
             execution_batch: None,
@@ -463,6 +683,8 @@ mod tests {
         let qc = MergeQuorumCertificate::new(
             11,
             5,
+            6,
+            HashOf::from_untyped_unchecked(sample_hash(b"carrier-parent")),
             sample_hash(b"chain"),
             1,
             HashOf::new(&Vec::<PeerId>::new()),

@@ -108,7 +108,7 @@ public enum SorafsOrderbookCancelReason: UInt32, Sendable {
 }
 
 public struct SorafsSignedOrderbookOrderRequestFields: Sendable {
-    public let orderId: Data
+    public let orderId: Data?
     public let side: SorafsOrderbookSide
     public let tier: SorafsOrderbookTier
     public let pricePerGibMicroXor: String
@@ -121,7 +121,7 @@ public struct SorafsSignedOrderbookOrderRequestFields: Sendable {
     public let takerFeeBps: UInt32
 
     public init(
-        orderId: Data,
+        orderId: Data? = nil,
         side: SorafsOrderbookSide,
         tier: SorafsOrderbookTier,
         pricePerGibMicroXor: String,
@@ -315,19 +315,30 @@ public enum SorafsReferenceValidators {
         _ fields: SorafsSignedOrderbookOrderRequestFields,
         privateKey: Data
     ) throws -> Data {
-        try requireFixed32(fields.orderId, "orderId")
+        if let suppliedOrderId = fields.orderId {
+            try requireFixed32(suppliedOrderId, "orderId")
+        }
         try requirePositive(fields.quantityGib, "quantityGib")
         let remainingGib = fields.remainingGib ?? fields.quantityGib
         try requirePositive(remainingGib, "remainingGib")
         try requireNonEmpty(fields.ownerAccount, "ownerAccount")
         try requirePositive(fields.expiryUnix, "expiryUnix")
         try requirePositive(fields.nonce, "nonce")
+        let canonicalOrderId = try deriveOrderbookOrderId(
+            ownerAccount: fields.ownerAccount,
+            nonce: fields.nonce
+        )
+        if let suppliedOrderId = fields.orderId, suppliedOrderId != canonicalOrderId {
+            throw SorafsReferenceValidationError.invalidOrderbookField(
+                "orderId must equal the canonical owner-and-nonce derivation"
+            )
+        }
         try requireDecimal(fields.pricePerGibMicroXor, "pricePerGibMicroXor", positive: true)
         try requireFeeBps(fields.makerFeeBps, "makerFeeBps")
         try requireFeeBps(fields.takerFeeBps, "takerFeeBps")
         try requirePrivateKey(privateKey)
         let nativeFields = NativeSorafsOrderbookOrderRequestFields(
-            orderId: fields.orderId,
+            orderId: canonicalOrderId,
             side: fields.side.rawValue,
             tier: fields.tier.rawValue,
             pricePerGibMicroXor: fields.pricePerGibMicroXor,
@@ -346,6 +357,22 @@ public enum SorafsReferenceValidators {
             throw SorafsReferenceValidationError.bridgeUnavailable
         }
         return signed
+    }
+
+    /// Derive the canonical V1 order identifier from owner-account bytes and nonce.
+    public static func deriveOrderbookOrderId(
+        ownerAccount: Data,
+        nonce: UInt64
+    ) throws -> Data {
+        try requireNonEmpty(ownerAccount, "ownerAccount")
+        try requirePositive(nonce, "nonce")
+        guard let orderId = NoritoNativeBridge.shared.sorafsReferenceDeriveOrderbookOrderId(
+            ownerAccount: ownerAccount,
+            nonce: nonce
+        ) else {
+            throw SorafsReferenceValidationError.bridgeUnavailable
+        }
+        return orderId
     }
 
     public static func buildSignedOrderbookOrderCancel(

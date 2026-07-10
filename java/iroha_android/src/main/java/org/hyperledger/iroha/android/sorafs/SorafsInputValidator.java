@@ -9,8 +9,8 @@ import java.util.Base64;
 final class SorafsInputValidator {
 
   private static final int MAX_PROVIDER_NAME_BYTES = 128;
-  private static final int MAX_STREAM_TOKEN_ENCODED_BYTES = 90 * 1024;
-  private static final int MAX_STREAM_TOKEN_DECODED_BYTES = 64 * 1024;
+  private static final int MAX_STREAM_TOKEN_ENCODED_BYTES = 4 * 1024;
+  private static final int MAX_STREAM_TOKEN_DECODED_BYTES = 2 * 1024;
 
   private SorafsInputValidator() {}
 

@@ -3,6 +3,7 @@ package org.hyperledger.iroha.sdk.sorafs
 import java.io.InputStream
 import java.net.URI
 import java.time.Duration
+import java.util.Base64
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
 import java.util.concurrent.atomic.AtomicBoolean
@@ -110,6 +111,13 @@ class SorafsGatewayCanonicalInputTest {
 
     @Test
     fun providerRejectsOversizedNameAndStreamTokenBeforeDispatch() {
+        GatewayProvider(
+            "alpha",
+            PROVIDER_ID_HEX,
+            GATEWAY_PUBLIC_KEY_HEX,
+            "https://provider.example/",
+            Base64.getEncoder().encodeToString(ByteArray(2 * 1024)),
+        )
         assertThrows(IllegalArgumentException::class.java) {
             GatewayProvider(
                 "a".repeat(129),
@@ -125,7 +133,16 @@ class SorafsGatewayCanonicalInputTest {
                 PROVIDER_ID_HEX,
                 GATEWAY_PUBLIC_KEY_HEX,
                 "https://provider.example/",
-                "A".repeat(90 * 1024 + 1),
+                "A".repeat(4 * 1024 + 1),
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            GatewayProvider(
+                "alpha",
+                PROVIDER_ID_HEX,
+                GATEWAY_PUBLIC_KEY_HEX,
+                "https://provider.example/",
+                Base64.getEncoder().encodeToString(ByteArray(2 * 1024 + 1)),
             )
         }
     }

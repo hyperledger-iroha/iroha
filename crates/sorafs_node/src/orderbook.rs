@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use blake3::Hasher;
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
+use sorafs_manifest::orderbook::OrderbookOwnerNonceHighWaterV1;
 use sorafs_manifest::{
     OrderBookEntryV1, OrderCancelReasonV1, OrderCancelV1, OrderFillOutcomeV1, OrderRequestV1,
     OrderSideV1, OrderbookRuntimeSnapshotV1, OrderbookValidationError, SettlementChannelV1,
@@ -40,6 +41,18 @@ pub enum OrderbookRuntimeError {
         /// Hex-encoded duplicate order id.
         order_id_hex: String,
     },
+    /// The owner nonce does not advance the last durably committed operation.
+    #[error(
+        "owner `{owner_account_hex}` nonce {nonce} is stale or replayed (highest committed nonce {highest_nonce})"
+    )]
+    StaleOwnerNonce {
+        /// Hex-encoded canonical owner account bytes.
+        owner_account_hex: String,
+        /// Rejected order or cancellation nonce.
+        nonce: u64,
+        /// Highest nonce already committed for the owner.
+        highest_nonce: u64,
+    },
     /// The requested order id is not open in the local book.
     #[error("order id `{order_id_hex}` is not open")]
     OrderNotFound {
@@ -74,6 +87,9 @@ pub enum OrderbookRuntimeError {
     /// The monotonic local admission sequence overflowed.
     #[error("orderbook admission sequence overflow")]
     SequenceOverflow,
+    /// The monotonic local event sequence overflowed.
+    #[error("orderbook event sequence overflow")]
+    EventSequenceOverflow,
     /// The deterministic matcher referenced an order missing from the local pre-match snapshot.
     #[error("matcher output referenced an unknown order")]
     MissingMatchedOrder,
@@ -122,6 +138,9 @@ pub enum OrderbookRuntimeError {
     /// A durable orderbook snapshot contained duplicate or inconsistent indexes.
     #[error("invalid orderbook runtime snapshot: {0}")]
     InvalidSnapshot(String),
+    /// The durable orderbook state-and-event checkpoint could not be committed.
+    #[error("orderbook checkpoint failed: {0}")]
+    Checkpoint(String),
 }
 
 /// Result of accepting an order into the local orderbook mirror.
@@ -268,12 +287,14 @@ pub struct OrderbookSnapshot {
 #[derive(Debug, Clone)]
 pub(crate) struct OrderbookRuntime {
     next_sequence: u64,
+    owner_nonce_high_waters: BTreeMap<Vec<u8>, u64>,
     open_orders: BTreeMap<[u8; 32], OrderBookEntryV1>,
     trades: Vec<TradeEventV1>,
     settlement_channels: BTreeMap<[u8; 32], SettlementChannelV1>,
     settlement_receipts: BTreeMap<[u8; 32], SettlementReceiptV1>,
     expired_order_ids: Vec<[u8; 32]>,
     entry_limit: usize,
+    owner_nonce_limit: usize,
 }
 
 impl Default for OrderbookRuntime {
@@ -284,14 +305,20 @@ impl Default for OrderbookRuntime {
 
 impl OrderbookRuntime {
     pub(crate) fn with_entry_limit(entry_limit: usize) -> Self {
+        Self::with_limits(entry_limit, entry_limit)
+    }
+
+    fn with_limits(entry_limit: usize, owner_nonce_limit: usize) -> Self {
         Self {
             next_sequence: 0,
+            owner_nonce_high_waters: BTreeMap::new(),
             open_orders: BTreeMap::new(),
             trades: Vec::new(),
             settlement_channels: BTreeMap::new(),
             settlement_receipts: BTreeMap::new(),
             expired_order_ids: Vec::new(),
             entry_limit: entry_limit.max(1),
+            owner_nonce_limit: owner_nonce_limit.max(1),
         }
     }
 
@@ -313,6 +340,7 @@ impl OrderbookRuntime {
         now_unix: u64,
     ) -> Result<OrderbookSubmitOutcome, OrderbookRuntimeError> {
         verify_order_request_signature_v1(&order)?;
+        self.record_owner_nonce(&order.owner_account, order.nonce)?;
         if self.open_orders.contains_key(&order.order_id) {
             return Err(OrderbookRuntimeError::DuplicateOrderId {
                 order_id_hex: hex::encode(order.order_id),
@@ -346,7 +374,19 @@ impl OrderbookRuntime {
         &mut self,
         cancel: OrderCancelV1,
     ) -> Result<OrderbookCancelOutcome, OrderbookRuntimeError> {
+        let mut candidate = self.clone();
+        let outcome = candidate.cancel_order_inner(cancel)?;
+        candidate.ensure_collection_limits()?;
+        *self = candidate;
+        Ok(outcome)
+    }
+
+    fn cancel_order_inner(
+        &mut self,
+        cancel: OrderCancelV1,
+    ) -> Result<OrderbookCancelOutcome, OrderbookRuntimeError> {
         verify_order_cancel_signature_v1(&cancel)?;
+        self.record_owner_nonce(&cancel.owner_account, cancel.nonce)?;
         let Some(entry) = self.open_orders.get(&cancel.order_id) else {
             return Err(OrderbookRuntimeError::OrderNotFound {
                 order_id_hex: hex::encode(cancel.order_id),
@@ -365,6 +405,30 @@ impl OrderbookRuntime {
             reason: cancel.reason,
             open_order_count: self.open_orders.len(),
         })
+    }
+
+    fn record_owner_nonce(
+        &mut self,
+        owner_account: &[u8],
+        nonce: u64,
+    ) -> Result<(), OrderbookRuntimeError> {
+        if let Some(highest_nonce) = self.owner_nonce_high_waters.get(owner_account) {
+            if nonce <= *highest_nonce {
+                return Err(OrderbookRuntimeError::StaleOwnerNonce {
+                    owner_account_hex: hex::encode(owner_account),
+                    nonce,
+                    highest_nonce: *highest_nonce,
+                });
+            }
+        } else if self.owner_nonce_high_waters.len() >= self.owner_nonce_limit {
+            return Err(OrderbookRuntimeError::ResourceExhausted {
+                resource: "owner_nonce_high_waters",
+                limit: self.owner_nonce_limit,
+            });
+        }
+        self.owner_nonce_high_waters
+            .insert(owner_account.to_vec(), nonce);
+        Ok(())
     }
 
     pub(crate) fn submit_receipt(
@@ -457,6 +521,16 @@ impl OrderbookRuntime {
             version: sorafs_manifest::ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1,
             next_sequence: snapshot.next_sequence,
             generated_at_unix: snapshot.generated_at_unix,
+            owner_nonce_high_waters: self
+                .owner_nonce_high_waters
+                .iter()
+                .map(
+                    |(owner_account, highest_nonce)| OrderbookOwnerNonceHighWaterV1 {
+                        owner_account: owner_account.clone(),
+                        highest_nonce: *highest_nonce,
+                    },
+                )
+                .collect(),
             open_orders: snapshot.open_orders,
             trades: snapshot.trades,
             settlement_channels: snapshot.settlement_channels,
@@ -466,6 +540,12 @@ impl OrderbookRuntime {
     }
 
     fn ensure_collection_limits(&self) -> Result<(), OrderbookRuntimeError> {
+        if self.owner_nonce_high_waters.len() > self.owner_nonce_limit {
+            return Err(OrderbookRuntimeError::ResourceExhausted {
+                resource: "owner_nonce_high_waters",
+                limit: self.owner_nonce_limit,
+            });
+        }
         for (resource, count) in [
             ("open_orders", self.open_orders.len()),
             ("trades", self.trades.len()),
@@ -488,6 +568,12 @@ impl OrderbookRuntime {
         snapshot: OrderbookRuntimeSnapshotV1,
     ) -> Result<(), OrderbookRuntimeError> {
         snapshot.validate()?;
+        if snapshot.owner_nonce_high_waters.len() > self.owner_nonce_limit {
+            return Err(OrderbookRuntimeError::ResourceExhausted {
+                resource: "owner_nonce_high_waters",
+                limit: self.owner_nonce_limit,
+            });
+        }
         for (resource, count) in [
             ("open_orders", snapshot.open_orders.len()),
             ("trades", snapshot.trades.len()),
@@ -512,6 +598,11 @@ impl OrderbookRuntime {
                 )));
             }
         }
+        let owner_nonce_high_waters = snapshot
+            .owner_nonce_high_waters
+            .into_iter()
+            .map(|entry| (entry.owner_account, entry.highest_nonce))
+            .collect();
         let mut settlement_channels = BTreeMap::new();
         for channel in snapshot.settlement_channels {
             let channel_id = channel.channel_id;
@@ -533,14 +624,17 @@ impl OrderbookRuntime {
             }
         }
         let entry_limit = self.entry_limit;
+        let owner_nonce_limit = self.owner_nonce_limit;
         *self = Self {
             next_sequence: snapshot.next_sequence,
+            owner_nonce_high_waters,
             open_orders,
             trades: snapshot.trades,
             settlement_channels,
             settlement_receipts,
             expired_order_ids: snapshot.expired_order_ids,
             entry_limit,
+            owner_nonce_limit,
         };
         Ok(())
     }
@@ -743,9 +837,9 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair, Signature as IrohaSignature};
     use sorafs_manifest::{
         BYTES_PER_GIB, ByteRangeV1, ORDERBOOK_ORDER_VERSION_V1, OrderTierV1, OrderbookSignatureV1,
-        SETTLEMENT_RECEIPT_VERSION_V1, deal::XorAmount, order_cancel_signature_digest_v1,
-        order_request_signature_digest_v1, provider_advert::SignatureAlgorithm,
-        settlement_receipt_signature_digest_v1,
+        SETTLEMENT_RECEIPT_VERSION_V1, deal::XorAmount, derive_orderbook_order_id_v1,
+        order_cancel_signature_digest_v1, order_request_signature_digest_v1,
+        provider_advert::SignatureAlgorithm, settlement_receipt_signature_digest_v1,
     };
 
     use super::*;
@@ -831,18 +925,20 @@ mod tests {
     }
 
     fn order(id: u8, side: OrderSideV1, price_micro: u128, owner: &[u8]) -> OrderRequestV1 {
+        let owner_account = owner.to_vec();
+        let nonce = u64::from(id);
         sign_order(
             OrderRequestV1 {
                 version: ORDERBOOK_ORDER_VERSION_V1,
-                order_id: [id; 32],
+                order_id: derive_orderbook_order_id_v1(&owner_account, nonce),
                 side,
                 tier: OrderTierV1::Hot,
                 price_per_gib: XorAmount::from_micro(price_micro),
                 quantity_gib: 4,
                 remaining_gib: 4,
-                owner_account: owner.to_vec(),
+                owner_account,
                 expiry_unix: 1_800_000_100,
-                nonce: u64::from(id),
+                nonce,
                 maker_fee_bps: 10,
                 taker_fee_bps: 20,
                 signature: signature(),
@@ -909,9 +1005,138 @@ mod tests {
     }
 
     #[test]
+    fn runtime_rejects_exact_order_replay_after_fill() {
+        let mut runtime = OrderbookRuntime::default();
+        let ask = order(1, OrderSideV1::Ask, 1_500_000, b"provider");
+        let replay = ask.clone();
+        runtime
+            .submit_order(ask, 1_800_000_000)
+            .expect("accept ask");
+        runtime
+            .submit_order(
+                order(2, OrderSideV1::Bid, 1_600_000, b"buyer"),
+                1_800_000_000,
+            )
+            .expect("fill ask");
+
+        assert_eq!(
+            runtime
+                .submit_order(replay, 1_800_000_001)
+                .expect_err("filled order replay must be rejected"),
+            OrderbookRuntimeError::StaleOwnerNonce {
+                owner_account_hex: hex::encode(b"provider"),
+                nonce: 1,
+                highest_nonce: 1,
+            }
+        );
+        assert_eq!(runtime.snapshot(1_800_000_001).trades.len(), 1);
+    }
+
+    #[test]
+    fn runtime_rejects_same_and_cross_owner_retired_order_id_reuse() {
+        let mut runtime = OrderbookRuntime::default();
+        let ask = order(1, OrderSideV1::Ask, 1_500_000, b"provider");
+        let retired_order_id = ask.order_id;
+        runtime
+            .submit_order(ask, 1_800_000_000)
+            .expect("accept ask");
+        runtime
+            .submit_order(
+                order(2, OrderSideV1::Bid, 1_600_000, b"buyer"),
+                1_800_000_000,
+            )
+            .expect("retire ask through fill");
+
+        for (owner, nonce, signing_seed) in [
+            (b"provider".as_slice(), 3, 0x33),
+            (b"other-owner".as_slice(), 1, 0x44),
+        ] {
+            let mut reused = order(9, OrderSideV1::Ask, 1_500_000, owner);
+            reused.nonce = nonce;
+            reused.order_id = retired_order_id;
+            let expected_order_id = derive_orderbook_order_id_v1(owner, nonce);
+            let reused = sign_order(reused, signing_seed);
+
+            assert_eq!(
+                runtime
+                    .submit_order(reused, 1_800_000_001)
+                    .expect_err("retired order id reuse must be rejected"),
+                OrderbookRuntimeError::Validation(
+                    OrderbookValidationError::OrderIdDerivationMismatch {
+                        order_id: retired_order_id,
+                        expected_order_id,
+                    }
+                )
+            );
+        }
+        assert_eq!(runtime.snapshot(1_800_000_001).trades.len(), 1);
+    }
+
+    #[test]
+    fn runtime_rejects_exact_order_replay_after_expiry() {
+        let mut runtime = OrderbookRuntime::default();
+        let expired = order(1, OrderSideV1::Ask, 1_500_000, b"provider");
+        let expired_order_id = expired.order_id;
+        let replay = expired.clone();
+        let first = runtime
+            .submit_order(expired, 1_800_000_101)
+            .expect("accept and expire order");
+        assert_eq!(first.expired_order_ids, vec![expired_order_id]);
+        assert_eq!(first.open_order_count, 0);
+
+        assert!(matches!(
+            runtime.submit_order(replay, 1_800_000_102),
+            Err(OrderbookRuntimeError::StaleOwnerNonce {
+                nonce: 1,
+                highest_nonce: 1,
+                ..
+            })
+        ));
+        assert_eq!(
+            runtime.snapshot(1_800_000_102).expired_order_ids,
+            vec![expired_order_id]
+        );
+    }
+
+    #[test]
+    fn owner_nonce_high_water_is_scoped_to_canonical_owner() {
+        let mut runtime = OrderbookRuntime::default();
+        runtime
+            .submit_order(
+                order(1, OrderSideV1::Ask, 1_500_000, b"provider"),
+                1_800_000_000,
+            )
+            .expect("accept first owner's nonce");
+        let mut buyer = order(2, OrderSideV1::Bid, 1_600_000, b"buyer");
+        buyer.nonce = 1;
+        buyer.order_id = derive_orderbook_order_id_v1(&buyer.owner_account, buyer.nonce);
+        let buyer = sign_order(buyer, 0x22);
+        runtime
+            .submit_order(buyer, 1_800_000_000)
+            .expect("same nonce remains valid for a distinct owner");
+
+        assert_eq!(
+            runtime
+                .runtime_snapshot(1_800_000_001)
+                .owner_nonce_high_waters,
+            vec![
+                OrderbookOwnerNonceHighWaterV1 {
+                    owner_account: b"buyer".to_vec(),
+                    highest_nonce: 1,
+                },
+                OrderbookOwnerNonceHighWaterV1 {
+                    owner_account: b"provider".to_vec(),
+                    highest_nonce: 1,
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn runtime_cancels_only_matching_owner_order() {
         let mut runtime = OrderbookRuntime::default();
         let ask = order(1, OrderSideV1::Ask, 1_500_000, b"provider");
+        let order_id = ask.order_id;
         runtime
             .submit_order(ask, 1_800_000_000)
             .expect("accept ask");
@@ -919,7 +1144,7 @@ mod tests {
         let wrong_owner = sign_cancel(
             OrderCancelV1 {
                 version: sorafs_manifest::ORDERBOOK_CANCEL_VERSION_V1,
-                order_id: [1; 32],
+                order_id,
                 owner_account: b"other".to_vec(),
                 reason: OrderCancelReasonV1::OwnerRequested,
                 nonce: 1,
@@ -938,7 +1163,171 @@ mod tests {
         };
         let outcome = runtime.cancel_order(cancel).expect("cancel order");
         assert_eq!(outcome.open_order_count, 0);
-        assert_eq!(outcome.cancelled_order.order_id, [1; 32]);
+        assert_eq!(outcome.cancelled_order.order_id, order_id);
+    }
+
+    #[test]
+    fn runtime_cancel_advances_shared_owner_nonce_and_rejects_replay() {
+        let mut runtime = OrderbookRuntime::default();
+        runtime
+            .submit_order(
+                order(1, OrderSideV1::Ask, 1_500_000, b"provider"),
+                1_800_000_000,
+            )
+            .expect("accept ask");
+        let cancel = wrong_owner_fixture();
+        let replay = cancel.clone();
+        runtime.cancel_order(cancel).expect("cancel ask");
+
+        assert!(matches!(
+            runtime.cancel_order(replay),
+            Err(OrderbookRuntimeError::StaleOwnerNonce {
+                nonce: 2,
+                highest_nonce: 2,
+                ..
+            })
+        ));
+
+        for stale_nonce in [1, 2] {
+            let mut stale_order = order(3, OrderSideV1::Ask, 1_500_000, b"provider");
+            stale_order.nonce = stale_nonce;
+            stale_order.order_id =
+                derive_orderbook_order_id_v1(&stale_order.owner_account, stale_nonce);
+            let stale_order = sign_order(stale_order, 0x33);
+            assert!(matches!(
+                runtime.submit_order(stale_order, 1_800_000_001),
+                Err(OrderbookRuntimeError::StaleOwnerNonce {
+                    nonce,
+                    highest_nonce: 2,
+                    ..
+                }) if nonce == stale_nonce
+            ));
+        }
+
+        runtime
+            .submit_order(
+                order(3, OrderSideV1::Ask, 1_500_000, b"provider"),
+                1_800_000_001,
+            )
+            .expect("higher owner nonce remains admissible");
+        assert_eq!(
+            runtime
+                .runtime_snapshot(1_800_000_001)
+                .owner_nonce_high_waters,
+            vec![OrderbookOwnerNonceHighWaterV1 {
+                owner_account: b"provider".to_vec(),
+                highest_nonce: 3,
+            }]
+        );
+    }
+
+    #[test]
+    fn runtime_snapshot_restore_preserves_owner_nonce_replay_protection() {
+        let mut source = OrderbookRuntime::default();
+        let order = order(7, OrderSideV1::Ask, 1_500_000, b"provider");
+        let replay = order.clone();
+        source
+            .submit_order(order, 1_800_000_000)
+            .expect("accept order");
+        let snapshot = source.runtime_snapshot(1_800_000_001);
+
+        let mut restored = OrderbookRuntime::default();
+        restored
+            .restore_runtime_snapshot(snapshot)
+            .expect("restore runtime snapshot");
+        assert!(matches!(
+            restored.submit_order(replay, 1_800_000_002),
+            Err(OrderbookRuntimeError::StaleOwnerNonce {
+                nonce: 7,
+                highest_nonce: 7,
+                ..
+            })
+        ));
+        assert_eq!(restored.snapshot(1_800_000_002).open_orders.len(), 1);
+    }
+
+    #[test]
+    fn runtime_restore_rejects_forged_owner_nonce_state_without_mutation() {
+        let mut source = OrderbookRuntime::default();
+        source
+            .submit_order(
+                order(7, OrderSideV1::Ask, 1_500_000, b"provider"),
+                1_800_000_000,
+            )
+            .expect("accept order");
+        let mut forged = source.runtime_snapshot(1_800_000_001);
+        forged.owner_nonce_high_waters.clear();
+
+        let mut target = OrderbookRuntime::default();
+        let before = target.runtime_snapshot(1_800_000_001);
+        assert!(matches!(
+            target.restore_runtime_snapshot(forged),
+            Err(OrderbookRuntimeError::Validation(
+                OrderbookValidationError::SnapshotOpenOrderNonceMissing { .. }
+            ))
+        ));
+        assert_eq!(target.runtime_snapshot(1_800_000_001), before);
+    }
+
+    #[test]
+    fn owner_nonce_capacity_is_bounded_and_failure_is_atomic() {
+        let mut runtime = OrderbookRuntime::with_entry_limit(1);
+        runtime
+            .submit_order(
+                order(1, OrderSideV1::Ask, 1_500_000, b"provider-a"),
+                1_800_000_000,
+            )
+            .expect("accept first owner");
+        let before = runtime.runtime_snapshot(1_800_000_001);
+
+        assert_eq!(
+            runtime
+                .submit_order(
+                    order(2, OrderSideV1::Ask, 1_500_000, b"provider-b"),
+                    1_800_000_001,
+                )
+                .expect_err("new owner past nonce capacity must be rejected"),
+            OrderbookRuntimeError::ResourceExhausted {
+                resource: "owner_nonce_high_waters",
+                limit: 1,
+            }
+        );
+        assert_eq!(runtime.runtime_snapshot(1_800_000_001), before);
+    }
+
+    #[test]
+    fn restore_rejects_owner_nonce_state_above_configured_capacity() {
+        let mut source = OrderbookRuntime::with_entry_limit(2);
+        source
+            .submit_order(
+                order(1, OrderSideV1::Ask, 1_500_000, b"provider-a"),
+                1_800_000_000,
+            )
+            .expect("accept first owner");
+        source
+            .submit_order(
+                order(2, OrderSideV1::Ask, 1_500_000, b"provider-b"),
+                1_800_000_000,
+            )
+            .expect("accept second owner");
+        let snapshot = source.runtime_snapshot(1_800_000_001);
+
+        let mut target = OrderbookRuntime::with_entry_limit(1);
+        assert_eq!(
+            target
+                .restore_runtime_snapshot(snapshot)
+                .expect_err("oversized owner nonce state must be rejected"),
+            OrderbookRuntimeError::ResourceExhausted {
+                resource: "owner_nonce_high_waters",
+                limit: 1,
+            }
+        );
+        assert!(
+            target
+                .runtime_snapshot(1_800_000_001)
+                .owner_nonce_high_waters
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1006,11 +1395,12 @@ mod tests {
     }
 
     fn wrong_owner_fixture() -> OrderCancelV1 {
+        let owner_account = b"provider".to_vec();
         sign_cancel(
             OrderCancelV1 {
                 version: sorafs_manifest::ORDERBOOK_CANCEL_VERSION_V1,
-                order_id: [1; 32],
-                owner_account: b"provider".to_vec(),
+                order_id: derive_orderbook_order_id_v1(&owner_account, 1),
+                owner_account,
                 reason: OrderCancelReasonV1::OwnerRequested,
                 nonce: 2,
                 signature: signature(),
@@ -1048,7 +1438,7 @@ mod tests {
 
     #[test]
     fn configured_limits_refuse_growth_without_partial_orderbook_mutation() {
-        let mut runtime = OrderbookRuntime::with_entry_limit(1);
+        let mut runtime = OrderbookRuntime::with_limits(1, 4);
         runtime
             .submit_order(
                 order(1, OrderSideV1::Ask, 1_500_000, b"provider-a"),
@@ -1096,7 +1486,10 @@ mod tests {
         let snapshot = runtime.snapshot(1_800_000_000);
         assert_eq!(snapshot.next_sequence, 3);
         assert_eq!(snapshot.open_orders.len(), 1);
-        assert_eq!(snapshot.open_orders[0].order.order_id, [3; 32]);
+        assert_eq!(
+            snapshot.open_orders[0].order.order_id,
+            derive_orderbook_order_id_v1(b"provider-b", 3)
+        );
         assert_eq!(snapshot.trades.len(), 1);
         assert_eq!(snapshot.settlement_channels.len(), 1);
 

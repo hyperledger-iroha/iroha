@@ -3803,21 +3803,31 @@ impl StateBlock<'_> {
         let routing =
             crate::queue::RoutingDecision::new(descriptor.lane_id, descriptor.dataspace_id);
         let mut results = Vec::with_capacity(artifact.entrypoints.len());
-        for (raw_entrypoint_index, entrypoint) in descriptor
+        for (position, (raw_entrypoint_index, entrypoint)) in descriptor
             .accepted_candidate_indices
             .iter()
             .copied()
             .zip(artifact.entrypoints.iter())
+            .enumerate()
         {
             let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Borrowed(entrypoint));
-            let plan = evaluate_policy_plan_with_nexus_and_world_at_block_height(
-                &self.nexus,
-                &accepted,
-                &self.world,
-                u64::try_from(self._curr_block.creation_time().as_millis()).unwrap_or(u64::MAX),
-                descriptor.proposal_height,
-            )
-            .map_err(|_| "execution input routing cannot be resolved")?;
+            let plan = if let Some(bound) = artifact.routing_plans.get(position) {
+                // Autonomous payloads carry a producer-authenticated plan bound
+                // to the proposal-height incarnation. Recomputing against the
+                // current catalog would make valid delayed merges depend on
+                // unrelated scale-out or policy drift.
+                bound.clone()
+            } else {
+                evaluate_policy_plan_with_nexus_and_world_at_block_height(
+                    &self.nexus,
+                    &accepted,
+                    &self.world,
+                    u64::try_from(self._curr_block.creation_time().as_millis())
+                        .unwrap_or(u64::MAX),
+                    descriptor.proposal_height,
+                )
+                .map_err(|_| "execution input routing cannot be resolved")?
+            };
             if plan.coordinator_route() != routing {
                 return Err("execution input route does not match recomputed coordinator route");
             }
@@ -12199,6 +12209,9 @@ pub mod tests {
             autonomous_epoch: None,
             autonomous_payload_hash: None,
             entrypoints,
+            reservation_keys: Vec::new(),
+            routing_plans: Vec::new(),
+            native_amx_receipts: Vec::new(),
         })
     }
 

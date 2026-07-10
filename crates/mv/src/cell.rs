@@ -75,11 +75,6 @@ mod view {
         pub fn get(&self) -> &V {
             &self.blocks
         }
-
-        /// Return whether this block has staged a value mutation.
-        pub fn is_dirty(&self) -> bool {
-            self.dirty
-        }
     }
 
     impl<V: Value> Deref for View<'_, V> {
@@ -159,6 +154,11 @@ mod block {
         /// Read entry from the storage up to certain version non-inclusive
         pub fn get(&self) -> &V {
             &self.blocks
+        }
+
+        /// Return whether this block has staged a value mutation.
+        pub fn is_dirty(&self) -> bool {
+            self.dirty
         }
     }
 
@@ -363,6 +363,22 @@ mod tests {
 
         let view = cell.view();
         assert_eq!(view.get(), &1);
+    }
+
+    #[test]
+    fn block_dirty_flag_tracks_staged_mutation() {
+        let cell = Cell::new(0_u64);
+        let mut block = cell.block();
+
+        assert!(!block.is_dirty());
+        assert_eq!(block.get(), &0);
+        assert!(
+            !block.is_dirty(),
+            "read-only access must keep the block clean"
+        );
+
+        *block.get_mut() = 1;
+        assert!(block.is_dirty());
     }
 
     #[test]

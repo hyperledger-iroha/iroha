@@ -121,6 +121,7 @@ use sorafs_manifest::{
     capacity::CapacityTelemetryV1,
     chunker_registry,
     deal::XorAmount,
+    derive_orderbook_order_id_v1,
     por::{AuditVerdictV1, PorChallengeV1, PorProofV1},
     potr::{PotrReceiptV1, PotrSignatureAlgorithm, PotrSignatureV1, PotrStatus},
     repair::{RepairTaskEventV1, RepairTaskStatusV1},
@@ -208,7 +209,7 @@ use crate::{
         },
         site::{
             content_type_for_path, decode_content_cid, encode_content_cid, find_site_binding,
-            load_site_bindings_from_env, normalize_host_header, path_components_for_request,
+            normalize_host_header, path_components_for_request,
         },
     },
     utils::extractors::{ExtractAccept, JsonOnly, NoritoJson},
@@ -15854,7 +15855,8 @@ fn appeal_finance_weekly_rollup_publish_json(rollup: &SoraFsAppealFinanceWeeklyR
 
 fn orderbook_runtime_error_response(err: OrderbookRuntimeError) -> Response {
     let status = match err {
-        OrderbookRuntimeError::DuplicateOrderId { .. } => StatusCode::CONFLICT,
+        OrderbookRuntimeError::DuplicateOrderId { .. }
+        | OrderbookRuntimeError::StaleOwnerNonce { .. } => StatusCode::CONFLICT,
         OrderbookRuntimeError::DuplicateReceiptId { .. }
         | OrderbookRuntimeError::ReceiptRangeOverlap { .. } => StatusCode::CONFLICT,
         OrderbookRuntimeError::OrderNotFound { .. } => StatusCode::NOT_FOUND,
@@ -15868,7 +15870,9 @@ fn orderbook_runtime_error_response(err: OrderbookRuntimeError) -> Response {
         }
         OrderbookRuntimeError::ResourceExhausted { .. } => StatusCode::TOO_MANY_REQUESTS,
         OrderbookRuntimeError::InvalidSnapshot(_) => StatusCode::BAD_REQUEST,
+        OrderbookRuntimeError::Checkpoint(_) => StatusCode::SERVICE_UNAVAILABLE,
         OrderbookRuntimeError::SequenceOverflow
+        | OrderbookRuntimeError::EventSequenceOverflow
         | OrderbookRuntimeError::MissingMatchedOrder
         | OrderbookRuntimeError::InvalidMatchedSides
         | OrderbookRuntimeError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
@@ -15926,7 +15930,7 @@ fn reserve_appeal_runtime_error_response(err: ReserveAppealRuntimeError) -> Resp
 
 #[cfg(test)]
 #[test]
-fn orderbook_admission_policy_errors_map_to_bad_request() {
+fn orderbook_admission_and_replay_errors_map_to_expected_status() {
     let response = orderbook_runtime_error_response(OrderbookRuntimeError::OrderBelowMinimum {
         quantity_gib: 1,
         min_order_gib: 8,
@@ -15946,6 +15950,13 @@ fn orderbook_admission_policy_errors_map_to_bad_request() {
             stage: "default".to_owned(),
         });
     assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+
+    let response = orderbook_runtime_error_response(OrderbookRuntimeError::StaleOwnerNonce {
+        owner_account_hex: hex::encode(b"buyer@sora"),
+        nonce: 7,
+        highest_nonce: 7,
+    });
+    assert_eq!(response.status(), StatusCode::CONFLICT);
 }
 
 fn moderation_ballot_runtime_error_response(err: ModerationBallotRuntimeError) -> Response {
@@ -15970,8 +15981,8 @@ fn moderation_ballot_runtime_error_response(err: ModerationBallotRuntimeError) -
         | ModerationBallotRuntimeError::TallyWindowOpen { .. }
         | ModerationBallotRuntimeError::QuorumNotMet { .. } => StatusCode::PRECONDITION_FAILED,
         ModerationBallotRuntimeError::ResourceExhausted { .. } => StatusCode::TOO_MANY_REQUESTS,
+        ModerationBallotRuntimeError::Checkpoint(_) => StatusCode::SERVICE_UNAVAILABLE,
         ModerationBallotRuntimeError::EventSequenceOverflow
-        | ModerationBallotRuntimeError::Checkpoint(_)
         | ModerationBallotRuntimeError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
         ModerationBallotRuntimeError::Validation(_)
         | ModerationBallotRuntimeError::MissingRoundId
@@ -16041,6 +16052,7 @@ fn moderation_model_registry_error_response(err: ModerationModelRegistryError) -
         | ModerationModelRegistryError::InvalidCorpusManifest { .. }
         | ModerationModelRegistryError::InvalidRegistrySnapshot { .. }
         | ModerationModelRegistryError::CorpusEncoding { .. } => StatusCode::BAD_REQUEST,
+        ModerationModelRegistryError::Checkpoint { .. } => StatusCode::SERVICE_UNAVAILABLE,
         ModerationModelRegistryError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
     };
     json_error(
@@ -16473,6 +16485,7 @@ fn moderation_screening_error_response(err: ModerationScreeningError) -> Respons
         ModerationScreeningError::InvalidTransition { .. } => StatusCode::CONFLICT,
         ModerationScreeningError::InvalidInput { .. }
         | ModerationScreeningError::InvalidSnapshot { .. } => StatusCode::BAD_REQUEST,
+        ModerationScreeningError::Checkpoint { .. } => StatusCode::SERVICE_UNAVAILABLE,
         ModerationScreeningError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
     };
     json_error(status, format!("sorafs moderation screening error: {err}"))
@@ -16490,8 +16503,8 @@ fn moderation_quarantine_object_error_response(err: ModerationQuarantineObjectEr
         ModerationQuarantineObjectError::InvalidInput { .. }
         | ModerationQuarantineObjectError::InvalidSnapshot { .. }
         | ModerationQuarantineObjectError::Codec { .. } => StatusCode::BAD_REQUEST,
-        ModerationQuarantineObjectError::Io { .. }
-        | ModerationQuarantineObjectError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
+        ModerationQuarantineObjectError::Io { .. } => StatusCode::SERVICE_UNAVAILABLE,
+        ModerationQuarantineObjectError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
     };
     json_error(
         status,
@@ -16512,8 +16525,8 @@ fn moderation_evidence_viewer_error_response(err: ModerationEvidenceViewerError)
         | ModerationEvidenceViewerError::InvalidSnapshot { .. }
         | ModerationEvidenceViewerError::Codec { .. } => StatusCode::BAD_REQUEST,
         ModerationEvidenceViewerError::TransparencyExport { .. }
-        | ModerationEvidenceViewerError::Io { .. }
-        | ModerationEvidenceViewerError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
+        | ModerationEvidenceViewerError::Io { .. } => StatusCode::SERVICE_UNAVAILABLE,
+        ModerationEvidenceViewerError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
     };
     json_error(
         status,
@@ -21894,13 +21907,11 @@ async fn resolve_site_host(
         return Ok(resolved);
     }
 
-    let bindings = match load_site_bindings_from_env() {
-        Ok(Some(document)) => document,
-        Ok(None) => return Err(StatusCode::NOT_FOUND.into_response()),
-        Err(err) => return Err(json_error(StatusCode::INTERNAL_SERVER_ERROR, err)),
+    let Some(bindings) = state.sorafs_site_bindings.as_deref() else {
+        return Err(StatusCode::NOT_FOUND.into_response());
     };
 
-    let Some(binding) = find_site_binding(&bindings, &host).cloned() else {
+    let Some(binding) = find_site_binding(bindings, &host).cloned() else {
         return Err(StatusCode::NOT_FOUND.into_response());
     };
 
@@ -30560,10 +30571,7 @@ mod advert_tests {
         proof_stream::ProofStreamTier,
     };
     use sorafs_node::config::StorageConfig;
-    use std::{
-        collections::{BTreeMap, HashSet},
-        sync::{LazyLock, Mutex, MutexGuard},
-    };
+    use std::collections::{BTreeMap, HashSet};
     use tempfile::{NamedTempFile, TempDir};
     use tokio::net::TcpListener;
 
@@ -36614,18 +36622,20 @@ mod advert_tests {
         price_micro: u128,
         owner: &OrderbookAccountFixture,
     ) -> OrderRequestV1 {
+        let owner_account = orderbook_owner_bytes(owner);
+        let nonce = u64::from(id);
         sign_orderbook_order(
             OrderRequestV1 {
                 version: sorafs_manifest::ORDERBOOK_ORDER_VERSION_V1,
-                order_id: [id; 32],
+                order_id: derive_orderbook_order_id_v1(&owner_account, nonce),
                 side,
                 tier: OrderTierV1::Hot,
                 price_per_gib: sorafs_manifest::deal::XorAmount::from_micro(price_micro),
                 quantity_gib: 4,
                 remaining_gib: 4,
-                owner_account: orderbook_owner_bytes(owner),
+                owner_account,
                 expiry_unix: unix_timestamp_now().saturating_add(300),
-                nonce: u64::from(id),
+                nonce,
                 maker_fee_bps: 10,
                 taker_fee_bps: 20,
                 signature: orderbook_signature_fixture(),
@@ -36634,17 +36644,24 @@ mod advert_tests {
         )
     }
 
-    fn orderbook_cancel_fixture(id: u8, owner: &OrderbookAccountFixture) -> OrderCancelV1 {
+    fn orderbook_cancel_fixture(
+        id: u8,
+        order_owner: &OrderbookAccountFixture,
+        cancel_owner: &OrderbookAccountFixture,
+    ) -> OrderCancelV1 {
         sign_orderbook_cancel(
             OrderCancelV1 {
                 version: sorafs_manifest::ORDERBOOK_CANCEL_VERSION_V1,
-                order_id: [id; 32],
-                owner_account: orderbook_owner_bytes(owner),
+                order_id: derive_orderbook_order_id_v1(
+                    &orderbook_owner_bytes(order_owner),
+                    u64::from(id),
+                ),
+                owner_account: orderbook_owner_bytes(cancel_owner),
                 reason: OrderCancelReasonV1::OwnerRequested,
                 nonce: u64::from(id).saturating_add(100),
                 signature: orderbook_signature_fixture(),
             },
-            &owner.keypair,
+            &cancel_owner.keypair,
         )
     }
 
@@ -38348,7 +38365,7 @@ mod advert_tests {
         let order = sign_orderbook_order(
             OrderRequestV1 {
                 version: sorafs_manifest::ORDERBOOK_ORDER_VERSION_V1,
-                order_id: [42; 32],
+                order_id: derive_orderbook_order_id_v1(&orderbook_owner_bytes(&auth.buyer), 42),
                 side: OrderSideV1::Bid,
                 tier: OrderTierV1::Hot,
                 price_per_gib: sorafs_manifest::deal::XorAmount::from_micro(1_600_000),
@@ -43979,7 +43996,7 @@ mod advert_tests {
         let response = post_orderbook_cancel(
             app.clone(),
             &auth.buyer,
-            orderbook_cancel_body(orderbook_cancel_fixture(3, &auth.buyer)),
+            orderbook_cancel_body(orderbook_cancel_fixture(3, &auth.provider, &auth.buyer)),
         )
         .await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -43987,7 +44004,7 @@ mod advert_tests {
         let response = post_orderbook_cancel(
             app.clone(),
             &auth.provider,
-            orderbook_cancel_body(orderbook_cancel_fixture(3, &auth.provider)),
+            orderbook_cancel_body(orderbook_cancel_fixture(3, &auth.provider, &auth.provider)),
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -45372,33 +45389,6 @@ mod advert_tests {
             schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
             container,
             service,
-        }
-    }
-
-    fn site_bindings_override_test_lock() -> &'static Mutex<()> {
-        // Site-binding overrides use a single global path, so tests that mutate
-        // it must not run concurrently.
-        static LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-        &LOCK
-    }
-
-    struct SiteBindingsOverrideGuard(MutexGuard<'static, ()>);
-
-    impl SiteBindingsOverrideGuard {
-        fn set(path: &std::path::Path) -> Self {
-            let lock = site_bindings_override_test_lock()
-                .lock()
-                .expect("site bindings override test lock poisoned");
-            crate::sorafs::site::set_site_bindings_file_override_for_tests(Some(
-                path.to_path_buf(),
-            ));
-            Self(lock)
-        }
-    }
-
-    impl Drop for SiteBindingsOverrideGuard {
-        fn drop(&mut self) {
-            crate::sorafs::site::set_site_bindings_file_override_for_tests(None);
         }
     }
 
@@ -47283,24 +47273,16 @@ mod advert_tests {
         node.ingest_manifest(&manifest, &plan, &mut reader)
             .expect("ingest site payload");
 
-        let bindings_file = NamedTempFile::new().expect("site bindings file");
-        fs::write(
-            bindings_file.path(),
-            norito::json::to_vec(&crate::sorafs::site::SiteBindingsDocument {
-                version: Some(1),
-                sites: vec![crate::sorafs::site::SiteBinding {
-                    hostname: "taira.sora.org".to_owned(),
-                    manifest_digest_hex,
-                    index_document: None,
-                    spa_fallback: Some(true),
-                }],
-            })
-            .expect("encode site bindings"),
-        )
-        .expect("write site bindings");
-        let _env_guard = SiteBindingsOverrideGuard::set(bindings_file.path());
-
         inner.sorafs_node = node;
+        inner.sorafs_site_bindings = Some(Arc::new(crate::sorafs::site::SiteBindingsDocument {
+            version: 1,
+            sites: vec![crate::sorafs::site::SiteBinding {
+                hostname: "taira.sora.org".to_owned(),
+                manifest_digest_hex,
+                index_document: None,
+                spa_fallback: Some(true),
+            }],
+        }));
         inner.sorafs_gateway_config.untrusted_hosting.enabled = true;
         inner
             .sorafs_gateway_config
@@ -47625,22 +47607,15 @@ mod advert_tests {
         node.ingest_manifest(&new_manifest, &new_plan, &mut new_reader)
             .expect("ingest new site payload");
 
-        let bindings_file = NamedTempFile::new().expect("site bindings file");
-        fs::write(
-            bindings_file.path(),
-            norito::json::to_vec(&crate::sorafs::site::SiteBindingsDocument {
-                version: Some(1),
-                sites: vec![crate::sorafs::site::SiteBinding {
-                    hostname: "taira.sora.org".to_owned(),
-                    manifest_digest_hex: old_manifest_digest_hex,
-                    index_document: None,
-                    spa_fallback: Some(true),
-                }],
-            })
-            .expect("encode site bindings"),
-        )
-        .expect("write site bindings");
-        let _env_guard = SiteBindingsOverrideGuard::set(bindings_file.path());
+        let site_bindings = Arc::new(crate::sorafs::site::SiteBindingsDocument {
+            version: 1,
+            sites: vec![crate::sorafs::site::SiteBinding {
+                hostname: "taira.sora.org".to_owned(),
+                manifest_digest_hex: old_manifest_digest_hex,
+                index_document: None,
+                spa_fallback: Some(true),
+            }],
+        });
 
         let mut world = World::new();
         let bundle = fixture_public_service_bundle("2026.04.0", "taira.sora.org");
@@ -47700,6 +47675,7 @@ mod advert_tests {
         let app = mk_app_state_for_tests_with_world(world);
         let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
         inner.sorafs_node = node;
+        inner.sorafs_site_bindings = Some(site_bindings);
         let state = Arc::new(inner);
 
         let mut root_headers = HeaderMap::new();
@@ -47771,22 +47747,15 @@ mod advert_tests {
         node.ingest_manifest(&new_manifest, &new_plan, &mut new_reader)
             .expect("ingest new site payload");
 
-        let bindings_file = NamedTempFile::new().expect("site bindings file");
-        fs::write(
-            bindings_file.path(),
-            norito::json::to_vec(&crate::sorafs::site::SiteBindingsDocument {
-                version: Some(1),
-                sites: vec![crate::sorafs::site::SiteBinding {
-                    hostname: "taira.sora.org".to_owned(),
-                    manifest_digest_hex: old_manifest_digest_hex,
-                    index_document: None,
-                    spa_fallback: Some(true),
-                }],
-            })
-            .expect("encode site bindings"),
-        )
-        .expect("write site bindings");
-        let _env_guard = SiteBindingsOverrideGuard::set(bindings_file.path());
+        let site_bindings = Arc::new(crate::sorafs::site::SiteBindingsDocument {
+            version: 1,
+            sites: vec![crate::sorafs::site::SiteBinding {
+                hostname: "taira.sora.org".to_owned(),
+                manifest_digest_hex: old_manifest_digest_hex,
+                index_document: None,
+                spa_fallback: Some(true),
+            }],
+        });
 
         let mut world = World::new();
         let bundle = fixture_public_service_bundle("2026.04.1", "taira.sora.org");
@@ -47826,6 +47795,7 @@ mod advert_tests {
         let app = mk_app_state_for_tests_with_world(world);
         let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
         inner.sorafs_node = node;
+        inner.sorafs_site_bindings = Some(site_bindings);
         let state = Arc::new(inner);
 
         let mut root_headers = HeaderMap::new();

@@ -38236,7 +38236,15 @@ impl RepairSlashSubmissionV1 {
     /// Validate and unwrap the slash proposal payload.
     pub(crate) fn into_proposal(self) -> Result<RepairSlashProposalV1, Error> {
         match validate_signed_auditor_request(self.envelope)? {
-            SignedAuditorRequestPayloadV1::SlashProposal(proposal) => Ok(proposal),
+            SignedAuditorRequestPayloadV1::SlashProposal(proposal)
+                if proposal.approval.is_none() =>
+            {
+                Ok(proposal)
+            }
+            SignedAuditorRequestPayloadV1::SlashProposal(_) => Err(conversion_error(
+                "repair slash proposals must not embed approval summaries; governance decisions require authenticated stored votes"
+                    .to_string(),
+            )),
             SignedAuditorRequestPayloadV1::RepairReport(_) => Err(conversion_error(
                 "signed auditor request payload must be `slash_proposal`".to_string(),
             )),
@@ -38474,7 +38482,9 @@ pub async fn handle_get_sorafs_repair_status(
 ) -> Result<impl IntoResponse, Error> {
     let digest = parse_hex_array::<32>(&manifest_hex, "manifest_digest")?;
     let filters = repair_filters_from_query(Some(digest), query)?;
-    let tasks: Vec<sorafs_node::RepairTaskSnapshot> = sorafs_node.repair_task_snapshots(filters);
+    let tasks: Vec<sorafs_node::RepairTaskSnapshot> = sorafs_node
+        .repair_task_snapshots(filters)
+        .map_err(repair_scheduler_error)?;
     let body = repair_task_snapshots_body(&tasks);
     let mut resp = Response::new(Body::from(body));
     resp.headers_mut().insert(
@@ -38491,7 +38501,9 @@ pub async fn handle_get_sorafs_repair_status_all(
     crate::NoritoQuery(query): crate::NoritoQuery<RepairStatusQueryDto>,
 ) -> Result<impl IntoResponse, Error> {
     let filters = repair_filters_from_query(None, query)?;
-    let tasks: Vec<sorafs_node::RepairTaskSnapshot> = sorafs_node.repair_task_snapshots(filters);
+    let tasks: Vec<sorafs_node::RepairTaskSnapshot> = sorafs_node
+        .repair_task_snapshots(filters)
+        .map_err(repair_scheduler_error)?;
     let body = repair_task_snapshots_body(&tasks);
     let mut resp = Response::new(Body::from(body));
     resp.headers_mut().insert(
@@ -38541,6 +38553,7 @@ fn repair_task_snapshots_body(snapshots: &[sorafs_node::RepairTaskSnapshot]) -> 
                 .collect();
             json_object(vec![
                 ("norito_base64", json_value(&record_encoded)),
+                ("events_dropped", json_value(&snapshot.events_dropped)),
                 ("events", json::Value::Array(events)),
             ])
         })
@@ -38912,8 +38925,16 @@ fn por_coordinator_error(err: PorCoordinatorError) -> Error {
     }
 }
 
-fn repair_scheduler_error(err: sorafs_node::RepairSchedulerError) -> Error {
-    conversion_error(format!("repair scheduler error: {err}"))
+pub(crate) fn repair_scheduler_error(err: sorafs_node::RepairSchedulerError) -> Error {
+    let message = format!("repair scheduler error: {err}");
+    if matches!(err, sorafs_node::RepairSchedulerError::Store(_)) {
+        Error::AppServiceUnavailable {
+            code: "sorafs_repair_store_unavailable",
+            message,
+        }
+    } else {
+        conversion_error(message)
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -39212,6 +39233,39 @@ mod repair_query_tests {
             .expect("unwrap signed slash proposal");
 
         assert_eq!(decoded, proposal);
+    }
+
+    #[test]
+    fn signed_repair_slash_submission_rejects_embedded_approval() {
+        let key_pair = checked_auditor_keypair();
+        let auditor_account = auditor_account(&key_pair);
+        let mut proposal = slash_proposal_with_auditor(
+            "REP-411-approval",
+            [0x11; 32],
+            [0x23; 32],
+            1_700_000_100,
+            &auditor_account,
+        );
+        proposal.approval = Some(sorafs_manifest::repair::RepairEscalationApprovalV1 {
+            version: sorafs_manifest::repair::REPAIR_ESCALATION_APPROVAL_VERSION_V1,
+            approve_votes: 3,
+            reject_votes: 0,
+            abstain_votes: 0,
+            approved_at_unix: 1_700_000_200,
+            finalized_at_unix: 1_700_000_300,
+        });
+        let envelope = signed_auditor_request(
+            SignedAuditorRequestPayloadV1::SlashProposal(proposal),
+            &key_pair,
+        );
+        let error = RepairSlashSubmissionV1::new(envelope)
+            .into_proposal()
+            .expect_err("embedded approval summary must fail closed");
+
+        assert!(
+            error.to_string().contains("must not embed approval summaries"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
@@ -39597,7 +39651,9 @@ mod repair_worker_tests {
             .expect("fail handler")
             .into_response();
 
-            let tasks = node.repair_tasks(RepairTaskFilters::default());
+            let tasks = node
+                .repair_tasks(RepairTaskFilters::default())
+                .expect("repair task store");
             assert_eq!(tasks.len(), 2);
             let mut states = tasks
                 .iter()
@@ -42940,6 +42996,7 @@ fn account_history_projections_for_height_range(
                 result_hash,
                 result_proof,
                 result,
+                merge_inclusion: None,
             };
             append_account_history_projections_for_tx(&mut index, &tx);
         }
@@ -43168,6 +43225,7 @@ fn contract_activity_projections_for_height_range(
                             result_hash,
                             result_proof,
                             result,
+                            merge_inclusion: None,
                         };
                         contract_activity_projection_from_tx(&tx)
                     },
@@ -43911,6 +43969,7 @@ fn contract_event_projections_for_height_range(
                             result_hash,
                             result_proof,
                             result,
+                            merge_inclusion: None,
                         };
                         contract_event_projection_from_tx(height, &tx)
                     },
@@ -47235,62 +47294,9 @@ mod stateful_account_path_parser_tests {
 #[cfg(feature = "app_api")]
 fn committed_transactions_snapshot(
     state: &CoreState,
-) -> Vec<iroha_data_model::query::CommittedTransaction> {
-    let committed_height = state.committed_height();
-    if committed_height == 0 {
-        return Vec::new();
-    }
-
-    let mut transactions = Vec::new();
-    for height in (1..=committed_height).rev() {
-        let Some(height_nz) = std::num::NonZeroUsize::new(height) else {
-            continue;
-        };
-        let Some(block) = state.block_by_height(height_nz) else {
-            iroha_logger::warn!(
-                height,
-                "missing block in Kura while building committed transaction snapshot"
-            );
-            continue;
-        };
-        let block_hash = block.hash();
-
-        // Keep ordering aligned with `FindTransactions`: newest block first, newest tx first.
-        let entrypoint_hashes = block.entrypoint_hashes().rev();
-        let entrypoint_proofs = block.entrypoint_proofs().rev();
-        let entrypoints = block.entrypoints_cloned().rev();
-        let result_hashes = block.result_hashes().rev();
-        let result_proofs = block.result_proofs().rev();
-        let results = block.results().cloned().rev();
-
-        transactions.extend(
-            entrypoint_hashes
-                .zip(entrypoint_proofs)
-                .zip(entrypoints)
-                .zip(result_hashes)
-                .zip(result_proofs)
-                .zip(results)
-                .map(
-                    |(
-                        (
-                            (((entrypoint_hash, entrypoint_proof), entrypoint), result_hash),
-                            result_proof,
-                        ),
-                        result,
-                    )| iroha_data_model::query::CommittedTransaction {
-                        block_hash,
-                        entrypoint_hash,
-                        entrypoint_proof,
-                        entrypoint,
-                        result_hash,
-                        result_proof,
-                        result,
-                    },
-                ),
-        );
-    }
-
-    transactions
+) -> Result<Vec<iroha_data_model::query::CommittedTransaction>> {
+    iroha_core::smartcontracts::isi::tx::committed_transactions_snapshot(state)
+        .map_err(|err| Error::Query(iroha_data_model::ValidationFail::QueryFailed(err)))
 }
 
 /// POST /v1/accounts/{account_id}/transactions/query
@@ -47369,7 +47375,7 @@ pub async fn handle_v1_account_transactions_with_policy(
     record_account_literal_selection(&telemetry, ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY);
     let limits = app_query_limits();
     let cap = app_query_page_cap(&state);
-    let committed_txs = committed_transactions_snapshot(state.as_ref());
+    let committed_txs = committed_transactions_snapshot(state.as_ref())?;
     let allowed_asset_selector = allowed_asset_definition_id
         .clone()
         .map(TxHistoryAssetSelector::DefinitionId);
@@ -47792,7 +47798,7 @@ async fn handle_v1_transactions_query_scoped_with_policy(
 
     let limits = app_query_limits();
     let cap = app_query_page_cap(&state);
-    let committed_txs = committed_transactions_snapshot(state.as_ref());
+    let committed_txs = committed_transactions_snapshot(state.as_ref())?;
     let allowed_asset_selector = allowed_asset_definition_id
         .clone()
         .map(TxHistoryAssetSelector::DefinitionId);
@@ -48092,7 +48098,7 @@ pub async fn handle_v1_account_transactions_get_with_policy(
     let count_mode = app_count_mode(params.count_mode.as_deref(), ENDPOINT_ACCOUNTS_TRANSACTIONS);
     let page = {
         let limits = app_query_limits();
-        let committed_txs = committed_transactions_snapshot(state.as_ref());
+        let committed_txs = committed_transactions_snapshot(state.as_ref())?;
         let world = state.world_view();
         let now_ms = asset_alias_observation_time_ms(&state);
         let asset_filter = resolve_tx_history_asset_selector(
@@ -48354,7 +48360,7 @@ pub async fn handle_v1_transactions_history_get(
     let count_mode = app_count_mode(params.count_mode.as_deref(), "/v1/transactions/history");
     let page = {
         let limits = app_query_limits();
-        let committed_txs = committed_transactions_snapshot(state.as_ref());
+        let committed_txs = committed_transactions_snapshot(state.as_ref())?;
         let world = state.world_view();
         let now_ms = asset_alias_observation_time_ms(&state);
         let asset_filter = resolve_tx_history_asset_selector(
@@ -49201,6 +49207,7 @@ mod tx_query_filter_tests {
             )),
             result_proof: dummy_proof(),
             result,
+            merge_inclusion: None,
         }
     }
 
@@ -49266,6 +49273,7 @@ mod tx_query_filter_tests {
             )),
             result_proof: dummy_proof(),
             result,
+            merge_inclusion: None,
         }
     }
 
@@ -58563,7 +58571,7 @@ pub async fn handle_v1_kaigi_call_signals(
         .unwrap_or(0);
 
     let call_literal = call_id.to_string();
-    let mut items = committed_transactions_snapshot(state.as_ref())
+    let mut items = committed_transactions_snapshot(state.as_ref())?
         .into_iter()
         .filter_map(|tx| kaigi_signal_from_transaction(&tx, reveal_authorities))
         .filter(|signal| signal.call_id == call_literal)
@@ -61501,6 +61509,7 @@ mod status_tests {
             validator_set: validator_set.clone(),
             signers_bitmap: vec![0b0000_0001],
             bls_aggregate_signature: vec![0xA1],
+            payload_availability_qc: None,
         };
         let commit_qc = LaneBlockQcV1 {
             body: proposal.vote_body(CertPhase::Commit),
@@ -61509,6 +61518,7 @@ mod status_tests {
             validator_set,
             signers_bitmap: vec![0b0000_0001],
             bls_aggregate_signature: vec![0xA2],
+            payload_availability_qc: None,
         };
         status::CommittedLaneBlockSnapshot {
             lane_id: proposal.descriptor.lane_id,

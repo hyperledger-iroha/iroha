@@ -6,9 +6,11 @@ use iroha_crypto::{Algorithm, Hash, HashOf, PrivateKey, PublicKey, Signature};
 use iroha_data_model::{
     block::consensus::{
         CertPhase, LaneBlockProposalPayloadHintV1, LaneBlockProposalV1, LaneBlockQcV1,
-        LaneBlockVoteBodyV1, SumeragiLaneBlockSessionStatus, SumeragiLanePayloadOwnership,
+        LaneBlockVoteBodyV1, LanePayloadAvailabilityBodyV1, LanePayloadAvailabilityQcV1,
+        NativeAmxReceipt, SumeragiLaneBlockSessionStatus, SumeragiLanePayloadOwnership,
     },
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
+    merge::{MAX_MERGE_EXECUTION_ENTRYPOINTS, MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES},
     nexus::{DataSpaceId, LaneId},
     peer::PeerId,
     transaction::signed::TransactionEntrypoint,
@@ -27,14 +29,31 @@ use crate::{
 /// The proposal path applies tighter configured block limits. This hard ceiling
 /// is a final defence for artifacts recovered from untrusted storage or future
 /// lane-local transport.
-pub(crate) const MAX_LANE_EXECUTABLE_ENTRYPOINTS: usize = 4_096;
+pub(crate) const MAX_LANE_EXECUTABLE_ENTRYPOINTS: usize = MAX_MERGE_EXECUTION_ENTRYPOINTS;
 
-/// Maximum canonical Norito bytes retained for one autonomous lane payload.
+/// Maximum lane validators admitted into one vote or certificate.
+pub(crate) const MAX_LANE_BLOCK_VALIDATORS: usize = 128;
+/// Canonical compressed BLS-normal signature and proof-of-possession length.
+pub(crate) const LANE_BLS_PROOF_BYTES: usize = 96;
+/// Maximum canonical READY body bytes before signing or hashing.
+pub(crate) const MAX_LANE_PAYLOAD_AVAILABILITY_BODY_BYTES: usize = 4 * 1024;
+/// Maximum self-contained READY QC bytes admitted from wire or storage.
+pub(crate) const MAX_LANE_PAYLOAD_AVAILABILITY_QC_BYTES: usize = 64 * 1024;
+/// Maximum UTF-8 bytes retained for the READY consensus-domain tag.
+const MAX_LANE_AVAILABILITY_QC_MODE_TAG_BYTES: usize = 256;
+
+/// Bytes reserved below the default consensus frame cap for the authenticated
+/// view/QC envelope and the later globally certified merge transcript.
+pub(crate) const LANE_EXECUTABLE_ENVELOPE_HEADROOM_BYTES: usize =
+    16 * 1024 * 1024 - MAX_LANE_EXECUTABLE_PAYLOAD_BYTES;
+/// Maximum canonical Norito body bytes retained for one autonomous lane payload.
 ///
-/// This matches the default consensus frame ceiling and is deliberately a
-/// protocol hard limit: operators may lower transport caps, but no peer will
-/// decode, persist, or re-sign an unbounded lane handoff.
-pub(crate) const MAX_LANE_EXECUTABLE_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
+/// The payload body is at most half of one authenticated source bundle because
+/// that bundle also carries availability, view-change, prepare, commit, and PoP
+/// evidence. The global merge batch then has a separate bounded budget for the
+/// repeated executable transcript, deterministic results, and settlement.
+pub(crate) const MAX_LANE_EXECUTABLE_PAYLOAD_BYTES: usize =
+    MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES / 2;
 
 /// Maximum authenticated view transitions retained for one lane height.
 pub(crate) const MAX_LANE_NEW_VIEW_CERTIFICATES: usize = 256;
@@ -65,6 +84,11 @@ pub struct LaneExecutablePayloadV1 {
     pub reservation_keys: Vec<LaneQueueReservationKeyV1>,
     /// Full coordinator/participant routing plans in entrypoint order.
     pub routing_plans: Vec<RoutingPlan>,
+    /// Native AMX certificates aligned exactly with entrypoints and routing plans.
+    ///
+    /// Autonomous payloads carry one element per entrypoint: `Some` for a
+    /// cross-dataspace native AMX plan and `None` for a single-route plan.
+    pub native_amx_receipts: Vec<Option<NativeAmxReceipt>>,
     /// View-neutral digest of chain, epoch, lane coordinates, predecessor,
     /// committee, and exact executable entrypoints.
     pub payload_hash: Hash,
@@ -127,6 +151,7 @@ struct LaneExecutablePayloadPreimage {
     entrypoints: Vec<TransactionEntrypoint>,
     reservation_keys: Vec<LaneQueueReservationKeyV1>,
     routing_plans: Vec<RoutingPlan>,
+    native_amx_receipts: Vec<Option<NativeAmxReceipt>>,
 }
 
 #[derive(Clone, Debug, Encode)]
@@ -224,6 +249,19 @@ pub struct LaneBlockNewViewVoteV1 {
     pub bls_signature: Vec<u8>,
 }
 
+/// Individual READY vote for one exact autonomous lane executable payload.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct LanePayloadAvailabilityVoteV1 {
+    /// Exact payload/session body signed by the committee member.
+    pub body: LanePayloadAvailabilityBodyV1,
+    /// Committee member that durably retained the payload before signing.
+    pub signer: PeerId,
+    /// PoPs aligned with the exact historical committee order.
+    pub validator_set_pops: Vec<Vec<u8>>,
+    /// BLS-normal signature over `body.signature_preimage()`.
+    pub bls_signature: Vec<u8>,
+}
+
 /// Quorum certificate authorizing one lane-local view transition.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct LaneBlockNewViewCertificateV1 {
@@ -249,22 +287,15 @@ pub(crate) struct DurableLaneBlockNewViewCertificateV1 {
 
 /// Restart-verifiable lane payload availability certificate.
 ///
-/// A prepare vote doubles as a READY statement only after the signer has
-/// validated and durably persisted the producer-authenticated payload. The
-/// aggregate prepare QC is the DELIVER certificate: quorum intersection then
-/// guarantees at least one honest durable holder under the lane fault model.
+/// An autonomous prepare vote carries a separate, domain-separated READY
+/// signature only after the signer validates and durably persists the exact
+/// producer-authenticated payload. The prepare QC embeds the aggregate READY
+/// certificate and historical signer PoPs, so no unsigned sidecar field is
+/// trusted after restart.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub(crate) struct DurableLanePayloadAvailabilityCertificateV1 {
-    /// Chain that owns the durable payload.
-    pub(crate) chain_id_hash: Hash,
-    /// Epoch at the proposal compatibility height.
-    pub(crate) epoch: u64,
-    /// View-neutral executable payload digest retained by READY signers.
-    pub(crate) executable_payload_hash: Hash,
-    /// Aggregate prepare QC serving as the availability DELIVER certificate.
+    /// Prepare QC containing the exact aggregate READY certificate.
     pub(crate) certificate: LaneBlockQcV1,
-    /// Proofs of possession for exactly the selected READY signers.
-    pub(crate) signer_pops: BTreeMap<PublicKey, Vec<u8>>,
 }
 
 /// Restart-verifiable compaction point for an authenticated lane view chain.
@@ -310,6 +341,9 @@ pub(crate) enum LaneAutonomousArtifactError {
     /// Full routing plans do not exactly bind coordinator-owned execution.
     #[error("autonomous lane payload routing plans do not match payload")]
     RoutingPlanMismatch,
+    /// Native AMX receipts are missing, extra, reordered, or do not bind the exact session.
+    #[error("autonomous lane payload native AMX receipts do not match payload")]
+    NativeAmxReceiptMismatch,
     /// Canonical payload hashing failed or the stored digest mismatched.
     #[error("autonomous lane payload hash mismatch")]
     PayloadHashMismatch,
@@ -373,6 +407,33 @@ pub(crate) enum LaneAutonomousArtifactError {
     /// Availability certificate does not bind the exact executable payload.
     #[error("lane payload availability certificate does not match payload")]
     AvailabilityMismatch,
+    /// Availability body is malformed or exceeds defensive limits.
+    #[error("lane payload availability body is invalid")]
+    InvalidAvailabilityBody,
+    /// READY signer is not in the exact certified lane committee.
+    #[error("lane payload availability signer is not in committee")]
+    AvailabilitySignerNotInCommittee,
+    /// READY signer appeared more than once.
+    #[error("duplicate lane payload availability signer")]
+    DuplicateAvailabilitySigner,
+    /// READY votes certify different payload/session bodies.
+    #[error("lane payload availability vote body mismatch")]
+    AvailabilityBodyMismatch,
+    /// READY signer proof of possession is missing, malformed, or invalid.
+    #[error("lane payload availability signer proof of possession is invalid")]
+    InvalidAvailabilityPop,
+    /// READY vote signature is missing, malformed, or invalid.
+    #[error("lane payload availability vote signature is invalid")]
+    InvalidAvailabilitySignature,
+    /// READY votes do not satisfy the exact committee quorum.
+    #[error("lane payload availability quorum is not met")]
+    AvailabilityQuorumNotMet,
+    /// READY signer bitmap is malformed or has trailing bits set.
+    #[error("lane payload availability signer bitmap is invalid")]
+    InvalidAvailabilityBitmap,
+    /// READY aggregate signature construction or verification failed.
+    #[error("lane payload availability aggregate signature is invalid")]
+    InvalidAvailabilityAggregate,
     /// Availability certificate is not a valid aggregate prepare QC.
     #[error("lane payload availability certificate is invalid")]
     InvalidAvailabilityCertificate,
@@ -395,6 +456,7 @@ impl LaneExecutablePayloadV1 {
             entrypoints,
             Vec::new(),
             Vec::new(),
+            Vec::new(),
             producer,
             private_key,
         )
@@ -410,6 +472,7 @@ impl LaneExecutablePayloadV1 {
         entrypoints: Vec<TransactionEntrypoint>,
         reservation_keys: Vec<LaneQueueReservationKeyV1>,
         routing_plans: Vec<RoutingPlan>,
+        native_amx_receipts: Vec<Option<NativeAmxReceipt>>,
         producer: PeerId,
         private_key: &PrivateKey,
     ) -> Result<Self, LaneAutonomousArtifactError> {
@@ -428,6 +491,7 @@ impl LaneExecutablePayloadV1 {
             entrypoints,
             reservation_keys,
             routing_plans,
+            native_amx_receipts,
             payload_hash: Hash::prehashed([0; Hash::LENGTH]),
             producer,
             producer_signature: Vec::new(),
@@ -452,6 +516,7 @@ impl LaneExecutablePayloadV1 {
             &self.entrypoints,
             &self.reservation_keys,
             &self.routing_plans,
+            &self.native_amx_receipts,
         )
     }
 
@@ -488,6 +553,7 @@ impl LaneExecutablePayloadV1 {
             &self.entrypoints,
             &self.reservation_keys,
             &self.routing_plans,
+            &self.native_amx_receipts,
             self.payload_hash,
             expected_chain_id_hash,
             expected_epoch,
@@ -538,6 +604,400 @@ impl LaneExecutablePayloadV1 {
     }
 }
 
+/// Build the exact READY body for a producer-authenticated payload and the
+/// view-specific proposal currently being prepared.
+pub(crate) fn lane_payload_availability_body(
+    executable_payload: &LaneExecutablePayloadV1,
+    current_proposal: &LaneBlockProposalV1,
+    expected_chain_id_hash: Hash,
+    expected_epoch: u64,
+) -> Result<LanePayloadAvailabilityBodyV1, LaneAutonomousArtifactError> {
+    executable_payload.validate(expected_chain_id_hash, expected_epoch)?;
+    validate_lane_block_proposal(current_proposal)
+        .map_err(|_| LaneAutonomousArtifactError::InvalidProposal)?;
+    if !executable_payload.matches_proposal_static(current_proposal) {
+        return Err(LaneAutonomousArtifactError::AvailabilityMismatch);
+    }
+    let expected_current = if current_proposal.descriptor.lane_block_view
+        == executable_payload
+            .origin_proposal
+            .descriptor
+            .lane_block_view
+    {
+        executable_payload.origin_proposal.clone()
+    } else {
+        retarget_lane_block_proposal_exact_view(
+            &executable_payload.origin_proposal,
+            current_proposal.descriptor.lane_block_view,
+        )?
+    };
+    if !expected_current.same_consensus_identity(current_proposal) {
+        return Err(LaneAutonomousArtifactError::AvailabilityMismatch);
+    }
+
+    let origin = &executable_payload.origin_proposal.descriptor;
+    let current = &current_proposal.descriptor;
+    let body = LanePayloadAvailabilityBodyV1 {
+        version: 1,
+        chain_id_hash: expected_chain_id_hash,
+        epoch: expected_epoch,
+        lane_id: current.lane_id,
+        dataspace_id: current.dataspace_id,
+        lane_incarnation: current.lane_incarnation,
+        proposal_height: current.proposal_height,
+        lane_block_height: current.lane_block_height,
+        origin_lane_block_view: origin.lane_block_view,
+        origin_proposal_hash: executable_payload.origin_proposal.proposal_hash,
+        origin_descriptor_hash: origin.descriptor_hash,
+        current_lane_block_view: current.lane_block_view,
+        current_proposal_hash: current_proposal.proposal_hash,
+        current_descriptor_hash: current.descriptor_hash,
+        current_subject_hash: current.subject_hash,
+        current_payload_ownership_hash: current.payload_ownership_hash,
+        current_rbc_instance_hash: current.rbc_instance_hash,
+        executable_payload_hash: executable_payload.payload_hash,
+        validator_set_hash_version: current.validator_set_hash_version,
+        validator_set_hash: current.validator_set_hash,
+        validator_count: current.validator_count,
+        min_quorum: current.min_quorum,
+        qc_mode_tag: current.qc_mode_tag.clone(),
+    };
+    validate_lane_payload_availability_body_shape(&body)?;
+    Ok(body)
+}
+
+/// Verify that a READY body names the exact payload and current proposal.
+pub(crate) fn validate_lane_payload_availability_body_against_payload(
+    body: &LanePayloadAvailabilityBodyV1,
+    executable_payload: &LaneExecutablePayloadV1,
+    current_proposal: &LaneBlockProposalV1,
+    expected_chain_id_hash: Hash,
+    expected_epoch: u64,
+) -> Result<(), LaneAutonomousArtifactError> {
+    let expected = lane_payload_availability_body(
+        executable_payload,
+        current_proposal,
+        expected_chain_id_hash,
+        expected_epoch,
+    )?;
+    if body != &expected {
+        return Err(LaneAutonomousArtifactError::AvailabilityMismatch);
+    }
+    Ok(())
+}
+
+fn validate_lane_payload_availability_body_shape(
+    body: &LanePayloadAvailabilityBodyV1,
+) -> Result<(), LaneAutonomousArtifactError> {
+    let validator_count = usize::try_from(body.validator_count)
+        .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilityBody)?;
+    if body.version != 1
+        || body.proposal_height == 0
+        || body.lane_block_height == 0
+        || body.lane_incarnation.as_ref().iter().all(|byte| *byte == 0)
+        || body.origin_lane_block_view > body.current_lane_block_view
+        || body.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1
+        || validator_count == 0
+        || validator_count > MAX_LANE_BLOCK_VALIDATORS
+        || body.min_quorum == 0
+        || body.min_quorum > body.validator_count
+        || body.qc_mode_tag.trim().is_empty()
+        || body.qc_mode_tag.len() > MAX_LANE_AVAILABILITY_QC_MODE_TAG_BYTES
+    {
+        return Err(LaneAutonomousArtifactError::InvalidAvailabilityBody);
+    }
+    if norito::to_bytes(body).map_or(true, |encoded| {
+        encoded.len() > MAX_LANE_PAYLOAD_AVAILABILITY_BODY_BYTES
+    }) {
+        return Err(LaneAutonomousArtifactError::InvalidAvailabilityBody);
+    }
+    Ok(())
+}
+
+fn validate_availability_body_matches_proposal(
+    body: &LanePayloadAvailabilityBodyV1,
+    proposal: &LaneBlockProposalV1,
+) -> Result<(), LaneAutonomousArtifactError> {
+    validate_lane_payload_availability_body_shape(body)?;
+    let descriptor = &proposal.descriptor;
+    if body.lane_id != descriptor.lane_id
+        || body.dataspace_id != descriptor.dataspace_id
+        || body.lane_incarnation != descriptor.lane_incarnation
+        || body.proposal_height != descriptor.proposal_height
+        || body.lane_block_height != descriptor.lane_block_height
+        || body.current_lane_block_view != descriptor.lane_block_view
+        || body.current_proposal_hash != proposal.proposal_hash
+        || body.current_descriptor_hash != descriptor.descriptor_hash
+        || body.current_subject_hash != descriptor.subject_hash
+        || body.current_payload_ownership_hash != descriptor.payload_ownership_hash
+        || body.current_rbc_instance_hash != descriptor.rbc_instance_hash
+        || body.validator_set_hash_version != descriptor.validator_set_hash_version
+        || body.validator_set_hash != descriptor.validator_set_hash
+        || body.validator_count != descriptor.validator_count
+        || body.min_quorum != descriptor.min_quorum
+        || body.qc_mode_tag != descriptor.qc_mode_tag
+    {
+        return Err(LaneAutonomousArtifactError::AvailabilityMismatch);
+    }
+    Ok(())
+}
+
+fn availability_body_matches_lane_vote_body(
+    availability: &LanePayloadAvailabilityBodyV1,
+    vote: &LaneBlockVoteBodyV1,
+) -> bool {
+    availability.lane_id == vote.lane_id
+        && availability.dataspace_id == vote.dataspace_id
+        && availability.lane_incarnation == vote.lane_incarnation
+        && availability.proposal_height == vote.proposal_height
+        && availability.lane_block_height == vote.lane_block_height
+        && availability.current_lane_block_view == vote.lane_block_view
+        && availability.current_proposal_hash == vote.proposal_hash
+        && availability.current_descriptor_hash == vote.descriptor_hash
+        && availability.current_subject_hash == vote.subject_hash
+        && availability.current_payload_ownership_hash == vote.payload_ownership_hash
+        && availability.current_rbc_instance_hash == vote.rbc_instance_hash
+        && availability.validator_set_hash_version == vote.validator_set_hash_version
+        && availability.validator_set_hash == vote.validator_set_hash
+        && availability.validator_count == vote.validator_count
+        && availability.min_quorum == vote.min_quorum
+        && availability.qc_mode_tag == vote.qc_mode_tag
+}
+
+impl LanePayloadAvailabilityVoteV1 {
+    /// Construct a READY vote after the caller has durably retained the exact payload.
+    pub(crate) fn new_signed(
+        body: LanePayloadAvailabilityBodyV1,
+        signer: PeerId,
+        validator_set_pops: Vec<Vec<u8>>,
+        private_key: &PrivateKey,
+    ) -> Result<Self, LaneAutonomousArtifactError> {
+        validate_lane_payload_availability_body_shape(&body)?;
+        let signature = Signature::try_new(private_key, &body.signature_preimage())
+            .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilitySignature)?;
+        let vote = Self {
+            body,
+            signer,
+            validator_set_pops,
+            bls_signature: signature.payload().to_vec(),
+        };
+        vote.validate_shape_and_signature()?;
+        Ok(vote)
+    }
+
+    fn validate_shape(&self) -> Result<(), LaneAutonomousArtifactError> {
+        validate_lane_payload_availability_body_shape(&self.body)?;
+        let validator_count = usize::try_from(self.body.validator_count)
+            .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilityBody)?;
+        if self.validator_set_pops.len() != validator_count
+            || self
+                .validator_set_pops
+                .iter()
+                .any(|pop| pop.len() != LANE_BLS_PROOF_BYTES)
+        {
+            return Err(LaneAutonomousArtifactError::InvalidAvailabilityPop);
+        }
+        if !peer_uses_bls_normal(&self.signer) || self.bls_signature.len() != LANE_BLS_PROOF_BYTES {
+            return Err(LaneAutonomousArtifactError::InvalidAvailabilitySignature);
+        }
+        Ok(())
+    }
+
+    fn verify_signature(&self) -> Result<(), LaneAutonomousArtifactError> {
+        Signature::try_from_bytes(&self.bls_signature)
+            .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilitySignature)?
+            .verify(self.signer.public_key(), &self.body.signature_preimage())
+            .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilitySignature)
+    }
+
+    fn validate_shape_and_signature(&self) -> Result<(), LaneAutonomousArtifactError> {
+        self.validate_shape()?;
+        self.verify_signature()
+    }
+
+    fn validate_against_validator_set(
+        &self,
+        validator_set: &[PeerId],
+    ) -> Result<(), LaneAutonomousArtifactError> {
+        self.validate_shape_and_signature()?;
+        validate_lane_block_validator_set_fields(
+            self.body.validator_set_hash_version,
+            self.body.validator_set_hash,
+            self.body.validator_count,
+            validator_set,
+        )
+        .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilityBody)?;
+        if validator_set.len() > MAX_LANE_BLOCK_VALIDATORS || !validator_set.contains(&self.signer)
+        {
+            return Err(LaneAutonomousArtifactError::AvailabilitySignerNotInCommittee);
+        }
+        for (validator, pop) in validator_set.iter().zip(&self.validator_set_pops) {
+            if !peer_uses_bls_normal(validator)
+                || iroha_crypto::bls_normal_pop_verify(validator.public_key(), pop).is_err()
+            {
+                return Err(LaneAutonomousArtifactError::InvalidAvailabilityPop);
+            }
+        }
+        Ok(())
+    }
+}
+
+fn aggregate_lane_payload_availability_votes(
+    body: LanePayloadAvailabilityBodyV1,
+    validator_set: Vec<PeerId>,
+    votes: &[LanePayloadAvailabilityVoteV1],
+) -> Result<LanePayloadAvailabilityQcV1, LaneAutonomousArtifactError> {
+    validate_lane_payload_availability_body_shape(&body)?;
+    validate_lane_block_validator_set_fields(
+        body.validator_set_hash_version,
+        body.validator_set_hash,
+        body.validator_count,
+        &validator_set,
+    )
+    .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilityBody)?;
+    if validator_set.len() > MAX_LANE_BLOCK_VALIDATORS {
+        return Err(LaneAutonomousArtifactError::InvalidAvailabilityBody);
+    }
+
+    let mut indexed_signatures = BTreeMap::<usize, Vec<u8>>::new();
+    let mut canonical_pops: Option<Vec<Vec<u8>>> = None;
+    for vote in votes {
+        if vote.body != body {
+            return Err(LaneAutonomousArtifactError::AvailabilityBodyMismatch);
+        }
+        vote.validate_against_validator_set(&validator_set)?;
+        let index = validator_set
+            .iter()
+            .position(|validator| validator == &vote.signer)
+            .ok_or(LaneAutonomousArtifactError::AvailabilitySignerNotInCommittee)?;
+        if indexed_signatures
+            .insert(index, vote.bls_signature.clone())
+            .is_some()
+        {
+            return Err(LaneAutonomousArtifactError::DuplicateAvailabilitySigner);
+        }
+        match &mut canonical_pops {
+            Some(existing) if vote.validator_set_pops.as_slice() < existing.as_slice() => {
+                *existing = vote.validator_set_pops.clone();
+            }
+            None => canonical_pops = Some(vote.validator_set_pops.clone()),
+            Some(_) => {}
+        }
+    }
+    if indexed_signatures.len()
+        < usize::try_from(body.min_quorum)
+            .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilityBody)?
+    {
+        return Err(LaneAutonomousArtifactError::AvailabilityQuorumNotMet);
+    }
+
+    let mut signers_bitmap = vec![0_u8; validator_set.len().div_ceil(8)];
+    let ordered_signatures = indexed_signatures
+        .into_iter()
+        .map(|(index, signature)| {
+            signers_bitmap[index / 8] |= 1_u8 << (index % 8);
+            signature
+        })
+        .collect::<Vec<_>>();
+    let signature_refs = ordered_signatures
+        .iter()
+        .map(Vec::as_slice)
+        .collect::<Vec<_>>();
+    let bls_aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
+        .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilityAggregate)?;
+    let qc = LanePayloadAvailabilityQcV1 {
+        body,
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set_hash: HashOf::new(&validator_set),
+        validator_set,
+        validator_set_pops: canonical_pops
+            .ok_or(LaneAutonomousArtifactError::AvailabilityQuorumNotMet)?,
+        signers_bitmap,
+        bls_aggregate_signature,
+    };
+    validate_lane_payload_availability_qc(&qc)?;
+    Ok(qc)
+}
+
+/// Validate a self-contained exact-payload READY quorum certificate.
+pub(crate) fn validate_lane_payload_availability_qc(
+    qc: &LanePayloadAvailabilityQcV1,
+) -> Result<(), LaneAutonomousArtifactError> {
+    validate_lane_payload_availability_body_shape(&qc.body)?;
+    if qc.validator_set.len() > MAX_LANE_BLOCK_VALIDATORS
+        || qc.validator_set_hash_version != qc.body.validator_set_hash_version
+        || qc.validator_set_hash != qc.body.validator_set_hash
+    {
+        return Err(LaneAutonomousArtifactError::InvalidAvailabilityBody);
+    }
+    validate_lane_block_validator_set_fields(
+        qc.validator_set_hash_version,
+        qc.validator_set_hash,
+        qc.body.validator_count,
+        &qc.validator_set,
+    )
+    .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilityBody)?;
+    if qc.validator_set_pops.len() != qc.validator_set.len()
+        || qc
+            .validator_set_pops
+            .iter()
+            .any(|pop| pop.len() != LANE_BLS_PROOF_BYTES)
+    {
+        return Err(LaneAutonomousArtifactError::InvalidAvailabilityPop);
+    }
+    let expected_bitmap_len = qc.validator_set.len().div_ceil(8);
+    if qc.signers_bitmap.len() != expected_bitmap_len
+        || qc.bls_aggregate_signature.len() != LANE_BLS_PROOF_BYTES
+    {
+        return Err(LaneAutonomousArtifactError::InvalidAvailabilityBitmap);
+    }
+    if norito::to_bytes(qc).map_or(true, |encoded| {
+        encoded.len() > MAX_LANE_PAYLOAD_AVAILABILITY_QC_BYTES
+    }) {
+        return Err(LaneAutonomousArtifactError::InvalidAvailabilityBody);
+    }
+    if let Some(last) = qc.signers_bitmap.last().copied() {
+        let used_bits = qc.validator_set.len() % 8;
+        if used_bits != 0 && last & !((1_u8 << used_bits) - 1) != 0 {
+            return Err(LaneAutonomousArtifactError::InvalidAvailabilityBitmap);
+        }
+    }
+
+    let mut signer_count = 0_usize;
+    let mut public_keys = Vec::<&PublicKey>::new();
+    let mut pop_refs = Vec::<&[u8]>::new();
+    for (index, (validator, pop)) in qc
+        .validator_set
+        .iter()
+        .zip(&qc.validator_set_pops)
+        .enumerate()
+    {
+        if !peer_uses_bls_normal(validator)
+            || iroha_crypto::bls_normal_pop_verify(validator.public_key(), pop).is_err()
+        {
+            return Err(LaneAutonomousArtifactError::InvalidAvailabilityPop);
+        }
+        if qc.signers_bitmap[index / 8] & (1_u8 << (index % 8)) != 0 {
+            signer_count = signer_count.saturating_add(1);
+            public_keys.push(validator.public_key());
+            pop_refs.push(pop.as_slice());
+        }
+    }
+    if signer_count
+        < usize::try_from(qc.body.min_quorum)
+            .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilityBody)?
+    {
+        return Err(LaneAutonomousArtifactError::AvailabilityQuorumNotMet);
+    }
+    iroha_crypto::bls_normal_verify_preaggregated_same_message(
+        &qc.body.signature_preimage(),
+        &qc.bls_aggregate_signature,
+        &public_keys,
+        &pop_refs,
+    )
+    .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilityAggregate)
+}
+
 pub(crate) fn compute_lane_executable_payload_hash(
     version: u8,
     chain_id_hash: Hash,
@@ -546,6 +1006,7 @@ pub(crate) fn compute_lane_executable_payload_hash(
     entrypoints: &[TransactionEntrypoint],
     reservation_keys: &[LaneQueueReservationKeyV1],
     routing_plans: &[RoutingPlan],
+    native_amx_receipts: &[Option<NativeAmxReceipt>],
 ) -> Result<Hash, LaneAutonomousArtifactError> {
     let descriptor = &origin_proposal.descriptor;
     let preimage = LaneExecutablePayloadPreimage {
@@ -572,6 +1033,7 @@ pub(crate) fn compute_lane_executable_payload_hash(
         entrypoints: entrypoints.to_vec(),
         reservation_keys: reservation_keys.to_vec(),
         routing_plans: routing_plans.to_vec(),
+        native_amx_receipts: native_amx_receipts.to_vec(),
     };
     let bytes = norito::to_bytes(&preimage)
         .map_err(|_| LaneAutonomousArtifactError::PayloadHashMismatch)?;
@@ -588,6 +1050,7 @@ fn validate_lane_executable_payload_body(
     entrypoints: &[TransactionEntrypoint],
     reservation_keys: &[LaneQueueReservationKeyV1],
     routing_plans: &[RoutingPlan],
+    native_amx_receipts: &[Option<NativeAmxReceipt>],
     payload_hash: Hash,
     expected_chain_id_hash: Hash,
     expected_epoch: u64,
@@ -612,14 +1075,14 @@ fn validate_lane_executable_payload_body(
     {
         return Err(LaneAutonomousArtifactError::EntrypointLimitExceeded);
     }
-    if Encode::encode(&(
+    let encoded_payload_body_len = Encode::encode(&(
         entrypoints.to_vec(),
         reservation_keys.to_vec(),
         routing_plans.to_vec(),
+        native_amx_receipts.to_vec(),
     ))
-    .len()
-        > MAX_LANE_EXECUTABLE_PAYLOAD_BYTES
-    {
+    .len();
+    if !lane_executable_payload_body_within_limit(encoded_payload_body_len) {
         return Err(LaneAutonomousArtifactError::PayloadByteLimitExceeded);
     }
     let actual_hashes = entrypoints
@@ -645,18 +1108,21 @@ fn validate_lane_executable_payload_body(
     if reservation_keys.is_empty() != routing_plans.is_empty()
         || (!reservation_keys.is_empty()
             && (reservation_keys.len() != entrypoints.len()
-                || routing_plans.len() != entrypoints.len()))
+                || routing_plans.len() != entrypoints.len()
+                || native_amx_receipts.len() != entrypoints.len()))
+        || (reservation_keys.is_empty() && !native_amx_receipts.is_empty())
         || (origin_proposal.payload_block_hint.is_none() && reservation_keys.is_empty())
     {
         return Err(LaneAutonomousArtifactError::ReservationMismatch);
     }
     let mut reservation_digests = BTreeSet::new();
     let mut signed_transaction_hashes = BTreeSet::new();
-    for (((entrypoint, entrypoint_hash), key), routing_plan) in entrypoints
+    for ((((entrypoint, entrypoint_hash), key), routing_plan), native_amx_receipt) in entrypoints
         .iter()
         .zip(entrypoint_hashes)
         .zip(reservation_keys)
         .zip(routing_plans)
+        .zip(native_amx_receipts)
     {
         let accepted = AcceptedTransaction::new_unchecked(entrypoint.clone());
         if key.signed_transaction_hash != accepted.hash()
@@ -680,6 +1146,16 @@ fn validate_lane_executable_payload_body(
         {
             return Err(LaneAutonomousArtifactError::RoutingPlanMismatch);
         }
+        if !crate::native_amx::receipt_shape_matches_coordinator_payload(
+            native_amx_receipt.as_ref(),
+            routing_plan,
+            accepted.hash().as_ref(),
+            *entrypoint_hash,
+            chain_id_hash,
+            origin_proposal,
+        ) {
+            return Err(LaneAutonomousArtifactError::NativeAmxReceiptMismatch);
+        }
     }
     if compute_lane_executable_payload_hash(
         version,
@@ -689,11 +1165,16 @@ fn validate_lane_executable_payload_body(
         entrypoints,
         reservation_keys,
         routing_plans,
+        native_amx_receipts,
     )? != payload_hash
     {
         return Err(LaneAutonomousArtifactError::PayloadHashMismatch);
     }
     Ok(())
+}
+
+const fn lane_executable_payload_body_within_limit(encoded_len: usize) -> bool {
+    encoded_len <= MAX_LANE_EXECUTABLE_PAYLOAD_BYTES
 }
 
 impl LaneExecutablePayloadHandoffV1 {
@@ -719,6 +1200,7 @@ impl LaneExecutablePayloadHandoffV1 {
             epoch,
             &origin_proposal,
             &entrypoints,
+            &[],
             &[],
             &[],
         )?;
@@ -779,6 +1261,7 @@ impl LaneExecutablePayloadHandoffV1 {
             &self.origin_proposal,
             &self.entrypoint_hashes,
             &self.entrypoints,
+            &[],
             &[],
             &[],
             self.payload_hash,
@@ -946,6 +1429,8 @@ fn validate_lane_block_new_view_body(
         || body.from_view.checked_add(1) != Some(body.target_view)
         || body.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1
         || body.validator_count == 0
+        || usize::try_from(body.validator_count)
+            .map_or(true, |count| count > MAX_LANE_BLOCK_VALIDATORS)
         || body.min_quorum == 0
         || body.min_quorum > body.validator_count
     {
@@ -1122,17 +1607,16 @@ pub(crate) fn validate_lane_payload_availability_certificate(
     expected_epoch: u64,
 ) -> Result<(), LaneAutonomousArtifactError> {
     executable_payload.validate(expected_chain_id_hash, expected_epoch)?;
-    if durable.chain_id_hash != expected_chain_id_hash
-        || durable.epoch != expected_epoch
-        || durable.executable_payload_hash != executable_payload.payload_hash
-    {
-        return Err(LaneAutonomousArtifactError::AvailabilityMismatch);
+    if durable.certificate.body.phase != CertPhase::Prepare {
+        return Err(LaneAutonomousArtifactError::InvalidAvailabilityCertificate);
     }
-    // Availability is view-neutral: a quorum may first deliver the immutable
-    // bytes after a certified NewView transition. Rebuild the exact
-    // view-specific proposal named by the READY QC and then validate every
-    // signed field against it. This does not authorize a view jump; it only
-    // establishes that the QC certifies retention of this immutable payload.
+    let availability_qc = durable
+        .certificate
+        .payload_availability_qc
+        .as_ref()
+        .ok_or(LaneAutonomousArtifactError::InvalidAvailabilityCertificate)?;
+    // Availability is view-neutral, but each READY signature names the exact
+    // view-specific proposal/RBC session in which retention was certified.
     let certified_proposal = if durable.certificate.body.lane_block_view
         == executable_payload
             .origin_proposal
@@ -1148,10 +1632,27 @@ pub(crate) fn validate_lane_payload_availability_certificate(
     };
     if durable.certificate.body != certified_proposal.vote_body(CertPhase::Prepare)
         || durable.certificate.validator_set != certified_proposal.descriptor.validator_set
+        || durable.certificate.signers_bitmap != availability_qc.signers_bitmap
     {
         return Err(LaneAutonomousArtifactError::AvailabilityMismatch);
     }
-    validate_lane_block_qc_aggregate(&durable.certificate, &durable.signer_pops)
+    validate_lane_payload_availability_body_against_payload(
+        &availability_qc.body,
+        executable_payload,
+        &certified_proposal,
+        expected_chain_id_hash,
+        expected_epoch,
+    )?;
+    validate_lane_payload_availability_qc(availability_qc)
+        .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilityCertificate)?;
+    let historical_pops = availability_qc
+        .validator_set
+        .iter()
+        .cloned()
+        .zip(availability_qc.validator_set_pops.iter().cloned())
+        .map(|(peer, pop)| (peer.public_key().clone(), pop))
+        .collect::<BTreeMap<_, _>>();
+    validate_lane_block_qc_aggregate(&durable.certificate, &historical_pops)
         .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilityCertificate)?;
     validate_qc_matches_proposal(&durable.certificate, &certified_proposal)
         .map_err(|_| LaneAutonomousArtifactError::AvailabilityMismatch)
@@ -1503,6 +2004,10 @@ impl LaneBlockNewViewCertificateCache {
 pub struct LaneBlockVoteV1 {
     /// Body signed by the lane validator.
     pub body: LaneBlockVoteBodyV1,
+    /// Separate exact-payload READY vote paired with autonomous prepares.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub payload_availability_vote: Option<LanePayloadAvailabilityVoteV1>,
     /// Validator that produced the vote.
     pub signer: PeerId,
     /// BLS signature over [`LaneBlockVoteBodyV1::signature_preimage`].
@@ -1541,6 +2046,8 @@ struct LaneBlockSlotKey {
 pub(crate) struct LaneBlockSession {
     /// Proposal artifact, when it has arrived.
     pub(crate) proposal: Option<LaneBlockProposalV1>,
+    /// Exact autonomous payload/session body authorized from durable bytes.
+    pub(crate) payload_availability_body: Option<LanePayloadAvailabilityBodyV1>,
     /// Prepare votes keyed by signer.
     pub(crate) prepare_votes: BTreeMap<PeerId, LaneBlockVoteV1>,
     /// Commit votes keyed by signer.
@@ -1616,6 +2123,15 @@ pub(crate) enum LaneBlockSessionError {
     /// vote signer is not in the cached proposal validator set
     #[error("lane block vote signer is not in validator set")]
     VoteSignerNotInValidatorSet,
+    /// autonomous payload evidence arrived before exact durable authorization
+    #[error("lane payload availability evidence is not authorized for this session")]
+    AvailabilityNotAuthorized,
+    /// autonomous payload evidence differs from the exact authorized body
+    #[error("lane payload availability evidence does not match authorized payload")]
+    AvailabilityMismatch,
+    /// commit evidence arrived before a valid prepare certificate
+    #[error("lane block commit evidence arrived before prepare certificate")]
+    CommitBeforePrepareQc,
     /// signer already submitted different vote bytes for the same proposal phase
     #[error("conflicting lane block vote for signer")]
     ConflictingVote,
@@ -1703,16 +2219,24 @@ impl LaneBlockSessionCache {
         vote: &LaneBlockVoteV1,
         _sender: Option<&PeerId>,
     ) -> Result<(), LaneBlockSessionError> {
-        vote.validate_ingress(vote.body.phase)
+        vote.validate_ingress_shape(vote.body.phase)
             .map_err(LaneBlockSessionError::InvalidVote)?;
         let phase = vote.body.phase;
         let key = LaneBlockSessionKey::from_vote_body(&vote.body);
         let Some(session) = self.sessions.get(&key) else {
+            if vote.payload_availability_vote.is_some() {
+                return Err(LaneBlockSessionError::AvailabilityNotAuthorized);
+            }
+            if phase == CertPhase::Commit {
+                return Err(LaneBlockSessionError::CommitBeforePrepareQc);
+            }
+            vote.verify_signatures()
+                .map_err(LaneBlockSessionError::InvalidVote)?;
             return Ok(());
         };
-        if let Some(proposal) = &session.proposal {
-            validate_vote_matches_proposal(vote, proposal)?;
-        }
+        validate_vote_matches_session(vote, session)?;
+        vote.verify_signatures()
+            .map_err(LaneBlockSessionError::InvalidVote)?;
         let votes = votes_for_phase(session, phase).ok_or(LaneBlockSessionError::InvalidVote(
             LaneBlockVoteIngressError::InvalidBody,
         ))?;
@@ -1751,6 +2275,74 @@ impl LaneBlockSessionCache {
             .and_then(|session| votes_for_phase(session, vote.body.phase))
             .and_then(|votes| votes.get(&vote.signer))
             == Some(vote)
+    }
+
+    /// Return the proposal bound to an exact session key.
+    pub(crate) fn proposal_for_key(
+        &self,
+        key: &LaneBlockSessionKey,
+    ) -> Option<LaneBlockProposalV1> {
+        self.sessions
+            .get(key)
+            .and_then(|session| session.proposal.clone())
+    }
+
+    /// Authorize the exact autonomous payload body derived from durable bytes.
+    ///
+    /// Existing compatibility prepare votes/QCs are purged before the body is
+    /// installed, preventing reordered unsigned votes from being reused after
+    /// an autonomous payload arrives.
+    pub(crate) fn authorize_payload_availability(
+        &mut self,
+        proposal: &LaneBlockProposalV1,
+        body: LanePayloadAvailabilityBodyV1,
+    ) -> Result<(), LaneBlockSessionError> {
+        validate_availability_body_matches_proposal(&body, proposal)
+            .map_err(|_| LaneBlockSessionError::AvailabilityMismatch)?;
+        let key = LaneBlockSessionKey::from_proposal(proposal);
+        let session = self
+            .sessions
+            .get_mut(&key)
+            .ok_or(LaneBlockSessionError::AvailabilityNotAuthorized)?;
+        if !session
+            .proposal
+            .as_ref()
+            .is_some_and(|cached| cached.same_consensus_identity(proposal))
+        {
+            return Err(LaneBlockSessionError::AvailabilityMismatch);
+        }
+        if let Some(existing) = &session.payload_availability_body {
+            return if existing == &body {
+                Ok(())
+            } else {
+                Err(LaneBlockSessionError::AvailabilityMismatch)
+            };
+        }
+
+        session.payload_availability_body = Some(body.clone());
+        session.prepare_votes.retain(|_, vote| {
+            vote.payload_availability_vote
+                .as_ref()
+                .is_some_and(|availability| availability.body == body)
+        });
+        let prepare_qc_matches = session
+            .prepare_qc
+            .as_ref()
+            .and_then(|qc| qc.payload_availability_qc.as_ref())
+            .is_some_and(|availability| availability.body == body);
+        if !prepare_qc_matches {
+            session.prepare_qc = None;
+            session.commit_votes.clear();
+            session.commit_qc = None;
+            session.pending_commit_vote_request = false;
+            session.commit_vote_request_drained = false;
+            session.pending_committed_session_drain = false;
+            session.committed_session_drained = false;
+        }
+        try_seal_phase_qc(session, CertPhase::Prepare);
+        refresh_commit_vote_request_ready(session);
+        refresh_committed_session_ready(session);
+        Ok(())
     }
 
     /// Return the cached proposal validator set for a session, if the proposal is known.
@@ -2216,16 +2808,26 @@ impl LaneBlockSessionCache {
         vote: LaneBlockVoteV1,
         _sender: Option<&PeerId>,
     ) -> Result<LaneBlockSessionInsertOutcome, LaneBlockSessionError> {
-        vote.validate_ingress(vote.body.phase)
+        vote.validate_ingress_shape(vote.body.phase)
             .map_err(LaneBlockSessionError::InvalidVote)?;
         let phase = vote.body.phase;
         let key = LaneBlockSessionKey::from_vote_body(&vote.body);
 
+        if let Some(session) = self.sessions.get(&key) {
+            validate_vote_matches_session(&vote, session)?;
+        } else {
+            if vote.payload_availability_vote.is_some() {
+                return Err(LaneBlockSessionError::AvailabilityNotAuthorized);
+            }
+            if phase == CertPhase::Commit {
+                return Err(LaneBlockSessionError::CommitBeforePrepareQc);
+            }
+        }
+        vote.verify_signatures()
+            .map_err(LaneBlockSessionError::InvalidVote)?;
+
         self.touch(key);
         let session = self.sessions.entry(key).or_default();
-        if let Some(proposal) = &session.proposal {
-            validate_vote_matches_proposal(&vote, proposal)?;
-        }
         let votes = votes_for_phase_mut(session, phase).ok_or(
             LaneBlockSessionError::InvalidVote(LaneBlockVoteIngressError::InvalidBody),
         )?;
@@ -2249,6 +2851,7 @@ impl LaneBlockSessionCache {
         &mut self,
         qc: LaneBlockQcV1,
     ) -> Result<LaneBlockSessionInsertOutcome, LaneBlockSessionError> {
+        self.validate_qc_session_preconditions(&qc)?;
         validate_lane_block_qc(&qc).map_err(LaneBlockSessionError::InvalidQc)?;
         self.insert_validated_qc(qc)
     }
@@ -2260,8 +2863,25 @@ impl LaneBlockSessionCache {
         qc: LaneBlockQcV1,
         pops: &BTreeMap<PublicKey, Vec<u8>>,
     ) -> Result<LaneBlockSessionInsertOutcome, LaneBlockSessionError> {
+        self.validate_qc_session_preconditions(&qc)?;
         validate_lane_block_qc_aggregate(&qc, pops).map_err(LaneBlockSessionError::InvalidQc)?;
         self.insert_validated_qc(qc)
+    }
+
+    fn validate_qc_session_preconditions(
+        &self,
+        qc: &LaneBlockQcV1,
+    ) -> Result<(), LaneBlockSessionError> {
+        let key = LaneBlockSessionKey::from_vote_body(&qc.body);
+        if let Some(session) = self.sessions.get(&key) {
+            validate_qc_matches_session(qc, session)
+        } else if qc.payload_availability_qc.is_some() {
+            Err(LaneBlockSessionError::AvailabilityNotAuthorized)
+        } else if qc.body.phase == CertPhase::Commit {
+            Err(LaneBlockSessionError::CommitBeforePrepareQc)
+        } else {
+            Ok(())
+        }
     }
 
     fn insert_validated_qc(
@@ -2272,9 +2892,7 @@ impl LaneBlockSessionCache {
 
         self.touch(key);
         let session = self.sessions.entry(key).or_default();
-        if let Some(proposal) = &session.proposal {
-            validate_qc_matches_proposal(&qc, proposal)?;
-        }
+        validate_qc_matches_session(&qc, session)?;
         let slot = qc_for_phase_mut(session, qc.body.phase).ok_or(
             LaneBlockSessionError::InvalidQc(LaneBlockQcIngressError::InvalidBody),
         )?;
@@ -2563,6 +3181,21 @@ fn validate_vote_matches_proposal(
     if !proposal.descriptor.validator_set.contains(&vote.signer) {
         return Err(LaneBlockSessionError::VoteSignerNotInValidatorSet);
     }
+    match &vote.payload_availability_vote {
+        Some(availability_vote) => {
+            if vote.body.phase != CertPhase::Prepare
+                || availability_vote.signer != vote.signer
+                || validate_availability_body_matches_proposal(&availability_vote.body, proposal)
+                    .is_err()
+                || availability_vote
+                    .validate_against_validator_set(&proposal.descriptor.validator_set)
+                    .is_err()
+            {
+                return Err(LaneBlockSessionError::AvailabilityMismatch);
+            }
+        }
+        None => {}
+    }
     Ok(())
 }
 
@@ -2577,6 +3210,86 @@ fn validate_qc_matches_proposal(
     {
         return Err(LaneBlockSessionError::QcProposalMismatch);
     }
+    match &qc.payload_availability_qc {
+        Some(availability_qc) => {
+            if qc.body.phase != CertPhase::Prepare
+                || validate_availability_body_matches_proposal(&availability_qc.body, proposal)
+                    .is_err()
+                || validate_lane_payload_availability_qc(availability_qc).is_err()
+            {
+                return Err(LaneBlockSessionError::AvailabilityMismatch);
+            }
+        }
+        None => {}
+    }
+    Ok(())
+}
+
+fn validate_vote_matches_session(
+    vote: &LaneBlockVoteV1,
+    session: &LaneBlockSession,
+) -> Result<(), LaneBlockSessionError> {
+    match vote.body.phase {
+        CertPhase::Prepare => match (
+            session.payload_availability_body.as_ref(),
+            vote.payload_availability_vote.as_ref(),
+        ) {
+            (Some(expected), Some(actual)) if &actual.body == expected => {}
+            (None, None) => {}
+            (None, Some(_)) => return Err(LaneBlockSessionError::AvailabilityNotAuthorized),
+            _ => return Err(LaneBlockSessionError::AvailabilityMismatch),
+        },
+        CertPhase::Commit => {
+            if vote.payload_availability_vote.is_some() {
+                return Err(LaneBlockSessionError::AvailabilityMismatch);
+            }
+            if session.prepare_qc.is_none() {
+                return Err(LaneBlockSessionError::CommitBeforePrepareQc);
+            }
+        }
+        CertPhase::NewView => {
+            return Err(LaneBlockSessionError::InvalidVote(
+                LaneBlockVoteIngressError::InvalidBody,
+            ));
+        }
+    }
+    if let Some(proposal) = &session.proposal {
+        validate_vote_matches_proposal(vote, proposal)?;
+    }
+    Ok(())
+}
+
+fn validate_qc_matches_session(
+    qc: &LaneBlockQcV1,
+    session: &LaneBlockSession,
+) -> Result<(), LaneBlockSessionError> {
+    match qc.body.phase {
+        CertPhase::Prepare => match (
+            session.payload_availability_body.as_ref(),
+            qc.payload_availability_qc.as_ref(),
+        ) {
+            (Some(expected), Some(actual)) if &actual.body == expected => {}
+            (None, None) => {}
+            (None, Some(_)) => return Err(LaneBlockSessionError::AvailabilityNotAuthorized),
+            _ => return Err(LaneBlockSessionError::AvailabilityMismatch),
+        },
+        CertPhase::Commit => {
+            if qc.payload_availability_qc.is_some() {
+                return Err(LaneBlockSessionError::AvailabilityMismatch);
+            }
+            if session.prepare_qc.is_none() {
+                return Err(LaneBlockSessionError::CommitBeforePrepareQc);
+            }
+        }
+        CertPhase::NewView => {
+            return Err(LaneBlockSessionError::InvalidQc(
+                LaneBlockQcIngressError::InvalidBody,
+            ));
+        }
+    }
+    if let Some(proposal) = &session.proposal {
+        validate_qc_matches_proposal(qc, proposal)?;
+    }
     Ok(())
 }
 
@@ -2585,17 +3298,50 @@ fn lane_block_qc_certifies_same_body(left: &LaneBlockQcV1, right: &LaneBlockQcV1
         && left.validator_set_hash_version == right.validator_set_hash_version
         && left.validator_set_hash == right.validator_set_hash
         && left.validator_set == right.validator_set
+        && left.payload_availability_qc == right.payload_availability_qc
 }
 
 fn reconcile_session_with_proposal(session: &mut LaneBlockSession, proposal: &LaneBlockProposalV1) {
+    let availability_body = session.payload_availability_body.clone();
+    let has_prepare_qc = session.prepare_qc.is_some();
     for phase in [CertPhase::Prepare, CertPhase::Commit] {
         if let Some(votes) = votes_for_phase_mut(session, phase) {
-            votes.retain(|_, vote| validate_vote_matches_proposal(vote, proposal).is_ok());
+            votes.retain(|_, vote| {
+                if validate_vote_matches_proposal(vote, proposal).is_err() {
+                    return false;
+                }
+                match phase {
+                    CertPhase::Prepare => match (
+                        availability_body.as_ref(),
+                        vote.payload_availability_vote.as_ref(),
+                    ) {
+                        (Some(expected), Some(actual)) => &actual.body == expected,
+                        (None, None) => true,
+                        _ => false,
+                    },
+                    CertPhase::Commit => vote.payload_availability_vote.is_none() && has_prepare_qc,
+                    CertPhase::NewView => false,
+                }
+            });
         }
         if let Some(slot) = qc_for_phase_mut(session, phase) {
-            let keep_qc = slot
-                .as_ref()
-                .is_none_or(|qc| validate_qc_matches_proposal(qc, proposal).is_ok());
+            let keep_qc = slot.as_ref().is_none_or(|qc| {
+                if validate_qc_matches_proposal(qc, proposal).is_err() {
+                    return false;
+                }
+                match phase {
+                    CertPhase::Prepare => match (
+                        availability_body.as_ref(),
+                        qc.payload_availability_qc.as_ref(),
+                    ) {
+                        (Some(expected), Some(actual)) => &actual.body == expected,
+                        (None, None) => true,
+                        _ => false,
+                    },
+                    CertPhase::Commit => qc.payload_availability_qc.is_none() && has_prepare_qc,
+                    CertPhase::NewView => false,
+                }
+            });
             if !keep_qc {
                 *slot = None;
             }
@@ -2754,6 +3500,51 @@ fn peer_uses_bls_normal(peer: &PeerId) -> bool {
 }
 
 impl LaneBlockVoteV1 {
+    /// Validate bounded vote shape before any BLS operation.
+    pub fn validate_ingress_shape(
+        &self,
+        expected_phase: CertPhase,
+    ) -> Result<(), LaneBlockVoteIngressError> {
+        validate_lane_block_vote_body_shape(&self.body)?;
+        if self.body.phase != expected_phase {
+            return Err(LaneBlockVoteIngressError::PhaseMismatch {
+                expected: expected_phase,
+                actual: self.body.phase,
+            });
+        }
+        if !peer_uses_bls_normal(&self.signer) {
+            return Err(LaneBlockVoteIngressError::SignerNotBlsNormal);
+        }
+        if self.bls_signature.len() != LANE_BLS_PROOF_BYTES {
+            return Err(LaneBlockVoteIngressError::InvalidSignature);
+        }
+        if let Some(availability) = &self.payload_availability_vote {
+            if self.body.phase != CertPhase::Prepare
+                || availability.signer != self.signer
+                || !availability_body_matches_lane_vote_body(&availability.body, &self.body)
+            {
+                return Err(LaneBlockVoteIngressError::InvalidAvailability);
+            }
+            availability
+                .validate_shape()
+                .map_err(|_| LaneBlockVoteIngressError::InvalidAvailability)?;
+        }
+        Ok(())
+    }
+
+    fn verify_signatures(&self) -> Result<(), LaneBlockVoteIngressError> {
+        Signature::try_from_bytes(&self.bls_signature)
+            .map_err(|_| LaneBlockVoteIngressError::InvalidSignature)?
+            .verify(self.signer.public_key(), &self.body.signature_preimage())
+            .map_err(|_| LaneBlockVoteIngressError::InvalidSignature)?;
+        if let Some(availability) = &self.payload_availability_vote {
+            availability
+                .verify_signature()
+                .map_err(|_| LaneBlockVoteIngressError::InvalidAvailability)?;
+        }
+        Ok(())
+    }
+
     /// Validate phase, BLS-normal identity, and vote signature.
     ///
     /// This is the stateless ingress prefilter. Callers that know the current
@@ -2769,20 +3560,8 @@ impl LaneBlockVoteV1 {
         &self,
         expected_phase: CertPhase,
     ) -> Result<(), LaneBlockVoteIngressError> {
-        validate_lane_block_vote_body_shape(&self.body)?;
-        if self.body.phase != expected_phase {
-            return Err(LaneBlockVoteIngressError::PhaseMismatch {
-                expected: expected_phase,
-                actual: self.body.phase,
-            });
-        }
-        if !peer_uses_bls_normal(&self.signer) {
-            return Err(LaneBlockVoteIngressError::SignerNotBlsNormal);
-        }
-        Signature::try_from_bytes(&self.bls_signature)
-            .map_err(|_| LaneBlockVoteIngressError::InvalidSignature)?
-            .verify(self.signer.public_key(), &self.body.signature_preimage())
-            .map_err(|_| LaneBlockVoteIngressError::InvalidSignature)
+        self.validate_ingress_shape(expected_phase)?;
+        self.verify_signatures()
     }
 }
 
@@ -2806,6 +3585,9 @@ pub enum LaneBlockVoteIngressError {
     /// lane block vote signature is missing, malformed, or invalid
     #[error("lane block vote signature is invalid")]
     InvalidSignature,
+    /// paired autonomous payload READY vote is malformed or invalid
+    #[error("lane payload availability vote is invalid")]
+    InvalidAvailability,
 }
 
 /// Failure while validating a standalone lane-local block proposal before session insertion.
@@ -2882,6 +3664,12 @@ pub enum LaneBlockQcIngressError {
     /// aggregate signature does not verify for the selected signers
     #[error("lane block QC aggregate signature is invalid")]
     AggregateSignatureInvalid,
+    /// payload availability proof is present in a phase where it is forbidden
+    #[error("lane block QC carries an unexpected payload availability proof")]
+    UnexpectedAvailabilityQc,
+    /// autonomous payload availability proof is malformed or invalid
+    #[error("lane block QC payload availability proof is invalid")]
+    InvalidAvailabilityQc,
 }
 
 /// Failure while building a lane-local block QC from validator votes.
@@ -2929,6 +3717,12 @@ pub enum LaneBlockQcBuildError {
     /// BLS signature aggregation failed
     #[error("failed to aggregate lane block BLS signatures")]
     SignatureAggregate,
+    /// autonomous prepare votes do not carry one exact READY body
+    #[error("lane block prepare votes carry mismatched payload availability evidence")]
+    AvailabilityMismatch,
+    /// autonomous READY vote aggregation failed
+    #[error("failed to aggregate lane payload availability votes")]
+    AvailabilityAggregate,
 }
 
 /// Validate the signer-independent body of a standalone lane-local block proposal.
@@ -2957,6 +3751,7 @@ pub fn validate_lane_block_proposal(
             .all(|byte| *byte == 0)
         || descriptor.qc_mode_tag.trim().is_empty()
         || descriptor.accepted_candidate_indices.is_empty()
+        || descriptor.accepted_candidate_indices.len() > MAX_LANE_EXECUTABLE_ENTRYPOINTS
         || descriptor.accepted_candidate_indices.len()
             != descriptor.accepted_transaction_hashes.len()
         || descriptor.previous_lane_block_height == 0
@@ -3054,11 +3849,29 @@ pub fn validate_lane_block_qc(qc: &LaneBlockQcV1) -> Result<(), LaneBlockQcIngre
         _ => LaneBlockQcIngressError::InvalidBody,
     })?;
 
+    match &qc.payload_availability_qc {
+        Some(availability_qc) => {
+            if qc.body.phase != CertPhase::Prepare {
+                return Err(LaneBlockQcIngressError::UnexpectedAvailabilityQc);
+            }
+            if !availability_body_matches_lane_vote_body(&availability_qc.body, &qc.body)
+                || availability_qc.validator_set_hash_version != qc.validator_set_hash_version
+                || availability_qc.validator_set_hash != qc.validator_set_hash
+                || availability_qc.validator_set != qc.validator_set
+            {
+                return Err(LaneBlockQcIngressError::InvalidAvailabilityQc);
+            }
+            validate_lane_payload_availability_qc(availability_qc)
+                .map_err(|_| LaneBlockQcIngressError::InvalidAvailabilityQc)?;
+        }
+        None => {}
+    }
+
     let expected_bitmap_len = qc.validator_set.len().div_ceil(8);
     if qc.signers_bitmap.len() != expected_bitmap_len {
         return Err(LaneBlockQcIngressError::SignerBitmapLengthMismatch);
     }
-    if qc.bls_aggregate_signature.is_empty() {
+    if qc.bls_aggregate_signature.len() != LANE_BLS_PROOF_BYTES {
         return Err(LaneBlockQcIngressError::AggregateSignatureMissing);
     }
 
@@ -3210,6 +4023,44 @@ pub fn aggregate_lane_block_votes_to_qc(
     let bls_aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
         .map_err(|_| LaneBlockQcBuildError::SignatureAggregate)?;
 
+    let payload_availability_qc = if votes
+        .iter()
+        .any(|vote| vote.payload_availability_vote.is_some())
+    {
+        if body.phase != CertPhase::Prepare
+            || votes
+                .iter()
+                .any(|vote| vote.payload_availability_vote.is_none())
+        {
+            return Err(LaneBlockQcBuildError::AvailabilityMismatch);
+        }
+        let availability_votes = votes
+            .iter()
+            .filter_map(|vote| vote.payload_availability_vote.clone())
+            .collect::<Vec<_>>();
+        let availability_body = availability_votes
+            .first()
+            .map(|vote| vote.body.clone())
+            .ok_or(LaneBlockQcBuildError::AvailabilityMismatch)?;
+        if !availability_body_matches_lane_vote_body(&availability_body, &body)
+            || availability_votes
+                .iter()
+                .any(|vote| vote.body != availability_body)
+        {
+            return Err(LaneBlockQcBuildError::AvailabilityMismatch);
+        }
+        Some(
+            aggregate_lane_payload_availability_votes(
+                availability_body,
+                validator_set.clone(),
+                &availability_votes,
+            )
+            .map_err(|_| LaneBlockQcBuildError::AvailabilityAggregate)?,
+        )
+    } else {
+        None
+    };
+
     Ok(LaneBlockQcV1 {
         body,
         validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
@@ -3217,6 +4068,7 @@ pub fn aggregate_lane_block_votes_to_qc(
         validator_set,
         signers_bitmap,
         bls_aggregate_signature,
+        payload_availability_qc,
     })
 }
 
@@ -3229,6 +4081,7 @@ fn validate_lane_block_vote_body_shape(
         || body.lane_incarnation.as_ref().iter().all(|byte| *byte == 0)
         || body.qc_mode_tag.trim().is_empty()
         || body.accepted_candidate_indices.is_empty()
+        || body.accepted_candidate_indices.len() > MAX_LANE_EXECUTABLE_ENTRYPOINTS
         || body.accepted_candidate_indices.len() != body.accepted_transaction_hashes.len()
         || body.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1
         || body.validator_count == 0
@@ -3260,6 +4113,9 @@ fn validate_lane_block_validator_set_fields(
 ) -> Result<(), LaneBlockQcBuildError> {
     if validator_set.is_empty() {
         return Err(LaneBlockQcBuildError::EmptyValidatorSet);
+    }
+    if validator_set.len() > MAX_LANE_BLOCK_VALIDATORS {
+        return Err(LaneBlockQcBuildError::ValidatorCountMismatch);
     }
     let actual_validator_count = u32::try_from(validator_set.len())
         .map_err(|_| LaneBlockQcBuildError::ValidatorCountMismatch)?;
@@ -3329,6 +4185,7 @@ mod tests {
             .expect("checked lane block fixture signature verifies");
         LaneBlockVoteV1 {
             body: body.clone(),
+            payload_availability_vote: None,
             signer: peer(keypair),
             bls_signature: signature.payload().to_vec(),
         }
@@ -3345,6 +4202,44 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    fn aligned_validator_pops(validator_set: &[PeerId], keypairs: &[KeyPair]) -> Vec<Vec<u8>> {
+        validator_set
+            .iter()
+            .map(|validator| {
+                let keypair = keypairs
+                    .iter()
+                    .find(|keypair| keypair.public_key() == validator.public_key())
+                    .expect("fixture validator keypair");
+                bls_normal_pop_prove(keypair.private_key()).expect("checked lane block fixture PoP")
+            })
+            .collect()
+    }
+
+    fn signed_autonomous_prepare_vote(
+        payload: &LaneExecutablePayloadV1,
+        current_proposal: &LaneBlockProposalV1,
+        chain_id_hash: Hash,
+        epoch: u64,
+        keypair: &KeyPair,
+        all_keypairs: &[KeyPair],
+    ) -> LaneBlockVoteV1 {
+        let body = current_proposal.vote_body(CertPhase::Prepare);
+        let mut vote = signed_vote(&body, keypair);
+        let availability_body =
+            lane_payload_availability_body(payload, current_proposal, chain_id_hash, epoch)
+                .expect("fixture availability body");
+        vote.payload_availability_vote = Some(
+            LanePayloadAvailabilityVoteV1::new_signed(
+                availability_body,
+                peer(keypair),
+                aligned_validator_pops(&current_proposal.descriptor.validator_set, all_keypairs),
+                keypair.private_key(),
+            )
+            .expect("fixture READY vote"),
+        );
+        vote
     }
 
     fn vote_body(validator_set: &[PeerId]) -> LaneBlockVoteBodyV1 {
@@ -3529,8 +4424,22 @@ mod tests {
         let (chain_id_hash, epoch, payload) = autonomous_payload_fixture(&keypairs);
         let body = payload.origin_proposal.vote_body(CertPhase::Prepare);
         let votes = [
-            signed_vote(&body, &keypairs[0]),
-            signed_vote(&body, &keypairs[1]),
+            signed_autonomous_prepare_vote(
+                &payload,
+                &payload.origin_proposal,
+                chain_id_hash,
+                epoch,
+                &keypairs[0],
+                &keypairs,
+            ),
+            signed_autonomous_prepare_vote(
+                &payload,
+                &payload.origin_proposal,
+                chain_id_hash,
+                epoch,
+                &keypairs[1],
+                &keypairs,
+            ),
         ];
         let certificate = aggregate_lane_block_votes_to_qc(
             body,
@@ -3538,18 +4447,18 @@ mod tests {
             &votes,
         )
         .expect("availability READY quorum");
-        let durable = DurableLanePayloadAvailabilityCertificateV1 {
-            chain_id_hash,
-            epoch,
-            executable_payload_hash: payload.payload_hash,
-            certificate,
-            signer_pops: signer_pops(&keypairs[..2]),
-        };
+        let durable = DurableLanePayloadAvailabilityCertificateV1 { certificate };
         validate_lane_payload_availability_certificate(&durable, &payload, chain_id_hash, epoch)
             .expect("availability DELIVER certificate");
 
         let mut wrong_payload = durable.clone();
-        wrong_payload.executable_payload_hash = Hash::new(b"wrong-availability-payload");
+        wrong_payload
+            .certificate
+            .payload_availability_qc
+            .as_mut()
+            .expect("availability QC")
+            .body
+            .executable_payload_hash = Hash::new(b"wrong-availability-payload");
         assert_eq!(
             validate_lane_payload_availability_certificate(
                 &wrong_payload,
@@ -3559,11 +4468,407 @@ mod tests {
             ),
             Err(LaneAutonomousArtifactError::AvailabilityMismatch)
         );
-        let mut forged = durable;
-        forged.certificate.bls_aggregate_signature[0] ^= 1;
+        let mut forged = durable.clone();
+        forged
+            .certificate
+            .payload_availability_qc
+            .as_mut()
+            .expect("availability QC")
+            .bls_aggregate_signature[0] ^= 1;
         assert_eq!(
             validate_lane_payload_availability_certificate(&forged, &payload, chain_id_hash, epoch,),
             Err(LaneAutonomousArtifactError::InvalidAvailabilityCertificate)
+        );
+        let mut forged_prepare = durable;
+        forged_prepare.certificate.bls_aggregate_signature[0] ^= 1;
+        assert_eq!(
+            validate_lane_payload_availability_certificate(
+                &forged_prepare,
+                &payload,
+                chain_id_hash,
+                epoch,
+            ),
+            Err(LaneAutonomousArtifactError::InvalidAvailabilityCertificate)
+        );
+    }
+
+    #[test]
+    fn payload_availability_qc_rejects_duplicate_bitmap_roster_and_pop_attacks() {
+        let keypairs = [
+            checked_bls_keypair(31),
+            checked_bls_keypair(32),
+            checked_bls_keypair(33),
+        ];
+        let (chain_id_hash, epoch, payload) = autonomous_payload_fixture(&keypairs);
+        let outer_votes = [
+            signed_autonomous_prepare_vote(
+                &payload,
+                &payload.origin_proposal,
+                chain_id_hash,
+                epoch,
+                &keypairs[0],
+                &keypairs,
+            ),
+            signed_autonomous_prepare_vote(
+                &payload,
+                &payload.origin_proposal,
+                chain_id_hash,
+                epoch,
+                &keypairs[1],
+                &keypairs,
+            ),
+        ];
+        let ready_votes = outer_votes
+            .iter()
+            .map(|vote| {
+                vote.payload_availability_vote
+                    .clone()
+                    .expect("fixture READY vote")
+            })
+            .collect::<Vec<_>>();
+        let availability_body = ready_votes[0].body.clone();
+        let validator_set = payload.origin_proposal.descriptor.validator_set.clone();
+        assert!(
+            norito::to_bytes(&availability_body)
+                .expect("availability body encodes")
+                .len()
+                <= MAX_LANE_PAYLOAD_AVAILABILITY_BODY_BYTES
+        );
+
+        let mut oversized_body = availability_body.clone();
+        oversized_body.validator_count =
+            u32::try_from(MAX_LANE_BLOCK_VALIDATORS + 1).expect("hard cap fits u32");
+        assert_eq!(
+            validate_lane_payload_availability_body_shape(&oversized_body),
+            Err(LaneAutonomousArtifactError::InvalidAvailabilityBody)
+        );
+        let mut oversized_domain = availability_body.clone();
+        oversized_domain.qc_mode_tag = "x".repeat(MAX_LANE_PAYLOAD_AVAILABILITY_BODY_BYTES + 1);
+        assert_eq!(
+            validate_lane_payload_availability_body_shape(&oversized_domain),
+            Err(LaneAutonomousArtifactError::InvalidAvailabilityBody)
+        );
+
+        assert_eq!(
+            aggregate_lane_payload_availability_votes(
+                availability_body.clone(),
+                validator_set.clone(),
+                &[ready_votes[0].clone(), ready_votes[0].clone()],
+            ),
+            Err(LaneAutonomousArtifactError::DuplicateAvailabilitySigner)
+        );
+
+        let qc = aggregate_lane_payload_availability_votes(
+            availability_body,
+            validator_set,
+            &ready_votes,
+        )
+        .expect("valid READY QC");
+        assert!(
+            norito::to_bytes(&qc)
+                .expect("availability QC encodes")
+                .len()
+                <= MAX_LANE_PAYLOAD_AVAILABILITY_QC_BYTES
+        );
+
+        let mut trailing_bit = qc.clone();
+        *trailing_bit
+            .signers_bitmap
+            .last_mut()
+            .expect("fixture signer bitmap") |= 0b1000_0000;
+        assert_eq!(
+            validate_lane_payload_availability_qc(&trailing_bit),
+            Err(LaneAutonomousArtifactError::InvalidAvailabilityBitmap)
+        );
+
+        let mut below_quorum = qc.clone();
+        below_quorum.signers_bitmap = vec![0b0000_0001];
+        assert_eq!(
+            validate_lane_payload_availability_qc(&below_quorum),
+            Err(LaneAutonomousArtifactError::AvailabilityQuorumNotMet)
+        );
+
+        let mut duplicate_roster = qc.clone();
+        duplicate_roster.validator_set[1] = duplicate_roster.validator_set[0].clone();
+        assert_eq!(
+            validate_lane_payload_availability_qc(&duplicate_roster),
+            Err(LaneAutonomousArtifactError::InvalidAvailabilityBody)
+        );
+
+        let mut invalid_pop = qc;
+        invalid_pop.validator_set_pops[0][0] ^= 1;
+        assert_eq!(
+            validate_lane_payload_availability_qc(&invalid_pop),
+            Err(LaneAutonomousArtifactError::InvalidAvailabilityPop)
+        );
+    }
+
+    #[test]
+    fn payload_availability_tracks_authenticated_new_view_without_rebinding_origin() {
+        let keypairs = [
+            checked_bls_keypair(41),
+            checked_bls_keypair(42),
+            checked_bls_keypair(43),
+        ];
+        let (chain_id_hash, epoch, payload) = autonomous_payload_fixture(&keypairs);
+        let source = payload.origin_proposal.clone();
+        let target = retarget_lane_block_proposal_view(&source, 1).expect("next-view proposal");
+        let new_view =
+            durable_new_view_certificate(&source, &payload, &keypairs, chain_id_hash, epoch);
+        validate_lane_block_new_view_transition(
+            &source,
+            &target,
+            &payload,
+            &new_view,
+            chain_id_hash,
+            epoch,
+        )
+        .expect("authenticated contiguous NewView transition");
+
+        let votes = [
+            signed_autonomous_prepare_vote(
+                &payload,
+                &target,
+                chain_id_hash,
+                epoch,
+                &keypairs[0],
+                &keypairs,
+            ),
+            signed_autonomous_prepare_vote(
+                &payload,
+                &target,
+                chain_id_hash,
+                epoch,
+                &keypairs[1],
+                &keypairs,
+            ),
+        ];
+        let certificate = aggregate_lane_block_votes_to_qc(
+            target.vote_body(CertPhase::Prepare),
+            target.descriptor.validator_set.clone(),
+            &votes,
+        )
+        .expect("next-view exact availability QC");
+        let durable = DurableLanePayloadAvailabilityCertificateV1 { certificate };
+        validate_lane_payload_availability_certificate(&durable, &payload, chain_id_hash, epoch)
+            .expect("next-view availability remains bound to immutable origin payload");
+
+        let mut stale_origin = durable.clone();
+        stale_origin
+            .certificate
+            .payload_availability_qc
+            .as_mut()
+            .expect("availability QC")
+            .body
+            .origin_proposal_hash = Hash::new(b"stale-origin-rebinding");
+        assert_eq!(
+            validate_lane_payload_availability_certificate(
+                &stale_origin,
+                &payload,
+                chain_id_hash,
+                epoch,
+            ),
+            Err(LaneAutonomousArtifactError::AvailabilityMismatch)
+        );
+
+        let mut stale_incarnation = durable.clone();
+        stale_incarnation
+            .certificate
+            .payload_availability_qc
+            .as_mut()
+            .expect("availability QC")
+            .body
+            .lane_incarnation = Hash::new(b"recreated-lane-incarnation");
+        assert_eq!(
+            validate_lane_payload_availability_certificate(
+                &stale_incarnation,
+                &payload,
+                chain_id_hash,
+                epoch,
+            ),
+            Err(LaneAutonomousArtifactError::AvailabilityMismatch)
+        );
+
+        let unrelated = {
+            let mut proposal = target.clone();
+            proposal.descriptor.accepted_transaction_hashes[0] =
+                Hash::new(b"unrelated-proposal-entrypoint");
+            proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
+            proposal.proposal_hash = proposal.computed_proposal_hash();
+            proposal
+        };
+        assert_eq!(
+            lane_payload_availability_body(&payload, &unrelated, chain_id_hash, epoch,),
+            Err(LaneAutonomousArtifactError::AvailabilityMismatch)
+        );
+
+        let skipped = retarget_lane_block_proposal_exact_view(&source, 2)
+            .expect("canonical but unauthorized skipped-view proposal");
+        assert_eq!(
+            validate_lane_block_new_view_transition(
+                &source,
+                &skipped,
+                &payload,
+                &new_view,
+                chain_id_hash,
+                epoch,
+            ),
+            Err(LaneAutonomousArtifactError::InvalidNewViewBody)
+        );
+    }
+
+    #[test]
+    fn autonomous_session_requires_authorized_ready_quorum_and_resists_cache_flood() {
+        let keypairs = [
+            checked_bls_keypair(51),
+            checked_bls_keypair(52),
+            checked_bls_keypair(53),
+        ];
+        let (chain_id_hash, epoch, payload) = autonomous_payload_fixture(&keypairs);
+        let proposal = payload.origin_proposal.clone();
+        let availability_body =
+            lane_payload_availability_body(&payload, &proposal, chain_id_hash, epoch)
+                .expect("authorized availability body");
+        let key = LaneBlockSessionKey::from_proposal(&proposal);
+        let mut cache = LaneBlockSessionCache::new(1);
+        cache
+            .insert_proposal(proposal.clone())
+            .expect("cache autonomous proposal");
+        cache
+            .authorize_payload_availability(&proposal, availability_body.clone())
+            .expect("authorize exact durable payload");
+
+        let unsigned_prepare = signed_vote(&proposal.vote_body(CertPhase::Prepare), &keypairs[0]);
+        assert_eq!(
+            cache.insert_vote(unsigned_prepare, None),
+            Err(LaneBlockSessionError::AvailabilityMismatch)
+        );
+
+        for nonce in 0_u8..32 {
+            let proposal_hash =
+                Hash::new([b"unauthorized-ready-flood-".as_slice(), &[nonce]].concat());
+            let descriptor_hash =
+                Hash::new([b"unauthorized-ready-descriptor-".as_slice(), &[nonce]].concat());
+            let mut body = proposal.vote_body(CertPhase::Prepare);
+            body.proposal_hash = proposal_hash;
+            body.descriptor_hash = descriptor_hash;
+            let mut ready_body = availability_body.clone();
+            ready_body.current_proposal_hash = proposal_hash;
+            ready_body.current_descriptor_hash = descriptor_hash;
+            let vote = LaneBlockVoteV1 {
+                body,
+                payload_availability_vote: Some(LanePayloadAvailabilityVoteV1 {
+                    body: ready_body,
+                    signer: peer(&keypairs[0]),
+                    validator_set_pops: aligned_validator_pops(
+                        &proposal.descriptor.validator_set,
+                        &keypairs,
+                    ),
+                    // Shape-valid but deliberately unverified: authorization
+                    // rejection must happen before any cryptographic work.
+                    bls_signature: vec![0; LANE_BLS_PROOF_BYTES],
+                }),
+                signer: peer(&keypairs[0]),
+                bls_signature: vec![0; LANE_BLS_PROOF_BYTES],
+            };
+            assert_eq!(
+                cache.insert_vote(vote, None),
+                Err(LaneBlockSessionError::AvailabilityNotAuthorized)
+            );
+        }
+        assert_eq!(cache.len(), 1);
+        assert_eq!(
+            cache
+                .get(&key)
+                .and_then(|session| session.payload_availability_body.as_ref()),
+            Some(&availability_body)
+        );
+
+        for keypair in keypairs.iter().take(2) {
+            cache
+                .insert_vote(
+                    signed_autonomous_prepare_vote(
+                        &payload,
+                        &proposal,
+                        chain_id_hash,
+                        epoch,
+                        keypair,
+                        &keypairs,
+                    ),
+                    None,
+                )
+                .expect("cache exact READY vote");
+        }
+        let prepare_qc = cache
+            .get(&key)
+            .and_then(|session| session.prepare_qc.as_ref())
+            .expect("READY quorum seals prepare QC");
+        assert!(prepare_qc.payload_availability_qc.is_some());
+    }
+
+    #[test]
+    fn autonomous_payload_body_cap_reserves_consensus_envelope_headroom() {
+        assert_eq!(
+            MAX_LANE_EXECUTABLE_PAYLOAD_BYTES * 2,
+            MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES,
+            "an executable payload must leave half of its source bundle for authenticated proof material"
+        );
+        assert_eq!(
+            MAX_LANE_EXECUTABLE_PAYLOAD_BYTES + LANE_EXECUTABLE_ENVELOPE_HEADROOM_BYTES,
+            iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONSENSUS.get(),
+        );
+        assert!(lane_executable_payload_body_within_limit(
+            MAX_LANE_EXECUTABLE_PAYLOAD_BYTES - 1
+        ));
+        assert!(lane_executable_payload_body_within_limit(
+            MAX_LANE_EXECUTABLE_PAYLOAD_BYTES
+        ));
+        assert!(!lane_executable_payload_body_within_limit(
+            MAX_LANE_EXECUTABLE_PAYLOAD_BYTES + 1
+        ));
+    }
+
+    #[test]
+    fn native_amx_receipt_vector_is_payload_hash_bound_and_exactly_aligned() {
+        let keypairs = [
+            checked_bls_keypair(21),
+            checked_bls_keypair(22),
+            checked_bls_keypair(23),
+        ];
+        let (chain_id_hash, epoch, payload) = autonomous_payload_fixture(&keypairs);
+        let descriptor = &payload.origin_proposal.descriptor;
+        let receipt = NativeAmxReceipt {
+            version: 1,
+            source_id: [0xA5; Hash::LENGTH],
+            chain_id_hash,
+            plan_digest: Hash::new(b"payload-hash-bound-native-amx-plan"),
+            lane_id: descriptor.lane_id,
+            dataspace_id: descriptor.dataspace_id,
+            lane_incarnation: descriptor.lane_incarnation,
+            authority_context_height: descriptor.proposal_height,
+            lane_block_height: descriptor.lane_block_height,
+            lane_block_view: descriptor.lane_block_view,
+            coordinator_proposal_hash: payload.origin_proposal.proposal_hash,
+            legs: Vec::new(),
+        };
+        let with_receipt = compute_lane_executable_payload_hash(
+            payload.version,
+            chain_id_hash,
+            epoch,
+            &payload.origin_proposal,
+            &payload.entrypoints,
+            &payload.reservation_keys,
+            &payload.routing_plans,
+            &[Some(receipt)],
+        )
+        .expect("receipt-bearing payload hash");
+        assert_ne!(payload.payload_hash, with_receipt);
+
+        let mut misaligned = payload;
+        misaligned.native_amx_receipts.push(None);
+        assert_eq!(
+            misaligned.validate(chain_id_hash, epoch),
+            Err(LaneAutonomousArtifactError::ReservationMismatch)
         );
     }
 
@@ -3883,6 +5188,58 @@ mod tests {
         assert_eq!(
             validate_lane_block_proposal(&duplicate),
             Err(LaneBlockProposalIngressError::DuplicateValidator)
+        );
+    }
+
+    #[test]
+    fn lane_block_consensus_rejects_work_above_global_merge_capacity() {
+        let keypairs = [
+            checked_bls_keypair(1),
+            checked_bls_keypair(2),
+            checked_bls_keypair(3),
+        ];
+        let mut validator_set = keypairs.iter().map(peer).collect::<Vec<_>>();
+        validator_set.sort();
+        let indices = (0..u64::try_from(MAX_LANE_EXECUTABLE_ENTRYPOINTS)
+            .expect("entrypoint ceiling fits u64"))
+            .collect::<Vec<_>>();
+        let hashes = indices
+            .iter()
+            .map(|index| Hash::new(index.to_le_bytes()))
+            .collect::<Vec<_>>();
+
+        let mut at_limit = lane_block_proposal(&validator_set);
+        at_limit.descriptor.accepted_candidate_indices = indices.clone();
+        at_limit.descriptor.accepted_transaction_hashes = hashes.clone();
+        at_limit.descriptor.descriptor_hash = at_limit.descriptor.computed_descriptor_hash();
+        at_limit.proposal_hash = at_limit.computed_proposal_hash();
+        validate_lane_block_proposal(&at_limit)
+            .expect("a lane proposal at the global merge entrypoint ceiling is admissible");
+
+        let mut above_limit = at_limit;
+        above_limit
+            .descriptor
+            .accepted_candidate_indices
+            .push(u64::try_from(MAX_LANE_EXECUTABLE_ENTRYPOINTS).expect("ceiling fits u64"));
+        above_limit
+            .descriptor
+            .accepted_transaction_hashes
+            .push(Hash::new(b"above-global-merge-entrypoint-ceiling"));
+        above_limit.descriptor.descriptor_hash = above_limit.descriptor.computed_descriptor_hash();
+        above_limit.proposal_hash = above_limit.computed_proposal_hash();
+        assert_eq!(
+            validate_lane_block_proposal(&above_limit),
+            Err(LaneBlockProposalIngressError::InvalidBody)
+        );
+
+        let mut oversized_vote = vote_body(&validator_set);
+        oversized_vote.accepted_candidate_indices =
+            above_limit.descriptor.accepted_candidate_indices;
+        oversized_vote.accepted_transaction_hashes =
+            above_limit.descriptor.accepted_transaction_hashes;
+        assert_eq!(
+            validate_lane_block_vote_body_shape(&oversized_vote),
+            Err(LaneBlockVoteIngressError::InvalidBody)
         );
     }
 

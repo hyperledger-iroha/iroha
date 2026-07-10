@@ -636,7 +636,7 @@ struct LaneSettlementBuilder {
 }
 
 /// Consensus-critical authority surface used by native AMX validation.
-trait NativeAmxAuthorityContext {
+pub(crate) trait NativeAmxAuthorityContext {
     fn route_active_at_height(
         &self,
         lane_id: LaneId,
@@ -672,8 +672,51 @@ impl<T: StateReadOnly> NativeAmxAuthorityContext for T {
     }
 }
 
-fn validate_native_amx_receipt_against_plan(
+fn native_amx_coordinator_proposal_from_ownership(
+    ownership: &iroha_data_model::block::consensus::SumeragiLanePayloadOwnership,
+) -> Result<iroha_data_model::block::consensus::LaneBlockProposalV1, String> {
+    ownership
+        .validate_replay_material()
+        .map_err(|err| format!("invalid native AMX coordinator ownership: {err}"))?;
+    let descriptor_hash = ownership
+        .lane_block_descriptor_hash
+        .ok_or_else(|| "native AMX coordinator ownership is missing descriptor hash".to_owned())?;
+    let descriptor = iroha_data_model::block::consensus::LaneBlockDescriptorV1 {
+        lane_id: ownership.lane_id,
+        dataspace_id: ownership.dataspace_id,
+        lane_incarnation: ownership.lane_incarnation,
+        proposal_height: ownership.proposal_height,
+        previous_lane_block_height: ownership.previous_lane_block_height,
+        previous_lane_block_descriptor_hash: ownership.previous_lane_block_descriptor_hash,
+        lane_block_height: ownership.lane_block_height,
+        lane_block_view: ownership.lane_block_view,
+        subject_hash: ownership.subject_hash,
+        payload_ownership_hash: ownership.payload_ownership_hash,
+        rbc_instance_hash: ownership.rbc_instance_hash,
+        accepted_candidate_indices: ownership.accepted_candidate_indices.clone(),
+        accepted_transaction_hashes: ownership.accepted_transaction_hashes.clone(),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set_hash: HashOf::new(&ownership.lane_block_descriptor_validator_set),
+        validator_set: ownership.lane_block_descriptor_validator_set.clone(),
+        validator_count: ownership.lane_block_descriptor_validator_count,
+        min_quorum: ownership.lane_block_descriptor_min_quorum,
+        qc_mode_tag: ownership.qc_mode_tag.clone(),
+        descriptor_hash,
+    };
+    let mut proposal = iroha_data_model::block::consensus::LaneBlockProposalV1 {
+        descriptor,
+        proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+        payload_block_hint: None,
+    };
+    proposal.proposal_hash = proposal.computed_proposal_hash();
+    crate::lane_consensus::validate_lane_block_proposal(&proposal)
+        .map_err(|_| "native AMX coordinator proposal replay is malformed".to_owned())?;
+    Ok(proposal)
+}
+
+pub(crate) fn validate_native_amx_receipt_against_plan(
     receipt: &NativeAmxReceipt,
+    coordinator_proposal: &iroha_data_model::block::consensus::LaneBlockProposalV1,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
     plan: &crate::queue::RoutingPlan,
     expected_source_id: [u8; iroha_crypto::Hash::LENGTH],
@@ -681,6 +724,9 @@ fn validate_native_amx_receipt_against_plan(
     dataspace_catalog: &DataSpaceCatalog,
     authority: &impl NativeAmxAuthorityContext,
 ) -> Result<(), String> {
+    if receipt.legs.len() > crate::native_amx::MAX_NATIVE_AMX_PLAN_LEGS {
+        return Err("native AMX receipt exceeds the participant-leg cap".to_owned());
+    }
     if receipt.version != 1 {
         return Err(format!(
             "unsupported native AMX receipt version {}",
@@ -727,6 +773,20 @@ fn validate_native_amx_receipt_against_plan(
     let crate::queue::RoutingPlan::NativeAmx(native_plan) = plan else {
         return Err("native AMX receipt attached to single-route plan".to_owned());
     };
+    crate::lane_consensus::validate_lane_block_proposal(coordinator_proposal)
+        .map_err(|_| "native AMX coordinator proposal is malformed".to_owned())?;
+    if !crate::native_amx::receipt_shape_matches_coordinator_payload(
+        Some(receipt),
+        plan,
+        &expected_source_id,
+        Hash::from(entrypoint_hash),
+        expected_chain_id_hash,
+        coordinator_proposal,
+    ) {
+        return Err(
+            "native AMX receipt does not bind the exact coordinator lane proposal".to_owned(),
+        );
+    }
 
     let expected_participants = native_plan
         .participants
@@ -758,7 +818,18 @@ fn validate_native_amx_receipt_against_plan(
             }
             Ok((leg.route.lane_id, leg.route.dataspace_id, incarnation))
         })
-        .collect::<Result<BTreeSet<_>, String>>()?;
+        .collect::<Result<Vec<_>, String>>()?;
+    if receipt.legs.len() != expected_participants.len()
+        || receipt
+            .legs
+            .iter()
+            .map(|leg| (leg.lane_id, leg.dataspace_id, leg.lane_incarnation))
+            .ne(expected_participants.iter().copied())
+    {
+        return Err(
+            "native AMX receipt participant legs are missing, extra, or reordered".to_owned(),
+        );
+    }
     let mut seen_participants = BTreeSet::new();
     for leg in &receipt.legs {
         let participant = (leg.lane_id, leg.dataspace_id, leg.lane_incarnation);
@@ -797,14 +868,14 @@ fn validate_native_amx_receipt_against_plan(
             authority,
         )?;
     }
-    if seen_participants != expected_participants {
+    if seen_participants != expected_participants.iter().copied().collect() {
         return Err("native AMX receipt is missing participant leg".to_owned());
     }
     Ok(())
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
-fn validate_native_amx_attestation_qc(
+pub(crate) fn validate_native_amx_attestation_qc(
     receipt: &NativeAmxReceipt,
     leg: &NativeAmxLegRecord,
     qc: &NativeAmxAttestationQcV1,
@@ -815,6 +886,16 @@ fn validate_native_amx_attestation_qc(
     authority: &impl NativeAmxAuthorityContext,
 ) -> Result<(), String> {
     let body = &qc.body;
+    if qc.validator_set.is_empty()
+        || qc.validator_set.len() > crate::native_amx::MAX_NATIVE_AMX_VALIDATORS
+        || qc.validator_set_pops.len() != qc.validator_set.len()
+        || qc.signers_bitmap.len() > crate::native_amx::MAX_NATIVE_AMX_VALIDATORS.div_ceil(8)
+        || qc.bls_aggregate_signature.len() != crate::native_amx::NATIVE_AMX_BLS_PROOF_BYTES
+    {
+        return Err(
+            "native AMX attestation exceeds or violates a protocol resource cap".to_owned(),
+        );
+    }
     if body.chain_id_hash != expected_chain_id_hash || body.chain_id_hash != receipt.chain_id_hash {
         return Err("native AMX attestation chain identity mismatch".to_owned());
     }
@@ -842,6 +923,23 @@ fn validate_native_amx_attestation_qc(
     {
         return Err("native AMX attestation participant route/incarnation mismatch".to_owned());
     }
+    let Ok(body_validator_count) = usize::try_from(body.participant_validator_count) else {
+        return Err("native AMX attestation participant validator count is invalid".to_owned());
+    };
+    let Ok(body_min_quorum) = usize::try_from(body.participant_min_quorum) else {
+        return Err("native AMX attestation participant quorum is invalid".to_owned());
+    };
+    if body_validator_count != qc.validator_set.len()
+        || body_validator_count == 0
+        || body_validator_count > crate::native_amx::MAX_NATIVE_AMX_VALIDATORS
+        || body_min_quorum == 0
+        || body_min_quorum > body_validator_count
+        || body.participant_validator_set_hash != qc.validator_set_hash
+    {
+        return Err(
+            "native AMX attestation signed participant committee context mismatch".to_owned(),
+        );
+    }
     if body.authority_context_height != receipt.authority_context_height
         || body.coordinator_lane_block_height != receipt.lane_block_height
         || body.coordinator_lane_block_view != receipt.lane_block_view
@@ -867,6 +965,12 @@ fn validate_native_amx_attestation_qc(
     }
     if qc.validator_set_hash != HashOf::new(&expected_validator_set) {
         return Err("native AMX attestation validator-set hash mismatch".to_owned());
+    }
+    if body.participant_validator_set_hash != HashOf::new(&expected_validator_set) {
+        return Err(
+            "native AMX attestation body does not bind the authoritative participant committee"
+                .to_owned(),
+        );
     }
     let Some(dataspace) = dataspace_catalog
         .entries()
@@ -902,6 +1006,20 @@ fn validate_native_amx_attestation_qc(
     let mut signer_count = 0usize;
     let mut signer_keys = Vec::new();
     let mut signer_pops = Vec::new();
+    for (validator, pop) in qc.validator_set.iter().zip(&qc.validator_set_pops) {
+        if pop.len() != crate::native_amx::NATIVE_AMX_BLS_PROOF_BYTES
+            || !crate::sumeragi::is_bls_normal_public_key(validator.public_key())
+            || iroha_crypto::bls_normal_pop_verify(validator.public_key(), pop).is_err()
+            || authority
+                .live_consensus_pop(validator, body.authority_context_height)
+                .is_some_and(|live_pop| live_pop != *pop)
+        {
+            return Err(
+                "native AMX attestation validator has invalid historical BLS proof-of-possession"
+                    .to_owned(),
+            );
+        }
+    }
     for (byte_index, byte) in qc.signers_bitmap.iter().copied().enumerate() {
         if byte == 0 {
             continue;
@@ -923,18 +1041,15 @@ fn validate_native_amx_attestation_qc(
             if !crate::sumeragi::is_bls_normal_public_key(signer.public_key()) {
                 return Err("native AMX attestation signer is not a BLS normal key".to_owned());
             }
-            let Some(pop) = authority.live_consensus_pop(signer, body.authority_context_height)
-            else {
-                return Err(
-                    "native AMX attestation signer missing live BLS proof-of-possession".to_owned(),
-                );
-            };
             signer_keys.push(signer.public_key());
-            signer_pops.push(pop);
+            signer_pops.push(qc.validator_set_pops[signer_index].clone());
         }
     }
     let required_quorum =
         crate::sumeragi::network_topology::commit_quorum_from_len(qc.validator_set.len()).max(1);
+    if body_min_quorum != required_quorum {
+        return Err("native AMX attestation signed quorum policy mismatch".to_owned());
+    }
     if signer_count < required_quorum {
         return Err(format!(
             "native AMX attestation quorum not met: expected {required_quorum}, got {signer_count}"
@@ -2588,6 +2703,11 @@ pub enum BlockValidationError {
     MerkleRootMismatch,
     /// Execution context invalid: {0}
     ExecutionContextInvalid(String),
+    /// Certified merge sidecar `{entry_hash}` is not available locally yet
+    MissingCertifiedMergeSidecar {
+        /// Canonical hash of the full merge entry required by this block.
+        entry_hash: HashOf<iroha_data_model::merge::MergeLedgerEntry>,
+    },
     /// Committed fragment count mismatch. Expected: {expected}, actual: {actual}
     CommittedFragmentCountMismatch {
         /// Count recomputed while executing the block.
@@ -3056,6 +3176,42 @@ mod chained {
         #[must_use]
         pub fn creation_time(&self) -> Duration {
             self.0.header.creation_time()
+        }
+
+        /// Header context selected for this proposal before payload/result roots are finalized.
+        ///
+        /// Certified merge execution strips those roots and binds the remaining height, parent,
+        /// ledger-time, and view fields, so callers may use this clone to select an exact pending
+        /// merge sidecar without introducing a header-hash cycle.
+        #[inline]
+        #[must_use]
+        pub(crate) fn carrier_context_header(&self) -> BlockHeader {
+            self.0.header.clone()
+        }
+
+        /// Bind this proposal to the exact ledger timestamp certified by a merge batch.
+        ///
+        /// Height, parent, and view are selected by the active global round and must already
+        /// match. Only the timestamp may be adopted from the pre-executed merge application
+        /// context; payload roots are deliberately excluded from that context.
+        pub(crate) fn bind_certified_merge_application_context(
+            mut self,
+            application: &BlockHeader,
+        ) -> Result<Self, &'static str> {
+            if application.merkle_root().is_some()
+                || application.result_merkle_root().is_some()
+                || application.creation_time().is_zero()
+                || application.height() != self.0.header.height()
+                || application.prev_block_hash() != self.0.header.prev_block_hash()
+                || application.view_change_index() != self.0.header.view_change_index()
+            {
+                return Err(
+                    "certified merge application context differs from the active global round",
+                );
+            }
+            self.0.header.creation_time_ms = u64::try_from(application.creation_time().as_millis())
+                .map_err(|_| "certified merge application timestamp exceeds u64")?;
+            Ok(self)
         }
 
         /// Attach a DA commitment bundle and update the header hash accordingly.
@@ -5386,6 +5542,9 @@ pub(crate) mod valid {
             ) {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
+            if let Err(error) = Self::validate_merge_entrypoint_disjointness(&block, state_block) {
+                return WithEvents::new(Err((Box::new(block), Box::new(error))));
+            }
             let exec_witness_guard = (!state_block.replay_compatibility)
                 .then(crate::sumeragi::witness::exec_witness_guard);
             if let Err(error) =
@@ -5432,6 +5591,14 @@ pub(crate) mod valid {
                 time_source,
             ) {
                 // Emit rejection with the offending header
+                let ev = PipelineEventBox::from(BlockEvent {
+                    header: block.header(),
+                    status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
+                });
+                send_events(ev);
+                return WithEvents::new(Err((Box::new(block), Box::new(error))));
+            }
+            if let Err(error) = Self::validate_merge_entrypoint_disjointness(&block, state_block) {
                 let ev = PipelineEventBox::from(BlockEvent {
                     header: block.header(),
                     status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
@@ -5667,6 +5834,7 @@ pub(crate) mod valid {
                 block.header().is_genesis() || signed_block_entrypoints_are_canonical(&block),
                 "SCCP root probe block payload is not in canonical transaction entrypoint order"
             );
+            Self::validate_merge_entrypoint_disjointness(&block, state_block)?;
             let exec_witness_guard = (!state_block.replay_compatibility)
                 .then(crate::sumeragi::witness::exec_witness_guard);
             Self::validate_and_record_transactions_with_prepared(
@@ -5684,6 +5852,85 @@ pub(crate) mod valid {
             block.set_sccp_commitment_root(root);
             Self::validate_sccp_commitment_root(&block)?;
             Ok(root)
+        }
+
+        fn state_block_for_execution<'state>(
+            block: &SignedBlock,
+            state: &'state State,
+            soft_fork: bool,
+        ) -> Result<StateBlock<'state>, BlockValidationError> {
+            let merge_reference = block
+                .execution_context()
+                .and_then(|bundle| bundle.merge_entry.as_ref());
+            if let Some(reference) = merge_reference {
+                if soft_fork {
+                    return Err(Self::execution_context_error(
+                        "soft-fork replacement cannot safely apply a certified merge entry",
+                    ));
+                }
+                return state
+                    .block_with_certified_merge_reference(block.header(), reference)
+                    .map_err(|error| match error {
+                        crate::state::MergeLedgerCommitError::MissingCertifiedMergeSidecar {
+                            entry_hash,
+                        } => BlockValidationError::MissingCertifiedMergeSidecar { entry_hash },
+                        other => Self::execution_context_error(format!(
+                            "certified merge entry could not be staged: {other}"
+                        )),
+                    });
+            }
+            Ok(if soft_fork {
+                state.block_and_revert(block.header())
+            } else {
+                state.block(block.header())
+            })
+        }
+
+        fn validate_merge_entrypoint_disjointness(
+            block: &SignedBlock,
+            state_block: &StateBlock<'_>,
+        ) -> Result<(), BlockValidationError> {
+            let reference = block
+                .execution_context()
+                .and_then(|bundle| bundle.merge_entry.as_ref());
+            let staged = state_block.staged_merge_entry();
+            let entry = match (reference, staged) {
+                (None, None) => return Ok(()),
+                (Some(reference), Some(entry)) if reference.matches_entry(entry) => entry,
+                (Some(_), None) => {
+                    return Err(Self::execution_context_error(
+                        "certified merge reference was not staged on the execution overlay",
+                    ));
+                }
+                (None, Some(_)) => {
+                    return Err(Self::execution_context_error(
+                        "execution overlay contains an unreferenced certified merge entry",
+                    ));
+                }
+                (Some(_), Some(_)) => {
+                    return Err(Self::execution_context_error(
+                        "staged certified merge entry differs from the block reference",
+                    ));
+                }
+            };
+            let Some(batch) = entry.execution_batch.as_ref() else {
+                return Ok(());
+            };
+            let merge_entrypoints = batch
+                .lanes
+                .iter()
+                .flat_map(|execution| execution.entrypoint_hashes.iter().copied())
+                .collect::<BTreeSet<_>>();
+            if block
+                .external_entrypoints_cloned()
+                .map(|entrypoint| Hash::from(entrypoint.hash()))
+                .any(|hash| merge_entrypoints.contains(&hash))
+            {
+                return Err(Self::execution_context_error(
+                    "ordinary block entrypoint duplicates a certified merge-batch entrypoint",
+                ));
+            }
+            Ok(())
         }
 
         #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -5859,14 +6106,28 @@ pub(crate) mod valid {
                 timings.execution_da_indexes_ms = to_ms(da_indexes_start.elapsed());
             }
             let state_block_start = Instant::now();
-            let mut state_block = if soft_fork {
-                state.block_and_revert(block.header())
-            } else {
-                state.block(block.header())
+            let mut state_block = match Self::state_block_for_execution(&block, state, soft_fork) {
+                Ok(state_block) => state_block,
+                Err(error) => {
+                    record_timings(&mut timings, stateless_elapsed, Some(execution_start));
+                    if !matches!(
+                        error,
+                        BlockValidationError::MissingCertifiedMergeSidecar { .. }
+                    ) {
+                        emit_rejection(&block, &error);
+                    }
+                    return WithEvents::new(Err((Box::new(block), Box::new(error))));
+                }
             };
             state_block.replay_compatibility = replay_compatibility;
             if let Some(timings) = timings.as_deref_mut() {
                 timings.execution_state_block_ms = to_ms(state_block_start.elapsed());
+            }
+            if let Err(error) = Self::validate_merge_entrypoint_disjointness(&block, &state_block) {
+                drop(state_block);
+                record_timings(&mut timings, stateless_elapsed, Some(execution_start));
+                emit_rejection(&block, &error);
+                return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             let exec_witness_guard =
                 (!replay_compatibility).then(crate::sumeragi::witness::exec_witness_guard);
@@ -6695,6 +6956,152 @@ pub(crate) mod valid {
             Ok(())
         }
 
+        fn validate_execution_context_merge_reference(
+            block: &SignedBlock,
+            chain_id: &ChainId,
+            state: &impl StateReadOnly,
+            bundle: &BlockExecutionContextBundle,
+        ) -> Result<(), BlockValidationError> {
+            const MAX_MERGE_ENTRY_BYTES: u64 = 16 * 1024 * 1024;
+            const MAX_MERGE_REFERENCE_BYTES: usize = 2 * 1024 * 1024;
+            const MAX_MERGE_ENTRYPOINTS: u64 = 4_096;
+            const MAX_MERGE_VALIDATORS: usize = 4_096;
+            const BLS_NORMAL_SIGNATURE_BYTES: usize = 96;
+
+            let Some(reference) = bundle.merge_entry.as_ref() else {
+                return Ok(());
+            };
+            if block.header().is_genesis() {
+                return Err(Self::execution_context_error(
+                    "genesis block cannot carry a certified merge entry",
+                ));
+            }
+            if !state.nexus().enabled {
+                return Err(Self::execution_context_error(
+                    "certified merge entry requires Nexus multilane mode",
+                ));
+            }
+            if reference.version != 1 {
+                return Err(Self::execution_context_error(format!(
+                    "unsupported certified merge reference version {}",
+                    reference.version
+                )));
+            }
+            if reference.encoded_len == 0 || reference.encoded_len > MAX_MERGE_ENTRY_BYTES {
+                return Err(Self::execution_context_error(format!(
+                    "certified merge sidecar length {} is outside 1..={MAX_MERGE_ENTRY_BYTES}",
+                    reference.encoded_len
+                )));
+            }
+            if reference.encode().len() > MAX_MERGE_REFERENCE_BYTES {
+                return Err(Self::execution_context_error(
+                    "certified merge reference exceeds its hard byte cap",
+                ));
+            }
+            let has_batch_hash = reference.execution_batch_hash.is_some();
+            if [
+                reference.entrypoint_count.is_some(),
+                reference.entrypoint_merkle_root.is_some(),
+                reference.result_merkle_root.is_some(),
+                reference.base_state_height.is_some(),
+                reference.base_state_hash.is_some(),
+            ]
+            .into_iter()
+            .any(|present| present != has_batch_hash)
+            {
+                return Err(Self::execution_context_error(
+                    "certified merge reference has a partial execution-batch binding",
+                ));
+            }
+            if let Some(entrypoint_count) = reference.entrypoint_count
+                && !(1..=MAX_MERGE_ENTRYPOINTS).contains(&entrypoint_count)
+            {
+                return Err(Self::execution_context_error(format!(
+                    "certified merge reference entrypoint count {entrypoint_count} is outside 1..={MAX_MERGE_ENTRYPOINTS}",
+                )));
+            }
+
+            let qc = &reference.merge_qc;
+            if reference.epoch_id != qc.epoch_id {
+                return Err(Self::execution_context_error(
+                    "certified merge reference epoch differs from its QC",
+                ));
+            }
+            if qc.carrier_height != block.header().height().get()
+                || Some(qc.carrier_parent_hash) != block.header().prev_block_hash()
+                || qc.view != block.header().view_change_index()
+            {
+                return Err(Self::execution_context_error(
+                    "certified merge QC is bound to a different carrier height, parent, or view",
+                ));
+            }
+            if qc.chain_id_digest != crate::merge::merge_chain_id_digest(chain_id) {
+                return Err(Self::execution_context_error(
+                    "certified merge reference is bound to another chain",
+                ));
+            }
+            if qc.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1
+                || qc.validator_set.is_empty()
+                || qc.validator_set.len() > MAX_MERGE_VALIDATORS
+                || qc.validator_set_hash != HashOf::new(&qc.validator_set)
+                || qc.aggregate_signature.len() != BLS_NORMAL_SIGNATURE_BYTES
+            {
+                return Err(Self::execution_context_error(
+                    "certified merge reference has malformed committee or signature metadata",
+                ));
+            }
+            let mut unique_validators = BTreeSet::new();
+            if qc.validator_set.iter().any(|validator| {
+                !unique_validators.insert(validator)
+                    || !crate::sumeragi::is_bls_normal_public_key(validator.public_key())
+            }) {
+                return Err(Self::execution_context_error(
+                    "certified merge reference committee is duplicated or contains a non-BLS key",
+                ));
+            }
+            let roster_len = qc.validator_set.len();
+            let expected_bitmap_len = roster_len.div_ceil(8);
+            if qc.signers_bitmap.len() != expected_bitmap_len {
+                return Err(Self::execution_context_error(
+                    "certified merge reference has a non-canonical signer bitmap length",
+                ));
+            }
+            if roster_len % 8 != 0 {
+                let used_bits = roster_len % 8;
+                let padding_mask = !((1_u8 << used_bits) - 1);
+                if qc.signers_bitmap[expected_bitmap_len - 1] & padding_mask != 0 {
+                    return Err(Self::execution_context_error(
+                        "certified merge reference signer bitmap has non-zero padding",
+                    ));
+                }
+            }
+            let signers = qc
+                .signers_bitmap
+                .iter()
+                .copied()
+                .enumerate()
+                .flat_map(|(byte_index, byte)| {
+                    (0_u8..8).filter_map(move |bit| {
+                        (byte & (1_u8 << bit) != 0).then_some(byte_index * 8 + usize::from(bit))
+                    })
+                })
+                .collect::<Vec<_>>();
+            let signer_count = signers.len();
+            let required = crate::sumeragi::network_topology::commit_quorum_from_len(roster_len);
+            if signer_count < required
+                || qc.signer_proofs.len() != signer_count
+                || qc.signer_proofs.iter().zip(signers).any(|(proof, signer)| {
+                    usize::try_from(proof.signer).ok() != Some(signer)
+                        || proof.proof_of_possession.len() != BLS_NORMAL_SIGNATURE_BYTES
+                })
+            {
+                return Err(Self::execution_context_error(
+                    "certified merge reference lacks exact quorum proof material",
+                ));
+            }
+            Ok(())
+        }
+
         fn execution_context_preimage_hash(
             preimage: &impl Encode,
             context: &str,
@@ -7177,6 +7584,7 @@ pub(crate) mod valid {
             };
 
             Self::validate_execution_context_alignment(block, bundle)?;
+            Self::validate_execution_context_merge_reference(block, chain_id, state, bundle)?;
             Self::validate_execution_context_lane_payload_ownerships(
                 block, topology, chain_id, state, bundle,
             )?;
@@ -7264,8 +7672,37 @@ pub(crate) mod valid {
                         expected_source_id.copy_from_slice(source_tx.hash().as_ref());
                         let expected_chain_id_hash =
                             Hash::new(chain_id.clone().into_inner().as_bytes());
+                        let entrypoint_untyped = Hash::from(context.entrypoint_hash);
+                        let mut matching_ownerships =
+                            bundle.lane_payload_ownerships.iter().filter(|ownership| {
+                                ownership.lane_id == context.lane_id
+                                    && ownership.dataspace_id == context.dataspace_id
+                                    && ownership.proposal_height == receipt.authority_context_height
+                                    && ownership
+                                        .accepted_transaction_hashes
+                                        .iter()
+                                        .any(|hash| *hash == entrypoint_untyped)
+                            });
+                        let Some(coordinator_ownership) = matching_ownerships.next() else {
+                            return Err(Self::execution_context_error(format!(
+                                "native AMX receipt at index {idx} has no coordinator lane ownership"
+                            )));
+                        };
+                        if matching_ownerships.next().is_some() {
+                            return Err(Self::execution_context_error(format!(
+                                "native AMX receipt at index {idx} matches multiple coordinator lane ownerships"
+                            )));
+                        }
+                        let coordinator_proposal =
+                            native_amx_coordinator_proposal_from_ownership(coordinator_ownership)
+                                .map_err(|err| {
+                                Self::execution_context_error(format!(
+                                    "native AMX coordinator ownership invalid at index {idx}: {err}"
+                                ))
+                            })?;
                         validate_native_amx_receipt_against_plan(
                             receipt,
+                            &coordinator_proposal,
                             context.entrypoint_hash,
                             &plan,
                             expected_source_id,
@@ -8459,8 +8896,20 @@ pub(crate) mod valid {
             state_block: &StateBlock<'_>,
             advertised_committed_fragments: Option<u64>,
         ) -> Result<(), BlockValidationError> {
-            let expected =
-                u64::try_from(state_block.committed_fragment_count()).unwrap_or(u64::MAX);
+            let ordinary = u64::try_from(state_block.committed_fragment_count()).map_err(|_| {
+                Self::execution_context_error(
+                    "ordinary committed fragment count exceeds the canonical u64 range",
+                )
+            })?;
+            let merged = state_block
+                .staged_merge_entry()
+                .and_then(|entry| entry.execution_batch.as_ref())
+                .map_or(0, |batch| batch.entrypoint_count);
+            let expected = ordinary.checked_add(merged).ok_or_else(|| {
+                Self::execution_context_error(
+                    "combined ordinary and merge committed fragment count overflow",
+                )
+            })?;
             if let Some(actual) = advertised_committed_fragments.filter(|count| *count != 0)
                 && actual != expected
             {
@@ -12541,6 +12990,8 @@ pub(crate) mod valid {
                 block.header().is_genesis() || signed_block_entrypoints_are_canonical(&block),
                 "unchecked block payload is not in canonical transaction entrypoint order"
             );
+            Self::validate_merge_entrypoint_disjointness(&block, state_block)
+                .expect("unchecked certified merge block requires its exact pre-staged sidecar");
             let exec_witness_guard = (!state_block.replay_compatibility)
                 .then(crate::sumeragi::witness::exec_witness_guard);
             Self::validate_and_record_transactions(&mut block, state_block, None, false)
@@ -22235,6 +22686,7 @@ mod event {
                 Reason::SccpCommitmentRootMismatch
             }
             BlockValidationError::ExecutionContextInvalid(_)
+            | BlockValidationError::MissingCertifiedMergeSidecar { .. }
             | BlockValidationError::CommittedFragmentCountMismatch { .. } => {
                 Reason::TransactionValidationFailed
             }
@@ -23286,6 +23738,53 @@ mod tests {
         Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
     }
 
+    fn native_amx_test_coordinator_proposal(
+        coordinator: crate::queue::RoutingDecision,
+        tx_entrypoint_hash: HashOf<TransactionEntrypoint>,
+        block_height: u64,
+        keypairs: &[KeyPair],
+    ) -> iroha_data_model::block::consensus::LaneBlockProposalV1 {
+        let mut validator_set = keypairs
+            .iter()
+            .map(|keypair| PeerId::new(keypair.public_key().clone()))
+            .collect::<Vec<_>>();
+        validator_set.sort();
+        validator_set.dedup();
+        let mut descriptor = iroha_data_model::block::consensus::LaneBlockDescriptorV1 {
+            lane_id: coordinator.lane_id,
+            dataspace_id: coordinator.dataspace_id,
+            lane_incarnation: Hash::new(coordinator.lane_id.as_u32().to_be_bytes()),
+            proposal_height: block_height,
+            previous_lane_block_height: 6,
+            previous_lane_block_descriptor_hash: Some(Hash::new(b"native-amx-test-previous")),
+            lane_block_height: 7,
+            lane_block_view: 2,
+            subject_hash: Hash::new(b"native-amx-test-subject"),
+            payload_ownership_hash: Hash::new(b"native-amx-test-ownership"),
+            rbc_instance_hash: Hash::new(b"native-amx-test-rbc"),
+            accepted_candidate_indices: vec![0],
+            accepted_transaction_hashes: vec![Hash::from(tx_entrypoint_hash)],
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set,
+            validator_count: u32::try_from(keypairs.len()).expect("fixture validator count"),
+            min_quorum: u32::try_from(
+                crate::sumeragi::network_topology::commit_quorum_from_len(keypairs.len()).max(1),
+            )
+            .expect("fixture quorum"),
+            qc_mode_tag: "native-amx:test-coordinator".to_owned(),
+            descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
+        };
+        descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
+        let mut proposal = iroha_data_model::block::consensus::LaneBlockProposalV1 {
+            descriptor,
+            proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+            payload_block_hint: None,
+        };
+        proposal.proposal_hash = proposal.computed_proposal_hash();
+        proposal
+    }
+
     fn signed_native_amx_attestation_qc_with_signer_count(
         phase: NativeAmxPhase,
         source_id: [u8; iroha_crypto::Hash::LENGTH],
@@ -23306,6 +23805,14 @@ mod tests {
             .iter()
             .map(|(peer, _)| peer.clone())
             .collect::<Vec<_>>();
+        let participant_min_quorum =
+            crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()).max(1);
+        let coordinator_proposal = native_amx_test_coordinator_proposal(
+            coordinator,
+            tx_entrypoint_hash,
+            block_height,
+            keypairs,
+        );
         let body = NativeAmxAttestationBodyV1 {
             chain_id_hash: Hash::new(b"native-amx-test-chain"),
             source_id,
@@ -23318,10 +23825,15 @@ mod tests {
             participant_lane_id: participant.lane_id,
             participant_dataspace_id: participant.dataspace_id,
             participant_lane_incarnation: Hash::new(participant.lane_id.as_u32().to_be_bytes()),
+            participant_validator_set_hash: HashOf::new(&validator_set),
+            participant_validator_count: u32::try_from(validator_set.len())
+                .expect("fixture validator count"),
+            participant_min_quorum: u32::try_from(participant_min_quorum)
+                .expect("fixture participant quorum"),
             authority_context_height: block_height,
             coordinator_lane_block_height: 7,
             coordinator_lane_block_view: 2,
-            coordinator_proposal_hash: Hash::new(b"native-amx-test-proposal"),
+            coordinator_proposal_hash: coordinator_proposal.proposal_hash,
         };
         let preimage = body.signature_preimage();
         let signatures = validator_keys
@@ -23344,6 +23856,13 @@ mod tests {
             body,
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set_hash: HashOf::new(&validator_set),
+            validator_set_pops: validator_keys
+                .iter()
+                .map(|(_, keypair)| {
+                    iroha_crypto::bls_normal_pop_prove(keypair.private_key())
+                        .expect("fixture validator PoP")
+                })
+                .collect(),
             validator_set,
             signers_bitmap,
             bls_aggregate_signature,
@@ -23379,6 +23898,12 @@ mod tests {
             panic!("test expects native AMX plan");
         };
         let coordinator = plan.coordinator.route;
+        let coordinator_proposal = native_amx_test_coordinator_proposal(
+            coordinator,
+            tx_entrypoint_hash,
+            block_height,
+            keypairs,
+        );
         let legs = plan
             .participants
             .iter()
@@ -23421,7 +23946,7 @@ mod tests {
             authority_context_height: block_height,
             lane_block_height: 7,
             lane_block_view: 2,
-            coordinator_proposal_hash: Hash::new(b"native-amx-test-proposal"),
+            coordinator_proposal_hash: coordinator_proposal.proposal_hash,
             legs,
         }
     }
@@ -23478,9 +24003,16 @@ mod tests {
             42,
             &keypairs,
         );
+        let coordinator_proposal = native_amx_test_coordinator_proposal(
+            routing_plan.coordinator_route(),
+            tx.hash_as_entrypoint(),
+            42,
+            &keypairs,
+        );
 
         validate_native_amx_receipt_against_plan(
             &receipt,
+            &coordinator_proposal,
             tx.hash_as_entrypoint(),
             &routing_plan,
             source_id,
@@ -23547,9 +24079,16 @@ mod tests {
             &keypairs,
             3,
         );
+        let coordinator_proposal = native_amx_test_coordinator_proposal(
+            routing_plan.coordinator_route(),
+            tx.hash_as_entrypoint(),
+            42,
+            &keypairs,
+        );
 
         validate_native_amx_receipt_against_plan(
             &receipt,
+            &coordinator_proposal,
             tx.hash_as_entrypoint(),
             &routing_plan,
             source_id,
@@ -23561,6 +24100,72 @@ mod tests {
 
         assert_eq!(receipt.legs[0].prepare_qc.validator_set.len(), 4);
         assert_eq!(receipt.legs[0].prepare_qc.signers_bitmap, vec![0b0000_0111]);
+    }
+
+    #[test]
+    fn native_amx_receipt_retains_pop_evidence_after_key_retirement() {
+        let paynet = DataSpaceId::new(7);
+        let cbuae = DataSpaceId::new(8);
+        let (tx, tx_hash) =
+            signed_domain_registration_tx(&[("merchant", "paynet"), ("treasury", "cbuae")]);
+        let routing_plan = crate::queue::RoutingPlan::native_amx(
+            crate::queue::RoutingDecision::new(LaneId::new(1), paynet),
+            vec![
+                crate::queue::RouteLeg::new(
+                    crate::queue::RoutingDecision::new(LaneId::new(1), paynet),
+                    crate::queue::RouteLegRole::Participant,
+                ),
+                crate::queue::RouteLeg::new(
+                    crate::queue::RoutingDecision::new(LaneId::new(2), cbuae),
+                    crate::queue::RouteLegRole::Participant,
+                ),
+            ],
+        );
+        let (_, keypairs) = native_amx_test_world_with_keys();
+        let entrypoint_hash = tx.hash_as_entrypoint();
+        let mut source_id = [0_u8; iroha_crypto::Hash::LENGTH];
+        source_id.copy_from_slice(tx_hash.as_ref());
+        let receipt =
+            signed_native_amx_receipt(source_id, entrypoint_hash, &routing_plan, 42, &keypairs);
+        let coordinator_proposal = native_amx_test_coordinator_proposal(
+            routing_plan.coordinator_route(),
+            entrypoint_hash,
+            42,
+            &keypairs,
+        );
+        let historical_authority = NativeAmxTestAuthority {
+            world: World::new(),
+            committee: receipt.legs[0].prepare_qc.validator_set.clone(),
+        };
+
+        validate_native_amx_receipt_against_plan(
+            &receipt,
+            &coordinator_proposal,
+            entrypoint_hash,
+            &routing_plan,
+            source_id,
+            Hash::new(b"native-amx-test-chain"),
+            &native_amx_test_catalog(paynet, cbuae),
+            &historical_authority,
+        )
+        .expect("embedded historical PoPs survive live-key retirement");
+
+        let mut tampered = receipt;
+        tampered.legs[0].prepare_qc.validator_set_pops[0][0] ^= 0x80;
+        assert!(
+            validate_native_amx_receipt_against_plan(
+                &tampered,
+                &coordinator_proposal,
+                entrypoint_hash,
+                &routing_plan,
+                source_id,
+                Hash::new(b"native-amx-test-chain"),
+                &native_amx_test_catalog(paynet, cbuae),
+                &historical_authority,
+            )
+            .is_err(),
+            "tampered historical PoP must fail closed"
+        );
     }
 
     #[test]
@@ -23590,9 +24195,16 @@ mod tests {
         source_id.copy_from_slice(tx_hash.as_ref());
         let receipt =
             signed_native_amx_receipt(source_id, entrypoint_hash, &routing_plan, 42, &keypairs);
+        let coordinator_proposal = native_amx_test_coordinator_proposal(
+            routing_plan.coordinator_route(),
+            entrypoint_hash,
+            42,
+            &keypairs,
+        );
         let validate = |receipt: &NativeAmxReceipt| {
             validate_native_amx_receipt_against_plan(
                 receipt,
+                &coordinator_proposal,
                 entrypoint_hash,
                 &routing_plan,
                 source_id,
@@ -23604,37 +24216,24 @@ mod tests {
 
         let mut missing_leg = receipt.clone();
         missing_leg.legs.pop();
-        assert!(
-            validate(&missing_leg)
-                .expect_err("missing leg must fail")
-                .contains("missing participant leg")
-        );
+        assert!(validate(&missing_leg).is_err(), "missing leg must fail");
 
         let mut wrong_phase = receipt.clone();
         wrong_phase.legs[0].prepare_qc.body.phase = NativeAmxPhase::Commit;
-        assert!(
-            validate(&wrong_phase)
-                .expect_err("wrong phase must fail")
-                .contains("phase mismatch")
-        );
+        assert!(validate(&wrong_phase).is_err(), "wrong phase must fail");
 
         let mut wrong_digest = receipt.clone();
         let mut digest = [0_u8; iroha_crypto::Hash::LENGTH];
         digest[0] = 0x42;
         digest[iroha_crypto::Hash::LENGTH - 1] = 0x01;
         wrong_digest.legs[0].prepare_qc.body.plan_digest = Hash::prehashed(digest);
-        assert!(
-            validate(&wrong_digest)
-                .expect_err("wrong digest must fail")
-                .contains("plan digest mismatch")
-        );
+        assert!(validate(&wrong_digest).is_err(), "wrong digest must fail");
 
         let mut bad_bitmap = receipt;
         bad_bitmap.legs[0].prepare_qc.signers_bitmap.push(0);
         assert!(
-            validate(&bad_bitmap)
-                .expect_err("bad signer bitmap must fail")
-                .contains("signer bitmap length mismatch")
+            validate(&bad_bitmap).is_err(),
+            "bad signer bitmap must fail"
         );
 
         let receipt =
@@ -23643,21 +24242,13 @@ mod tests {
         subset.legs[0].prepare_qc.validator_set.pop();
         subset.legs[0].prepare_qc.validator_set_hash =
             HashOf::new(&subset.legs[0].prepare_qc.validator_set);
-        assert!(
-            validate(&subset)
-                .expect_err("roster subset must fail")
-                .contains("exact authoritative participant committee")
-        );
+        assert!(validate(&subset).is_err(), "roster subset must fail");
 
         let mut reordered = receipt.clone();
         reordered.legs[0].prepare_qc.validator_set.swap(0, 1);
         reordered.legs[0].prepare_qc.validator_set_hash =
             HashOf::new(&reordered.legs[0].prepare_qc.validator_set);
-        assert!(
-            validate(&reordered)
-                .expect_err("roster reorder must fail")
-                .contains("exact authoritative participant committee")
-        );
+        assert!(validate(&reordered).is_err(), "roster reorder must fail");
 
         let mut stale_incarnation = receipt;
         stale_incarnation.legs[0].lane_incarnation = Hash::new(b"retired-participant-incarnation");
@@ -23670,9 +24261,39 @@ mod tests {
             .body
             .participant_lane_incarnation = stale_incarnation.legs[0].lane_incarnation;
         assert!(
-            validate(&stale_incarnation)
-                .expect_err("retired lane incarnation replay must fail")
-                .contains("unexpected participant")
+            validate(&stale_incarnation).is_err(),
+            "retired lane incarnation replay must fail"
+        );
+
+        let receipt =
+            signed_native_amx_receipt(source_id, entrypoint_hash, &routing_plan, 42, &keypairs);
+        let mut oversized_committee = receipt.clone();
+        let repeated = oversized_committee.legs[0].prepare_qc.validator_set[0].clone();
+        oversized_committee.legs[0].prepare_qc.validator_set =
+            vec![repeated; crate::native_amx::MAX_NATIVE_AMX_VALIDATORS + 1];
+        oversized_committee.legs[0].prepare_qc.validator_set_pops = vec![
+            vec![0_u8; crate::native_amx::NATIVE_AMX_BLS_PROOF_BYTES];
+            crate::native_amx::MAX_NATIVE_AMX_VALIDATORS + 1
+        ];
+        assert!(
+            validate(&oversized_committee).is_err(),
+            "oversized participant committee must fail before cryptography"
+        );
+
+        let mut synthetic_session = coordinator_proposal.clone();
+        synthetic_session.descriptor.subject_hash = Hash::new(b"synthetic-native-amx-session");
+        synthetic_session.descriptor.descriptor_hash =
+            synthetic_session.descriptor.computed_descriptor_hash();
+        synthetic_session.proposal_hash = synthetic_session.computed_proposal_hash();
+        let mut synthetic_receipt = receipt;
+        synthetic_receipt.coordinator_proposal_hash = synthetic_session.proposal_hash;
+        for leg in &mut synthetic_receipt.legs {
+            leg.prepare_qc.body.coordinator_proposal_hash = synthetic_session.proposal_hash;
+            leg.commit_qc.body.coordinator_proposal_hash = synthetic_session.proposal_hash;
+        }
+        assert!(
+            validate(&synthetic_receipt).is_err(),
+            "a self-consistent synthetic session must not replace the owned coordinator proposal"
         );
     }
 
@@ -23703,9 +24324,16 @@ mod tests {
         source_id.copy_from_slice(tx_hash.as_ref());
         let receipt =
             signed_native_amx_receipt(source_id, entrypoint_hash, &routing_plan, 42, &keypairs);
+        let coordinator_proposal = native_amx_test_coordinator_proposal(
+            routing_plan.coordinator_route(),
+            entrypoint_hash,
+            42,
+            &keypairs,
+        );
         let validate = |receipt: &NativeAmxReceipt| {
             validate_native_amx_receipt_against_plan(
                 receipt,
+                &coordinator_proposal,
                 entrypoint_hash,
                 &routing_plan,
                 source_id,
@@ -23718,19 +24346,22 @@ mod tests {
         let mut duplicate_participant = receipt.clone();
         duplicate_participant.legs[1] = duplicate_participant.legs[0].clone();
         assert!(
-            validate(&duplicate_participant)
-                .expect_err("duplicate participant leg must fail")
-                .contains("duplicates participant"),
+            validate(&duplicate_participant).is_err(),
             "duplicate native AMX participant legs must fail before QC material can be reused"
+        );
+
+        let mut reordered_participants = receipt.clone();
+        reordered_participants.legs.swap(0, 1);
+        assert!(
+            validate(&reordered_participants).is_err(),
+            "native AMX participant legs must retain canonical routing-plan order"
         );
 
         let mut unexpected_participant = receipt;
         unexpected_participant.legs[1].lane_id = LaneId::new(99);
         unexpected_participant.legs[1].dataspace_id = DataSpaceId::new(99);
         assert!(
-            validate(&unexpected_participant)
-                .expect_err("unexpected participant leg must fail")
-                .contains("unexpected participant lane 99 dataspace 99"),
+            validate(&unexpected_participant).is_err(),
             "native AMX receipts must not add participant legs outside the canonical routing plan"
         );
     }

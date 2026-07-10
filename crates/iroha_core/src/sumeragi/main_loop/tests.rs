@@ -99,8 +99,39 @@ use norito::to_bytes;
 use sha2::{Digest as _, Sha256};
 
 fn native_amx_request_for_test(
-    body: iroha_data_model::block::consensus::NativeAmxAttestationBodyV1,
+    mut body: iroha_data_model::block::consensus::NativeAmxAttestationBodyV1,
 ) -> crate::native_amx::NativeAmxAttestationRequestV1 {
+    let validator_set = vec![PeerId::from(checked_keypair().public_key().clone())];
+    let mut descriptor = iroha_data_model::block::consensus::LaneBlockDescriptorV1 {
+        lane_id: body.coordinator_lane_id,
+        dataspace_id: body.coordinator_dataspace_id,
+        lane_incarnation: body.coordinator_lane_incarnation,
+        proposal_height: body.authority_context_height,
+        previous_lane_block_height: body.coordinator_lane_block_height.saturating_sub(1),
+        previous_lane_block_descriptor_hash: Some(Hash::new(b"native-amx-test-previous")),
+        lane_block_height: body.coordinator_lane_block_height,
+        lane_block_view: body.coordinator_lane_block_view,
+        subject_hash: Hash::new(b"native-amx-test-subject"),
+        payload_ownership_hash: Hash::new(b"native-amx-test-ownership"),
+        rbc_instance_hash: Hash::new(b"native-amx-test-rbc"),
+        accepted_candidate_indices: vec![0],
+        accepted_transaction_hashes: vec![Hash::from(body.tx_entrypoint_hash)],
+        validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set_hash: HashOf::new(&validator_set),
+        validator_set,
+        validator_count: 1,
+        min_quorum: 1,
+        qc_mode_tag: "native-amx:test".to_owned(),
+        descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
+    };
+    descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
+    let mut coordinator_proposal = iroha_data_model::block::consensus::LaneBlockProposalV1 {
+        descriptor,
+        proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+        payload_block_hint: None,
+    };
+    coordinator_proposal.proposal_hash = coordinator_proposal.computed_proposal_hash();
+    body.coordinator_proposal_hash = coordinator_proposal.proposal_hash;
     crate::native_amx::NativeAmxAttestationRequestV1 {
         plan_legs: vec![
             crate::queue::RouteLeg::new(
@@ -119,6 +150,8 @@ fn native_amx_request_for_test(
             ),
         ],
         body,
+        coordinator_proposal,
+        prepare_qc: None,
     }
 }
 
@@ -7866,7 +7899,7 @@ fn effective_commit_topology_falls_back_to_genesis_roster_when_empty() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn merge_committee_signatures_commit_merge_entry() {
+async fn merge_committee_signatures_persist_pending_globally_ordered_entry() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
 
@@ -7897,6 +7930,7 @@ async fn merge_committee_signatures_commit_merge_entry() {
     topo.clear();
     topo.push(actor.common_config.peer.id().clone());
     topo.commit();
+    let genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
 
     let signers: Vec<&KeyPair> = lane_keypairs.iter().collect();
     let (_, mode_tag, _) = actor.consensus_context_for_height(1);
@@ -7912,11 +7946,15 @@ async fn merge_committee_signatures_commit_merge_entry() {
         .on_lane_relay_message(super::LaneRelayMessage::Envelope(envelope.clone()))
         .expect("lane relay handled");
 
-    let entry = actor
-        .state
-        .merge_ledger()
-        .latest()
-        .expect("merge entry committed");
+    assert!(
+        actor.state.merge_ledger().latest().is_none(),
+        "merge QC completion must not publish state outside global block order"
+    );
+    let (_, entry) = actor
+        .kura
+        .select_pending_certified_merge_entry()
+        .expect("pending merge store readable")
+        .expect("certified merge sidecar persisted");
     assert_eq!(entry.epoch_id, 1);
     assert_eq!(
         entry.lane_tips().as_slice(),
@@ -7929,7 +7967,7 @@ async fn merge_committee_signatures_commit_merge_entry() {
     assert_eq!(entry.merge_qc.signers_bitmap, vec![0x01]);
     assert!(!entry.merge_qc.aggregate_signature.is_empty());
 
-    let candidate = crate::merge::MergeLedgerCandidate::from(entry.as_ref());
+    let candidate = crate::merge::MergeLedgerCandidate::from(&entry);
     let expected = crate::merge::merge_qc_message_digest(
         &actor.chain_id,
         &candidate,
@@ -7937,6 +7975,91 @@ async fn merge_committee_signatures_commit_merge_entry() {
         entry.merge_qc.validator_set_hash,
     );
     assert_eq!(entry.merge_qc.message_digest, expected);
+
+    let height = 2;
+    let view = 0;
+    let highest_qc = QcHeaderRef {
+        height: 1,
+        view: 0,
+        epoch: actor.epoch_for_height(1),
+        subject_block_hash: genesis_hash,
+        phase: crate::sumeragi::consensus::Phase::Commit,
+    };
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let assembled = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            0,
+            0,
+            None,
+            Instant::now(),
+        )
+        .expect("merge-only proposal assembly succeeds");
+    assert!(assembled, "certified merge work must make a proposal nonempty");
+    let proposed = actor
+        .pending
+        .pending_blocks
+        .values()
+        .find(|pending| pending.height == height && pending.view == view)
+        .expect("merge-only pending proposal");
+    assert_eq!(proposed.block.external_entrypoint_count(), 0);
+    let reference = proposed
+        .block
+        .execution_context()
+        .and_then(|bundle| bundle.merge_entry.as_ref())
+        .expect("merge-only block carries a compact certified reference");
+    assert!(reference.matches_entry(&entry));
+    assert!(!proposed.block.is_empty());
+    let proposed_block = proposed.block.clone();
+    let proposed_block_hash = proposed_block.hash();
+    let missing_hash = reference.entry_hash;
+    actor
+        .kura
+        .remove_pending_certified_merge_entry(missing_hash)
+        .expect("remove pending sidecar for negative validation");
+    let mut voting_block = None;
+    let validation = crate::block::ValidBlock::validate_keep_voting_block(
+        proposed_block,
+        &topology,
+        &actor.chain_id,
+        &actor.genesis_account,
+        &TimeSource::new_system(),
+        actor.state.as_ref(),
+        &mut voting_block,
+        false,
+    )
+    .unpack(|_| {});
+    let (_, err) = validation.expect_err("missing full merge sidecar must fail closed");
+    assert!(matches!(
+        *err,
+        crate::block::BlockValidationError::MissingCertifiedMergeSidecar { entry_hash }
+            if entry_hash == missing_hash
+    ));
+    assert!(matches!(
+        actor.validate_pending_block_for_voting_inline(proposed_block_hash, topology.as_ref()),
+        super::pending_block::ValidationGateOutcome::Deferred
+    ));
+    actor
+        .kura
+        .persist_pending_certified_merge_entry(&entry)
+        .expect("restore complete certified sidecar");
+    let requester = actor.common_config.peer.id().clone();
+    let (deferred, retry) = actor.subsystems.merge.sidecars.finish_completed(
+        missing_hash,
+        true,
+        &requester,
+        Instant::now(),
+    );
+    assert!(retry.is_none());
+    assert_eq!(deferred.len(), 1, "only the exact carrier is resumed");
+    actor.resume_certified_merge_sidecar_blocks(deferred);
+    assert!(matches!(
+        actor.validate_pending_block_for_voting_inline(proposed_block_hash, topology.as_ref()),
+        super::pending_block::ValidationGateOutcome::Valid
+    ));
     harness.shutdown.send();
 }
 
@@ -8001,6 +8124,13 @@ async fn merge_committee_accepts_remote_signature() {
     topo.push(actor.common_config.peer.id().clone());
     topo.push(PeerId::new(harness.key_pairs[1].public_key().clone()));
     topo.commit();
+    seed_genesis_block_for_state(actor.state.as_ref());
+    let merge_view = (0_u64..16)
+        .find(|view| actor.local_is_round_leader(2, *view))
+        .expect("local validator leads one bounded merge view");
+    actor
+        .phase_tracker
+        .on_view_change(2, merge_view, Instant::now());
 
     let signers: Vec<&KeyPair> = lane_keypairs.iter().collect();
     let (_, mode_tag, _) = actor.consensus_context_for_height(1);
@@ -8020,7 +8150,9 @@ async fn merge_committee_accepts_remote_signature() {
         "quorum requires remote signature"
     );
 
-    let candidates = actor.state.merge_entry_candidates_from_lane_relays();
+    let candidates = actor
+        .state
+        .merge_entry_candidates_from_lane_relays_for_view(merge_view);
     assert_eq!(candidates.len(), 1);
     let candidate = &candidates[0];
     let validator_set = actor
@@ -8038,7 +8170,7 @@ async fn merge_committee_accepts_remote_signature() {
     );
     let inert_merge_signature = MergeCommitteeSignature {
         epoch_id: candidate.epoch_id,
-        view: 0,
+        view: candidate.view,
         signer: 1,
         message_digest,
         bls_sig: vec![0_u8; 96],
@@ -8056,7 +8188,7 @@ async fn merge_committee_accepts_remote_signature() {
     let signature = checked_signature(harness.key_pairs[1].private_key(), message_digest.as_ref());
     let merge_signature = MergeCommitteeSignature {
         epoch_id: candidate.epoch_id,
-        view: 0,
+        view: candidate.view,
         signer: 1,
         message_digest,
         bls_sig: signature.payload().to_vec(),
@@ -8066,14 +8198,99 @@ async fn merge_committee_accepts_remote_signature() {
         .on_lane_relay_message(super::LaneRelayMessage::MergeSignature(merge_signature))
         .expect("merge signature handled");
 
-    let entry = actor
-        .state
-        .merge_ledger()
-        .latest()
-        .expect("merge entry committed");
+    assert!(
+        actor.state.merge_ledger().latest().is_none(),
+        "merge QC completion must not publish state before a global carrier commits"
+    );
+    let (_, entry) = actor
+        .kura
+        .select_pending_certified_merge_entry()
+        .expect("pending merge store readable")
+        .expect("merge QC must persist a pending certified sidecar");
     assert_eq!(entry.epoch_id, candidate.epoch_id);
     assert_eq!(entry.merge_qc.signers_bitmap, vec![0x03]);
     assert!(!entry.merge_qc.aggregate_signature.is_empty());
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn merge_committee_rejects_an_old_global_view_share() {
+    let mut harness = test_actor_harness(2).await;
+    let actor = &mut harness.actor;
+    seed_genesis_block_for_state(actor.state.as_ref());
+    actor
+        .phase_tracker
+        .on_view_change(2, 1, Instant::now());
+
+    let topology = actor.state.commit_topology.view();
+    let signer = topology
+        .iter()
+        .position(|peer| peer == actor.common_config.peer.id())
+        .and_then(|index| u32::try_from(index).ok())
+        .expect("local peer belongs to commit topology");
+    let message_digest = Hash::new(b"stale-merge-view-share");
+    let signature = checked_signature(
+        actor.common_config.key_pair.private_key(),
+        message_digest.as_ref(),
+    );
+    actor
+        .on_merge_signature(MergeCommitteeSignature {
+            epoch_id: 1,
+            view: 0,
+            signer,
+            message_digest,
+            bls_sig: signature.payload().to_vec(),
+        })
+        .expect("stale share is handled without mutating committee state");
+
+    assert!(actor.subsystems.merge.committee.pending.is_empty());
+    assert!(actor.subsystems.merge.committee.remote_signers.is_empty());
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn merge_preparation_grace_expires_and_resets_on_round_change() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+    seed_genesis_block_for_state(actor.state.as_ref());
+    let validator_set = actor
+        .state
+        .commit_topology
+        .view()
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    let validator_set_hash = HashOf::new(&validator_set);
+    let (round, _) = actor
+        .current_merge_execution_round(validator_set_hash)
+        .expect("exact merge round");
+    let started_at = Instant::now();
+    actor
+        .subsystems
+        .merge
+        .committee
+        .mark_preparation(round, started_at);
+    assert!(actor.merge_preparation_grace_active(round.height, round.view, started_at));
+
+    let timeout = actor.effective_timing.get().commit_quorum_timeout;
+    let after_timeout = started_at
+        .checked_add(timeout.saturating_add(Duration::from_millis(1)))
+        .expect("test instant remains representable");
+    assert!(
+        !actor.merge_preparation_grace_active(round.height, round.view, after_timeout),
+        "ordinary progress must resume after the configured merge grace"
+    );
+
+    let next_round = super::MergeExecutionRound {
+        view: round.view.saturating_add(1),
+        ..round
+    };
+    actor
+        .subsystems
+        .merge
+        .committee
+        .retain_round(next_round);
+    assert!(actor.subsystems.merge.committee.preparation.is_none());
     harness.shutdown.send();
 }
 
@@ -73182,7 +73399,7 @@ async fn internal_proposal_work_detects_da_commitments() {
     write_da_commitment_spool_file(&spool_dir, &record, [0x78; 32]);
 
     let proposal_height = actor.state.view().height() as u64 + 1;
-    let work = actor.internal_proposal_work(proposal_height, None);
+    let work = actor.internal_proposal_work(proposal_height, None, false);
     assert!(work.da_commitments);
     assert!(work.has_work());
 
@@ -73200,7 +73417,7 @@ async fn internal_proposal_work_treats_commitment_spool_errors_as_work() {
     fs::write(&path, b"corrupt commitment").expect("write corrupt DA commitment");
 
     let proposal_height = actor.state.view().height() as u64 + 1;
-    let work = actor.internal_proposal_work(proposal_height, None);
+    let work = actor.internal_proposal_work(proposal_height, None, false);
     assert!(
         work.da_commitments,
         "commitment spool errors must keep DA proposal work visible"
@@ -73222,7 +73439,7 @@ async fn internal_proposal_work_detects_da_receipts() {
     write_da_receipt_spool_file(&spool_dir, &receipt, record.sequence, [0x45; 32]);
 
     let proposal_height = actor.state.view().height() as u64 + 1;
-    let work = actor.internal_proposal_work(proposal_height, None);
+    let work = actor.internal_proposal_work(proposal_height, None, false);
     assert!(
         work.da_receipts,
         "pending DA receipts must keep proposal work visible"
@@ -73249,7 +73466,7 @@ async fn internal_proposal_work_treats_receipt_spool_errors_as_work() {
     fs::write(&path, b"corrupt receipt").expect("write corrupt DA receipt");
 
     let proposal_height = actor.state.view().height() as u64 + 1;
-    let work = actor.internal_proposal_work(proposal_height, None);
+    let work = actor.internal_proposal_work(proposal_height, None, false);
     assert!(
         work.da_receipts,
         "receipt spool errors must keep DA proposal work visible"
@@ -73281,7 +73498,7 @@ async fn internal_proposal_work_ignores_committed_da_commitments() {
         .insert_bundle(1, DaCommitmentBundle::new(vec![record]));
 
     let proposal_height = actor.state.view().height() as u64 + 1;
-    let work = actor.internal_proposal_work(proposal_height, None);
+    let work = actor.internal_proposal_work(proposal_height, None, false);
     assert!(
         !work.da_commitments,
         "duplicate committed commitment must not keep DA proposal work alive"
@@ -73306,7 +73523,7 @@ async fn internal_proposal_work_detects_da_pin_intents() {
     write_da_pin_intent_spool_file(&spool_dir, &intent, [0xB2; 32]);
 
     let proposal_height = actor.state.view().height() as u64 + 1;
-    let work = actor.internal_proposal_work(proposal_height, None);
+    let work = actor.internal_proposal_work(proposal_height, None, false);
     assert!(work.da_pin_intents);
     assert!(work.has_work());
 
@@ -73330,7 +73547,7 @@ async fn internal_proposal_work_treats_pin_spool_errors_as_work() {
     fs::write(&path, b"corrupt pin intent").expect("write corrupt DA pin intent");
 
     let proposal_height = actor.state.view().height() as u64 + 1;
-    let work = actor.internal_proposal_work(proposal_height, None);
+    let work = actor.internal_proposal_work(proposal_height, None, false);
     assert!(
         work.da_pin_intents,
         "pin-intent spool errors must keep DA proposal work visible"
@@ -73383,10 +73600,59 @@ async fn internal_proposal_work_ignores_committed_da_pin_intent_identities() {
     }
 
     let proposal_height = actor.state.view().height() as u64 + 1;
-    let work = actor.internal_proposal_work(proposal_height, None);
+    let work = actor.internal_proposal_work(proposal_height, None, false);
     assert!(
         !work.da_pin_intents,
         "pin intents colliding with committed ticket or manifest identities must not keep DA proposal work alive"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn internal_proposal_work_keeps_idle_autoscale_scale_in_live_until_floor() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let mut elastic = ModelLaneConfig {
+        id: LaneId::new(1),
+        dataspace_id: DataSpaceId::UNIVERSAL,
+        alias: "elastic-lane-1".to_owned(),
+        ..ModelLaneConfig::default()
+    };
+    elastic
+        .metadata
+        .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+    elastic.metadata.insert(
+        AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
+        "1".to_owned(),
+    );
+    {
+        let mut nexus = actor.state.nexus.write();
+        nexus.enabled = true;
+        nexus.autoscale.enabled = true;
+        nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero floor");
+        nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero ceiling");
+        nexus.lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(2).expect("two lanes"),
+            vec![ModelLaneConfig::default(), elastic],
+        )
+        .expect("valid elastic catalog");
+    }
+
+    let proposal_height = actor.state.view().height() as u64 + 1;
+    let work = actor.internal_proposal_work(proposal_height, None, false);
+    assert!(work.autoscale_maintenance);
+    assert!(work.has_work());
+
+    actor.state.nexus.write().lane_catalog = LaneCatalog::new(
+        NonZeroU32::new(1).expect("one lane"),
+        vec![ModelLaneConfig::default()],
+    )
+    .expect("floor catalog");
+    let floor_work = actor.internal_proposal_work(proposal_height, None, false);
+    assert!(
+        !floor_work.autoscale_maintenance,
+        "maintenance proposals must stop once managed elastic capacity reaches its floor"
     );
 
     harness.shutdown.send();
@@ -109710,6 +109976,9 @@ fn message_projection_helpers_match_formal_gate() {
             participant_lane_id: LaneId::new(2),
             participant_dataspace_id: DataSpaceId::new(8),
             participant_lane_incarnation: Hash::new(b"native-amx-message-participant"),
+            participant_validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
+            participant_validator_count: 1,
+            participant_min_quorum: 1,
             authority_context_height: 42,
             coordinator_lane_block_height: 9,
             coordinator_lane_block_view: 3,
@@ -193055,6 +193324,9 @@ fn background_dispatch_formal_gate_matrix() {
                     participant_lane_id: LaneId::new(2),
                     participant_dataspace_id: DataSpaceId::new(8),
                     participant_lane_incarnation: Hash::new(b"native-amx-message-participant"),
+                    participant_validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
+                    participant_validator_count: 1,
+                    participant_min_quorum: 1,
                     authority_context_height: 42,
                     coordinator_lane_block_height: 9,
                     coordinator_lane_block_view: 3,
@@ -193341,6 +193613,9 @@ fn background_bypass_formal_gate_matrix() {
                     participant_lane_id: LaneId::new(2),
                     participant_dataspace_id: DataSpaceId::new(8),
                     participant_lane_incarnation: Hash::new(b"native-amx-message-participant"),
+                    participant_validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
+                    participant_validator_count: 1,
+                    participant_min_quorum: 1,
                     authority_context_height: 42,
                     coordinator_lane_block_height: 9,
                     coordinator_lane_block_view: 3,
@@ -193787,6 +194062,9 @@ fn background_fallback_formal_gate_matrix() {
                     participant_lane_id: LaneId::new(2),
                     participant_dataspace_id: DataSpaceId::new(8),
                     participant_lane_incarnation: Hash::new(b"native-amx-message-participant"),
+                    participant_validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
+                    participant_validator_count: 1,
+                    participant_min_quorum: 1,
                     authority_context_height: 42,
                     coordinator_lane_block_height: 9,
                     coordinator_lane_block_view: 3,
@@ -210084,6 +210362,7 @@ fn sample_lane_block_messages() -> (
         .expect("lane block fixture vote signature");
     let vote = crate::lane_consensus::LaneBlockVoteV1 {
         body: body.clone(),
+        payload_availability_vote: None,
         signer: peer_id,
         bls_signature: signature.payload().to_vec(),
     };
@@ -210209,6 +210488,7 @@ fn signed_lane_block_vote_with_keypair(
         .expect("lane block fixture vote signature");
     crate::lane_consensus::LaneBlockVoteV1 {
         body,
+        payload_availability_vote: None,
         signer: PeerId::new(keypair.public_key().clone()),
         bls_signature: signature.payload().to_vec(),
     }
@@ -210344,6 +210624,7 @@ fn sample_lane_block_commit_messages_for_route_at(
             .expect("lane block fixture prepare vote signature");
     let prepare_vote = crate::lane_consensus::LaneBlockVoteV1 {
         body: prepare_body.clone(),
+        payload_availability_vote: None,
         signer: peer_id.clone(),
         bls_signature: prepare_signature.payload().to_vec(),
     };
@@ -210360,6 +210641,7 @@ fn sample_lane_block_commit_messages_for_route_at(
             .expect("lane block fixture commit vote signature");
     let commit_vote = crate::lane_consensus::LaneBlockVoteV1 {
         body: commit_body.clone(),
+        payload_availability_vote: None,
         signer: peer_id,
         bls_signature: commit_signature.payload().to_vec(),
     };
@@ -216716,6 +216998,7 @@ async fn lane_block_broadcast_ignores_malformed_cached_prepare_vote_before_trans
     .expect("drift local lane-block vote signature");
     let drift_vote = crate::lane_consensus::LaneBlockVoteV1 {
         body: drift_body,
+        payload_availability_vote: None,
         signer: local_peer.clone(),
         bls_signature: drift_signature.payload().to_vec(),
     };

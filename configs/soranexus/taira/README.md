@@ -64,7 +64,7 @@ config rather than wrapper-local defaults:
 - `explorer.runtime-config.json`: runtime config example for the Explorer
   frontend; point it at the explicit public Torii base URL you want the UI to
   query.
-- `sorafs_sites.json`: optional host-to-manifest bindings for Torii-served static sites. Keep `taira.sora.org` out of this file.
+- `sorafs_sites.json`: optional host-to-manifest bindings for Torii-served static sites. Keep `taira.sora.org` out of this file. Enable it only through the rendered validator config's `[sorafs.gateway.site_bindings]` table; Torii reads, validates, and caches the document once at startup.
 - `sorafs_gateway_denylist.catalog.json`: default-on SoraFS denylist pack catalog.
 - `sorafs_gateway_denylist.global-core.json`: baseline governance-backed illegal-content pack.
 - `sorafs_gateway_denylist.global-emergency.json`: emergency-response denylist pack.
@@ -440,6 +440,25 @@ alias layer, but they are no longer the primary deployment path. Reserve
 `taira.sora.org` for Torii itself and serve apps from `/sorafs/cid/<cid>/` or
 `<cid>.sorafs.taira.sora.org`.
 
+Named bindings are production configuration, not a runtime environment
+override. Add the following to each rendered validator config and restart
+Torii after changing the document:
+
+```toml
+[sorafs.gateway.site_bindings]
+path = "/config/sorafs_sites.json"
+max_bytes = 1048576
+max_sites = 1024
+```
+
+The file must be a regular, single-link file owned by the Torii user or root,
+must not be group/world writable, and neither it nor an ancestor may be a
+symbolic link; ancestor directories must not be group/world writable. Version
+1 requires canonical lowercase DNS names, 64-character lowercase manifest
+digests, unique hosts, and safe single-component index file names. Invalid
+configuration aborts startup instead of falling back to stale or partially
+parsed bindings.
+
 Soracloud runtime apps use the SoraDNS/Soracloud alias route instead of SoraFS
 CID hosts. For clients without native SoraDNS resolution, the public browser
 gateway is `<alias>.mon.taira.sora.net`, for example
@@ -808,8 +827,9 @@ Optional container overrides:
   `docker-compose.validator.yml`, then set `TAIRA_GENESIS_PATH=...` in
   `/etc/default/taira-validator-container.compose.env`
 - if the validator host should serve named SoraFS host bindings directly from
-  the container, uncomment the matching `IROHA_SORAFS_SITE_BINDINGS_FILE` and
-  volume lines, then set `TAIRA_SORAFS_SITE_BINDINGS_PATH=...`
+  the container, set `[sorafs.gateway.site_bindings].path =
+  "/config/sorafs_sites.json"` in the rendered validator config, uncomment the
+  matching volume line, then set `TAIRA_SORAFS_SITE_BINDINGS_PATH=...`
 
 ## Bare-metal validator deployment
 

@@ -378,6 +378,32 @@ export function signOrderbookPayload(kind, bytes, privateKey) {
   throw new Error("Native binding returned a non-buffer orderbook signing payload");
 }
 
+/**
+ * Derive the canonical V1 orderbook order id from owner-account bytes and nonce.
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} ownerAccount
+ * @param {number | bigint | string} nonce
+ * @returns {Buffer}
+ */
+export function deriveOrderbookOrderId(ownerAccount, nonce) {
+  const owner = toBuffer(ownerAccount);
+  if (owner.length === 0) {
+    throw new RangeError("ownerAccount must not be empty");
+  }
+  const canonicalNonce = decimalIntegerString(nonce, "nonce", { positive: true });
+  const binding = requireSorafsNativeFunction(
+    "sorafsDeriveOrderbookOrderId",
+    "orderbook order id derivation",
+  );
+  const orderId = requireSignedBuilderBuffer(
+    binding.sorafsDeriveOrderbookOrderId(owner, canonicalNonce),
+    "orderbook order id derivation",
+  );
+  if (orderId.length !== 32) {
+    throw new Error("Native binding returned a non-32-byte orderbook order id");
+  }
+  return orderId;
+}
+
 function requireSignedBuilderBuffer(value, context) {
   if (Buffer.isBuffer(value)) {
     return value;
@@ -404,13 +430,29 @@ export function buildSignedOrderbookOrderRequest(fields, privateKey) {
     { positive: true },
   );
   const remainingValue = optionalField(fields, "remainingGib", "remaining_gib");
+  const ownerAccount = bytesField(fields, "ownerAccount", "ownerAccount", "owner_account");
+  const nonce = decimalIntegerString(
+    requiredField(fields, "nonce", "nonce"),
+    "nonce",
+    { positive: true },
+  );
+  const orderId = deriveOrderbookOrderId(ownerAccount, nonce);
+  const suppliedOrderId = optionalField(fields, "orderId", "order_id");
+  if (suppliedOrderId !== undefined) {
+    const supplied = toBuffer(suppliedOrderId);
+    if (supplied.length !== 32 || !supplied.equals(orderId)) {
+      throw new RangeError(
+        `orderId must equal the canonical owner-and-nonce derivation ${orderId.toString("hex")}`,
+      );
+    }
+  }
   const binding = requireSorafsNativeFunction(
     "sorafsBuildSignedOrderbookOrderRequest",
     "orderbook order request builder",
   );
   return requireSignedBuilderBuffer(
     binding.sorafsBuildSignedOrderbookOrderRequest(
-      fixedBytesField(fields, "orderId", "orderId", "order_id"),
+      orderId,
       String(requiredField(fields, "side", "side")),
       String(requiredField(fields, "tier", "tier")),
       decimalIntegerString(
@@ -427,17 +469,13 @@ export function buildSignedOrderbookOrderRequest(fields, privateKey) {
       remainingValue === undefined
         ? undefined
         : decimalIntegerString(remainingValue, "remainingGib", { positive: true }),
-      bytesField(fields, "ownerAccount", "ownerAccount", "owner_account"),
+      ownerAccount,
       decimalIntegerString(
         requiredField(fields, "expiryUnix", "expiryUnix", "expiry_unix"),
         "expiryUnix",
         { positive: true },
       ),
-      decimalIntegerString(
-        requiredField(fields, "nonce", "nonce"),
-        "nonce",
-        { positive: true },
-      ),
+      nonce,
       normalizeOrderbookFeeBps(
         requiredField(fields, "makerFeeBps", "makerFeeBps", "maker_fee_bps"),
         "makerFeeBps",
@@ -821,7 +859,7 @@ function requireCanonicalGatewayToken(value, label) {
     typeof value !== "string" ||
     value.trim() !== value ||
     value.length === 0 ||
-    Buffer.byteLength(value, "utf8") > 90 * 1024
+    Buffer.byteLength(value, "utf8") > 4 * 1024
   ) {
     throw new TypeError(`${label} must be exact canonical standard base64`);
   }
@@ -836,7 +874,7 @@ function requireCanonicalGatewayToken(value, label) {
   if (canonical !== value) {
     throw new TypeError(`${label} must be exact canonical standard base64`);
   }
-  if (Buffer.from(value, "base64").length > 64 * 1024) {
+  if (Buffer.from(value, "base64").length > 2 * 1024) {
     throw new TypeError(`${label} must be exact canonical standard base64`);
   }
   return value;
@@ -941,6 +979,15 @@ function requireCanonicalGatewayUrl(value, label, expectedPath) {
     expectedPath === "/"
       ? value === parsed.origin || value === `${parsed.origin}/`
       : value === `${parsed.origin}${expectedPath}`;
+  const hostname = parsed.hostname.toLowerCase();
+  const privateDnsName =
+    hostname === "localhost" ||
+    hostname.endsWith(".localhost") ||
+    hostname.endsWith(".local") ||
+    hostname.endsWith(".internal") ||
+    hostname.endsWith(".lan") ||
+    hostname.endsWith(".") ||
+    hostname.length > 253;
   if (
     parsed.protocol !== "https:" ||
     parsed.username !== "" ||
@@ -949,7 +996,7 @@ function requireCanonicalGatewayUrl(value, label, expectedPath) {
     parsed.search !== "" ||
     parsed.hash !== "" ||
     !expected ||
-    parsed.hostname.toLowerCase() === "localhost" ||
+    privateDnsName ||
     !isPublicGatewayLiteral(parsed.hostname)
   ) {
     throw new TypeError(`${label} must be an exact public HTTPS origin${expectedPath}`);

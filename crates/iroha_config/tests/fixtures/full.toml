@@ -95,6 +95,11 @@ deal_telemetry_window_secs = 900
 capacity_dispute_window_secs = 1800
 por_submission_window_secs = 900
 
+[sorafs.gateway.site_bindings]
+path = "site-bindings/test.json"
+max_bytes = 4096
+max_sites = 7
+
 [torii.sorafs.quota]
 capacity_declaration_window_secs = 3600
 capacity_telemetry_window_secs = 900

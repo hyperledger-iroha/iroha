@@ -279,7 +279,12 @@ fn ingest_por_command(args: Vec<String>) -> Result<(), String> {
         }
     }
 
-    let handle = NodeHandle::new(storage_config);
+    let handle = NodeHandle::try_new(storage_config).map_err(|err| {
+        format!(
+            "failed to initialise SoraFS runtime from {}: {err}",
+            data_dir.display()
+        )
+    })?;
     handle
         .record_por_challenge(&challenge)
         .map_err(|err| format!("failed to record challenge: {err}"))?;

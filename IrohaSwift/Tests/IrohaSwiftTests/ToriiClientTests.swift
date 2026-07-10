@@ -6767,12 +6767,26 @@ final class ToriiClientTests: XCTestCase {
                 streamTokenB64: Data("token".utf8).base64EncodedString()
             ))
         }
+        XCTAssertNoThrow(try SorafsGatewayProvider(
+            name: "alpha",
+            providerIdHex: String(repeating: "01", count: 32),
+            gatewayPublicKeyHex: String(repeating: "ab", count: 32),
+            baseURL: URL(string: "https://gateway.test/")!,
+            streamTokenB64: Data(repeating: 0, count: 2 * 1_024).base64EncodedString()
+        ))
         XCTAssertThrowsError(try SorafsGatewayProvider(
             name: "alpha",
             providerIdHex: String(repeating: "01", count: 32),
             gatewayPublicKeyHex: String(repeating: "ab", count: 32),
             baseURL: URL(string: "https://gateway.test/")!,
-            streamTokenB64: String(repeating: "A", count: 90 * 1_024 + 1)
+            streamTokenB64: String(repeating: "A", count: 4 * 1_024 + 1)
+        ))
+        XCTAssertThrowsError(try SorafsGatewayProvider(
+            name: "alpha",
+            providerIdHex: String(repeating: "01", count: 32),
+            gatewayPublicKeyHex: String(repeating: "ab", count: 32),
+            baseURL: URL(string: "https://gateway.test/")!,
+            streamTokenB64: Data(repeating: 0, count: 2 * 1_024 + 1).base64EncodedString()
         ))
     }
 

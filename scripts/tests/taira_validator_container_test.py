@@ -22,7 +22,19 @@ class TairaValidatorContainerScriptTest(unittest.TestCase):
         self.tempdir = tempfile.TemporaryDirectory()
         self.root = Path(self.tempdir.name)
         self.config_path = self.root / "config.toml"
-        self.config_path.write_text("chain = \"test\"\n", encoding="utf-8")
+        self.config_path.write_text(
+            textwrap.dedent(
+                """\
+                chain = "test"
+
+                [sorafs.gateway.site_bindings]
+                path = "/config/sorafs_sites.json"
+                max_bytes = 1048576
+                max_sites = 1024
+                """
+            ),
+            encoding="utf-8",
+        )
         self.storage_path = self.root / "storage"
         self.storage_path.mkdir()
         self.genesis_path = self.root / "genesis.json"
@@ -30,7 +42,9 @@ class TairaValidatorContainerScriptTest(unittest.TestCase):
         self.signed_genesis_path = self.root / "genesis.signed.nrt"
         self.signed_genesis_path.write_bytes(b"norito")
         self.sites_path = self.root / "sorafs_sites.json"
-        self.sites_path.write_text("{}\n", encoding="utf-8")
+        self.sites_path.write_text(
+            '{\n  "version": 1,\n  "sites": []\n}\n', encoding="utf-8"
+        )
         self.env_file = self.root / "validator.env"
         self.env_file.write_text(
             textwrap.dedent(
@@ -110,7 +124,8 @@ class TairaValidatorContainerScriptTest(unittest.TestCase):
         self.assertIn("--network taira-localnet", result.stdout)
         self.assertIn("IROHA_TAIRA_GENESIS=/config/genesis.json", result.stdout)
         self.assertIn("IROHA_TAIRA_SIGNED_GENESIS=/config/genesis.signed.nrt", result.stdout)
-        self.assertIn("IROHA_SORAFS_SITE_BINDINGS_FILE=/config/sorafs_sites.json", result.stdout)
+        self.assertNotIn("IROHA_SORAFS_SITE_BINDINGS_FILE", result.stdout)
+        self.assertIn(f"{self.sites_path}:/config/sorafs_sites.json:ro", result.stdout)
         self.assertIn("example/taira:test", result.stdout)
 
     def test_up_pulls_when_image_missing_then_runs_container(self) -> None:
@@ -133,7 +148,6 @@ class TairaValidatorContainerScriptTest(unittest.TestCase):
                     f"-v {self.genesis_path}:/config/genesis.json:ro "
                     "-e IROHA_TAIRA_SIGNED_GENESIS=/config/genesis.signed.nrt "
                     f"-v {self.signed_genesis_path}:/config/genesis.signed.nrt:ro "
-                    "-e IROHA_SORAFS_SITE_BINDINGS_FILE=/config/sorafs_sites.json "
                     f"-v {self.sites_path}:/config/sorafs_sites.json:ro "
                     "example/taira:test"
                 ),
@@ -156,6 +170,12 @@ class TairaValidatorContainerScriptTest(unittest.TestCase):
         result = self.run_script("up")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("missing Taira config", result.stderr)
+
+    def test_site_binding_mount_requires_config_backed_path(self) -> None:
+        self.config_path.write_text('chain = "test"\n', encoding="utf-8")
+        result = self.run_script("config")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("[sorafs.gateway.site_bindings].path", result.stderr)
 
 
 if __name__ == "__main__":

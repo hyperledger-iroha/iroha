@@ -37,6 +37,7 @@ use norito::codec::Encode as _;
 
 use crate::{
     kura::BlockCount,
+    merge_sidecar::{CertifiedMergeSidecarMessage, MergeCandidateMessage},
     state::{State, StateReadOnly, StateView, WorldReadOnly},
 };
 
@@ -878,6 +879,7 @@ mod tests {
             .expect("lane-block fixture vote signature");
         crate::lane_consensus::LaneBlockVoteV1 {
             body,
+            payload_availability_vote: None,
             signer: PeerId::new(keypair.public_key().clone()),
             bls_signature: signature.payload().to_vec(),
         }
@@ -892,6 +894,7 @@ mod tests {
             validator_set: proposal.descriptor.validator_set,
             signers_bitmap: vec![1],
             bls_aggregate_signature: vec![0xAB; 48],
+            payload_availability_qc: None,
         }
     }
 
@@ -13266,6 +13269,14 @@ impl BlockPayloadDedupCache {
 enum LaneRelayMessage {
     Envelope(LaneRelayEnvelope),
     MergeSignature(MergeCommitteeSignature),
+    CertifiedMergeSidecar {
+        sender: PeerId,
+        message: CertifiedMergeSidecarMessage,
+    },
+    MergeCandidate {
+        sender: PeerId,
+        message: MergeCandidateMessage,
+    },
     NativeAmx {
         sender: PeerId,
         message: crate::native_amx::NativeAmxMessage,
@@ -14740,6 +14751,62 @@ impl SumeragiHandle {
                     false
                 }
             },
+        }
+    }
+
+    /// Enqueue an authenticated certified merge-sidecar request or chunk.
+    ///
+    /// Sidecar chunks are retryable and therefore always use non-blocking
+    /// ingress so a saturated transfer queue cannot stall the network relay.
+    pub fn try_incoming_certified_merge_sidecar(
+        &self,
+        sender: PeerId,
+        message: CertifiedMergeSidecarMessage,
+    ) -> bool {
+        let relay = LaneRelayMessage::CertifiedMergeSidecar { sender, message };
+        match self.lane_relay.try_send(relay) {
+            Ok(()) => {
+                status::record_worker_queue_enqueue(status::WorkerQueueKind::LaneRelay);
+                self.wake();
+                true
+            }
+            Err(mpsc::TrySendError::Full(_)) => {
+                status::record_worker_queue_drop(status::WorkerQueueKind::LaneRelay);
+                iroha_logger::warn!(
+                    "Sumeragi actor dropped certified merge-sidecar traffic due to queue saturation"
+                );
+                false
+            }
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                status::record_worker_queue_drop(status::WorkerQueueKind::LaneRelay);
+                iroha_logger::warn!(
+                    "Sumeragi actor dropped certified merge-sidecar traffic because its queue is disconnected"
+                );
+                false
+            }
+        }
+    }
+
+    /// Enqueue authenticated round-leader merge-candidate transport traffic.
+    pub fn try_incoming_merge_candidate(
+        &self,
+        sender: PeerId,
+        message: MergeCandidateMessage,
+    ) -> bool {
+        let relay = LaneRelayMessage::MergeCandidate { sender, message };
+        match self.lane_relay.try_send(relay) {
+            Ok(()) => {
+                status::record_worker_queue_enqueue(status::WorkerQueueKind::LaneRelay);
+                self.wake();
+                true
+            }
+            Err(mpsc::TrySendError::Full(_)) | Err(mpsc::TrySendError::Disconnected(_)) => {
+                status::record_worker_queue_drop(status::WorkerQueueKind::LaneRelay);
+                iroha_logger::warn!(
+                    "Sumeragi actor dropped merge-candidate transport traffic due to queue unavailability"
+                );
+                false
+            }
         }
     }
 

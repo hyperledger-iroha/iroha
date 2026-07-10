@@ -46,6 +46,21 @@ const QUIC_REPORT: &[u8] = &[0x10, 0x20, 0x30];
 const COUNCIL_KEY_BYTES: [u8; 32] = [0x45; 32];
 const PROVIDER_SIGNING_KEY_BYTES: [u8; 32] = [0x21; 32];
 
+const RETIRED_FIXTURE_NAMES: &[&str] = &[
+    "proposal_legacy_v1.json",
+    "proposal_legacy_v1.to",
+    "advert_legacy_v1.json",
+    "advert_legacy_v1.to",
+    "envelope_legacy_v1.json",
+    "envelope_legacy_v1.to",
+    "proposal_v2.json",
+    "proposal_v2.to",
+    "advert_v2.json",
+    "advert_v2.to",
+    "envelope_v2.json",
+    "envelope_v2.to",
+];
+
 #[derive(Debug)]
 struct Options {
     out_dir: PathBuf,
@@ -94,6 +109,8 @@ where
 }
 
 fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::error::Error>> {
+    remove_retired_fixtures(out_dir)?;
+
     let descriptor =
         chunker_registry::lookup_by_handle("sorafs.sf1@1.0.0").expect("registry handle available");
 
@@ -149,7 +166,7 @@ fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::erro
         Value::Object(build_envelope_summary(&envelope_v1, &record_v1)),
     )?;
 
-    let proposal_v2 = build_proposal(ProposalParams {
+    let renewed_proposal_v1 = build_proposal(ProposalParams {
         namespace: descriptor.namespace,
         name: descriptor.name,
         semver: descriptor.semver,
@@ -161,31 +178,50 @@ fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::erro
         attested_at: 1_700_000_000,
         expires_at: 1_700_007_200,
     });
-    let advert_v2 = build_advert(&proposal_v2, &provider_signing_key, 220, 900, 1_400, 32)?;
-    let envelope_v2 = build_envelope(
-        proposal_v2.clone(),
-        advert_v2.body.clone(),
+    let renewed_advert_v1 = build_advert(
+        &renewed_proposal_v1,
+        &provider_signing_key,
+        220,
+        900,
+        1_400,
+        32,
+    )?;
+    let renewed_envelope_v1 = build_envelope(
+        renewed_proposal_v1.clone(),
+        renewed_advert_v1.body.clone(),
         220,
         900,
         &council_key,
     )?;
-    let envelope_v2_digest = compute_envelope_digest(&envelope_v2)?;
+    let renewed_envelope_v1_digest = compute_envelope_digest(&renewed_envelope_v1)?;
 
     let renewal = ProviderAdmissionRenewalV1 {
         version: PROVIDER_ADMISSION_RENEWAL_VERSION_V1,
         provider_id,
         previous_envelope_digest: *record_v1.envelope_digest(),
-        envelope_digest: envelope_v2_digest,
-        envelope: envelope_v2.clone(),
+        envelope_digest: renewed_envelope_v1_digest,
+        envelope: renewed_envelope_v1.clone(),
         notes: Some("stake top-up 2025-03".into()),
     };
     // Ensure renewal respects invariants.
     let renewed_record = record_v1.apply_renewal(&renewal, &council_policy)?;
-    verify_advert_against_record(&advert_v2, &renewed_record)?;
+    verify_advert_against_record(&renewed_advert_v1, &renewed_record)?;
 
-    write_binary(out_dir, "proposal_v2.to", &norito::to_bytes(&proposal_v2)?)?;
-    write_binary(out_dir, "advert_v2.to", &norito::to_bytes(&advert_v2)?)?;
-    write_binary(out_dir, "envelope_v2.to", &norito::to_bytes(&envelope_v2)?)?;
+    write_binary(
+        out_dir,
+        "proposal_renewed_v1.to",
+        &norito::to_bytes(&renewed_proposal_v1)?,
+    )?;
+    write_binary(
+        out_dir,
+        "advert_renewed_v1.to",
+        &norito::to_bytes(&renewed_advert_v1)?,
+    )?;
+    write_binary(
+        out_dir,
+        "envelope_renewed_v1.to",
+        &norito::to_bytes(&renewed_envelope_v1)?,
+    )?;
     write_binary(out_dir, "renewal_v1.to", &norito::to_bytes(&renewal)?)?;
     write_json(
         out_dir,
@@ -249,7 +285,7 @@ fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::erro
     Ok(FixtureSummary {
         proposal_v1_digest: compute_proposal_digest(&proposal_v1)?,
         envelope_v1_digest: *record_v1.envelope_digest(),
-        renewal_envelope_digest: envelope_v2_digest,
+        renewal_envelope_digest: renewed_envelope_v1_digest,
         revocation_digest,
     })
 }
@@ -699,18 +735,52 @@ fn write_json(out_dir: &Path, name: &str, value: Value) -> Result<(), Box<dyn st
 
 fn write_readme(out_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let path = out_dir.join("README.md");
-    let mut content = String::from(
+    let content = String::from(
         "# Provider Admission Fixtures\n\n\
 These files are generated via `cargo run -p sorafs_car --features cli --bin provider_admission_fixtures`.\n\
 They provide deterministic governance proposals, adverts, envelopes, renewals, and revocations for\n\
-integration tests across Rust, Torii, and CLI tooling.\n\n\
+integration tests across Rust, Torii, and CLI tooling. Every admission object uses the first-release\n\
+V1 schema. Files named `*_renewed_v1` contain the V1 proposal, advert, and envelope carried by\n\
+`renewal_v1`; `renewed` describes lifecycle state, not a new schema version.\n\n\
 Additional artifacts include a sample multi-source fetch plan so SDKs can exercise chunk scheduling\n\
 end-to-end.\n\n\
 Do not edit manually; rerun the generator if data changes.\n",
     );
-    content.push('\n');
     let mut file = open_output_file(&path, "README fixture")?;
     file.write_all(content.as_bytes())?;
+    Ok(())
+}
+
+fn remove_retired_fixtures(out_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    for name in RETIRED_FIXTURE_NAMES {
+        let path = out_dir.join(name);
+        validate_output_path(&path)?;
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || !metadata.is_file() {
+                    return Err(format!(
+                        "retired fixture `{}` must be a regular file",
+                        path.display()
+                    )
+                    .into());
+                }
+                fs::remove_file(&path).map_err(|err| {
+                    format!(
+                        "failed to remove retired fixture `{}`: {err}",
+                        path.display()
+                    )
+                })?;
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(format!(
+                    "failed to inspect retired fixture `{}`: {err}",
+                    path.display()
+                )
+                .into());
+            }
+        }
+    }
     Ok(())
 }
 
@@ -928,27 +998,43 @@ mod tests {
     #[test]
     fn generate_fixtures_produces_expected_artifacts() {
         let (_dir, dir_path) = canonical_tempdir();
+        for name in RETIRED_FIXTURE_NAMES {
+            fs::write(dir_path.join(name), b"retired").expect("seed retired fixture");
+        }
         let summary = generate_fixtures(&dir_path).expect("fixtures");
 
         assert_eq!(
             hex_lower(summary.proposal_v1_digest),
-            "75ae7423ac495a9417be3b7a3ec3ef641a51632fbfa46833a3c68b43c9d1025a"
+            "69f5a339695ce00ce917b94865ce38ea67d11d53bdf1c0583768c18ee13b2daa"
         );
         assert_eq!(
             hex_lower(summary.envelope_v1_digest),
-            "80b9f9285062bee7cc2d9b5f29948cbfd26c1cbfea274b6937f9e2f2279defbf"
+            "f6dac4124c10bfc9905d58ec1b880ec85f747120c8d27fb0d15328f96095a4d4"
         );
         assert_eq!(
             hex_lower(summary.renewal_envelope_digest),
-            "e838cc856d1b70a34c8503154dd0f858328365a1b3f1c36f1560f002ee9494b1"
+            "b703263247bdd59c285f699931f57e1e8e5f33d1b26607951bf1ba3ce891b8f1"
         );
         assert_eq!(
             hex_lower(summary.revocation_digest),
-            "9c04ca10c8573ab653000a83388871beeb90b9b9f53f1208bc3b695521eda5c3"
+            "eafe0515b73971ea5aefb4fa3c6680936a1dae1843a0f05b09e0fbde29809d5b"
         );
 
         let proposal_path = dir_path.join("proposal_v1.to");
         assert!(proposal_path.exists(), "proposal fixture missing");
+        for name in [
+            "proposal_renewed_v1.to",
+            "advert_renewed_v1.to",
+            "envelope_renewed_v1.to",
+        ] {
+            assert!(dir_path.join(name).exists(), "{name} missing");
+        }
+        for name in RETIRED_FIXTURE_NAMES {
+            assert!(
+                !dir_path.join(name).exists(),
+                "retired fixture {name} emitted"
+            );
+        }
     }
 
     #[test]
@@ -1003,6 +1089,28 @@ mod tests {
         assert!(
             !real_dir.join("README.md").exists(),
             "symlink parent should not receive output"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn generate_fixtures_rejects_retired_symlink_without_touching_target() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let target_path = temp_path.join("outside.to");
+        fs::write(&target_path, b"unchanged").expect("write target");
+        std::os::unix::fs::symlink(&target_path, temp_path.join("proposal_v2.to"))
+            .expect("create retired fixture symlink");
+
+        let err = generate_fixtures(&temp_path).expect_err("reject retired fixture symlink");
+
+        assert!(
+            err.to_string().contains("must not be a symlink"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged");
+        assert!(
+            temp_path.join("proposal_v2.to").is_symlink(),
+            "rejected symlink must not be removed"
         );
     }
 }

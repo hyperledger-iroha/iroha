@@ -207,8 +207,8 @@ public struct SorafsGatewayFetchReport: Codable, Sendable {
 
 /// Gateway descriptors consumed by the orchestrator helper.
 public struct SorafsGatewayProvider: Encodable, Sendable, Equatable {
-    private static let maximumStreamTokenEncodedBytes = 90 * 1_024
-    private static let maximumStreamTokenDecodedBytes = 64 * 1_024
+    private static let maximumStreamTokenEncodedBytes = 4 * 1_024
+    private static let maximumStreamTokenDecodedBytes = 2 * 1_024
 
     public enum Error: Swift.Error {
         case invalidName

@@ -56,7 +56,9 @@ use iroha_data_model::{
     },
     events::{EventBox, pipeline::PipelineEventBox},
     isi::register::RegisterPeerWithPop,
-    merge::{MergeCommitteeSignature, MergeQuorumCertificate, MergeSignerProof},
+    merge::{
+        MergeCommitteeSignature, MergeLedgerEntry, MergeQuorumCertificate, MergeSignerProof,
+    },
     nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
     peer::PeerId,
     sorafs::pin_registry::ManifestDigest,
@@ -431,6 +433,14 @@ use crate::{
     EventsSender, IrohaNetwork, NetworkMessage,
     block::{BlockBuilder, BlockValidationError, ValidBlock, valid::ValidationTimings},
     kura::{BlockCount, Kura},
+    merge_sidecar::{
+        CandidateChunkOutcome, CertifiedMergeSidecarMessage, ChunkIngestOutcome,
+        MergeCandidateAdvertV1, MergeCandidateMessage, MergeCandidatePost,
+        MergeCandidateTransport, MergeSidecarPost, MergeSidecarTransport, MergeSigningContextV1,
+        MergeSigningGuard,
+        certified_merge_reference_digest, certified_merge_sidecar_holders,
+        decode_certified_merge_sidecar, decode_merge_candidate_body,
+    },
     native_amx::{
         NativeAmxAttestationRequestV1, NativeAmxMessage, NativeAmxSessionCache,
         NativeAmxSessionError, NativeAmxSessionKey, NativeAmxVoteIngressError, NativeAmxVoteV1,
@@ -14981,6 +14991,8 @@ struct DaRbcState {
 struct MergeLaneState {
     lane_relay: LaneRelayBroadcaster<IrohaNetwork>,
     committee: MergeCommitteeState,
+    sidecars: MergeSidecarTransport,
+    candidates: MergeCandidateTransport,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15216,18 +15228,254 @@ struct MergeCommitteeKey {
 struct MergeCommitteeEntry {
     candidate: Option<crate::merge::MergeLedgerCandidate>,
     signatures: BTreeMap<ValidatorIndex, Vec<u8>>,
+    created_at: Instant,
+    last_updated: Instant,
+    last_local_signature_broadcast: Option<Instant>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct MergeRemoteSignerContext {
+    epoch_id: u64,
+    view: u64,
+    carrier_height: u64,
+    parent_hash: HashOf<BlockHeader>,
+    validator_set_hash: HashOf<Vec<PeerId>>,
+    signer: ValidatorIndex,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MergeRemoteSignerDecision {
+    message_digest: Hash,
+    last_seen: Instant,
 }
 
 #[derive(Debug)]
 struct MergeCommitteeState {
     pending: BTreeMap<MergeCommitteeKey, MergeCommitteeEntry>,
+    execution_attempt: Option<MergeExecutionAttempt>,
+    preparation: Option<MergePreparation>,
+    leader_advert: Option<MergeLeaderAdvertState>,
+    remote_signers: BTreeMap<MergeRemoteSignerContext, MergeRemoteSignerDecision>,
+    remote_equivocators: BTreeMap<MergeRemoteSignerContext, Instant>,
+    signing_guard: MergeSigningGuard,
 }
 
 impl MergeCommitteeState {
-    fn new() -> Self {
+    const MAX_PENDING: usize = 256;
+    const MAX_REMOTE_SIGNERS: usize = 4_096;
+
+    fn new(signing_guard: MergeSigningGuard) -> Self {
         Self {
             pending: BTreeMap::new(),
+            execution_attempt: None,
+            preparation: None,
+            leader_advert: None,
+            remote_signers: BTreeMap::new(),
+            remote_equivocators: BTreeMap::new(),
+            signing_guard,
         }
+    }
+
+    fn retain_round(&mut self, round: MergeExecutionRound) {
+        self.pending.retain(|key, entry| {
+            key.epoch_id == round.epoch_id
+                && key.view == round.view
+                && entry.candidate.as_ref().is_none_or(|candidate| {
+                    candidate.carrier_height == round.height
+                        && candidate.carrier_parent_hash == round.parent_hash
+                })
+        });
+        self.remote_signers.retain(|context, _| {
+            context.epoch_id == round.epoch_id
+                && context.view == round.view
+                && context.carrier_height == round.height
+                && context.parent_hash == round.parent_hash
+                && context.validator_set_hash == round.validator_set_hash
+        });
+        self.remote_equivocators.retain(|context, _| {
+            context.epoch_id == round.epoch_id
+                && context.view == round.view
+                && context.carrier_height == round.height
+                && context.parent_hash == round.parent_hash
+                && context.validator_set_hash == round.validator_set_hash
+        });
+        if self
+            .execution_attempt
+            .as_ref()
+            .is_some_and(|attempt| attempt.round != round)
+        {
+            self.execution_attempt = None;
+        }
+        if self
+            .preparation
+            .as_ref()
+            .is_some_and(|preparation| preparation.round != round)
+        {
+            self.preparation = None;
+        }
+        if self
+            .leader_advert
+            .as_ref()
+            .is_some_and(|advert| advert.round != round)
+        {
+            self.leader_advert = None;
+        }
+    }
+
+    fn prune(&mut self, _now: Instant) {
+        while self.pending.len() > Self::MAX_PENDING {
+            let oldest = self
+                .pending
+                .iter()
+                .min_by_key(|(key, entry)| (entry.created_at, **key))
+                .map(|(key, _)| *key);
+            let Some(oldest) = oldest else { break };
+            self.pending.remove(&oldest);
+        }
+        while self.remote_signers.len() > Self::MAX_REMOTE_SIGNERS {
+            let oldest = self
+                .remote_signers
+                .iter()
+                .min_by_key(|(context, decision)| (decision.last_seen, (*context).clone()))
+                .map(|(context, _)| context.clone());
+            let Some(oldest) = oldest else { break };
+            self.remote_signers.remove(&oldest);
+        }
+        while self.remote_equivocators.len() > Self::MAX_REMOTE_SIGNERS {
+            let oldest = self
+                .remote_equivocators
+                .iter()
+                .min_by_key(|(context, observed)| (**observed, (*context).clone()))
+                .map(|(context, _)| context.clone());
+            let Some(oldest) = oldest else { break };
+            self.remote_equivocators.remove(&oldest);
+        }
+    }
+
+    fn ensure_pending_capacity(&mut self, now: Instant) {
+        self.prune(now);
+        if self.pending.len() < Self::MAX_PENDING {
+            return;
+        }
+        let oldest = self
+            .pending
+            .iter()
+            .min_by_key(|(key, entry)| (entry.created_at, **key))
+            .map(|(key, _)| *key);
+        if let Some(oldest) = oldest {
+            self.pending.remove(&oldest);
+        }
+    }
+
+    fn mark_preparation(&mut self, round: MergeExecutionRound, now: Instant) {
+        if self
+            .preparation
+            .as_ref()
+            .is_some_and(|preparation| preparation.round == round)
+        {
+            return;
+        }
+        self.preparation = Some(MergePreparation {
+            round,
+            started_at: now,
+        });
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MergeExecutionRound {
+    height: u64,
+    parent_hash: HashOf<BlockHeader>,
+    view: u64,
+    epoch_id: u64,
+    validator_set_hash: HashOf<Vec<PeerId>>,
+}
+
+#[derive(Debug)]
+struct MergeExecutionAttempt {
+    round: MergeExecutionRound,
+    message_digest: Option<Hash>,
+    candidate: Option<crate::merge::MergeLedgerCandidate>,
+    reserved: bool,
+    completed: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MergePreparation {
+    round: MergeExecutionRound,
+    started_at: Instant,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MergeLeaderAdvertState {
+    round: MergeExecutionRound,
+    message_digest: Hash,
+    last_broadcast_at: Instant,
+}
+
+fn preferred_merge_candidates<T>(execution: Option<T>, relay: Vec<T>) -> Vec<T> {
+    execution.map_or(relay, |candidate| vec![candidate])
+}
+
+#[cfg(test)]
+mod preferred_merge_candidates_tests {
+    use super::{
+        MergeCommitteeState, MergeExecutionRound, MergeRemoteSignerContext,
+        MergeRemoteSignerDecision, preferred_merge_candidates,
+    };
+    use crate::merge_sidecar::MergeSigningGuard;
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::{block::BlockHeader, peer::PeerId};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn execution_candidate_is_the_only_candidate_for_an_epoch() {
+        assert_eq!(preferred_merge_candidates(Some(7), vec![1, 2, 3]), vec![7]);
+    }
+
+    #[test]
+    fn relay_candidates_remain_available_without_execution() {
+        assert_eq!(preferred_merge_candidates(None, vec![1, 2, 3]), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn current_round_signer_decision_survives_elapsed_wall_clock() {
+        let temp = tempfile::tempdir().expect("temporary signing guard");
+        let guard = MergeSigningGuard::open(temp.path()).expect("open signing guard");
+        let mut committee = MergeCommitteeState::new(guard);
+        let parent_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"parent"));
+        let validator_set_hash = HashOf::new(&Vec::<PeerId>::new());
+        let round = MergeExecutionRound {
+            height: 9,
+            parent_hash,
+            view: 3,
+            epoch_id: 4,
+            validator_set_hash,
+        };
+        let context = MergeRemoteSignerContext {
+            epoch_id: round.epoch_id,
+            view: round.view,
+            carrier_height: round.height,
+            parent_hash,
+            validator_set_hash,
+            signer: 0,
+        };
+        let observed = Instant::now();
+        committee.remote_signers.insert(
+            context.clone(),
+            MergeRemoteSignerDecision {
+                message_digest: Hash::new(b"first"),
+                last_seen: observed,
+            },
+        );
+
+        committee.prune(
+            observed
+                .checked_add(Duration::from_secs(24 * 60 * 60))
+                .expect("test instant remains representable"),
+        );
+
+        assert!(committee.remote_signers.contains_key(&context));
     }
 }
 
@@ -22182,6 +22430,16 @@ impl Actor {
             "sumeragi.actor_init.adaptive_state.ready",
             startup_trace_started_at,
         );
+        let committed_merge_epoch = state
+            .merge_ledger()
+            .latest()
+            .map_or(0, |entry| entry.epoch_id);
+        let merge_signing_guard = MergeSigningGuard::open_with_committed_frontier(
+            &kura.store_root(),
+            committed_merge_epoch,
+            u64::try_from(state.committed_height()).unwrap_or(u64::MAX),
+        )
+        .map_err(|error| eyre!("failed to open merge signing guard: {error}"))?;
 
         #[cfg(feature = "telemetry")]
         {
@@ -22274,7 +22532,9 @@ impl Actor {
             vrf: VrfActor::new(),
             merge: MergeLaneState {
                 lane_relay,
-                committee: MergeCommitteeState::new(),
+                committee: MergeCommitteeState::new(merge_signing_guard),
+                sidecars: MergeSidecarTransport::new(),
+                candidates: MergeCandidateTransport::new(),
             },
             lane_blocks: crate::lane_consensus::LaneBlockSessionCache::new(
                 config.recovery.pending_proposal_cap.max(1),
@@ -22568,49 +22828,8 @@ impl Actor {
             startup_trace_started_at,
         );
         let recovered_lane_reservations = actor.queue.live_lane_reservations();
-        let mut finalized_committed_reservations = 0_usize;
-        for key in &recovered_lane_reservations {
-            if !actor
-                .state
-                .has_committed_transaction(key.signed_transaction_hash)
-            {
-                continue;
-            }
-            if actor
-                .queue
-                .commit_lane_reservation(key)
-                .map_err(|err| {
-                    eyre!(
-                        "failed to finalize committed lane queue reservation during startup: {err}"
-                    )
-                })?
-                == crate::queue::LaneQueueReservationOutcome::Finalized
-            {
-                finalized_committed_reservations =
-                    finalized_committed_reservations.saturating_add(1);
-            }
-        }
-        let remaining_lane_reservations = actor.queue.live_lane_reservations();
-        let startup_nexus = actor.state.nexus_snapshot();
-        let released_orphans = actor
-            .queue
-            .reconcile_orphaned_lane_reservations(&remaining_lane_reservations, |key| {
-                actor.state.lane_incarnation_at_height(key.lane_id, key.proposal_height)
-                    == Some(key.lane_incarnation)
-                    && crate::state::nexus_active_lane_dataspace_at_height(
-                        key.lane_id,
-                        &startup_nexus,
-                        key.proposal_height,
-                    ) == Some(key.dataspace_id)
-                    && actor
-                        .state
-                        .kura()
-                        .autonomous_lane_payload_matches_reservation(
-                            key,
-                            actor.chain_hash,
-                            actor.epoch_for_height(key.proposal_height),
-                        )
-            })
+        let (finalized_committed_reservations, released_orphans) = actor
+            .reconcile_lane_reservation_ownership()
             .map_err(|err| eyre!("failed to reconcile lane queue reservations: {err}"))?;
         if !recovered_lane_reservations.is_empty()
             || finalized_committed_reservations > 0
@@ -23952,6 +24171,87 @@ impl Actor {
         self.next_tick_deadline(Instant::now()).is_some()
     }
 
+    /// Reconcile durable independent-lane queue ownership with committed state,
+    /// the active lane incarnation, and the exact Kura payload claim.
+    ///
+    /// Committed transactions are consumed before orphan handling so a restart
+    /// after merge publication can never requeue already-applied work. A stale
+    /// retired/recreated incarnation is not retained merely because its archived
+    /// payload still exists.
+    fn reconcile_lane_reservation_ownership(
+        &self,
+    ) -> Result<(usize, usize)> {
+        let recovered = self.queue.live_lane_reservations();
+        let mut exact_committed = BTreeMap::new();
+        for entry in self
+            .kura
+            .merge_ledger_all_entries()
+            .map_err(|err| eyre!("failed to read committed merge ledger: {err}"))?
+        {
+            for (transaction_hash, reservation) in
+                crate::state::certified_merge_queue_reservations(&entry)?
+            {
+                if let Some(existing) = exact_committed.insert(transaction_hash, reservation)
+                    && existing != reservation
+                {
+                    return Err(eyre!(
+                        "committed merge ledger binds transaction {transaction_hash} to conflicting reservation identities"
+                    ));
+                }
+            }
+        }
+        let mut finalized_committed = 0_usize;
+        for key in &recovered {
+            if !self
+                .state
+                .has_committed_transaction(key.signed_transaction_hash)
+            {
+                continue;
+            }
+            let Some(committed_key) = exact_committed.get(&key.signed_transaction_hash) else {
+                return Err(eyre!(
+                    "committed transaction {} retains a lane reservation without an exact durable merge-batch binding",
+                    key.signed_transaction_hash
+                ));
+            };
+            if committed_key != key {
+                return Err(eyre!(
+                    "committed transaction {} retains a lane reservation that differs from its durable merge-batch binding",
+                    key.signed_transaction_hash
+                ));
+            }
+            if self.queue.commit_lane_reservation(key)?
+                == crate::queue::LaneQueueReservationOutcome::Finalized
+            {
+                finalized_committed = finalized_committed.saturating_add(1);
+            }
+        }
+
+        let remaining = self.queue.live_lane_reservations();
+        let nexus = self.state.nexus_snapshot();
+        let released_orphans =
+            self.queue
+                .reconcile_orphaned_lane_reservations(&remaining, |key| {
+                    self.state
+                        .lane_incarnation_at_height(key.lane_id, key.proposal_height)
+                        == Some(key.lane_incarnation)
+                        && crate::state::nexus_active_lane_dataspace_at_height(
+                            key.lane_id,
+                            &nexus,
+                            key.proposal_height,
+                        ) == Some(key.dataspace_id)
+                        && self
+                            .state
+                            .kura()
+                            .autonomous_lane_payload_matches_reservation(
+                                key,
+                                self.chain_hash,
+                                self.epoch_for_height(key.proposal_height),
+                            )
+                })?;
+        Ok((finalized_committed, released_orphans))
+    }
+
     fn tick_work_budget_deadline(&self, tick_start: Instant) -> Option<Instant> {
         let cap = self.config.worker.tick_work_budget_cap;
         if cap.is_zero() {
@@ -24055,6 +24355,26 @@ impl Actor {
         if expired_culled > 0 {
             progress = true;
         }
+        if self.tick_counter % Self::TICK_EXPIRED_CULL_STRIDE == 0 {
+            match self.reconcile_lane_reservation_ownership() {
+                Ok((finalized_committed, released_orphans)) => {
+                    if finalized_committed > 0 || released_orphans > 0 {
+                        info!(
+                            finalized_committed,
+                            released_orphans,
+                            "reconciled independent-lane queue ownership during tick"
+                        );
+                        progress = true;
+                    }
+                }
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        "failed to reconcile independent-lane queue ownership; retaining fail-closed reservations for retry"
+                    );
+                }
+            }
+        }
         let rbc_persist_progress = self.poll_rbc_persist_results_inner();
         let rbc_seed_progress = self.poll_rbc_seed_results_inner();
         let now = tick_start;
@@ -24080,6 +24400,7 @@ impl Actor {
             // commit height advances mid-tick.
             progress |= self.tick_mode_management();
         }
+        let merge_sidecar_progress = self.tick_certified_merge_sidecars(now);
         let lane_block_vote_progress = {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.lane_block_votes");
             self.broadcast_ready_local_lane_block_votes()
@@ -24195,6 +24516,22 @@ impl Actor {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.round_liveness_fsm");
             self.drive_round_liveness_fsm(now)
         };
+        let merge_committee_progress = if Self::tick_budget_exhausted(tick_deadline, Instant::now())
+        {
+            false
+        } else {
+            let _view_ctx = StateViewContextGuard::new("sumeragi.tick.merge_committee");
+            match self.handle_merge_entry_candidates(committed_lane_block_progress) {
+                Ok(progress) => progress,
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        "merge committee maintenance failed closed; retrying on a later tick"
+                    );
+                    false
+                }
+            }
+        };
         let rbc_rebroadcast_progress = self.rebroadcast_stalled_rbc_payloads(now);
         let rbc_outbound_progress = self.flush_rbc_outbound_chunks(now);
         let rbc_session_ttl_progress = self.prune_stale_rbc_sessions(SystemTime::now());
@@ -24206,6 +24543,7 @@ impl Actor {
             || adaptive_progress
             || refresh_progress
             || committed_progress
+            || merge_sidecar_progress
             || lane_block_vote_progress
             || committed_lane_block_progress
             || deferred_qc_progress
@@ -24221,6 +24559,7 @@ impl Actor {
             || reschedule_progress
             || idle_view_progress
             || round_liveness_progress
+            || merge_committee_progress
             || rbc_rebroadcast_progress
             || rbc_outbound_progress
             || rbc_session_ttl_progress;
@@ -26960,17 +27299,750 @@ impl Actor {
     pub(super) fn on_lane_relay_message(&mut self, message: super::LaneRelayMessage) -> Result<()> {
         match message {
             super::LaneRelayMessage::Envelope(envelope) => {
-                self.on_lane_relay(envelope)?;
-                self.handle_merge_entry_candidates()
+                let changed = self.on_lane_relay(envelope)?;
+                self.handle_merge_entry_candidates(changed).map(|_| ())
             }
             super::LaneRelayMessage::MergeSignature(signature) => {
                 self.on_merge_signature(signature)?;
-                self.handle_merge_entry_candidates()
+                self.handle_merge_entry_candidates(false).map(|_| ())
+            }
+            super::LaneRelayMessage::CertifiedMergeSidecar { sender, message } => {
+                self.on_certified_merge_sidecar_message(sender, message);
+                Ok(())
+            }
+            super::LaneRelayMessage::MergeCandidate { sender, message } => {
+                self.on_merge_candidate_message(sender, message);
+                Ok(())
             }
             super::LaneRelayMessage::NativeAmx { sender, message } => {
                 self.on_native_amx_message(sender, message)
             }
         }
+    }
+
+    fn post_certified_merge_sidecar(&self, post: MergeSidecarPost) {
+        self.network.post(Post {
+            data: NetworkMessage::CertifiedMergeSidecar(Box::new(post.message)),
+            peer_id: post.peer,
+            priority: Priority::High,
+        });
+    }
+
+    fn on_certified_merge_sidecar_message(
+        &mut self,
+        sender: PeerId,
+        message: CertifiedMergeSidecarMessage,
+    ) {
+        match message {
+            CertifiedMergeSidecarMessage::Request(request) => {
+                self.on_certified_merge_sidecar_request(sender, request);
+            }
+            CertifiedMergeSidecarMessage::Chunk(chunk) => {
+                self.on_certified_merge_sidecar_chunk(sender, chunk);
+            }
+        }
+    }
+
+    fn on_certified_merge_sidecar_request(
+        &mut self,
+        sender: PeerId,
+        request: crate::merge_sidecar::CertifiedMergeSidecarRequestV1,
+    ) {
+        let now = Instant::now();
+        let local_peer = self.common_config.peer.id().clone();
+        if let Err(error) = self.subsystems.merge.sidecars.admit_server_request(
+            &sender,
+            &request,
+            &local_peer,
+            now,
+        ) {
+            debug!(%sender, ?error, "dropping certified merge-sidecar request");
+            return;
+        }
+        let entry = match self.kura.merge_entry_by_hash(request.entry_hash) {
+            Ok(Some(entry)) => entry,
+            Ok(None) => {
+                debug!(
+                    %sender,
+                    entry_hash = %request.entry_hash,
+                    "cannot serve certified merge-sidecar request: exact durable entry is absent"
+                );
+                return;
+            }
+            Err(error) => {
+                warn!(
+                    %sender,
+                    entry_hash = %request.entry_hash,
+                    ?error,
+                    "cannot serve certified merge-sidecar request: durable lookup failed"
+                );
+                return;
+            }
+        };
+        let reference = iroha_data_model::block::CertifiedMergeLedgerReference::new(&entry);
+        let metadata_matches = request.encoded_len == reference.encoded_len
+            && request.epoch_id == reference.epoch_id
+            && request.reference_digest == certified_merge_reference_digest(&reference);
+        let local_is_holder = certified_merge_sidecar_holders(&reference)
+            .is_ok_and(|holders| holders.contains(&local_peer));
+        if !metadata_matches || !local_is_holder {
+            warn!(
+                %sender,
+                entry_hash = %request.entry_hash,
+                metadata_matches,
+                local_is_holder,
+                "refusing certified merge-sidecar request not bound to this exact QC holder"
+            );
+            return;
+        }
+        if let Err(error) = self.subsystems.merge.sidecars.enqueue_response(
+            request,
+            entry.canonical_bytes(),
+            now,
+        ) {
+            debug!(%sender, ?error, "certified merge-sidecar response budget rejected request");
+            return;
+        }
+        let posts = self
+            .subsystems
+            .merge
+            .sidecars
+            .drain_outbound_chunks(8, now);
+        for post in posts {
+            self.post_certified_merge_sidecar(post);
+        }
+    }
+
+    fn on_certified_merge_sidecar_chunk(
+        &mut self,
+        sender: PeerId,
+        chunk: crate::merge_sidecar::CertifiedMergeSidecarChunkV1,
+    ) {
+        let entry_hash = chunk.entry_hash;
+        let now = Instant::now();
+        let outcome = match self
+            .subsystems
+            .merge
+            .sidecars
+            .ingest_chunk(&sender, chunk, now)
+        {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                warn!(%sender, %entry_hash, ?error, "dropping invalid certified merge-sidecar chunk");
+                return;
+            }
+        };
+        let ChunkIngestOutcome::Complete(completed) = outcome else {
+            return;
+        };
+        let entry = match decode_certified_merge_sidecar(&completed.reference, &completed.bytes) {
+            Ok(entry) => entry,
+            Err(error) => {
+                warn!(
+                    %sender,
+                    %entry_hash,
+                    ?error,
+                    "reassembled certified merge sidecar is corrupt; rotating holder"
+                );
+                self.retry_completed_merge_sidecar(entry_hash, now);
+                return;
+            }
+        };
+        if let Err(error) = self
+            .state
+            .validate_certified_merge_entry_for_global_order(&entry)
+        {
+            let deferred = self
+                .subsystems
+                .merge
+                .sidecars
+                .discard_invalid(entry_hash);
+            warn!(
+                %sender,
+                %entry_hash,
+                ?error,
+                affected_blocks = deferred.len(),
+                "exact certified merge sidecar is invalid for global order"
+            );
+            self.reject_invalid_certified_merge_sidecar_blocks(deferred, error.to_string());
+            return;
+        }
+        match self.kura.persist_pending_certified_merge_entry(&entry) {
+            Ok(persisted_hash) if persisted_hash == entry_hash => {
+                let requester = self.common_config.peer.id().clone();
+                let (deferred, _) = self.subsystems.merge.sidecars.finish_completed(
+                    entry_hash,
+                    true,
+                    &requester,
+                    now,
+                );
+                info!(
+                    %sender,
+                    %entry_hash,
+                    resumed_blocks = deferred.len(),
+                    "persisted authenticated certified merge sidecar"
+                );
+                self.resume_certified_merge_sidecar_blocks(deferred);
+            }
+            Ok(other_hash) => {
+                error!(
+                    expected = %entry_hash,
+                    actual = %other_hash,
+                    "Kura returned a different hash for a validated certified merge sidecar"
+                );
+                let deferred = self
+                    .subsystems
+                    .merge
+                    .sidecars
+                    .discard_invalid(entry_hash);
+                self.reject_invalid_certified_merge_sidecar_blocks(
+                    deferred,
+                    "Kura persisted a conflicting certified merge sidecar hash".to_owned(),
+                );
+            }
+            Err(error) => {
+                warn!(
+                    %entry_hash,
+                    ?error,
+                    "failed to persist validated certified merge sidecar; rotating holder"
+                );
+                self.retry_completed_merge_sidecar(entry_hash, now);
+            }
+        }
+    }
+
+    fn retry_completed_merge_sidecar(
+        &mut self,
+        entry_hash: HashOf<MergeLedgerEntry>,
+        now: Instant,
+    ) {
+        let requester = self.common_config.peer.id().clone();
+        let (_, retry) = self.subsystems.merge.sidecars.finish_completed(
+            entry_hash,
+            false,
+            &requester,
+            now,
+        );
+        if let Some(post) = retry {
+            self.post_certified_merge_sidecar(post);
+        }
+    }
+
+    fn tick_certified_merge_sidecars(&mut self, now: Instant) -> bool {
+        let committed_epoch = self
+            .state
+            .merge_ledger()
+            .latest()
+            .map_or(0, |entry| entry.epoch_id);
+        let committed_height = self.committed_height_snapshot();
+        if let Err(error) = self
+            .subsystems
+            .merge
+            .committee
+            .signing_guard
+            .advance_committed_frontier(committed_epoch, committed_height)
+        {
+            // Signing authorization itself remains fail-closed because the
+            // durable guard still refuses conflicts and committed epochs.
+            error!(
+                committed_epoch,
+                ?error,
+                "failed to advance merge signing-guard committed high-water"
+            );
+        }
+        self.subsystems.merge.committee.prune(now);
+        let requester = self.common_config.peer.id().clone();
+        let pending_blocks = self
+            .pending
+            .pending_blocks
+            .keys()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        self.subsystems
+            .merge
+            .sidecars
+            .retain_pending_blocks(&pending_blocks, committed_height);
+        let posts = self
+            .subsystems
+            .merge
+            .sidecars
+            .tick(&requester, now);
+        let mut progress = !posts.is_empty();
+        for post in posts {
+            self.post_certified_merge_sidecar(post);
+        }
+        if let Some((round, _, validator_set_hash)) = self.exact_merge_candidate_network_round() {
+            self.subsystems.merge.candidates.retain_exact_round(
+                round.epoch_id,
+                round.view,
+                round.height,
+                round.parent_hash,
+                validator_set_hash,
+            );
+        }
+        let candidate_posts = self.subsystems.merge.candidates.tick(now);
+        progress |= !candidate_posts.is_empty();
+        for post in candidate_posts {
+            self.post_merge_candidate(post);
+        }
+        progress
+    }
+
+    fn post_merge_candidate(&self, post: MergeCandidatePost) {
+        self.network.post(Post {
+            data: NetworkMessage::MergeCandidate(Box::new(post.message)),
+            peer_id: post.peer,
+            priority: Priority::High,
+        });
+    }
+
+    fn exact_merge_candidate_network_round(
+        &self,
+    ) -> Option<(MergeExecutionRound, PeerId, HashOf<Vec<PeerId>>)> {
+        let commit_topology = self.state.commit_topology.view();
+        if commit_topology.is_empty() {
+            return None;
+        }
+        let validator_set = commit_topology.iter().cloned().collect::<Vec<_>>();
+        if !validator_set.contains(self.common_config.peer.id()) {
+            return None;
+        }
+        let validator_set_hash = HashOf::new(&validator_set);
+        let (round, _) = self.current_merge_execution_round(validator_set_hash)?;
+        let mut topology = super::network_topology::Topology::new(validator_set);
+        self.leader_index_for(&mut topology, round.height, round.view)
+            .ok()?;
+        Some((round, topology.leader().clone(), validator_set_hash))
+    }
+
+    fn merge_candidate_advert_matches_round(
+        advert: &MergeCandidateAdvertV1,
+        sender: &PeerId,
+        leader: &PeerId,
+        round: MergeExecutionRound,
+        validator_set_hash: HashOf<Vec<PeerId>>,
+    ) -> bool {
+        sender == leader
+            && &advert.proposer == leader
+            && advert.epoch_id == round.epoch_id
+            && advert.view == round.view
+            && advert.carrier_height == round.height
+            && advert.parent_hash == round.parent_hash
+            && advert.validator_set_hash == validator_set_hash
+    }
+
+    fn broadcast_guarded_merge_candidate(
+        &mut self,
+        candidate: &crate::merge::MergeLedgerCandidate,
+        round: MergeExecutionRound,
+        message_digest: Hash,
+    ) -> Result<bool> {
+        let Some((current_round, leader, validator_set_hash)) =
+            self.exact_merge_candidate_network_round()
+        else {
+            return Ok(false);
+        };
+        let local_peer = self.common_config.peer.id().clone();
+        if current_round != round || leader != local_peer {
+            return Ok(false);
+        }
+        let context = MergeSigningContextV1 {
+            epoch_id: round.epoch_id,
+            view: round.view,
+            carrier_height: round.height,
+            parent_hash: round.parent_hash,
+            validator_set_hash,
+        };
+        if self
+            .subsystems
+            .merge
+            .committee
+            .signing_guard
+            .authorized_digest(&context)?
+            != Some(message_digest)
+        {
+            return Err(eyre!(
+                "refusing to advertise merge candidate before durable exact-round authorization"
+            ));
+        }
+        let advert = self.subsystems.merge.candidates.publish(
+            candidate,
+            round.height,
+            round.parent_hash,
+            validator_set_hash,
+            message_digest,
+            local_peer,
+            Instant::now(),
+        )?;
+        self.network.broadcast(Broadcast {
+            data: NetworkMessage::MergeCandidate(Box::new(MergeCandidateMessage::Advert(advert))),
+            priority: Priority::High,
+        });
+        Ok(true)
+    }
+
+    fn accept_validated_leader_merge_candidate(
+        &mut self,
+        sender: &PeerId,
+        advert: &MergeCandidateAdvertV1,
+        candidate: crate::merge::MergeLedgerCandidate,
+    ) -> Result<bool> {
+        let Some((round, leader, validator_set_hash)) = self.exact_merge_candidate_network_round()
+        else {
+            return Ok(false);
+        };
+        if !Self::merge_candidate_advert_matches_round(
+            advert,
+            sender,
+            &leader,
+            round,
+            validator_set_hash,
+        )
+            || candidate.epoch_id != round.epoch_id
+            || candidate.view != round.view
+            || candidate.carrier_height != round.height
+            || candidate.carrier_parent_hash != round.parent_hash
+        {
+            return Err(eyre!(
+                "leader merge candidate no longer belongs to the exact current carrier round"
+            ));
+        }
+        let expected_digest = crate::merge::merge_qc_message_digest(
+            &self.chain_id,
+            &candidate,
+            VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash,
+        );
+        if advert.message_digest != expected_digest {
+            self.on_merge_candidate_leader_equivocation(round, leader);
+            return Err(eyre!(
+                "leader merge candidate digest differs from its announcement"
+            ));
+        }
+        let (_, parent_header) = self
+            .current_merge_execution_round(validator_set_hash)
+            .ok_or_else(|| eyre!("current merge parent became unavailable"))?;
+        if let Err(error) = self.state.validate_merge_candidate_for_global_round(
+            &candidate,
+            &parent_header,
+            round.view,
+        ) {
+            self.on_merge_candidate_leader_equivocation(round, leader);
+            return Err(eyre!(
+                "leader merge candidate validation failed: {error}"
+            ));
+        }
+
+        let signing_context = MergeSigningContextV1 {
+            epoch_id: round.epoch_id,
+            view: round.view,
+            carrier_height: round.height,
+            parent_hash: round.parent_hash,
+            validator_set_hash,
+        };
+        if let Some(authorized) = self
+            .subsystems
+            .merge
+            .committee
+            .signing_guard
+            .authorized_digest(&signing_context)?
+            && authorized != expected_digest
+        {
+            self.on_merge_candidate_leader_equivocation(round, leader);
+            return Err(eyre!(
+                "round leader proposed a digest conflicting with the durable signing decision"
+            ));
+        }
+        self.subsystems
+            .merge
+            .committee
+            .signing_guard
+            .authorize(signing_context, expected_digest)?;
+
+        let now = Instant::now();
+        self.subsystems.merge.committee.retain_round(round);
+        self.subsystems
+            .merge
+            .committee
+            .mark_preparation(round, now);
+        let key = MergeCommitteeKey {
+            epoch_id: candidate.epoch_id,
+            view: candidate.view,
+            message_digest: expected_digest,
+        };
+        let conflicting = self
+            .subsystems
+            .merge
+            .committee
+            .pending
+            .iter()
+            .any(|(pending_key, entry)| {
+                pending_key.epoch_id == round.epoch_id
+                    && pending_key.view == round.view
+                    && pending_key.message_digest != expected_digest
+                    && entry.candidate.is_some()
+            });
+        if conflicting {
+            self.on_merge_candidate_leader_equivocation(round, leader);
+            return Err(eyre!(
+                "round leader proposed more than one validated merge candidate"
+            ));
+        }
+        if self
+            .subsystems
+            .merge
+            .committee
+            .pending
+            .get(&key)
+            .and_then(|entry| entry.candidate.as_ref())
+            .is_some_and(|existing| existing != &candidate)
+        {
+            self.on_merge_candidate_leader_equivocation(round, leader);
+            return Err(eyre!("candidate digest collision in merge committee cache"));
+        }
+        if !self.subsystems.merge.committee.pending.contains_key(&key) {
+            self.subsystems.merge.committee.ensure_pending_capacity(now);
+        }
+        let entry = self
+            .subsystems
+            .merge
+            .committee
+            .pending
+            .entry(key)
+            .or_insert_with(|| MergeCommitteeEntry {
+                candidate: Some(candidate.clone()),
+                signatures: BTreeMap::new(),
+                created_at: now,
+                last_updated: now,
+                last_local_signature_broadcast: None,
+            });
+        entry.candidate = Some(candidate);
+        entry.last_updated = now;
+        self.handle_merge_entry_candidates(false)
+    }
+
+    fn on_merge_candidate_message(&mut self, sender: PeerId, message: MergeCandidateMessage) {
+        match message {
+            MergeCandidateMessage::Advert(advert) => {
+                self.on_merge_candidate_advert(sender, advert);
+            }
+            MergeCandidateMessage::Request(request) => {
+                self.on_merge_candidate_request(sender, request);
+            }
+            MergeCandidateMessage::Chunk(chunk) => {
+                self.on_merge_candidate_chunk(sender, chunk);
+            }
+        }
+    }
+
+    fn on_merge_candidate_advert(&mut self, sender: PeerId, advert: MergeCandidateAdvertV1) {
+        let Some((round, leader, validator_set_hash)) = self.exact_merge_candidate_network_round()
+        else {
+            return;
+        };
+        let requester = self.common_config.peer.id().clone();
+        if requester == leader {
+            return;
+        }
+        self.subsystems.merge.candidates.retain_exact_round(
+            round.epoch_id,
+            round.view,
+            round.height,
+            round.parent_hash,
+            validator_set_hash,
+        );
+        match self.subsystems.merge.candidates.accept_advert(
+            &sender,
+            advert,
+            &leader,
+            &requester,
+            round.epoch_id,
+            round.view,
+            round.height,
+            round.parent_hash,
+            validator_set_hash,
+            Instant::now(),
+        ) {
+            Ok(post) => {
+                let now = Instant::now();
+                self.subsystems.merge.committee.retain_round(round);
+                self.subsystems
+                    .merge
+                    .committee
+                    .mark_preparation(round, now);
+                if let Some(post) = post {
+                    self.post_merge_candidate(post);
+                }
+            }
+            Err(error) => {
+                warn!(
+                    %sender,
+                    ?error,
+                    height = round.height,
+                    view = round.view,
+                    "dropping invalid round-leader merge candidate announcement"
+                );
+                if matches!(error, crate::merge_sidecar::MergeSidecarError::CandidateEquivocation)
+                {
+                    self.on_merge_candidate_leader_equivocation(round, sender);
+                }
+            }
+        }
+    }
+
+    fn on_merge_candidate_request(
+        &mut self,
+        sender: PeerId,
+        request: crate::merge_sidecar::MergeCandidateRequestV1,
+    ) {
+        let Some((round, leader, validator_set_hash)) = self.exact_merge_candidate_network_round()
+        else {
+            return;
+        };
+        let local_peer = self.common_config.peer.id().clone();
+        if leader != local_peer
+            || !self.state.commit_topology.view().contains(&sender)
+            || request.advert.epoch_id != round.epoch_id
+            || request.advert.view != round.view
+            || request.advert.carrier_height != round.height
+            || request.advert.parent_hash != round.parent_hash
+            || request.advert.validator_set_hash != validator_set_hash
+        {
+            warn!(%sender, "dropping stale or non-leader merge candidate body request");
+            return;
+        }
+        if let Err(error) = self.subsystems.merge.candidates.accept_request(
+            &sender,
+            request,
+            &local_peer,
+            Instant::now(),
+        ) {
+            debug!(%sender, ?error, "dropping merge candidate body request");
+            return;
+        }
+        let posts = self
+            .subsystems
+            .merge
+            .candidates
+            .drain_outbound(8, Instant::now());
+        for post in posts {
+            self.post_merge_candidate(post);
+        }
+    }
+
+    fn on_merge_candidate_chunk(
+        &mut self,
+        sender: PeerId,
+        chunk: crate::merge_sidecar::MergeCandidateChunkV1,
+    ) {
+        let transfer_id = chunk.advert.transfer_id;
+        let now = Instant::now();
+        let outcome = match self
+            .subsystems
+            .merge
+            .candidates
+            .ingest_chunk(&sender, chunk, now)
+        {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                warn!(%sender, %transfer_id, ?error, "dropping invalid merge candidate chunk");
+                return;
+            }
+        };
+        let CandidateChunkOutcome::Complete(completed) = outcome else {
+            return;
+        };
+        let candidate = match decode_merge_candidate_body(&completed.advert, &completed.bytes) {
+            Ok(candidate) => candidate,
+            Err(error) => {
+                warn!(%sender, %transfer_id, ?error, "merge candidate body is corrupt");
+                let _ = self
+                    .subsystems
+                    .merge
+                    .candidates
+                    .finish_completed(transfer_id, true, now);
+                if let Some((round, leader, validator_set_hash)) =
+                    self.exact_merge_candidate_network_round()
+                    && Self::merge_candidate_advert_matches_round(
+                        &completed.advert,
+                        &sender,
+                        &leader,
+                        round,
+                        validator_set_hash,
+                    )
+                {
+                    self.on_merge_candidate_leader_equivocation(round, sender);
+                }
+                return;
+            }
+        };
+        let expected_digest = crate::merge::merge_qc_message_digest(
+            &self.chain_id,
+            &candidate,
+            VALIDATOR_SET_HASH_VERSION_V1,
+            completed.advert.validator_set_hash,
+        );
+        if expected_digest != completed.advert.message_digest {
+            let _ = self
+                .subsystems
+                .merge
+                .candidates
+                .finish_completed(transfer_id, true, now);
+            if let Some((round, leader, validator_set_hash)) =
+                self.exact_merge_candidate_network_round()
+                && Self::merge_candidate_advert_matches_round(
+                    &completed.advert,
+                    &sender,
+                    &leader,
+                    round,
+                    validator_set_hash,
+                )
+            {
+                self.on_merge_candidate_leader_equivocation(round, sender);
+            }
+            return;
+        }
+        match self.accept_validated_leader_merge_candidate(&sender, &completed.advert, candidate) {
+            Ok(_) => {
+                let _ = self
+                    .subsystems
+                    .merge
+                    .candidates
+                    .finish_completed(transfer_id, true, now);
+            }
+            Err(error) => {
+                let _ = self
+                    .subsystems
+                    .merge
+                    .candidates
+                    .finish_completed(transfer_id, true, now);
+                warn!(
+                    %sender,
+                    %transfer_id,
+                    ?error,
+                    "rejecting fully transferred leader merge candidate"
+                );
+            }
+        }
+    }
+
+    fn on_merge_candidate_leader_equivocation(
+        &mut self,
+        round: MergeExecutionRound,
+        leader: PeerId,
+    ) {
+        warn!(
+            %leader,
+            height = round.height,
+            view = round.view,
+            epoch = round.epoch_id,
+            "detected round-leader merge candidate equivocation"
+        );
+        self.trigger_view_change_with_cause(
+            round.height,
+            round.view,
+            ViewChangeCause::ValidationReject,
+        );
     }
 
     fn on_native_amx_message(&mut self, sender: PeerId, message: NativeAmxMessage) -> Result<()> {
@@ -27019,6 +28091,14 @@ impl Actor {
         validator_set: &[PeerId],
         request: NativeAmxAttestationRequestV1,
     ) {
+        if let Err(err) = request.validate_plan_binding() {
+            iroha_logger::warn!(?err, "refusing to authorize malformed native AMX request");
+            return;
+        }
+        if let Err(err) = self.native_amx_sessions.authorize_request(&request) {
+            iroha_logger::warn!(?err, "refusing to authorize native AMX vote session");
+            return;
+        }
         let local_peer = self.common_config.peer.id().clone();
         for peer in validator_set {
             if peer == &local_peer {
@@ -27054,6 +28134,8 @@ impl Actor {
             );
             return None;
         }
+        let coordinator_proposal = request.coordinator_proposal.clone();
+        let prepare_qc = request.prepare_qc.clone();
         let body = request.body;
         if body.phase != expected_phase {
             iroha_logger::warn!(
@@ -27083,15 +28165,6 @@ impl Actor {
                 .as_ref()
                 .iter()
                 .all(|byte| *byte == 0)
-            || sender.is_some_and(|sender| {
-                !self
-                    .state
-                    .authoritative_lane_peer_ids_at_height(
-                        body.coordinator_lane_id,
-                        body.authority_context_height,
-                    )
-                    .contains(sender)
-            })
         {
             iroha_logger::warn!(
                 sender = ?sender,
@@ -27129,29 +28202,37 @@ impl Actor {
             return None;
         }
 
-        let coordinator_proposal = self
-            .subsystems
-            .lane_blocks
-            .proposals_without_commit_qc()
-            .into_iter()
-            .find(|proposal| {
-                let descriptor = &proposal.descriptor;
-                proposal.proposal_hash == body.coordinator_proposal_hash
-                    && descriptor.lane_id == body.coordinator_lane_id
-                    && descriptor.dataspace_id == body.coordinator_dataspace_id
-                    && descriptor.lane_incarnation == body.coordinator_lane_incarnation
-                    && descriptor.proposal_height == body.authority_context_height
-                    && descriptor.lane_block_height == body.coordinator_lane_block_height
-                    && descriptor.lane_block_view == body.coordinator_lane_block_view
-            });
-        let Some(coordinator_proposal) = coordinator_proposal else {
+        let coordinator_descriptor = &coordinator_proposal.descriptor;
+        let mut expected_coordinator_committee = self.state.authoritative_lane_peer_ids_at_height(
+            body.coordinator_lane_id,
+            body.authority_context_height,
+        );
+        expected_coordinator_committee.sort();
+        expected_coordinator_committee.dedup();
+        let expected_coordinator_count =
+            u32::try_from(expected_coordinator_committee.len()).unwrap_or(u32::MAX);
+        let expected_coordinator_quorum = u32::try_from(
+            crate::sumeragi::network_topology::commit_quorum_from_len(
+                expected_coordinator_committee.len(),
+            )
+            .max(1),
+        )
+        .unwrap_or(u32::MAX);
+        if expected_coordinator_committee.is_empty()
+            || expected_coordinator_committee.len() > crate::native_amx::MAX_NATIVE_AMX_VALIDATORS
+            || coordinator_descriptor.validator_set != expected_coordinator_committee
+            || coordinator_descriptor.validator_set_hash
+                != HashOf::new(&expected_coordinator_committee)
+            || coordinator_descriptor.validator_count != expected_coordinator_count
+            || coordinator_descriptor.min_quorum != expected_coordinator_quorum
+        {
             iroha_logger::warn!(
                 sender = ?sender,
                 proposal_hash = %body.coordinator_proposal_hash,
-                "dropping native AMX request for an unknown coordinator lane session"
+                "dropping native AMX request with non-authoritative coordinator proposal committee"
             );
             return None;
-        };
+        }
         let expected_leader = lane_scheduler::lane_block_redrive_leader(&coordinator_proposal, 0);
         if sender.map_or_else(
             || expected_leader != Some(self.common_config.peer.id()),
@@ -27165,20 +28246,54 @@ impl Actor {
             return None;
         }
 
-        let local_peer = self.common_config.peer.id().clone();
-        if !self
-            .state
-            .authoritative_lane_peer_ids_at_height(
-                body.participant_lane_id,
-                body.authority_context_height,
-            )
-            .contains(&local_peer)
+        let mut participant_committee = self.state.authoritative_lane_peer_ids_at_height(
+            body.participant_lane_id,
+            body.authority_context_height,
+        );
+        participant_committee.sort();
+        participant_committee.dedup();
+        let expected_participant_count =
+            u32::try_from(participant_committee.len()).unwrap_or(u32::MAX);
+        let expected_participant_quorum = u32::try_from(
+            crate::sumeragi::network_topology::commit_quorum_from_len(participant_committee.len())
+                .max(1),
+        )
+        .unwrap_or(u32::MAX);
+        if participant_committee.is_empty()
+            || participant_committee.len() > crate::native_amx::MAX_NATIVE_AMX_VALIDATORS
+            || participant_committee
+                .windows(2)
+                .any(|pair| pair[0] >= pair[1])
+            || body.participant_validator_set_hash != HashOf::new(&participant_committee)
+            || body.participant_validator_count != expected_participant_count
+            || body.participant_min_quorum != expected_participant_quorum
         {
+            iroha_logger::warn!(
+                sender = ?sender,
+                participant_lane = body.participant_lane_id.as_u32(),
+                "dropping native AMX request with non-authoritative participant committee"
+            );
+            return None;
+        }
+        let local_peer = self.common_config.peer.id().clone();
+        if !participant_committee.contains(&local_peer) {
             iroha_logger::warn!(
                 sender = ?sender,
                 %local_peer,
                 participant_lane = body.participant_lane_id.as_u32(),
                 "dropping native AMX request outside the participant lane committee"
+            );
+            return None;
+        }
+        if expected_phase == NativeAmxPhase::Commit
+            && prepare_qc
+                .as_ref()
+                .is_none_or(|qc| crate::native_amx::validate_self_contained_qc(qc).is_err())
+        {
+            iroha_logger::warn!(
+                sender = ?sender,
+                participant_lane = body.participant_lane_id.as_u32(),
+                "dropping native AMX commit request without a valid prepare QC"
             );
             return None;
         }
@@ -27191,13 +28306,16 @@ impl Actor {
         }
         {
             let world = self.state.world_view();
-            if crate::state::live_consensus_key_pop_for_peer(
+            let valid_pop = crate::state::live_consensus_key_pop_for_peer(
                 &world,
                 &local_peer,
                 body.authority_context_height,
             )
-            .is_none()
-            {
+            .is_some_and(|pop| {
+                pop.len() == crate::native_amx::NATIVE_AMX_BLS_PROOF_BYTES
+                    && iroha_crypto::bls_normal_pop_verify(local_peer.public_key(), &pop).is_ok()
+            });
+            if !valid_pop {
                 iroha_logger::warn!(
                     sender = ?sender,
                     %local_peer,
@@ -27235,7 +28353,7 @@ impl Actor {
         expected_phase: NativeAmxPhase,
         sender: Option<&PeerId>,
     ) {
-        if let Err(err) = vote.validate_ingress(expected_phase, sender) {
+        if let Err(err) = vote.validate_ingress_shape(expected_phase, sender) {
             match err {
                 NativeAmxVoteIngressError::PhaseMismatch { expected, actual } => {
                     iroha_logger::warn!(
@@ -27251,6 +28369,12 @@ impl Actor {
                         signer = %vote.signer,
                         ?sender,
                         "dropping native AMX vote because sender does not match signer"
+                    );
+                }
+                NativeAmxVoteIngressError::InvalidBody => {
+                    iroha_logger::warn!(
+                        signer = %vote.signer,
+                        "dropping native AMX vote with malformed or oversized body"
                     );
                 }
                 NativeAmxVoteIngressError::SignerNotBlsNormal => {
@@ -27276,8 +28400,23 @@ impl Actor {
         );
         participant_committee.sort();
         participant_committee.dedup();
+        let expected_participant_count =
+            u32::try_from(participant_committee.len()).unwrap_or(u32::MAX);
+        let expected_participant_quorum = u32::try_from(
+            crate::sumeragi::network_topology::commit_quorum_from_len(participant_committee.len())
+                .max(1),
+        )
+        .unwrap_or(u32::MAX);
         if body.chain_id_hash != self.chain_hash
             || body.authority_context_height == 0
+            || participant_committee.is_empty()
+            || participant_committee.len() > crate::native_amx::MAX_NATIVE_AMX_VALIDATORS
+            || participant_committee
+                .windows(2)
+                .any(|pair| pair[0] >= pair[1])
+            || body.participant_validator_set_hash != HashOf::new(&participant_committee)
+            || body.participant_validator_count != expected_participant_count
+            || body.participant_min_quorum != expected_participant_quorum
             || crate::state::nexus_active_lane_dataspace_at_height(
                 body.coordinator_lane_id,
                 &nexus,
@@ -27307,26 +28446,11 @@ impl Actor {
             );
             return;
         }
-        let known_coordinator_session = self
-            .subsystems
-            .lane_blocks
-            .proposals_without_commit_qc()
-            .into_iter()
-            .any(|proposal| {
-                let descriptor = proposal.descriptor;
-                proposal.proposal_hash == body.coordinator_proposal_hash
-                    && descriptor.lane_id == body.coordinator_lane_id
-                    && descriptor.dataspace_id == body.coordinator_dataspace_id
-                    && descriptor.lane_incarnation == body.coordinator_lane_incarnation
-                    && descriptor.proposal_height == body.authority_context_height
-                    && descriptor.lane_block_height == body.coordinator_lane_block_height
-                    && descriptor.lane_block_view == body.coordinator_lane_block_view
-            });
-        if !known_coordinator_session {
+        if !self.native_amx_sessions.is_authorized_body(body) {
             iroha_logger::warn!(
                 signer = %vote.signer,
                 proposal_hash = %body.coordinator_proposal_hash,
-                "dropping native AMX vote for an unknown coordinator lane session"
+                "dropping unsolicited native AMX vote outside an authorized coordinator session"
             );
             return;
         }
@@ -27353,6 +28477,14 @@ impl Actor {
                 return;
             }
         }
+        if let Err(err) = vote.verify_signature() {
+            iroha_logger::warn!(
+                signer = %vote.signer,
+                ?err,
+                "dropping native AMX vote with invalid signature"
+            );
+            return;
+        }
         let phase = vote.body.phase;
         let signer = vote.signer.clone();
         match self.native_amx_sessions.insert_vote(vote) {
@@ -27372,10 +28504,66 @@ impl Actor {
                     "dropping native AMX vote that equivocates one source across routing plans"
                 );
             }
+            Err(NativeAmxSessionError::UnauthorizedBody) => {
+                iroha_logger::warn!(
+                    %signer,
+                    ?phase,
+                    "dropping native AMX vote outside an authorized exact body"
+                );
+            }
         }
     }
 
+    fn current_merge_execution_round(
+        &self,
+        validator_set_hash: HashOf<Vec<PeerId>>,
+    ) -> Option<(MergeExecutionRound, BlockHeader)> {
+        let parent_header = self.state.latest_block_header_fast()?;
+        let parent_hash = self.state.latest_block_hash_fast()?;
+        let committed_height = u64::try_from(self.state.committed_height()).ok()?;
+        if parent_header.height().get() != committed_height || parent_header.hash() != parent_hash {
+            iroha_logger::warn!(
+                committed_height,
+                parent_height = parent_header.height().get(),
+                cached_parent_hash = %parent_header.hash(),
+                journal_parent_hash = %parent_hash,
+                "deferring merge committee work because the committed parent cache is inconsistent"
+            );
+            return None;
+        }
+        let height = committed_height.checked_add(1)?;
+        let view = self.phase_tracker.current_view(height).unwrap_or(0);
+        let epoch_id = self
+            .state
+            .merge_ledger()
+            .latest()
+            .map_or(1, |entry| entry.epoch_id.saturating_add(1));
+        Some((
+            MergeExecutionRound {
+                height,
+                parent_hash,
+                view,
+                epoch_id,
+                validator_set_hash,
+            },
+            parent_header,
+        ))
+    }
+
     fn on_merge_signature(&mut self, signature: MergeCommitteeSignature) -> Result<()> {
+        let expected_epoch = self
+            .state
+            .merge_ledger()
+            .latest()
+            .map_or(1, |entry| entry.epoch_id.saturating_add(1));
+        if signature.epoch_id != expected_epoch {
+            iroha_logger::debug!(
+                epoch = signature.epoch_id,
+                expected_epoch,
+                "ignoring merge signature outside the exact next epoch"
+            );
+            return Ok(());
+        }
         let commit_topology = self.state.commit_topology.view();
         let roster_len = commit_topology.len();
         if roster_len == 0 {
@@ -27413,6 +28601,20 @@ impl Actor {
             );
             return Ok(());
         }
+        let validator_set: Vec<_> = commit_topology.iter().cloned().collect();
+        let validator_set_hash = HashOf::new(&validator_set);
+        let Some((round, _)) = self.current_merge_execution_round(validator_set_hash) else {
+            return Ok(());
+        };
+        if signature.view != round.view {
+            iroha_logger::debug!(
+                epoch = signature.epoch_id,
+                view = signature.view,
+                expected_view = round.view,
+                "ignoring merge signature outside the exact current view"
+            );
+            return Ok(());
+        }
 
         let peer = &commit_topology[signer_idx];
         if !merge_signature_valid(peer, &signature) {
@@ -27429,6 +28631,134 @@ impl Actor {
             view: signature.view,
             message_digest: signature.message_digest,
         };
+        if !self
+            .subsystems
+            .merge
+            .committee
+            .pending
+            .get(&key)
+            .is_some_and(|entry| entry.candidate.is_some())
+        {
+            iroha_logger::debug!(
+                signer = signature.signer,
+                epoch = signature.epoch_id,
+                view = signature.view,
+                digest = %signature.message_digest,
+                "ignoring merge share until the exact round-leader candidate is validated"
+            );
+            return Ok(());
+        }
+
+        let now = Instant::now();
+        let signer_context = MergeRemoteSignerContext {
+            epoch_id: signature.epoch_id,
+            view: signature.view,
+            carrier_height: round.height,
+            parent_hash: round.parent_hash,
+            validator_set_hash,
+            signer: signature.signer,
+        };
+        self.subsystems.merge.committee.retain_round(round);
+        self.subsystems.merge.committee.prune(now);
+        if self
+            .subsystems
+            .merge
+            .committee
+            .remote_equivocators
+            .contains_key(&signer_context)
+        {
+            iroha_logger::warn!(
+                signer = signature.signer,
+                epoch = signature.epoch_id,
+                view = signature.view,
+                "dropping merge signature from a detected equivocator"
+            );
+            return Ok(());
+        }
+        if let Some(previous) = self
+            .subsystems
+            .merge
+            .committee
+            .remote_signers
+            .get(&signer_context)
+            .copied()
+        {
+            if previous.message_digest != signature.message_digest {
+                let previous_key = MergeCommitteeKey {
+                    epoch_id: signature.epoch_id,
+                    view: signature.view,
+                    message_digest: previous.message_digest,
+                };
+                if let Some(previous_entry) = self
+                    .subsystems
+                    .merge
+                    .committee
+                    .pending
+                    .get_mut(&previous_key)
+                {
+                    previous_entry.signatures.remove(&signature.signer);
+                }
+                self.subsystems
+                    .merge
+                    .committee
+                    .remote_signers
+                    .remove(&signer_context);
+                self.subsystems
+                    .merge
+                    .committee
+                    .remote_equivocators
+                    .insert(signer_context, now);
+                iroha_logger::warn!(
+                    signer = signature.signer,
+                    epoch = signature.epoch_id,
+                    view = signature.view,
+                    first = %previous.message_digest,
+                    conflicting = %signature.message_digest,
+                    "detected merge committee signature equivocation; excluding both shares"
+                );
+                return Ok(());
+            }
+        } else {
+            if self.subsystems.merge.committee.remote_signers.len()
+                >= MergeCommitteeState::MAX_REMOTE_SIGNERS
+            {
+                self.subsystems.merge.committee.prune(now);
+                if self.subsystems.merge.committee.remote_signers.len()
+                    >= MergeCommitteeState::MAX_REMOTE_SIGNERS
+                {
+                    iroha_logger::warn!(
+                        "dropping merge signature because the remote signer cache is full"
+                    );
+                    return Ok(());
+                }
+            }
+            self.subsystems.merge.committee.remote_signers.insert(
+                signer_context,
+                MergeRemoteSignerDecision {
+                    message_digest: signature.message_digest,
+                    last_seen: now,
+                },
+            );
+        }
+
+        let pending_cap = self.config.recovery.pending_proposal_cap.max(1);
+        if !self
+            .subsystems
+            .merge
+            .committee
+            .pending
+            .contains_key(&key)
+            && self.subsystems.merge.committee.pending.len() >= pending_cap
+        {
+            iroha_logger::warn!(
+                epoch = signature.epoch_id,
+                view = signature.view,
+                pending = self.subsystems.merge.committee.pending.len(),
+                pending_cap,
+                "dropping orphan merge signature because the bounded committee cache is full"
+            );
+            return Ok(());
+        }
         let entry = self
             .subsystems
             .merge
@@ -27438,10 +28768,13 @@ impl Actor {
             .or_insert_with(|| MergeCommitteeEntry {
                 candidate: None,
                 signatures: BTreeMap::new(),
+                created_at: now,
+                last_updated: now,
+                last_local_signature_broadcast: None,
             });
+        entry.last_updated = now;
 
         if let Some(candidate) = entry.candidate.as_ref() {
-            let validator_set: Vec<_> = commit_topology.iter().cloned().collect();
             let expected = crate::merge::merge_qc_message_digest(
                 &self.chain_id,
                 candidate,
@@ -27504,28 +28837,359 @@ impl Actor {
         })
     }
 
-    fn handle_merge_entry_candidates(&mut self) -> Result<()> {
-        let candidates = self.state.merge_entry_candidates_from_lane_relays();
-        if candidates.is_empty() {
-            return Ok(());
+    fn merge_execution_candidate_matches_round(
+        candidate: &crate::merge::MergeLedgerCandidate,
+        round: MergeExecutionRound,
+    ) -> bool {
+        candidate.epoch_id == round.epoch_id
+            && candidate.view == round.view
+            && candidate.carrier_height == round.height
+            && candidate.carrier_parent_hash == round.parent_hash
+            && candidate.execution_batch.as_ref().is_some_and(|batch| {
+                let header = &batch.application_block_header;
+                header.height().get() == round.height
+                    && header.prev_block_hash() == Some(round.parent_hash)
+                    && header.view_change_index() == round.view
+            })
+    }
+
+    fn pending_merge_execution_candidate(
+        &self,
+        round: MergeExecutionRound,
+    ) -> Option<crate::merge::MergeLedgerCandidate> {
+        self.subsystems
+            .merge
+            .committee
+            .pending
+            .iter()
+            .find_map(|(key, entry)| {
+                let candidate = entry.candidate.as_ref()?;
+                if !Self::merge_execution_candidate_matches_round(candidate, round) {
+                    return None;
+                }
+                let expected_digest = crate::merge::merge_qc_message_digest(
+                    &self.chain_id,
+                    candidate,
+                    VALIDATOR_SET_HASH_VERSION_V1,
+                    round.validator_set_hash,
+                );
+                (key.message_digest == expected_digest).then(|| candidate.clone())
+            })
+    }
+
+    /// Derive autonomous execution at most once per exact carrier round unless
+    /// new certified lane work explicitly invalidates a not-yet-signed attempt.
+    /// A future-dated deterministic candidate is cached until local admission.
+    fn merge_execution_candidate_for_round(
+        &mut self,
+        round: MergeExecutionRound,
+        parent_header: &BlockHeader,
+        force_refresh: bool,
+    ) -> (Option<crate::merge::MergeLedgerCandidate>, bool) {
+        if let Some(candidate) = self.pending_merge_execution_candidate(round) {
+            let message_digest = crate::merge::merge_qc_message_digest(
+                &self.chain_id,
+                &candidate,
+                VALIDATOR_SET_HASH_VERSION_V1,
+                round.validator_set_hash,
+            );
+            self.subsystems.merge.committee.execution_attempt = Some(MergeExecutionAttempt {
+                round,
+                message_digest: Some(message_digest),
+                candidate: None,
+                reserved: true,
+                completed: true,
+            });
+            return (Some(candidate), true);
         }
 
+        let same_round = self
+            .subsystems
+            .merge
+            .committee
+            .execution_attempt
+            .as_ref()
+            .is_some_and(|attempt| attempt.round == round);
+        if same_round {
+            let attempt = self
+                .subsystems
+                .merge
+                .committee
+                .execution_attempt
+                .as_mut()
+                .expect("same-round merge attempt must exist");
+            if attempt.reserved && attempt.completed {
+                return (None, true);
+            }
+            if attempt.reserved && !attempt.completed && !force_refresh {
+                let Some(candidate) = attempt.candidate.as_ref() else {
+                    return (None, true);
+                };
+                let application_time_ms = candidate
+                    .execution_batch
+                    .as_ref()
+                    .map(|batch| batch.application_block_header.creation_time_ms)
+                    .unwrap_or(u64::MAX);
+                if !self.state.merge_application_time_is_locally_ready(
+                    application_time_ms,
+                    timestamp_ms_now(),
+                ) {
+                    return (None, true);
+                }
+                let candidate = attempt
+                    .candidate
+                    .take()
+                    .expect("ready deferred merge candidate must remain cached");
+                attempt.completed = true;
+                return (Some(candidate), true);
+            }
+            if !attempt.reserved && attempt.completed && !force_refresh {
+                return (None, false);
+            }
+        }
+
+        let candidate = self
+            .state
+            .merge_execution_candidate_for_next_carrier(parent_header, round.view);
+        let Some(candidate) = candidate else {
+            self.subsystems.merge.committee.execution_attempt = Some(MergeExecutionAttempt {
+                round,
+                message_digest: None,
+                candidate: None,
+                reserved: false,
+                completed: true,
+            });
+            return (None, false);
+        };
+        if !Self::merge_execution_candidate_matches_round(&candidate, round) {
+            iroha_logger::warn!(
+                epoch = candidate.epoch_id,
+                view = candidate.view,
+                expected_epoch = round.epoch_id,
+                expected_view = round.view,
+                expected_height = round.height,
+                "discarding autonomous merge candidate outside its exact carrier round"
+            );
+            self.subsystems.merge.committee.execution_attempt = None;
+            return (None, false);
+        }
+        let message_digest = crate::merge::merge_qc_message_digest(
+            &self.chain_id,
+            &candidate,
+            VALIDATOR_SET_HASH_VERSION_V1,
+            round.validator_set_hash,
+        );
+        let application_time_ms = candidate
+            .execution_batch
+            .as_ref()
+            .map(|batch| batch.application_block_header.creation_time_ms)
+            .unwrap_or(u64::MAX);
+        let ready = self
+            .state
+            .merge_application_time_is_locally_ready(application_time_ms, timestamp_ms_now());
+        self.subsystems.merge.committee.execution_attempt = Some(MergeExecutionAttempt {
+            round,
+            message_digest: Some(message_digest),
+            candidate: (!ready).then(|| candidate.clone()),
+            reserved: true,
+            completed: ready,
+        });
+        if ready {
+            (Some(candidate), true)
+        } else {
+            iroha_logger::debug!(
+                epoch = round.epoch_id,
+                view = round.view,
+                application_time_ms,
+                "delaying autonomous merge signature until deterministic carrier time is locally admissible"
+            );
+            (None, true)
+        }
+    }
+
+    fn handle_merge_entry_candidates(&mut self, force_execution_refresh: bool) -> Result<bool> {
         let commit_topology = self.state.commit_topology.view();
         if commit_topology.is_empty() {
-            iroha_logger::warn!(
-                pending = candidates.len(),
-                "merge entry candidates available without commit roster; deferring"
-            );
-            return Ok(());
+            return Ok(false);
         }
 
         let validator_set: Vec<_> = commit_topology.iter().cloned().collect();
         let validator_set_hash = HashOf::new(&validator_set);
+        let Some((round, parent_header)) =
+            self.current_merge_execution_round(validator_set_hash)
+        else {
+            return Ok(false);
+        };
+        self.kura
+            .prune_pending_certified_merge_entries_not_bound_to(
+                round.height,
+                round.parent_hash,
+                round.view,
+            )?;
+        self.subsystems
+            .merge
+            .committee
+            .signing_guard
+            .advance_committed_epoch(round.epoch_id.saturating_sub(1))?;
+        let now = Instant::now();
+        self.subsystems.merge.committee.retain_round(round);
+        self.subsystems.merge.committee.prune(now);
+        let pending_execution_backlog = self.state.has_pending_merge_execution_sources();
+        let pending_relay_backlog = self
+            .subsystems
+            .merge
+            .committee
+            .preparation
+            .is_none()
+            && !self
+                .state
+                .merge_entry_candidates_from_lane_relays_for_view(round.view)
+                .is_empty();
+        if force_execution_refresh || pending_execution_backlog || pending_relay_backlog {
+            self.subsystems
+                .merge
+                .committee
+                .mark_preparation(round, now);
+        }
+
+        let mut leader_topology = super::network_topology::Topology::new(validator_set.clone());
+        let leader_index = self.leader_index_for(&mut leader_topology, round.height, round.view)?;
+        let merge_leader = leader_topology.iter().nth(leader_index).cloned();
+        let local_is_merge_leader = merge_leader
+            .as_ref()
+            .is_some_and(|leader| leader == self.common_config.peer.id());
+        let (execution_candidate, execution_reserved) = if local_is_merge_leader {
+            self.merge_execution_candidate_for_round(
+                round,
+                &parent_header,
+                force_execution_refresh,
+            )
+        } else {
+            (None, false)
+        };
+        let relay_candidates = if local_is_merge_leader {
+            self.state
+                .merge_entry_candidates_from_lane_relays_for_view(round.view)
+                .into_iter()
+                .filter(|candidate| candidate.epoch_id == round.epoch_id)
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        if execution_reserved || !relay_candidates.is_empty() {
+            self.subsystems
+                .merge
+                .committee
+                .mark_preparation(round, now);
+        }
+        let signing_context = MergeSigningContextV1 {
+            epoch_id: round.epoch_id,
+            view: round.view,
+            carrier_height: round.height,
+            parent_hash: round.parent_hash,
+            validator_set_hash,
+        };
+        let authorized_digest = self
+            .subsystems
+            .merge
+            .committee
+            .signing_guard
+            .authorized_digest(&signing_context)?;
+
+        let installed_candidates = self
+            .subsystems
+            .merge
+            .committee
+            .pending
+            .values()
+            .filter_map(|entry| entry.candidate.clone())
+            .filter(|candidate| {
+                candidate.epoch_id == round.epoch_id
+                    && candidate.view == round.view
+                    && candidate.carrier_height == round.height
+                    && candidate.carrier_parent_hash == round.parent_hash
+            })
+            .collect::<Vec<_>>();
+        let mut available_candidates = execution_candidate
+            .clone()
+            .into_iter()
+            .chain(relay_candidates.iter().cloned())
+            .chain(installed_candidates.iter().cloned())
+            .filter(|candidate| {
+                candidate.epoch_id == round.epoch_id
+                    && candidate.view == round.view
+                    && candidate.carrier_height == round.height
+                    && candidate.carrier_parent_hash == round.parent_hash
+            })
+            .collect::<Vec<_>>();
+        let mut seen_digests = BTreeSet::new();
+        available_candidates.retain(|candidate| {
+            seen_digests.insert(crate::merge::merge_qc_message_digest(
+                &self.chain_id,
+                candidate,
+                VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set_hash,
+            ))
+        });
+        let candidates = if let Some(authorized_digest) = authorized_digest {
+            available_candidates
+                .into_iter()
+                .find(|candidate| {
+                    crate::merge::merge_qc_message_digest(
+                        &self.chain_id,
+                        candidate,
+                        VALIDATOR_SET_HASH_VERSION_V1,
+                        validator_set_hash,
+                    ) == authorized_digest
+                })
+                .into_iter()
+                .collect::<Vec<_>>()
+        } else if execution_reserved {
+            execution_candidate.into_iter().collect()
+        } else if !local_is_merge_leader {
+            installed_candidates
+        } else {
+            preferred_merge_candidates(execution_candidate, relay_candidates)
+        };
+        if candidates.is_empty() {
+            let attempt_digest = self
+                .subsystems
+                .merge
+                .committee
+                .execution_attempt
+                .as_ref()
+                .filter(|attempt| attempt.round == round)
+                .and_then(|attempt| attempt.message_digest);
+            iroha_logger::trace!(
+                epoch = round.epoch_id,
+                view = round.view,
+                ?attempt_digest,
+                "no locally signable merge candidate is ready for the exact carrier round"
+            );
+            return Ok(false);
+        }
+
         let topology = super::network_topology::Topology::new(commit_topology.clone());
         let local_index = self.local_validator_index_for_topology(&topology);
         let mut ordered_keys = Vec::with_capacity(candidates.len());
+        let mut progress = false;
 
         for candidate in candidates {
+            if local_is_merge_leader
+                && let Err(error) = self.state.validate_merge_candidate_for_global_round(
+                    &candidate,
+                    &parent_header,
+                    round.view,
+                )
+            {
+                iroha_logger::warn!(
+                    ?error,
+                    epoch = candidate.epoch_id,
+                    view = candidate.view,
+                    "dropping invalid locally built merge candidate before durable authorization"
+                );
+                continue;
+            }
             let view = candidate.view;
             let message_digest = crate::merge::merge_qc_message_digest(
                 &self.chain_id,
@@ -27539,10 +29203,115 @@ impl Actor {
                 message_digest,
             };
             ordered_keys.push(key);
+            if let Some(batch) = candidate.execution_batch.as_ref()
+                && !self.state.merge_application_time_is_locally_ready(
+                    batch.application_block_header.creation_time_ms,
+                    timestamp_ms_now(),
+                )
+            {
+                self.subsystems
+                    .merge
+                    .committee
+                    .mark_preparation(round, now);
+                continue;
+            }
 
-            let local_signature = local_index.and_then(|signer| {
-                self.build_merge_signature(signer, view, &candidate, message_digest)
+            let candidate_matches = self
+                .subsystems
+                .merge
+                .committee
+                .pending
+                .get(&key)
+                .and_then(|entry| entry.candidate.as_ref())
+                .is_none_or(|existing| existing == &candidate);
+            if !candidate_matches {
+                iroha_logger::warn!(
+                    epoch = candidate.epoch_id,
+                    view,
+                    "merge candidate digest collides with a different cached candidate"
+                );
+                continue;
+            }
+            if !self
+                .subsystems
+                .merge
+                .committee
+                .pending
+                .contains_key(&key)
+            {
+                self.subsystems
+                    .merge
+                    .committee
+                    .ensure_pending_capacity(now);
+            }
+            let existing_local_signature = local_index.and_then(|signer| {
+                let entry = self.subsystems.merge.committee.pending.get(&key)?;
+                Some((
+                    signer,
+                    entry.signatures.get(&signer)?.clone(),
+                    entry.last_local_signature_broadcast,
+                ))
             });
+            if local_index.is_some() {
+                self.subsystems
+                    .merge
+                    .committee
+                    .signing_guard
+                    .authorize(signing_context.clone(), message_digest)?;
+            }
+            if local_is_merge_leader && local_index.is_some() {
+                let rebroadcast_cooldown = self
+                    .effective_timing
+                    .get()
+                    .rebroadcast_cooldown
+                    .max(Duration::from_millis(1));
+                let advert_due = self
+                    .subsystems
+                    .merge
+                    .committee
+                    .leader_advert
+                    .as_ref()
+                    .is_none_or(|state| {
+                        state.round != round
+                            || state.message_digest != message_digest
+                            || now.saturating_duration_since(state.last_broadcast_at)
+                                >= rebroadcast_cooldown
+                    });
+                if advert_due {
+                    self.broadcast_guarded_merge_candidate(&candidate, round, message_digest)?;
+                    self.subsystems.merge.committee.leader_advert =
+                        Some(MergeLeaderAdvertState {
+                            round,
+                            message_digest,
+                            last_broadcast_at: now,
+                        });
+                    progress = true;
+                }
+            }
+            let signature_rebroadcast_cooldown = self
+                .effective_timing
+                .get()
+                .rebroadcast_cooldown
+                .max(Duration::from_millis(1));
+            let local_signature = if let Some((signer, bls_sig, last_broadcast)) =
+                existing_local_signature
+            {
+                last_broadcast
+                    .is_none_or(|last| {
+                        now.saturating_duration_since(last) >= signature_rebroadcast_cooldown
+                    })
+                    .then_some(MergeCommitteeSignature {
+                        epoch_id: candidate.epoch_id,
+                        view,
+                        signer,
+                        message_digest,
+                        bls_sig,
+                    })
+            } else if let Some(signer) = local_index {
+                self.build_merge_signature(signer, view, &candidate, message_digest)
+            } else {
+                None
+            };
 
             let mut broadcast_signature: Option<MergeCommitteeSignature> = None;
             {
@@ -27555,7 +29324,11 @@ impl Actor {
                     .or_insert_with(|| MergeCommitteeEntry {
                         candidate: Some(candidate.clone()),
                         signatures: BTreeMap::new(),
+                        created_at: now,
+                        last_updated: now,
+                        last_local_signature_broadcast: None,
                     });
+                entry.last_updated = now;
 
                 let candidate_matches = entry
                     .candidate
@@ -27567,9 +29340,25 @@ impl Actor {
                     }
 
                     if let Some(signature) = local_signature {
-                        if let Entry::Vacant(slot) = entry.signatures.entry(signature.signer) {
-                            slot.insert(signature.bls_sig.clone());
-                            broadcast_signature = Some(signature);
+                        match entry.signatures.entry(signature.signer) {
+                            Entry::Vacant(slot) => {
+                                slot.insert(signature.bls_sig.clone());
+                                broadcast_signature = Some(signature);
+                            }
+                            Entry::Occupied(slot) if slot.get() == &signature.bls_sig => {
+                                broadcast_signature = Some(signature);
+                            }
+                            Entry::Occupied(_) => {
+                                iroha_logger::error!(
+                                    epoch = candidate.epoch_id,
+                                    view,
+                                    "local merge signature cache conflicts with durable signing guard"
+                                );
+                            }
+                        }
+                        if broadcast_signature.is_some() {
+                            entry.last_local_signature_broadcast = Some(now);
+                            progress = true;
                         }
                     }
                 } else {
@@ -27588,18 +29377,19 @@ impl Actor {
             }
         }
 
-        self.try_commit_merge_candidates(&ordered_keys);
-        Ok(())
+        progress |= self.try_commit_merge_candidates(&ordered_keys);
+        Ok(progress)
     }
 
-    fn try_commit_merge_candidates(&mut self, ordered_keys: &[MergeCommitteeKey]) {
+    fn try_commit_merge_candidates(&mut self, ordered_keys: &[MergeCommitteeKey]) -> bool {
         let validator_set: Vec<_> = self.state.commit_topology.view().iter().cloned().collect();
         let roster_len = validator_set.len();
         if roster_len == 0 {
-            return;
+            return false;
         }
         let validator_set_hash = HashOf::new(&validator_set);
         let required = crate::sumeragi::network_topology::commit_quorum_from_len(roster_len);
+        let mut progress = false;
 
         for key in ordered_keys {
             let (candidate, qc) = {
@@ -27688,6 +29478,8 @@ impl Actor {
                 let qc = MergeQuorumCertificate::new(
                     key.view,
                     key.epoch_id,
+                    candidate.carrier_height,
+                    candidate.carrier_parent_hash,
                     crate::merge::merge_chain_id_digest(&self.chain_id),
                     VALIDATOR_SET_HASH_VERSION_V1,
                     validator_set_hash,
@@ -27700,19 +29492,31 @@ impl Actor {
                 (candidate.clone(), qc)
             };
 
-            match self.state.commit_merge_entry(candidate.into_entry(qc)) {
-                Ok(_) => {
+            let entry = candidate.into_entry(qc);
+            match self.kura.persist_pending_certified_merge_entry(&entry) {
+                Ok(entry_hash) => {
                     self.subsystems.merge.committee.pending.remove(key);
+                    progress = true;
+                    iroha_logger::info!(
+                        epoch = entry.epoch_id,
+                        %entry_hash,
+                        "persisted certified merge sidecar for globally ordered block inclusion"
+                    );
                 }
                 Err(err) => {
-                    iroha_logger::warn!(?err, epoch = key.epoch_id, "failed to commit merge entry");
+                    iroha_logger::warn!(
+                        ?err,
+                        epoch = key.epoch_id,
+                        "failed to persist certified merge sidecar"
+                    );
                     break;
                 }
             }
         }
+        progress
     }
 
-    pub(super) fn on_lane_relay(&mut self, envelope: LaneRelayEnvelope) -> Result<()> {
+    pub(super) fn on_lane_relay(&mut self, envelope: LaneRelayEnvelope) -> Result<bool> {
         match self.state.record_lane_relay(&envelope) {
             Ok(insert) => {
                 if matches!(insert, crate::state::LaneRelayInsert::Duplicate) {
@@ -27723,6 +29527,7 @@ impl Actor {
                         "duplicate lane relay received; ignoring"
                     );
                 }
+                Ok(!matches!(insert, crate::state::LaneRelayInsert::Duplicate))
             }
             Err(err) => {
                 iroha_logger::warn!(
@@ -27733,9 +29538,9 @@ impl Actor {
                     error = %err,
                     "dropping invalid lane relay envelope"
                 );
+                Ok(false)
             }
         }
-        Ok(())
     }
 
     pub(super) fn on_consensus_control(&mut self, msg: ControlFlow) -> Result<()> {

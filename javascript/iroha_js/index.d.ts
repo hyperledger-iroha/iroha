@@ -12239,6 +12239,11 @@ export function signOrderbookPayload(
   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
 ): Buffer;
 
+export function deriveOrderbookOrderId(
+  ownerAccount: SorafsOrderbookBytesInput,
+  nonce: SorafsOrderbookIntegerInput,
+): Buffer;
+
 export function buildSignedOrderbookOrderRequest(
   fields: SorafsSignedOrderbookOrderRequestFields,
   privateKey: ArrayBufferView | ArrayBuffer | Buffer,

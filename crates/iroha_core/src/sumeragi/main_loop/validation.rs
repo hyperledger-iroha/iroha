@@ -991,6 +991,13 @@ impl Actor {
                 ValidationGateOutcome::Valid
             }
             Err(err) => {
+                if let BlockValidationError::MissingCertifiedMergeSidecar { entry_hash } = &err {
+                    return self.defer_missing_certified_merge_sidecar(
+                        hash,
+                        pending,
+                        *entry_hash,
+                    );
+                }
                 if let BlockValidationError::PrevBlockHeightMismatch { expected, actual } = &err {
                     if let Some(parent_hash) = pending.block.header().prev_block_hash() {
                         self.request_missing_parent(
@@ -1036,6 +1043,131 @@ impl Actor {
                     return ValidationGateOutcome::Valid;
                 }
                 self.finalize_validation_failure(hash, pending, &err)
+            }
+        }
+    }
+
+    fn defer_missing_certified_merge_sidecar(
+        &mut self,
+        hash: HashOf<BlockHeader>,
+        mut pending: PendingBlock,
+        entry_hash: HashOf<MergeLedgerEntry>,
+    ) -> ValidationGateOutcome {
+        let reference = pending
+            .block
+            .execution_context()
+            .and_then(|bundle| bundle.merge_entry.as_ref())
+            .filter(|reference| reference.entry_hash == entry_hash)
+            .cloned();
+        let Some(reference) = reference else {
+            let error = BlockValidationError::ExecutionContextInvalid(
+                "missing-sidecar validation outcome has no matching compact reference".to_owned(),
+            );
+            return self.finalize_validation_failure(hash, pending, &error);
+        };
+        let committed_height = self.committed_height_snapshot();
+        let requester = self.common_config.peer.id().clone();
+        match self.subsystems.merge.sidecars.defer_block(
+            hash,
+            pending.height,
+            pending.view,
+            reference,
+            &requester,
+            committed_height,
+            Instant::now(),
+        ) {
+            Ok(Some(post)) => self.post_certified_merge_sidecar(post),
+            Ok(None) => {}
+            Err(error) => {
+                warn!(
+                    block = %hash,
+                    height = pending.height,
+                    view = pending.view,
+                    %entry_hash,
+                    ?error,
+                    "certified merge-sidecar fetch is deferred by a bounded transport guard"
+                );
+            }
+        }
+        pending.validation_status = ValidationStatus::Pending;
+        pending.parent_state_root = None;
+        pending.post_state_root = None;
+        pending.validated_commit_artifact = None;
+        pending.touch_progress(Instant::now());
+        self.pending.pending_blocks.insert(hash, pending);
+        debug!(
+            block = %hash,
+            %entry_hash,
+            "deferred block validation pending authenticated certified merge sidecar"
+        );
+        ValidationGateOutcome::Deferred
+    }
+
+    pub(super) fn resume_certified_merge_sidecar_blocks(
+        &mut self,
+        deferred: Vec<(HashOf<BlockHeader>, u64, u64)>,
+    ) {
+        let mut slots = Vec::new();
+        for (hash, height, view) in deferred {
+            let Some(pending) = self.pending.pending_blocks.get_mut(&hash) else {
+                continue;
+            };
+            if pending.height != height || pending.view != view {
+                continue;
+            }
+            pending.validation_status = ValidationStatus::Pending;
+            pending.parent_state_root = None;
+            pending.post_state_root = None;
+            pending.validated_commit_artifact = None;
+            pending.touch_progress(Instant::now());
+            if let Some(slot) = self
+                .vnext_rounds
+                .get(&(height, view))
+                .and_then(|round| round.slot(hash))
+                .map(|slot| slot.slot)
+            {
+                slots.push(slot);
+            }
+        }
+        for slot in slots {
+            let _ = self.mark_vnext_validation_deferred(slot);
+        }
+        self.request_commit_pipeline();
+    }
+
+    pub(super) fn reject_invalid_certified_merge_sidecar_blocks(
+        &mut self,
+        deferred: Vec<(HashOf<BlockHeader>, u64, u64)>,
+        reason: String,
+    ) {
+        for (hash, height, view) in deferred {
+            let Some(pending) = self.pending.pending_blocks.remove(&hash) else {
+                continue;
+            };
+            if pending.height != height || pending.view != view {
+                self.pending.pending_blocks.insert(hash, pending);
+                continue;
+            }
+            let error = BlockValidationError::ExecutionContextInvalid(format!(
+                "certified merge sidecar is invalid: {reason}"
+            ));
+            if let ValidationGateOutcome::Invalid {
+                hash,
+                height,
+                view,
+                reason,
+                reason_label,
+                evidence,
+            } = self.finalize_validation_failure(hash, pending, &error)
+            {
+                self.handle_validation_reject(
+                    hash,
+                    height,
+                    view,
+                    evidence,
+                    reason,
+                    reason_label,
+                );
             }
         }
     }
@@ -1283,6 +1415,23 @@ impl Actor {
                             "dropping late validation result after frontier owner supersede"
                         );
                         self.pending.pending_blocks.insert(hash, pending);
+                        progress = true;
+                        continue;
+                    }
+
+                    if let Err(BlockValidationError::MissingCertifiedMergeSidecar {
+                        entry_hash,
+                    }) = &outcome
+                    {
+                        if let Some((slot, _)) = vnext_result.take() {
+                            let _ = self.mark_vnext_validation_deferred(slot);
+                        }
+                        let _ = self.defer_missing_certified_merge_sidecar(
+                            hash,
+                            pending,
+                            *entry_hash,
+                        );
+                        self.request_commit_pipeline();
                         progress = true;
                         continue;
                     }

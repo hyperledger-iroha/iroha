@@ -729,7 +729,7 @@ impl LaneRelayEnvelope {
         for receipt in &settlement.native_amx_receipts {
             if receipt.lane_id != settlement.lane_id
                 || receipt.dataspace_id != settlement.dataspace_id
-                || receipt.block_height != settlement.block_height
+                || receipt.authority_context_height != settlement.block_height
             {
                 return Err(LaneRelayError::SettlementReceiptCoordinateMismatch);
             }
@@ -1167,7 +1167,9 @@ mod tests {
         AccountId, PeerId,
         block::{
             BlockHeader,
-            consensus::{LaneBlockCommitment, NexusFeeReceipt, NexusFeeScheduleInputs},
+            consensus::{
+                LaneBlockCommitment, NativeAmxReceipt, NexusFeeReceipt, NexusFeeScheduleInputs,
+            },
         },
         consensus::{CertPhase, QcAggregate},
     };
@@ -1469,6 +1471,46 @@ mod tests {
         let changed = lane_relay_fastpq_claim_digest(&envelope).expect("changed claim digest");
 
         assert_ne!(original, changed);
+    }
+
+    #[test]
+    fn native_amx_relay_coordinate_uses_global_authority_height() {
+        let mut envelope = build_envelope(8, None);
+        let receipt = NativeAmxReceipt {
+            version: 1,
+            source_id: [0x31; 32],
+            chain_id_hash: Hash::new(b"relay-native-amx-chain"),
+            plan_digest: Hash::new(b"relay-native-amx-plan"),
+            lane_id: envelope.lane_id,
+            dataspace_id: envelope.dataspace_id,
+            lane_incarnation: envelope.lane_incarnation,
+            authority_context_height: envelope.block_height,
+            lane_block_height: 3,
+            lane_block_view: 1,
+            coordinator_proposal_hash: Hash::new(b"relay-native-amx-proposal"),
+            legs: Vec::new(),
+        };
+        assert_ne!(
+            receipt.lane_block_height, envelope.block_height,
+            "fixture must keep the lane-local and global authority heights distinct"
+        );
+        envelope
+            .settlement_commitment
+            .native_amx_receipts
+            .push(receipt);
+        envelope.settlement_hash =
+            compute_settlement_hash(&envelope.settlement_commitment).expect("settlement hash");
+        envelope
+            .verify()
+            .expect("lane-local height need not equal the global relay height");
+
+        envelope.settlement_commitment.native_amx_receipts[0].authority_context_height += 1;
+        envelope.settlement_hash =
+            compute_settlement_hash(&envelope.settlement_commitment).expect("settlement hash");
+        assert_eq!(
+            envelope.verify(),
+            Err(LaneRelayError::SettlementReceiptCoordinateMismatch)
+        );
     }
 
     #[test]

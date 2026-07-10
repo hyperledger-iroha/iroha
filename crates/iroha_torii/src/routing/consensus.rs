@@ -2024,10 +2024,7 @@ fn native_amx_leg_json(leg: &NativeAmxLegRecord) -> Value {
     json_object(vec![
         json_entry("lane_id", leg.lane_id),
         json_entry("dataspace_id", leg.dataspace_id),
-        json_entry(
-            "lane_incarnation",
-            hash_with_prefix(leg.lane_incarnation),
-        ),
+        json_entry("lane_incarnation", hash_with_prefix(leg.lane_incarnation)),
         json_entry(
             "prepare_qc",
             native_amx_attestation_qc_json(&leg.prepare_qc),
@@ -4072,6 +4069,7 @@ mod status_tests {
             validator_set: validator_set.clone(),
             signers_bitmap: vec![0b0000_0001],
             bls_aggregate_signature: vec![0xA1],
+            payload_availability_qc: None,
         };
         let commit_qc = LaneBlockQcV1 {
             body: proposal.vote_body(CertPhase::Commit),
@@ -4080,6 +4078,7 @@ mod status_tests {
             validator_set,
             signers_bitmap: vec![0b0000_0001],
             bls_aggregate_signature: vec![0xA2],
+            payload_availability_qc: None,
         };
         status::CommittedLaneBlockSnapshot {
             lane_id: proposal.descriptor.lane_id,
