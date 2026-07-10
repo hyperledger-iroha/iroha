@@ -1915,7 +1915,7 @@ impl Kura {
         Ok(())
     }
 
-    fn lane_geometry_journal_path(&self) -> PathBuf {
+    pub(crate) fn lane_geometry_journal_path(&self) -> PathBuf {
         self.store_root.join(JOURNAL_FILE_NAME)
     }
 

@@ -658,7 +658,9 @@ fn validate_lane_executable_payload_body(
         .zip(reservation_keys)
         .zip(routing_plans)
     {
-        let accepted = AcceptedTransaction::new_unchecked(entrypoint.clone());
+        let accepted = AcceptedTransaction::new_unchecked_entrypoint(std::borrow::Cow::Owned(
+            entrypoint.clone(),
+        ));
         if key.signed_transaction_hash != accepted.hash()
             || Hash::from(key.entrypoint_hash) != *entrypoint_hash
             || key.lane_id != descriptor.lane_id

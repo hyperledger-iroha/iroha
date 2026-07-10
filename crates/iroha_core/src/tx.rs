@@ -12199,6 +12199,8 @@ pub mod tests {
             autonomous_epoch: None,
             autonomous_payload_hash: None,
             entrypoints,
+            reservation_keys: Vec::new(),
+            routing_plans: Vec::new(),
         })
     }
 

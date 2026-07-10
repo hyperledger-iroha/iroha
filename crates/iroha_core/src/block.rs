@@ -10383,9 +10383,12 @@ pub(crate) mod valid {
                         LaneBlockCommitment {
                             block_height,
                             lane_id,
-                            lane_incarnation: state_block
-                                .lane_incarnation_at_height(lane_id, block_height)
-                                .expect("settlement lane must have an active incarnation"),
+                            lane_incarnation: StateReadOnly::lane_incarnation_at_height(
+                                state_block,
+                                lane_id,
+                                block_height,
+                            )
+                            .expect("settlement lane must have an active incarnation"),
                             dataspace_id,
                             tx_count: builder.tx_count,
                             total_local_micro: builder.total_local_micro,

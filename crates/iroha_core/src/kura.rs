@@ -82,6 +82,7 @@ use crate::{
         DurableLanePayloadAvailabilityCertificateV1, LaneExecutablePayloadV1,
         MAX_LANE_NEW_VIEW_CERTIFICATES,
     },
+    queue::{LaneQueueReservationKeyV1, RoutingPlan},
 };
 
 impl From<CommittedBlock> for Arc<SignedBlock> {
@@ -7117,6 +7118,10 @@ pub struct RecoveredLaneBlockPayload {
     pub autonomous_payload_hash: Option<Hash>,
     /// Accepted entrypoints in lane descriptor order.
     pub entrypoints: Vec<TransactionEntrypoint>,
+    /// Exact queue reservation identities bound by an autonomous payload.
+    pub reservation_keys: Vec<LaneQueueReservationKeyV1>,
+    /// Full routing plans bound by an autonomous payload.
+    pub routing_plans: Vec<RoutingPlan>,
 }
 
 /// Known metadata format variants for durable lane-block execution input.
@@ -7149,6 +7154,12 @@ pub struct LaneBlockExecutionInputArtifact {
     pub entrypoint_hashes: Vec<Hash>,
     /// Accepted entrypoints in lane descriptor order.
     pub entrypoints: Vec<TransactionEntrypoint>,
+    /// Exact queue reservation identities bound by an autonomous payload.
+    #[norito(default)]
+    pub reservation_keys: Vec<LaneQueueReservationKeyV1>,
+    /// Full routing plans bound by an autonomous payload.
+    #[norito(default)]
+    pub routing_plans: Vec<RoutingPlan>,
 }
 
 impl LaneBlockExecutionInputArtifact {
@@ -7171,6 +7182,8 @@ impl LaneBlockExecutionInputArtifact {
             autonomous_payload_hash: recovered.autonomous_payload_hash,
             entrypoint_hashes,
             entrypoints: recovered.entrypoints,
+            reservation_keys: recovered.reservation_keys,
+            routing_plans: recovered.routing_plans,
         }
     }
 
@@ -10755,6 +10768,8 @@ impl Kura {
             autonomous_epoch: None,
             autonomous_payload_hash: None,
             entrypoints,
+            reservation_keys: Vec::new(),
+            routing_plans: Vec::new(),
         })
     }
 
@@ -10828,6 +10843,8 @@ impl Kura {
             autonomous_epoch: Some(expected_epoch),
             autonomous_payload_hash: Some(artifact.executable_payload.payload_hash),
             entrypoints,
+            reservation_keys: artifact.executable_payload.reservation_keys.clone(),
+            routing_plans: artifact.executable_payload.routing_plans.clone(),
         })
     }
 
@@ -10874,6 +10891,8 @@ impl Kura {
                 autonomous_epoch: Some(expected_epoch),
                 autonomous_payload_hash: Some(payload.payload_hash),
                 entrypoints: payload.entrypoints.clone(),
+                reservation_keys: payload.reservation_keys.clone(),
+                routing_plans: payload.routing_plans.clone(),
             },
         ))
     }

@@ -206,6 +206,18 @@ pub struct MergeLaneExecution {
     pub settlement_commitment: LaneBlockCommitment,
     /// Canonical hash of `settlement_commitment`.
     pub settlement_hash: HashOf<LaneBlockCommitment>,
+    /// Norito-encoded queue reservation bindings for the autonomous payload.
+    ///
+    /// The concrete reservation type belongs to the node's queue subsystem, so
+    /// the merge wire model carries its canonical Norito bytes opaquely.
+    #[norito(default)]
+    pub reservation_keys: Vec<u8>,
+    /// Norito-encoded routing-plan bindings for the autonomous payload.
+    ///
+    /// The concrete routing-plan type belongs to the node's queue subsystem,
+    /// so the merge wire model carries its canonical Norito bytes opaquely.
+    #[norito(default)]
+    pub routing_plans: Vec<u8>,
 }
 
 /// Merge-committee-certified total-order execution batch.

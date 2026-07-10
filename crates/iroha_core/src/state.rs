@@ -235,6 +235,20 @@ where
     append_merge_write_set_component(out, &cell.get().encode());
 }
 
+fn append_merge_executor_delta(
+    out: &mut Vec<u8>,
+    name: &'static str,
+    cell: &CellBlock<'_, Executor>,
+) {
+    if !cell.is_dirty() {
+        return;
+    }
+    append_merge_write_set_component(out, name.as_bytes());
+    let encoded = crate::executor::executor_norito::to_bytes(cell.get())
+        .expect("runtime executor must have a canonical Norito representation");
+    append_merge_write_set_component(out, &encoded);
+}
+
 use crate::{
     block::BlockValidationError,
     commit_roster_journal::{CommitRosterJournal, CommitRosterSnapshot},
@@ -1644,6 +1658,50 @@ struct MergeExecutionSource {
     bundle_hash: Hash,
     certified: crate::kura::CertifiedLaneBlockArtifact,
     input: crate::kura::LaneBlockExecutionInputArtifact,
+}
+
+fn decode_merge_execution_bindings(
+    execution: &MergeLaneExecution,
+) -> Result<
+    (
+        Vec<crate::queue::LaneQueueReservationKeyV1>,
+        Vec<crate::queue::RoutingPlan>,
+    ),
+    MergeLedgerCommitError,
+> {
+    let reservation_keys = if execution.reservation_keys.is_empty() {
+        Vec::new()
+    } else {
+        norito::decode_from_bytes(&execution.reservation_keys).map_err(|_| {
+            MergeLedgerCommitError::ExecutionBatchInvalid(
+                "autonomous reservation bindings are not valid Norito".to_owned(),
+            )
+        })?
+    };
+    let routing_plans = if execution.routing_plans.is_empty() {
+        Vec::new()
+    } else {
+        norito::decode_from_bytes(&execution.routing_plans).map_err(|_| {
+            MergeLedgerCommitError::ExecutionBatchInvalid(
+                "autonomous routing-plan bindings are not valid Norito".to_owned(),
+            )
+        })?
+    };
+    if (!execution.reservation_keys.is_empty()
+        && reservation_keys.encode() != execution.reservation_keys)
+        || (!execution.routing_plans.is_empty()
+            && routing_plans.encode() != execution.routing_plans)
+    {
+        return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+            "autonomous merge bindings are not canonically encoded".to_owned(),
+        ));
+    }
+    if reservation_keys.len() != routing_plans.len() {
+        return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+            "autonomous reservation and routing-plan bindings differ in length".to_owned(),
+        ));
+    }
+    Ok((reservation_keys, routing_plans))
 }
 
 fn merge_execution_source_bundle_hash(
@@ -3676,7 +3734,6 @@ impl<'world> WorldBlock<'world> {
             peers,
             viral_reward_budget,
             viral_campaign_budget,
-            executor,
             executor_data_model,
             sorafs_pricing,
             soradns_directory_latest,
@@ -3687,6 +3744,7 @@ impl<'world> WorldBlock<'world> {
             merge_hint_roots,
             merge_global_state_root,
         );
+        append_merge_executor_delta(&mut out, "executor", &self.executor);
         self.triggers.append_merge_execution_write_set(&mut out);
         storage!(
             consensus_keys,
@@ -27147,7 +27205,7 @@ impl State {
     fn latest_merge_execution_heights(
         &self,
     ) -> Result<BTreeMap<(LaneId, DataSpaceId, Hash), u64>, MergeLedgerCommitError> {
-        let mut heights = BTreeMap::new();
+        let mut heights: BTreeMap<(LaneId, DataSpaceId, Hash), u64> = BTreeMap::new();
         for entry in self.kura.merge_ledger_all_entries()? {
             let Some(batch) = entry.execution_batch else {
                 continue;
@@ -27189,6 +27247,7 @@ impl State {
             signer_pops,
         };
         let descriptor = &execution.proposal.descriptor;
+        let (reservation_keys, routing_plans) = decode_merge_execution_bindings(execution)?;
         let (proposal_block_hash, proposal_view) =
             crate::kura::Kura::autonomous_lane_execution_anchor(
                 &execution.proposal,
@@ -27223,6 +27282,8 @@ impl State {
                 autonomous_epoch: Some(execution.autonomous_epoch),
                 autonomous_payload_hash: Some(execution.autonomous_payload_hash),
                 entrypoints: execution.entrypoints.clone(),
+                reservation_keys,
+                routing_plans,
             },
         );
         let bundle_hash = merge_execution_source_bundle_hash(&certified, &input);
@@ -27375,6 +27436,8 @@ impl State {
                 results,
                 settlement_hash: HashOf::new(&placeholder),
                 settlement_commitment: placeholder,
+                reservation_keys: source.input.reservation_keys.encode(),
+                routing_plans: source.input.routing_plans.encode(),
             };
             let commitment = state_block.drain_merge_lane_settlement_commitment(&execution)?;
             execution.settlement_hash = HashOf::new(&commitment);
@@ -29004,18 +29067,22 @@ impl State {
                     ));
                 }
             }
-            let computed_payload_hash = crate::lane_consensus::compute_lane_executable_payload_hash(
-                1,
-                execution.autonomous_chain_id_hash,
-                execution.autonomous_epoch,
-                &execution.proposal,
-                &execution.entrypoints,
-            )
-            .map_err(|_| {
-                MergeLedgerCommitError::ExecutionBatchInvalid(
-                    "autonomous executable payload hash could not be recomputed".to_owned(),
+            let (reservation_keys, routing_plans) = decode_merge_execution_bindings(execution)?;
+            let computed_payload_hash =
+                crate::lane_consensus::compute_lane_executable_payload_hash(
+                    1,
+                    execution.autonomous_chain_id_hash,
+                    execution.autonomous_epoch,
+                    &execution.proposal,
+                    &execution.entrypoints,
+                    &reservation_keys,
+                    &routing_plans,
                 )
-            })?;
+                .map_err(|_| {
+                    MergeLedgerCommitError::ExecutionBatchInvalid(
+                        "autonomous executable payload hash could not be recomputed".to_owned(),
+                    )
+                })?;
             if computed_payload_hash != execution.autonomous_payload_hash {
                 return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                     "autonomous executable payload hash mismatch".to_owned(),
@@ -36178,7 +36245,11 @@ impl<'state> StateBlock<'state> {
                     .to_owned(),
             ));
         }
-        if self.nexus != self.state_ref.nexus_snapshot()
+        let state_nexus = self.state_ref.nexus_snapshot();
+        let nexus_changed = self.nexus.lane_catalog != state_nexus.lane_catalog
+            || iroha_config::parameters::actual::nexus_consensus_policy_digest(&self.nexus)
+                != iroha_config::parameters::actual::nexus_consensus_policy_digest(&state_nexus);
+        if nexus_changed
             || self.lane_incarnations != self.state_ref.lane_incarnations_snapshot()
             || self.lane_incarnation_activation_heights
                 != self
@@ -36492,12 +36563,15 @@ impl<'state> StateBlock<'state> {
 
         let mut tx = self.transaction();
         tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         for (asset_id, amount) in &aggregate {
-            tx.withdraw_numeric_asset(asset_id, amount)
+            tx.world
+                .withdraw_numeric_asset(asset_id, amount)
                 .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
-            tx.decrease_asset_total_amount(asset_id.definition(), amount)
+            tx.world
+                .decrease_asset_total_amount(asset_id.definition(), amount)
                 .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
-            tx.emit_events(Some(
+            tx.world.emit_events(Some(
                 iroha_data_model::events::data::prelude::AssetEvent::Removed(
                     iroha_data_model::events::data::prelude::AssetChanged {
                         asset: asset_id.clone(),
@@ -36507,10 +36581,10 @@ impl<'state> StateBlock<'state> {
             ));
         }
         for key in settlement_markers {
-            tx.smart_contract_state.insert(key, vec![1]);
+            tx.world.smart_contract_state.insert(key, vec![1]);
         }
         for key in receipt_markers {
-            tx.smart_contract_state.insert(key, vec![1]);
+            tx.world.smart_contract_state.insert(key, vec![1]);
         }
         tx.apply();
         Ok(())
